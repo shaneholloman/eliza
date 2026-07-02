@@ -12,6 +12,7 @@ import { getCachedExternalEntries } from "../cache";
 import { aiEntryToPrepared } from "../dimensions";
 import { fetchText, stripHtml } from "../fetch";
 import { EXTERNAL_CACHE_TTL_MS, type PreparedPricingEntry } from "../types";
+import { buildSfxSnapshotEntries } from "./sfx";
 import { buildMusicSnapshotEntries } from "./suno";
 
 function extractFalPricingParagraph(html: string): string {
@@ -366,6 +367,7 @@ export async function fetchFalCatalogEntries(): Promise<PreparedPricingEntry[]> 
       ...entryArrays.flat(),
       ...buildFalImageSnapshotEntries(),
       ...buildMusicSnapshotEntries("fal", "fal_model_page"),
+      ...buildSfxSnapshotEntries("fal", "fal_model_page"),
     ];
   });
 }

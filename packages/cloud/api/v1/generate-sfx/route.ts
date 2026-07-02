@@ -1,3 +1,13 @@
+/**
+ * POST /api/v1/generate-sfx — sound-effect generation.
+ *
+ * Same pipeline as generate-music (validate → safety → price → reserve →
+ * provider via the audio registry → store → persist → settle), but a separate
+ * route + model catalog: SFX models (ElevenLabs sound-generation, Stable
+ * Audio 2.5 on fal) have a different request contract (short clips, prompt
+ * influence, no lyrics) and their own pricing family ("sfx").
+ */
+
 import { Hono } from "hono";
 import { z } from "zod";
 import { failureResponse, jsonError } from "@/lib/api/cloud-worker-errors";
@@ -8,10 +18,10 @@ import {
 } from "@/lib/middleware/rate-limit-hono-cloudflare";
 import { getAudioProvider } from "@/lib/providers/audio/registry";
 import type { GeneratedAudio } from "@/lib/providers/audio/types";
-import { calculateMusicGenerationCostFromCatalog } from "@/lib/services/ai-pricing";
+import { calculateSfxGenerationCostFromCatalog } from "@/lib/services/ai-pricing";
 import {
-  getSupportedMusicModelDefinition,
-  SUPPORTED_MUSIC_MODEL_IDS,
+  getSupportedSfxModelDefinition,
+  SUPPORTED_SFX_MODEL_IDS,
 } from "@/lib/services/ai-pricing-definitions";
 import { contentSafetyService } from "@/lib/services/content-safety";
 import {
@@ -23,37 +33,16 @@ import { putPublicObject } from "@/lib/storage/r2-public-object";
 import { logger } from "@/lib/utils/logger";
 import type { AppEnv, Bindings } from "@/types/cloud-worker-env";
 
-const DEFAULT_MUSIC_MODEL = "fal-ai/minimax-music/v2.6";
-const MAX_PROMPT_LENGTH = 4100;
-const MAX_LYRICS_LENGTH = 3500;
+const DEFAULT_SFX_MODEL = "elevenlabs/sound_effects_v1";
+const MAX_PROMPT_LENGTH = 500;
 
-const audioFormatSchema = z.enum(["mp3", "wav", "pcm", "flac"]).optional();
-const audioSampleRateSchema = z
-  .enum(["16000", "24000", "32000", "44100"])
-  .optional();
-const audioBitrateSchema = z
-  .enum(["32000", "64000", "128000", "256000"])
-  .optional();
-
-const musicRequestSchema = z.object({
+const sfxRequestSchema = z.object({
   prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
-  model: z.string().trim().default(DEFAULT_MUSIC_MODEL),
-  provider: z.enum(["fal", "elevenlabs", "suno"]).optional(),
-  lyrics: z.string().max(MAX_LYRICS_LENGTH).optional(),
-  lyricsOptimizer: z.boolean().optional(),
-  instrumental: z.boolean().optional(),
-  durationSeconds: z.coerce.number().int().min(3).max(600).optional(),
-  referenceUrl: z.string().trim().url().optional(),
+  model: z.string().trim().default(DEFAULT_SFX_MODEL),
+  durationSeconds: z.coerce.number().min(0.5).max(190).optional(),
+  promptInfluence: z.coerce.number().min(0).max(1).optional(),
   seed: z.coerce.number().int().min(0).max(2_147_483_647).optional(),
   outputFormat: z.string().trim().max(64).optional(),
-  audio: z
-    .object({
-      format: audioFormatSchema,
-      sampleRate: audioSampleRateSchema,
-      bitrate: audioBitrateSchema,
-    })
-    .strict()
-    .optional(),
   extraInput: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -70,10 +59,7 @@ function providerConfigured(env: Bindings, provider: string): boolean {
   if (provider === "fal") {
     return Boolean(envString(env, "FAL_KEY") ?? envString(env, "FAL_API_KEY"));
   }
-  if (provider === "elevenlabs") {
-    return Boolean(envString(env, "ELEVENLABS_API_KEY"));
-  }
-  return Boolean(envString(env, "SUNO_API_KEY"));
+  return Boolean(envString(env, "ELEVENLABS_API_KEY"));
 }
 
 function extensionForContentType(contentType: string): string {
@@ -90,11 +76,7 @@ interface StoredAudio {
   content_type?: string;
 }
 
-/**
- * Byte results (ElevenLabs streams the file body) are persisted to R2 here so
- * providers stay storage-free; hosted results pass through unchanged.
- */
-async function storeGeneratedAudio(
+async function storeGeneratedSfx(
   env: Bindings,
   generated: GeneratedAudio,
   keyPrefix: string,
@@ -135,49 +117,41 @@ async function storeGeneratedAudio(
 app.post("/", async (c) => {
   let reservation: Awaited<ReturnType<typeof creditsService.reserve>> | null =
     null;
-  // Once the charge is SETTLED, a later (non-critical, post-settle) failure must
-  // NOT hit the catch's reconcile(0) — which is non-idempotent and would refund
-  // the already-correct charge, giving free music. Mirrors generate-image.
+  // Post-settle failures must not refund a settled charge (mirrors
+  // generate-image / generate-video / generate-music).
   let chargeSettled = false;
 
   try {
     const user = await requireUserOrApiKeyWithOrg(c);
-    const request = musicRequestSchema.parse(await c.req.json());
-    const definition = getSupportedMusicModelDefinition(request.model);
+    const request = sfxRequestSchema.parse(await c.req.json());
+    const definition = getSupportedSfxModelDefinition(request.model);
     if (!definition) {
       return jsonError(
         c,
         400,
-        `Unsupported music model: ${request.model}`,
+        `Unsupported SFX model: ${request.model}`,
         "validation_error",
         {
-          supportedModels: SUPPORTED_MUSIC_MODEL_IDS,
+          supportedModels: SUPPORTED_SFX_MODEL_IDS,
         },
       );
     }
-
-    const provider = request.provider ?? definition.provider;
-    if (provider !== definition.provider) {
+    if (
+      request.durationSeconds !== undefined &&
+      request.durationSeconds > definition.defaultParameters.maxDurationSeconds
+    ) {
       return jsonError(
         c,
         400,
-        `Model ${request.model} is served by ${definition.provider}, not ${provider}`,
+        `${request.model} supports at most ${definition.defaultParameters.maxDurationSeconds}s per clip`,
         "validation_error",
       );
     }
-    if (provider === "fal" && request.prompt.length > 2000) {
-      return jsonError(
-        c,
-        400,
-        "Fal music prompts must be 2000 characters or fewer",
-        "validation_error",
-      );
-    }
-    if (!providerConfigured(c.env, provider)) {
+    if (!providerConfigured(c.env, definition.provider)) {
       return jsonError(
         c,
         503,
-        `${provider} music generation is not configured`,
+        `${definition.provider} SFX generation is not configured`,
         "internal_error",
       );
     }
@@ -186,29 +160,22 @@ app.post("/", async (c) => {
       surface: "media_generation_prompt",
       organizationId: user.organization_id,
       userId: user.id,
-      text: [
-        `Music prompt: ${request.prompt}`,
-        request.lyrics ? `Lyrics: ${request.lyrics}` : undefined,
-        request.referenceUrl
-          ? `Reference URL: ${request.referenceUrl}`
-          : undefined,
-      ],
-      metadata: { type: "music", model: request.model, provider },
+      text: [`Sound effect prompt: ${request.prompt}`],
+      metadata: {
+        type: "sfx",
+        model: request.model,
+        provider: definition.provider,
+      },
     });
 
     const durationSeconds =
       request.durationSeconds ?? definition.defaultParameters.durationSeconds;
-    const cost = await calculateMusicGenerationCostFromCatalog({
+    const cost = await calculateSfxGenerationCostFromCatalog({
       model: request.model,
       provider: definition.provider,
       billingSource: definition.billingSource,
       durationSeconds,
-      dimensions: {
-        ...(durationSeconds ? { durationSeconds } : {}),
-        ...(request.instrumental !== undefined
-          ? { instrumental: request.instrumental }
-          : {}),
-      },
+      dimensions: { durationSeconds },
     });
 
     try {
@@ -216,7 +183,7 @@ app.post("/", async (c) => {
         organizationId: user.organization_id,
         userId: user.id,
         amount: cost.totalCost,
-        description: `Music generation: ${request.model}`,
+        description: `SFX generation: ${request.model}`,
       });
     } catch (error) {
       if (error instanceof InsufficientCreditsError) {
@@ -234,17 +201,13 @@ app.post("/", async (c) => {
 
     const generated = await getAudioProvider(definition.billingSource).generate(
       {
-        kind: "music",
+        kind: "sfx",
         model: request.model,
         prompt: request.prompt,
-        lyrics: request.lyrics,
-        lyricsOptimizer: request.lyricsOptimizer,
-        instrumental: request.instrumental,
         durationSeconds: request.durationSeconds,
-        referenceUrl: request.referenceUrl,
+        promptInfluence: request.promptInfluence,
         seed: request.seed,
         outputFormat: request.outputFormat,
-        audioSettings: request.audio,
         extraInput: request.extraInput,
         apiKeys: {
           FAL_KEY: envString(c.env, "FAL_KEY"),
@@ -257,21 +220,19 @@ app.post("/", async (c) => {
           FAL_QUEUE_TIMEOUT_MS: envString(c.env, "FAL_QUEUE_TIMEOUT_MS"),
           ELEVENLABS_API_KEY: envString(c.env, "ELEVENLABS_API_KEY"),
           ELEVENLABS_BASE_URL: envString(c.env, "ELEVENLABS_BASE_URL"),
-          SUNO_API_KEY: envString(c.env, "SUNO_API_KEY"),
-          SUNO_BASE_URL: envString(c.env, "SUNO_BASE_URL"),
         },
       },
     );
 
-    const music = await storeGeneratedAudio(
+    const audio = await storeGeneratedSfx(
       c.env,
       generated,
-      `generations/music/${user.organization_id}/${user.id}`,
+      `generations/sfx/${user.organization_id}/${user.id}`,
       {
         userId: user.id,
         organizationId: user.organization_id,
         model: request.model,
-        source: "generate-music",
+        source: "generate-sfx",
       },
     );
 
@@ -279,32 +240,27 @@ app.post("/", async (c) => {
     chargeSettled = true;
 
     const requestId = generated.requestId;
-    const status = generated.source === "hosted" ? generated.status : undefined;
 
     const generation = await generationsService.create({
       organization_id: user.organization_id,
       user_id: user.id,
-      type: "music",
+      type: "sfx",
       model: request.model,
       provider: definition.provider,
       prompt: request.prompt,
       result: {
         requestId,
-        status,
         billingSource: definition.billingSource,
         raw: generated.raw,
       },
       status: "completed",
-      storage_url: music.url,
+      storage_url: audio.url,
       thumbnail_url: null,
-      file_size: music.file_size ? BigInt(music.file_size) : undefined,
-      mime_type: music.content_type ?? "audio/mpeg",
+      file_size: audio.file_size ? BigInt(audio.file_size) : undefined,
+      mime_type: audio.content_type ?? "audio/mpeg",
       parameters: {
         durationSeconds,
-        hasLyrics: Boolean(request.lyrics),
-        lyricsOptimizer: request.lyricsOptimizer,
-        instrumental: request.instrumental,
-        referenceUrl: request.referenceUrl,
+        promptInfluence: request.promptInfluence,
         outputFormat: request.outputFormat,
       },
       dimensions: {
@@ -320,14 +276,13 @@ app.post("/", async (c) => {
       success: true,
       id: generation.id,
       requestId,
-      status: status ?? "completed",
-      music,
+      audio,
       cost,
     });
   } catch (error) {
     if (reservation && !chargeSettled) {
       await reservation.reconcile(0).catch((reconcileError) => {
-        logger.error("[GenerateMusic] Failed to refund reservation", {
+        logger.error("[GenerateSfx] Failed to refund reservation", {
           error:
             reconcileError instanceof Error
               ? reconcileError.message
