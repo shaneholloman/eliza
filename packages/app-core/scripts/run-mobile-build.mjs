@@ -2771,8 +2771,8 @@ function overlayAndroid({ includeAospRoleLaunchers = false } = {}) {
       // template tree (platforms/android): a whitelabel build
       // (ELIZA_ANDROID_USE_APP_DIR) reads that template READ-ONLY, and writing
       // the brand package back into it corrupts the elizaOS checkout's
-      // ai/elizaos/app sources (the recurring "package ai.milady.app does not
-      // exist" pollution that breaks the next elizaOS build). srcJava resolves
+      // ai/elizaos/app sources (the recurring "custom package does not exist"
+      // pollution that breaks the next elizaOS build). srcJava resolves
       // to templateJava for a whitelabel build, so this guard is what keeps the
       // two brands' source trees separate.
       const srcInOwnAndroidDir = path

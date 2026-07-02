@@ -1,4 +1,6 @@
 import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "vitest";
 import {
 	type EntitySpan,
@@ -132,7 +134,7 @@ describe("probe3", () => {
 			);
 		}
 		writeFileSync(
-			"/private/tmp/claude-501/-Users-shawwalters-eliza-workspace-milady-eliza/6d6de187-237a-4fc9-9689-34ed10a5d6e7/scratchpad/probe-out3.txt",
+			join(tmpdir(), "eliza-probe-out3.txt"),
 			out.join("\n"),
 		);
 	});
