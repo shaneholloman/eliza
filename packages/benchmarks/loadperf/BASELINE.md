@@ -5,7 +5,8 @@ refresh; ratchet `budgets.json` down as these improve. All sizes are
 **brotli**-compressed bytes.
 
 Captured: 2026-05-31; **corrected 2026-06-02** (see CORRECTIONS below);
-**re-baselined 2026-07-02** for the #11350 CI gate.
+**re-baselined 2026-07-02** for the #11350 CI gate;
+**ratcheted 2026-07-02** by the #11351 residual lazy-loads (see below).
 
 ## CURRENT CI GATE BASELINE (2026-07-02) — clean `build:web`
 
@@ -31,6 +32,39 @@ future regressions are blocked; #11471 moved 122.6 KB off the eager path and
 the gate preserves that ratchet. Follow-up optimization should split/lazy-load
 remaining eager vendors and ratchet `budgets.json` back down.
 
+### #11351 residual lazy-loads (2026-07-02) — measured ratchet
+
+The #11471 review found two static eager paths that partially defeated its
+lazy split: `DetachedShellRoot` (statically imported by the eager entry for
+detached windows) pulled nine views (ProviderSwitcher, PermissionsSection,
+ReleaseCenterView, ConfigPageView, VoiceConfigView, CloudDashboard,
+HeartbeatsView, ChatView, ConversationsSidebar) into every window's
+first-paint graph, and `App.tsx` statically imported the whole vault surface
+via `SecretsManagerModalRoot`. Both are now lazy (the vault modal loads on
+first open; its open/close event subscription stays eager so no dispatch is
+missed).
+
+Measured on this branch's rebase base (`0140a4fcb9e`) vs the change — clean
+`build:web` both sides, same machine (macOS arm64):
+
+| Metric | Before (develop base) | After (#11351 residuals) | Gate budget | Status |
+| --- | --- | --- | --- | --- |
+| eager (first-paint) brotli | 3,210,097 B (3135.0 KB / 39 chunks) | **3,142,732 B** (3069.1 KB / 57 chunks) | 3,330,000 B | PASS |
+| initial entry brotli | 3,024,127 B (2953.2 KB) | **2,937,470 B** (2868.6 KB) | 3,260,000 B | PASS |
+| total brotli | 5,233,041 B | 5,268,874 B (+35 KB chunk-split overhead) | 6,000,000 B | PASS |
+
+Delta: **eager −67,365 B (−65.8 KB), entry −86,657 B (−84.6 KB)**; 29 new
+on-demand chunks (379 → 408 assets). Budgets ratcheted down by (slightly more
+than) the realized saving: `eagerGraphBrotliBytes` 3,400,000 → **3,330,000**,
+`initialEntryBrotliBytes` 3,350,000 → **3,260,000**. Against the CI-measured
+base (3,320,289 B eager), the expected CI after ≈ 3,252,900 B keeps ~2.3%
+headroom under the new gate. (Local absolute values sit ~110 KB under CI's —
+machine variance; the delta is the trustworthy number.) Note for local runs:
+`maxDuplicateLibBytes` can FAIL on a dev machine whose worktree carries extra
+postinstall plugin dirs (each adds an app-window HTML entry → more per-entry
+`index-*` copies, 364.3 KB waste measured locally vs CI's 219.8 KB); that
+failure pre-exists this change and does not occur on a clean CI checkout.
+
 ## CORRECTIONS (2026-06-02) — the original numbers below were wrong
 
 Two of the original baseline numbers were measurement artifacts, not real:
@@ -46,7 +80,7 @@ Two of the original baseline numbers were measurement artifacts, not real:
    Fixing the readiness gate (loadperf W5.0) is a prerequisite for trusting boot
    deltas. (research/03-agent-boot-plugins.md)
 
-## Bundle (`bundle-kpi.mjs`) — CORRECTED, clean `build:web`, measured 2026-06-02
+## Bundle (`bundle-kpi.mjs`) — SUPERSEDED 2026-07-02 (kept for the record), measured 2026-06-02
 
 | Metric | Value | Budget | Status |
 | --- | --- | --- | --- |
@@ -83,6 +117,27 @@ all artifacts of measuring a 3-generation layered watch dist; disregard.
 - Dev (tsx) path, for reference: best ~3.1 s, ~12 s under contention.
 - The original "70 ms PASS" was a false positive from the permissive readiness
   check. Budgets: cold `readyMs` ≤ 25 000, peak RSS ≤ 1600 MB.
+
+### Steady-state RSS (idle resident cost — new)
+
+`peakRssMb` is the boot-time high-water mark; a booted agent that never releases
+boot scratch (or slowly grows at idle) is a **separate** regression class the
+peak number hides. After `ready`, the KPI now holds the idle process for a
+settle window (`LOADPERF_STEADY_SETTLE_MS`, default 12 s), samples `/proc` VmRSS,
+and reports **`steadyRssMb`** = the median of the window's tail (last 60 %), the
+resident cost the headless keyless agent actually carries once boot churn
+subsides.
+
+- **Measured** (prod `entry.js start`, keyless/headless, `--runs=2`, 12 s settle,
+  on a heavily CPU-contended host — RSS is contention-insensitive): peak RSS
+  **1057.6 MB**, **steady RSS 1069 MB**. Steady sits slightly *above* boot-peak
+  because RSS keeps climbing during post-ready warmup (lazy provider/embedding
+  load, GC not yet run) — the exact resident tail the boot-peak sample misses.
+- **Budget: `steadyRssMb` ≤ 1500 MB** — ~40 % headroom over the measured 1069 MB
+  and above the historical ~1272 MB peak reading, so it catches a real resident
+  regression (a ~430 MB idle leak) without flaking on host variance. Ratchet it
+  down as idle-footprint optimizations land. A `null` budget records the number
+  without gating; `--attach` mode reports `null` (no child pid to sample).
 
 ### Boot profile (quiesced, `ELIZA_BOOT_PROFILE=1`)
 
