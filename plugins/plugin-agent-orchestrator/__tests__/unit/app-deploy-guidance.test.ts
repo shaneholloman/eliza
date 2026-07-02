@@ -4,6 +4,7 @@ import {
   buildAppDeployGuidance,
   isAppBuildTask,
   isMonetizedAppTask,
+  resolveAppDeployConfig,
 } from "../../src/services/app-deploy-guidance.js";
 
 describe("app-deploy-guidance", () => {
@@ -43,18 +44,18 @@ describe("app-deploy-guidance", () => {
     });
   });
 
-  describe("agent-home publish note (structural, always attached)", () => {
+  describe("custom-host publish note (structural, always attached)", () => {
     const cfg = {
-      target: "agent-home" as const,
-      agentHomeAppsDir: "/data/apps",
-      agentHomeBaseUrl: "https://example.test",
+      target: "custom" as const,
+      customAppsDir: "/data/apps",
+      customBaseUrl: "https://example.test",
     };
     it("attaches the self-gating publish note with both CREATE and EDIT paths", () => {
       const out = augmentTaskWithDeployGuidance(
         "build a magic 8-ball web app",
         cfg,
       );
-      expect(out).toContain("Publishing web apps (agent-home)");
+      expect(out).toContain("Publishing web apps (custom host)");
       expect(out).toContain("To CREATE a new app");
       // The whole point of this PR: an existing deployed app can be edited in
       // place instead of being re-created under a fresh slug.
@@ -70,7 +71,7 @@ describe("app-deploy-guidance", () => {
         "build a monetized web app that charges $3 per use",
         cfg,
       );
-      expect(out).toContain("Publishing web apps (agent-home)");
+      expect(out).toContain("Publishing web apps (custom host)");
       expect(out).toContain("also register it with Eliza Cloud");
       expect(out).toContain("build-monetized-app");
       // The old monetized-vs-static branching (edad template, cloud.json,
@@ -89,9 +90,34 @@ describe("app-deploy-guidance", () => {
         "add a dark mode toggle to the coinflip app and redeploy it",
         cfg,
       );
-      expect(out).toContain("Publishing web apps (agent-home)");
+      expect(out).toContain("Publishing web apps (custom host)");
       expect(out).toContain("Otherwise do not involve Eliza Cloud");
       expect(out).not.toContain("App Deployment (Eliza Cloud)");
+    });
+
+    it("turns structural monetized app intent into a firm custom-host directive", () => {
+      const out = augmentTaskWithDeployGuidance(
+        "people unlock answers from the tiny bot",
+        cfg,
+        { monetized: true },
+      );
+      expect(out).toContain("Publishing web apps (custom host)");
+      expect(out).toContain("THIS APP IS MONETIZED");
+      expect(out).not.toContain("If the app must earn money");
+    });
+
+    it("appends operator-supplied publish notes verbatim, and omits them when unset", () => {
+      const note = "- Do NOT run the host build script for static apps.";
+      const withNotes = augmentTaskWithDeployGuidance("build a web app", {
+        ...cfg,
+        customPublishNotes: note,
+      });
+      expect(withNotes).toContain(note);
+      const withoutNotes = augmentTaskWithDeployGuidance(
+        "build a web app",
+        cfg,
+      );
+      expect(withoutNotes).not.toContain(note);
     });
   });
 
@@ -122,18 +148,28 @@ describe("app-deploy-guidance", () => {
       expect(twice).toBe(once);
     });
 
-    it("uses the gated agent-home host when that target is configured", () => {
+    it("uses the gated custom host when that target is configured", () => {
+      const out = augmentTaskWithDeployGuidance("build a website", {
+        target: "custom",
+        customAppsDir: "/data/apps",
+        customBaseUrl: "https://example.test",
+      });
+      expect(out).toContain("Publishing web apps (custom host)");
+      expect(out).toContain("/data/apps/<slug>/");
+      expect(out).toContain("https://example.test/apps/<slug>/");
+      // The Cloud contract header must not appear — the custom-host note only
+      // references Cloud conditionally for the monetized case.
+      expect(out).not.toContain("App Deployment (Eliza Cloud)");
+    });
+
+    it("accepts legacy agent-home config as a custom-host migration alias", () => {
       const out = augmentTaskWithDeployGuidance("build a website", {
         target: "agent-home",
         agentHomeAppsDir: "/data/apps",
-        agentHomeBaseUrl: "https://example.test",
+        agentHomeBaseUrl: "https://legacy.test",
       });
-      expect(out).toContain("Publishing web apps (agent-home)");
-      expect(out).toContain("/data/apps/<slug>/");
-      expect(out).toContain("https://example.test/apps/<slug>/");
-      // The Cloud contract header must not appear — the agent-home note only
-      // references Cloud conditionally for the monetized case.
-      expect(out).not.toContain("App Deployment (Eliza Cloud)");
+      expect(out).toContain("Publishing web apps (custom host)");
+      expect(out).toContain("https://legacy.test/apps/<slug>/");
     });
   });
 
@@ -157,10 +193,58 @@ describe("app-deploy-guidance", () => {
       expect(out).toContain("App Deployment (Eliza Cloud)");
       expect(out).not.toContain("packages/examples/cloud/edad");
     });
+    it("a structurally monetized cloud build starts from the edad template even when regex misses", () => {
+      const out = buildAppDeployGuidance(
+        { target: "eliza-cloud" },
+        "people unlock answers from the tiny bot",
+        { monetized: true },
+      );
+      expect(out).toContain("packages/examples/cloud/edad");
+      expect(out).toContain("START FROM THE TEMPLATE");
+    });
     it("defaults to Eliza Cloud for an unspecified/empty config", () => {
       expect(buildAppDeployGuidance({ target: "eliza-cloud" })).toContain(
         "Eliza Cloud",
       );
+    });
+  });
+
+  describe("resolveAppDeployConfig", () => {
+    it("resolves legacy agent-home env as a custom-host migration alias", () => {
+      const keys = [
+        "ELIZA_CONFIG_PATH",
+        "ELIZA_APP_DEPLOY_TARGET",
+        "ELIZA_APP_DEPLOY_CUSTOM_APPS_DIR",
+        "ELIZA_APP_DEPLOY_CUSTOM_BASE_URL",
+        "ELIZA_APP_DEPLOY_CUSTOM_NOTES",
+        "ELIZA_AGENT_HOME_APPS_DIR",
+        "ELIZA_AGENT_HOME_BASE_URL",
+      ];
+      const previous = new Map(
+        keys.map((key) => [key, process.env[key]] as const),
+      );
+      try {
+        process.env.ELIZA_CONFIG_PATH = "/does/not/exist/eliza.json";
+        process.env.ELIZA_APP_DEPLOY_TARGET = "agent-home";
+        delete process.env.ELIZA_APP_DEPLOY_CUSTOM_APPS_DIR;
+        delete process.env.ELIZA_APP_DEPLOY_CUSTOM_BASE_URL;
+        process.env.ELIZA_AGENT_HOME_APPS_DIR = "/legacy/apps";
+        process.env.ELIZA_AGENT_HOME_BASE_URL = "https://legacy.test/";
+
+        expect(resolveAppDeployConfig()).toEqual({
+          target: "custom",
+          customAppsDir: "/legacy/apps",
+          customBaseUrl: "https://legacy.test",
+        });
+      } finally {
+        for (const [key, value] of previous) {
+          if (value === undefined) {
+            delete process.env[key];
+          } else {
+            process.env[key] = value;
+          }
+        }
+      }
     });
   });
 });

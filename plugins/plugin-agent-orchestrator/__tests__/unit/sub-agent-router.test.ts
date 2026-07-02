@@ -1380,7 +1380,7 @@ describe("SubAgentRouter", () => {
 
     it("does not surface route-prefix or data-source URLs as the deliverable for a non-build info-fetch", async () => {
       // Live BTC regression (2026-06-13): a "what's BTC worth?" turn routed to
-      // the agent-home apps route. The spawn task carried the route's
+      // the static-apps route. The spawn task carried the route's
       // `--- URL Path Mapping ---` hint verbatim (so `initialTask`, the verify
       // reference text, contained the bare `https://host/apps/` prefix) plus the
       // CoinGecko data-source URL the sub-agent was told to fetch. Both probed
@@ -1414,7 +1414,7 @@ describe("SubAgentRouter", () => {
         {
           workdirRoute: {
             id: "static-apps",
-            workdir: "/tmp/agent-home",
+            workdir: "/tmp/custom-apps",
             urlMappings: [
               { urlPrefix: appsPrefixLocal, localPath: "data/apps/" },
               { urlPrefix: appsPrefixPublic, localPath: "data/apps/" },

@@ -722,8 +722,12 @@ async function runCreate(
       // sendPrompt (smithers or direct), so the AcpService initialTask deploy
       // injection never fires here. Re-attach the contract on the task text
       // itself; the helper is gated + idempotent so non-app tasks pass through.
+      const appMonetized =
+        pickBoolean(params, content, "appMonetized") === true;
       const taskWithRouteHints = augmentTaskWithDeployGuidance(
         taskWithResolvedRoute(task, route, sessionWorkdir, swarmRoomMetadata),
+        undefined,
+        { monetized: appMonetized },
       );
       const session = await service.spawnSession({
         agentType,
@@ -744,6 +748,7 @@ async function runCreate(
           userId: message.entityId,
           label,
           source: content.source,
+          ...(appMonetized ? { appMonetized } : {}),
           workdirRouteId: route?.id,
           workdirRoute: route,
         },
@@ -1119,6 +1124,12 @@ async function runSpawnAgent(
       effectiveWorkdir,
       swarmRoomMetadata,
     );
+    const appMonetized = pickBoolean(params, content, "appMonetized") === true;
+    const taskWithDeployGuidance = augmentTaskWithDeployGuidance(
+      taskWithRouteHints,
+      undefined,
+      { monetized: appMonetized },
+    );
 
     // Resolve the connector source for routing the sub-agent's eventual
     // reply back to the user. For messages that originated on a platform
@@ -1191,7 +1202,7 @@ async function runSpawnAgent(
       agentType,
       workdir: effectiveWorkdir,
       isolateWorkdir,
-      initialTask: taskWithRouteHints,
+      initialTask: taskWithDeployGuidance,
       memoryContent,
       approvalPreset,
       metadata: {
@@ -1211,12 +1222,13 @@ async function runSpawnAgent(
         label,
         source: resolvedSpawnSource,
         keepAliveAfterComplete,
+        ...(appMonetized ? { appMonetized } : {}),
         workdirRouteId: effectiveRoute?.id,
         workdirRoute: effectiveRoute,
         // Stash the resolved task so SubAgentRouter can re-dispatch the
         // sub-agent on a failed verification without reconstructing it.
         // SessionInfo itself doesn't carry initialTask; metadata does.
-        initialTask: taskWithRouteHints,
+        initialTask: taskWithDeployGuidance,
       },
     });
 
