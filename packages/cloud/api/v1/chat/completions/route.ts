@@ -755,7 +755,9 @@ export async function handleChatCompletionsPOST(
   options: ChatCompletionsHandlerOptions = {},
 ) {
   const startTime = Date.now();
-  const requestId = req.headers.get("x-request-id") || crypto.randomUUID();
+  // #11588: this request id feeds billing/affiliate dedupe. Keep it stable for
+  // this request, but never let a caller force collisions with `x-request-id`.
+  const requestId = crypto.randomUUID();
   const idempotencyKey = req.headers.get("idempotency-key") || requestId;
   const routeTimeoutMs = getRouteTimeoutMs(ROUTE_MAX_DURATION);
   let settleReservation:
