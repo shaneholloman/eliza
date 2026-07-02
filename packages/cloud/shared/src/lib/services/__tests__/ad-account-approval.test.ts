@@ -8,14 +8,8 @@
  */
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import {
-  adAccountsRepository,
-  adCampaignsRepository,
-} from "../../../db/repositories";
-import type {
-  AdAccount,
-  AdAccountStatus,
-} from "../../../db/schemas/ad-accounts";
+import { adAccountsRepository, adCampaignsRepository } from "../../../db/repositories";
+import type { AdAccount, AdAccountStatus } from "../../../db/schemas/ad-accounts";
 import type { AdCampaign } from "../../../db/schemas/ad-campaigns";
 import { advertisingService } from "../advertising";
 
@@ -112,9 +106,7 @@ describe("ad account approval state machine", () => {
       spyOn(adAccountsRepository, "updateStatus").mockResolvedValue(makeAccount("active")),
     );
 
-    await expect(advertisingService.approveAccount(ACCOUNT_ID)).rejects.toThrow(
-      /only "pending"/,
-    );
+    await expect(advertisingService.approveAccount(ACCOUNT_ID)).rejects.toThrow(/only "pending"/);
     expect(update).not.toHaveBeenCalled();
   });
 
@@ -196,9 +188,9 @@ describe("advertising spend requires an active account", () => {
       track(spyOn(adCampaignsRepository, "findById").mockResolvedValue(makeCampaign()));
       track(spyOn(adAccountsRepository, "findById").mockResolvedValue(makeAccount(status)));
 
-      await expect(
-        advertisingService.startCampaign(CAMPAIGN_ID, ORG_ID),
-      ).rejects.toThrow(/not active/);
+      await expect(advertisingService.startCampaign(CAMPAIGN_ID, ORG_ID)).rejects.toThrow(
+        /not active/,
+      );
     });
 
     test(`createCreative is blocked when account is ${status}`, async () => {

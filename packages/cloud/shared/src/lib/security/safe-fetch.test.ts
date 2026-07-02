@@ -39,9 +39,7 @@ function createFakeIncomingMessage(
   }) as FakeIncomingMessage;
 }
 
-function createFakeClientRequest(
-  onEnd?: (req: FakeClientRequest) => void,
-): FakeClientRequest {
+function createFakeClientRequest(onEnd?: (req: FakeClientRequest) => void): FakeClientRequest {
   const req = Object.assign(new EventEmitter(), {
     chunks: [] as Buffer[],
     destroy: vi.fn((error?: Error) => {
@@ -253,8 +251,8 @@ describe("safeFetch fail-closed", () => {
       },
     });
 
-    await expect(
-      safeFetch("http://example.com/upload", { method: "POST", body }),
-    ).rejects.toThrow("body exploded");
+    await expect(safeFetch("http://example.com/upload", { method: "POST", body })).rejects.toThrow(
+      "body exploded",
+    );
   });
 });

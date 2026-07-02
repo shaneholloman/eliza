@@ -294,19 +294,19 @@ class AdvertisingService {
           credentials = await this.getCredentials(account);
           provider = this.getProvider(account.platform);
         } catch (error) {
-          logger.error("[Advertising] Failed to load provider credentials while suspending account", {
-            accountId,
-            error: error instanceof Error ? error.message : String(error),
-          });
+          logger.error(
+            "[Advertising] Failed to load provider credentials while suspending account",
+            {
+              accountId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
         }
       }
 
       for (const campaign of activeCampaigns) {
         if (campaign.external_campaign_id && credentials && provider) {
-          const result = await provider.pauseCampaign(
-            credentials,
-            campaign.external_campaign_id,
-          );
+          const result = await provider.pauseCampaign(credentials, campaign.external_campaign_id);
           if (!result.success) {
             logger.error("[Advertising] Failed to pause provider campaign for suspended account", {
               accountId,

@@ -166,10 +166,12 @@ describe("resolveCodingBackend precedence", () => {
       coding: { default: "codex", byTag: { hard: "claude" } },
     });
 
-    expect(resolveCodingBackend({ runtime: fakeRuntime({}), tag: "hard" }))
-      .toEqual({ agentType: "claude", source: "env:byTag" });
-    expect(resolveCodingBackend({ runtime: fakeRuntime({}), tag: "simple" }))
-      .toEqual({ agentType: "codex", source: "env:default" });
+    expect(
+      resolveCodingBackend({ runtime: fakeRuntime({}), tag: "hard" }),
+    ).toEqual({ agentType: "claude", source: "env:byTag" });
+    expect(
+      resolveCodingBackend({ runtime: fakeRuntime({}), tag: "simple" }),
+    ).toEqual({ agentType: "codex", source: "env:default" });
   });
 
   it("4. operator pin wins over the planner's heuristic guess", () => {
