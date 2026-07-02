@@ -68,7 +68,10 @@ export function parseFenceSpans(buffer: string): FenceSpan[] {
 				};
 			} else if (
 				open.markerChar === markerChar &&
-				markerLen >= open.markerLen
+				markerLen >= open.markerLen &&
+				// A closing fence may be followed only by spaces/tabs (CommonMark);
+				// a line like "```js" inside an open fence is content, not a closer.
+				/^[ \t]*$/.test(match[3])
 			) {
 				const end = lineEnd;
 				spans.push({
