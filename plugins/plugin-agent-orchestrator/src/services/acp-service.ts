@@ -160,6 +160,7 @@ const DENY_ENV_PATTERNS = [
   /TELEGRAM.*TOKEN/i,
   /SLACK.*TOKEN/i,
   /BOT.*TOKEN/i,
+  /OPENCODE_CONFIG_CONTENT/i,
   /ELIZA_VAULT_PASSPHRASE/i,
   // Host-API shell-exec / stdio-MCP auth secret — consumed only by
   // packages/agent/src/api/*, never by a coding sub-agent. Forwarding it would
@@ -2238,6 +2239,7 @@ export class AcpService extends Service {
       }
     }
     if (agentType === "opencode") {
+      delete env.OPENCODE_CONFIG_CONTENT;
       const opencode = buildOpencodeAcpEnv(this.runtime, env, model);
       Object.assign(env, opencode.env);
       if (opencode.config) {
@@ -2543,7 +2545,6 @@ export function shouldForwardEnv(key: string): boolean {
       "OPENAI_MODEL",
       "ANTHROPIC_MODEL",
       "OPENCODE_MODEL",
-      "OPENCODE_CONFIG_CONTENT",
       "OPENCODE_DISABLE_AUTOUPDATE",
       "OPENCODE_DISABLE_TERMINAL_TITLE",
       "CODEX_HOME",

@@ -69,6 +69,15 @@ describe("readCodingRouting", () => {
     expect(axis?.allow).toEqual(["claude", "codex"]);
   });
 
+  it("preserves an explicitly empty allow lock-list", () => {
+    const axis = readCodingRouting(
+      fakeRuntime({
+        routing: { coding: { allow: [] } },
+      }),
+    );
+    expect(axis?.allow).toEqual([]);
+  });
+
   it("drops an axis with no usable fields", () => {
     expect(
       readCodingRouting(fakeRuntime({ routing: { coding: { byTag: {} } } })),
@@ -252,6 +261,20 @@ describe("resolveCodingBackend operator allow lock-list", () => {
   it("returns undefined when nothing satisfies the allow-list", () => {
     const runtime = fakeRuntime({
       routing: { coding: { allow: ["elizaos"] } },
+      settings: { ELIZA_ACP_DEFAULT_AGENT: "opencode" },
+    });
+    expect(
+      resolveCodingBackend({
+        runtime,
+        explicit: "codex",
+        plannerGuess: "claude",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("fails closed when the configured allow-list normalizes to no known backends", () => {
+    const runtime = fakeRuntime({
+      routing: { coding: { allow: ["gpt-9000", ""] } },
       settings: { ELIZA_ACP_DEFAULT_AGENT: "opencode" },
     });
     expect(

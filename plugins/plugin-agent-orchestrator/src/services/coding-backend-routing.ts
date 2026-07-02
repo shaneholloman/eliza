@@ -87,7 +87,7 @@ function parseAxis(value: unknown): BackendAxisRouting | undefined {
   }
   if (Array.isArray(value.allow)) {
     const allow = value.allow.filter((v): v is string => typeof v === "string");
-    if (allow.length > 0) axis.allow = allow;
+    axis.allow = allow;
   }
   return axis.default || axis.byTag || axis.allow ? axis : undefined;
 }
@@ -165,11 +165,15 @@ export function resolveCodingBackend(args: {
 }): CodingBackendResolution | undefined {
   const codingEntry = readCodingRoutingEntry(args.runtime);
   const coding = codingEntry?.routing;
-  const allow = coding?.allow
-    ?.map((v) => asKnownAdapter(v))
-    .filter((v): v is string => Boolean(v));
+  const rawAllow = coding?.allow;
+  const allowConfigured = Array.isArray(rawAllow);
+  const allow = allowConfigured
+    ? rawAllow
+        .map((v) => asKnownAdapter(v))
+        .filter((v): v is string => Boolean(v))
+    : undefined;
   const allowed = (backend: string | undefined): string | undefined =>
-    backend && (!allow?.length || allow.includes(backend))
+    backend && (!allowConfigured || allow?.includes(backend))
       ? backend
       : undefined;
 

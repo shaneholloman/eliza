@@ -593,7 +593,7 @@ function parseCodingAxisObject(parsed: unknown): CodingAxisRouting {
     const allow = coding.allow.filter(
       (v): v is string => typeof v === "string",
     );
-    if (allow.length > 0) out.allow = allow;
+    out.allow = allow;
   }
   return out;
 }
@@ -642,11 +642,15 @@ function readEffectiveCodingRouting(
   const fromCharacter = parseCodingAxisObject(
     runtime.character?.settings?.routing,
   );
-  if (fromCharacter.default || fromCharacter.byTag || fromCharacter.allow) {
+  if (
+    fromCharacter.default ||
+    fromCharacter.byTag ||
+    fromCharacter.allow !== undefined
+  ) {
     return { routing: fromCharacter, source: "character" };
   }
   const fromEnv = readBackendRouting(config);
-  if (fromEnv.default || fromEnv.byTag || fromEnv.allow) {
+  if (fromEnv.default || fromEnv.byTag || fromEnv.allow !== undefined) {
     return { routing: fromEnv, source: "env" };
   }
   return { routing: {}, source: "none" };
@@ -736,6 +740,18 @@ function handleSetBackend(
   // Start from the EFFECTIVE routing (character first, else env) so we mutate
   // whatever currently wins and preserve any operator allow lock-list.
   const { routing: coding } = readEffectiveCodingRouting(runtime, config);
+  if (coding.allow !== undefined) {
+    const allowed = coding.allow
+      .map((value) => normalizeCodingBackend(value))
+      .filter((value): value is string => Boolean(value));
+    if (!allowed.includes(backend)) {
+      return fail(
+        "SETTINGS_BACKEND_DISALLOWED",
+        `Cannot route coding tasks to \`${backend}\`: it is outside the configured coding backend allow-list.`,
+        { backend, allow: allowed },
+      );
+    }
+  }
   if (tag) {
     coding.byTag = { ...(coding.byTag || {}), [tag]: backend };
   } else {

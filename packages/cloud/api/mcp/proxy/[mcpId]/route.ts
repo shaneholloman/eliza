@@ -219,6 +219,34 @@ app.post("/", async (c) => {
     );
   }
 
+  let refundedPrecharge = false;
+  const refundPrecharge = async (
+    reason: string,
+    metadata: Record<string, string | number | boolean | null | undefined> = {},
+  ): Promise<void> => {
+    if (refundedPrecharge) return;
+    refundedPrecharge = true;
+    await creditsService
+      .refundCredits({
+        organizationId: user.organization_id,
+        amount: totalCreditsRequired / CREDITS_PER_DOLLAR,
+        description: `MCP refund: ${mcp.name} (${reason})`,
+        metadata: {
+          mcp_id: mcp.id,
+          reason,
+          ...metadata,
+        },
+      })
+      .catch((refundError: Error | string) => {
+        logger.error("[MCP Proxy] Failed to refund credits", {
+          mcpId,
+          reason,
+          error:
+            typeof refundError === "string" ? refundError : refundError.message,
+        });
+      });
+  };
+
   let targetUrl: string;
   // External (user-configured) endpoints are fetched through safeFetch below,
   // which re-validates AND pins the resolved IP for the actual request (closing
@@ -237,24 +265,54 @@ app.post("/", async (c) => {
         mcpId,
         error: error instanceof Error ? error.message : String(error),
       });
+      await refundPrecharge("unsafe_external_endpoint", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       return c.json({ error: "Unsafe external MCP endpoint" }, 400);
     }
     targetUrl = parsed.toString();
     isExternalEndpoint = true;
   } else if (mcp.endpoint_type === "container" && mcp.container_id) {
-    const container = await containersService.getById(
-      mcp.container_id,
-      mcp.organization_id,
-    );
+    let container: Awaited<ReturnType<typeof containersService.getById>>;
+    try {
+      container = await containersService.getById(
+        mcp.container_id,
+        mcp.organization_id,
+      );
+    } catch (error) {
+      logger.error("[MCP Proxy] Failed to resolve MCP container", {
+        mcpId,
+        containerId: mcp.container_id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await refundPrecharge("container_lookup_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return c.json({ error: "MCP container not available" }, 502);
+    }
     if (!container?.load_balancer_url) {
+      await refundPrecharge("container_not_available");
       return c.json({ error: "MCP container not available" }, 503);
     }
     targetUrl = `${container.load_balancer_url}${mcp.endpoint_path || "/mcp"}`;
   } else {
+    await refundPrecharge("endpoint_not_configured");
     return c.json({ error: "MCP endpoint not configured" }, 500);
   }
 
-  const proxyBody = await parseJsonBody(c.req.raw);
+  let proxyBody: McpProxyJson;
+  try {
+    proxyBody = await parseJsonBody(c.req.raw);
+  } catch (error) {
+    logger.warn("[MCP Proxy] Invalid JSON body", {
+      mcpId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await refundPrecharge("invalid_json_body", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
   const toolName = toolNameFromRpcBody(proxyBody);
 
   const proxyRequestInit: RequestInit = {
@@ -295,7 +353,26 @@ app.post("/", async (c) => {
       targetUrl,
       error: error instanceof Error ? error.message : String(error),
     });
+    await refundPrecharge("mcp_endpoint_unreachable", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return c.json({ error: "Failed to reach MCP endpoint" }, 502);
+  }
+
+  let responseBody: string;
+  try {
+    responseBody = await mcpResponse.text();
+  } catch (error) {
+    logger.error("[MCP Proxy] Failed to read MCP response body", {
+      mcpId,
+      status: mcpResponse.status,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await refundPrecharge("mcp_response_read_failed", {
+      status: mcpResponse.status,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return c.json({ error: "Failed to read MCP response" }, 502);
   }
 
   if (mcpResponse.ok) {
@@ -327,27 +404,8 @@ app.post("/", async (c) => {
         });
       });
   } else {
-    await creditsService
-      .refundCredits({
-        organizationId: user.organization_id,
-        amount: totalCreditsRequired / CREDITS_PER_DOLLAR,
-        description: `MCP refund: ${mcp.name} (failed)`,
-        metadata: {
-          mcp_id: mcp.id,
-          reason: "mcp_call_failed",
-          status: mcpResponse.status,
-        },
-      })
-      .catch((refundError: Error | string) => {
-        logger.error("[MCP Proxy] Failed to refund credits", {
-          mcpId,
-          error:
-            typeof refundError === "string" ? refundError : refundError.message,
-        });
-      });
+    await refundPrecharge("mcp_call_failed", { status: mcpResponse.status });
   }
-
-  const responseBody = await mcpResponse.text();
 
   return new Response(responseBody, {
     status: mcpResponse.status,

@@ -255,4 +255,19 @@ describe("safeFetch fail-closed", () => {
       "body exploded",
     );
   });
+
+  test("rejects when a ReadableStream request body is already locked", async () => {
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    requestMock.mockImplementation(() => createFakeClientRequest());
+    const body = utf8Stream("locked body");
+    const reader = body.getReader();
+
+    try {
+      await expect(
+        safeFetch("http://example.com/upload", { method: "POST", body }),
+      ).rejects.toThrow(/locked|reader/i);
+    } finally {
+      reader.releaseLock();
+    }
+  });
 });
