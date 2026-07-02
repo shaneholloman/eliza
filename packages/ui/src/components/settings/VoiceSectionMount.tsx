@@ -18,6 +18,7 @@ import type { DeviceTier } from "../../api/client-local-inference";
 import { createVoiceProfilesClient } from "../../api/client-voice-profiles";
 import {
   loadWakeWordEnabled,
+  saveContinuousChatMode,
   saveVadAutoStop,
   saveWakeWordEnabled,
 } from "../../state/persistence";
@@ -104,12 +105,24 @@ export function VoiceSectionMount(): React.ReactElement {
   React.useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const config = await client.getConfig();
-      if (cancelled) return;
-      const loaded = readStoredVoicePrefs(config);
-      setPrefs(loaded);
-      // Seed the local mirror so the capture hot path reads the server value.
-      if (loaded.vadAutoStop) saveVadAutoStop(loaded.vadAutoStop);
+      try {
+        const config = await client.getConfig();
+        if (cancelled) return;
+        const loaded = readStoredVoicePrefs(config);
+        setPrefs(loaded);
+        // Seed the local mirrors so the capture hot path reads the server value.
+        if (loaded.vadAutoStop) saveVadAutoStop(loaded.vadAutoStop);
+        // The surfaces that implement continuous chat (ChatView,
+        // useShellController) read ONLY the localStorage mirror via
+        // loadContinuousChatMode — never `messages.voice.continuous` — so the
+        // server value must be seeded into it, same as vadAutoStop above.
+        saveContinuousChatMode(loaded.continuous);
+      } catch {
+        if (cancelled) return;
+        setPrefs(DEFAULT_VOICE_SECTION_PREFS);
+        saveVadAutoStop(DEFAULT_VAD_AUTO_STOP_PREFS);
+        saveContinuousChatMode(DEFAULT_VOICE_SECTION_PREFS.continuous);
+      }
     })();
     return () => {
       cancelled = true;
@@ -119,10 +132,16 @@ export function VoiceSectionMount(): React.ReactElement {
   React.useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const result = await client.getLocalInferenceDeviceTier();
-      if (cancelled) return;
-      setTier(result.tier);
-      setTierSummary(result.reason);
+      try {
+        const result = await client.getLocalInferenceDeviceTier();
+        if (cancelled) return;
+        setTier(result.tier);
+        setTierSummary(result.reason);
+      } catch {
+        if (cancelled) return;
+        setTier(null);
+        setTierSummary(undefined);
+      }
     })();
     return () => {
       cancelled = true;
@@ -141,7 +160,8 @@ export function VoiceSectionMount(): React.ReactElement {
       setPrefs(next);
       setPersistError(null);
       // Mirror to localStorage immediately so the capture path picks up the new
-      // VAD thresholds without waiting on the config round-trip.
+      // voice settings without waiting on the config round-trip.
+      saveContinuousChatMode(next.continuous);
       if (next.vadAutoStop) saveVadAutoStop(next.vadAutoStop);
       try {
         const config = await client.getConfig();
