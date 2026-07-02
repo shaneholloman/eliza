@@ -268,6 +268,7 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
   >(null);
   const talkModeHandlesRef = useRef<PluginListenerHandle[]>([]);
   const ensureTalkModeListenersPromiseRef = useRef<Promise<void> | null>(null);
+  const startListeningPromiseRef = useRef<Promise<void> | null>(null);
   const mountedRef = useRef(true);
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
@@ -1021,26 +1022,42 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
   const startListening = useCallback(
     async (mode: Exclude<VoiceCaptureMode, "idle"> = "compose") => {
       if (enabledRef.current) return;
-
-      transcriptBufferRef.current = "";
-      setInterimTranscript("");
-      if (interruptOnSpeechRef.current) {
-        interruptSpeechRef.current();
+      if (startListeningPromiseRef.current) {
+        return startListeningPromiseRef.current;
       }
 
-      const localStarted = await startLocalInferenceRecognition(mode);
-      if (localStarted) {
-        return;
-      }
+      const startPromise = (async () => {
+        if (enabledRef.current) return;
 
-      if (shouldPreferNativeTalkMode()) {
-        const started = await startTalkModeRecognition(mode);
-        if (started) {
+        transcriptBufferRef.current = "";
+        setInterimTranscript("");
+        if (interruptOnSpeechRef.current) {
+          interruptSpeechRef.current();
+        }
+
+        const localStarted = await startLocalInferenceRecognition(mode);
+        if (localStarted) {
           return;
         }
-      }
 
-      startBrowserRecognition(mode);
+        if (shouldPreferNativeTalkMode()) {
+          const started = await startTalkModeRecognition(mode);
+          if (started) {
+            return;
+          }
+        }
+
+        startBrowserRecognition(mode);
+      })();
+
+      startListeningPromiseRef.current = startPromise;
+      try {
+        await startPromise;
+      } finally {
+        if (startListeningPromiseRef.current === startPromise) {
+          startListeningPromiseRef.current = null;
+        }
+      }
     },
     [
       startBrowserRecognition,

@@ -118,6 +118,7 @@ describe("useVoiceChat TalkMode listener lifecycle", () => {
     expect(
       talkModeMock.addListener.mock.calls.map(([eventName]) => eventName),
     ).toEqual(["transcript", "error", "stateChange"]);
+    expect(talkModeMock.start).toHaveBeenCalledTimes(1);
 
     unmount();
 

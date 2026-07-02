@@ -149,9 +149,10 @@ describe("VoiceSectionMount — continuous-chat localStorage mirror", () => {
     );
   });
 
-  it("renders defaults and keeps local mirrors coherent when boot reads fail", async () => {
+  it("renders defaults without overwriting local mirrors when boot reads fail", async () => {
     const unhandledRejection = vi.fn();
     window.addEventListener("unhandledrejection", unhandledRejection);
+    window.localStorage.setItem(CONTINUOUS_KEY, "always-on");
     clientMock.getConfig.mockRejectedValue(new Error("config unavailable"));
     clientMock.getLocalInferenceDeviceTier.mockRejectedValue(
       new Error("tier unavailable"),
@@ -167,7 +168,7 @@ describe("VoiceSectionMount — continuous-chat localStorage mirror", () => {
     await waitFor(() =>
       expect(clientMock.getLocalInferenceDeviceTier).toHaveBeenCalled(),
     );
-    expect(window.localStorage.getItem(CONTINUOUS_KEY)).toBe("off");
+    expect(window.localStorage.getItem(CONTINUOUS_KEY)).toBe("always-on");
     expect(unhandledRejection).not.toHaveBeenCalled();
 
     window.removeEventListener("unhandledrejection", unhandledRejection);

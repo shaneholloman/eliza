@@ -120,8 +120,6 @@ export function VoiceSectionMount(): React.ReactElement {
       } catch {
         if (cancelled) return;
         setPrefs(DEFAULT_VOICE_SECTION_PREFS);
-        saveVadAutoStop(DEFAULT_VAD_AUTO_STOP_PREFS);
-        saveContinuousChatMode(DEFAULT_VOICE_SECTION_PREFS.continuous);
       }
     })();
     return () => {
