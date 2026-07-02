@@ -12,7 +12,7 @@
  * double-credit / mint.
  *
  * The helper tests (apps-chat-stream-refund.test.ts) drive
- * `reconcileStreamProcessingError` with a pre-computed boolean, so they stay
+ * `reconcileChatSettleError` with a pre-computed boolean, so they stay
  * green even if the route's flag ordering regresses. This suite drives the REAL
  * route with a reservation seam that models the real non-transactional
  * internals (refund committed, then throw), asserting the refund COUNT end to
