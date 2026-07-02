@@ -156,6 +156,7 @@ export * from "./media";
 export * from "./memory";
 export * from "./messaging/interactions";
 export * from "./mobile-device-bridge-hooks";
+export * from "./model-gateway";
 // Export network utilities (SSRF protection, secure fetch)
 export * from "./network";
 export { getOptimizationRootDir } from "./optimization-root-dir";
