@@ -172,19 +172,9 @@ class DiscordAppAutomationService {
   }
 
   async generateAnnouncement(organizationId: string, app: App): Promise<string> {
-    const deduction = await creditsService.deductCredits({
-      organizationId,
-      amount: DISCORD_POST_COST,
-      description: `Discord AI announcement: ${app.name}`,
-      metadata: { appId: app.id, type: "discord_announcement" },
-    });
-
-    if (!deduction.success) {
-      throw new Error(
-        `Insufficient credits for AI generation. Required: $${DISCORD_POST_COST.toFixed(4)}`,
-      );
-    }
-
+    // All throwable prep (character-context DB fetch, prompt build) runs BEFORE
+    // the deduction: nothing may throw between the charge and the refunding try,
+    // or the user is charged for a generation that never ran (#11685).
     const config = app.discord_automation as DiscordAutomationConfig;
     const vibeStyle = config?.vibeStyle || "professional and engaging";
 
@@ -235,6 +225,19 @@ Website: ${app.website_url || app.app_url}
 Write in a ${vibeStyle} style. Keep it concise and engaging.
 Use appropriate emojis sparingly (1-2 max). Do not use excessive formatting.
 Maximum ${MAX_ANNOUNCEMENT_LENGTH} characters. Do not include the URL in your response - it will be added automatically.`;
+
+    const deduction = await creditsService.deductCredits({
+      organizationId,
+      amount: DISCORD_POST_COST,
+      description: `Discord AI announcement: ${app.name}`,
+      metadata: { appId: app.id, type: "discord_announcement" },
+    });
+
+    if (!deduction.success) {
+      throw new Error(
+        `Insufficient credits for AI generation. Required: $${DISCORD_POST_COST.toFixed(4)}`,
+      );
+    }
 
     try {
       const result = await generateText({
