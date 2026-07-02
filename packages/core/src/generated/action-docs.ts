@@ -6576,12 +6576,12 @@ export const allActionsSpec = {
 		{
 			name: "INBOX",
 			description:
-				"Inbox: Gmail, Slack, Discord, Telegram, Signal, iMessage, WhatsApp. Merge recency feed and operate the persisted triage queue. Subactions: list, search, summarize, triage, reply, snooze, archive, approve.",
+				"Inbox: Gmail, Slack, Discord, Telegram, Signal, iMessage, WhatsApp. Merge recency feed and operate the persisted triage queue. Subactions: list, search, summarize, triage (AI-classify new messages into urgent / needs_reply / notify / info / ignore, then return the prioritized queue), reply, snooze, archive, approve.",
 			parameters: [
 				{
 					name: "action",
 					description:
-						"Inbox op: list | search | summarize | triage | reply | snooze | archive | approve.",
+						"Inbox op: list | search | summarize | triage (classify new messages with the AI triage classifier, then return the pending queue) | reply | snooze | archive | approve.",
 					required: false,
 					schema: {
 						type: "string",
@@ -6597,7 +6597,7 @@ export const allActionsSpec = {
 						],
 					},
 					descriptionCompressed:
-						"Inbox op: list | search | summarize | triage | reply | snooze | archive | approve.",
+						"Inbox op: list | search | summarize | triage (classify new msgs with the AI triage classifier, then return the pending queue) | reply | snooze | archive |...",
 				},
 				{
 					name: "platforms",
@@ -6681,7 +6681,7 @@ export const allActionsSpec = {
 				},
 			],
 			descriptionCompressed:
-				"INBOX list|search|summarize|triage|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
+				"INBOX list|search|summarize|triage(classify urgent/needs_reply/noise)|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
 			exampleCalls: [
 				{
 					user: "Use INBOX with the provided parameters.",
@@ -9014,13 +9014,48 @@ export const allActionsSpec = {
 				{
 					name: "agentType",
 					description:
-						"Agent type (elizaos, pi-agent, opencode, codex, or claude) for create / spawn_agent / control.resume. Defaults to ELIZA_ACP_DEFAULT_AGENT, normally elizaos.",
+						"Heuristic backend guess (elizaos, pi-agent, opencode, codex, or claude) for create / spawn_agent / control.resume. This is a weak hint — it loses to the operator default/pin and to character routing. To honor an EXPLICIT user request use requestedBackend instead.",
 					required: false,
 					schema: {
 						type: "string",
 					},
 					descriptionCompressed:
-						"Agent type (elizaos, pi-agent, opencode, codex, or claude) for create/spawn_agent/control. resume. Defaults to ELIZA_ACP_DEFAULT_AGENT, normally elizaos.",
+						"Heuristic backend guess (elizaos, pi-agent, opencode, codex, or claude) for create/spawn_agent/control. resume. This is a weak hint - it loses to the...",
+				},
+				{
+					name: "appMonetized",
+					description:
+						"Set true when the user wants the app to EARN MONEY / charge for access — e.g. 'people pay $1 to chat with X', 'charge per message', 'a paid app', 'monetized', a paywall, or per-use pricing. Judge the user's INTENT, not specific keywords. When true the sub-agent gets the monetized Eliza Cloud contract (register for an appId, inference markup, OAuth + affiliate billing) instead of a free static page. Leave unset for a normal free app or non-app task.",
+					required: false,
+					schema: {
+						type: "boolean",
+					},
+					descriptionCompressed:
+						"Set true when user wants the app to EARN MONEY/charge for access - e. g. 'people pay $1 to chat with X', 'charge per msg', 'a paid app', 'monetized', a...",
+				},
+				{
+					name: "requestedBackend",
+					description:
+						"Set ONLY when the user EXPLICITLY named a coding backend for THIS task (e.g. 'use codex', 'have claude build it') — one of elizaos, pi-agent, opencode, codex, claude. Leave unset if the user did not name one; never guess. Unlike agentType this overrides the configured default/pin.",
+					required: false,
+					schema: {
+						type: "string",
+						enum: ["elizaos", "pi-agent", "opencode", "codex", "claude"],
+					},
+					descriptionCompressed:
+						"Set ONLY when user EXPLICITLY named a coding backend for THIS task (e. g. 'use codex', 'have claude build it') - one of elizaos, pi-agent, opencode, codex...",
+				},
+				{
+					name: "taskComplexity",
+					description:
+						"Your honest assessment of this coding task's difficulty: 'simple' (small/routine), 'moderate', or 'hard' (large, subtle, multi-file, or architectural). Used only to route to whichever backend the character configured for that difficulty (character.routing.coding.byTag). Judge the task itself — do not echo words from the user.",
+					required: false,
+					schema: {
+						type: "string",
+						enum: ["simple", "moderate", "hard"],
+					},
+					descriptionCompressed:
+						"Your honest assessment of this coding task's difficulty: 'simple' (small/routine), 'moderate', or 'hard' (large, subtle, multi-file, or architectural). Used...",
 				},
 				{
 					name: "agents",
@@ -9611,6 +9646,9 @@ export const allActionsSpec = {
 							operation: "create",
 							task: "example",
 							agentType: "example",
+							appMonetized: false,
+							requestedBackend: "elizaos",
+							taskComplexity: "simple",
 							agents: "example",
 							repo: "example",
 							workdir: "example",
