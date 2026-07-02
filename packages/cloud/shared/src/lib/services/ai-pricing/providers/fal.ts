@@ -79,6 +79,8 @@ export function buildFalImageSnapshotEntries(): PreparedPricingEntry[] {
   const priceByModel: Record<string, number> = {
     "fal-ai/flux/schnell": 0.003,
     "fal-ai/flux/dev": 0.025,
+    "fal-ai/recraft/v3/text-to-image": 0.04,
+    "fal-ai/ideogram/v3": 0.06,
   };
 
   return SUPPORTED_IMAGE_MODELS.filter((model) => model.billingSource === "fal").flatMap(

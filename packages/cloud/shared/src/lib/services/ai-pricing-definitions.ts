@@ -277,6 +277,25 @@ export const SUPPORTED_IMAGE_MODELS: SupportedImageModelDefinition[] = [
     sourceUrl: "https://fal.ai/models/fal-ai/flux/dev",
     defaultDimensions: { image_size: "square_hd" },
   },
+  // Roster additions (#10688): design/vector + typography-strong image models
+  // served through the existing fal image provider (same fal.run contract as
+  // FLUX). Snapshot-priced in ai-pricing/providers/fal.ts.
+  {
+    modelId: "fal-ai/recraft/v3/text-to-image",
+    provider: "fal",
+    billingSource: "fal",
+    label: "Recraft V3",
+    sourceUrl: "https://fal.ai/models/fal-ai/recraft/v3/text-to-image",
+    defaultDimensions: { image_size: "square_hd" },
+  },
+  {
+    modelId: "fal-ai/ideogram/v3",
+    provider: "fal",
+    billingSource: "fal",
+    label: "Ideogram V3",
+    sourceUrl: "https://fal.ai/models/fal-ai/ideogram/v3",
+    defaultDimensions: { image_size: "square_hd" },
+  },
 ] as const;
 
 /**
