@@ -1,7 +1,6 @@
 /**
  * "My Agent" page (`/dashboard/my-agents`) — the character library + agent
- * console. Ported from
- * `@elizaos/cloud-frontend/src/dashboard/my-agents/Page.tsx`.
+ * console.
  */
 
 import {
@@ -9,9 +8,9 @@ import {
   PageHeaderProvider,
 } from "@elizaos/ui/cloud-ui";
 import { useDocumentTitle } from "../lib/use-document-title";
+import { useRequireAuth } from "../lib/use-session-auth";
 import { MyAgentsClient } from "./components/my-agents";
 import { useT } from "./lib/i18n";
-import { useRequireAuth } from "./lib/use-session-auth";
 
 export default function MyAgentsPage() {
   const t = useT();

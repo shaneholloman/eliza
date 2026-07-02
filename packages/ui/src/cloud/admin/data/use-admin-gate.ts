@@ -1,17 +1,6 @@
 /**
  * THE single admin gate for the app-hosted Eliza Cloud admin surfaces.
  *
- * Consolidates the auth/role mess that existed in `@elizaos/cloud-frontend`:
- * that package had two parallel admin hooks
- * (`lib/data/admin.ts` — a react-query gate on the moderation HEAD endpoint —
- * and `hooks/use-admin.ts` — a hand-rolled module-cache + in-flight-dedupe hook
- * keyed on a wallet address, with the anvil-default-wallet fallback) plus four
- * different dev-bypass conventions scattered across the route layout, the page,
- * and the env flags (`import.meta.env.DEV`, `process.env.NODE_ENV`,
- * `NEXT_PUBLIC_DEVNET`, `VITE_ELIZA_CLOUD_LOCAL_DEV_ADMIN`).
- *
- * This module replaces all of that with ONE source of truth:
- *
  *   - **Role:** the `HEAD /api/v1/admin/moderation` endpoint, parsed from its
  *     `X-Is-Admin` / `X-Admin-Role` response headers — the server is the only
  *     authority on who is an admin and what role they hold.
@@ -30,7 +19,7 @@ import type {
 } from "@elizaos/cloud-shared/lib/types/cloud-api";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../../lib/api-client";
-import { useSessionAuth } from "../../public-pages/lib/use-session-auth";
+import { useSessionAuth } from "../../lib/use-session-auth";
 
 export type AdminGateStatus = AdminModerationStatusResponse;
 

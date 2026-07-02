@@ -1,8 +1,6 @@
 /**
- * Current-user data hook backed by `GET /api/v1/user`.
- *
- * Ported from `@elizaos/cloud-frontend/src/lib/data/user.ts`. Calls the profile
- * route used by account + settings, unwraps the `{ success, data }` envelope,
+ * Current-user data hook backed by `GET /api/v1/user`. Calls the profile route
+ * used by account + settings, unwraps the `{ success, data }` envelope,
  * and adapts the payload to the `UserProfile` shape the account components
  * consume (timestamp strings → `Date`). Gated on the synchronous session check
  * so we never fire before the session is restored from storage.
@@ -13,7 +11,7 @@ import type {
 } from "@elizaos/cloud-shared/types";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api-client";
-import { useSessionAuth } from "./use-session-auth";
+import { useSessionAuth } from "../../lib/use-session-auth";
 
 /**
  * `UserWithOrganization`-compatible record consumed by the account components.

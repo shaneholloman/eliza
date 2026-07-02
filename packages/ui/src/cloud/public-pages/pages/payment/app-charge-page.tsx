@@ -2,8 +2,7 @@
  * Hosted public page for an app credit-charge request. Reads the charge +
  * owning app from /api/v1/apps/:appId/charges/:chargeId, then begins a
  * stripe/oxapay checkout (auth required to start checkout; login redirect on
- * sign-out). Polls for confirmation after returning from the provider. Ported
- * from `@elizaos/cloud-frontend/src/pages/payment/app-charge/[appId]/[chargeId]/page.tsx`.
+ * sign-out). Polls for confirmation after returning from the provider.
  */
 
 import {
@@ -17,8 +16,8 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { ApiError, api } from "../../../lib/api-client";
+import { useSessionAuth } from "../../../lib/use-session-auth";
 import { useCloudT } from "../../../shell/CloudI18nProvider";
-import { useSessionAuth } from "../../lib/use-session-auth";
 import { navigateToExternalPayment } from "./payment-navigation";
 
 type TFn = ReturnType<typeof useCloudT>;

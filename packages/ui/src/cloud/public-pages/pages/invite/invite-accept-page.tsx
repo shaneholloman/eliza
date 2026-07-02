@@ -2,7 +2,7 @@
  * Invite-acceptance page for organization invitations. Validates the token,
  * then lets an authenticated user accept (which MOVES them into the inviting org
  * — single-org model). Signed-out users are sent to login with a returnTo back
- * here. Ported from `@elizaos/cloud-frontend/src/pages/invite/accept/page.tsx`.
+ * here.
  *
  * Changes vs source: dropped the dead `pending-invite-token` localStorage write
  * (the returnTo round-trip already carries the token); raw fetch → typed `api`
@@ -40,9 +40,9 @@ import {
   CardTitle,
 } from "../../../../components/primitives";
 import { ApiError, api } from "../../../lib/api-client";
+import { useSessionAuth } from "../../../lib/use-session-auth";
 import { useCloudT } from "../../../shell/CloudI18nProvider";
 import { DEFAULT_LOGIN_RETURN_TO } from "../../lib/login-return-to";
-import { useSessionAuth } from "../../lib/use-session-auth";
 
 interface InviteDetails {
   organization_name: string;

@@ -84,6 +84,9 @@ export * from "./lifeops-passive-connectors";
 export * from "./logger";
 export * from "./memory";
 export * from "./messaging/interactions";
+// Vendor-neutral model-gateway resolution (#11536 E1). Pure string logic, no
+// Node deps, so it is browser-safe and exported from both barrels.
+export * from "./model-gateway";
 export * from "./prompts";
 export * from "./roles";
 export * from "./runtime";

@@ -53,7 +53,9 @@ import {
   getAiProviderConfigurationError,
   getLanguageModel,
   hasLanguageModelProviderConfigured,
+  type PooledLanguageModelCredential,
   resolveAiProviderSource,
+  resolvePooledDirectProviderForModel,
 } from "@/lib/providers/language-model";
 import {
   type AIUsage,
@@ -91,6 +93,10 @@ import {
   resolveInferenceBillingLedger,
 } from "@/lib/services/inference-billing-ledger";
 import { getCachedGatewayModelById } from "@/lib/services/model-catalog";
+import {
+  getTeamPoolRegistry,
+  type SelectedPooledCredential,
+} from "@/lib/services/team-credential-pool";
 import { createCreditReservationSettler } from "@/lib/utils/credit-reservation";
 import { logger } from "@/lib/utils/logger";
 import { getRouteTimeoutMs } from "@/lib/utils/request-timeout";
@@ -100,6 +106,12 @@ const ROUTE_MAX_DURATION = 800;
 
 // Minimum tokens to reserve for actual response generation when CoT is active
 const MIN_RESPONSE_TOKENS = 4096;
+
+interface PooledInferenceCredential extends PooledLanguageModelCredential {
+  organizationId: string;
+  credentialId: string;
+  label: string;
+}
 
 function buildProviderReconciliationMetadata(
   provider: string,
@@ -770,6 +782,72 @@ function getRecoverableProviderErrorStatus(error: unknown): number | null {
   return null;
 }
 
+function toPooledInferenceCredential(
+  organizationId: string,
+  selected: SelectedPooledCredential,
+): PooledInferenceCredential {
+  return {
+    organizationId,
+    credentialId: selected.credentialId,
+    providerId: selected.providerId,
+    apiKey: selected.apiKey,
+    label: selected.label,
+  };
+}
+
+async function selectPooledInferenceCredential(params: {
+  model: string;
+  organizationId: string;
+  sessionKey: string;
+}): Promise<PooledInferenceCredential | null> {
+  const providerId = resolvePooledDirectProviderForModel(params.model);
+  if (!providerId) return null;
+  const selected = await getTeamPoolRegistry().selectCredential({
+    organizationId: params.organizationId,
+    providerId,
+    sessionKey: params.sessionKey,
+  });
+  return selected
+    ? toPooledInferenceCredential(params.organizationId, selected)
+    : null;
+}
+
+async function recordPooledInferenceSuccess(
+  pooledCredential: PooledInferenceCredential | null,
+  userId: string,
+): Promise<void> {
+  if (!pooledCredential) return;
+  await getTeamPoolRegistry().recordUse({
+    organizationId: pooledCredential.organizationId,
+    credentialId: pooledCredential.credentialId,
+    userId,
+  });
+}
+
+async function recordPooledInferenceFailure(
+  pooledCredential: PooledInferenceCredential | null,
+  error: unknown,
+): Promise<void> {
+  if (!pooledCredential) return;
+  const status =
+    getRecoverableProviderErrorStatus(error) ?? getErrorStatusCode(error);
+  if (![401, 403, 429].includes(status)) return;
+  await getTeamPoolRegistry().recordProviderFailure({
+    organizationId: pooledCredential.organizationId,
+    credentialId: pooledCredential.credentialId,
+    providerId: pooledCredential.providerId,
+    status,
+    detail: error instanceof Error ? error.message : String(error),
+  });
+}
+
+function shouldUsePooledNoopReservation(params: {
+  pooledCredential: PooledInferenceCredential | null;
+  useMonetizedAppBilling: boolean;
+}): boolean {
+  return Boolean(params.pooledCredential && !params.useMonetizedAppBilling);
+}
+
 // ============================================================================
 // Main Handler
 // ============================================================================
@@ -915,8 +993,13 @@ export async function handleChatCompletionsPOST(
     // by dedicated agents) to the bare Cerebras id so pricing, routing, and
     // billing all agree and route to cerebras-direct instead of OpenRouter.
     const model = canonicalizeCerebrasModelId(request.model);
+    const pooledCredential = await selectPooledInferenceCredential({
+      model,
+      organizationId: user.organization_id,
+      sessionKey: apiKey?.id ?? user.id,
+    });
 
-    if (!hasLanguageModelProviderConfigured(model)) {
+    if (!pooledCredential && !hasLanguageModelProviderConfigured(model)) {
       return addCorsHeaders(
         Response.json(
           {
@@ -933,7 +1016,9 @@ export async function handleChatCompletionsPOST(
 
     const provider = getProviderFromModel(model);
     const normalizedModel = normalizeModelName(model);
-    const billingSource = resolveAiProviderSource(model) ?? "gateway";
+    const billingSource = pooledCredential
+      ? "gateway"
+      : (resolveAiProviderSource(model) ?? "gateway");
     const cotBudget = resolveAnthropicThinkingBudgetTokens(model, process.env);
     const cotOptions =
       cotBudget != null
@@ -1052,6 +1137,9 @@ export async function handleChatCompletionsPOST(
       | ((actualCost: number) => Promise<CreditReconciliationResult | null>)
       | null = null;
 
+    const useMonetizedAppBilling = Boolean(
+      useAppCredits && appId && monetizedApp,
+    );
     if (useAppCredits && appId && monetizedApp) {
       const { totalCost } = await calculateCost(
         normalizedModel,
@@ -1097,6 +1185,13 @@ export async function handleChatCompletionsPOST(
         }
         throw error;
       }
+    } else if (
+      shouldUsePooledNoopReservation({
+        pooledCredential,
+        useMonetizedAppBilling,
+      })
+    ) {
+      reservation = creditsService.createAnonymousReservation();
     } else {
       // Organization credits path. #9899 Tier-2: when optimistic billing is
       // enabled AND this org's balance comfortably clears SAFE_BALANCE_THRESHOLD,
@@ -1252,7 +1347,14 @@ export async function handleChatCompletionsPOST(
 
     // Optimistic path debits the actual cost off the response path; otherwise the
     // reservation settler reconciles the upfront hold. Same (actualCost) shape.
-    if (optimisticSettler) {
+    if (
+      shouldUsePooledNoopReservation({
+        pooledCredential,
+        useMonetizedAppBilling,
+      })
+    ) {
+      settleReservation = async () => null;
+    } else if (optimisticSettler) {
       settleReservation = optimisticSettler;
     } else {
       if (!reservation) {
@@ -1316,6 +1418,7 @@ export async function handleChatCompletionsPOST(
           effectiveMaxTokens,
           webSearchOptions,
           billingSource,
+          pooledCredential,
         )
       : await handleNonStreamingRequest(
           model,
@@ -1336,6 +1439,7 @@ export async function handleChatCompletionsPOST(
           effectiveMaxTokens,
           webSearchOptions,
           billingSource,
+          pooledCredential,
           options.executionCtx,
         );
     // Emit per-step pre-forward timing as a readable header (#9899). Debug-only
@@ -1593,12 +1697,14 @@ async function handleStreamingRequest(
   effectiveMaxTokens: number | undefined,
   webSearchOptions: ReturnType<typeof buildProviderNativeWebSearchTools>,
   billingSource: PricingBillingSource,
+  pooledCredential: PooledInferenceCredential | null,
 ) {
   const provider = getProviderFromModel(model);
   const tools = convertTools(request.tools);
   const toolChoice = mapToolChoice(request.tool_choice);
   const experimentalOutput = mapResponseFormat(request.response_format);
   const billingPrompt = buildChatPromptForBilling(request);
+  const billingAffiliateCode = pooledCredential ? null : affiliateCode;
   let deliveredText = "";
   let streamingSettlementPromise: Promise<CreditReconciliationResult | null> | null =
     null;
@@ -1629,7 +1735,7 @@ async function handleStreamingRequest(
           provider,
           user,
           apiKey,
-          affiliateCode,
+          affiliateCode: billingAffiliateCode,
           appId,
           requestId,
           idempotencyKey,
@@ -1657,7 +1763,7 @@ async function handleStreamingRequest(
   });
 
   const result = streamText({
-    model: getLanguageModel(model),
+    model: getLanguageModel(model, pooledCredential ?? undefined),
     system: systemPrompt,
     messages,
     ...webSearchOptions,
@@ -1680,11 +1786,12 @@ async function handleStreamingRequest(
             billingSource,
             requestId,
             appId,
-            affiliateCode,
+            affiliateCode: billingAffiliateCode,
             streaming: true,
           });
           const billing = await billUsage(billingContext, usage);
           const reconciliation = await settleReservation(billing.totalCost);
+          await recordPooledInferenceSuccess(pooledCredential, user.id);
 
           const usageRecord = await recordUsageAnalytics(
             billingContext,
@@ -1763,6 +1870,7 @@ async function handleStreamingRequest(
     // later onFinish/onAbort cannot double-refund.
     onError: async ({ error }: { error: unknown }) => {
       await refundStreamingReservationOnce();
+      await recordPooledInferenceFailure(pooledCredential, error);
       logger.error(
         "[Chat Completions] Stream provider error — reservation refunded",
         {
@@ -1952,6 +2060,7 @@ async function handleStreamingRequest(
           await settleStreamingAbortOnce([]);
         } else {
           await refundStreamingReservationOnce();
+          await recordPooledInferenceFailure(pooledCredential, error);
         }
         const status =
           getRecoverableProviderErrorStatus(error) ?? getErrorStatusCode(error);
@@ -2027,12 +2136,14 @@ async function handleNonStreamingRequest(
   effectiveMaxTokens: number | undefined,
   webSearchOptions: ReturnType<typeof buildProviderNativeWebSearchTools>,
   billingSource: PricingBillingSource,
+  pooledCredential: PooledInferenceCredential | null,
   executionCtx: { waitUntil(promise: Promise<unknown>): void } | undefined,
 ) {
   const provider = getProviderFromModel(model);
   const tools = convertTools(request.tools);
   const toolChoice = mapToolChoice(request.tool_choice);
   const experimentalOutput = mapResponseFormat(request.response_format);
+  const billingAffiliateCode = pooledCredential ? null : affiliateCode;
 
   const safeParamsNonStream = getSafeModelParams(model, {
     temperature: request.temperature,
@@ -2048,7 +2159,7 @@ async function handleNonStreamingRequest(
 
   try {
     const result = await generateText({
-      model: getLanguageModel(model),
+      model: getLanguageModel(model, pooledCredential ?? undefined),
       system: systemPrompt,
       messages,
       ...webSearchOptions,
@@ -2102,11 +2213,12 @@ async function handleNonStreamingRequest(
           billingSource,
           requestId,
           appId,
-          affiliateCode,
+          affiliateCode: billingAffiliateCode,
           streaming: false,
         });
         const billing = await billUsage(billingContext, result.usage);
         const reconciliation = await settleReservation(billing.totalCost);
+        await recordPooledInferenceSuccess(pooledCredential, user.id);
 
         const usageRecord = await recordUsageAnalytics(
           billingContext,
@@ -2232,6 +2344,7 @@ async function handleNonStreamingRequest(
     );
   } catch (error) {
     await settleReservation?.(0);
+    await recordPooledInferenceFailure(pooledCredential, error);
     throw error;
   }
 }
@@ -2279,4 +2392,8 @@ export const __nativeToolingTestHooks = {
  */
 export const __streamingCreditTestHooks = {
   handleStreamingRequest,
+} as const;
+
+export const __billingBranchTestHooks = {
+  shouldUsePooledNoopReservation,
 } as const;

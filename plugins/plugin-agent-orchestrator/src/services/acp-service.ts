@@ -25,6 +25,11 @@ import {
 } from "./coding-account-selection.js";
 import { readConfigMcpServers } from "./config-env.js";
 import {
+  applyModelGatewayEnv,
+  MODEL_GATEWAY_EXCLUDED_PROVIDER_KEYS,
+  resolveModelGatewayConfig,
+} from "./model-gateway.js";
+import {
   buildOpencodeAcpEnv,
   resolveVendoredOpencodeAcpCommand,
 } from "./opencode-config.js";
@@ -188,6 +193,10 @@ const DENY_ENV_PATTERNS = [
   // hand a child process a credential that re-authorizes arbitrary host command
   // execution with zero legitimate use for it.
   /TERMINAL_RUN_TOKEN/i,
+  // Repo-scoped GitHub host credentials must not be injected into sub-agents,
+  // including through customCredentials. Registry push uses the dedicated
+  // GHCR_* or ELIZA_APP_IMAGE_REGISTRY_* names instead.
+  /^(?:GITHUB_TOKEN|GH_TOKEN|CR_PAT)$/i,
 ];
 
 /**
@@ -2407,6 +2416,19 @@ export class AcpService extends Service {
         });
       }
     }
+    // Gateway mode runs LAST so no earlier merge step (host forwarding,
+    // customCredentials, spawn extras, account selection) can reintroduce a
+    // raw provider key into the child env. Never log the token.
+    const gateway = resolveModelGatewayConfig();
+    if (gateway) {
+      applyModelGatewayEnv(env, gateway);
+      this.log("info", "model-gateway mode engaged for sub-agent env", {
+        gatewayUrl: gateway.url,
+        agentType,
+        sessionId: childSessionId,
+        excludedProviderKeys: [...MODEL_GATEWAY_EXCLUDED_PROVIDER_KEYS],
+      });
+    }
     return env;
   }
 
@@ -2705,6 +2727,16 @@ export function shouldForwardEnv(key: string): boolean {
       "OPENCODE_DISABLE_AUTOUPDATE",
       "OPENCODE_DISABLE_TERMINAL_TITLE",
       "CODEX_HOME",
+      // Container-registry PUSH credential for app-image builds (docker login
+      // ghcr.io before the deploy contract's docker push). Narrow by design:
+      // these are the dedicated registry-scoped names (a packages:write PAT),
+      // mirrored cloud-side by containersEnv.registryUsername()/registryToken().
+      // The broad GITHUB_TOKEN / GH_TOKEN / CR_PAT stay DENIED — a repo-scoped
+      // host token must never ride into a sub-agent. The canonical
+      // ELIZA_APP_IMAGE_REGISTRY_USERNAME/_TOKEN pair already forwards via the
+      // ELIZA_ prefix above.
+      "GHCR_USERNAME",
+      "GHCR_TOKEN",
     ].includes(key)
   );
 }
