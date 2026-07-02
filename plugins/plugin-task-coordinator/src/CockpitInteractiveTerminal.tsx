@@ -5,9 +5,19 @@ import { PtyTerminalPane } from "./PtyTerminalPane";
 /** Cerebras inference tier the interactive eliza-code CLI leads with. */
 export type CockpitTerminalTier = "fast" | "smart";
 
+/**
+ * Which CLI the terminal drives. `"eliza-code"` (default) is the TOS-clean
+ * tier on Eliza Cloud/cerebras; `"claude"` / `"codex"` are the experimental
+ * vendor tier on the user's own subscription — the server rejects them unless
+ * `PTY_VENDOR_CLI_ENABLED=true`.
+ */
+export type CockpitTerminalKind = "eliza-code" | "claude" | "codex";
+
 export interface CockpitInteractiveTerminalProps {
-  /** Which cerebras tier eliza-code leads with. */
+  /** Which cerebras tier eliza-code leads with (eliza-code sessions only). */
   tier: CockpitTerminalTier;
+  /** Which CLI to drive. Defaults to `"eliza-code"`. */
+  kind?: CockpitTerminalKind;
   /** Optional working directory for the session. */
   cwd?: string;
   /** Called when the user closes the terminal. */
@@ -18,8 +28,8 @@ type Phase = "spawning" | "ready" | "error";
 
 type InteractivePtyClient = typeof client & {
   spawnPtySession(options: {
-    kind: "eliza-code";
-    tier: CockpitTerminalTier;
+    kind: CockpitTerminalKind;
+    tier?: CockpitTerminalTier;
     cwd?: string;
   }): Promise<{ sessionId: string }>;
   stopPtySession(sessionId: string): Promise<boolean>;
@@ -32,13 +42,16 @@ const ptyClient = client as InteractivePtyClient;
  * interactive `eliza-code` CLI on Eliza Cloud/cerebras (`@elizaos/plugin-pty`'s
  * `spawnPtySession`) and mounts the live xterm pane on it. eliza-code is a real
  * slash-command TUI we own, so this is a real CLI — all slash commands — with
- * zero TOS exposure.
+ * zero TOS exposure. The same surface hosts the experimental
+ * `kind="claude" | "codex"` vendor tier (server-gated by
+ * PTY_VENDOR_CLI_ENABLED, default off).
  *
  * Self-contained: spawns once on mount, surfaces spawn errors with a retry, and
  * kills the session on unmount so the REPL process never orphans.
  */
 export function CockpitInteractiveTerminal({
   tier,
+  kind = "eliza-code",
   cwd,
   onClose,
 }: CockpitInteractiveTerminalProps) {
@@ -48,13 +61,20 @@ export function CockpitInteractiveTerminal({
   const spawnStartedRef = useRef(false);
   const activeSessionRef = useRef<string | null>(null);
 
+  // The cerebras tier only means something to eliza-code; the vendor CLIs
+  // pick their own models.
+  const headerLabel =
+    kind === "eliza-code"
+      ? `eliza-code · ${tier === "smart" ? "smart" : "fast"} · Cerebras`
+      : `${kind} · interactive`;
+
   const spawn = useCallback(async () => {
     setPhase("spawning");
     setError(null);
     try {
       const { sessionId: id } = await ptyClient.spawnPtySession({
-        kind: "eliza-code",
-        tier,
+        kind,
+        ...(kind === "eliza-code" ? { tier } : {}),
         ...(cwd ? { cwd } : {}),
       });
       activeSessionRef.current = id;
@@ -68,7 +88,7 @@ export function CockpitInteractiveTerminal({
       );
       setPhase("error");
     }
-  }, [tier, cwd]);
+  }, [kind, tier, cwd]);
 
   // Spawn exactly once on mount.
   useEffect(() => {
@@ -122,9 +142,7 @@ export function CockpitInteractiveTerminal({
           color: "var(--txt-muted, #9aa0aa)",
         }}
       >
-        <span>
-          eliza-code · {tier === "smart" ? "smart" : "fast"} · Cerebras
-        </span>
+        <span>{headerLabel}</span>
         <button
           type="button"
           data-testid="cockpit-terminal-close"
@@ -151,7 +169,9 @@ export function CockpitInteractiveTerminal({
               color: "var(--txt-muted, #9aa0aa)",
             }}
           >
-            Starting interactive eliza-code on Cerebras…
+            {kind === "eliza-code"
+              ? "Starting interactive eliza-code on Cerebras…"
+              : `Starting interactive ${kind}…`}
           </div>
         ) : null}
 
