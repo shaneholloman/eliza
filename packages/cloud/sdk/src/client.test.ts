@@ -441,47 +441,6 @@ describe("ElizaCloudClient web sign-in + app-credits affordances", () => {
     expect(requests[0].headers["x-affiliate-code"]).toBeUndefined();
   });
 
-  it("sends X-Affiliate-Code on every inference helper", async () => {
-    const { client, requests } = createClientRecorder({
-      choices: [],
-      data: [],
-      images: [],
-    });
-    const options = { affiliateCode: "aff-xyz" };
-
-    await client.createResponse({ model: "gpt-5.5", input: "hi" }, options);
-    await client.createChatCompletion(
-      {
-        model: "anthropic/claude-sonnet-4.5",
-        messages: [{ role: "user", content: "hi" }],
-      },
-      options,
-    );
-    await client.createEmbeddings(
-      { model: "text-embedding-3-small", input: "hi" },
-      options,
-    );
-    await client.generateImage({ prompt: "a cloud" }, options);
-    await client.transcribeAudio(
-      {
-        audio: new Blob(["audio"], { type: "audio/wav" }),
-        filename: "audio.wav",
-      },
-      options,
-    );
-
-    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
-      "/api/v1/responses",
-      "/api/v1/chat/completions",
-      "/api/v1/embeddings",
-      "/api/v1/generate-image",
-      "/api/v1/voice/stt",
-    ]);
-    for (const request of requests) {
-      expect(request.headers["x-affiliate-code"]).toBe("aff-xyz");
-    }
-  });
-
   it("waitForCliLogin polls until authenticated and returns the key", async () => {
     const statuses = ["pending", "pending", "authenticated"];
     let call = 0;

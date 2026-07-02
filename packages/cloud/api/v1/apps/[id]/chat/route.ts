@@ -40,13 +40,8 @@ import type {
   OpenAIChatRequest,
   ProviderHttpError,
 } from "@/lib/providers/types";
-import { getRequestIdempotencyKey } from "@/lib/runtime/request-context";
 import { appCreditsService } from "@/lib/services/app-credits";
 import { appsService } from "@/lib/services/apps";
-import {
-  type CreditReservation,
-  InsufficientCreditsError,
-} from "@/lib/services/credits";
 import { logger } from "@/lib/utils/logger";
 import { getRouteTimeoutMs } from "@/lib/utils/request-timeout";
 import type { AppEnv } from "@/types/cloud-worker-env";
@@ -58,6 +53,7 @@ const ROUTE_MAX_DURATION = 800;
 // Safety multiplier for cost estimation to reduce undercharging risk
 // We charge 1.5x estimated upfront, then reconcile to actual
 const COST_SAFETY_MULTIPLIER = 1.5;
+const APP_CHAT_RESERVATION_SETTLEMENT_MARKER = "app_chat_reservation_v1";
 
 function isProviderHttpError(error: unknown): error is ProviderHttpError {
   return Boolean(
@@ -318,70 +314,68 @@ async function handlePOST(
     // We charge more upfront, then reconcile to actual cost
     const reservedBaseCost = estimatedBaseCost * COST_SAFETY_MULTIPLIER;
 
-    const idempotencyKey = getRequestIdempotencyKey() ?? crypto.randomUUID();
+    // Check and deduct app credits with markup (using buffered amount)
+    // Pass app to avoid N+1 query (app already fetched above)
+    const deductionResult = await appCreditsService.deductCredits({
+      appId,
+      userId: user.id,
+      baseCost: reservedBaseCost,
+      description: `Chat: ${model}`,
+      metadata: {
+        type: "app_chat_reservation",
+        settlement_marker: APP_CHAT_RESERVATION_SETTLEMENT_MARKER,
+        model,
+        provider,
+        billingSource,
+        estimatedInputTokens,
+        estimatedOutputTokens,
+        estimated_cost: estimatedBaseCost,
+        reserved_amount: reservedBaseCost,
+        safetyMultiplier: COST_SAFETY_MULTIPLIER,
+        reservation_buffer: COST_SAFETY_MULTIPLIER,
+      },
+      app, // Pass pre-fetched app to avoid duplicate DB query
+    });
 
-    // Reserve app credits with the same idempotent reservation surface used by
-    // /v1/chat/completions and /v1/messages. Raw deduct/reconcile here left the
-    // app-chat route without service-level settlement idempotency.
-    let reservation: CreditReservation;
-    try {
-      reservation = await appCreditsService.reserveInferenceCredits({
+    if (!deductionResult.success) {
+      logger.warn("[App Chat] Insufficient cloud credits", {
         appId,
         userId: user.id,
-        estimatedBaseCost: reservedBaseCost,
-        description: `Chat: ${model}`,
-        idempotencyKey,
-        metadata: {
-          model,
-          provider,
-          billingSource,
-          estimatedInputTokens,
-          estimatedOutputTokens,
-          safetyMultiplier: COST_SAFETY_MULTIPLIER,
-          route: "apps_chat",
-          streaming: isStreaming,
-        },
-        app, // Pass pre-fetched app to avoid duplicate DB query
+        required: deductionResult.totalCost,
+        message: deductionResult.message,
       });
-    } catch (error) {
-      if (error instanceof InsufficientCreditsError) {
-        logger.warn("[App Chat] Insufficient cloud credits", {
-          appId,
-          userId: user.id,
-          required: error.required,
-          balance: error.available,
-          message: error.message,
-        });
 
-        return withCors(
-          Response.json(
-            {
-              error: {
-                message: `Insufficient cloud credits. Required: $${error.required.toFixed(4)}`,
-                type: "insufficient_quota",
-                code: "insufficient_credits",
-                required: error.required,
-                balance: error.available,
-              },
+      return withCors(
+        Response.json(
+          {
+            error: {
+              message:
+                deductionResult.message ||
+                `Insufficient cloud credits. Required: $${deductionResult.totalCost.toFixed(4)}`,
+              type: "insufficient_quota",
+              code: "insufficient_credits",
+              required: deductionResult.totalCost,
+              balance: deductionResult.newBalance,
             },
-            { status: 402 },
-          ),
-        );
-      }
-      throw error;
+          },
+          { status: 402 },
+        ),
+      );
     }
+    const appChatReservationTransactionId =
+      deductionResult.transactionId ?? null;
 
     logger.info("[App Chat] Credits deducted", {
       appId,
       userId: user.id,
       reservedBaseCost,
-      reservedAmount: reservation.reservedAmount,
-      reservationTransactionId: reservation.reservationTransactionId,
+      baseCost: deductionResult.baseCost,
+      creatorMarkup: deductionResult.creatorMarkup,
+      totalCost: deductionResult.totalCost,
+      creatorEarnings: deductionResult.creatorEarnings,
+      newBalance: deductionResult.newBalance,
       monetizationEnabled: app.monetization_enabled,
     });
-
-    const settleReservation = (actualBaseCost: number) =>
-      reservation.reconcile(actualBaseCost);
 
     // Forward to provider - wrap in try-catch to refund on failure
     const { primary: providerInstance, fallback: fallbackProvider } =
@@ -418,7 +412,15 @@ async function handlePOST(
             : "Unknown error",
       });
 
-      await settleReservation(0);
+      await appCreditsService.reconcileCredits({
+        appId,
+        userId: user.id,
+        estimatedBaseCost: reservedBaseCost,
+        actualBaseCost: 0, // Full refund
+        description: "Refund due to provider error",
+        metadata: { error: true, providerFailure: true },
+        reservationTransactionId: appChatReservationTransactionId,
+      });
 
       return withCors(Response.json(failure.body, { status: failure.status }));
     }
@@ -433,10 +435,11 @@ async function handlePOST(
       let outputTokens = 0;
       let fullContent = "";
       let writerClosed = false;
-      // True once the FULL answer has been delivered to the client and the
-      // writer closed. Distinguishes "stream failed mid-delivery" (refund) from
-      // "stream succeeded, only post-stream accounting threw" (do NOT refund —
-      // the user already received the whole answer).
+      // True once the client has received everything it will get and the
+      // writer is closed — the full answer on success, or the refund error
+      // event on the no-body path. Distinguishes "stream failed mid-delivery"
+      // (refund) from "only post-delivery accounting threw" (do NOT refund —
+      // money may already have moved).
       let streamCompleted = false;
 
       // Process stream in background with error handling
@@ -474,11 +477,20 @@ async function handlePOST(
             // transactional — its refund branch commits the org-balance
             // movement and can then throw from the earnings/counter writes.
             // With the flag flipped first, that throw reaches the catch as
-            // "money may have moved" and reconcileChatSettleError does NOT
-            // refund the full hold a second time (double-credit / mint).
+            // "money may have moved" and reconcileStreamProcessingError does
+            // NOT refund the full hold a second time (double-credit / mint).
             streamCompleted = true;
 
-            await settleReservation(0);
+            await appCreditsService.reconcileCredits({
+              appId,
+              userId: user.id,
+              estimatedBaseCost: reservedBaseCost,
+              actualBaseCost: 0, // Full refund
+              description: "Refund due to empty provider response",
+              metadata: { error: true, noBody: true },
+              reservationTransactionId: appChatReservationTransactionId,
+              app,
+            });
             return;
           }
 
@@ -587,7 +599,25 @@ async function handlePOST(
             billingSource,
           );
 
-          const reconciliation = await settleReservation(actualBaseCost);
+          // Reconcile the difference between reserved and actual costs
+          // Pass app to avoid N+1 query (app already fetched above)
+          const reconciliation = await appCreditsService.reconcileCredits({
+            appId,
+            userId: user.id,
+            estimatedBaseCost: reservedBaseCost,
+            actualBaseCost,
+            description: `Chat reconciliation: ${model}`,
+            reservationTransactionId: appChatReservationTransactionId,
+            metadata: {
+              model,
+              provider,
+              billingSource,
+              inputTokens,
+              outputTokens,
+              streaming: true,
+            },
+            app,
+          });
 
           const duration = Date.now() - startTime;
           logger.info("[App Chat] Streaming request completed", {
@@ -600,9 +630,8 @@ async function handlePOST(
             reservedBaseCost,
             actualBaseCost,
             reconciliation: {
-              adjustmentType: reconciliation?.adjustmentType ?? "none",
-              reservedAmount: reconciliation?.reservedAmount,
-              actualCost: reconciliation?.actualCost,
+              action: reconciliation.action,
+              amount: reconciliation.adjustedAmount,
             },
           });
         } catch (error) {
@@ -625,12 +654,10 @@ async function handlePOST(
               appId,
               userId: user.id,
               reservedBaseCost,
+              reservationTransactionId: appChatReservationTransactionId,
               errorMessage,
             },
-            {
-              reconcileCredits: ({ actualBaseCost }) =>
-                settleReservation(actualBaseCost),
-            },
+            appCreditsService,
           );
 
           // Notify the client only when the stream failed mid-delivery (a
@@ -661,9 +688,15 @@ async function handlePOST(
       );
     }
 
+    // Non-streaming response. Everything below runs AFTER the upfront hold was
+    // debited, so a throw here — a truncated body failing providerResponse.json(),
+    // or calculateCost erroring — would strand the reserved hold (the streaming
+    // branch is covered by the same settle-error refund; this one was not,
+    // #11169). Full-refund on any failure BEFORE the settle completes; once
+    // reconcileCredits has settled, a later throw must NOT refund (the charge is
+    // real), mirroring the streaming branch's streamCompleted gating.
     let nonStreamingSettleStarted = false;
     try {
-      // Non-streaming response
       const responseData = (await providerResponse.json()) as {
         usage?: { prompt_tokens?: number; completion_tokens?: number };
         choices?: Array<{ message?: { content?: string } }>;
@@ -694,8 +727,30 @@ async function handlePOST(
         billingSource,
       );
 
+      // Reconcile the difference between reserved and actual costs
+      // Pass app to avoid N+1 query (app already fetched above)
+      // Flag the settle as STARTED *before* invoking reconcileCredits (not after
+      // it returns): reconcileCredits commits its org-balance movement before its
+      // non-transactional earnings/counter writes, so a throw mid-settle must not
+      // let the catch refund the hold a second time (double-credit). (#11218)
       nonStreamingSettleStarted = true;
-      const reconciliation = await settleReservation(actualBaseCost);
+      const reconciliation = await appCreditsService.reconcileCredits({
+        appId,
+        userId: user.id,
+        estimatedBaseCost: reservedBaseCost,
+        actualBaseCost,
+        description: `Chat reconciliation: ${model}`,
+        reservationTransactionId: appChatReservationTransactionId,
+        metadata: {
+          model,
+          provider,
+          billingSource,
+          inputTokens: actualInputTokens,
+          outputTokens: actualOutputTokens,
+          streaming: false,
+        },
+        app,
+      });
 
       const duration = Date.now() - startTime;
       logger.info("[App Chat] Request completed", {
@@ -708,22 +763,27 @@ async function handlePOST(
         reservedBaseCost,
         actualBaseCost,
         reconciliation: {
-          adjustmentType: reconciliation?.adjustmentType ?? "none",
-          reservedAmount: reconciliation?.reservedAmount,
-          actualCost: reconciliation?.actualCost,
+          action: reconciliation.action,
+          amount: reconciliation.adjustedAmount,
         },
       });
 
       return withCors(Response.json(responseData));
-    } catch (error) {
+    } catch (postProviderError) {
       const errorMessage =
-        error instanceof Error ? error.message : String(error);
-
+        postProviderError instanceof Error
+          ? postProviderError.message
+          : String(postProviderError);
+      // Refund the stranded hold ONLY if the settle never started. A throw
+      // at/after the settle may have already moved money (reconcileCredits is
+      // not transactional), so re-refunding would mint credits — the
+      // stranded-reservation sweep recovers that rare window instead. `.catch`
+      // so a refund failure can't mask the original error. (#11218)
       await reconcileChatSettleError(
         {
           skipRefund: nonStreamingSettleStarted,
           skipRefundLog:
-            "[App Chat] Non-streaming throw at/after the settle reconcile; NOT refunding (movement may have committed - sweep recovers a stranded hold)",
+            "[App Chat] Non-streaming throw at/after the settle reconcile; NOT refunding (movement may have committed — sweep recovers a stranded hold)",
           refundLog:
             "[App Chat] Non-streaming settle never started after debit; refunding reserved hold (#11169)",
           refundDescription: `Chat refund (non-streaming settle failed): ${model}`,
@@ -738,24 +798,24 @@ async function handlePOST(
           appId,
           userId: user.id,
           reservedBaseCost,
+          reservationTransactionId: appChatReservationTransactionId,
           errorMessage,
         },
-        {
-          reconcileCredits: ({ actualBaseCost }) =>
-            settleReservation(actualBaseCost),
-        },
+        appCreditsService,
       ).catch((refundError) => {
-        logger.error("[App Chat] Non-streaming settle-error refund failed", {
-          appId,
-          userId: user.id,
-          error:
-            refundError instanceof Error
-              ? refundError.message
-              : String(refundError),
-        });
+        logger.error(
+          "[App Chat] Non-streaming guard refund failed; surfacing original error",
+          {
+            appId,
+            userId: user.id,
+            refundError:
+              refundError instanceof Error
+                ? refundError.message
+                : String(refundError),
+          },
+        );
       });
-
-      throw error;
+      throw postProviderError;
     }
   } catch (error) {
     logger.error("[App Chat] Error:", error);

@@ -209,8 +209,9 @@ app.post("/", async (c) => {
     // today). On the optimistic path the reservation's `reconcile` IS the
     // actual-cost debit, and settleBilling invokes it through the single
     // first-call-wins settler.
-    // #11588: this request id feeds billing/affiliate dedupe. Keep it stable for
-    // this request, but never let a caller force collisions with `x-request-id`.
+    // #11588: server-generate the billing requestId — it feeds the affiliate
+    // dedupe sourceId and must not be client-controllable (see the fuller note
+    // in v1/chat/completions/route.ts).
     const requestId = crypto.randomUUID();
     const orgId = user.organization_id;
     let reservation: Awaited<ReturnType<typeof reserveCredits>> | undefined;

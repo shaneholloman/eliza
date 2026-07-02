@@ -1,7 +1,6 @@
 /**
  * Lazy boundary for the wallet stack (wagmi + RainbowKit + Solana + viem).
  *
- * Ported from `@elizaos/cloud-frontend/src/providers/ConditionalWalletProviders.tsx`.
  * On non-wallet routes it renders `children` directly so the heavy wallet vendor
  * chunks never enter the entry bundle; on wallet routes it lazy-loads the real
  * provider tree ({@link StewardWalletProviders}) behind Suspense as the outermost
@@ -16,12 +15,8 @@ import { Component, lazy, type ReactNode, Suspense, useMemo } from "react";
 import { matchPath, useLocation } from "react-router-dom";
 import { useCloudT } from "../../shell/CloudI18nProvider";
 
-const WALLET_ROUTE_PATTERNS = [
-  "/dashboard/billing",
-  "/dashboard/billing/*",
-  "/settings",
-  "/settings/*",
-];
+// The billing surface (the only wallet consumer) mounts at /settings.
+const WALLET_ROUTE_PATTERNS = ["/settings", "/settings/*"];
 
 const LazyStewardWalletProviders = lazy(async () => {
   const mod = await import("./steward-wallet-providers");

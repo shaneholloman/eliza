@@ -2,11 +2,17 @@
  * Invite-acceptance page for organization invitations. Validates the token,
  * then lets an authenticated user accept (which MOVES them into the inviting org
  * — single-org model). Signed-out users are sent to login with a returnTo back
- * here. Ported from `@elizaos/cloud-frontend/src/pages/invite/accept/page.tsx`.
+ * here.
  *
  * Changes vs source: dropped the dead `pending-invite-token` localStorage write
  * (the returnTo round-trip already carries the token); raw fetch → typed `api`
  * client; `date-fns` format → `Intl.DateTimeFormat` (no date-fns dep here).
+ *
+ * Connect-link intent (#11332 design §5): when the link carries `connect=1`,
+ * accepting routes straight to the org Credentials tab with the contribute
+ * modal open (`/dashboard/organization?tab=credentials&contribute=1`) so the
+ * teammate can pool their API key immediately. The param is preserved through
+ * the login returnTo round-trip.
  */
 
 import {
@@ -34,9 +40,9 @@ import {
   CardTitle,
 } from "../../../../components/primitives";
 import { ApiError, api } from "../../../lib/api-client";
+import { useSessionAuth } from "../../../lib/use-session-auth";
 import { useCloudT } from "../../../shell/CloudI18nProvider";
 import { DEFAULT_LOGIN_RETURN_TO } from "../../lib/login-return-to";
-import { useSessionAuth } from "../../lib/use-session-auth";
 
 interface InviteDetails {
   organization_name: string;
@@ -73,6 +79,7 @@ export default function InviteAcceptPage() {
   const navigate = useNavigate();
   const { authenticated } = useSessionAuth();
   const token = searchParams.get("token");
+  const connectIntent = searchParams.get("connect") === "1";
 
   const [isValidating, setIsValidating] = useState(true);
   const [isAccepting, setIsAccepting] = useState(false);
@@ -133,7 +140,7 @@ export default function InviteAcceptPage() {
 
   const handleAcceptInvite = async () => {
     if (!authenticated) {
-      const currentUrl = `/invite/accept?token=${encodeURIComponent(token ?? "")}`;
+      const currentUrl = `/invite/accept?token=${encodeURIComponent(token ?? "")}${connectIntent ? "&connect=1" : ""}`;
       navigate(`/login?returnTo=${encodeURIComponent(currentUrl)}`);
       return;
     }
@@ -150,7 +157,12 @@ export default function InviteAcceptPage() {
             defaultValue: "Invitation accepted! Redirecting…",
           }),
         );
-        setTimeout(() => navigate(DEFAULT_LOGIN_RETURN_TO), 1500);
+        // connect=1 → land on the Credentials tab with the contribute modal
+        // open so the new member can pool their API key immediately (#11332).
+        const destination = connectIntent
+          ? "/dashboard/organization?tab=credentials&contribute=1"
+          : DEFAULT_LOGIN_RETURN_TO;
+        setTimeout(() => navigate(destination), 1500);
       } else {
         setError(
           data.error ||

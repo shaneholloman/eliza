@@ -79,7 +79,14 @@ const AddDurableOpSchema = z.object({
 	op: z.literal("add_durable"),
 	claim: z.string().min(1),
 	category: DurableCategoryEnum,
-	structured_fields: StructuredFieldsSchema.optional().default({}),
+	// `.default({})`, NOT required: the advertised wire schema (reflection-items
+	// factOpsSchema) marks structured_fields optional (only `op` is required)
+	// and the extractor prompt never even names the field, so the model omits it
+	// on most turns. A required schema here rejected those ops — and because the
+	// whole `ops` array was parsed atomically, one omission silently discarded
+	// EVERY fact op for the turn. The default keeps the inferred type a
+	// non-optional record so downstream applyAddDurable stays type-safe.
+	structured_fields: StructuredFieldsSchema.default({}),
 	keywords: KeywordsSchema,
 	verification_status: VerificationStatusEnum.optional(),
 	reason: z.string().optional(),
@@ -89,7 +96,8 @@ const AddCurrentOpSchema = z.object({
 	op: z.literal("add_current"),
 	claim: z.string().min(1),
 	category: CurrentCategoryEnum,
-	structured_fields: StructuredFieldsSchema.optional().default({}),
+	// See AddDurableOpSchema: wire-optional + prompt-unnamed → default, not required.
+	structured_fields: StructuredFieldsSchema.default({}),
 	keywords: KeywordsSchema,
 	/**
 	 * ISO timestamp of when the state began. Optional in the schema because
@@ -152,40 +160,49 @@ export const ExtractorOutputSchema = z.object({
 export type ExtractorOutput = z.infer<typeof ExtractorOutputSchema>;
 
 /**
- * Tolerant extraction parse for production evaluator output.
+ * Parse the extractor envelope tolerantly, op-by-op.
  *
- * The extractor emits an `{ ops: [...] }` envelope. A single malformed op must
- * not discard valid sibling ops, so this validates the envelope leniently and
- * then validates each op independently. Dropped ops are logged here because the
- * evaluator `parse` hook has no runtime/logger in scope.
+ * `ExtractorOutputSchema` parses the whole `ops` array atomically, so a single
+ * malformed op (the model occasionally hallucinates one bad entry among good
+ * ones — a missing `factId` on a strengthen, a `contradict` with no `reason`)
+ * fails `safeParse` and silently discards EVERY fact op for the turn. That is
+ * real, launch-critical memory loss.
+ *
+ * This validates the envelope leniently (`{ ops: [...] }`), then validates each
+ * op independently, keeping only the ones that pass. Drops are logged HERE
+ * (one aggregate warn with per-op issues) — the only production caller is an
+ * evaluator `parse` hook (`parse?(output): TOutput | null`,
+ * `types/evaluator.ts`) which has no runtime/logger in scope, so a returned
+ * drop count could never be reported and per-op loss stayed silent in prod.
+ * Returns null only when the envelope itself is not `{ ops: array }` (a
+ * genuinely malformed section).
  */
 export function parseExtractorOutputTolerant(
 	output: unknown,
 ): ExtractorOutput | null {
 	const envelope = z.object({ ops: z.array(z.unknown()) }).safeParse(output);
 	if (!envelope.success) return null;
-
 	const ops: ExtractorOp[] = [];
 	const issues: string[] = [];
 	for (const raw of envelope.data.ops) {
 		const parsed = OpSchema.safeParse(raw);
 		if (parsed.success) {
 			ops.push(parsed.data);
-			continue;
+		} else {
+			issues.push(
+				parsed.error.issues
+					.map(
+						(issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`,
+					)
+					.join("; "),
+			);
 		}
-		issues.push(
-			parsed.error.issues
-				.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
-				.join("; "),
-		);
 	}
-
 	if (issues.length > 0) {
 		logger.warn(
 			{ src: "factMemory", count: issues.length, issues },
 			"dropped malformed extractor op(s)",
 		);
 	}
-
 	return { ops };
 }

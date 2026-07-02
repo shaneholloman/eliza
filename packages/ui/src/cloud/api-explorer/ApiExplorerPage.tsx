@@ -6,12 +6,8 @@
  * from `GET /api/v1/pricing/summary`); an Auth manager (auto-mints the explorer
  * key via `GET /api/v1/api-keys/explorer`); and an OpenAPI 3.0 spec viewer with
  * JSON/YAML copy. The tester runs REAL, BILLED calls — the "API calls are
- * billed" banner stays.
- *
- * Ported from `@elizaos/cloud-frontend/src/dashboard/api-explorer/Page.tsx`,
- * re-pointed at the app's shared cloud infra (typed `api<T>` client, the new
- * Steward session gate) and the `@elizaos/ui/cloud-ui` component set. Never
- * public — gated on an authenticated Steward session.
+ * billed" banner stays. Never public — gated on an authenticated Steward
+ * session.
  */
 
 import {
@@ -51,11 +47,11 @@ import { DashboardPageContainer } from "../../cloud-ui/components/layout/dashboa
 import { cn } from "../../cloud-ui/lib/utils";
 import { api } from "../lib/api-client";
 import { useDocumentTitle } from "../lib/use-document-title";
+import { useRequireAuth } from "../lib/use-session-auth";
 import { ApiTester } from "./api-tester";
 import { AuthManager } from "./auth-manager";
 import { toast } from "./toast";
 import { useExplorerApiKey } from "./use-explorer-api-key";
-import { useRequireAuth } from "./use-session-auth";
 
 const categoryDescriptions: Record<string, string> = {
   All: "Explore the complete set of API endpoints available in the Eliza platform.",
@@ -145,7 +141,7 @@ function resolveApiUrl() {
 }
 
 /**
- * The API Explorer surface. Embeddable: used directly by the Wave-3 settings
+ * The API Explorer surface. Embeddable: used directly by the settings
  * section and wrapped by {@link ApiExplorerRoute} for the standalone route.
  */
 export function ApiExplorerSurface() {

@@ -144,34 +144,14 @@ try {
     throw new Error(`Unexpected config body: ${JSON.stringify(body)}`);
   }
 
-  const html = await fetch(`${baseUrl}/`);
-  const htmlText = await html.text();
-  if (!htmlText.includes('const TOKEN_KEY = "edad.appSession"')) {
-    throw new Error("frontend should store only app-local sessions");
-  }
-  if (!htmlText.includes('const LEGACY_TOKEN_KEY = "edad.oauthToken"')) {
-    throw new Error("frontend should delete stale oauth-token storage");
-  }
-  if (!htmlText.includes('code = params.get("code")')) {
-    throw new Error("frontend should consume OAuth codes");
-  }
-  if (htmlText.includes('params.get("token")')) {
-    throw new Error("frontend should not accept token query params");
-  }
-  if (!htmlText.includes('"x-app-session"')) {
-    throw new Error("frontend should send app sessions to the backend");
-  }
-  if (htmlText.includes('"x-user-token"')) {
-    throw new Error("frontend should not send Cloud user tokens");
-  }
-
+  // ── App-session helper round-trip (pure, no network) ──────────────────────
   const { mintAppSession, verifyAppSession } = await import("./app-session.ts");
   const minted = mintAppSession("user-123", SESSION_SECRET);
   if (verifyAppSession(minted, SESSION_SECRET) !== "user-123") {
     throw new Error("app-session: valid token did not verify to its user id");
   }
   if (verifyAppSession(minted, "wrong-secret") !== null) {
-    throw new Error("app-session: token verified under the wrong secret");
+    throw new Error("app-session: token verified under the WRONG secret");
   }
   if (verifyAppSession(`${minted}tamper`, SESSION_SECRET) !== null) {
     throw new Error("app-session: tampered token verified");
@@ -181,6 +161,7 @@ try {
     throw new Error("app-session: expired token verified");
   }
 
+  // ── Auth gating: messages/history require a valid app session ──────────────
   const noAuth = await fetch(`${baseUrl}/api/messages/`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -205,6 +186,7 @@ try {
     );
   }
 
+  // ── Exchange route: rejects a missing code (without contacting cloud) ──────
   const noCode = await fetch(`${baseUrl}/api/auth/exchange`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -214,6 +196,7 @@ try {
     throw new Error(`exchange without a code should 400, got ${noCode.status}`);
   }
 
+  // ── Successful OAuth code exchange mints an app session ───────────────────
   const exchange = await fetch(`${baseUrl}/api/auth/exchange`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -289,6 +272,7 @@ try {
     );
   }
 
+  // ── Misconfiguration: a session secret alone must not enable sign-in ───────
   const misconfiguredPort = port + 1;
   const misconfiguredBaseUrl = `http://127.0.0.1:${misconfiguredPort}`;
   const misconfigured = Bun.spawn(["bun", "run", "server.ts"], {

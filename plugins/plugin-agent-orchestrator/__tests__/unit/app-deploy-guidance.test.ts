@@ -4,10 +4,82 @@ import {
   buildAppDeployGuidance,
   isAppBuildTask,
   isMonetizedAppTask,
-  resolveAppDeployConfig,
 } from "../../src/services/app-deploy-guidance.js";
 
 describe("app-deploy-guidance", () => {
+  // The planner's `monetized` signal is the STRUCTURAL fix for the normie
+  // phrasings the keyword regex misses ("people pay $1 to chat with X"). It must
+  // produce the monetized Eliza Cloud contract regardless of target, and even
+  // when the build-verb gate (isAppBuildTask) would otherwise drop the task.
+  describe("monetized signal (structural, not keyword)", () => {
+    const cloud = { target: "eliza-cloud" as const };
+    const custom = {
+      target: "custom" as const,
+      customAppsDir: "/data/apps",
+      customBaseUrl: "https://example.test",
+    };
+    // The two flagship normie phrasings the regex does NOT catch.
+    const NORMIE = [
+      "build me an app where people pay $1 to chat with a grimes-style AI",
+      "an app spending $1 to talk to a drake style ai",
+    ];
+
+    it("regex alone misses these normie phrasings (documents the gap)", () => {
+      for (const p of NORMIE) expect(isMonetizedAppTask(p)).toBe(false);
+    });
+
+    it("eliza-cloud: signal forces the edad/register monetized contract", () => {
+      for (const p of NORMIE) {
+        const out = augmentTaskWithDeployGuidance(p, cloud, {
+          monetized: true,
+        });
+        expect(out).toContain("App Deployment (Eliza Cloud)");
+        expect(out).toContain("packages/examples/cloud/edad");
+        expect(out).toContain("POST /api/v1/apps");
+        expect(out).toContain("x-affiliate-code");
+      }
+    });
+
+    it("eliza-cloud: signal forces the contract even when the build-verb gate misses", () => {
+      // "an app spending $1 …" has no build verb → isAppBuildTask is false.
+      expect(isAppBuildTask(NORMIE[1])).toBe(false);
+      const out = augmentTaskWithDeployGuidance(NORMIE[1], cloud, {
+        monetized: true,
+      });
+      expect(out).toContain("packages/examples/cloud/edad");
+    });
+
+    it("custom host: signal turns the weak conditional into a firm directive", () => {
+      const plain = augmentTaskWithDeployGuidance(NORMIE[0], custom);
+      expect(plain).toContain("If the app must earn money");
+      expect(plain).not.toContain("THIS APP IS MONETIZED");
+
+      const monetized = augmentTaskWithDeployGuidance(NORMIE[0], custom, {
+        monetized: true,
+      });
+      expect(monetized).toContain("THIS APP IS MONETIZED");
+      expect(monetized).toContain("packages/examples/cloud/edad");
+      expect(monetized).toContain("x-app-id");
+    });
+
+    it("no signal + no keyword → free-app contract, NOT monetized (no regression)", () => {
+      const out = augmentTaskWithDeployGuidance(
+        "build me a free web app tip calculator",
+        cloud,
+      );
+      expect(out).toContain("App Deployment (Eliza Cloud)");
+      expect(out).not.toContain("packages/examples/cloud/edad");
+    });
+
+    it("signal only ADDS detection — a keyword match still works without it", () => {
+      const out = buildAppDeployGuidance(
+        cloud,
+        "build a monetized app that charges $2 per use",
+      );
+      expect(out).toContain("packages/examples/cloud/edad");
+    });
+  });
+
   describe("isAppBuildTask", () => {
     it("matches hosted web-surface builds", () => {
       expect(isAppBuildTask("build me a website about cats")).toBe(true);
@@ -94,19 +166,9 @@ describe("app-deploy-guidance", () => {
       expect(out).toContain("Otherwise do not involve Eliza Cloud");
       expect(out).not.toContain("App Deployment (Eliza Cloud)");
     });
-
-    it("turns structural monetized app intent into a firm custom-host directive", () => {
-      const out = augmentTaskWithDeployGuidance(
-        "people unlock answers from the tiny bot",
-        cfg,
-        { monetized: true },
-      );
-      expect(out).toContain("Publishing web apps (custom host)");
-      expect(out).toContain("THIS APP IS MONETIZED");
-      expect(out).not.toContain("If the app must earn money");
-    });
-
     it("appends operator-supplied publish notes verbatim, and omits them when unset", () => {
+      // Host-specific caveats (e.g. "do not run the host's build script") live
+      // only in the operator's private config — never hardcoded here.
       const note = "- Do NOT run the host build script for static apps.";
       const withNotes = augmentTaskWithDeployGuidance("build a web app", {
         ...cfg,
@@ -161,16 +223,6 @@ describe("app-deploy-guidance", () => {
       // references Cloud conditionally for the monetized case.
       expect(out).not.toContain("App Deployment (Eliza Cloud)");
     });
-
-    it("accepts legacy agent-home config as a custom-host migration alias", () => {
-      const out = augmentTaskWithDeployGuidance("build a website", {
-        target: "agent-home",
-        agentHomeAppsDir: "/data/apps",
-        agentHomeBaseUrl: "https://legacy.test",
-      });
-      expect(out).toContain("Publishing web apps (custom host)");
-      expect(out).toContain("https://legacy.test/apps/<slug>/");
-    });
   });
 
   describe("buildAppDeployGuidance", () => {
@@ -193,21 +245,11 @@ describe("app-deploy-guidance", () => {
       expect(out).toContain("App Deployment (Eliza Cloud)");
       expect(out).not.toContain("packages/examples/cloud/edad");
     });
-    it("a structurally monetized cloud build starts from the edad template even when regex misses", () => {
-      const out = buildAppDeployGuidance(
-        { target: "eliza-cloud" },
-        "people unlock answers from the tiny bot",
-        { monetized: true },
-      );
-      expect(out).toContain("packages/examples/cloud/edad");
-      expect(out).toContain("START FROM THE TEMPLATE");
-    });
     it("defaults to Eliza Cloud for an unspecified/empty config", () => {
       expect(buildAppDeployGuidance({ target: "eliza-cloud" })).toContain(
         "Eliza Cloud",
       );
     });
-
     // The push step of the container flow: an anonymous ghcr.io push always
     // 403s, so BOTH cloud branches must carry the docker-login contract (env
     // var NAMES only — never values) and the explicit report-the-missing-
@@ -223,45 +265,6 @@ describe("app-deploy-guidance", () => {
         expect(out).toContain("ELIZA_APP_IMAGE_REGISTRY_TOKEN");
         expect(out).toContain("GHCR_TOKEN");
         expect(out).toContain("registry push credential is missing");
-      }
-    });
-  });
-
-  describe("resolveAppDeployConfig", () => {
-    it("resolves legacy agent-home env as a custom-host migration alias", () => {
-      const keys = [
-        "ELIZA_CONFIG_PATH",
-        "ELIZA_APP_DEPLOY_TARGET",
-        "ELIZA_APP_DEPLOY_CUSTOM_APPS_DIR",
-        "ELIZA_APP_DEPLOY_CUSTOM_BASE_URL",
-        "ELIZA_APP_DEPLOY_CUSTOM_NOTES",
-        "ELIZA_AGENT_HOME_APPS_DIR",
-        "ELIZA_AGENT_HOME_BASE_URL",
-      ];
-      const previous = new Map(
-        keys.map((key) => [key, process.env[key]] as const),
-      );
-      try {
-        process.env.ELIZA_CONFIG_PATH = "/does/not/exist/eliza.json";
-        process.env.ELIZA_APP_DEPLOY_TARGET = "agent-home";
-        delete process.env.ELIZA_APP_DEPLOY_CUSTOM_APPS_DIR;
-        delete process.env.ELIZA_APP_DEPLOY_CUSTOM_BASE_URL;
-        process.env.ELIZA_AGENT_HOME_APPS_DIR = "/legacy/apps";
-        process.env.ELIZA_AGENT_HOME_BASE_URL = "https://legacy.test/";
-
-        expect(resolveAppDeployConfig()).toEqual({
-          target: "custom",
-          customAppsDir: "/legacy/apps",
-          customBaseUrl: "https://legacy.test",
-        });
-      } finally {
-        for (const [key, value] of previous) {
-          if (value === undefined) {
-            delete process.env[key];
-          } else {
-            process.env[key] = value;
-          }
-        }
       }
     });
   });

@@ -219,6 +219,10 @@ app.post("/", async (c) => {
     );
   }
 
+  // The caller was debited upfront; ANY post-debit failure (unsafe/misconfigured
+  // endpoint, unreachable upstream, container down, non-ok status) must return
+  // the money — otherwise a momentarily-down MCP silently over-charges the org
+  // (#11637). Refund on every failure branch, not only a non-ok HTTP status.
   let refundedPrecharge = false;
   const refundPrecharge = async (
     reason: string,
@@ -265,9 +269,7 @@ app.post("/", async (c) => {
         mcpId,
         error: error instanceof Error ? error.message : String(error),
       });
-      await refundPrecharge("unsafe_external_endpoint", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      await refundPrecharge("unsafe_endpoint");
       return c.json({ error: "Unsafe external MCP endpoint" }, 400);
     }
     targetUrl = parsed.toString();
@@ -291,12 +293,12 @@ app.post("/", async (c) => {
       return c.json({ error: "MCP container not available" }, 502);
     }
     if (!container?.load_balancer_url) {
-      await refundPrecharge("container_not_available");
+      await refundPrecharge("container_unavailable");
       return c.json({ error: "MCP container not available" }, 503);
     }
     targetUrl = `${container.load_balancer_url}${mcp.endpoint_path || "/mcp"}`;
   } else {
-    await refundPrecharge("endpoint_not_configured");
+    await refundPrecharge("endpoint_misconfigured");
     return c.json({ error: "MCP endpoint not configured" }, 500);
   }
 
@@ -304,14 +306,12 @@ app.post("/", async (c) => {
   try {
     proxyBody = await parseJsonBody(c.req.raw);
   } catch (error) {
-    logger.warn("[MCP Proxy] Invalid JSON body", {
+    logger.warn("[MCP Proxy] Invalid JSON request body", {
       mcpId,
       error: error instanceof Error ? error.message : String(error),
     });
-    await refundPrecharge("invalid_json_body", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return c.json({ error: "Invalid JSON body" }, 400);
+    await refundPrecharge("invalid_json");
+    return c.json({ error: "Invalid MCP request body" }, 400);
   }
   const toolName = toolNameFromRpcBody(proxyBody);
 
@@ -353,9 +353,7 @@ app.post("/", async (c) => {
       targetUrl,
       error: error instanceof Error ? error.message : String(error),
     });
-    await refundPrecharge("mcp_endpoint_unreachable", {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    await refundPrecharge("upstream_unreachable");
     return c.json({ error: "Failed to reach MCP endpoint" }, 502);
   }
 

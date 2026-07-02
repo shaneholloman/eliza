@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { AGENT_PRICING } from "../constants/agent-pricing";
 import { logger } from "../utils/logger";
 import { insufficientCredits402, insufficientCreditsBody } from "./agent-billing-gate-402";
 
 describe("insufficientCreditsBody", () => {
-  test("builds the canonical 402 wire shape", () => {
+  test("builds the canonical 402 wire shape — exact fields, nothing else", () => {
     const body = insufficientCreditsBody({
       balance: 0.02,
       error: "Insufficient credits. Please add funds.",
@@ -31,13 +31,16 @@ describe("insufficientCreditsBody", () => {
 describe("insufficientCredits402", () => {
   const warnSpy = spyOn(logger, "warn").mockImplementation(() => undefined);
 
+  beforeEach(() => {
+    warnSpy.mockClear();
+  });
+
   afterEach(() => {
     warnSpy.mockClear();
   });
 
-  test("warns with the route line and gate numbers", () => {
+  test("warns with the route's line + gate numbers and returns the canonical body", () => {
     const creditCheck = { balance: 0.05, error: "Insufficient credits." };
-    const callsBefore = warnSpy.mock.calls.length;
 
     const body = insufficientCredits402(
       creditCheck,
@@ -46,15 +49,12 @@ describe("insufficientCredits402", () => {
     );
 
     expect(body).toStrictEqual(insufficientCreditsBody(creditCheck));
-    expect(warnSpy.mock.calls).toHaveLength(callsBefore + 1);
-    expect(warnSpy.mock.calls.at(-1)).toEqual([
-      "[agent-api] Resume blocked: insufficient credits",
-      {
-        agentId: "agent-1",
-        orgId: "org-1",
-        balance: 0.05,
-        required: AGENT_PRICING.MINIMUM_DEPOSIT,
-      },
-    ]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith("[agent-api] Resume blocked: insufficient credits", {
+      agentId: "agent-1",
+      orgId: "org-1",
+      balance: 0.05,
+      required: AGENT_PRICING.MINIMUM_DEPOSIT,
+    });
   });
 });

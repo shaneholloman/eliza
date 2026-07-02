@@ -19,7 +19,9 @@ import {
   jsonSchema,
   type ModelMessage,
   RetryError,
+  type StepResult,
   streamText,
+  type ToolSet,
 } from "ai";
 import { getErrorStatusCode } from "@/lib/api/errors";
 import { requireAuthOrApiKeyWithOrg } from "@/lib/auth";
@@ -31,6 +33,7 @@ import {
 } from "@/lib/middleware/rate-limit-hono-cloudflare";
 import {
   calculateCost,
+  estimateTokens,
   getProviderFromModel,
   getSafeModelParams,
   modelUsesReasoningTokens,
@@ -50,9 +53,13 @@ import {
   getAiProviderConfigurationError,
   getLanguageModel,
   hasLanguageModelProviderConfigured,
+  type PooledLanguageModelCredential,
   resolveAiProviderSource,
+  resolvePooledDirectProviderForModel,
 } from "@/lib/providers/language-model";
 import {
+  type AIUsage,
+  type BillingContext,
   billUsage,
   estimateInputTokens,
   InsufficientCreditsError,
@@ -86,6 +93,10 @@ import {
   resolveInferenceBillingLedger,
 } from "@/lib/services/inference-billing-ledger";
 import { getCachedGatewayModelById } from "@/lib/services/model-catalog";
+import {
+  getTeamPoolRegistry,
+  type SelectedPooledCredential,
+} from "@/lib/services/team-credential-pool";
 import { createCreditReservationSettler } from "@/lib/utils/credit-reservation";
 import { logger } from "@/lib/utils/logger";
 import { getRouteTimeoutMs } from "@/lib/utils/request-timeout";
@@ -95,6 +106,12 @@ const ROUTE_MAX_DURATION = 800;
 
 // Minimum tokens to reserve for actual response generation when CoT is active
 const MIN_RESPONSE_TOKENS = 4096;
+
+interface PooledInferenceCredential extends PooledLanguageModelCredential {
+  organizationId: string;
+  credentialId: string;
+  label: string;
+}
 
 function buildProviderReconciliationMetadata(
   provider: string,
@@ -136,6 +153,42 @@ function buildProviderBillingFields(
       process.env.VAST_BASE_URL ??
       null,
   };
+}
+
+function buildChatBillingContext(params: {
+  user: { id: string; organization_id: string };
+  apiKey: { id: string } | null;
+  model: string;
+  provider: string;
+  billingSource: PricingBillingSource;
+  requestId: string;
+  appId: string | null;
+  affiliateCode: string | null;
+  streaming: boolean;
+}): BillingContext {
+  return {
+    organizationId: params.user.organization_id,
+    userId: params.user.id,
+    apiKeyId: params.apiKey?.id,
+    model: params.model,
+    provider: params.provider,
+    billingSource: params.billingSource,
+    requestId: params.requestId,
+    metadata: buildProviderReconciliationMetadata(
+      params.provider,
+      params.model,
+      params.streaming,
+      params.appId,
+    ),
+    affiliateCode: params.affiliateCode,
+    ...buildProviderBillingFields(params.provider, params.model),
+  };
+}
+
+function buildChatPromptForBilling(request: ChatRequest): string {
+  return request.messages
+    .map((m) => `[${m.role}] ${getMessageContent(m)}`)
+    .join("\n");
 }
 
 /**
@@ -729,6 +782,72 @@ function getRecoverableProviderErrorStatus(error: unknown): number | null {
   return null;
 }
 
+function toPooledInferenceCredential(
+  organizationId: string,
+  selected: SelectedPooledCredential,
+): PooledInferenceCredential {
+  return {
+    organizationId,
+    credentialId: selected.credentialId,
+    providerId: selected.providerId,
+    apiKey: selected.apiKey,
+    label: selected.label,
+  };
+}
+
+async function selectPooledInferenceCredential(params: {
+  model: string;
+  organizationId: string;
+  sessionKey: string;
+}): Promise<PooledInferenceCredential | null> {
+  const providerId = resolvePooledDirectProviderForModel(params.model);
+  if (!providerId) return null;
+  const selected = await getTeamPoolRegistry().selectCredential({
+    organizationId: params.organizationId,
+    providerId,
+    sessionKey: params.sessionKey,
+  });
+  return selected
+    ? toPooledInferenceCredential(params.organizationId, selected)
+    : null;
+}
+
+async function recordPooledInferenceSuccess(
+  pooledCredential: PooledInferenceCredential | null,
+  userId: string,
+): Promise<void> {
+  if (!pooledCredential) return;
+  await getTeamPoolRegistry().recordUse({
+    organizationId: pooledCredential.organizationId,
+    credentialId: pooledCredential.credentialId,
+    userId,
+  });
+}
+
+async function recordPooledInferenceFailure(
+  pooledCredential: PooledInferenceCredential | null,
+  error: unknown,
+): Promise<void> {
+  if (!pooledCredential) return;
+  const status =
+    getRecoverableProviderErrorStatus(error) ?? getErrorStatusCode(error);
+  if (![401, 403, 429].includes(status)) return;
+  await getTeamPoolRegistry().recordProviderFailure({
+    organizationId: pooledCredential.organizationId,
+    credentialId: pooledCredential.credentialId,
+    providerId: pooledCredential.providerId,
+    status,
+    detail: error instanceof Error ? error.message : String(error),
+  });
+}
+
+function shouldUsePooledNoopReservation(params: {
+  pooledCredential: PooledInferenceCredential | null;
+  useMonetizedAppBilling: boolean;
+}): boolean {
+  return Boolean(params.pooledCredential && !params.useMonetizedAppBilling);
+}
+
 // ============================================================================
 // Main Handler
 // ============================================================================
@@ -755,8 +874,15 @@ export async function handleChatCompletionsPOST(
   options: ChatCompletionsHandlerOptions = {},
 ) {
   const startTime = Date.now();
-  // #11588: this request id feeds billing/affiliate dedupe. Keep it stable for
-  // this request, but never let a caller force collisions with `x-request-id`.
+  // #11588: the billing requestId feeds the affiliate-earnings dedupe sourceId
+  // (getAffiliateEarningsSourceId → `ai_billing:<op>:<requestId>`, deduped on
+  // addEarnings) while the org charge is unconditional. It MUST NOT be
+  // client-controllable, or a caller pinning `x-request-id` across two billed
+  // requests could suppress the second affiliate credit while still being
+  // charged the markup. Server-generate it (stable for this request, so the
+  // #11460/#11472 abort-vs-finish single-flight dedupe is preserved). The
+  // client's retry-idempotency mechanism stays the explicit `idempotency-key`
+  // header.
   const requestId = crypto.randomUUID();
   const idempotencyKey = req.headers.get("idempotency-key") || requestId;
   const routeTimeoutMs = getRouteTimeoutMs(ROUTE_MAX_DURATION);
@@ -867,8 +993,13 @@ export async function handleChatCompletionsPOST(
     // by dedicated agents) to the bare Cerebras id so pricing, routing, and
     // billing all agree and route to cerebras-direct instead of OpenRouter.
     const model = canonicalizeCerebrasModelId(request.model);
+    const pooledCredential = await selectPooledInferenceCredential({
+      model,
+      organizationId: user.organization_id,
+      sessionKey: apiKey?.id ?? user.id,
+    });
 
-    if (!hasLanguageModelProviderConfigured(model)) {
+    if (!pooledCredential && !hasLanguageModelProviderConfigured(model)) {
       return addCorsHeaders(
         Response.json(
           {
@@ -885,7 +1016,9 @@ export async function handleChatCompletionsPOST(
 
     const provider = getProviderFromModel(model);
     const normalizedModel = normalizeModelName(model);
-    const billingSource = resolveAiProviderSource(model) ?? "gateway";
+    const billingSource = pooledCredential
+      ? "gateway"
+      : (resolveAiProviderSource(model) ?? "gateway");
     const cotBudget = resolveAnthropicThinkingBudgetTokens(model, process.env);
     const cotOptions =
       cotBudget != null
@@ -1004,6 +1137,9 @@ export async function handleChatCompletionsPOST(
       | ((actualCost: number) => Promise<CreditReconciliationResult | null>)
       | null = null;
 
+    const useMonetizedAppBilling = Boolean(
+      useAppCredits && appId && monetizedApp,
+    );
     if (useAppCredits && appId && monetizedApp) {
       const { totalCost } = await calculateCost(
         normalizedModel,
@@ -1049,6 +1185,13 @@ export async function handleChatCompletionsPOST(
         }
         throw error;
       }
+    } else if (
+      shouldUsePooledNoopReservation({
+        pooledCredential,
+        useMonetizedAppBilling,
+      })
+    ) {
+      reservation = creditsService.createAnonymousReservation();
     } else {
       // Organization credits path. #9899 Tier-2: when optimistic billing is
       // enabled AND this org's balance comfortably clears SAFE_BALANCE_THRESHOLD,
@@ -1204,7 +1347,14 @@ export async function handleChatCompletionsPOST(
 
     // Optimistic path debits the actual cost off the response path; otherwise the
     // reservation settler reconciles the upfront hold. Same (actualCost) shape.
-    if (optimisticSettler) {
+    if (
+      shouldUsePooledNoopReservation({
+        pooledCredential,
+        useMonetizedAppBilling,
+      })
+    ) {
+      settleReservation = async () => null;
+    } else if (optimisticSettler) {
       settleReservation = optimisticSettler;
     } else {
       if (!reservation) {
@@ -1262,11 +1412,13 @@ export async function handleChatCompletionsPOST(
           startTime,
           req.signal,
           routeTimeoutMs,
+          estimatedInputTokens,
           settleReservation,
           cotOptions,
           effectiveMaxTokens,
           webSearchOptions,
           billingSource,
+          pooledCredential,
         )
       : await handleNonStreamingRequest(
           model,
@@ -1287,6 +1439,7 @@ export async function handleChatCompletionsPOST(
           effectiveMaxTokens,
           webSearchOptions,
           billingSource,
+          pooledCredential,
           options.executionCtx,
         );
     // Emit per-step pre-forward timing as a readable header (#9899). Debug-only
@@ -1354,6 +1507,170 @@ function openAiErrorTypeForStatus(status: number): string {
   return "api_error";
 }
 
+function summarizeFinishedStepUsage(
+  steps: readonly StepResult<ToolSet>[],
+): AIUsage | null {
+  let sawUsage = false;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
+  let cacheReadInputTokens = 0;
+  let cacheWriteInputTokens = 0;
+
+  for (const step of steps) {
+    const usage = step.usage;
+    const stepInputTokens = firstNumber(usage.inputTokens) ?? 0;
+    const stepOutputTokens = firstNumber(usage.outputTokens) ?? 0;
+    const stepTotalTokens =
+      firstNumber(usage.totalTokens) ?? stepInputTokens + stepOutputTokens;
+    const stepCacheReadTokens =
+      firstNumber(
+        usage.inputTokenDetails?.cacheReadTokens,
+        usage.cachedInputTokens,
+      ) ?? 0;
+    const stepCacheWriteTokens =
+      firstNumber(usage.inputTokenDetails?.cacheWriteTokens) ?? 0;
+
+    if (
+      stepInputTokens > 0 ||
+      stepOutputTokens > 0 ||
+      stepTotalTokens > 0 ||
+      stepCacheReadTokens > 0 ||
+      stepCacheWriteTokens > 0
+    ) {
+      sawUsage = true;
+    }
+
+    inputTokens += stepInputTokens;
+    outputTokens += stepOutputTokens;
+    totalTokens += stepTotalTokens;
+    cacheReadInputTokens += stepCacheReadTokens;
+    cacheWriteInputTokens += stepCacheWriteTokens;
+  }
+
+  if (!sawUsage) return null;
+
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    cacheReadInputTokens,
+    cacheWriteInputTokens,
+  };
+}
+
+async function settleStreamingAbortReservation(params: {
+  model: string;
+  provider: string;
+  user: { id: string; organization_id: string };
+  apiKey: { id: string } | null;
+  affiliateCode: string | null;
+  appId: string | null;
+  requestId: string;
+  idempotencyKey: string;
+  systemPrompt: string | undefined;
+  prompt: string;
+  startTime: number;
+  billingSource: PricingBillingSource;
+  estimatedInputTokens: number;
+  deliveredText: string;
+  steps: readonly StepResult<ToolSet>[];
+  settleReservation: (
+    actualCost: number,
+  ) => Promise<CreditReconciliationResult | null>;
+}): Promise<CreditReconciliationResult | null> {
+  const finishedStepUsage = summarizeFinishedStepUsage(params.steps);
+  const deliveredOutputTokens = estimateTokens(params.deliveredText);
+  const inputTokens = Math.max(
+    params.estimatedInputTokens,
+    finishedStepUsage?.inputTokens ?? 0,
+  );
+  const outputTokens = Math.max(
+    deliveredOutputTokens,
+    finishedStepUsage?.outputTokens ?? 0,
+  );
+  const totalTokens = Math.max(
+    inputTokens + outputTokens,
+    finishedStepUsage?.totalTokens ?? 0,
+  );
+
+  try {
+    const billingContext = buildChatBillingContext({
+      user: params.user,
+      apiKey: params.apiKey,
+      model: params.model,
+      provider: params.provider,
+      billingSource: params.billingSource,
+      requestId: params.requestId,
+      appId: params.appId,
+      affiliateCode: params.affiliateCode,
+      streaming: true,
+    });
+    const billing = await billUsage(billingContext, {
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      cacheReadInputTokens: finishedStepUsage?.cacheReadInputTokens,
+      cacheWriteInputTokens: finishedStepUsage?.cacheWriteInputTokens,
+    });
+    const reconciliation = await params.settleReservation(billing.totalCost);
+    const usageRecord = await recordUsageAnalytics(billingContext, billing, {
+      type: "chat",
+      isSuccessful: false,
+      errorMessage: "client_aborted_stream",
+      content: params.deliveredText,
+      systemPrompt: params.systemPrompt,
+      prompt: params.prompt,
+      latencyMs: Date.now() - params.startTime,
+    });
+    if (usageRecord) {
+      try {
+        await aiBillingRecordsService.record({
+          context: billingContext,
+          billing,
+          usageRecord,
+          idempotencyKey: params.idempotencyKey,
+          reconciliation,
+        });
+      } catch (auditError) {
+        logger.error("[Chat Completions] audit record failed (non-fatal)", {
+          error:
+            auditError instanceof Error
+              ? auditError.message
+              : String(auditError),
+          cause:
+            auditError instanceof Error && auditError.cause
+              ? String((auditError.cause as Error).message ?? auditError.cause)
+              : undefined,
+        });
+      }
+    }
+
+    logger.info(
+      "[Chat Completions] Stream aborted; reservation partially settled",
+      {
+        model: params.model,
+        inputTokens: billing.inputTokens,
+        outputTokens: billing.outputTokens,
+        totalCost: billing.totalCost,
+        deliveredChars: params.deliveredText.length,
+        finishedSteps: params.steps.length,
+      },
+    );
+
+    return reconciliation;
+  } catch (error) {
+    logger.error(
+      "[Chat Completions] Stream abort partial settlement failed; refunding reservation",
+      {
+        model: params.model,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    );
+    return await params.settleReservation(0);
+  }
+}
+
 // ============================================================================
 // Streaming Handler
 // ============================================================================
@@ -1372,6 +1689,7 @@ async function handleStreamingRequest(
   startTime: number,
   abortSignal: AbortSignal | undefined,
   timeoutMs: number,
+  estimatedInputTokens: number,
   settleReservation: (
     actualCost: number,
   ) => Promise<CreditReconciliationResult | null>,
@@ -1379,11 +1697,58 @@ async function handleStreamingRequest(
   effectiveMaxTokens: number | undefined,
   webSearchOptions: ReturnType<typeof buildProviderNativeWebSearchTools>,
   billingSource: PricingBillingSource,
+  pooledCredential: PooledInferenceCredential | null,
 ) {
   const provider = getProviderFromModel(model);
   const tools = convertTools(request.tools);
   const toolChoice = mapToolChoice(request.tool_choice);
   const experimentalOutput = mapResponseFormat(request.response_format);
+  const billingPrompt = buildChatPromptForBilling(request);
+  const billingAffiliateCode = pooledCredential ? null : affiliateCode;
+  let deliveredText = "";
+  let streamingSettlementPromise: Promise<CreditReconciliationResult | null> | null =
+    null;
+
+  // First-call-wins EVEN on throw (#11512): the settlement promise is cached
+  // unconditionally, so a rejected settlement can never be re-run by a later
+  // callback (onAbort/onError racing a thrown onFinish). Resetting on throw
+  // let a second call re-invoke reconcile after its org refund had already
+  // committed — a second full refund, i.e. minted cashable credit. Subsequent
+  // callers observe the same resolution or the same rejection.
+  const settleStreamingOnce = (
+    factory: () => Promise<CreditReconciliationResult | null>,
+  ): Promise<CreditReconciliationResult | null> => {
+    if (!streamingSettlementPromise) {
+      streamingSettlementPromise = factory();
+    }
+    return streamingSettlementPromise;
+  };
+
+  const refundStreamingReservationOnce = () =>
+    settleStreamingOnce(async () => await settleReservation(0));
+
+  const settleStreamingAbortOnce = (steps: readonly StepResult<ToolSet>[]) =>
+    settleStreamingOnce(
+      async () =>
+        await settleStreamingAbortReservation({
+          model,
+          provider,
+          user,
+          apiKey,
+          affiliateCode: billingAffiliateCode,
+          appId,
+          requestId,
+          idempotencyKey,
+          systemPrompt,
+          prompt: billingPrompt,
+          startTime,
+          billingSource,
+          estimatedInputTokens,
+          deliveredText,
+          steps,
+          settleReservation,
+        }),
+    );
 
   const safeParams = getSafeModelParams(model, {
     temperature: request.temperature,
@@ -1398,7 +1763,7 @@ async function handleStreamingRequest(
   });
 
   const result = streamText({
-    model: getLanguageModel(model),
+    model: getLanguageModel(model, pooledCredential ?? undefined),
     system: systemPrompt,
     messages,
     ...webSearchOptions,
@@ -1411,82 +1776,90 @@ async function handleStreamingRequest(
     ...(effectiveMaxTokens != null && { maxOutputTokens: effectiveMaxTokens }),
     ...cotOptions,
     onFinish: async ({ text, usage }) => {
-      try {
-        const billingContext = {
-          organizationId: user.organization_id,
-          userId: user.id,
-          apiKeyId: apiKey?.id,
-          model,
-          provider,
-          billingSource,
-          requestId,
-          metadata: buildProviderReconciliationMetadata(
-            provider,
+      await settleStreamingOnce(async () => {
+        try {
+          const billingContext = buildChatBillingContext({
+            user,
+            apiKey,
             model,
-            true,
+            provider,
+            billingSource,
+            requestId,
             appId,
-          ),
-          affiliateCode,
-          ...buildProviderBillingFields(provider, model),
-        };
-        const billing = await billUsage(billingContext, usage);
-        const reconciliation = await settleReservation(billing.totalCost);
+            affiliateCode: billingAffiliateCode,
+            streaming: true,
+          });
+          const billing = await billUsage(billingContext, usage);
+          const reconciliation = await settleReservation(billing.totalCost);
+          await recordPooledInferenceSuccess(pooledCredential, user.id);
 
-        const usageRecord = await recordUsageAnalytics(
-          billingContext,
-          billing,
-          {
-            type: "chat",
-            content: text,
-            systemPrompt,
-            prompt: request.messages
-              .map((m) => `[${m.role}] ${getMessageContent(m)}`)
-              .join("\n"),
-            latencyMs: Date.now() - startTime,
-          },
-        );
-        if (usageRecord) {
-          try {
-            await aiBillingRecordsService.record({
-              context: billingContext,
-              billing,
-              usageRecord,
-              idempotencyKey,
-              reconciliation,
-            });
-          } catch (auditError) {
-            logger.error("[Chat Completions] audit record failed (non-fatal)", {
-              error:
-                auditError instanceof Error
-                  ? auditError.message
-                  : String(auditError),
-              cause:
-                auditError instanceof Error && auditError.cause
-                  ? String(
-                      (auditError.cause as Error).message ?? auditError.cause,
-                    )
-                  : undefined,
-            });
+          const usageRecord = await recordUsageAnalytics(
+            billingContext,
+            billing,
+            {
+              type: "chat",
+              content: text,
+              systemPrompt,
+              prompt: billingPrompt,
+              latencyMs: Date.now() - startTime,
+            },
+          );
+          if (usageRecord) {
+            try {
+              await aiBillingRecordsService.record({
+                context: billingContext,
+                billing,
+                usageRecord,
+                idempotencyKey,
+                reconciliation,
+              });
+            } catch (auditError) {
+              logger.error(
+                "[Chat Completions] audit record failed (non-fatal)",
+                {
+                  error:
+                    auditError instanceof Error
+                      ? auditError.message
+                      : String(auditError),
+                  cause:
+                    auditError instanceof Error && auditError.cause
+                      ? String(
+                          (auditError.cause as Error).message ??
+                            auditError.cause,
+                        )
+                      : undefined,
+                },
+              );
+            }
           }
-        }
 
-        logger.info("[Chat Completions] Streaming complete", {
-          durationMs: Date.now() - startTime,
-          inputTokens: billing.inputTokens,
-          outputTokens: billing.outputTokens,
-          totalCost: billing.totalCost,
-        });
-      } catch (error) {
-        await settleReservation(0);
-        logger.error("[Chat Completions] onFinish error", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+          logger.info("[Chat Completions] Streaming complete", {
+            durationMs: Date.now() - startTime,
+            inputTokens: billing.inputTokens,
+            outputTokens: billing.outputTokens,
+            totalCost: billing.totalCost,
+          });
+
+          return reconciliation;
+        } catch (error) {
+          const reconciliation = await settleReservation(0);
+          logger.error("[Chat Completions] onFinish error", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return reconciliation;
+        }
+      });
     },
-    onAbort: async () => {
-      await settleReservation(0);
+    onAbort: async ({
+      steps,
+    }: {
+      readonly steps: readonly StepResult<ToolSet>[];
+    }) => {
+      await settleStreamingAbortOnce(steps);
       logger.info("[Chat Completions] Stream aborted before completion", {
         model,
+        estimatedInputTokens,
+        deliveredOutputTokens: estimateTokens(deliveredText),
       });
     },
     // A provider error during streaming (e.g. the cerebras 429/5xx the
@@ -1496,7 +1869,8 @@ async function handleStreamingRequest(
     // settleReservation(0). The settler is idempotent (first-call-wins), so a
     // later onFinish/onAbort cannot double-refund.
     onError: async ({ error }: { error: unknown }) => {
-      await settleReservation(0);
+      await refundStreamingReservationOnce();
+      await recordPooledInferenceFailure(pooledCredential, error);
       logger.error(
         "[Chat Completions] Stream provider error — reservation refunded",
         {
@@ -1536,6 +1910,7 @@ async function handleStreamingRequest(
             controller.enqueue(
               encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`),
             );
+            deliveredText += part.text;
             continue;
           }
 
@@ -1680,7 +2055,13 @@ async function handleStreamingRequest(
         // does not await) onError, so settle the reservation here too. The
         // settler is idempotent, so this cannot double-refund if onError already
         // won the race.
-        await settleReservation(0);
+        const streamAborted = abortSignal?.aborted === true;
+        if (streamAborted) {
+          await settleStreamingAbortOnce([]);
+        } else {
+          await refundStreamingReservationOnce();
+          await recordPooledInferenceFailure(pooledCredential, error);
+        }
         const status =
           getRecoverableProviderErrorStatus(error) ?? getErrorStatusCode(error);
         try {
@@ -1755,12 +2136,14 @@ async function handleNonStreamingRequest(
   effectiveMaxTokens: number | undefined,
   webSearchOptions: ReturnType<typeof buildProviderNativeWebSearchTools>,
   billingSource: PricingBillingSource,
+  pooledCredential: PooledInferenceCredential | null,
   executionCtx: { waitUntil(promise: Promise<unknown>): void } | undefined,
 ) {
   const provider = getProviderFromModel(model);
   const tools = convertTools(request.tools);
   const toolChoice = mapToolChoice(request.tool_choice);
   const experimentalOutput = mapResponseFormat(request.response_format);
+  const billingAffiliateCode = pooledCredential ? null : affiliateCode;
 
   const safeParamsNonStream = getSafeModelParams(model, {
     temperature: request.temperature,
@@ -1776,7 +2159,7 @@ async function handleNonStreamingRequest(
 
   try {
     const result = await generateText({
-      model: getLanguageModel(model),
+      model: getLanguageModel(model, pooledCredential ?? undefined),
       system: systemPrompt,
       messages,
       ...webSearchOptions,
@@ -1819,27 +2202,23 @@ async function handleNonStreamingRequest(
     // Bill using actual usage from SDK response. Deferred via waitUntil so the
     // ~0.7-1.1s of reconciliation/audit DB writes never block the response.
     // Same code, same amounts, same reservation — only the timing moves.
+    const billingPrompt = buildChatPromptForBilling(request);
     await settleOffResponsePath(executionCtx, async () => {
       try {
-        const billingContext = {
-          organizationId: user.organization_id,
-          userId: user.id,
-          apiKeyId: apiKey?.id,
+        const billingContext = buildChatBillingContext({
+          user,
+          apiKey,
           model,
           provider,
           billingSource,
           requestId,
-          metadata: buildProviderReconciliationMetadata(
-            provider,
-            model,
-            false,
-            appId,
-          ),
-          affiliateCode,
-          ...buildProviderBillingFields(provider, model),
-        };
+          appId,
+          affiliateCode: billingAffiliateCode,
+          streaming: false,
+        });
         const billing = await billUsage(billingContext, result.usage);
         const reconciliation = await settleReservation(billing.totalCost);
+        await recordPooledInferenceSuccess(pooledCredential, user.id);
 
         const usageRecord = await recordUsageAnalytics(
           billingContext,
@@ -1848,9 +2227,7 @@ async function handleNonStreamingRequest(
             type: "chat",
             content: result.text,
             systemPrompt,
-            prompt: request.messages
-              .map((m) => `[${m.role}] ${getMessageContent(m)}`)
-              .join("\n"),
+            prompt: billingPrompt,
             latencyMs: responseLatencyMs,
           },
         );
@@ -1967,6 +2344,7 @@ async function handleNonStreamingRequest(
     );
   } catch (error) {
     await settleReservation?.(0);
+    await recordPooledInferenceFailure(pooledCredential, error);
     throw error;
   }
 }
@@ -2014,4 +2392,8 @@ export const __nativeToolingTestHooks = {
  */
 export const __streamingCreditTestHooks = {
   handleStreamingRequest,
+} as const;
+
+export const __billingBranchTestHooks = {
+  shouldUsePooledNoopReservation,
 } as const;

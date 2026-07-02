@@ -1,16 +1,14 @@
 /**
  * BSC cloud-credit promotion (public). Buy $10+ in cloud credit on BSC, get $5
- * bonus. Ported from `@elizaos/cloud-frontend/src/pages/bsc/page.tsx`.
+ * bonus.
  *
  * The static credit calculator (amount input + you-pay / you-receive) and the
  * sign-in gate are ported here. The actual crypto-checkout card
  * (`DirectCryptoCreditCard`) lives in the BILLING domain (it pulls the wallet
  * stack — wagmi / RainbowKit / Solana — which are not dependencies of
  * `@elizaos/ui`), and the account/profile fetch (`useUserProfile`) lives in the
- * SETTINGS domain. Wiring the crypto card in is a cross-domain follow-up tracked
- * in the structured result; signed-in users see a placeholder + a link into the
- * in-app billing surface instead. The page-local `attach-wallet-card` from
- * cloud-frontend is dead/dropped per scope.
+ * SETTINGS domain. Signed-in users see a link into the in-app billing surface
+ * instead of an inline crypto-checkout card.
  */
 
 import { BRAND_PATHS, LOGO_FILES } from "@elizaos/shared/brand";
@@ -25,9 +23,9 @@ import {
   CardTitle,
   Input,
 } from "../../../components/primitives";
+import { useSessionAuth } from "../../lib/use-session-auth";
 import { useCloudT } from "../../shell/CloudI18nProvider";
 import { usePageTitle } from "../lib/use-page-title";
-import { useSessionAuth } from "../lib/use-session-auth";
 
 export default function BscPromoPage() {
   const t = useCloudT();
@@ -195,7 +193,7 @@ export default function BscPromoPage() {
                     })}
                   </p>
                   <Button asChild className="w-full rounded-xs">
-                    <Link to="/settings#billing">
+                    <Link to="/settings#cloud-billing">
                       {t("cloud.bsc.openBilling", {
                         defaultValue: "Open billing",
                       })}

@@ -108,14 +108,6 @@ class AdvertisingService {
     return metadata;
   }
 
-  private assertAccountCanSpend(account: AdAccount): void {
-    if (account.status !== "active") {
-      throw new Error(
-        `Ad account is not active (status: ${account.status}); it must be approved before running campaigns`,
-      );
-    }
-  }
-
   getProvider(platform: AdPlatform): AdProvider {
     const provider = providers[platform];
     if (!provider) {
@@ -231,8 +223,11 @@ class AdvertisingService {
       account_name: input.accountName || validation.accountName || "Ad Account",
       access_token_secret_id: accessTokenSecret.id,
       refresh_token_secret_id: refreshTokenSecretId,
-      // Ad spend is money movement. New accounts require operator approval
-      // before campaigns, creatives, or inventory serves can spend against them.
+      // Ad spend is money movement, so a newly-connected account starts
+      // "pending" and cannot run campaigns until a platform operator approves
+      // it (POST /api/v1/advertising/accounts/:id/approve, requireAdmin) — the
+      // same operator-executes posture as fiat payouts/redemptions. This
+      // prevents a stolen/abusive ad account from spending before review. (#11364)
       status: "pending",
     });
 
@@ -244,20 +239,24 @@ class AdvertisingService {
     return account;
   }
 
+  /**
+   * Approve a pending ad account so it can run campaigns. Platform-operator
+   * action (requireAdmin at the route) — the same operator-executes posture as
+   * fiat payouts; an org owner can never self-approve their own ad account. (#11364)
+   */
   async approveAccount(accountId: string): Promise<AdAccount> {
     const account = await adAccountsRepository.findById(accountId);
     if (!account) {
       throw new Error("Ad account not found");
     }
     if (account.status === "active") {
-      return account;
+      return account; // idempotent
     }
     if (account.status !== "pending") {
       throw new Error(
         `Ad account cannot be approved from status "${account.status}" (only "pending" accounts can be approved)`,
       );
     }
-
     const updated = await adAccountsRepository.updateStatus(accountId, "active");
     if (!updated) {
       throw new Error("Ad account not found");
@@ -266,64 +265,24 @@ class AdvertisingService {
     return updated;
   }
 
+  /**
+   * Reject or suspend an ad account so it cannot run campaigns. Platform-operator
+   * action (requireAdmin at the route). Covers both rejecting a pending account
+   * on review and suspending an active account for ToS. (#11364)
+   */
   async rejectAccount(accountId: string): Promise<AdAccount> {
     const account = await adAccountsRepository.findById(accountId);
     if (!account) {
       throw new Error("Ad account not found");
     }
     if (account.status === "suspended") {
-      return account;
+      return account; // idempotent
     }
-
     const updated = await adAccountsRepository.updateStatus(accountId, "suspended");
     if (!updated) {
       throw new Error("Ad account not found");
     }
-
-    const activeCampaigns = (await adCampaignsRepository.listByAdAccount(accountId)).filter(
-      (campaign) => campaign.status === "active",
-    );
-    if (activeCampaigns.length > 0) {
-      const externalActiveCampaigns = activeCampaigns.filter((campaign) =>
-        Boolean(campaign.external_campaign_id),
-      );
-      let credentials: AdAccountCredentials | undefined;
-      let provider: AdProvider | undefined;
-      if (externalActiveCampaigns.length > 0) {
-        try {
-          credentials = await this.getCredentials(account);
-          provider = this.getProvider(account.platform);
-        } catch (error) {
-          logger.error(
-            "[Advertising] Failed to load provider credentials while suspending account",
-            {
-              accountId,
-              error: error instanceof Error ? error.message : String(error),
-            },
-          );
-        }
-      }
-
-      for (const campaign of activeCampaigns) {
-        if (campaign.external_campaign_id && credentials && provider) {
-          const result = await provider.pauseCampaign(credentials, campaign.external_campaign_id);
-          if (!result.success) {
-            logger.error("[Advertising] Failed to pause provider campaign for suspended account", {
-              accountId,
-              campaignId: campaign.id,
-              externalCampaignId: campaign.external_campaign_id,
-              error: result.error,
-            });
-          }
-        }
-        await adCampaignsRepository.updateStatus(campaign.id, "paused");
-      }
-    }
-
-    logger.info("[Advertising] Ad account rejected/suspended", {
-      accountId,
-      pausedCampaigns: activeCampaigns.length,
-    });
+    logger.info("[Advertising] Ad account rejected/suspended", { accountId });
     return updated;
   }
 
@@ -543,7 +502,13 @@ class AdvertisingService {
     if (!account || account.organization_id !== input.organizationId) {
       throw new Error("Ad account not found");
     }
-    this.assertAccountCanSpend(account);
+    // Only an approved (active) ad account may spend — a pending/suspended/
+    // disconnected account cannot create campaigns. (#11364)
+    if (account.status !== "active") {
+      throw new Error(
+        `Ad account is not active (status: ${account.status}); it must be approved before running campaigns`,
+      );
+    }
 
     await contentSafetyService.assertSafeForPublicUse({
       surface: "advertising_campaign",
@@ -720,7 +685,12 @@ class AdvertisingService {
     if (!account) {
       throw new Error("Ad account not found");
     }
-    this.assertAccountCanSpend(account);
+
+    if (account.status !== "active") {
+      throw new Error(
+        `Ad account is not active (status: ${account.status}); it must be approved before running campaigns`,
+      );
+    }
 
     const credentials = await this.getCredentials(account);
     const provider = this.getProvider(account.platform);
@@ -778,9 +748,17 @@ class AdvertisingService {
 
     let updated: AdCampaign | undefined;
     if (budgetCreditDelta < 0 && newCreditsAllocated !== undefined) {
-      // Platform accepted a budget decrease. Refund only the genuinely unused
-      // freed allocation, and claim the allocation change atomically so two
-      // concurrent decreases cannot both refund the same credits.
+      // Platform accepted a budget DECREASE. Two money leaks fixed here (#11292):
+      //  1. Over-refund after spend: the old code refunded the FULL allocation
+      //     delta, ignoring spend. Refund only the genuinely-UNUSED portion (the
+      //     same clamp deleteCampaign applies), so a decrease can never refund
+      //     credits already spent on real impressions.
+      //  2. Concurrent double-refund: claim the allocation change atomically
+      //     (CAS on the observed credits_allocated) so only ONE of two
+      //     simultaneous decreases refunds.
+      // credits_allocated stays == newBudget*markup (never clamp the STORED
+      // allocation) so the markup derived at delete (allocated/budget) stays
+      // correct — only the REFUND is clamped.
       const oldAllocated = parseFloat(campaign.credits_allocated);
       const spentCredits = await this.computeCreditsSpent(campaign);
       const freed = oldAllocated - newCreditsAllocated;
@@ -794,9 +772,11 @@ class AdvertisingService {
         updateData,
       );
       if (!updated) {
+        // Another budget change moved credits_allocated between our read and
+        // this atomic write — refuse rather than risk a double refund. Safe to
+        // retry (the campaign was not modified by this call).
         throw new Error("Campaign budget changed concurrently; please retry");
       }
-
       if (refundAmount > 0) {
         await creditsService.refundCredits({
           organizationId,
@@ -828,7 +808,14 @@ class AdvertisingService {
     if (!account) {
       throw new Error("Ad account not found");
     }
-    this.assertAccountCanSpend(account);
+    // Only an approved (active) ad account may spend — block starting a campaign
+    // on a pending/suspended/disconnected account (e.g. suspended for ToS after
+    // the campaign was created). (#11364)
+    if (account.status !== "active") {
+      throw new Error(
+        `Ad account is not active (status: ${account.status}); it must be approved before running campaigns`,
+      );
+    }
 
     const credentials = await this.getCredentials(account);
     const provider = this.getProvider(account.platform);
@@ -878,9 +865,19 @@ class AdvertisingService {
   }
 
   /**
-   * Credits genuinely spent for a campaign, honoring both spend columns:
-   * internal SSP credits are already in allocated-credit units, while external
-   * provider spend is USD and must be converted with the campaign markup.
+   * Credits genuinely spent for a campaign, honoring BOTH spend columns (#11151):
+   *   - internal miniapp SSP spend → `credits_spent` (already in allocated-credit
+   *     units, written by adSlotsRepository.recordServe per served impression).
+   *   - external-provider spend → `total_spend` (USD; converted to allocated-
+   *     credit units at the same markup applied at allocation). Best-effort
+   *     refreshed from the provider first so a never-synced campaign can't
+   *     under-count spend and over-refund.
+   * SUMS the two measures and clamps to the allocation (restoring merged
+   * #11255 semantics): the streams are additive, not alternative —
+   * findEligibleAd serves EXTERNAL campaigns through the internal SSP too, so
+   * credits_spent and total_spend accrue independently on one campaign, and
+   * MAX would under-count dual-stream spend and over-refund. Shared by
+   * deleteCampaign and the updateCampaign budget-decrease refund (#11292).
    */
   private async computeCreditsSpent(campaign: {
     id: string;
@@ -905,7 +902,6 @@ class AdvertisingService {
         });
       }
     }
-
     const creditsAllocated = parseFloat(campaign.credits_allocated);
     const budgetAmountUsd = parseFloat(campaign.budget_amount);
     const markup = budgetAmountUsd > 0 ? creditsAllocated / budgetAmountUsd : 1;
@@ -933,8 +929,11 @@ class AdvertisingService {
       }
     }
 
-    // Refresh external spend before the atomic claim while the row still exists.
-    // getCampaignMetrics persists total_spend, so the claimed row carries it.
+    // Best-effort external spend refresh BEFORE the atomic claim, while the
+    // row still exists — getCampaignMetrics persists the fresh total_spend
+    // onto the row (updateMetrics), so the claimed row below carries it. Keeps
+    // the #11151 protection against a never-synced campaign under-counting
+    // spend and over-refunding.
     if (campaign.external_campaign_id) {
       try {
         await this.getCampaignMetrics(campaignId, organizationId);
@@ -946,6 +945,10 @@ class AdvertisingService {
       }
     }
 
+    // Atomic claim: only the caller that actually removes the row refunds, so
+    // two concurrent deletes (or a delete retried after a mid-op failure) can't
+    // both refund the unused budget (#11292). claimDelete returns the row only
+    // to the winner.
     const deleted = await adCampaignsRepository.claimDelete(campaignId, organizationId);
     if (!deleted) {
       logger.info("[Advertising] Campaign already deleted concurrently; skipping refund", {
@@ -954,9 +957,15 @@ class AdvertisingService {
       return;
     }
 
-    // Refund from the claimed row, never the earlier findById snapshot: a
-    // concurrent budget decrease can commit a lower credits_allocated and
-    // refund the freed delta before this delete wins the row.
+    // Refund from the CLAIMED row, never the pre-claim findById snapshot: a
+    // concurrent budget DECREASE commits its lower credits_allocated (and
+    // refunds the freed delta) before claimDelete removes the row, so a
+    // snapshot-based refund would pay that freed budget out a second time —
+    // and impressions served after the snapshot would be refunded too. The
+    // two-column (#11151) spend logic lives in the shared helper; external
+    // spend was already refreshed onto the row above and the row is gone now,
+    // so skip the in-helper re-refresh (it could only fail and warn) by
+    // passing external_campaign_id: null.
     const creditsSpent = await this.computeCreditsSpent({
       ...deleted,
       external_campaign_id: null,
@@ -967,19 +976,25 @@ class AdvertisingService {
       await creditsService.refundCredits({
         organizationId,
         amount: creditsRemaining,
-        description: `Refund unused budget for deleted campaign: ${deleted.name}`,
-        metadata: { campaignId, campaignName: deleted.name },
+        description: `Refund unused budget for deleted campaign: ${campaign.name}`,
+        metadata: { campaignId, campaignName: campaign.name },
       });
 
+      // The campaign row is already deleted by claimDelete, so a campaign_id
+      // here would violate the ad_transactions FK (23503) and 500 every
+      // refunding delete AFTER the refund committed — dropping the ledger row
+      // (onDelete:'set null' rewrites existing rows; it does not permit a
+      // dangling insert). Keep the deleted id in external_reference, matching
+      // the merged #11255 fix this branch predates.
       await adTransactionsRepository.create({
         organization_id: organizationId,
         campaign_id: null,
         external_reference: campaignId,
         type: "refund",
         amount: String(creditsRemaining),
-        currency: deleted.budget_currency,
+        currency: campaign.budget_currency,
         credits_amount: String(creditsRemaining),
-        description: `Refund for deleted campaign: ${deleted.name}`,
+        description: `Refund for deleted campaign: ${campaign.name}`,
       });
     }
 
@@ -1067,11 +1082,6 @@ class AdvertisingService {
     if (!campaign || campaign.organization_id !== organizationId) {
       throw new Error("Campaign not found");
     }
-    const account = await adAccountsRepository.findById(campaign.ad_account_id);
-    if (!account) {
-      throw new Error("Ad account not found");
-    }
-    this.assertAccountCanSpend(account);
 
     const safetyReview = await contentSafetyService.assertSafeForPublicUse({
       surface: "advertising_creative",
@@ -1095,30 +1105,34 @@ class AdvertisingService {
     }
 
     let preparedInput = input;
+    let account: AdAccount | undefined;
     let credentials: AdAccountCredentials | undefined;
     let provider: AdProvider | undefined;
     if (campaign.external_campaign_id) {
-      try {
-        credentials = await this.getCredentials(account);
-        provider = this.getProvider(account.platform);
-        const preparedMedia = await this.prepareCreativeMediaForProvider(
-          organizationId,
-          account,
-          provider,
-          credentials,
-          input,
-        );
-        preparedInput = { ...input, media: preparedMedia };
-      } catch (error) {
-        await creditsService.refundCredits({
-          organizationId,
-          amount: AD_CREDIT_RATES.createCreative,
-          description: `Refund: Creative media upload failed - ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          metadata: { campaignId: input.campaignId, creativeName: input.name },
-        });
-        throw error;
+      account = await adAccountsRepository.findById(campaign.ad_account_id);
+      if (account) {
+        try {
+          credentials = await this.getCredentials(account);
+          provider = this.getProvider(account.platform);
+          const preparedMedia = await this.prepareCreativeMediaForProvider(
+            organizationId,
+            account,
+            provider,
+            credentials,
+            input,
+          );
+          preparedInput = { ...input, media: preparedMedia };
+        } catch (error) {
+          await creditsService.refundCredits({
+            organizationId,
+            amount: AD_CREDIT_RATES.createCreative,
+            description: `Refund: Creative media upload failed - ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            metadata: { campaignId: input.campaignId, creativeName: input.name },
+          });
+          throw error;
+        }
       }
     }
 

@@ -58,6 +58,11 @@ app.delete("/", async (c) => {
   }
 });
 
+/**
+ * Approve a pending ad account (platform operator only). requireAdmin ensures an
+ * org owner can never self-approve their own account — the same operator-executes
+ * posture as fiat payouts. (#11364)
+ */
 app.post("/approve", async (c) => {
   try {
     await requireAdmin(c);
@@ -73,6 +78,9 @@ app.post("/approve", async (c) => {
   }
 });
 
+/**
+ * Reject or suspend an ad account (platform operator only). (#11364)
+ */
 app.post("/reject", async (c) => {
   try {
     await requireAdmin(c);

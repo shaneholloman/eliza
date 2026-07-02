@@ -7,36 +7,43 @@ Shipped live at **https://eliza.nubs.site/apps/edad/** by RemilioNubilio.
 ## Why this pattern exists
 
 - Keeps users on the miniapp's domain end-to-end (branding, UX continuity, embeddable elsewhere)
-- Users sign in with Eliza Cloud once; the app gets their identity, not a Cloud token, and mints its own session
-- App creator earns the inference markup % on every reply; affiliate code adds a separate share
+- Users sign in with Eliza Cloud once; the app gets their **identity** (not a Cloud token) and mints its own session
+- App creator earns the inference markup % on every reply; the affiliate code adds a separate share
 - No character registration, no anonymous session management — lean proxy + minimal frontend
 
-## Auth & billing model
+## Auth & billing model (read this)
 
-Eliza Cloud's app OAuth returns a **single-use authorization code** (`eac_...`)
-on the redirect, not a durable user token. This app redeems that code once on
-the server at `GET /api/v1/app-auth/session`, mints its own signed app session
-(`app-session.ts`), and then proxies `/api/v1/messages` with the **app owner's**
-`ELIZAOS_CLOUD_API_KEY` plus `x-app-id` and `x-affiliate-code`.
+Eliza Cloud's app OAuth returns a **single-use authorization code** (`eac_…`) on the
+redirect — never a durable user token. By design a third-party app can learn a
+user's *identity* but cannot hold their Cloud JWT. So this app:
+
+1. redeems the code **once, server-side**, at `GET /api/v1/app-auth/session` to get the user's identity, then
+2. mints its **own** signed session token (`app-session.ts`) the browser reuses, and
+3. proxies `/api/v1/messages` using the **app owner's** `ELIZAOS_CLOUD_API_KEY` (server-side only) plus `x-app-id` + `x-affiliate-code`.
 
 Because the call carries `x-app-id` for a monetization-enabled app, Cloud bills
-the app's monetized credit pool with the creator inference markup and credits
-the affiliate. The owner key never reaches the browser and the single-use code
+the app's **monetized credit pool** with the creator inference markup and credits
+the affiliate — the owner key never reaches the browser, and the single-use code
 is never reused.
 
 ```
 browser                                  app backend                          eliza cloud
 ┌──────────────────┐  POST /api/auth/    ┌──────────────────┐  GET /app-auth/   ┌───────────────────┐
-│ ?code=eac_...    ├── exchange ────────▶│ redeem code,     ├── session ───────▶│ consume code,     │
-│ x-app-session    │                     │ mint app session │◀─────────────────│ return identity   │
-│                  ├── POST /api/messages▶ owner key +      ├── /api/v1/messages▶ app-pool billing │
-│                  │                     │ x-app-id + aff.  │                   │ + markup/affiliate│
-└──────────────────┘                     └──────────────────┘                   └───────────────────┘
+│ ?code=eac_… ─────┼─── exchange ───────▶│ redeem code →    │── session ───────▶│ consume code →    │
+│ (single-use)     │                     │ identity, mint   │   (Bearer code)   │ return identity   │
+│                  │                     │ app session      │◀──────────────────│                   │
+│ x-app-session ───┼── POST /api/messages▶│ owner key +      │  /api/v1/messages │ app-pool billing  │
+│ (our token)      │                     │ x-app-id + aff.  │── (owner bearer) ─▶│ + markup → creator│
+└──────────────────┘                     └──────────────────┘                   │ + affiliate share │
+                                                                                 └───────────────────┘
 ```
 
-> A "user pays from their own org balance" variant would require the user's
-> Steward JWT, which the app-OAuth code flow deliberately does not hand out.
-> This template uses the supported app-credit-pool path above.
+> Note: a "user pays from their **own** org balance" variant would require the
+> app to present the user's Steward JWT, which the app-OAuth code flow
+> deliberately does not hand out. This template uses the supported app-credit-pool
+> path above. The full live OAuth round-trip needs a deployed app + a real Cloud
+> sign-in to exercise end to end; the session logic and auth gating are covered by
+> `test.ts`.
 
 ## Files
 
@@ -53,10 +60,10 @@ browser                                  app backend                          el
 
 ```bash
 ELIZA_APP_ID=<uuid of app registered via POST /api/v1/apps>
-ELIZAOS_CLOUD_API_KEY=eliza_...     # app owner's Cloud key; server-side only
+ELIZAOS_CLOUD_API_KEY=eliza_...     # the app OWNER's Cloud key — the server's upstream bearer (never sent to the browser)
 ELIZA_CLOUD_URL=https://www.elizacloud.ai
 ELIZA_AFFILIATE_CODE=AFF-XXXXXX     # your affiliate code — drives per-call affiliate share earnings
-EDAD_SESSION_SECRET=<random>        # OPTIONAL — signs app sessions; defaults to ELIZAOS_CLOUD_API_KEY
+EDAD_SESSION_SECRET=<random>        # OPTIONAL — signs app session tokens; defaults to ELIZAOS_CLOUD_API_KEY
 DATABASE_URL=postgres://...         # OPTIONAL — when set, chat history persists (see below)
 ```
 
@@ -71,10 +78,9 @@ silent no-op — the proxy runs stateless anywhere. This makes edad a single app
 that exercises the **whole** platform: monetized inference + container deploy +
 per-tenant DB + per-app auth + custom domain.
 
-There is **no anonymous fallback**. The proxy rejects requests without a valid
-app session with 401. Reasoning:
+There is **no anonymous fallback**. The proxy rejects requests without a valid app session with 401 — users must sign in with Eliza Cloud first. Reasoning:
 
-- The whole point of monetization is that creators + affiliates earn a real cut of every billed reply. An anonymous path bypasses attribution and billing.
+- The whole point of monetization is that creators + affiliates earn a real cut of every billed reply. An anonymous path bypassed that math entirely (the user "chats on the house" and nothing is attributed to anyone).
 - One auth path is simpler to reason about than two; eliminates the awkward "chatting on the house" UI state.
 - Free-tier promo is better expressed as a welcome-credit grant on the user's org (cloud already does this — new orgs get $5 on first sync).
 

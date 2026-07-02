@@ -12,12 +12,18 @@
  * before mounting `CloudRouterShell` so the registry is populated. It is
  * idempotent — every underlying registration guards against double-register or
  * is keyed by route path / section id — so calling it more than once is safe.
+ *
+ * Account-management surfaces (account, security, plugin grants, billing,
+ * API keys, monetization, connections, organization-as-section) have NO
+ * standalone dashboard routes — their single home is the in-app Settings
+ * sections, and the `CloudRouterShell` compat redirects carry the legacy
+ * `/dashboard/*` deep links there.
  */
 
 // Side-effecting domain modules: importing them runs their top-level
-// `registerCloudRoute(...)` / `registerSettingsSection(...)` calls.
+// `registerCloudRoute(...)` calls.
 import "./instances";
-import "./account-security";
+import "./analytics";
 import "./billing/routes";
 import "./organization/routes";
 
@@ -27,7 +33,6 @@ import { registerApplicationsCloudRoutes } from "./applications";
 import { registerApprovalsCloudRoute } from "./approvals";
 import { registerJoinFlow } from "./join";
 import { registerMcpsCloudRoute } from "./mcps";
-import { registerMonetizationCloudRoutes } from "./monetization";
 import { registerPublicPages } from "./public-pages";
 import { registerCloudSettingsSections } from "./settings";
 
@@ -47,7 +52,6 @@ export function registerAllCloudSurfaces(): void {
   registerApiExplorerCloudRoute();
   registerApplicationsCloudRoutes();
   registerApprovalsCloudRoute();
-  registerMonetizationCloudRoutes();
   registerAdminCloudRoutes();
   registerMcpsCloudRoute();
 

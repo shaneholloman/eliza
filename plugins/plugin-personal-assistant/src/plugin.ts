@@ -45,7 +45,6 @@ import { connectorAction } from "./actions/connector.js";
 import { credentialsAction } from "./actions/credentials.js";
 import { ownerDocumentsAction } from "./actions/document.js";
 import { entityAction } from "./actions/entity.js";
-import { inboxAction } from "./actions/inbox.js";
 import {
   ownerAlarmsAction,
   ownerFinancesAction,
@@ -132,6 +131,7 @@ import {
   registerLifeOpsTaskWorker,
 } from "./lifeops/runtime.js";
 import { registerLifeOpsScheduledTaskRunnerDeps } from "./lifeops/scheduled-task/runtime-wiring.js";
+import { handleScheduledTaskInboundMessage } from "./lifeops/scheduled-task/scheduler.js";
 import { getScheduledTaskRunner as getProductionScheduledTaskRunner } from "./lifeops/scheduled-task/service.js";
 import { lifeOpsSchema } from "./lifeops/schema.js";
 import {
@@ -151,7 +151,6 @@ import { crossChannelContextProvider } from "./providers/cross-channel-context.j
 // LifeOps core providers
 import { firstRunProvider } from "./providers/first-run.js";
 import { healthProvider } from "./providers/health.js";
-import { inboxTriageProvider } from "./providers/inbox-triage.js";
 import { lifeOpsProvider } from "./providers/lifeops.js";
 import { pendingPromptsProvider } from "./providers/pending-prompts.js";
 import { recentTaskStatesProvider } from "./providers/recent-task-states.js";
@@ -773,7 +772,9 @@ const rawPersonalAssistantPlugin: Plugin = {
     ...promoteSubactionsToActions(briefAction),
     ...promoteSubactionsToActions(prioritizeAction),
     ...promoteSubactionsToActions(conflictDetectAction),
-    ...promoteSubactionsToActions(inboxAction),
+    // INBOX (+ its INBOX_* virtuals) registers via @elizaos/plugin-inbox,
+    // which init() guarantees is loaded before PA's action array is
+    // processed; plugin-inbox promotes the subactions itself.
     ...promoteSubactionsToActions(voiceCallAction),
     workThreadAction,
     // The create virtual carries an explicit de-claim: on live small models a
@@ -802,7 +803,10 @@ const rawPersonalAssistantPlugin: Plugin = {
     workThreadsProvider,
     recentTaskStatesProvider,
     healthProvider,
-    inboxTriageProvider,
+    // `inboxTriage` registers via @elizaos/plugin-inbox, which init()
+    // guarantees is loaded (ensureLifeOpsInboxPluginRegistered) before PA's
+    // own provider array is processed. Re-listing it here was a dead
+    // duplicate the runtime silently skipped.
     crossChannelContextProvider,
     activityProfileProvider,
   ],
@@ -821,6 +825,7 @@ const rawPersonalAssistantPlugin: Plugin = {
   // overview"). Domain views live in the per-domain plugins; the personal
   // assistant is the chat itself (PERSONAL_ASSISTANT action).
   events: {
+    [EventType.MESSAGE_RECEIVED]: [handleScheduledTaskInboundMessage],
     // Fold recognized voice turns into the entity/relationship graph via
     // the merge engine, then round-trip the binding to the voice-profile
     // owner. See lifeops/entities/voice-observer-bridge.ts.
@@ -1283,8 +1288,11 @@ export type {
   GateDecision,
   ProcessDueScheduledTasksRequest,
   ProcessDueScheduledTasksResult,
+  ProcessScheduledTaskInboundMessageRequest,
+  ProcessScheduledTaskInboundMessageResult,
   ScheduledTask,
   ScheduledTaskCompletionCheck,
+  ScheduledTaskCompletionResult,
   ScheduledTaskContextRequest,
   ScheduledTaskDueContext,
   ScheduledTaskDueDecision,
@@ -1320,6 +1328,7 @@ export {
   DEFAULT_ESCALATION_LADDERS,
   PRIORITY_DEFAULT_LADDER_KEYS,
   processDueScheduledTasks,
+  processScheduledTaskInboundMessage,
   registerBuiltInCompletionChecks,
   registerBuiltInGates,
   registerDefaultEscalationLadders,
@@ -1327,7 +1336,10 @@ export {
   STATE_LOG_DEFAULT_RETENTION_DAYS,
 } from "./lifeops/scheduled-task/index.js";
 export type { CreateRuntimeRunnerOptions } from "./lifeops/scheduled-task/runtime-wiring.js";
-export { createRuntimeScheduledTaskRunner } from "./lifeops/scheduled-task/runtime-wiring.js";
+export {
+  createRuntimeScheduledTaskRunner,
+  registerLifeOpsScheduledTaskSubjectStore,
+} from "./lifeops/scheduled-task/runtime-wiring.js";
 export type { GetScheduledTaskRunnerOptions } from "./lifeops/scheduled-task/service.js";
 export {
   getScheduledTaskRunner,

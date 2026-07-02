@@ -70,18 +70,13 @@ function readStoredVoicePrefs(
     string,
     unknown
   >;
+  // Note: legacy `cloudFirstLineCache` / `autoLearnVoices` keys may still sit
+  // in older persisted `messages.voice` blobs; they are dead (no readers) and
+  // intentionally dropped here — see the removal note in VoiceSection.tsx.
   return {
     continuous: isContinuousMode(stored.continuous)
       ? stored.continuous
       : DEFAULT_VOICE_SECTION_PREFS.continuous,
-    cloudFirstLineCache:
-      typeof stored.cloudFirstLineCache === "boolean"
-        ? stored.cloudFirstLineCache
-        : DEFAULT_VOICE_SECTION_PREFS.cloudFirstLineCache,
-    autoLearnVoices:
-      typeof stored.autoLearnVoices === "boolean"
-        ? stored.autoLearnVoices
-        : DEFAULT_VOICE_SECTION_PREFS.autoLearnVoices,
     vadAutoStop: readVadAutoStop(stored.vadAutoStop),
   };
 }
@@ -105,22 +100,25 @@ export function VoiceSectionMount(): React.ReactElement {
   React.useEffect(() => {
     let cancelled = false;
     void (async () => {
+      let config: Record<string, unknown> = {};
       try {
-        const config = await client.getConfig();
-        if (cancelled) return;
-        const loaded = readStoredVoicePrefs(config);
-        setPrefs(loaded);
-        // Seed the local mirrors so the capture hot path reads the server value.
-        if (loaded.vadAutoStop) saveVadAutoStop(loaded.vadAutoStop);
-        // The surfaces that implement continuous chat (ChatView,
-        // useShellController) read ONLY the localStorage mirror via
-        // loadContinuousChatMode — never `messages.voice.continuous` — so the
-        // server value must be seeded into it, same as vadAutoStop above.
-        saveContinuousChatMode(loaded.continuous);
+        config = await client.getConfig();
       } catch {
-        if (cancelled) return;
-        setPrefs(DEFAULT_VOICE_SECTION_PREFS);
+        // Config fetch failed (offline / server error) — fall back to the
+        // defaults readStoredVoicePrefs derives from an empty config so the
+        // localStorage mirrors below are still seeded (an unhandled rejection
+        // here would leave the capture hot path with no value at all).
       }
+      if (cancelled) return;
+      const loaded = readStoredVoicePrefs(config);
+      setPrefs(loaded);
+      // Seed the local mirrors so the capture hot path reads the server value.
+      if (loaded.vadAutoStop) saveVadAutoStop(loaded.vadAutoStop);
+      // The surfaces that implement continuous chat (ChatView,
+      // useShellController) read ONLY the localStorage mirror via
+      // loadContinuousChatMode — never `messages.voice.continuous` — so the
+      // server value must be seeded into it, same as vadAutoStop above.
+      saveContinuousChatMode(loaded.continuous);
     })();
     return () => {
       cancelled = true;
@@ -136,9 +134,8 @@ export function VoiceSectionMount(): React.ReactElement {
         setTier(result.tier);
         setTierSummary(result.reason);
       } catch {
-        if (cancelled) return;
-        setTier(null);
-        setTierSummary(undefined);
+        // Tier probe failed — keep the null-tier default (VoiceSection renders
+        // without the tier banner) instead of surfacing an unhandled rejection.
       }
     })();
     return () => {
@@ -158,9 +155,12 @@ export function VoiceSectionMount(): React.ReactElement {
       setPrefs(next);
       setPersistError(null);
       // Mirror to localStorage immediately so the capture path picks up the new
-      // voice settings without waiting on the config round-trip.
-      saveContinuousChatMode(next.continuous);
+      // VAD thresholds without waiting on the config round-trip.
       if (next.vadAutoStop) saveVadAutoStop(next.vadAutoStop);
+      // Mirror continuous-chat mode too: ChatView / useShellController read it
+      // synchronously from localStorage (loadContinuousChatMode) and never see
+      // the `messages.voice.continuous` config blob.
+      saveContinuousChatMode(next.continuous);
       try {
         const config = await client.getConfig();
         const messages = (config.messages ?? {}) as Record<string, unknown>;

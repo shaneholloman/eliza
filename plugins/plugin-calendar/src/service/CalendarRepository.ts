@@ -216,6 +216,13 @@ export class CalendarRepository {
       calendarId && calendarId !== "all"
         ? `AND calendar_id = ${sqlQuote(calendarId)}`
         : "";
+    // Multi-account safety: two grants can expose a calendar with the same
+    // calendarId (every Google account names its default calendar "primary"),
+    // and the keep-list only contains the syncing grant's event ids — so an
+    // unscoped prune lets one account's sync delete the other account's cached
+    // events on every pass. When the caller syncs on behalf of a grant, only
+    // that grant's rows are pruned (plus legacy rows that predate grant
+    // attribution, so they converge instead of going permanently stale).
     const grantClause = grantId
       ? `AND (grant_id = ${sqlQuote(grantId)} OR grant_id IS NULL)`
       : "";

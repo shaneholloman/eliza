@@ -2183,8 +2183,8 @@ describe("redactLoopbackUrls", () => {
     // a public route, the PUBLIC URL is what the user can see — it must
     // survive the redaction.
     const text =
-      "Local: http://127.0.0.1:6900/apps/x/ — Public: https://nubilio.org/apps/x/";
-    expect(redactLoopbackUrls(text)).toContain("https://nubilio.org/apps/x/");
+      "Local: http://127.0.0.1:6900/apps/x/ — Public: https://example.test/apps/x/";
+    expect(redactLoopbackUrls(text)).toContain("https://example.test/apps/x/");
     expect(redactLoopbackUrls(text)).not.toContain("127.0.0.1");
   });
 
@@ -2199,7 +2199,7 @@ describe("redactLoopbackUrls", () => {
   });
 
   it("returns text unchanged when no loopback URLs are present", () => {
-    const text = "Public URL: https://nubilio.org/apps/x/ is reachable.";
+    const text = "Public URL: https://example.test/apps/x/ is reachable.";
     expect(redactLoopbackUrls(text)).toBe(text);
   });
 

@@ -374,10 +374,10 @@ const DATA_URL_RE = /^data:([^,]*),([\s\S]*)$/;
 export function persistDataUrl(dataUrl: string): PersistedMedia | null {
   const match = DATA_URL_RE.exec(dataUrl.trim());
   if (!match) return null;
-  const header = match[1] || "";
-  const payload = match[2] || "";
+  const header = match[1] ?? "";
+  const payload = match[2] ?? "";
   const tokens = header.split(";");
-  const mimeType = (tokens.shift() || "").trim() || "application/octet-stream";
+  const mimeType = (tokens.shift() ?? "").trim() || "application/octet-stream";
   const isBase64 = tokens.some((token) => token.trim() === "base64");
   let buffer: Buffer;
   try {

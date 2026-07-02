@@ -1,7 +1,7 @@
 /**
  * Public-pages domain barrel.
  *
- * The app shell / Wave-3 settings+section wiring imports {@link registerPublicPages}
+ * The app shell imports {@link registerPublicPages}
  * to mount all token-gated / auth / marketing / payment routes onto the shared
  * cloud-route registry (the `CloudRouterShell` renders whatever the registry
  * returns). Importing the module for its side effect is enough:
@@ -14,12 +14,6 @@
  */
 
 export { useMetaTag, usePageTitle } from "./lib/use-page-title";
-export {
-  type SessionAuthState,
-  type StewardSessionUser,
-  useSessionAuth,
-  useStewardAuth,
-} from "./lib/use-session-auth";
 export { default as AppAuthAuthorizePage } from "./pages/app-auth/app-authorize-page";
 export { default as ApprovalPage } from "./pages/approve/approval-page";
 export { default as AuthErrorPage } from "./pages/auth/auth-error-page";

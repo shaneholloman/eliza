@@ -1,11 +1,7 @@
 /**
- * React-Query data hooks for the Organization settings surface.
- *
- * Ported from the cloud-frontend organization tab, which used raw `fetch()` +
- * manual `useState`/`useEffect` loading and component-local refetch. Here the
- * reads/writes go through the shared typed {@link api} client and React-Query,
- * so mutations invalidate the relevant query instead of re-running ad-hoc
- * fetchers.
+ * React-Query data hooks for the Organization settings surface. Reads/writes
+ * go through the shared typed {@link api} client and React-Query, so mutations
+ * invalidate the relevant query.
  *
  * Endpoints (note plural `organizations`, no `/v1`):
  * - `GET    /api/v1/user`                          current user + organization
@@ -20,6 +16,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "../../lib/api-client";
 import type {
+  CreatedInviteDto,
   InviteRole,
   OrgInviteDto,
   OrgMemberDto,
@@ -88,10 +85,16 @@ export function useCreateInvite() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (input: { email: string; role: InviteRole }) => {
-      await api("/api/organizations/invites", {
-        method: "POST",
-        json: input,
-      });
+      // `data.token` is the raw invite token, returned exactly once at
+      // creation so the inviter can copy a shareable accept link.
+      const res = await api<Envelope<CreatedInviteDto>>(
+        "/api/organizations/invites",
+        {
+          method: "POST",
+          json: input,
+        },
+      );
+      return res.data;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({

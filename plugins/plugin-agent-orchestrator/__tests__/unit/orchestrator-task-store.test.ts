@@ -527,7 +527,97 @@ describe("FileTaskStore", () => {
   });
 });
 
+/**
+ * Emulates the pglite/postgres failure mode from #11641: the driver rejects a
+ * `document LIKE ?` comparison against the JSON-bearing column (it does not
+ * treat it as a plain-text haystack the way sqlite does). Every other query
+ * shape behaves like {@link FakeSqlAdapter}. If `findSession` still emits
+ * `document LIKE`, the lookup throws here — proving the portability fix.
+ */
+class PgliteLikeRejectingAdapter extends FakeSqlAdapter {
+  override async all(sql: string, params: unknown[] = []): Promise<unknown[]> {
+    if (sql.includes("document LIKE")) {
+      throw new Error(
+        `Failed query: ${sql}\nparams: ${JSON.stringify(params)}`,
+      );
+    }
+    return super.all(sql, params);
+  }
+}
+
 describe("RuntimeDbTaskStore", () => {
+  it("resolves a session without a `document LIKE` query so pglite/postgres do not fail (#11641)", async () => {
+    // On pglite the old `SELECT document FROM orchestrator_tasks WHERE document
+    // LIKE ?` threw, spamming a failed-query warn on every session event and
+    // 500-ing POST /tasks/:id/agents. This adapter reproduces that rejection;
+    // the lookup must still resolve the session via the portable scan.
+    const adapter = new PgliteLikeRejectingAdapter();
+    const store = new RuntimeDbTaskStore(adapter);
+    const { task } = await store.createTask(createInput({ title: "pglite" }));
+    await store.addSession(sessionFor(task.id, { sessionId: "session-x" }));
+
+    const found = await store.findSession("session-x");
+    expect(found?.taskId).toBe(task.id);
+    expect(found?.session.sessionId).toBe("session-x");
+
+    // A miss is a clean null, not a throw, on the same rejecting adapter.
+    expect(await store.findSession("no-such-session")).toBeNull();
+
+    // And updateSession (which resolves via findSession) also survives.
+    await store.updateSession("session-x", { activeTool: "edit" });
+    expect((await store.findSession("session-x"))?.session.activeTool).toBe(
+      "edit",
+    );
+  });
+
+  it("finds a session on a task even when other tasks exist, without substring LIKE false-positives", async () => {
+    // The JS `sessions.find` is the authoritative match — a sessionId that
+    // happens to appear as a substring of another task's document must not
+    // resolve to the wrong task.
+    const adapter = new PgliteLikeRejectingAdapter();
+    const store = new RuntimeDbTaskStore(adapter);
+    const a = await store.createTask(createInput({ title: "task a" }));
+    const b = await store.createTask(createInput({ title: "task b" }));
+    await store.addSession(sessionFor(a.task.id, { sessionId: "sess-aaa" }));
+    await store.addSession(sessionFor(b.task.id, { sessionId: "sess-bbb" }));
+
+    expect((await store.findSession("sess-aaa"))?.taskId).toBe(a.task.id);
+    expect((await store.findSession("sess-bbb"))?.taskId).toBe(b.task.id);
+  });
+
+  it("prefilters findSession on the indexed search_text column, not a full document scan (#11641 P2)", async () => {
+    // A live session's lookup must NOT scan+parse every task document on the
+    // hot event path. It resolves via the indexed `search_text` prefilter, so
+    // an unqualified `SELECT document FROM orchestrator_tasks` (the full-table
+    // fallback) never runs for a session that exists.
+    const seenSql: string[] = [];
+    const adapter = new FakeSqlAdapter();
+    const capturing = {
+      execute: (sql: string, params?: unknown[]) =>
+        adapter.execute(sql, params),
+      all: (sql: string, params?: unknown[]) => {
+        seenSql.push(sql);
+        return adapter.all(sql, params);
+      },
+    };
+    const store = new RuntimeDbTaskStore(capturing);
+    const { task } = await store.createTask(createInput({ title: "hot path" }));
+    await store.addSession(sessionFor(task.id, { sessionId: "live-session" }));
+
+    seenSql.length = 0;
+    const found = await store.findSession("live-session");
+    expect(found?.taskId).toBe(task.id);
+
+    // The targeted, indexed prefilter ran...
+    expect(seenSql.some((s) => /search_text LIKE/.test(s))).toBe(true);
+    // ...and the unbounded full-table scan fallback did NOT.
+    expect(
+      seenSql.some((s) => /FROM orchestrator_tasks\s*$/.test(s.trim())),
+    ).toBe(false);
+    // Never the pglite-breaking document LIKE either.
+    expect(seenSql.some((s) => /document LIKE/.test(s))).toBe(false);
+  });
+
   it("round-trips tasks, sessions, and deletes through a SQL adapter", async () => {
     const adapter = new FakeSqlAdapter();
     const store = new RuntimeDbTaskStore(adapter);
@@ -699,8 +789,12 @@ describe("orchestrator-task-store audit follow-ups (#11028)", () => {
     const path = await tempFile();
     const a = new FileTaskStore(path);
     const b = new FileTaskStore(path);
-    // Both instances load the empty file; each inserts a distinct task. Before
-    // the read-merge-write fix, b's whole-document write clobbered a's task.
+    // Hydrate BOTH instances from the empty file BEFORE either writes, so b
+    // cannot pick up a's task at lazy-load time — only the read-merge-write in
+    // afterWrite can preserve it. (Without the explicit hydration this test
+    // also passed on the pre-merge clobbering code, i.e. it proved nothing.)
+    await a.listTasks();
+    await b.listTasks();
     const ta = await a.createTask(createInput({ title: "from A" }));
     const tb = await b.createTask(createInput({ title: "from B" }));
     const reader = new FileTaskStore(path);
@@ -724,5 +818,87 @@ describe("orchestrator-task-store audit follow-ups (#11028)", () => {
     const ids = (await reader.listTasks()).map((t) => t.id);
     expect(ids).not.toContain(seed.task.id);
     expect(ids).toContain(x.task.id);
+  });
+
+  it("FileTaskStore delete that races an in-flight write in the same process stays deleted", async () => {
+    const path = await tempFile();
+    const a = new FileTaskStore(path);
+    const x = await a.createTask(createInput({ title: "X" }));
+    // Enqueue a write and a delete back-to-back without awaiting in between.
+    // With the tombstone recorded outside the queued op, the earlier write's
+    // afterWrite consumed and cleared it while X was still in memory, and the
+    // delete's own persist then re-seeded X from disk — deleteTask returned
+    // true but X survived on disk AND in memory.
+    const [, deleted] = await Promise.all([
+      a.createTask(createInput({ title: "Y" })),
+      a.deleteTask(x.task.id),
+    ]);
+    expect(deleted).toBe(true);
+    expect(await a.getTask(x.task.id)).toBeNull();
+    const reader = new FileTaskStore(path);
+    const ids = (await reader.listTasks()).map((t) => t.id);
+    expect(ids).not.toContain(x.task.id);
+    expect(ids).toHaveLength(1);
+  });
+
+  it("FileTaskStore failed delete does not phantom-delete another process's task later", async () => {
+    const path = await tempFile();
+    const a = new FileTaskStore(path);
+    await a.listTasks(); // hydrate `a` from the empty file
+    const b = new FileTaskStore(path);
+    const x = await b.createTask(createInput({ title: "X" }));
+    // `a` never saw X, so its delete is a no-op and must say so.
+    expect(await a.deleteTask(x.task.id)).toBe(false);
+    // The failed delete must not leave a lingering tombstone that a later
+    // unrelated write applies, silently destroying the other process's task.
+    await a.createTask(createInput({ title: "Y" }));
+    const reader = new FileTaskStore(path);
+    const ids = (await reader.listTasks()).map((t) => t.id);
+    expect(ids).toContain(x.task.id);
+  });
+
+  it("FileTaskStore keeps mutating after the state file is corrupted externally", async () => {
+    const path = await tempFile();
+    const warnings: string[] = [];
+    const store = new FileTaskStore(path, {
+      warn: (message) => warnings.push(message),
+    });
+    const a = await store.createTask(createInput({ title: "A" }));
+    const b = await store.createTask(createInput({ title: "B" }));
+    // Corrupt the file behind the store's back. JSON.parse throws a
+    // SyntaxError with no .code, which the persist path used to rethrow —
+    // bricking EVERY subsequent mutation while ensureLoaded warned-and-continued
+    // for the same condition.
+    await writeFile(path, "{not json[[", "utf8");
+
+    const updated = await store.updateTask(a.task.id, { status: "done" });
+    expect(updated?.status).toBe("done");
+    expect(warnings.some((m) => m.includes("task file unreadable"))).toBe(true);
+    // The recovery must not drop non-dirty in-memory tasks: B was untouched by
+    // the update, and both memory and the rewritten file must still carry it.
+    expect((await store.getTask(b.task.id))?.task.title).toBe("B");
+    const c = await store.createTask(createInput({ title: "C" }));
+
+    const reader = new FileTaskStore(path);
+    const titles = (await reader.listTasks()).map((t) => t.title).sort();
+    expect(titles).toEqual(["A", "B", "C"]);
+    expect((await reader.getTask(a.task.id))?.task.status).toBe("done");
+    expect((await reader.getTask(c.task.id))?.task.title).toBe("C");
+  });
+
+  it("FileTaskStore write does not revert another process's update to a task it did not touch", async () => {
+    const path = await tempFile();
+    const a = new FileTaskStore(path);
+    const t = await a.createTask(createInput({ title: "shared" }));
+    const b = new FileTaskStore(path);
+    await b.listTasks(); // b hydrates {t} at its pre-update version
+    await a.updateTask(t.task.id, { status: "done" });
+    // b, still holding the stale copy of t, persists an unrelated insert. The
+    // merge must overlay only b's dirty docs, keeping the newer on-disk t
+    // instead of reverting it to b's stale in-memory copy.
+    await b.createTask(createInput({ title: "unrelated" }));
+    const reader = new FileTaskStore(path);
+    const after = await reader.getTask(t.task.id);
+    expect(after?.task.status).toBe("done");
   });
 });

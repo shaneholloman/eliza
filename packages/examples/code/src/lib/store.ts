@@ -78,6 +78,12 @@ interface ElizaCodeState {
   isLoading: boolean;
   inputValue: string;
   isAgentTyping: boolean;
+  /**
+   * Submissions typed while a turn is in flight (queue-and-send). Drained
+   * FIFO when the turn completes; discarded when the turn is aborted.
+   * Ephemeral — never persisted to the session file.
+   */
+  pendingSubmissions: string[];
 
   // Session initialized flag
   sessionLoaded: boolean;
@@ -93,6 +99,7 @@ interface ElizaCodeState {
     role: Message["role"],
     content: string,
     taskId?: string,
+    kind?: Message["kind"],
   ) => Message;
   /** Append text to an existing message (used for streaming). No-op if not found. */
   appendToMessage: (roomId: string, messageId: string, delta: string) => void;
@@ -102,6 +109,8 @@ interface ElizaCodeState {
     messageId: string,
     content: string,
   ) => void;
+  /** Remove a single message (e.g. drop an empty assistant placeholder on error). No-op if not found. */
+  removeMessage: (roomId: string, messageId: string) => void;
   clearMessages: (roomId: string) => void;
 
   // Task Actions (for UI sync - actual data managed by CodeTaskService)
@@ -121,6 +130,12 @@ interface ElizaCodeState {
   setLoading: (loading: boolean) => void;
   setInputValue: (value: string) => void;
   setAgentTyping: (typing: boolean) => void;
+  /** Buffer a submission typed during a running turn. Returns the queue length. */
+  enqueuePendingSubmission: (text: string) => number;
+  /** Pop the oldest queued submission (FIFO), if any. */
+  takeNextPendingSubmission: () => string | undefined;
+  /** Drop all queued submissions. Returns how many were discarded. */
+  clearPendingSubmissions: () => number;
 
   // Session Actions
   loadSessionState: () => Promise<void>;
@@ -191,6 +206,7 @@ export const useStore = create<ElizaCodeState>((set, get) => ({
   isLoading: false,
   inputValue: "",
   isAgentTyping: false,
+  pendingSubmissions: [],
   sessionLoaded: false,
 
   // Room Actions
@@ -243,10 +259,12 @@ export const useStore = create<ElizaCodeState>((set, get) => ({
     role: Message["role"],
     content: string,
     taskId?: string,
+    kind?: Message["kind"],
   ) => {
     const message: Message = {
       id: uuidv4(),
       role,
+      ...(kind ? { kind } : {}),
       content,
       timestamp: new Date(),
       roomId,
@@ -275,6 +293,20 @@ export const useStore = create<ElizaCodeState>((set, get) => ({
         );
         return { ...room, messages: nextMessages };
       }),
+    }));
+    debouncedSave(get());
+  },
+
+  removeMessage: (roomId: string, messageId: string) => {
+    set((state) => ({
+      rooms: state.rooms.map((room) =>
+        room.id === roomId
+          ? {
+              ...room,
+              messages: room.messages.filter((m) => m.id !== messageId),
+            }
+          : room,
+      ),
     }));
     debouncedSave(get());
   },
@@ -415,6 +447,27 @@ export const useStore = create<ElizaCodeState>((set, get) => ({
 
   setAgentTyping: (typing: boolean) => {
     set({ isAgentTyping: typing });
+  },
+
+  enqueuePendingSubmission: (text: string) => {
+    const next = [...get().pendingSubmissions, text];
+    set({ pendingSubmissions: next });
+    return next.length;
+  },
+
+  takeNextPendingSubmission: () => {
+    const [head, ...rest] = get().pendingSubmissions;
+    if (head === undefined) return undefined;
+    set({ pendingSubmissions: rest });
+    return head;
+  },
+
+  clearPendingSubmissions: () => {
+    const count = get().pendingSubmissions.length;
+    if (count > 0) {
+      set({ pendingSubmissions: [] });
+    }
+    return count;
   },
 
   // Session Actions

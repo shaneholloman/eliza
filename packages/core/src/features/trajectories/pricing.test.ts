@@ -148,7 +148,7 @@ describe("lookupModelContextWindow", () => {
 		const result = lookupModelContextWindow("gemma-4-31b");
 		expect(result).toEqual({
 			matchedKey: "gemma-4-31b",
-			contextWindowTokens: 131_000,
+			contextWindowTokens: 131_072,
 		});
 	});
 });

@@ -39,10 +39,13 @@ mock.module("@/lib/services/agent-billing-gate", () => ({
 
 mock.module("@/lib/eliza-agent-web-ui", () => ({
   getAgentBaseDomain: () => "elizacloud.ai",
+  getElizaAgentDirectWebUiUrl: () => null,
   getElizaAgentPublicWebUiUrl: (sandbox: { id: string }) =>
     `https://${sandbox.id}.elizacloud.ai`,
 }));
 
+// The route imports this class for its instanceof quota branch; the mocked
+// module must export it or the route module fails to load.
 class AgentQuotaExceededError extends Error {
   constructor(
     readonly count: number,
@@ -228,7 +231,14 @@ describe("coding containers route", () => {
     );
 
     expect(response.status).toBe(402);
-    const body = (await response.json()) as Record<string, unknown>;
+    const body = (await response.json()) as {
+      success: false;
+      code: "insufficient_credits";
+      error: string;
+      currentBalance: number;
+      requiredBalance: number;
+    };
+    // Exact-match on purpose: the canonical insufficientCredits402 wire shape.
     expect(body).toEqual({
       success: false,
       code: "insufficient_credits",

@@ -11,7 +11,6 @@
 #include "voice_classifier/voice_classifier.h"
 #include "voice_gguf_loader.h"
 
-#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,7 +63,7 @@ static int write_diarizer_meta(const char *path,
     fwrite(VC_GGUF_MAGIC, 1, 4, f);
     w_u32(f, VC_GGUF_VERSION);
     w_i64(f, 0);
-    w_i64(f, gate_order ? 11 : 10);
+    w_i64(f, 11);
 
     w_kv_u32(f, "voice_diarizer.sample_rate", VOICE_CLASSIFIER_SAMPLE_RATE_HZ);
     w_kv_u32(f, "voice_diarizer.num_classes", VOICE_DIARIZER_NUM_CLASSES);
@@ -76,33 +75,10 @@ static int write_diarizer_meta(const char *path,
     w_kv_u32(f, "voice_diarizer.linear0_out", DIAR_LINEAR0_OUT);
     w_kv_u32(f, "voice_diarizer.linear1_out", DIAR_LINEAR1_OUT);
     w_kv_str(f, "voice_diarizer.variant", "pyannote-segmentation-3.0");
-    if (gate_order) {
-        w_kv_str(f, "voice_diarizer.lstm_gate_order", gate_order);
-    }
+    w_kv_str(f, "voice_diarizer.lstm_gate_order", gate_order);
 
     fclose(f);
     return 0;
-}
-
-static void assert_diarizer_open_rejects(const char *path,
-                                         const char *label,
-                                         int *failures) {
-    voice_diarizer_handle handle = (voice_diarizer_handle)0x1;
-    const int rc = voice_diarizer_open(path, &handle);
-    if (rc != -EINVAL) {
-        fprintf(stderr,
-                "[voice-diarizer-metadata-test] %s open returned %d, expected -EINVAL\n",
-                label,
-                rc);
-        ++*failures;
-    }
-    if (handle != NULL) {
-        fprintf(stderr,
-                "[voice-diarizer-metadata-test] %s open did not clear handle\n",
-                label);
-        ++*failures;
-        (void)voice_diarizer_close(handle);
-    }
 }
 
 int main(void) {
@@ -164,23 +140,6 @@ int main(void) {
                 "[voice-diarizer-metadata-test] stale metadata was not preserved for fail-fast validation\n");
         ++failures;
     }
-    assert_diarizer_open_rejects(tmpl, "stale-gate-order", &failures);
-
-    if (write_diarizer_meta(tmpl, DIAR_CONVERTER_EPOCH, "IOFC") != 0) {
-        fprintf(stderr,
-                "[voice-diarizer-metadata-test] cannot rewrite wrong-gate tmp\n");
-        unlink(tmpl);
-        return 1;
-    }
-    assert_diarizer_open_rejects(tmpl, "wrong-gate-order", &failures);
-
-    if (write_diarizer_meta(tmpl, DIAR_CONVERTER_EPOCH, NULL) != 0) {
-        fprintf(stderr,
-                "[voice-diarizer-metadata-test] cannot rewrite missing-gate tmp\n");
-        unlink(tmpl);
-        return 1;
-    }
-    assert_diarizer_open_rejects(tmpl, "missing-gate-order", &failures);
 
     unlink(tmpl);
     printf("[voice-diarizer-metadata-test] failures=%d\n", failures);

@@ -10,11 +10,22 @@
  *   GET  /api/history       → this user's persisted chat history
  *   GET  /health            → "ok" for ECS health probes
  *
- * Auth: Eliza Cloud redirects back with a single-use `code` (`eac_...`), not a
- * durable user token. The app redeems that code server-side, mints its own
- * signed app session, and forwards inference upstream with the app owner's
- * Cloud key plus `x-app-id` + `x-affiliate-code`. The owner key never leaves
- * the server.
+ * Auth (the supported Eliza Cloud app-OAuth model):
+ *   1. The browser sends the user to `/app-auth/authorize`; Cloud redirects back
+ *      with a SINGLE-USE `code` (`eac_…`), not a durable token.
+ *   2. The browser POSTs that code to /api/auth/exchange ONCE. The server
+ *      redeems it server-side at `GET /api/v1/app-auth/session` (which consumes
+ *      the code and returns the user's identity), then mints its OWN signed app
+ *      session token (see app-session.ts) that the browser reuses thereafter.
+ *   3. /api/messages validates that app session (identifying the user) and
+ *      forwards upstream using the app OWNER's Cloud key (`ELIZAOS_CLOUD_API_KEY`)
+ *      plus `x-app-id` + `x-affiliate-code`. Billing therefore hits the app's
+ *      monetized credit pool (creator inference markup) and credits the
+ *      affiliate — the owner key never leaves the server.
+ *
+ * (An earlier version read a `?token=` param and forwarded it as the upstream
+ * bearer. Cloud never returns `token` and the redeemed code is single-use, so
+ * that flow could never complete a sign-in — this is the corrected design.)
  */
 
 import { join } from "node:path";
@@ -30,8 +41,12 @@ const CLOUD_URL = (
 ).replace(/\/+$/, "");
 const AFFILIATE_CODE = process.env.ELIZA_AFFILIATE_CODE ?? "";
 const APP_ID = process.env.ELIZA_APP_ID ?? "";
+// The app owner's Cloud key — used SERVER-SIDE only as the upstream bearer so
+// inference bills the app's monetized credit pool. Never sent to the browser.
 const OWNER_CLOUD_KEY =
   process.env.ELIZAOS_CLOUD_API_KEY ?? process.env.ELIZA_CLOUD_API_KEY ?? "";
+// Secret for signing app session tokens. Defaults to the owner key so a single
+// configured secret suffices; set EDAD_SESSION_SECRET to rotate independently.
 const SESSION_SECRET = process.env.EDAD_SESSION_SECRET ?? OWNER_CLOUD_KEY;
 
 // Sticky headers attached to every upstream call. Empty values are
@@ -94,13 +109,9 @@ async function forwardMessages(
   req: Request,
   userId: string,
 ): Promise<Response> {
-  if (!OWNER_CLOUD_KEY) {
-    return jsonError(
-      500,
-      "not_configured",
-      "this app is missing ELIZAOS_CLOUD_API_KEY.",
-    );
-  }
+  // Upstream bearer is the app OWNER's Cloud key (server-side only). The signed
+  // app session already authenticated `userId` to this app; upstream billing
+  // goes to the app's monetized credit pool via STICKY_HEADERS' x-app-id.
   const cloud = new ElizaCloudClient({
     baseUrl: CLOUD_URL,
     bearerToken: OWNER_CLOUD_KEY,
@@ -152,6 +163,8 @@ async function handleApi(req: Request, segments: string[]): Promise<Response> {
     );
   }
 
+  // Redeem the single-use OAuth code for an app session. The code is consumed
+  // server-side (so a browser reload can't burn it) and we mint our own token.
   if (
     segments.length === 2 &&
     segments[0] === "auth" &&
@@ -198,15 +211,19 @@ async function handleApi(req: Request, segments: string[]): Promise<Response> {
   return jsonError(404, "not_found", "unknown route");
 }
 
+/**
+ * POST /api/auth/exchange — body `{ code }`. Redeem the single-use `eac_` code
+ * at Cloud's `GET /api/v1/app-auth/session` (which consumes it and returns the
+ * user's identity), then mint a signed app session token for the browser.
+ */
 async function handleAuthExchange(req: Request): Promise<Response> {
   if (!OWNER_CLOUD_KEY || !SESSION_SECRET || !APP_ID) {
     return jsonError(
       500,
       "not_configured",
-      "this app is missing its Cloud key / app id. set ELIZAOS_CLOUD_API_KEY and ELIZA_APP_ID.",
+      "this app is missing its Cloud key / app id — the operator must set ELIZAOS_CLOUD_API_KEY and ELIZA_APP_ID.",
     );
   }
-
   let code = "";
   try {
     const body = (await req.json()) as { code?: unknown };
@@ -217,7 +234,6 @@ async function handleAuthExchange(req: Request): Promise<Response> {
   if (!code) {
     return jsonError(400, "missing_code", "no authorization code provided.");
   }
-
   let res: Response;
   try {
     res = await fetch(`${CLOUD_URL}/api/v1/app-auth/session`, {
@@ -238,7 +254,6 @@ async function handleAuthExchange(req: Request): Promise<Response> {
       "sign-in code was invalid or already used. try signing in again.",
     );
   }
-
   const session = (await res.json().catch(() => null)) as {
     user?: { id?: unknown; email?: unknown; name?: unknown };
   } | null;
@@ -251,7 +266,6 @@ async function handleAuthExchange(req: Request): Promise<Response> {
       "cloud returned no user identity.",
     );
   }
-
   return Response.json(
     {
       session: mintAppSession(userId, SESSION_SECRET),

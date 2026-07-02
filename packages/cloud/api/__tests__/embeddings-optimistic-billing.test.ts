@@ -229,6 +229,30 @@ describe("POST /api/v1/embeddings optimistic-billing route decision (#9899/#1010
     expect(reserveCredits).not.toHaveBeenCalled();
   });
 
+  test("billing requestId is server-generated, not copied from x-request-id", async () => {
+    const { ctx, scheduled } = makeExecutionCtx();
+    const res = await post(
+      { model: "text-embedding-3-small", input: "hi" },
+      ctx,
+    );
+    await Promise.all(scheduled);
+
+    expect(res.status).toBe(200);
+    const pendingCalls = writePendingInferenceCharge.mock
+      .calls as unknown as Array<[{ requestId: string }, number]>;
+    const settlerCalls = createOptimisticDebitSettler.mock
+      .calls as unknown as Array<[{ requestId: string }]>;
+    const pending = pendingCalls[0]?.[0];
+    const settler = settlerCalls[0]?.[0];
+    expect(pending).toBeDefined();
+    expect(settler).toBeDefined();
+    if (!pending || !settler) throw new Error("billing path was not reached");
+
+    expect(pending.requestId).toMatch(UUID_RE);
+    expect(pending.requestId).not.toBe(CLIENT_REQUEST_ID);
+    expect(settler.requestId).toBe(pending.requestId);
+  });
+
   test("backstop records the REAL input-token cost estimate (not 0) so a dropped settle is recoverable", async () => {
     const { ctx, scheduled } = makeExecutionCtx();
     await post({ model: "text-embedding-3-small", input: "hi" }, ctx);

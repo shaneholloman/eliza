@@ -1,17 +1,6 @@
 /**
  * THE single admin gate for the app-hosted Eliza Cloud admin surfaces.
  *
- * Consolidates the auth/role mess that existed in `@elizaos/cloud-frontend`:
- * that package had two parallel admin hooks
- * (`lib/data/admin.ts` — a react-query gate on the moderation HEAD endpoint —
- * and `hooks/use-admin.ts` — a hand-rolled module-cache + in-flight-dedupe hook
- * keyed on a wallet address, with the anvil-default-wallet fallback) plus four
- * different dev-bypass conventions scattered across the route layout, the page,
- * and the env flags (`import.meta.env.DEV`, `process.env.NODE_ENV`,
- * `NEXT_PUBLIC_DEVNET`, `VITE_ELIZA_CLOUD_LOCAL_DEV_ADMIN`).
- *
- * This module replaces all of that with ONE source of truth:
- *
  *   - **Role:** the `HEAD /api/v1/admin/moderation` endpoint, parsed from its
  *     `X-Is-Admin` / `X-Admin-Role` response headers — the server is the only
  *     authority on who is an admin and what role they hold.
@@ -29,9 +18,8 @@ import type {
   AdminRole,
 } from "@elizaos/cloud-shared/lib/types/cloud-api";
 import { useQuery } from "@tanstack/react-query";
-import { useContext } from "react";
 import { apiFetch } from "../../lib/api-client";
-import { LocalStewardAuthContext } from "../../shell/StewardProvider";
+import { useSessionAuth } from "../../lib/use-session-auth";
 
 export type AdminGateStatus = AdminModerationStatusResponse;
 
@@ -55,14 +43,18 @@ interface AdminAuthGate {
  * Read the Steward session and derive whether the admin gate query may run.
  * In dev the query is skipped entirely (the bypass synthesises the role), so it
  * is gated on an authenticated session existing at all.
+ *
+ * Uses the console-wide `useSessionAuth` — NOT the raw Steward SDK context.
+ * The SDK keeps its session in MemoryStorage (empty on every full page load),
+ * so the raw context reports signed-out for a perfectly live session; every
+ * other console surface already resolves auth through `useSessionAuth`'s
+ * localStorage-JWT fallback, and the admin gate must agree with them.
  */
 function useAdminAuthGate(): AdminAuthGate {
-  const auth = useContext(LocalStewardAuthContext);
-  const ready = auth ? !auth.isLoading : true;
-  const authenticated = auth?.isAuthenticated ?? false;
+  const session = useSessionAuth();
   return {
-    enabled: ready && authenticated,
-    userId: auth?.user?.id ?? null,
+    enabled: session.ready && session.authenticated,
+    userId: session.user?.id ?? null,
   };
 }
 

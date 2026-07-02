@@ -1,17 +1,14 @@
 /**
- * Applications cloud domain — barrel + route registration.
- *
- * Lifted from `@elizaos/cloud-frontend/src/dashboard/apps/*` and its data hook
- * (`src/lib/data/apps.ts`). Applications are the developer **cloud OAuth app**
- * object whose id is the OAuth `client_id` (used by `/app-auth/authorize`) —
- * distinct from the local installed-apps surface. The surface is "Applications"
- * (PLAN §"`dashboard/apps` → VIEW (Applications)").
+ * Applications cloud domain — barrel + route registration. Applications are
+ * the developer **cloud OAuth app** object whose id is the OAuth `client_id`
+ * (used by `/app-auth/authorize`) — distinct from the local installed-apps
+ * surface.
  *
  *  - {@link ApplicationsRoute} (default export of `ApplicationsPage`) is the
  *    list view at `dashboard/apps`.
- *  - {@link ApplicationDetailRoute} is the 8-tab detail view at
- *    `dashboard/apps/:id` (overview / monetization / earnings / domains /
- *    analytics / promote / users / settings).
+ *  - {@link ApplicationDetailRoute} is the 9-tab detail view at
+ *    `dashboard/apps/:id` (overview / monetization / earnings / hosting /
+ *    domains / analytics / promote / users / settings).
  *
  * Both routes register **at import time** against the {@link CloudRouteDef}
  * registry. The `CloudRouterShell` carries a `dashboard/apps/create →

@@ -32,6 +32,22 @@ const STARTING_STATUSES = new Set([
 ]);
 const RETRY_AFTER_SECONDS = 5;
 
+function agentWebUiNotReadyResponse() {
+  return applyCorsHeaders(
+    Response.json(
+      {
+        success: false,
+        code: "AGENT_WEB_UI_NOT_READY",
+        error:
+          "Agent Web UI is not configured through the managed HTTPS route yet. Retry in a moment.",
+        retryable: true,
+      },
+      { status: 503 },
+    ),
+    CORS_METHODS,
+  );
+}
+
 type PairingSandbox = NonNullable<
   Awaited<ReturnType<typeof agentSandboxesRepository.findByIdAndOrg>>
 >;
@@ -153,6 +169,10 @@ async function __hono_POST(
       );
     }
 
+    if (sandbox.execution_tier === "shared") {
+      return agentWebUiNotReadyResponse();
+    }
+
     if (sandbox.status !== "running") {
       // Agent is pending/provisioning/stopped/disconnected — kick off (or
       // detect in-flight) provisioning and tell the client to retry.
@@ -178,6 +198,12 @@ async function __hono_POST(
           );
         }
 
+        // Credit gate before re-provisioning a DEDICATED container (#11224):
+        // pairing a stopped/reaped agent re-provisions its container, the same
+        // paid-compute wake the resume/restart/wake routes gate. Shared agents
+        // already returned early (execution_tier === "shared" above), so this
+        // only fences the dedicated case — a suspended/zero-balance org can't
+        // use pairing to get free compute the resume gate would have blocked.
         const creditCheck = await checkAgentCreditGate(user.organization_id);
         if (!creditCheck.allowed) {
           const body = insufficientCredits402(
@@ -249,19 +275,7 @@ async function __hono_POST(
 
     const webUiUrl = resolveManagedWebUiUrl(sandbox);
     if (!webUiUrl) {
-      return applyCorsHeaders(
-        Response.json(
-          {
-            success: false,
-            code: "AGENT_WEB_UI_NOT_READY",
-            error:
-              "Agent Web UI is not configured through the managed HTTPS route yet. Retry in a moment.",
-            retryable: true,
-          },
-          { status: 503 },
-        ),
-        CORS_METHODS,
-      );
+      return agentWebUiNotReadyResponse();
     }
 
     const tokenService = getPairingTokenService();

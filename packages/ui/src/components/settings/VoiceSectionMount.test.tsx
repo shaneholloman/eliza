@@ -38,6 +38,10 @@ vi.mock("./VoiceProfileSection", () => ({
   VoiceProfileSection: () => null,
 }));
 
+import {
+  DEFAULT_VAD_AUTO_STOP_PREFS,
+  DEFAULT_VOICE_SECTION_PREFS,
+} from "./VoiceSection.helpers";
 import { VoiceSectionMount } from "./VoiceSectionMount";
 
 const WAKE_KEY = "eliza:voice:wake-word-enabled";
@@ -148,29 +152,60 @@ describe("VoiceSectionMount — continuous-chat localStorage mirror", () => {
       expect(window.localStorage.getItem(CONTINUOUS_KEY)).toBe("vad-gated"),
     );
   });
+});
 
-  it("renders defaults without overwriting local mirrors when boot reads fail", async () => {
-    const unhandledRejection = vi.fn();
-    window.addEventListener("unhandledrejection", unhandledRejection);
-    window.localStorage.setItem(CONTINUOUS_KEY, "always-on");
-    clientMock.getConfig.mockRejectedValue(new Error("config unavailable"));
+const VAD_KEY = "eliza:voice:vad-auto-stop";
+
+describe("VoiceSectionMount — mount fetch failures fall back to defaults (listener-safety batch)", () => {
+  const unhandled: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    unhandled.length = 0;
+    process.on("unhandledRejection", onUnhandledRejection);
+    clientMock.updateConfig.mockResolvedValue({});
+    // Both mount-time fetches blow up: previously each ran in a bare void
+    // async IIFE, so this surfaced as an unhandled rejection and left the
+    // vadAutoStop / continuous-chat localStorage mirrors unseeded.
+    clientMock.getConfig.mockRejectedValue(new Error("config fetch down"));
     clientMock.getLocalInferenceDeviceTier.mockRejectedValue(
-      new Error("tier unavailable"),
+      new Error("tier probe down"),
     );
+  });
 
+  afterEach(() => {
+    process.off("unhandledRejection", onUnhandledRejection);
+    cleanup();
+  });
+
+  it("renders defaults, seeds the local mirrors, and raises no unhandled rejection", async () => {
     render(<VoiceSectionMount />);
 
-    const toggle = (await screen.findByTestId(
-      "voice-section-wake-toggle",
-    )) as HTMLInputElement;
-    expect(toggle.checked).toBe(true);
-    await waitFor(() => expect(clientMock.getConfig).toHaveBeenCalled());
+    // Defaults still render: the section is usable without the server.
+    await screen.findByTestId("voice-section-wake-toggle");
+    await screen.findByTestId("voice-section-continuous-row");
+    expect(screen.queryByTestId("voice-section-persist-error")).toBeNull();
+
+    // The capture hot path reads ONLY these localStorage mirrors, so a failed
+    // config fetch must still seed them with the defaults.
+    await waitFor(() => {
+      expect(window.localStorage.getItem(CONTINUOUS_KEY)).toBe(
+        DEFAULT_VOICE_SECTION_PREFS.continuous,
+      );
+      expect(
+        JSON.parse(window.localStorage.getItem(VAD_KEY) ?? "null"),
+      ).toEqual(DEFAULT_VAD_AUTO_STOP_PREFS);
+    });
+
+    // Let both rejected fetches fully settle, then confirm neither escaped as
+    // an unhandled rejection.
     await waitFor(() =>
       expect(clientMock.getLocalInferenceDeviceTier).toHaveBeenCalled(),
     );
-    expect(window.localStorage.getItem(CONTINUOUS_KEY)).toBe("always-on");
-    expect(unhandledRejection).not.toHaveBeenCalled();
-
-    window.removeEventListener("unhandledrejection", unhandledRejection);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(unhandled).toEqual([]);
   });
 });

@@ -1,14 +1,19 @@
 /**
- * Money-leak guard for POST /api/v1/apps/:id/chat streaming (#10837).
+ * Money-leak guard for POST /api/v1/apps/:id/chat settle errors
+ * (#10837 streaming, #11169 part 1 non-streaming).
  *
- * A streaming app-chat reserves credits up front, forwards the whole provider
- * response, closes the writer, and only THEN runs calculateCost +
- * reconcileCredits. Before this fix, if that post-stream accounting threw (a
- * transient DB/pricing error), the catch unconditionally full-refunded — free
- * inference, systemically so across concurrent streams during a DB blip.
+ * An app-chat request reserves credits up front, and only AFTER delivering
+ * (stream forwarded / provider body read) runs calculateCost +
+ * reconcileCredits. Both delivery paths share ONE settle-error refund —
+ * `reconcileChatSettleError` — gated by a per-site `skipRefund` flag:
+ * refunding a fully-delivered stream or an already-invoked settle would hand
+ * out free inference / double-credit, systemically so during a DB blip.
  *
  * This drives the REAL `reconcileChatSettleError` (the exact code the route
- * runs) against a spy credit service, asserting the refund decision.
+ * runs) with each call site's exact parameterization (mirrored from
+ * route.ts) against a spy credit service, asserting the refund decision and
+ * the ledger description/metadata each site sends. The route-level suite
+ * (apps-chat-nonstreaming-settle-guard.test.ts) drives the real route.
  */
 import { describe, expect, mock, test } from "bun:test";
 import {
@@ -17,15 +22,33 @@ import {
 } from "../v1/apps/[id]/chat/stream-refund";
 
 function makeCredits() {
-  const calls: Array<Parameters<ChatSettleCredits["reconcileCredits"]>[0]> = [];
+  const calls: Array<{
+    estimatedBaseCost: number;
+    actualBaseCost: number;
+    description: string;
+    metadata?: Record<string, unknown>;
+    reservationTransactionId?: string | null;
+  }> = [];
   const reconcileCredits = mock(
-    async (args: Parameters<ChatSettleCredits["reconcileCredits"]>[0]) => {
-      calls.push(args);
+    async (args: {
+      estimatedBaseCost: number;
+      actualBaseCost: number;
+      description: string;
+      metadata?: Record<string, unknown>;
+      reservationTransactionId?: string | null;
+    }) => {
+      calls.push({
+        estimatedBaseCost: args.estimatedBaseCost,
+        actualBaseCost: args.actualBaseCost,
+        description: args.description,
+        metadata: args.metadata,
+        reservationTransactionId: args.reservationTransactionId,
+      });
       return null;
     },
   );
   return { calls, reconcileCredits } satisfies {
-    calls: Array<Parameters<ChatSettleCredits["reconcileCredits"]>[0]>;
+    calls: unknown;
     reconcileCredits: ChatSettleCredits["reconcileCredits"];
   };
 }
@@ -34,39 +57,54 @@ const base = {
   appId: "app-1",
   userId: "user-1",
   reservedBaseCost: 0.05,
-  errorMessage: "transient pg timeout",
 };
 
-const streamRefund = {
-  skipRefundLog:
-    "[App Chat] Post-stream accounting failed AFTER full delivery; keeping reserved charge (NOT refunding)",
-  refundLog:
-    "[App Chat] Stream processing failed before delivery, refunding reserved",
-  refundDescription: "Refund due to stream error",
-  refundMetadata: { error: true, streaming: true },
-};
+/** The streaming call site's exact parameterization (route.ts). */
+function streamingSiteParams(streamCompleted: boolean, userId = base.userId) {
+  return {
+    ...base,
+    userId,
+    skipRefund: streamCompleted,
+    skipRefundLog:
+      "[App Chat] Post-stream accounting failed AFTER full delivery; keeping reserved charge (NOT refunding)",
+    refundLog:
+      "[App Chat] Stream processing failed before delivery, refunding reserved",
+    refundDescription: "Refund due to stream error",
+    refundMetadata: { error: true, streaming: true },
+    reservationTransactionId: "app-chat-hold-stream",
+    errorMessage: "transient pg timeout",
+  };
+}
 
-const nonStreamingRefund = {
-  skipRefundLog:
-    "[App Chat] Non-streaming throw at/after the settle reconcile; NOT refunding (movement may have committed - sweep recovers a stranded hold)",
-  refundLog:
-    "[App Chat] Non-streaming settle never started after debit; refunding reserved hold (#11169)",
-  refundDescription: "Chat refund (non-streaming settle failed): gpt-4o-mini",
-  refundMetadata: {
-    error: true,
-    streaming: false,
-    model: "gpt-4o-mini",
-    provider: "openai",
-    billingSource: "gateway",
-    refundReason: "non_streaming_settle_error",
-  },
-};
+/** The non-streaming call site's exact parameterization (route.ts). */
+function nonStreamingSiteParams(settleStarted: boolean) {
+  const model = "openai/gpt-oss-120b";
+  return {
+    ...base,
+    skipRefund: settleStarted,
+    skipRefundLog:
+      "[App Chat] Non-streaming throw at/after the settle reconcile; NOT refunding (movement may have committed — sweep recovers a stranded hold)",
+    refundLog:
+      "[App Chat] Non-streaming settle never started after debit; refunding reserved hold (#11169)",
+    refundDescription: `Chat refund (non-streaming settle failed): ${model}`,
+    refundMetadata: {
+      error: true,
+      streaming: false,
+      model,
+      provider: "openai",
+      billingSource: "openai",
+      refundReason: "non_streaming_settle_error",
+    },
+    reservationTransactionId: "app-chat-hold-nonstream",
+    errorMessage: "provider body was not valid JSON",
+  };
+}
 
-describe("reconcileChatSettleError (#10837, #11169)", () => {
+describe("reconcileChatSettleError — streaming site (#10837)", () => {
   test("stream COMPLETED then accounting threw → keep the reserved charge, NO refund", async () => {
     const credits = makeCredits();
     const result = await reconcileChatSettleError(
-      { ...base, ...streamRefund, skipRefund: true },
+      streamingSiteParams(true),
       credits,
     );
     expect(result.refunded).toBe(false);
@@ -77,18 +115,17 @@ describe("reconcileChatSettleError (#10837, #11169)", () => {
   test("stream FAILED before delivery → full refund (actualBaseCost 0)", async () => {
     const credits = makeCredits();
     const result = await reconcileChatSettleError(
-      { ...base, ...streamRefund, skipRefund: false },
+      streamingSiteParams(false),
       credits,
     );
     expect(result.refunded).toBe(true);
     expect(credits.reconcileCredits).toHaveBeenCalledTimes(1);
-    expect(credits.calls[0]).toMatchObject({
-      appId: "app-1",
-      userId: "user-1",
+    expect(credits.calls[0]).toEqual({
       estimatedBaseCost: 0.05,
       actualBaseCost: 0,
       description: "Refund due to stream error",
       metadata: { error: true, streaming: true },
+      reservationTransactionId: "app-chat-hold-stream",
     });
   });
 
@@ -97,7 +134,7 @@ describe("reconcileChatSettleError (#10837, #11169)", () => {
     const results = await Promise.all(
       Array.from({ length: 20 }, (_, i) =>
         reconcileChatSettleError(
-          { ...base, ...streamRefund, userId: `user-${i}`, skipRefund: true },
+          streamingSiteParams(true, `user-${i}`),
           credits,
         ),
       ),
@@ -109,56 +146,93 @@ describe("reconcileChatSettleError (#10837, #11169)", () => {
   test("mixed batch: only the pre-delivery failures are refunded", async () => {
     const credits = makeCredits();
     await Promise.all([
-      reconcileChatSettleError(
-        { ...base, ...streamRefund, skipRefund: true },
-        credits,
-      ),
-      reconcileChatSettleError(
-        { ...base, ...streamRefund, skipRefund: false },
-        credits,
-      ),
-      reconcileChatSettleError(
-        { ...base, ...streamRefund, skipRefund: true },
-        credits,
-      ),
-      reconcileChatSettleError(
-        { ...base, ...streamRefund, skipRefund: false },
-        credits,
-      ),
+      reconcileChatSettleError(streamingSiteParams(true), credits),
+      reconcileChatSettleError(streamingSiteParams(false), credits),
+      reconcileChatSettleError(streamingSiteParams(true), credits),
+      reconcileChatSettleError(streamingSiteParams(false), credits),
     ]);
     // 2 delivered (no refund) + 2 pre-delivery failures (refund) = exactly 2 refunds.
     expect(credits.reconcileCredits).toHaveBeenCalledTimes(2);
     expect(credits.calls.every((c) => c.actualBaseCost === 0)).toBe(true);
+    expect(
+      credits.calls.every(
+        (c) => c.reservationTransactionId === "app-chat-hold-stream",
+      ),
+    ).toBe(true);
   });
+});
 
-  test("non-streaming failure before settle starts → full refund with ledger tags", async () => {
+describe("reconcileChatSettleError — non-streaming site (#11169 part 1)", () => {
+  test("throw BEFORE the settle reconcile was invoked → full refund (actualBaseCost 0)", async () => {
     const credits = makeCredits();
     const result = await reconcileChatSettleError(
-      { ...base, ...nonStreamingRefund, skipRefund: false },
+      nonStreamingSiteParams(false),
       credits,
     );
-
     expect(result.refunded).toBe(true);
     expect(credits.reconcileCredits).toHaveBeenCalledTimes(1);
     expect(credits.calls[0]).toMatchObject({
-      appId: "app-1",
-      userId: "user-1",
       estimatedBaseCost: 0.05,
       actualBaseCost: 0,
-      description: "Chat refund (non-streaming settle failed): gpt-4o-mini",
-      metadata: nonStreamingRefund.refundMetadata,
+      reservationTransactionId: "app-chat-hold-nonstream",
     });
   });
 
-  test("non-streaming failure after settle starts → no second refund", async () => {
+  test("throw at/after the settle reconcile (incl. from INSIDE it — movement may have committed) → NO refund (no double-credit)", async () => {
     const credits = makeCredits();
     const result = await reconcileChatSettleError(
-      { ...base, ...nonStreamingRefund, skipRefund: true },
+      nonStreamingSiteParams(true),
       credits,
     );
-
     expect(result.refunded).toBe(false);
     expect(credits.reconcileCredits).not.toHaveBeenCalled();
-    expect(credits.calls).toEqual([]);
+  });
+
+  test("the refund is tagged non-streaming (streaming:false) so it's distinguishable in the ledger", async () => {
+    const credits = makeCredits();
+    await reconcileChatSettleError(nonStreamingSiteParams(false), credits);
+    expect(credits.calls[0].metadata).toMatchObject({
+      streaming: false,
+      refundReason: "non_streaming_settle_error",
+    });
+  });
+});
+
+describe("reconcileChatSettleError — shared contract", () => {
+  test("both sites route through the ONE helper: skipRefund decides, the ledger tags stay per-site", async () => {
+    const credits = makeCredits();
+    const [streamKept, streamRefunded, settleKept, settleRefunded] =
+      await Promise.all([
+        reconcileChatSettleError(streamingSiteParams(true), credits),
+        reconcileChatSettleError(streamingSiteParams(false), credits),
+        reconcileChatSettleError(nonStreamingSiteParams(true), credits),
+        reconcileChatSettleError(nonStreamingSiteParams(false), credits),
+      ]);
+
+    // skipRefund=true keeps the charge on BOTH sites; skipRefund=false
+    // refunds the full hold on BOTH sites.
+    expect(streamKept.refunded).toBe(false);
+    expect(settleKept.refunded).toBe(false);
+    expect(streamRefunded.refunded).toBe(true);
+    expect(settleRefunded.refunded).toBe(true);
+    expect(credits.reconcileCredits).toHaveBeenCalledTimes(2);
+    expect(credits.calls.every((c) => c.actualBaseCost === 0)).toBe(true);
+
+    // Each refund carries its own site's ledger identity.
+    const streaming = credits.calls.find((c) => c.metadata?.streaming === true);
+    const nonStreaming = credits.calls.find(
+      (c) => c.metadata?.streaming === false,
+    );
+    expect(streaming?.description).toBe("Refund due to stream error");
+    expect(streaming?.reservationTransactionId).toBe("app-chat-hold-stream");
+    expect(nonStreaming?.description).toBe(
+      "Chat refund (non-streaming settle failed): openai/gpt-oss-120b",
+    );
+    expect(nonStreaming?.reservationTransactionId).toBe(
+      "app-chat-hold-nonstream",
+    );
+    expect(nonStreaming?.metadata).toMatchObject({
+      refundReason: "non_streaming_settle_error",
+    });
   });
 });

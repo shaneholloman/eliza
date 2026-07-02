@@ -8,6 +8,15 @@ import { type IAgentRuntime, Service } from "@elizaos/core";
 import { NativeAcpClient } from "./acp-native-transport.js";
 import { augmentTaskWithDeployGuidance } from "./app-deploy-guidance.js";
 import {
+  appendCodexAcpSandboxConfig,
+  type CodexSandboxMode,
+  commandHasCodexSandboxConfig,
+  detectLandlockAvailability,
+  isCodexLandlockPanic,
+  normalizeCodexApprovalPolicy,
+  normalizeCodexSandboxMode,
+} from "./codex-sandbox.js";
+import {
   accountMetaFromSessionMetadata,
   type CodingAccountMeta,
   diagnoseCodingAccountFallback,
@@ -15,6 +24,11 @@ import {
   selectCodingAccount,
 } from "./coding-account-selection.js";
 import { readConfigMcpServers } from "./config-env.js";
+import {
+  applyModelGatewayEnv,
+  MODEL_GATEWAY_EXCLUDED_PROVIDER_KEYS,
+  resolveModelGatewayConfig,
+} from "./model-gateway.js";
 import {
   buildOpencodeAcpEnv,
   resolveVendoredOpencodeAcpCommand,
@@ -96,6 +110,9 @@ type RunResult = {
 const STDERR_CAP_BYTES = 64 * 1024;
 const KILL_GRACE_MS = 5_000;
 const DEFAULT_WORKDIR_ROOT = join(tmpdir(), "eliza-acp");
+const DEFAULT_CODEX_ACP_COMMAND = "npx -y @zed-industries/codex-acp@0.14.0";
+const CODEX_NO_LANDLOCK_SANDBOX_MODE: CodexSandboxMode = "danger-full-access";
+const CODEX_NO_LANDLOCK_APPROVAL_POLICY = "never";
 
 /**
  * Resolve the absolute workdir for a spawned session. When `isolate` is true,
@@ -147,6 +164,16 @@ const ORPHAN_RESUME_STATUSES: ReadonlySet<string> = new Set([
 ]);
 const ORPHAN_RESUME_PROMPT =
   "[System] Your previous turn was interrupted by a runtime restart. Continue where you left off on the original task and report results as usual.";
+// Background sub-agent initial tasks are fire-and-forget from the originating
+// chat turn. When no action-level timeout is explicit, do not bind the
+// session/prompt request to the ACP service default (often configured to the
+// connector message budget, e.g. 120s). User cancel / shutdown still flow
+// through cancelSession()/stopSession(), and explicit timeouts remain honored.
+export function resolveInitialTaskPromptTimeoutMs(
+  explicitTimeoutMs: number | undefined,
+): number | undefined {
+  return explicitTimeoutMs ?? 0;
+}
 const DEFAULT_AGENTS: AgentType[] = ["elizaos", "codex", "claude", "opencode"];
 // Path segment the app-core coding-account bridge uses for per-account Codex
 // homes (`<stateDir>/auth/_codex-home/<accountId>`). buildEnv keys off this
@@ -160,13 +187,16 @@ const DENY_ENV_PATTERNS = [
   /TELEGRAM.*TOKEN/i,
   /SLACK.*TOKEN/i,
   /BOT.*TOKEN/i,
-  /OPENCODE_CONFIG_CONTENT/i,
   /ELIZA_VAULT_PASSPHRASE/i,
   // Host-API shell-exec / stdio-MCP auth secret — consumed only by
   // packages/agent/src/api/*, never by a coding sub-agent. Forwarding it would
   // hand a child process a credential that re-authorizes arbitrary host command
   // execution with zero legitimate use for it.
   /TERMINAL_RUN_TOKEN/i,
+  // Repo-scoped GitHub host credentials must not be injected into sub-agents,
+  // including through customCredentials. Registry push uses the dedicated
+  // GHCR_* or ELIZA_APP_IMAGE_REGISTRY_* names instead.
+  /^(?:GITHUB_TOKEN|GH_TOKEN|CR_PAT)$/i,
 ];
 
 /**
@@ -663,7 +693,7 @@ export class AcpService extends Service {
     const initialTask =
       opts.initialTask && opts.initialTask.trim().length > 0
         ? augmentTaskWithDeployGuidance(opts.initialTask, undefined, {
-            monetized: opts.metadata?.appMonetized === true,
+            monetized: opts.monetized,
           })
         : opts.initialTask;
 
@@ -677,7 +707,7 @@ export class AcpService extends Service {
           (opts.metadata as Record<string, unknown> | undefined)
             ?.keepAliveAfterComplete === true;
         void this.sendPrompt(id, initialTask ?? "", {
-          timeoutMs: opts.timeoutMs,
+          timeoutMs: resolveInitialTaskPromptTimeoutMs(opts.timeoutMs),
           model: opts.model,
         })
           .catch((err: unknown) => {
@@ -750,7 +780,7 @@ export class AcpService extends Service {
         (opts.metadata as Record<string, unknown> | undefined)
           ?.keepAliveAfterComplete === true;
       void this.sendPrompt(id, initialTask ?? "", {
-        timeoutMs: opts.timeoutMs,
+        timeoutMs: resolveInitialTaskPromptTimeoutMs(opts.timeoutMs),
         model: opts.model,
       })
         .catch((err: unknown) => {
@@ -798,8 +828,20 @@ export class AcpService extends Service {
       if (this.nativePromptSessionIds.has(sessionId)) {
         throw new Error(`ACP session is already busy: ${sessionId}`);
       }
-      await this.store.updateStatus(sessionId, "busy");
-      return this.sendNativePrompt(session, text, opts, startedAt);
+      // Claim the session SYNCHRONOUSLY, before the first await. Previously the
+      // busy marker was only added deep inside sendNativePrompt (after
+      // `updateStatus` + client setup await), so two concurrent sendPrompt calls
+      // could both pass the has() check before either added, driving two prompts
+      // onto the same native session. Cleanup on the pre-prompt error paths;
+      // sendNativePrompt's own finally clears it on the normal path.
+      this.nativePromptSessionIds.add(sessionId);
+      try {
+        await this.store.updateStatus(sessionId, "busy");
+        return await this.sendNativePrompt(session, text, opts, startedAt);
+      } catch (err) {
+        this.nativePromptSessionIds.delete(sessionId);
+        throw err;
+      }
     }
     await this.store.updateStatus(sessionId, "busy");
     const args = this.baseArgs({
@@ -1215,50 +1257,146 @@ export class AcpService extends Service {
     return resolveVendoredOpencodeAcpCommand();
   }
 
+  private codexAcpSandboxMode(): CodexSandboxMode | undefined {
+    const raw =
+      this.setting("ELIZA_CODEX_ACP_SANDBOX_MODE") ??
+      this.setting("ELIZA_CODEX_SANDBOX_MODE");
+    const mode = normalizeCodexSandboxMode(raw);
+    if (raw?.trim() && !mode) {
+      this.log("warn", "Ignoring invalid Codex ACP sandbox mode", {
+        value: raw,
+        supported: ["read-only", "workspace-write", "danger-full-access"],
+      });
+    }
+    return mode;
+  }
+
+  private codexAcpApprovalPolicy(): string | undefined {
+    const raw =
+      this.setting("ELIZA_CODEX_ACP_APPROVAL_POLICY") ??
+      this.setting("ELIZA_CODEX_APPROVAL_POLICY");
+    const policy = normalizeCodexApprovalPolicy(raw);
+    if (raw?.trim() && !policy) {
+      this.log("warn", "Ignoring invalid Codex ACP approval policy", {
+        value: raw,
+        supported: ["untrusted", "on-request", "on-failure", "never"],
+      });
+    }
+    return policy;
+  }
+
+  private codexNoLandlockSandboxMode(): CodexSandboxMode {
+    const raw = this.setting("ELIZA_CODEX_ACP_NO_LANDLOCK_SANDBOX_MODE");
+    const mode = normalizeCodexSandboxMode(raw);
+    if (raw?.trim() && !mode) {
+      this.log("warn", "Ignoring invalid Codex ACP no-Landlock sandbox mode", {
+        value: raw,
+        supported: ["read-only", "workspace-write", "danger-full-access"],
+      });
+    }
+    return mode ?? CODEX_NO_LANDLOCK_SANDBOX_MODE;
+  }
+
+  private codexAgentCommand(): string {
+    const command =
+      this.setting("ELIZA_CODEX_ACP_COMMAND") ?? DEFAULT_CODEX_ACP_COMMAND;
+    const configuredSandboxMode = this.codexAcpSandboxMode();
+    if (configuredSandboxMode) {
+      return appendCodexAcpSandboxConfig(
+        command,
+        configuredSandboxMode,
+        this.codexAcpApprovalPolicy() ??
+          (configuredSandboxMode === "danger-full-access"
+            ? CODEX_NO_LANDLOCK_APPROVAL_POLICY
+            : undefined),
+      );
+    }
+    if (commandHasCodexSandboxConfig(command)) return command;
+
+    const landlock = detectLandlockAvailability({
+      env: {
+        ELIZA_CODEX_ACP_LANDLOCK: this.setting("ELIZA_CODEX_ACP_LANDLOCK"),
+        ELIZA_CODEX_LANDLOCK: this.setting("ELIZA_CODEX_LANDLOCK"),
+      },
+    });
+    if (landlock !== "unavailable") return command;
+
+    this.log(
+      "warn",
+      "Landlock unavailable; starting Codex ACP with sandbox fallback",
+      {
+        sandboxMode: this.codexNoLandlockSandboxMode(),
+        approvalPolicy:
+          this.codexAcpApprovalPolicy() ?? CODEX_NO_LANDLOCK_APPROVAL_POLICY,
+      },
+    );
+    return appendCodexAcpSandboxConfig(
+      command,
+      this.codexNoLandlockSandboxMode(),
+      this.codexAcpApprovalPolicy() ?? CODEX_NO_LANDLOCK_APPROVAL_POLICY,
+    );
+  }
+
+  private codexLandlockFallbackCommand(
+    agentType: AgentType,
+    command: string,
+    message: string,
+  ): string | undefined {
+    if ((normalizeTaskAgentAdapter(agentType) ?? agentType) !== "codex")
+      return undefined;
+    if (!isCodexLandlockPanic(message)) return undefined;
+    if (commandHasCodexSandboxConfig(command)) return undefined;
+    return appendCodexAcpSandboxConfig(
+      command,
+      this.codexAcpSandboxMode() ?? this.codexNoLandlockSandboxMode(),
+      this.codexAcpApprovalPolicy() ?? CODEX_NO_LANDLOCK_APPROVAL_POLICY,
+    );
+  }
+
   private async spawnNativeSession(
     id: string,
     session: SessionInfo,
     opts: SpawnOptions,
   ): Promise<SpawnResult> {
     const command = this.nativeAgentCommand(session.agentType);
-    const stderr: string[] = [];
-    const client = new NativeAcpClient({
-      command,
-      cwd: session.workdir,
-      approvalPreset: session.approvalPreset,
-      timeoutMs: opts.timeoutMs ?? this.sessionTimeoutMs,
-      terminal: !this.shouldDisableTerminalCapability(),
-      env: this.buildEnv(
-        opts.env,
-        opts.customCredentials,
-        opts.model,
-        session.agentType,
-        id,
-      ),
-      // Auto-inherit the parent runtime's configured MCP servers (config
-      // `mcp.servers`) so the sub-agent gets the same MCP tools. Undefined when
-      // none are configured → the transport falls back to ELIZA_ACP_MCP_SERVERS.
-      mcpServers: readConfigMcpServers(),
-      onEvent: (event, protocolSessionId) => {
-        this.handleAcpEvent(
-          event,
+    const createClient = (clientCommand: string, stderr: string[]) =>
+      new NativeAcpClient({
+        command: clientCommand,
+        cwd: session.workdir,
+        approvalPreset: session.approvalPreset,
+        timeoutMs: opts.timeoutMs ?? this.sessionTimeoutMs,
+        terminal: !this.shouldDisableTerminalCapability(),
+        env: this.buildEnv(
+          opts.env,
+          opts.customCredentials,
+          opts.model,
+          session.agentType,
           id,
-          "",
-          Date.now(),
-          false,
-          new Set<string>(),
-        );
-        if (protocolSessionId && protocolSessionId !== id) {
-          void this.store
-            .update(id, { acpxSessionId: protocolSessionId })
-            .catch(() => undefined);
-        }
-      },
-      onStderr: (chunk) => {
-        stderr.push(chunk);
-      },
-    });
-    try {
+        ),
+        // Auto-inherit the parent runtime's configured MCP servers (config
+        // `mcp.servers`) so the sub-agent gets the same MCP tools. Undefined when
+        // none are configured → the transport falls back to ELIZA_ACP_MCP_SERVERS.
+        mcpServers: readConfigMcpServers(),
+        onEvent: (event, protocolSessionId) => {
+          this.handleAcpEvent(
+            event,
+            id,
+            "",
+            Date.now(),
+            false,
+            new Set<string>(),
+          );
+          if (protocolSessionId && protocolSessionId !== id) {
+            void this.store
+              .update(id, { acpxSessionId: protocolSessionId })
+              .catch(() => undefined);
+          }
+        },
+        onStderr: (chunk) => {
+          stderr.push(chunk);
+        },
+      });
+    const attachClient = async (client: NativeAcpClient) => {
       await client.start();
       const nativeSession = await client.createSession(session.workdir);
       this.nativeClients.set(id, client);
@@ -1277,13 +1415,45 @@ export class AcpService extends Service {
       });
       const updated = await this.store.get(id);
       return toSpawnResult(updated ?? { ...session, status: "ready" });
+    };
+    let stderr: string[] = [];
+    let client = createClient(command, stderr);
+    try {
+      return await attachClient(client);
     } catch (err) {
       await client.close().catch(() => undefined);
       // A failed spawn must not leave a closed client registered: the entry is
       // set above before the store writes that can throw here. Idempotent when
       // the failure happened before the set.
       this.nativeClients.delete(id);
-      const message = stderr.join("").trim() || errorMessage(err);
+      let message = stderr.join("").trim() || errorMessage(err);
+      const fallbackCommand = this.codexLandlockFallbackCommand(
+        session.agentType,
+        command,
+        message,
+      );
+      if (fallbackCommand) {
+        this.log(
+          "warn",
+          "Codex ACP Landlock unavailable; retrying with sandbox fallback",
+          {
+            sessionId: id,
+            sandboxMode: this.codexNoLandlockSandboxMode(),
+            approvalPolicy:
+              this.codexAcpApprovalPolicy() ??
+              CODEX_NO_LANDLOCK_APPROVAL_POLICY,
+          },
+        );
+        stderr = [];
+        client = createClient(fallbackCommand, stderr);
+        try {
+          return await attachClient(client);
+        } catch (retryErr) {
+          await client.close().catch(() => undefined);
+          this.nativeClients.delete(id);
+          message = stderr.join("").trim() || errorMessage(retryErr);
+        }
+      }
       await this.store.updateStatus(id, "errored", message);
       this.emitSessionEvent(id, "error", {
         message,
@@ -1441,17 +1611,13 @@ export class AcpService extends Service {
       if (command) return command;
       return this.setting("ELIZA_OPENCODE_ACP_COMMAND") ?? "opencode acp";
     }
+    if (normalizedAgentType === "codex") return this.codexAgentCommand();
     const override = this.setting(
       `ELIZA_${String(normalizedAgentType)
         .toUpperCase()
         .replace(/[^A-Z0-9]/g, "_")}_ACP_COMMAND`,
     );
     if (override?.trim()) return override.trim();
-    if (normalizedAgentType === "codex")
-      return (
-        this.setting("ELIZA_CODEX_ACP_COMMAND") ??
-        "npx -y @zed-industries/codex-acp@0.14.0"
-      );
     if (normalizedAgentType === "claude")
       return (
         this.setting("ELIZA_CLAUDE_ACP_COMMAND") ??
@@ -2239,7 +2405,6 @@ export class AcpService extends Service {
       }
     }
     if (agentType === "opencode") {
-      delete env.OPENCODE_CONFIG_CONTENT;
       const opencode = buildOpencodeAcpEnv(this.runtime, env, model);
       Object.assign(env, opencode.env);
       if (opencode.config) {
@@ -2250,6 +2415,19 @@ export class AcpService extends Service {
           vendored: Boolean(opencode.vendoredShimDir),
         });
       }
+    }
+    // Gateway mode runs LAST so no earlier merge step (host forwarding,
+    // customCredentials, spawn extras, account selection) can reintroduce a
+    // raw provider key into the child env. Never log the token.
+    const gateway = resolveModelGatewayConfig();
+    if (gateway) {
+      applyModelGatewayEnv(env, gateway);
+      this.log("info", "model-gateway mode engaged for sub-agent env", {
+        gatewayUrl: gateway.url,
+        agentType,
+        sessionId: childSessionId,
+        excludedProviderKeys: [...MODEL_GATEWAY_EXCLUDED_PROVIDER_KEYS],
+      });
     }
     return env;
   }
@@ -2545,6 +2723,7 @@ export function shouldForwardEnv(key: string): boolean {
       "OPENAI_MODEL",
       "ANTHROPIC_MODEL",
       "OPENCODE_MODEL",
+      "OPENCODE_CONFIG_CONTENT",
       "OPENCODE_DISABLE_AUTOUPDATE",
       "OPENCODE_DISABLE_TERMINAL_TITLE",
       "CODEX_HOME",
@@ -2811,15 +2990,66 @@ function captureTerminalToolOutput(
   return `[tool output: ${title}]\n${truncated}\n${TOOL_OUTPUT_END_MARKER}`;
 }
 
-function normalizeToolOutput(rawOutput: unknown): string {
+// Exported for unit coverage of the exec-record one-liner path (issue #11578).
+export function normalizeToolOutput(rawOutput: unknown): string {
   if (typeof rawOutput === "string") {
     const trimmed = rawOutput.trim();
     const parsed = parseJsonRecord(trimmed);
+    // A stringified exec record (Codex) parsed back to an object: render the
+    // one-liner instead of echoing the raw JSON string (issue #11578 FIX B).
+    const execLine = execRecordOneLiner(parsed);
+    if (execLine) return execLine;
     return extractToolOutputText(parsed)?.trim() || trimmed;
   }
   if (rawOutput === undefined || rawOutput === null) return "";
+  // Codex exec records (keys: call_id, command, exit_code, …) reached this
+  // fallback and got JSON.stringify'd into the envelope, leaking the raw record
+  // to the user (issue elizaOS/eliza#11578 FIX B). Detect the shape and render
+  // a compact `$ <command> → exit <code>` one-liner instead; NEVER stringify a
+  // record carrying call_id.
+  const execLine = execRecordOneLiner(rawOutput);
+  if (execLine) return execLine;
   const extracted = extractToolOutputText(rawOutput);
   return extracted?.trim() || JSON.stringify(rawOutput).trim();
+}
+
+/**
+ * Render a Codex exec record (`{ call_id, command, exit_code, … }`) as a compact
+ * one-liner: `$ <command joined> → exit <exit_code>` plus a capped stdout/stderr
+ * tail when present. Returns undefined for anything that is not an exec record
+ * (must have BOTH call_id AND command), so non-record output is unaffected.
+ */
+function execRecordOneLiner(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const hasCallId = "call_id" in record && record.call_id != null;
+  const rawCommand = record.command;
+  if (!hasCallId || rawCommand == null) return undefined;
+
+  const command = Array.isArray(rawCommand)
+    ? rawCommand.map((part) => String(part)).join(" ")
+    : String(rawCommand);
+  const exitCode =
+    typeof record.exit_code === "number" || typeof record.exit_code === "string"
+      ? String(record.exit_code)
+      : "?";
+  let line = `$ ${command.trim()} → exit ${exitCode}`;
+
+  const tail = execRecordOutputTail(record);
+  if (tail) line = `${line}\n${tail}`;
+  return line;
+}
+
+/** Extract a capped (≤200 char) stdout/stderr tail from an exec record. */
+function execRecordOutputTail(record: Record<string, unknown>): string {
+  const candidates = [record.stdout, record.stderr, record.output]
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => entry.length > 0);
+  if (candidates.length === 0) return "";
+  const joined = candidates.join("\n").trim();
+  return joined.length > 200 ? `${joined.slice(0, 200)}…` : joined;
 }
 
 function parseJsonRecord(text: string): Record<string, unknown> | undefined {

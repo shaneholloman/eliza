@@ -1,9 +1,11 @@
 /**
  * Canonical 402 response for a failed agent credit gate.
  *
- * Companion to `checkAgentCreditGate`. Every route that denies on the gate
- * serializes this one body so the insufficient-credits wire shape cannot drift
- * between routes.
+ * Companion to `checkAgentCreditGate` (./agent-billing-gate.ts). Every route
+ * that denies on the gate serializes this one body, so the insufficient-credits
+ * wire shape cannot drift between routes. Kept in its own module (type-only
+ * import of the gate) so route unit tests that mock the db-backed gate module
+ * still exercise the real body shape.
  */
 
 import { AGENT_PRICING } from "../constants/agent-pricing";
@@ -18,6 +20,7 @@ export interface InsufficientCreditsBody {
   currentBalance: number;
 }
 
+/** Build the canonical 402 body from a denied `checkAgentCreditGate` result. */
 export function insufficientCreditsBody(
   creditCheck: Pick<CreditGateResult, "balance" | "error">,
 ): InsufficientCreditsBody {
@@ -30,6 +33,11 @@ export function insufficientCreditsBody(
   };
 }
 
+/**
+ * Warn with the route's log line (plus the gate numbers) and return the
+ * canonical 402 body. Routes own the transport — Hono `c.json`,
+ * `Response.json` + CORS headers — and must send it with status 402.
+ */
 export function insufficientCredits402(
   creditCheck: Pick<CreditGateResult, "balance" | "error">,
   warn: string,

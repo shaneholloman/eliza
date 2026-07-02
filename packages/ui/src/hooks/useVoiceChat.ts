@@ -267,9 +267,11 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
     "browser" | "local-inference" | "talkmode" | null
   >(null);
   const talkModeHandlesRef = useRef<PluginListenerHandle[]>([]);
-  const ensureTalkModeListenersPromiseRef = useRef<Promise<void> | null>(null);
-  const startListeningPromiseRef = useRef<Promise<void> | null>(null);
-  const mountedRef = useRef(true);
+  // In-flight talk-mode listener registration. talkModeHandlesRef is only
+  // assigned after all three addListener awaits resolve, so two overlapping
+  // ensureTalkModeListeners calls would otherwise both pass the length guard
+  // and register six listeners (the first three leaked, transcripts doubled).
+  const talkModeListenersRegistrationRef = useRef<Promise<void> | null>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const playbackFrameTapRef = useRef<PlaybackFrameTap | null>(null);
@@ -668,27 +670,15 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
   );
 
   const removeTalkModeListeners = useCallback(async () => {
-    const removeHandles = async (handles: PluginListenerHandle[]) => {
-      await Promise.all(
-        handles.map((handle) =>
-          handle.remove().catch(() => {
-            /* ignore */
-          }),
-        ),
-      );
-    };
-    const setupPromise = ensureTalkModeListenersPromiseRef.current;
     const handles = talkModeHandlesRef.current;
     talkModeHandlesRef.current = [];
-    await removeHandles(handles);
-    if (!setupPromise) return;
-
-    await setupPromise.catch(() => {
-      /* setup failures already clean up partial handles */
-    });
-    const lateHandles = talkModeHandlesRef.current;
-    talkModeHandlesRef.current = [];
-    await removeHandles(lateHandles);
+    await Promise.all(
+      handles.map((handle) =>
+        handle.remove().catch(() => {
+          /* ignore */
+        }),
+      ),
+    );
   }, []);
 
   const resetListeningState = useCallback(() => {
@@ -706,89 +696,78 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
 
   const ensureTalkModeListeners = useCallback(async () => {
     if (talkModeHandlesRef.current.length > 0) return;
-    if (ensureTalkModeListenersPromiseRef.current) {
-      return ensureTalkModeListenersPromiseRef.current;
-    }
+    // A registration pass is already in flight — await it instead of starting
+    // a second one (which would double-register every listener).
+    const pending = talkModeListenersRegistrationRef.current;
+    if (pending) return pending;
 
-    const promise = (async () => {
-      if (talkModeHandlesRef.current.length > 0) return;
-
+    const registration = (async () => {
       const talkMode = getTalkModePlugin();
-      const handles: PluginListenerHandle[] = [];
 
-      try {
-        const transcriptHandle = await talkMode.addListener(
-          "transcript",
-          (event: TalkModeTranscriptEvent) => {
-            const typedEvent = event as TalkModeTranscriptEvent & {
-              mode?: unknown;
-              speaker?: VoiceSpeakerMetadata;
-              turn?: Partial<VoiceTurn>;
-              source?: string;
-              confidence?: number;
-              metadata?: Record<string, unknown>;
-            };
-            applyTranscriptUpdate(
-              event.transcript ?? "",
-              event.isFinal === true,
-              {
-                mode:
-                  normalizeActiveVoiceSessionMode(typedEvent.mode) ?? undefined,
-                speaker: typedEvent.speaker,
-                source: typedEvent.source,
-                confidence: typedEvent.confidence,
-                turn: typedEvent.turn,
-                metadata: typedEvent.metadata,
-              },
-            );
-          },
-        );
-        handles.push(transcriptHandle);
-        const errorHandle = await talkMode.addListener(
-          "error",
-          (event: TalkModeErrorEvent) => {
+      const transcriptHandle = await talkMode.addListener(
+        "transcript",
+        (event: TalkModeTranscriptEvent) => {
+          const typedEvent = event as TalkModeTranscriptEvent & {
+            mode?: unknown;
+            speaker?: VoiceSpeakerMetadata;
+            turn?: Partial<VoiceTurn>;
+            source?: string;
+            confidence?: number;
+            metadata?: Record<string, unknown>;
+          };
+          applyTranscriptUpdate(
+            event.transcript ?? "",
+            event.isFinal === true,
+            {
+              mode:
+                normalizeActiveVoiceSessionMode(typedEvent.mode) ?? undefined,
+              speaker: typedEvent.speaker,
+              source: typedEvent.source,
+              confidence: typedEvent.confidence,
+              turn: typedEvent.turn,
+              metadata: typedEvent.metadata,
+            },
+          );
+        },
+      );
+      const errorHandle = await talkMode.addListener(
+        "error",
+        (event: TalkModeErrorEvent) => {
+          if (
+            sttBackendRef.current === "talkmode" ||
+            event.code === "not-allowed" ||
+            event.code === "service-not-allowed"
+          ) {
+            resetListeningState();
             if (
-              sttBackendRef.current === "talkmode" ||
               event.code === "not-allowed" ||
               event.code === "service-not-allowed"
             ) {
-              resetListeningState();
-              if (
-                event.code === "not-allowed" ||
-                event.code === "service-not-allowed"
-              ) {
-                setSupported(false);
-              }
+              setSupported(false);
             }
-          },
-        );
-        handles.push(errorHandle);
-        const stateHandle = await talkMode.addListener(
-          "stateChange",
-          (event: TalkModeStateEvent) => {
-            if (
-              (event.state === "error" || event.state === "idle") &&
-              sttBackendRef.current === "talkmode"
-            ) {
-              resetListeningState();
-            }
-          },
-        );
-        handles.push(stateHandle);
-        talkModeHandlesRef.current = handles;
-      } catch (error) {
-        await Promise.allSettled(handles.map((handle) => handle.remove()));
-        throw error;
-      }
+          }
+        },
+      );
+      const stateHandle = await talkMode.addListener(
+        "stateChange",
+        (event: TalkModeStateEvent) => {
+          if (
+            (event.state === "error" || event.state === "idle") &&
+            sttBackendRef.current === "talkmode"
+          ) {
+            resetListeningState();
+          }
+        },
+      );
+      talkModeHandlesRef.current = [transcriptHandle, errorHandle, stateHandle];
     })();
-
-    ensureTalkModeListenersPromiseRef.current = promise;
+    // Stored synchronously (before the first await inside the registration
+    // yields) so a concurrent caller reuses this pass instead of re-adding.
+    talkModeListenersRegistrationRef.current = registration;
     try {
-      await promise;
+      await registration;
     } finally {
-      if (ensureTalkModeListenersPromiseRef.current === promise) {
-        ensureTalkModeListenersPromiseRef.current = null;
-      }
+      talkModeListenersRegistrationRef.current = null;
     }
   }, [applyTranscriptUpdate, resetListeningState]);
 
@@ -923,15 +902,9 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
 
       try {
         await ensureTalkModeListeners();
-        if (!mountedRef.current) {
-          return false;
-        }
         const talkMode = getTalkModePlugin();
         const browserSpeechSupported = !!getSpeechRecognitionCtor();
         let permissions = await talkMode.checkPermissions().catch(() => null);
-        if (!mountedRef.current) {
-          return false;
-        }
         const nativeSpeechSupported =
           permissions?.speechRecognition !== "not_supported";
         if (!nativeSpeechSupported && !browserSpeechSupported) {
@@ -946,9 +919,6 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
           permissions = await talkMode
             .checkPermissions()
             .catch(() => permissions);
-          if (!mountedRef.current) {
-            return false;
-          }
         }
 
         const directRpc = getElectrobunRendererRpc();
@@ -964,12 +934,6 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
             interruptOnSpeech: true,
           },
         });
-        if (!mountedRef.current) {
-          await talkMode.stop().catch(() => {
-            /* ignore */
-          });
-          return false;
-        }
         if (!result.started) {
           if (!browserSpeechSupported) {
             setSupported(false);
@@ -1022,42 +986,26 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
   const startListening = useCallback(
     async (mode: Exclude<VoiceCaptureMode, "idle"> = "compose") => {
       if (enabledRef.current) return;
-      if (startListeningPromiseRef.current) {
-        return startListeningPromiseRef.current;
+
+      transcriptBufferRef.current = "";
+      setInterimTranscript("");
+      if (interruptOnSpeechRef.current) {
+        interruptSpeechRef.current();
       }
 
-      const startPromise = (async () => {
-        if (enabledRef.current) return;
+      const localStarted = await startLocalInferenceRecognition(mode);
+      if (localStarted) {
+        return;
+      }
 
-        transcriptBufferRef.current = "";
-        setInterimTranscript("");
-        if (interruptOnSpeechRef.current) {
-          interruptSpeechRef.current();
-        }
-
-        const localStarted = await startLocalInferenceRecognition(mode);
-        if (localStarted) {
+      if (shouldPreferNativeTalkMode()) {
+        const started = await startTalkModeRecognition(mode);
+        if (started) {
           return;
         }
-
-        if (shouldPreferNativeTalkMode()) {
-          const started = await startTalkModeRecognition(mode);
-          if (started) {
-            return;
-          }
-        }
-
-        startBrowserRecognition(mode);
-      })();
-
-      startListeningPromiseRef.current = startPromise;
-      try {
-        await startPromise;
-      } finally {
-        if (startListeningPromiseRef.current === startPromise) {
-          startListeningPromiseRef.current = null;
-        }
       }
+
+      startBrowserRecognition(mode);
     },
     [
       startBrowserRecognition,
@@ -2383,9 +2331,7 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
   // ── Cleanup on unmount ────────────────────────────────────────────
 
   useEffect(() => {
-    mountedRef.current = true;
     return () => {
-      mountedRef.current = false;
       void stopListening();
       void removeTalkModeListeners();
       stopSpeaking();

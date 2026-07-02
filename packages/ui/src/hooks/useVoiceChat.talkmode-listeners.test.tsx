@@ -1,178 +1,154 @@
 // @vitest-environment jsdom
 
-import type { PluginListenerHandle } from "@capacitor/core";
-import { Capacitor } from "@capacitor/core";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getTalkModePlugin } from "../bridge/native-plugins";
+
+/**
+ * FIX 1 — ensureTalkModeListeners re-entrancy (useVoiceChat.ts).
+ *
+ * talkModeHandlesRef is only assigned after all three `addListener` awaits
+ * resolve, so two overlapping ensureTalkModeListeners calls would both pass
+ * the `handles.length > 0` guard and register SIX native listeners — the
+ * first three leaked forever (double transcripts, un-removable). The fix
+ * serializes registration through an in-flight-promise ref
+ * (talkModeListenersRegistrationRef); this suite drives two concurrent
+ * startListening calls against a deferred fake TalkMode plugin and asserts
+ * exactly three listeners are registered and all of them are removable.
+ */
+
+const h = vi.hoisted(() => {
+  const state = {
+    /** Event name of every addListener call, in order. */
+    addListenerEvents: [] as string[],
+    /** Deferred resolvers — the test releases addListener results manually. */
+    resolvers: [] as Array<() => void>,
+    /** Total remove() calls across all handles ever returned. */
+    removeCalls: 0,
+  };
+  const talkModePlugin = {
+    addListener: (event: string, _cb: (ev: unknown) => void) => {
+      state.addListenerEvents.push(event);
+      return new Promise<{ remove: () => Promise<void> }>((resolve) => {
+        state.resolvers.push(() =>
+          resolve({
+            remove: () => {
+              state.removeCalls += 1;
+              return Promise.resolve();
+            },
+          }),
+        );
+      });
+    },
+    checkPermissions: () =>
+      Promise.resolve({
+        microphone: "granted",
+        speechRecognition: "granted",
+      }),
+    requestPermissions: () =>
+      Promise.resolve({
+        microphone: "granted",
+        speechRecognition: "granted",
+      }),
+    start: () => Promise.resolve({ started: true }),
+    stop: () => Promise.resolve(),
+  };
+  return { state, talkModePlugin };
+});
+
+// Make shouldPreferNativeTalkMode() true in jsdom (no Capacitor native
+// platform here) by pretending to be an Electrobun renderer.
+vi.mock("../bridge/electrobun-rpc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../bridge/electrobun-rpc")>()),
+  getElectrobunRendererRpc: () => ({}) as never,
+}));
+
+vi.mock("../bridge/native-plugins", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../bridge/native-plugins")>()),
+  getTalkModePlugin: () => h.talkModePlugin as never,
+}));
+
 import { useVoiceChat } from "./useVoiceChat";
 
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (error: unknown) => void;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
+/** Release deferred addListener resolutions until no new ones appear. */
+async function releaseAllListenerRegistrations(): Promise<void> {
+  // Enough rounds to drain even a (buggy) double-registration pass, so a
+  // regression fails on the count assertion instead of hanging the test.
+  for (let round = 0; round < 12; round += 1) {
+    for (const resolve of h.state.resolvers.splice(0)) resolve();
+    await new Promise((r) => setTimeout(r, 0));
+  }
 }
 
-const talkModeMock = vi.hoisted(() => ({
-  addListener: vi.fn(),
-  checkPermissions: vi.fn(),
-  requestPermissions: vi.fn(),
-  start: vi.fn(),
-  stop: vi.fn(),
-}));
-
-vi.mock("../bridge/native-plugins", () => ({
-  getTalkModePlugin: vi.fn(() => talkModeMock),
-}));
-
-describe("useVoiceChat TalkMode listener lifecycle", () => {
-  let isNativePlatformSpy: ReturnType<typeof vi.spyOn>;
-
+describe("useVoiceChat talk-mode listener registration (FIX 1)", () => {
   beforeEach(() => {
-    isNativePlatformSpy = vi
-      .spyOn(Capacitor, "isNativePlatform")
-      .mockReturnValue(true);
-    talkModeMock.checkPermissions.mockResolvedValue({
-      microphone: "granted",
-      speechRecognition: "granted",
-    });
-    talkModeMock.requestPermissions.mockResolvedValue({
-      microphone: "granted",
-      speechRecognition: "granted",
-    });
-    talkModeMock.start.mockResolvedValue({ started: true });
-    talkModeMock.stop.mockResolvedValue(undefined);
-
-    Object.defineProperty(window, "speechSynthesis", {
-      configurable: true,
-      value: {
-        speaking: false,
-        pending: false,
-        cancel: vi.fn(),
-        getVoices: vi.fn(() => []),
-        speak: vi.fn(),
-      },
-    });
+    h.state.addListenerEvents.length = 0;
+    h.state.resolvers.length = 0;
+    h.state.removeCalls = 0;
   });
 
   afterEach(() => {
     cleanup();
-    isNativePlatformSpy.mockRestore();
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
-  it("coalesces concurrent TalkMode listener setup into one removable handle set", async () => {
-    const listenerAdds = [
-      deferred<PluginListenerHandle>(),
-      deferred<PluginListenerHandle>(),
-      deferred<PluginListenerHandle>(),
-    ];
-    const removeFns = [
-      vi.fn().mockResolvedValue(undefined),
-      vi.fn().mockResolvedValue(undefined),
-      vi.fn().mockResolvedValue(undefined),
-    ];
-    talkModeMock.addListener.mockImplementation(() => {
-      const next = listenerAdds[talkModeMock.addListener.mock.calls.length - 1];
-      if (!next) throw new Error("unexpected listener registration");
-      return next.promise;
-    });
+  it("serializes concurrent registration passes — exactly three listeners, all removable", async () => {
     const { result, unmount } = renderHook(() =>
-      useVoiceChat({
-        onTranscript: vi.fn(),
-      }),
+      useVoiceChat({ onTranscript: vi.fn() }),
     );
 
-    const firstStart = result.current.startListening("push-to-talk");
-    const secondStart = result.current.startListening("push-to-talk");
+    // Two overlapping starts: both pass the enabledRef guard (neither has
+    // finished), so both reach ensureTalkModeListeners while the first
+    // registration pass is still blocked on its deferred addListener.
+    const starts: Array<Promise<void>> = [];
+    act(() => {
+      starts.push(result.current.startListening("push-to-talk"));
+      starts.push(result.current.startListening("push-to-talk"));
+    });
 
     await waitFor(() =>
-      expect(talkModeMock.addListener).toHaveBeenCalledTimes(1),
+      expect(h.state.addListenerEvents.length).toBeGreaterThanOrEqual(1),
     );
-    listenerAdds[0]?.resolve({ remove: removeFns[0] });
-    await waitFor(() =>
-      expect(talkModeMock.addListener).toHaveBeenCalledTimes(2),
-    );
-    listenerAdds[1]?.resolve({ remove: removeFns[1] });
-    await waitFor(() =>
-      expect(talkModeMock.addListener).toHaveBeenCalledTimes(3),
-    );
-    listenerAdds[2]?.resolve({ remove: removeFns[2] });
+    // Give the second caller ample time to (incorrectly) begin its own pass.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    // Only ONE pass may be in flight: a single pending "transcript"
+    // registration. Without the in-flight ref this is already
+    // ["transcript", "transcript"].
+    expect(h.state.addListenerEvents).toEqual(["transcript"]);
 
     await act(async () => {
-      await Promise.all([firstStart, secondStart]);
+      await releaseAllListenerRegistrations();
+      await Promise.all(starts);
     });
 
-    expect(getTalkModePlugin).toHaveBeenCalled();
-    expect(talkModeMock.addListener).toHaveBeenCalledTimes(3);
-    expect(
-      talkModeMock.addListener.mock.calls.map(([eventName]) => eventName),
-    ).toEqual(["transcript", "error", "stateChange"]);
-    expect(talkModeMock.start).toHaveBeenCalledTimes(1);
+    // Exactly three listeners — not six.
+    expect(h.state.addListenerEvents).toEqual([
+      "transcript",
+      "error",
+      "stateChange",
+    ]);
+    expect(result.current.isListening).toBe(true);
+    expect(result.current.captureMode).toBe("push-to-talk");
 
-    unmount();
-
-    await waitFor(() => expect(removeFns[0]).toHaveBeenCalledTimes(1));
-    expect(removeFns[1]).toHaveBeenCalledTimes(1);
-    expect(removeFns[2]).toHaveBeenCalledTimes(1);
-  });
-
-  it("removes TalkMode handles that resolve after unmount during listener setup", async () => {
-    const listenerAdds = [
-      deferred<PluginListenerHandle>(),
-      deferred<PluginListenerHandle>(),
-      deferred<PluginListenerHandle>(),
-    ];
-    const removeFns = [
-      vi.fn().mockResolvedValue(undefined),
-      vi.fn().mockResolvedValue(undefined),
-      vi.fn().mockResolvedValue(undefined),
-    ];
-    talkModeMock.addListener.mockImplementation(() => {
-      const next = listenerAdds[talkModeMock.addListener.mock.calls.length - 1];
-      if (!next) throw new Error("unexpected listener registration");
-      return next.promise;
-    });
-    const { result, unmount } = renderHook(() =>
-      useVoiceChat({
-        onTranscript: vi.fn(),
-      }),
-    );
-
-    const startPromise = result.current.startListening("push-to-talk");
-    await waitFor(() =>
-      expect(talkModeMock.addListener).toHaveBeenCalledTimes(1),
-    );
-
-    unmount();
-
-    listenerAdds[0]?.resolve({ remove: removeFns[0] });
-    await waitFor(() =>
-      expect(talkModeMock.addListener).toHaveBeenCalledTimes(2),
-    );
-    listenerAdds[1]?.resolve({ remove: removeFns[1] });
-    await waitFor(() =>
-      expect(talkModeMock.addListener).toHaveBeenCalledTimes(3),
-    );
-    listenerAdds[2]?.resolve({ remove: removeFns[2] });
-
+    // A later start with listeners already registered must not re-register.
     await act(async () => {
-      await startPromise;
+      await result.current.stopListening();
     });
+    await act(async () => {
+      const again = result.current.startListening("push-to-talk");
+      await releaseAllListenerRegistrations();
+      await again;
+    });
+    expect(h.state.addListenerEvents).toEqual([
+      "transcript",
+      "error",
+      "stateChange",
+    ]);
 
-    await waitFor(() => expect(removeFns[0]).toHaveBeenCalledTimes(1));
-    expect(removeFns[1]).toHaveBeenCalledTimes(1);
-    expect(removeFns[2]).toHaveBeenCalledTimes(1);
-    expect(talkModeMock.start).not.toHaveBeenCalled();
+    // Every registered handle is removable via removeTalkModeListeners
+    // (unmount cleanup) — nothing leaked outside talkModeHandlesRef.
+    unmount();
+    await waitFor(() => expect(h.state.removeCalls).toBe(3));
   });
 });

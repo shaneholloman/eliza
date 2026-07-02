@@ -1,4 +1,8 @@
-import type { AgentRuntime } from "@elizaos/core";
+import {
+  type ActionEventPayload,
+  type AgentRuntime,
+  EventType,
+} from "@elizaos/core";
 import {
   type AutocompleteItem,
   CombinedAutocompleteProvider,
@@ -16,6 +20,13 @@ import { getCwd, setCwd } from "./lib/cwd.js";
 import { FilteringTerminal } from "./lib/filtering-terminal.js";
 import { getCodeTaskService } from "./lib/get-code-task-service.js";
 import { useStore } from "./lib/store.js";
+import {
+  actionNameFromPayload,
+  formatToolCompleted,
+  formatToolStarted,
+  shouldShowToolAction,
+  toolTranscriptKey,
+} from "./lib/tool-transcript.js";
 import type {
   CodeTask,
   CodeTaskService,
@@ -414,6 +425,8 @@ export class App {
   private startupResumeTaskIds: string[] | null = null;
   private didCheckInterruptedTasks = false;
   private exitResolver: (() => void) | null = null;
+  private activeTurnAbortController: AbortController | null = null;
+  private readonly toolMessageIds = new Map<string, string>();
 
   constructor(runtime: AgentRuntime) {
     this.runtime = runtime;
@@ -474,6 +487,7 @@ export class App {
   private initializeManagers(): void {
     const agentClient = getAgentClient();
     agentClient.setRuntime(this.runtime);
+    this.registerToolTranscriptEvents();
 
     // Get task service and sync tasks to UI
     const service = getCodeTaskService(this.runtime);
@@ -526,6 +540,72 @@ export class App {
     }
   }
 
+  private registerToolTranscriptEvents(): void {
+    this.runtime.registerEvent(
+      EventType.ACTION_STARTED,
+      async (payload: ActionEventPayload) => {
+        this.handleToolActionStarted(payload);
+      },
+    );
+    this.runtime.registerEvent(
+      EventType.ACTION_COMPLETED,
+      async (payload: ActionEventPayload) => {
+        this.handleToolActionCompleted(payload);
+      },
+    );
+  }
+
+  private roomIdForAction(payload: ActionEventPayload): string {
+    const state = useStore.getState();
+    const room = state.rooms.find((candidate) => {
+      return candidate.elizaRoomId === payload.roomId;
+    });
+    return room?.id ?? state.currentRoomId;
+  }
+
+  private handleToolActionStarted(payload: ActionEventPayload): void {
+    const actionName = actionNameFromPayload(payload);
+    if (!shouldShowToolAction(actionName)) return;
+
+    const state = useStore.getState();
+    const roomId = this.roomIdForAction(payload);
+    const key = toolTranscriptKey(payload, actionName);
+    const message = state.addMessage(
+      roomId,
+      "system",
+      formatToolStarted(actionName),
+      state.currentTaskId ?? undefined,
+      "tool",
+    );
+    this.toolMessageIds.set(key, message.id);
+    this.tui.requestRender();
+  }
+
+  private handleToolActionCompleted(payload: ActionEventPayload): void {
+    const actionName = actionNameFromPayload(payload);
+    if (!shouldShowToolAction(actionName)) return;
+
+    const state = useStore.getState();
+    const roomId = this.roomIdForAction(payload);
+    const key = toolTranscriptKey(payload, actionName);
+    const messageId = this.toolMessageIds.get(key);
+    const line = formatToolCompleted(payload, { cwd: getCwd() });
+
+    if (messageId) {
+      state.setMessageContent(roomId, messageId, line);
+      this.toolMessageIds.delete(key);
+    } else {
+      state.addMessage(
+        roomId,
+        "system",
+        line,
+        state.currentTaskId ?? undefined,
+        "tool",
+      );
+    }
+    this.tui.requestRender();
+  }
+
   private async checkInterruptedTasks(): Promise<void> {
     if (this.didCheckInterruptedTasks) return;
     this.didCheckInterruptedTasks = true;
@@ -569,16 +649,41 @@ export class App {
    * @returns true when the keystroke was consumed.
    */
   private consumeGlobalInput(data: string): boolean {
+    if ((data === "\x1b" || data === "\x03") && this.abortCurrentTurn()) {
+      return true;
+    }
+
     if (this.showingHelp) {
-      if (data === "?" || data === "\x1b" || data === "\x08") {
+      // Ctrl+C / Ctrl+Q must still quit even with help open (they were trapped
+      // before). Otherwise close on ?, Esc, Backspace (\x08 Ctrl+H and \x7f DEL,
+      // which is what most terminals send), or q.
+      if (data === "\x03" || data === "\x11") {
+        useStore.getState().saveSessionState();
+        this.stop();
+        return true;
+      }
+      if (
+        data === "?" ||
+        data === "\x1b" ||
+        data === "\x08" ||
+        data === "\x7f" ||
+        data === "q"
+      ) {
         this.closeHelp();
       }
       return true;
     }
 
+    // `?` opens help only when it can't be a character the user is typing:
+    // task pane focused, or the chat composer is empty. Otherwise it must reach
+    // the editor so prompts like "what does this do?" aren't corrupted.
     if (data === "?") {
-      this.openHelp();
-      return true;
+      const state = useStore.getState();
+      if (state.focusedPane !== "chat" || state.inputValue.trim() === "") {
+        this.openHelp();
+        return true;
+      }
+      return false;
     }
 
     if (data === "\x03" || data === "\x11") {
@@ -608,18 +713,36 @@ export class App {
       return false;
     }
 
-    if (data === "\x1b[1;5D" || data === ",") {
+    // Ctrl+←/→ always resizes the task pane. Bare ","/"." resize ONLY when the
+    // task pane is focused — otherwise they are literal characters the chat
+    // composer must receive (you couldn't type "Fix App.ts, please." before).
+    const paneFocused = useStore.getState().focusedPane === "tasks";
+    if (data === "\x1b[1;5D" || (data === "," && paneFocused)) {
       useStore.getState().adjustTaskPaneWidth(-0.05);
       this.tui.requestRender();
       return true;
     }
-    if (data === "\x1b[1;5C" || data === ".") {
+    if (data === "\x1b[1;5C" || (data === "." && paneFocused)) {
       useStore.getState().adjustTaskPaneWidth(0.05);
       this.tui.requestRender();
       return true;
     }
 
     return false;
+  }
+
+  private abortCurrentTurn(): boolean {
+    const controller = this.activeTurnAbortController;
+    if (!controller) return false;
+    if (controller.signal.aborted) {
+      // Abort was already requested but the turn hasn't unwound yet (e.g. a
+      // provider that ignores the signal). Let the keystroke fall through so
+      // a second Ctrl+C reaches the quit handler instead of being eaten here.
+      return false;
+    }
+    controller.abort();
+    this.tui.requestRender();
+    return true;
   }
 
   private openHelp(): void {
@@ -965,7 +1088,8 @@ Dir: /cd [path], /pwd
 UI: /clear, /copy
 Help: /help, ?
 
-Shortcuts: Tab panes, Ctrl+< > resize tasks, Ctrl+N new chat, Ctrl+C quit`,
+Shortcuts: Tab panes, Ctrl+< > resize tasks, Ctrl+N new chat, Ctrl+C quit
+During a turn: Enter queues the message, Esc/Ctrl+C aborts (queued messages are discarded), second Ctrl+C quits`,
         );
         this.tui.requestRender();
         return true;
@@ -1043,14 +1167,45 @@ Shortcuts: Tab panes, Ctrl+< > resize tasks, Ctrl+N new chat, Ctrl+C quit`,
       const args = argParts.join(" ");
       const handled = await this.handleSlashCommand(command, args);
       if (handled) return;
+      // An unknown "/command" must NOT fall through to the LLM (it burns a turn
+      // and confuses the model). Report it and stop — unless it's the "//literal"
+      // escape hatch for genuinely sending slash-prefixed text.
+      if (!text.startsWith("//")) {
+        state.addMessage(
+          state.currentRoomId,
+          "system",
+          `Unknown command: /${command} — type /help for the list.`,
+        );
+        this.tui.requestRender();
+        return;
+      }
     }
 
+    // Queue-and-send (opencode behavior): a submission made while a turn is
+    // running is buffered and fired when the turn completes, instead of
+    // spawning a second concurrent turn.
+    if (this.activeTurnAbortController) {
+      const queueLength = state.enqueuePendingSubmission(text);
+      state.addMessage(
+        state.currentRoomId,
+        "system",
+        `Queued (${queueLength}): ${submissionPreview(text)} — sends when the current turn finishes. Esc/Ctrl+C aborts and discards the queue.`,
+        state.currentTaskId ?? undefined,
+        "tool",
+      );
+      this.tui.requestRender();
+      return;
+    }
+
+    const turnAbortController = new AbortController();
+    this.activeTurnAbortController = turnAbortController;
     state.setLoading(true);
     state.setAgentTyping(true);
     this.tui.requestRender();
 
+    const roomId = state.currentRoomId;
+    let placeholderId: string | null = null;
     try {
-      const roomId = state.currentRoomId;
       const room = state.rooms.find((r) => r.id === roomId);
       if (!room) {
         throw new Error("Current conversation not found");
@@ -1061,15 +1216,32 @@ Shortcuts: Tab panes, Ctrl+< > resize tasks, Ctrl+N new chat, Ctrl+C quit`,
 
       const agentClient = getAgentClient();
       const placeholder = state.addMessage(roomId, "assistant", "", undefined);
-      await agentClient.sendMessage({
+      placeholderId = placeholder.id;
+      const response = await agentClient.sendMessage({
         room,
         text,
         identity: state.identity,
+        abortSignal: turnAbortController.signal,
         onDelta: (delta) => {
+          if (turnAbortController.signal.aborted) return;
           state.appendToMessage(roomId, placeholder.id, delta);
           this.tui.requestRender();
         },
       });
+
+      if (response && !turnAbortController.signal.aborted) {
+        state.setMessageContent(roomId, placeholder.id, response);
+        this.tui.requestRender();
+      }
+
+      if (turnAbortController.signal.aborted) {
+        if (placeholderId) {
+          state.removeMessage(roomId, placeholderId);
+          placeholderId = null;
+        }
+        state.addMessage(roomId, "system", "Turn aborted.");
+        return;
+      }
 
       const service = getCodeTaskService(this.runtime);
       const currentTask = service ? await service.getCurrentTask() : null;
@@ -1089,10 +1261,71 @@ Shortcuts: Tab panes, Ctrl+< > resize tasks, Ctrl+N new chat, Ctrl+C quit`,
           ),
         }));
       }
+    } catch (err) {
+      // A provider error (network blip, 429, revoked key) or a missing-room
+      // throw must NOT crash the app — before this, the rejection bubbled to
+      // index.ts's unhandledRejection handler → process.exit(1), which left the
+      // terminal in raw mode (raw-mode/bracketed-paste/cursor restore only runs
+      // via app.stop()). Surface it as a system message and drop the empty
+      // assistant placeholder so no blank bubble lingers.
+      if (turnAbortController.signal.aborted || isAbortError(err)) {
+        if (placeholderId) {
+          state.removeMessage(roomId, placeholderId);
+        }
+        state.addMessage(roomId, "system", "Turn aborted.");
+      } else {
+        const messageText = err instanceof Error ? err.message : String(err);
+        if (placeholderId) {
+          state.removeMessage(roomId, placeholderId);
+        }
+        state.addMessage(roomId, "system", `Error: ${messageText}`);
+      }
     } finally {
+      if (this.activeTurnAbortController === turnAbortController) {
+        this.activeTurnAbortController = null;
+      }
       state.setLoading(false);
       state.setAgentTyping(false);
+      // Drain the queue-and-send buffer. Abort means "stop everything", so an
+      // aborted turn discards whatever was queued behind it; any other
+      // completion (success or error) sends the next queued submission.
+      if (turnAbortController.signal.aborted) {
+        const discarded = state.clearPendingSubmissions();
+        if (discarded > 0) {
+          state.addMessage(
+            roomId,
+            "system",
+            `Discarded ${discarded} queued message${discarded === 1 ? "" : "s"}.`,
+          );
+        }
+      } else {
+        const next = state.takeNextPendingSubmission();
+        if (next !== undefined) {
+          // New microtask: don't run the next turn inside this finally block.
+          // handleSendMessage never rejects (it catches everything), so void
+          // is safe here.
+          queueMicrotask(() => {
+            void this.handleSendMessage(next);
+          });
+        }
+      }
       this.tui.requestRender();
     }
   }
+}
+
+/** One-line, length-capped echo of a queued submission for the system notice. */
+function submissionPreview(text: string, maxLength = 48): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length <= maxLength ? flat : `${flat.slice(0, maxLength - 1)}…`;
+}
+
+function isAbortError(err: unknown): boolean {
+  if (err instanceof DOMException) {
+    return err.name === "AbortError";
+  }
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  return err.name === "AbortError" || /\babort(?:ed)?\b/i.test(err.message);
 }

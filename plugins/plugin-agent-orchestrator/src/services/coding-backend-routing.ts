@@ -98,6 +98,16 @@ function parseCodingAxis(raw: unknown): BackendAxisRouting | undefined {
   return parseAxis(raw.coding);
 }
 
+/**
+ * Resolve the coding routing axis from, in order: the character's declared
+ * `settings.routing.coding`, then the `ELIZA_BACKEND_ROUTING` config-env JSON's
+ * `coding` axis (the same structured-config mechanism `TASK_AGENT_WORKDIR_ROUTES`
+ * uses — a deployment-level override that works even when the character builder
+ * does not forward arbitrary `settings` keys). Resolved PER AXIS: a character
+ * that declares unrelated routing keys does not shadow an env-declared coding
+ * policy. Both sources are validated; this is declared policy, never
+ * message-text inspection.
+ */
 function readCodingRoutingEntry(
   runtime: IAgentRuntime | undefined,
 ): { routing: BackendAxisRouting; source: "character" | "env" } | undefined {
@@ -121,16 +131,6 @@ function readCodingRoutingEntry(
   }
 }
 
-/**
- * Resolve the coding routing axis from, in order: the character's declared
- * `settings.routing.coding`, then the `ELIZA_BACKEND_ROUTING` config-env JSON's
- * `coding` axis (the same structured-config mechanism `TASK_AGENT_WORKDIR_ROUTES`
- * uses — a deployment-level override that works even when the character builder
- * does not forward arbitrary `settings` keys). Resolved PER AXIS: a character
- * that declares unrelated routing keys does not shadow an env-declared coding
- * policy. Both sources are validated; this is declared policy, never
- * message-text inspection.
- */
 export function readCodingRouting(
   runtime: IAgentRuntime | undefined,
 ): BackendAxisRouting | undefined {

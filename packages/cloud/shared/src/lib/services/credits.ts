@@ -4,7 +4,7 @@
 
 import { sql } from "drizzle-orm";
 import { type SqlExecutor, sqlRows } from "../../db/execute-helpers";
-import { dbWrite } from "../../db/helpers";
+import { dbWrite, writeTransaction } from "../../db/helpers";
 import {
   type CreditPack,
   type CreditTransaction,
@@ -38,6 +38,8 @@ export const COST_BUFFER = Number(process.env.CREDIT_COST_BUFFER) || 1.5;
 export const MIN_RESERVATION = 0.000001;
 /** Epsilon for reconcile float comparisons — 10% of MIN_RESERVATION */
 export const EPSILON = MIN_RESERVATION * 0.1;
+export const RESERVATION_SETTLEMENT_MARKER = "credit_reservation_v1";
+export const APP_CHAT_RESERVATION_SETTLEMENT_MARKER = "app_chat_reservation_v1";
 /** Default estimated output tokens when not specified */
 export const DEFAULT_OUTPUT_TOKENS = 500;
 
@@ -82,6 +84,18 @@ export interface ReserveCreditsParams {
   billingSource?: PricingBillingSource;
   estimatedInputTokens?: number;
   estimatedOutputTokens?: number;
+}
+
+export interface ReservationSweepStats {
+  scanned: number;
+  settled: number;
+  skipped: number;
+  refunds: number;
+  overages: number;
+  noops: number;
+  uncollectedOverages: number;
+  batches: number;
+  capHit: boolean;
 }
 
 /**
@@ -144,6 +158,7 @@ interface CreditMutationRow {
   metadata: Record<string, unknown> | string | null;
   stripe_payment_intent_id: string | null;
   created_at: Date | string | null;
+  settled_at?: Date | string | null;
 }
 
 interface ClawbackMutationRow extends CreditMutationRow {
@@ -175,6 +190,17 @@ function parseMetadata(value: CreditMutationRow["metadata"]): Record<string, unk
   return value;
 }
 
+function metadataNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 function toCreditTransaction(row: CreditMutationRow): CreditTransaction {
   if (!row.id || !row.organization_id || !row.amount || !row.type || !row.created_at) {
     throw new Error("[CreditsService] Credit mutation did not return a transaction row");
@@ -190,6 +216,12 @@ function toCreditTransaction(row: CreditMutationRow): CreditTransaction {
     metadata: parseMetadata(row.metadata),
     stripe_payment_intent_id: row.stripe_payment_intent_id,
     created_at: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
+    settled_at:
+      row.settled_at == null
+        ? null
+        : row.settled_at instanceof Date
+          ? row.settled_at
+          : new Date(row.settled_at),
   };
 }
 
@@ -1026,6 +1058,399 @@ export class CreditsService {
     return parseNumeric(rows[0]?.total ?? 0, "clawed_back_total");
   }
 
+  private async reconcileReservationTransaction(params: {
+    organizationId: string;
+    reservationTransactionId: string;
+    actualCost: number;
+    description: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<
+    | {
+        kind: "handled";
+        claimed: boolean;
+        result: CreditReconciliationResult;
+        newBalance?: number;
+        balanceDecreaseMetadata?: Record<string, unknown>;
+      }
+    | { kind: "no_reservation_row" }
+  > {
+    const { organizationId, reservationTransactionId, actualCost, description, metadata } = params;
+
+    const existingSettlementIds = async (executor: SqlExecutor): Promise<string[]> => {
+      const rows = await sqlRows<{ id: string }>(
+        executor,
+        sql`
+          SELECT id
+          FROM credit_transactions
+          WHERE metadata->>'reservation_transaction_id' = ${reservationTransactionId}
+            AND organization_id = ${organizationId}
+          ORDER BY created_at ASC
+        `,
+      );
+      return rows.map((row) => row.id);
+    };
+
+    const result = await writeTransaction(async (tx) => {
+      const reservationRows = await sqlRows<{
+        id: string;
+        amount: string | number;
+        settled_at: Date | string | null;
+      }>(
+        tx,
+        sql`
+          SELECT id, amount, settled_at
+          FROM credit_transactions
+          WHERE id = ${reservationTransactionId}
+            AND organization_id = ${organizationId}
+            AND type = 'debit'
+            AND (
+              metadata->>'type' = 'reservation'
+              OR (
+                metadata->>'type' = 'app_chat_reservation'
+                AND metadata->>'settlement_marker' = ${APP_CHAT_RESERVATION_SETTLEMENT_MARKER}
+              )
+            )
+          LIMIT 1
+        `,
+      );
+      const reservation = reservationRows[0];
+      if (!reservation) {
+        return { kind: "no_reservation_row" as const };
+      }
+
+      const reservedAmount = Math.abs(parseNumeric(reservation.amount, "reservation_amount"));
+
+      if (reservation.settled_at !== null) {
+        return {
+          kind: "handled" as const,
+          claimed: false,
+          result: {
+            reservedAmount,
+            actualCost,
+            reservationTransactionId,
+            settlementTransactionIds: await existingSettlementIds(tx),
+            adjustmentType: "none" as const,
+          },
+        };
+      }
+
+      const preexistingSettlementIds = await existingSettlementIds(tx);
+      if (preexistingSettlementIds.length > 0) {
+        const markedRows = await sqlRows<{ id: string }>(
+          tx,
+          sql`
+            UPDATE credit_transactions
+            SET settled_at = NOW()
+            WHERE id = ${reservationTransactionId}
+              AND organization_id = ${organizationId}
+              AND type = 'debit'
+              AND (
+                metadata->>'type' = 'reservation'
+                OR (
+                  metadata->>'type' = 'app_chat_reservation'
+                  AND metadata->>'settlement_marker' = ${APP_CHAT_RESERVATION_SETTLEMENT_MARKER}
+                )
+              )
+              AND settled_at IS NULL
+            RETURNING id
+          `,
+        );
+        return {
+          kind: "handled" as const,
+          claimed: markedRows.length > 0,
+          result: {
+            reservedAmount,
+            actualCost,
+            reservationTransactionId,
+            settlementTransactionIds: preexistingSettlementIds,
+            adjustmentType: "none" as const,
+          },
+        };
+      }
+
+      const claimedRows = await sqlRows<{
+        id: string;
+        amount: string | number;
+      }>(
+        tx,
+        sql`
+          UPDATE credit_transactions
+          SET settled_at = NOW()
+          WHERE id = ${reservationTransactionId}
+            AND organization_id = ${organizationId}
+            AND type = 'debit'
+            AND (
+              metadata->>'type' = 'reservation'
+              OR (
+                metadata->>'type' = 'app_chat_reservation'
+                AND metadata->>'settlement_marker' = ${APP_CHAT_RESERVATION_SETTLEMENT_MARKER}
+              )
+            )
+            AND settled_at IS NULL
+          RETURNING id, amount
+        `,
+      );
+      const claimed = claimedRows[0];
+      if (!claimed) {
+        return {
+          kind: "handled" as const,
+          claimed: false,
+          result: {
+            reservedAmount,
+            actualCost,
+            reservationTransactionId,
+            settlementTransactionIds: await existingSettlementIds(tx),
+            adjustmentType: "none" as const,
+          },
+        };
+      }
+
+      const claimedReservedAmount = Math.abs(parseNumeric(claimed.amount, "reservation_amount"));
+      const normalizedActualCost = Math.max(actualCost, 0);
+      const difference = claimedReservedAmount - normalizedActualCost;
+      const baseMetadata = {
+        ...metadata,
+        reservation_transaction_id: reservationTransactionId,
+        reserved: claimedReservedAmount,
+        actual: normalizedActualCost,
+      };
+
+      if (Math.abs(difference) < EPSILON) {
+        return {
+          kind: "handled" as const,
+          claimed: true,
+          result: {
+            reservedAmount: claimedReservedAmount,
+            actualCost: normalizedActualCost,
+            reservationTransactionId,
+            settlementTransactionIds: [],
+            adjustmentType: "none" as const,
+          },
+        };
+      }
+
+      if (difference > 0) {
+        const refundMetadata = JSON.stringify({
+          ...baseMetadata,
+          type: "reconciliation_refund",
+        });
+        const refundRows = await sqlRows<{
+          id: string | null;
+          new_balance: string | number | null;
+        }>(
+          tx,
+          sql`
+            WITH org AS (
+              SELECT id, credit_balance::numeric AS current_balance
+              FROM organizations
+              WHERE id = ${organizationId}
+              FOR UPDATE
+            ),
+            updated AS (
+              UPDATE organizations AS o
+              SET credit_balance = org.current_balance + ${String(difference)}::numeric,
+                  updated_at = NOW()
+              FROM org
+              WHERE o.id = org.id
+              RETURNING o.credit_balance AS new_balance
+            ),
+            inserted AS (
+              INSERT INTO credit_transactions (
+                organization_id,
+                amount,
+                type,
+                description,
+                metadata,
+                stripe_payment_intent_id,
+                created_at
+              )
+              SELECT
+                org.id,
+                ${String(difference)}::numeric,
+                'refund',
+                ${`${description} (refund)`},
+                ${refundMetadata}::jsonb,
+                ${`recon:${reservationTransactionId}:refund`},
+                NOW()
+              FROM org
+              WHERE EXISTS (SELECT 1 FROM updated)
+              ON CONFLICT (stripe_payment_intent_id) DO NOTHING
+              RETURNING id
+            )
+            SELECT
+              (SELECT id FROM inserted) AS id,
+              (SELECT new_balance FROM updated) AS new_balance
+          `,
+        );
+        const refund = refundRows[0];
+        if (!refund?.id) {
+          throw new Error("[CreditsService] Reservation refund settlement did not insert a row");
+        }
+        return {
+          kind: "handled" as const,
+          claimed: true,
+          newBalance: parseNumeric(refund.new_balance, "new_balance"),
+          result: {
+            reservedAmount: claimedReservedAmount,
+            actualCost: normalizedActualCost,
+            reservationTransactionId,
+            settlementTransactionIds: [refund.id],
+            adjustmentType: "refund" as const,
+          },
+        };
+      }
+
+      const overage = -difference;
+      const overageMetadata = JSON.stringify({
+        ...baseMetadata,
+        type: "reconciliation_overage",
+      });
+      const overageRows = await sqlRows<{
+        id: string | null;
+        debited: boolean | string | number | null;
+        new_balance: string | number | null;
+      }>(
+        tx,
+        sql`
+          WITH org AS (
+            SELECT id, credit_balance::numeric AS current_balance
+            FROM organizations
+            WHERE id = ${organizationId}
+            FOR UPDATE
+          ),
+          updated AS (
+            UPDATE organizations AS o
+            SET credit_balance = org.current_balance - ${String(overage)}::numeric,
+                updated_at = NOW()
+            FROM org
+            WHERE o.id = org.id
+              AND org.current_balance >= ${String(overage)}::numeric
+            RETURNING o.credit_balance AS new_balance
+          ),
+          inserted AS (
+            INSERT INTO credit_transactions (
+              organization_id,
+              amount,
+              type,
+              description,
+              metadata,
+              stripe_payment_intent_id,
+              created_at
+            )
+            SELECT
+              org.id,
+              ${String(-overage)}::numeric,
+              'debit',
+              ${`${description} (overage)`},
+              ${overageMetadata}::jsonb,
+              ${`recon:${reservationTransactionId}:overage`},
+              NOW()
+            FROM org
+            WHERE EXISTS (SELECT 1 FROM updated)
+            ON CONFLICT (stripe_payment_intent_id) DO NOTHING
+            RETURNING id
+          )
+          SELECT
+            EXISTS(SELECT 1 FROM updated) AS debited,
+            (SELECT id FROM inserted) AS id,
+            (SELECT new_balance FROM updated) AS new_balance
+        `,
+      );
+      const overageRow = overageRows[0];
+      if (!isPgTrue(overageRow?.debited)) {
+        return {
+          kind: "handled" as const,
+          claimed: true,
+          result: {
+            reservedAmount: claimedReservedAmount,
+            actualCost: normalizedActualCost,
+            reservationTransactionId,
+            settlementTransactionIds: [],
+            adjustmentType: "uncollected_overage" as const,
+          },
+        };
+      }
+      if (!overageRow?.id) {
+        throw new Error("[CreditsService] Reservation overage settlement did not insert a row");
+      }
+      return {
+        kind: "handled" as const,
+        claimed: true,
+        newBalance: parseNumeric(overageRow.new_balance, "new_balance"),
+        balanceDecreaseMetadata: {
+          ...baseMetadata,
+          type: "reconciliation_overage",
+        },
+        result: {
+          reservedAmount: claimedReservedAmount,
+          actualCost: normalizedActualCost,
+          reservationTransactionId,
+          settlementTransactionIds: [overageRow.id],
+          adjustmentType: "overage" as const,
+        },
+      };
+    });
+
+    if (result.kind !== "handled" || !result.claimed) {
+      return result;
+    }
+
+    await CacheInvalidation.onCreditMutation(organizationId).catch((error) => {
+      logger.error("[CreditsService] Failed to invalidate credit mutation cache:", error);
+    });
+    invalidateOrganizationCache(organizationId).catch((error) => {
+      logger.error("[CreditsService] Failed to invalidate org cache:", error);
+    });
+    if (result.balanceDecreaseMetadata && result.newBalance !== undefined) {
+      this.notifyBalanceDecrease(organizationId, result.newBalance, result.balanceDecreaseMetadata);
+    }
+    return result;
+  }
+
+  async markReservationSettled(params: {
+    organizationId: string;
+    reservationTransactionId: string | null | undefined;
+  }): Promise<boolean> {
+    const { organizationId, reservationTransactionId } = params;
+    if (!reservationTransactionId) {
+      return false;
+    }
+
+    const rows = await sqlRows<{ id: string }>(
+      dbWrite,
+      sql`
+        UPDATE credit_transactions
+        SET settled_at = NOW()
+        WHERE id = ${reservationTransactionId}
+          AND organization_id = ${organizationId}
+          AND type = 'debit'
+          AND settled_at IS NULL
+          AND (
+            (
+              metadata->>'type' = 'reservation'
+              AND metadata->>'settlement_marker' = ${RESERVATION_SETTLEMENT_MARKER}
+            )
+            OR (
+              metadata->>'type' = 'app_chat_reservation'
+              AND metadata->>'settlement_marker' = ${APP_CHAT_RESERVATION_SETTLEMENT_MARKER}
+            )
+          )
+        RETURNING id
+      `,
+    );
+    if (rows.length === 0) {
+      return false;
+    }
+
+    await CacheInvalidation.onCreditMutation(organizationId).catch((error) => {
+      logger.error("[CreditsService] Failed to invalidate credit mutation cache:", error);
+    });
+    invalidateOrganizationCache(organizationId).catch((error) => {
+      logger.error("[CreditsService] Failed to invalidate org cache:", error);
+    });
+    return true;
+  }
+
   /**
    * Reconcile credits after a request completes.
    * Adjusts credits based on actual vs reserved cost.
@@ -1044,15 +1469,62 @@ export class CreditsService {
   }): Promise<CreditReconciliationResult> {
     const { organizationId, reservedAmount, actualCost, description, metadata } = params;
     const difference = reservedAmount - actualCost;
+    const reservationTxId =
+      typeof metadata?.reservation_transaction_id === "string"
+        ? metadata.reservation_transaction_id
+        : null;
+
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY_MS = 100;
+
+    if (reservationTxId) {
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          const reservationResult = await this.reconcileReservationTransaction({
+            organizationId,
+            reservationTransactionId: reservationTxId,
+            actualCost,
+            description,
+            metadata,
+          });
+          if (reservationResult.kind === "handled") {
+            return reservationResult.result;
+          }
+          break;
+        } catch (error) {
+          if (attempt === MAX_RETRIES) {
+            logger.error("[Credits] Reservation reconciliation failed after retries", {
+              organizationId,
+              reserved: reservedAmount,
+              actual: actualCost,
+              reservationTransactionId: reservationTxId,
+              difference,
+              error: error instanceof Error ? error.message : "Unknown error",
+            });
+            return {
+              reservedAmount,
+              actualCost,
+              reservationTransactionId: reservationTxId,
+              settlementTransactionIds: [],
+              adjustmentType: difference < 0 ? "uncollected_overage" : "none",
+            };
+          }
+          logger.warn("[Credits] Reservation reconciliation retry", {
+            attempt,
+            organizationId,
+            reservationTransactionId: reservationTxId,
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
+          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * attempt));
+        }
+      }
+    }
 
     if (Math.abs(difference) < EPSILON) {
       return {
         reservedAmount,
         actualCost,
-        reservationTransactionId:
-          typeof metadata?.reservation_transaction_id === "string"
-            ? metadata.reservation_transaction_id
-            : null,
+        reservationTransactionId: reservationTxId,
         settlementTransactionIds: [],
         adjustmentType: "none",
       };
@@ -1070,15 +1542,8 @@ export class CreditsService {
     // (platform loss) or a second overage charge (consumer double-charge).
     // Without a reservation id there is nothing stable to key on, so we keep the
     // prior non-idempotent behavior. (#10846 finding 2)
-    const reservationTxId =
-      typeof metadata?.reservation_transaction_id === "string"
-        ? metadata.reservation_transaction_id
-        : null;
     const reconKey = (phase: "refund" | "overage"): string | undefined =>
       reservationTxId ? `recon:${reservationTxId}:${phase}` : undefined;
-
-    const MAX_RETRIES = 3;
-    const RETRY_DELAY_MS = 100;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
@@ -1194,6 +1659,127 @@ export class CreditsService {
     };
   }
 
+  async sweepStaleReservations(opts?: {
+    graceMs?: number;
+    batchSize?: number;
+    maxBatches?: number;
+  }): Promise<ReservationSweepStats> {
+    const graceMs = opts?.graceMs ?? 20 * 60 * 1000;
+    const batchSize = opts?.batchSize ?? 200;
+    const maxBatches = opts?.maxBatches ?? 50;
+    const stats: ReservationSweepStats = {
+      scanned: 0,
+      settled: 0,
+      skipped: 0,
+      refunds: 0,
+      overages: 0,
+      noops: 0,
+      uncollectedOverages: 0,
+      batches: 0,
+      capHit: false,
+    };
+
+    for (let batch = 0; batch < maxBatches; batch++) {
+      const rows = await sqlRows<{
+        id: string;
+        organization_id: string;
+        amount: string | number;
+        description: string | null;
+        metadata: Record<string, unknown> | string | null;
+      }>(
+        dbWrite,
+        sql`
+          SELECT id, organization_id, amount, description, metadata
+          FROM credit_transactions
+          WHERE type = 'debit'
+            AND (
+              (
+                metadata->>'type' = 'reservation'
+                AND metadata->>'settlement_marker' = ${RESERVATION_SETTLEMENT_MARKER}
+              )
+              OR (
+                metadata->>'type' = 'app_chat_reservation'
+                AND metadata->>'settlement_marker' = ${APP_CHAT_RESERVATION_SETTLEMENT_MARKER}
+              )
+            )
+            AND settled_at IS NULL
+            AND created_at < NOW() - (${String(graceMs)} || ' milliseconds')::interval
+          ORDER BY created_at ASC
+          LIMIT ${batchSize}
+        `,
+      );
+      if (rows.length === 0) break;
+      stats.batches++;
+      stats.scanned += rows.length;
+
+      for (const row of rows) {
+        const reservedAmount = Math.abs(parseNumeric(row.amount, "reservation_amount"));
+        const reservationMetadata = parseMetadata(row.metadata);
+        const actualCost =
+          metadataNumber(reservationMetadata.estimated_cost) ??
+          metadataNumber(reservationMetadata.estimatedCost) ??
+          reservedAmount;
+        const description = (row.description ?? "Credit reservation").replace(
+          /\s+\(reserved\)$/,
+          "",
+        );
+        try {
+          const settlement = await this.reconcileReservationTransaction({
+            organizationId: row.organization_id,
+            reservationTransactionId: row.id,
+            actualCost,
+            description,
+            metadata: {
+              ...reservationMetadata,
+              settlement_source: "stale_reservation_sweep",
+            },
+          });
+          if (settlement.kind !== "handled" || !settlement.claimed) {
+            stats.skipped++;
+            continue;
+          }
+          stats.settled++;
+          switch (settlement.result.adjustmentType) {
+            case "refund":
+              stats.refunds++;
+              break;
+            case "overage":
+              stats.overages++;
+              break;
+            case "uncollected_overage":
+              stats.uncollectedOverages++;
+              break;
+            case "none":
+              stats.noops++;
+              break;
+          }
+        } catch (error) {
+          stats.skipped++;
+          logger.error("[Credits] Stale reservation sweep failed for row", {
+            reservationTransactionId: row.id,
+            organizationId: row.organization_id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      if (rows.length < batchSize) break;
+      if (batch === maxBatches - 1) stats.capHit = true;
+    }
+
+    if (stats.capHit) {
+      logger.warn("[Credits] Stale reservation sweep hit its batch ceiling", {
+        maxBatches,
+        batchSize,
+        scanned: stats.scanned,
+      });
+    }
+    if (stats.settled > 0 || stats.skipped > 0) {
+      logger.warn("[Credits] Swept stale credit reservations", stats);
+    }
+    return stats;
+  }
+
   // ============================================================================
   // Reserve Credits (High-level API)
   // ============================================================================
@@ -1220,9 +1806,11 @@ export class CreditsService {
     }
 
     let reservedAmount: number;
+    let estimatedCost: number;
     let model: string | undefined;
 
     if (params.amount !== undefined) {
+      estimatedCost = params.amount;
       reservedAmount = params.amount;
     } else if (params.model) {
       model = params.model;
@@ -1230,7 +1818,7 @@ export class CreditsService {
       const estimatedInputTokens = params.estimatedInputTokens ?? 0;
       const estimatedOutputTokens = params.estimatedOutputTokens ?? DEFAULT_OUTPUT_TOKENS;
 
-      const { totalCost: estimatedCost } = await calculateCost(
+      const { totalCost } = await calculateCost(
         params.model,
         provider,
         estimatedInputTokens,
@@ -1238,6 +1826,7 @@ export class CreditsService {
         params.billingSource,
       );
 
+      estimatedCost = totalCost;
       reservedAmount = Math.max(estimatedCost * COST_BUFFER, MIN_RESERVATION);
     } else {
       throw new Error("reserve() requires either `amount` or `model`");
@@ -1250,6 +1839,9 @@ export class CreditsService {
       metadata: {
         user_id: userId,
         type: "reservation",
+        settlement_marker: RESERVATION_SETTLEMENT_MARKER,
+        estimated_cost: estimatedCost,
+        reserved_amount: reservedAmount,
         ...(model && { model }),
       },
     });

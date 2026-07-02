@@ -266,6 +266,12 @@ export interface RerunFromEventInput {
   instruction?: string;
   planRevisionId?: string;
   stopActive?: boolean;
+  /**
+   * Rerun always preserves history; destructive rerun is intentionally
+   * unsupported. `boolean` (not the literal `true`) is deliberate: JSON callers
+   * can send `false`, and the boundary rejects it with a clear
+   * RecoveryConflictError rather than silently ignoring the request.
+   */
   preserveHistory?: boolean;
   agent?: SpawnAgentForTaskOptions;
 }
@@ -601,6 +607,11 @@ export class OrchestratorTaskService extends Service {
   protected override readonly runtime: RuntimeLike;
   private readonly store: OrchestratorTaskStore;
   private readonly sessionTaskIndex = new Map<string, string>();
+  // Session ids whose event-recording has already logged a failure. A
+  // degraded store (e.g. #11641's pglite lookup) would otherwise re-warn on
+  // EVERY session event (`ready`, `tool_running`, ...) forever — one line per
+  // event, per session. We warn once per session and stay silent after.
+  private readonly recordFailureWarned = new Set<string>();
   // Tasks with an auto-goal-verify pass in flight. ACP can emit `task_complete`
   // from two sites for one turn; without this guard both runs read the same
   // attempt counter across the model `await` and double-send a correction.
@@ -755,11 +766,18 @@ export class OrchestratorTaskService extends Service {
       await this.applySessionEvent(taskId, sessionId, event, data);
       this.emitChange(taskId);
     } catch (err) {
-      this.log("warn", "failed to record session event", {
-        sessionId,
-        event,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      // Warn once per session, not once per event. A persistently degraded
+      // store would fire this on every `ready`/`tool_running`/... otherwise,
+      // flooding the log for the life of the session (#11641).
+      if (!this.recordFailureWarned.has(sessionId)) {
+        this.recordFailureWarned.add(sessionId);
+        this.log("warn", "failed to record session event", {
+          sessionId,
+          event,
+          error: err instanceof Error ? err.message : String(err),
+          note: "further event-record failures for this session are suppressed",
+        });
+      }
     }
   }
 
@@ -1609,6 +1627,9 @@ export class OrchestratorTaskService extends Service {
     if (!doc) return null;
     await this.store.updateTask(taskId, {
       archived: false,
+      // A paused-then-archived task must not reopen frozen: paused:true would
+      // keep advanceTaskStatus inert with no archive surface left to clear it.
+      paused: false,
       status: doc.sessions.length > 0 ? "active" : "open",
       archivedAt: null,
       closedAt: null,
@@ -1620,8 +1641,10 @@ export class OrchestratorTaskService extends Service {
     const doc = await this.store.getTask(taskId);
     if (!doc) return false;
     await this.stopActiveSessions(doc);
-    for (const session of doc.sessions)
+    for (const session of doc.sessions) {
       this.sessionTaskIndex.delete(session.sessionId);
+      this.recordFailureWarned.delete(session.sessionId);
+    }
     return this.store.deleteTask(taskId);
   }
 
@@ -1784,6 +1807,18 @@ export class OrchestratorTaskService extends Service {
             completionEnvelope: {
               diffSummary: parse.envelope.diffSummary,
               filesChanged: parse.envelope.filesChanged,
+              ...(parse.envelope.realWorkdir
+                ? { realWorkdir: parse.envelope.realWorkdir }
+                : {}),
+              ...(parse.envelope.verifiedChangedFiles
+                ? { verifiedChangedFiles: parse.envelope.verifiedChangedFiles }
+                : {}),
+              ...(typeof parse.envelope.artifactsVerified === "boolean"
+                ? { artifactsVerified: parse.envelope.artifactsVerified }
+                : {}),
+              ...(parse.envelope.missingArtifacts
+                ? { missingArtifacts: parse.envelope.missingArtifacts }
+                : {}),
               testResults: parse.envelope.testResults,
               acceptanceCriteriaStatus: parse.envelope.acceptanceCriteriaStatus,
               residualRisks: parse.envelope.residualRisks,
@@ -1968,13 +2003,20 @@ export class OrchestratorTaskService extends Service {
     // can replay the gap. Re-read the doc so an upstream metadata write in this
     // same pass (e.g. the valid-envelope stamp) is preserved.
     const doc = await this.store.getTask(taskId);
+    if (!doc) {
+      // The task was deleted concurrently (e.g. the user cancelled during
+      // auto-verify). Bail: there is nothing to re-engage, and writing partial
+      // metadata back with `...doc?.task.metadata` spreading to `{}` would
+      // clobber the completion envelope this very re-read exists to preserve.
+      return;
+    }
     const attemptReflections = [
-      ...readAttemptReflections(doc?.task.metadata),
+      ...readAttemptReflections(doc.task.metadata),
       { attempt: attempt + 1, missing, summary },
     ].slice(-MAX_ATTEMPT_REFLECTIONS);
     await this.store.updateTask(taskId, {
       metadata: {
-        ...doc?.task.metadata,
+        ...doc.task.metadata,
         autoVerifyAttempts: attempt + 1,
         attemptReflections,
       },
@@ -2703,10 +2745,39 @@ export class OrchestratorTaskService extends Service {
       createdAt: ts,
       updatedAt: ts,
     };
-    await this.store.addSession(session);
+    // The ACP spawn above already SUCCEEDED — the session is live and doing
+    // work. Everything from here on is durable book-keeping. If the store is
+    // degraded (e.g. #11641's pglite lookup failure) a throw here would bubble
+    // a 500 to `POST /tasks/{id}/agents` even though the spawn worked, making
+    // API consumers think it failed and possibly double-spawn. So record the
+    // session best-effort and, on failure, still return a coherent detail that
+    // reflects the live session instead of throwing.
+    // Seed the in-memory index unconditionally so `resolveTaskId` resolves this
+    // session's events even if the durable write below degrades.
     this.sessionTaskIndex.set(result.sessionId, taskId);
-    await this.advanceTaskStatus(taskId, "active");
-    return this.getTask(taskId);
+    try {
+      await this.store.addSession(session);
+      await this.advanceTaskStatus(taskId, "active");
+      return this.getTask(taskId);
+    } catch (err) {
+      this.log("warn", "spawn succeeded but recording the session failed", {
+        taskId,
+        sessionId: result.sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // Return a detail that includes the just-spawned session so the caller
+      // sees a 2xx with the real session info. Prefer a fresh read (the
+      // addSession may have partially landed); fall back to the pre-spawn doc
+      // with the new session appended so the response is never a false 404.
+      const refreshed = await this.getTask(taskId).catch(() => null);
+      if (refreshed?.sessions?.some((s) => s.sessionId === result.sessionId)) {
+        return refreshed;
+      }
+      return toTaskThreadDetail({
+        ...doc,
+        sessions: [...doc.sessions, session],
+      });
+    }
   }
 
   /**

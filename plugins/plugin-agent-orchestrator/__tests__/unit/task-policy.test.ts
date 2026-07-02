@@ -1,14 +1,6 @@
 import type { IAgentRuntime, Memory } from "@elizaos/core";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { requireTaskAgentAccess } from "../../src/services/task-policy.js";
-
-vi.mock("@elizaos/core", () => ({
-  checkSenderRole: vi.fn(async () => ({
-    role: "ADMIN",
-    isAdmin: true,
-    isOwner: false,
-  })),
-}));
 
 /**
  * A partial TASK_AGENT_ROLE_POLICY override (e.g. only tightening slack) must
@@ -37,38 +29,37 @@ const discordMessage = {
   content: { source: "discord" },
 } as unknown as Memory;
 
+// resolveSenderRole dynamically imports @elizaos/core on first use; that cold
+// import transforms the whole core package under vitest and can exceed the 5s
+// default timeout (it crossed it when core gained the generated pricing/context
+// tables). The timeout covers the one-time import, not the logic under test.
+const COLD_CORE_IMPORT_TIMEOUT_MS = 30_000;
+
 describe("requireTaskAgentAccess — policy merge", () => {
-  const previousSkipLocalPluginRoles =
-    process.env.ELIZA_SKIP_LOCAL_PLUGIN_ROLES;
+  it(
+    "keeps the built-in Discord ADMIN gate when only another connector is overridden",
+    async () => {
+      const result = await requireTaskAgentAccess(
+        runtimeWith({ connectors: { slack: "ADMIN" } }),
+        discordMessage,
+        "create",
+      );
+      // Discord still requires ADMIN despite the slack-only override.
+      expect(result.requiredRole).toBe("ADMIN");
+    },
+    COLD_CORE_IMPORT_TIMEOUT_MS,
+  );
 
-  beforeAll(() => {
-    process.env.ELIZA_SKIP_LOCAL_PLUGIN_ROLES = "1";
-  });
-
-  afterAll(() => {
-    if (previousSkipLocalPluginRoles === undefined) {
-      delete process.env.ELIZA_SKIP_LOCAL_PLUGIN_ROLES;
-    } else {
-      process.env.ELIZA_SKIP_LOCAL_PLUGIN_ROLES = previousSkipLocalPluginRoles;
-    }
-  });
-
-  it("keeps the built-in Discord ADMIN gate when only another connector is overridden", async () => {
-    const result = await requireTaskAgentAccess(
-      runtimeWith({ connectors: { slack: "ADMIN" } }),
-      discordMessage,
-      "create",
-    );
-    // Discord still requires ADMIN despite the slack-only override.
-    expect(result.requiredRole).toBe("ADMIN");
-  });
-
-  it("still requires Discord ADMIN under the default policy (no override)", async () => {
-    const result = await requireTaskAgentAccess(
-      runtimeWith(undefined),
-      discordMessage,
-      "interact",
-    );
-    expect(result.requiredRole).toBe("ADMIN");
-  });
+  it(
+    "still requires Discord ADMIN under the default policy (no override)",
+    async () => {
+      const result = await requireTaskAgentAccess(
+        runtimeWith(undefined),
+        discordMessage,
+        "interact",
+      );
+      expect(result.requiredRole).toBe("ADMIN");
+    },
+    COLD_CORE_IMPORT_TIMEOUT_MS,
+  );
 });

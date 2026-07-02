@@ -32,7 +32,7 @@ export function HomeLauncherSurface({
   initialPage = "home",
   className,
 }: HomeLauncherSurfaceProps): React.JSX.Element {
-  const { page, launcherPage, launcherEditing } = useShellSurface();
+  const { page, launcherPage } = useShellSurface();
 
   // The mounting route decides which half shows first. Re-runs only when the
   // route actually changes `initialPage`, so an in-session swipe is never
@@ -41,35 +41,26 @@ export function HomeLauncherSurface({
     setShellSurfacePage(initialPage);
   }, [initialPage]);
 
-  // A committed flick must swallow the click that the browser synthesizes from
-  // the same press, so the flick doesn't also tap-launch the tile underneath.
-  const suppressClickRef = React.useRef(false);
   // ONE pager owns the touch gesture per surface — the fix for the "two swipe
-  // actions stacked on top of each other" the user reported. The rail owns the
-  // gesture on the HOME half (swipe left → launcher) and while EDITING (the
-  // inner launcher pager is disabled in edit mode, so the rail can safely own
-  // the back gesture without competing). On the launcher itself the inner
-  // Launcher owns everything — inter-page paging AND swipe-right-back-to-home
-  // (its `onEdgeSwipeRight` → goHome) — so the rail stands its gesture down and
-  // the two pagers never track the same finger.
-  const railGestureEnabled = page === "home" || launcherEditing;
+  // actions stacked on top of each other". The rail owns the gesture on the HOME
+  // half (swipe left → launcher); on the launcher the read-only Launcher owns the
+  // swipe-right-back-to-home (its `onEdgeSwipeRight` → goHome), so the rail stands
+  // its gesture down there and the two never track the same finger.
+  const railGestureEnabled = page === "home";
   // The desktop `< >` rail buttons stay available wherever a rail move is
-  // meaningful (home, the launcher's first page, editing). They route through
-  // goPrev/goNext, which work regardless of the gesture gate, so desktop keeps a
-  // click-to-home affordance at launcher page 0 even though the rail no longer
-  // tracks touch there. Deeper launcher pages hide them (the inner pager owns
-  // those), so two arrow sets never stack on one edge. Hidden on touch anyway.
-  const railButtonsEnabled =
-    page === "home" || launcherPage === 0 || launcherEditing;
+  // meaningful. They route through goPrev/goNext, which work regardless of the
+  // gesture gate, so desktop keeps a click-to-home affordance on the launcher
+  // (single page → launcherPage is 0) even though the rail no longer tracks touch
+  // there. Hidden on touch anyway.
+  const railButtonsEnabled = page === "home" || launcherPage === 0;
   const pager = useHorizontalPager<HTMLElement>({
     page: page === "launcher" ? 1 : 0,
     pageCount: 2,
     enabled: railGestureEnabled,
+    // The hook arms + swallows the committed-swipe click itself (handlers.
+    // onClickCapture, attached on both halves below), so this stays a plain
+    // navigation intent — no local click-suppression bookkeeping.
     onPageChange: (nextPage) => {
-      suppressClickRef.current = true;
-      window.setTimeout(() => {
-        suppressClickRef.current = false;
-      }, 0);
       if (nextPage === 0) {
         goHome();
       } else {
@@ -77,15 +68,6 @@ export function HomeLauncherSurface({
       }
     },
   });
-  const suppressCommittedSwipeClick = React.useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      if (!suppressClickRef.current) return;
-      suppressClickRef.current = false;
-      event.preventDefault();
-      event.stopPropagation();
-    },
-    [],
-  );
   // No page indicator: the dots collided with the floating chat composer, and
   // the swipe gesture (left → launcher, right → home / back a page) is the
   // sole, sufficient navigation. Paging across launcher pages stays a swipe.
@@ -103,14 +85,25 @@ export function HomeLauncherSurface({
         className,
       )}
     >
+      {/* AX-tree mirror of data-page: the native gesture e2e suites (XCUITest)
+          observe web state only through the accessibility tree, where data
+          attributes never surface. Lives OUTSIDE the two aria-hidden/inert
+          halves so it is always exposed. Not aria-live — never self-announces. */}
+      <span className="sr-only" data-testid="home-launcher-page-probe">
+        {`home-launcher-page:${page}`}
+      </span>
       <div
         ref={pager.railRef}
         data-testid="home-launcher-rail"
-        className="absolute inset-0 flex w-[200%] motion-reduce:transition-none"
+        className="absolute inset-0 flex w-[200%]"
       >
         <div
           data-testid="home-launcher-home-page"
           aria-hidden={page !== "home"}
+          // `inert` (not just aria-hidden) so the offscreen half is also removed
+          // from the tab order — a keyboard user can't focus a control hidden
+          // behind the visible page. Matches the Launcher's inert page pattern.
+          inert={page !== "home" || undefined}
           // `touch-pan-y`: reserve vertical panning for the browser (the home
           // widget list scrolls) but claim every horizontal gesture for the
           // rail flick. Without it a touch device hands a horizontal drag to the
@@ -122,13 +115,14 @@ export function HomeLauncherSurface({
           onPointerUp={pager.handlers.onPointerUp}
           onPointerCancel={pager.handlers.onPointerCancel}
           onLostPointerCapture={pager.handlers.onLostPointerCapture}
-          onClickCapture={suppressCommittedSwipeClick}
+          onClickCapture={pager.handlers.onClickCapture}
         >
           {home}
         </div>
         <div
           data-testid="home-launcher-launcher-page"
           aria-hidden={page !== "launcher"}
+          inert={page !== "launcher" || undefined}
           // Same as the home half: vertical scroll (the tile grid) stays with
           // the browser, horizontal flicks (right → back home) are ours.
           className="relative h-full w-1/2 shrink-0 touch-pan-y"
@@ -137,7 +131,7 @@ export function HomeLauncherSurface({
           onPointerUp={pager.handlers.onPointerUp}
           onPointerCancel={pager.handlers.onPointerCancel}
           onLostPointerCapture={pager.handlers.onLostPointerCapture}
-          onClickCapture={suppressCommittedSwipeClick}
+          onClickCapture={pager.handlers.onClickCapture}
         >
           {React.cloneElement(launcher, {
             onNavigateHomeFromEdge: goHome,

@@ -61,6 +61,10 @@ const webkitLaneEnabled = process.env.PLAYWRIGHT_WEBKIT === "1";
 // The all-views aesthetic audit (#8796) walks ~50 views × 2 viewports; it is a
 // dedicated tool run via `audit:app`, not part of the default e2e smoke.
 const AUDIT_APP_SPEC = /all-views-aesthetic-audit\.spec\.ts/;
+// The cloud-surface aesthetic audit (#10725/#11342) walks every registered
+// cloud route (packages/ui/src/cloud/register-all.ts) at desktop + mobile; a
+// dedicated tool run via `audit:cloud`, not part of the default e2e smoke.
+const AUDIT_CLOUD_SPEC = /cloud-surfaces-aesthetic-audit\.spec\.ts/;
 // The WebKit lane (#10104/#10722): the assertion-grade dashboard specs, the
 // core shell smoke, and the input-modality spec on a real Desktop Safari
 // engine. WebKit-only behavior differences are real (see
@@ -108,8 +112,9 @@ export default defineConfig({
       name: "chromium",
       // The voice button-press spec needs the fake-audio launch flags; it runs
       // in the dedicated `chromium-voice-mic` project below, not here. The
-      // all-views aesthetic audit runs only via the `audit:app` project.
-      testIgnore: [VOICE_MIC_SPEC, AUDIT_APP_SPEC],
+      // all-views aesthetic audit runs only via the `audit:app` project; the
+      // cloud-surface audit only via `audit:cloud`.
+      testIgnore: [VOICE_MIC_SPEC, AUDIT_APP_SPEC, AUDIT_CLOUD_SPEC],
       use: {
         ...devices["Desktop Chrome"],
         ...(chromiumExecutablePath
@@ -157,7 +162,7 @@ export default defineConfig({
       // so each surface is exercised at the same WebView viewport that ships on
       // Capacitor iOS/Android.
       testMatch:
-        /(apps-personal-assistant-decomposed-interactions|chat-clear-swipe|chat-send-voice-newchat-fuzz|input-modality)\.spec\.ts/,
+        /(apps-personal-assistant-decomposed-interactions|chat-clear-swipe|chat-send-voice-newchat-fuzz|gesture-matrix|input-modality)\.spec\.ts/,
       use: { ...devices["Pixel 7"] },
     },
     // WebKit cross-engine lane (opt-in). Only added when PLAYWRIGHT_WEBKIT=1 so a
@@ -167,7 +172,20 @@ export default defineConfig({
           {
             name: "webkit",
             testMatch: WEBKIT_POINTER_FOCUS_SPEC,
-            use: { ...devices["Desktop Safari"] },
+            use: {
+              ...devices["Desktop Safari"],
+              // Same parity as the desktop-webkit lane below: the PROD renderer
+              // registers /sw.js (skipWaiting + clients.claim), and WebKit —
+              // unlike Chromium — does NOT bypass a controlling service worker
+              // when page.route interception is active. Once the SW claims the
+              // page, every /api/* fetch silently goes AROUND the per-spec
+              // route fixtures to the real stub server (verified via an
+              // in-page probe: a route-fulfilled /api/conversations returned
+              // the stub server's conversations instead of the fixture's), so
+              // e.g. the conversation-persistence reload rehydrated a foreign
+              // thread and timed out (#11112 finding 2).
+              serviceWorkers: "block" as const,
+            },
           },
         ]
       : []),
@@ -195,6 +213,20 @@ export default defineConfig({
       // (`--project=audit-app`). Walks every view at desktop + mobile internally.
       name: "audit-app",
       testMatch: AUDIT_APP_SPEC,
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(chromiumExecutablePath
+          ? { launchOptions: { executablePath: chromiumExecutablePath } }
+          : {}),
+      },
+    },
+    {
+      // Cloud-surface aesthetic audit (#10725/#11342) — run with `audit:cloud`
+      // (`--project=audit-cloud`). Walks every registered cloud route at
+      // desktop + mobile internally. Requires a renderer built with
+      // VITE_PLAYWRIGHT_TEST_AUTH=true (the spec self-skips otherwise).
+      name: "audit-cloud",
+      testMatch: AUDIT_CLOUD_SPEC,
       use: {
         ...devices["Desktop Chrome"],
         ...(chromiumExecutablePath

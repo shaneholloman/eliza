@@ -7,13 +7,6 @@ const requireAuthOrApiKeyWithOrg = mock(async () => ({
 const findByIdAndOrg = mock();
 const generateToken = mock(async () => "pair-token");
 const enqueueAgentProvisionOnce = mock();
-type CreditGateResult = { allowed: boolean; balance: number; error?: string };
-const checkAgentCreditGate = mock(
-  async (): Promise<CreditGateResult> => ({
-    allowed: true,
-    balance: 1,
-  }),
-);
 const checkProvisioningWorkerHealth = mock(async () => ({ ok: true }));
 let publicBaseDomain: string | undefined = "elizacloud.ai";
 
@@ -65,16 +58,21 @@ mock.module("@/lib/services/provisioning-jobs", () => ({
   },
 }));
 
-mock.module("@/lib/services/agent-billing-gate", () => ({
-  checkAgentCreditGate,
-}));
-
 mock.module("@/lib/services/provisioning-worker-health", () => ({
   checkProvisioningWorkerHealth,
   provisioningWorkerFailureBody: () => ({
     success: false,
     error: "worker unavailable",
   }),
+}));
+
+const checkAgentCreditGate = mock(async () => ({
+  allowed: true,
+  balance: 10,
+  error: undefined as string | undefined,
+}));
+mock.module("@/lib/services/agent-billing-gate", () => ({
+  checkAgentCreditGate,
 }));
 
 mock.module("@/lib/services/proxy/cors", () => ({
@@ -125,12 +123,13 @@ describe("eliza agent pairing token route", () => {
     findByIdAndOrg.mockReset();
     generateToken.mockClear();
     enqueueAgentProvisionOnce.mockClear();
+    checkProvisioningWorkerHealth.mockClear();
     checkAgentCreditGate.mockClear();
     checkAgentCreditGate.mockResolvedValue({
       allowed: true,
-      balance: 1,
+      balance: 10,
+      error: undefined,
     });
-    checkProvisioningWorkerHealth.mockClear();
     publicBaseDomain = "elizacloud.ai";
   });
 
@@ -240,7 +239,26 @@ describe("eliza agent pairing token route", () => {
     expect(generateToken).not.toHaveBeenCalled();
   });
 
-  test("blocks auto-resume with canonical 402 when credits are insufficient", async () => {
+  test("#11224: pairing a STOPPED shared-runtime agent does not credit-gate or provision", async () => {
+    findByIdAndOrg.mockResolvedValue({
+      ...runningSandbox("shared"),
+      status: "stopped",
+    });
+
+    const response = await postPairingToken();
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      success: false,
+      code: "AGENT_WEB_UI_NOT_READY",
+    });
+    expect(checkProvisioningWorkerHealth).not.toHaveBeenCalled();
+    expect(checkAgentCreditGate).not.toHaveBeenCalled();
+    expect(enqueueAgentProvisionOnce).not.toHaveBeenCalled();
+    expect(generateToken).not.toHaveBeenCalled();
+  });
+
+  test("#11224: pairing a STOPPED dedicated agent for a suspended org is blocked 402 — no free re-provision", async () => {
     findByIdAndOrg.mockResolvedValue({
       ...runningSandbox("dedicated-lazy"),
       status: "stopped",
@@ -254,17 +272,31 @@ describe("eliza agent pairing token route", () => {
     const response = await postPairingToken();
 
     expect(response.status).toBe(402);
-    const body = (await response.json()) as Record<string, unknown>;
-    expect(body).toEqual({
-      success: false,
+    expect(await response.json()).toMatchObject({
       code: "insufficient_credits",
-      error: "Insufficient credits",
-      requiredBalance: 0.1,
-      currentBalance: 0,
     });
-    expect(checkProvisioningWorkerHealth).toHaveBeenCalledTimes(1);
-    expect(checkAgentCreditGate).toHaveBeenCalledWith("org-1");
+    // The paid re-provision must NOT be enqueued for a suspended org.
     expect(enqueueAgentProvisionOnce).not.toHaveBeenCalled();
-    expect(generateToken).not.toHaveBeenCalled();
+  });
+
+  test("#11224: pairing a STOPPED dedicated agent for a FUNDED org still re-provisions (no regression)", async () => {
+    findByIdAndOrg.mockResolvedValue({
+      ...runningSandbox("dedicated-lazy"),
+      status: "stopped",
+    });
+    checkAgentCreditGate.mockResolvedValue({
+      allowed: true,
+      balance: 10,
+      error: undefined,
+    });
+    enqueueAgentProvisionOnce.mockResolvedValue({
+      job: { id: "job-1" },
+      created: true,
+    });
+
+    await postPairingToken();
+
+    expect(checkAgentCreditGate).toHaveBeenCalledTimes(1);
+    expect(enqueueAgentProvisionOnce).toHaveBeenCalledTimes(1);
   });
 });

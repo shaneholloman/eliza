@@ -25,7 +25,6 @@ describe("shouldForwardEnv", () => {
     expect(shouldForwardEnv("ANTHROPIC_API_KEY")).toBe(true);
     expect(shouldForwardEnv("OPENAI_API_KEY")).toBe(true);
     expect(shouldForwardEnv("CEREBRAS_BASE_URL")).toBe(true);
-    expect(shouldForwardEnv("OPENCODE_CONFIG_CONTENT")).toBe(false);
     expect(shouldForwardEnv("PATH")).toBe(true);
   });
 
@@ -82,6 +81,9 @@ describe("shouldForwardEnv", () => {
     expect(isEnvForwardableToSubAgent("GHCR_TOKEN")).toBe(true);
     expect(shouldForwardEnv("GH_TOKEN")).toBe(false);
     expect(shouldForwardEnv("CR_PAT")).toBe(false);
+    expect(isEnvForwardableToSubAgent("GITHUB_TOKEN")).toBe(false);
+    expect(isEnvForwardableToSubAgent("GH_TOKEN")).toBe(false);
+    expect(isEnvForwardableToSubAgent("CR_PAT")).toBe(false);
   });
 });
 

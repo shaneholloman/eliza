@@ -67,26 +67,6 @@ const testCrossOrg = test.skipIf(
 );
 
 const createdAppIds: string[] = [];
-const createdCharacterIds: string[] = [];
-
-/**
- * Create a REAL character owned by the test user and return its id. The generic
- * app-update path enforces character ownership (cross-tenant disclosure guard,
- * #10852-class) — so `linked_character_ids` must reference characters that
- * exist AND belong to the caller, not fabricated UUIDs.
- */
-async function createTestCharacter(): Promise<string> {
-  const res = await api.post(
-    "/api/my-agents/characters",
-    { name: uniqueName("Linked Char"), bio: ["e2e linked-character fixture"] },
-    { headers: bearerHeaders() },
-  );
-  expect(res.status).toBe(200);
-  const body = (await res.json()) as { id?: string };
-  expect(body.id).toBeTruthy();
-  createdCharacterIds.push(body.id as string);
-  return body.id as string;
-}
 
 // A syntactically valid UUID that should never resolve to a real app.
 const MISSING_UUID = "00000000-0000-4000-8000-0000000000ff";
@@ -158,6 +138,26 @@ async function getApp(id: string): Promise<AppDto | undefined> {
   const res = await api.get(`/api/v1/apps/${id}`, { headers: bearerHeaders() });
   expect(res.status).toBe(200);
   return ((await res.json()) as GetAppResponse).app;
+}
+
+const createdCharacterIds: string[] = [];
+
+/**
+ * Creates a real character owned by the test user. linked_character_ids on
+ * PUT /api/v1/apps/:id enforces the character ownership guard (#10863), so
+ * link targets must exist and be owned/public — made-up UUIDs 404.
+ */
+async function createTestCharacter(): Promise<string> {
+  const res = await api.post(
+    "/api/my-agents/characters",
+    { name: uniqueName("Linked Character"), bio: ["app-link e2e fixture"] },
+    { headers: bearerHeaders() },
+  );
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { id?: string };
+  expect(body.id).toBeTruthy();
+  createdCharacterIds.push(body.id as string);
+  return body.id as string;
 }
 
 afterAll(async () => {

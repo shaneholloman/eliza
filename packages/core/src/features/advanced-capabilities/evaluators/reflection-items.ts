@@ -39,7 +39,7 @@ import {
 	type ContradictOp,
 	type DecayOp,
 	type ExtractorOp,
-	type ExtractorOutputSchema,
+	type ExtractorOutput,
 	parseExtractorOutputTolerant,
 	type StrengthenOp,
 } from "./factExtractor.schema.ts";
@@ -862,10 +862,7 @@ function canEvaluateMessage(message: Memory): boolean {
 	);
 }
 
-export const factMemoryEvaluator: Evaluator<
-	z.infer<typeof ExtractorOutputSchema>,
-	FactPrepared
-> = {
+export const factMemoryEvaluator: Evaluator<ExtractorOutput, FactPrepared> = {
 	name: "factMemory",
 	description:
 		"Extracts durable/current fact-store ops from recent conversation.",
@@ -904,8 +901,9 @@ ${formatKnownLines(current.slice(0, MAX_KNOWN_PER_KIND), "current")}`;
 	parse(output) {
 		// Tolerant, op-by-op: a single malformed op must not discard the whole
 		// turn's valid fact ops. Drops are logged inside
-		// parseExtractorOutputTolerant because this parse contract has no
-		// runtime/logger. Returns null only when the envelope is not `{ ops: [...] }`.
+		// parseExtractorOutputTolerant — this parse contract has no
+		// runtime/logger, so it could never report them. Returns null only when
+		// the envelope itself isn't `{ ops: [...] }`.
 		return parseExtractorOutputTolerant(output);
 	},
 	processors: [

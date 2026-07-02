@@ -95,6 +95,13 @@ app.post("/", async (c) => {
       return c.json({ success: true, data: sandboxPayload(existing) });
     }
 
+    // Credit gate before provisioning a NEW dedicated agent (#11224): this
+    // creates a custom-image (DEFAULT_DOCKER_IMAGE → dedicated) sandbox and
+    // eagerly enqueues its container, the same paid compute the main
+    // create/resume/wake paths gate. Without it a credit-suspended / zero-balance
+    // org gets a free dedicated container. New orgs clear this via the signup
+    // grant; only genuinely suspended orgs are blocked. (Existing sandboxes
+    // returned above are unaffected — this only fences the first provision.)
     const creditCheck = await checkAgentCreditGate(session.organizationId);
     if (!creditCheck.allowed) {
       return c.json(

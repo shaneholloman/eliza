@@ -1,21 +1,22 @@
 /**
  * App-side session tokens for the edad reference app.
  *
- * Eliza Cloud's app OAuth flow returns a single-use authorization code
- * (`eac_...`) on the redirect, not a durable bearer. That code is redeemed
- * once, server-side, at `GET /api/v1/app-auth/session`, which consumes it and
- * returns the signed-in user's identity. The app then mints its own short-lived
- * session token here, signed with a server secret, and the browser presents it
- * on each call. This token authenticates the user to this app; upstream
- * inference is billed with the app owner's Cloud key + `x-app-id`, never with
- * this token.
+ * Eliza Cloud's app OAuth flow returns a SINGLE-USE authorization code
+ * (`eac_…`) on the redirect, not a durable bearer. That code is redeemed ONCE,
+ * server-side, at `GET /api/v1/app-auth/session` (which consumes it and returns
+ * the signed-in user's identity). To keep the user signed in across requests
+ * without re-redeeming a spent code, the app mints its OWN short-lived session
+ * token here, signed with a server secret, and the browser presents it on each
+ * call. This token authenticates the user TO THIS APP; upstream inference is
+ * billed with the app owner's Cloud key + `x-app-id` (the app-credit-pool
+ * monetization path), never with this token.
  *
  * Format: `<base64url(JSON{uid,exp})>.<base64url(HMAC_SHA256(payload))>`.
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-const DEFAULT_TTL_MS = 12 * 60 * 60 * 1000;
+const DEFAULT_TTL_MS = 12 * 60 * 60 * 1000; // 12h
 
 function b64url(buf: Buffer | string): string {
   return Buffer.from(buf)
@@ -40,6 +41,10 @@ export function mintAppSession(
   return `${payload}.${sign(payload, secret)}`;
 }
 
+/**
+ * Verify a session token and return its userId, or null if it is malformed, has
+ * a bad signature, or is expired. Constant-time signature compare.
+ */
 export function verifyAppSession(
   token: string | null | undefined,
   secret: string,

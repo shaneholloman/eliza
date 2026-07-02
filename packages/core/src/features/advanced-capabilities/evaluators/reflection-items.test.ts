@@ -214,6 +214,7 @@ describe("factExtractor tolerant parsing (#11235)", () => {
 		});
 		expect(parsed).not.toBeNull();
 		expect(parsed?.ops).toHaveLength(1);
+		// The default keeps structured_fields a concrete record for downstream use.
 		expect(parsed?.ops[0]).toMatchObject({
 			op: "add_durable",
 			structured_fields: {},
@@ -221,12 +222,15 @@ describe("factExtractor tolerant parsing (#11235)", () => {
 	});
 
 	it("keeps valid ops when one op is malformed, and warns about the drop", () => {
+		// The evaluator parse contract (`parse?(output): TOutput | null`) has no
+		// runtime/logger, so the drop MUST be logged where it is computed —
+		// otherwise per-op loss is silent in prod (the regression #11241 killed).
 		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
 		try {
 			const parsed = parseExtractorOutputTolerant({
 				ops: [
 					{ op: "add_durable", claim: "likes tea", category: "preference" },
-					{ op: "contradict" },
+					{ op: "contradict" }, // invalid: missing required factId + reason
 					{ op: "strengthen", factId: "fact-123" },
 				],
 			});
@@ -264,6 +268,7 @@ describe("factExtractor tolerant parsing (#11235)", () => {
 	it("returns null only when the envelope itself is not { ops: array }", () => {
 		expect(parseExtractorOutputTolerant({ nope: true })).toBeNull();
 		expect(parseExtractorOutputTolerant(null)).toBeNull();
+		// An empty ops array is a VALID (zero-op) turn, not a parse failure.
 		expect(parseExtractorOutputTolerant({ ops: [] })).toEqual({ ops: [] });
 	});
 });

@@ -1,198 +1,183 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+/**
+ * Regression (#11637): the MCP metered proxy debits the caller upfront, so
+ * EVERY post-debit failure must refund — not only a non-ok HTTP status. Before
+ * the fix an unreachable upstream / unsafe endpoint / down container returned
+ * 502/400/503 while keeping the money = a silent over-charge.
+ *
+ * Drives the real route handler with mocked deps and asserts `refundCredits` is
+ * called on each failure branch and NOT on success. Red on develop tip (only
+ * the non-ok branch refunded); green after the fix.
+ */
+import { beforeEach, expect, mock, test } from "bun:test";
 import { Hono } from "hono";
 
+// mock.module is process-global — spread the real auth module so only
+// requireUserOrApiKeyWithOrg is overridden (mirrors agent-mcp-billing.test.ts).
 const requireUserOrApiKeyWithOrg = mock();
-const getReferrer = mock();
-const reserveAndDeductCredits = mock();
-const refundCredits = mock();
-const getMcpById = mock();
-const recordUsageWithoutDeduction = mock();
-const getEndpointUrl = mock();
-const getContainerById = mock();
-const assertSafeOutboundUrl = mock();
-const safeFetch = mock();
-const loggerWarn = mock();
-const loggerError = mock();
-
+const realAuth = await import("@/lib/auth/workers-hono-auth");
 mock.module("@/lib/auth/workers-hono-auth", () => ({
+  ...realAuth,
   requireUserOrApiKeyWithOrg,
 }));
+
+const assertSafeOutboundUrl = mock();
+mock.module("@/lib/security/outbound-url", () => ({ assertSafeOutboundUrl }));
+
+const safeFetch = mock();
+mock.module("@/lib/security/safe-fetch", () => ({ safeFetch }));
+
 mock.module("@/lib/services/affiliates", () => ({
-  affiliatesService: { getReferrer },
+  affiliatesService: { getReferrer: async () => null },
 }));
+
+const containersGetById = mock();
+mock.module("@/lib/services/containers", () => ({
+  containersService: { getById: containersGetById },
+}));
+
+const reserveAndDeductCredits = mock();
+const refundCredits = mock();
 mock.module("@/lib/services/credits", () => ({
   creditsService: { reserveAndDeductCredits, refundCredits },
 }));
+
+const getById = mock();
 mock.module("@/lib/services/user-mcps", () => ({
   userMcpsService: {
-    getById: getMcpById,
-    getEndpointUrl,
-    recordUsageWithoutDeduction,
+    getById,
+    recordUsageWithoutDeduction: mock(async () => {}),
   },
 }));
-mock.module("@/lib/services/containers", () => ({
-  containersService: { getById: getContainerById },
-}));
-mock.module("@/lib/security/outbound-url", () => ({
-  assertSafeOutboundUrl,
-}));
-mock.module("@/lib/security/safe-fetch", () => ({
-  safeFetch,
-}));
+
 mock.module("@/lib/utils/logger", () => ({
-  logger: { warn: loggerWarn, error: loggerError },
+  logger: { error: mock(), info: mock(), warn: mock(), debug: mock() },
 }));
 
-const { default: mcpProxyRoute } = await import("../mcp/proxy/[mcpId]/route");
-
-const originalFetch = globalThis.fetch;
-
-const user = { id: "user-1", organization_id: "org-user" };
-const mcp = {
-  id: "mcp-1",
-  name: "Test MCP",
-  description: "Test",
-  tools: [],
-  organization_id: "org-mcp",
-  status: "live",
-  is_public: true,
-  pricing_type: "per_request",
-  credits_per_request: "1",
-  x402_price_usd: null,
-  x402_enabled: false,
-  transport_type: "http",
-  endpoint_type: "container",
-  container_id: "container-1",
-  endpoint_path: "/mcp",
-  external_endpoint: null,
-};
-
-function app() {
-  const parent = new Hono();
-  parent.route("/api/mcp/proxy/:mcpId", mcpProxyRoute);
-  return parent;
-}
+const mcpRoute = (await import("../mcp/proxy/[mcpId]/route")).default;
+const app = new Hono();
+app.route("/:mcpId", mcpRoute);
 
 function post(
-  body = JSON.stringify({ method: "tools/call", params: { name: "search" } }),
+  body = JSON.stringify({ method: "tools/call", params: { name: "t" } }),
 ) {
-  return app().request("http://localhost/api/mcp/proxy/mcp-1", {
+  return app.request("/test-mcp", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body,
   });
 }
 
-function resetMocks() {
-  for (const fn of [
-    requireUserOrApiKeyWithOrg,
-    getReferrer,
-    reserveAndDeductCredits,
-    refundCredits,
-    getMcpById,
-    recordUsageWithoutDeduction,
-    getEndpointUrl,
-    getContainerById,
-    assertSafeOutboundUrl,
-    safeFetch,
-    loggerWarn,
-    loggerError,
-  ]) {
-    fn.mockReset();
-  }
-}
-
-function expectRefund(reason: string, extra: Record<string, unknown> = {}) {
-  expect(refundCredits).toHaveBeenCalledTimes(1);
-  expect(refundCredits.mock.calls[0]?.[0]).toMatchObject({
-    organizationId: "org-user",
-    amount: 0.01,
-    metadata: { mcp_id: "mcp-1", reason, ...extra },
-  });
-}
+const EXTERNAL_MCP = {
+  id: "test-mcp",
+  name: "Test MCP",
+  status: "live",
+  credits_per_request: "5",
+  endpoint_type: "external",
+  external_endpoint: "https://mcp.example.test/rpc",
+  organization_id: "org1",
+};
 
 beforeEach(() => {
-  resetMocks();
-  requireUserOrApiKeyWithOrg.mockImplementation(async () => user);
-  getReferrer.mockImplementation(async () => null);
-  reserveAndDeductCredits.mockImplementation(async () => ({
+  requireUserOrApiKeyWithOrg.mockResolvedValue({
+    id: "u1",
+    organization_id: "org1",
+  });
+  getById.mockResolvedValue({ ...EXTERNAL_MCP });
+  reserveAndDeductCredits.mockClear();
+  reserveAndDeductCredits.mockResolvedValue({
     success: true,
-    newBalance: 9,
-    transaction: { id: "reserve-1" },
-  }));
-  refundCredits.mockImplementation(async () => ({ success: true }));
-  getMcpById.mockImplementation(async () => ({ ...mcp }));
-  recordUsageWithoutDeduction.mockImplementation(async () => undefined);
-  getEndpointUrl.mockImplementation(
-    () => "https://example.test/api/mcp/proxy/mcp-1",
+    transaction: { id: "tx1" },
+    newBalance: 95,
+  });
+  refundCredits.mockReset();
+  refundCredits.mockResolvedValue({ newBalance: 100 });
+  assertSafeOutboundUrl.mockResolvedValue(
+    new URL("https://mcp.example.test/rpc"),
   );
-  getContainerById.mockImplementation(async () => ({
-    load_balancer_url: "https://container.test",
-  }));
-  assertSafeOutboundUrl.mockImplementation(async (url: string) => new URL(url));
-  safeFetch.mockImplementation(async () => new Response("{}", { status: 200 }));
-  globalThis.fetch = mock(
-    async () => new Response("{}", { status: 200 }),
-  ) as unknown as typeof fetch;
+  safeFetch.mockReset();
+  containersGetById.mockReset();
 });
 
-afterAll(() => {
-  globalThis.fetch = originalFetch;
+test("unreachable upstream (502) refunds the upfront debit (#11637)", async () => {
+  safeFetch.mockRejectedValue(new Error("ECONNREFUSED"));
+  const res = await post();
+  expect(res.status).toBe(502);
+  expect(reserveAndDeductCredits).toHaveBeenCalledTimes(1);
+  expect(refundCredits).toHaveBeenCalledTimes(1);
 });
 
-describe("MCP proxy post-debit refunds", () => {
-  test("refunds when container lookup throws after debit", async () => {
-    getContainerById.mockImplementation(async () => {
-      throw new Error("db unavailable");
-    });
+test("unsafe/blocked external endpoint (400) refunds (#11637)", async () => {
+  assertSafeOutboundUrl.mockRejectedValue(new Error("SSRF blocked"));
+  const res = await post();
+  expect(res.status).toBe(400);
+  expect(refundCredits).toHaveBeenCalledTimes(1);
+});
 
-    const response = await post();
-
-    expect(response.status).toBe(502);
-    expectRefund("container_lookup_failed");
-    expect(recordUsageWithoutDeduction).not.toHaveBeenCalled();
+test("container-unavailable (503) refunds (#11637)", async () => {
+  getById.mockResolvedValue({
+    id: "test-mcp",
+    name: "Container MCP",
+    status: "live",
+    credits_per_request: "5",
+    endpoint_type: "container",
+    container_id: "c1",
+    organization_id: "org1",
   });
+  containersGetById.mockResolvedValue(null); // no load_balancer_url
+  const res = await post();
+  expect(res.status).toBe(503);
+  expect(refundCredits).toHaveBeenCalledTimes(1);
+});
 
-  test("refunds malformed JSON bodies parsed after debit", async () => {
-    const response = await post("{not json");
-
-    expect(response.status).toBe(400);
-    expectRefund("invalid_json_body");
-    expect(globalThis.fetch).not.toHaveBeenCalled();
-    expect(recordUsageWithoutDeduction).not.toHaveBeenCalled();
+test("container lookup failure (502) refunds after upfront debit (#11637)", async () => {
+  getById.mockResolvedValue({
+    id: "test-mcp",
+    name: "Container MCP",
+    status: "live",
+    credits_per_request: "5",
+    endpoint_type: "container",
+    container_id: "c1",
+    organization_id: "org1",
   });
+  containersGetById.mockRejectedValue(new Error("container DB down"));
+  const res = await post();
+  expect(res.status).toBe(502);
+  expect(refundCredits).toHaveBeenCalledTimes(1);
+});
 
-  test("refunds upstream non-ok responses once with status metadata", async () => {
-    globalThis.fetch = mock(
-      async () => new Response("bad", { status: 503 }),
-    ) as unknown as typeof fetch;
+test("invalid JSON body (400) refunds after the upfront debit (#11637)", async () => {
+  const res = await post("{not json");
+  expect(res.status).toBe(400);
+  expect(reserveAndDeductCredits).toHaveBeenCalledTimes(1);
+  expect(refundCredits).toHaveBeenCalledTimes(1);
+});
 
-    const response = await post();
+test("non-ok upstream status refunds (existing behavior preserved)", async () => {
+  safeFetch.mockResolvedValue(new Response("upstream error", { status: 500 }));
+  const res = await post();
+  expect(res.status).toBe(500);
+  expect(refundCredits).toHaveBeenCalledTimes(1);
+});
 
-    expect(response.status).toBe(503);
-    expect(await response.text()).toBe("bad");
-    expectRefund("mcp_call_failed", { status: 503 });
-    expect(recordUsageWithoutDeduction).not.toHaveBeenCalled();
-  });
+test("upstream response body read failure refunds before usage is recorded", async () => {
+  safeFetch.mockResolvedValue({
+    ok: true,
+    status: 200,
+    headers: new Headers({ "content-type": "application/json" }),
+    text: async () => {
+      throw new Error("body stream failed");
+    },
+  } as Response);
+  const res = await post();
+  expect(res.status).toBe(502);
+  expect(refundCredits).toHaveBeenCalledTimes(1);
+});
 
-  test("refunds when reading an ok upstream response body fails", async () => {
-    globalThis.fetch = mock(
-      async () =>
-        ({
-          ok: true,
-          status: 200,
-          statusText: "OK",
-          headers: new Headers({ "content-type": "application/json" }),
-          text: mock(async () => {
-            throw new Error("body read failed");
-          }),
-        }) as unknown as Response,
-    ) as unknown as typeof fetch;
-
-    const response = await post();
-
-    expect(response.status).toBe(502);
-    expectRefund("mcp_response_read_failed", { status: 200 });
-    expect(recordUsageWithoutDeduction).not.toHaveBeenCalled();
-  });
+test("successful call does NOT refund", async () => {
+  safeFetch.mockResolvedValue(
+    new Response(JSON.stringify({ ok: true }), { status: 200 }),
+  );
+  const res = await post();
+  expect(res.status).toBe(200);
+  expect(refundCredits).not.toHaveBeenCalled();
 });

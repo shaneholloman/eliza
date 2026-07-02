@@ -2,8 +2,8 @@
 //
 // #11294: /copy copies the last assistant reply to the clipboard (OSC 52) and
 // reports it; with no assistant reply it says so. Drives the real
-// App.handleSlashCommand and intercepts terminal.write to verify the OSC-52
-// payload without emitting it to stdout.
+// App.handleSlashCommand (constructor is synchronous; terminal.write emits the
+// OSC-52 to stdout harmlessly in a test).
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import type { AgentRuntime } from "@elizaos/core";
@@ -18,20 +18,22 @@ function makeApp() {
     getService: () => null,
   } as unknown as AgentRuntime;
   const app = new App(runtime);
-  const terminal = (
-    app as unknown as { terminal: { write(data: string): void } }
-  ).terminal;
-  const writes: string[] = [];
-  terminal.write = (data: string) => {
-    writes.push(data);
-  };
   const run = (cmd: string, args: string): Promise<boolean> =>
     (
       app as unknown as {
         handleSlashCommand(c: string, a: string): Promise<boolean>;
       }
     ).handleSlashCommand(cmd, args);
-  return { run, writes };
+  // Capture terminal output so tests can assert the OSC-52 sequence is
+  // actually emitted, not just that the chat message says it was.
+  const written: string[] = [];
+  const terminal = (
+    app as unknown as { terminal: { write(data: string): void } }
+  ).terminal;
+  terminal.write = (data: string) => {
+    written.push(data);
+  };
+  return { run, written };
 }
 
 function freshRoom() {
@@ -48,37 +50,35 @@ function systemMessages(roomId: string): string[] {
     .map((m) => m.content);
 }
 
-function clipboardWrites(writes: string[]): string[] {
-  return writes.filter((write) => write.startsWith("\x1b]52;c;"));
-}
-
 describe("/copy command (#11294)", () => {
   beforeEach(() => {
     freshRoom();
   });
 
-  it("reports success when there is an assistant reply to copy", async () => {
-    const { run, writes } = makeApp();
+  it("emits the OSC-52 clipboard sequence for the last assistant reply", async () => {
+    const { run, written } = makeApp();
     const roomId = useStore.getState().currentRoomId;
     useStore.getState().addMessage(roomId, "user", "hi");
     useStore.getState().addMessage(roomId, "assistant", "the answer is 42");
 
     const handled = await run("copy", "");
     expect(handled).toBe(true);
-    expect(clipboardWrites(writes)).toEqual([osc52("the answer is 42")]);
     expect(systemMessages(roomId).some((m) => m.includes("Copied"))).toBe(true);
+    // The core effect: the exact OSC-52 escape for the reply reached the
+    // terminal (deleting the emission must red this test).
+    expect(written).toContain(osc52("the answer is 42"));
   });
 
   it("says there is nothing to copy when no assistant reply exists", async () => {
-    const { run, writes } = makeApp();
+    const { run, written } = makeApp();
     const roomId = useStore.getState().currentRoomId;
     useStore.getState().addMessage(roomId, "user", "hi"); // user only
 
     const handled = await run("copy", "");
     expect(handled).toBe(true);
-    expect(clipboardWrites(writes)).toEqual([]);
     expect(
       systemMessages(roomId).some((m) => m.includes("Nothing to copy")),
     ).toBe(true);
+    expect(written.filter((d) => d.includes("\x1b]52;"))).toHaveLength(0);
   });
 });

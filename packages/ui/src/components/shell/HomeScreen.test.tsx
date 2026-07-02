@@ -85,45 +85,61 @@ describe("HomeScreen", () => {
     expect(screen.queryByText("Pinned")).toBeNull();
   });
 
-  // #10706 — a downward pull from the thin top strip reveals the notification
-  // center. The strip is deliberately off the scrollable widget list, so this
-  // can never fight the list's scroll.
-  it("opens the notification center on a downward pull from the top strip", () => {
-    render(<HomeScreen onOpenTile={vi.fn()} />);
-    const zone = screen.getByTestId("home-notification-pull-zone");
-    expect(screen.queryByTestId("notification-sheet")).toBeNull();
+  // #10706 — a downward pull from the thin top strip DISPATCHES the surface-
+  // agnostic open event. The single always-mounted headless NotificationCenter
+  // (App.tsx) is the sole renderer of the sheet/panel, so two shells can never
+  // stack; HomeScreen's job here is only to fire the event. The strip is
+  // deliberately off the scrollable widget list, so this can never fight scroll.
+  it("dispatches the open-notification event on a downward pull from the top strip", async () => {
+    const { OPEN_NOTIFICATION_CENTER_EVENT } = await import("../../events");
+    const onOpen = vi.fn();
+    window.addEventListener(OPEN_NOTIFICATION_CENTER_EVENT, onOpen);
+    try {
+      render(<HomeScreen onOpenTile={vi.fn()} />);
+      const zone = screen.getByTestId("home-notification-pull-zone");
 
-    // Pull DOWN ~76px (past the 56px distance threshold), then release.
-    fireEvent.pointerDown(zone, { pointerId: 1, clientX: 120, clientY: 8 });
-    fireEvent.pointerMove(zone, { pointerId: 1, clientX: 120, clientY: 40 });
-    fireEvent.pointerMove(zone, { pointerId: 1, clientX: 120, clientY: 84 });
-    fireEvent.pointerUp(zone, { pointerId: 1, clientX: 120, clientY: 84 });
+      // Pull DOWN ~76px (past the 56px distance threshold), then release.
+      fireEvent.pointerDown(zone, { pointerId: 1, clientX: 120, clientY: 8 });
+      fireEvent.pointerMove(zone, { pointerId: 1, clientX: 120, clientY: 40 });
+      fireEvent.pointerMove(zone, { pointerId: 1, clientX: 120, clientY: 84 });
+      fireEvent.pointerUp(zone, { pointerId: 1, clientX: 120, clientY: 84 });
 
-    expect(screen.getByTestId("notification-sheet")).toBeTruthy();
+      expect(onOpen).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(OPEN_NOTIFICATION_CENTER_EVENT, onOpen);
+    }
   });
 
-  it("does not open the notification center on an UPWARD pull (direction-gated)", () => {
-    render(<HomeScreen onOpenTile={vi.fn()} />);
-    const zone = screen.getByTestId("home-notification-pull-zone");
+  it("does NOT dispatch the open event on an UPWARD pull (direction-gated)", async () => {
+    const { OPEN_NOTIFICATION_CENTER_EVENT } = await import("../../events");
+    const onOpen = vi.fn();
+    window.addEventListener(OPEN_NOTIFICATION_CENTER_EVENT, onOpen);
+    try {
+      render(<HomeScreen onOpenTile={vi.fn()} />);
+      const zone = screen.getByTestId("home-notification-pull-zone");
 
-    // Pull UP: the down-sheet must not open (onPullDown is direction-specific).
-    fireEvent.pointerDown(zone, { pointerId: 1, clientX: 120, clientY: 84 });
-    fireEvent.pointerMove(zone, { pointerId: 1, clientX: 120, clientY: 40 });
-    fireEvent.pointerMove(zone, { pointerId: 1, clientX: 120, clientY: 8 });
-    fireEvent.pointerUp(zone, { pointerId: 1, clientX: 120, clientY: 8 });
+      // Pull UP: the down-sheet must not open (onPullDown is direction-specific).
+      fireEvent.pointerDown(zone, { pointerId: 1, clientX: 120, clientY: 84 });
+      fireEvent.pointerMove(zone, { pointerId: 1, clientX: 120, clientY: 40 });
+      fireEvent.pointerMove(zone, { pointerId: 1, clientX: 120, clientY: 8 });
+      fireEvent.pointerUp(zone, { pointerId: 1, clientX: 120, clientY: 8 });
 
-    expect(screen.queryByTestId("notification-sheet")).toBeNull();
+      expect(onOpen).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(OPEN_NOTIFICATION_CENTER_EVENT, onOpen);
+    }
   });
 
-  it("dismisses the pulled-down sheet on a backdrop tap", () => {
-    render(<HomeScreen onOpenTile={vi.fn()} />);
-    const zone = screen.getByTestId("home-notification-pull-zone");
-    fireEvent.pointerDown(zone, { pointerId: 1, clientX: 120, clientY: 8 });
-    fireEvent.pointerMove(zone, { pointerId: 1, clientX: 120, clientY: 84 });
-    fireEvent.pointerUp(zone, { pointerId: 1, clientX: 120, clientY: 84 });
-    expect(screen.getByTestId("notification-sheet")).toBeTruthy();
-
-    fireEvent.click(screen.getByTestId("notification-sheet-backdrop"));
-    expect(screen.queryByTestId("notification-sheet")).toBeNull();
+  it("dispatches the open event on a click/tap/keyboard activation of the pull zone", async () => {
+    const { OPEN_NOTIFICATION_CENTER_EVENT } = await import("../../events");
+    const onOpen = vi.fn();
+    window.addEventListener(OPEN_NOTIFICATION_CENTER_EVENT, onOpen);
+    try {
+      render(<HomeScreen onOpenTile={vi.fn()} />);
+      fireEvent.click(screen.getByTestId("home-notification-pull-zone"));
+      expect(onOpen).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(OPEN_NOTIFICATION_CENTER_EVENT, onOpen);
+    }
   });
 });

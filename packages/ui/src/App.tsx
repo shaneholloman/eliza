@@ -12,6 +12,7 @@ import { ArrowLeft, X } from "lucide-react";
 import "./components/chat/chat-source-registration";
 import {
   type ComponentType,
+  type CSSProperties,
   type LazyExoticComponent,
   lazy,
   type ReactNode,
@@ -47,7 +48,6 @@ import { CustomActionEditor } from "./components/custom-actions/CustomActionEdit
 import { CustomActionsPanel } from "./components/custom-actions/CustomActionsPanel";
 import { AppsPageView } from "./components/pages/AppsPageView";
 import { TutorialOverlay } from "./components/pages/tutorial/TutorialOverlay";
-import { SecretsManagerModalRoot } from "./components/settings/SecretsManagerSection";
 import { ActionBanner } from "./components/shell/ActionBanner";
 import { AssistantOverlay } from "./components/shell/AssistantOverlay";
 import { BugReportModal } from "./components/shell/BugReportModal";
@@ -83,6 +83,7 @@ import { persistMobileRuntimeModeForServerTarget } from "./first-run/mobile-runt
 import { FirstRunConductorMount } from "./first-run/use-first-run-conductor";
 import { BugReportProvider, useBugReportState, useContextMenu } from "./hooks";
 import { useAuthStatus } from "./hooks/useAuthStatus";
+import { useSecretsManagerModalState } from "./hooks/useSecretsManagerModal";
 import { useSecretsManagerShortcut } from "./hooks/useSecretsManagerShortcut";
 import {
   APPS_ENABLED,
@@ -111,7 +112,7 @@ import { VoiceSelfTestShell } from "./voice/voice-selftest/VoiceSelfTestShell";
 import { VoiceWorkbenchShell } from "./voice/voice-selftest/VoiceWorkbenchShell";
 
 const MOBILE_NAV_PADDING_CLASS =
-  "pb-[calc(var(--eliza-mobile-nav-offset,0px)+var(--safe-area-bottom,0px)+var(--eliza-continuous-chat-clearance,5.25rem))]";
+  "pb-[calc(var(--eliza-mobile-nav-offset,0px)+max(var(--safe-area-bottom,0px),var(--android-gesture-inset-bottom,0px))+var(--eliza-continuous-chat-clearance,5.25rem))]";
 type ExtractComponent<TValue> =
   TValue extends ComponentType<infer Props> ? ComponentType<Props> : never;
 
@@ -1410,6 +1411,15 @@ const APP_SHELL_CLASS_TRANSPARENT =
   "flex flex-col flex-1 min-h-0 w-full font-body text-txt";
 
 function ShellBackButton({ onBack }: { onBack: () => void }): ReactNode {
+  // 44px (`h-11 w-11`) button = the Apple-HIG minimum touch target enforced by
+  // the rendered-geometry gate (tap-target-geometry.spec.ts); the 36px visual
+  // circle sits centered inside, so the resting look is unchanged while the
+  // hit area is honest. Offsets keep the circle at the historical position
+  // (safe-area + 0.75rem). The shell wrappers that render this button set
+  // --shell-backnav-clearance (consumed by SpatialSurface as top padding) so
+  // the fixed z-[60] chrome never occludes a spatial view's first row (#11144);
+  // the clearance must cover the button's bottom edge (0.5rem + 2.75rem =
+  // 3.25rem) — guarded by spatial/dom.backnav-clearance.test.tsx.
   return (
     <button
       type="button"
@@ -1417,9 +1427,11 @@ function ShellBackButton({ onBack }: { onBack: () => void }): ReactNode {
       title="Go back"
       data-testid="shell-back-button"
       onClick={onBack}
-      className="fixed left-[calc(var(--safe-area-left,0px)+0.75rem)] top-[calc(var(--safe-area-top,0px)+0.75rem)] z-[60] grid h-9 w-9 place-items-center rounded-full border border-border/60 bg-bg/90 text-txt shadow-sm transition-colors hover:bg-muted/70"
+      className="group fixed left-[calc(var(--safe-area-left,0px)+0.5rem)] top-[calc(var(--safe-area-top,0px)+0.5rem)] z-[60] grid h-11 w-11 place-items-center bg-transparent"
     >
-      <ArrowLeft className="h-4 w-4" aria-hidden />
+      <span className="grid h-9 w-9 place-items-center rounded-full border border-border/60 bg-bg/90 text-txt shadow-sm transition-colors group-hover:bg-muted/70">
+        <ArrowLeft className="h-4 w-4" aria-hidden />
+      </span>
     </button>
   );
 }
@@ -1499,7 +1511,25 @@ function RoutedShellContent(props: ShellContentProps): ReactNode {
       ? APP_SHELL_CLASS_TRANSPARENT
       : APP_SHELL_CLASS;
   return (
-    <div key={`tab-shell-${props.tab}`} className={shellClass}>
+    // --shell-backnav-clearance reserves top space for the fixed ShellBackButton
+    // so spatial views' first row (filter chips) clears it (#11144). The button
+    // bottom sits at safe-area-top + 3.25rem (0.5rem offset + 2.75rem hit target) in
+    // VIEWPORT coords, but this wrapper lives inside the root content column,
+    // which absorbs only max(safe-area-top - 1.25rem, 1.25rem) of the safe area
+    // — up to 1.25rem less than the button's full safe-area offset on notched
+    // devices. min(safe-area-top, 1.25rem) adds back exactly that deficit:
+    // 3.25rem at safe-area-top 0, tight at real notch insets (≥ 2.5rem).
+    // Consumed by SpatialSurface (spatial/dom.tsx); unset elsewhere → 0px.
+    <div
+      key={`tab-shell-${props.tab}`}
+      className={shellClass}
+      style={
+        {
+          "--shell-backnav-clearance":
+            "calc(3.25rem + min(var(--safe-area-top, 0px), 1.25rem))",
+        } as CSSProperties
+      }
+    >
       <ShellBackButton onBack={props.onNavigateBack} />
       {props.desktopTabBar}
       <main className={routedShellMainClass(props.tab)}>
@@ -1523,7 +1553,19 @@ function RoutedShellContent(props: ShellContentProps): ReactNode {
  */
 function FullBleedShellContent(props: ShellContentProps): ReactNode {
   return (
-    <div key={`fullbleed-shell-${props.tab}`} className={APP_SHELL_CLASS}>
+    <div
+      key={`fullbleed-shell-${props.tab}`}
+      className={APP_SHELL_CLASS}
+      // Same clearance contract as RoutedShellContent (see the derivation
+      // there): 3.25rem button clearance + the ≤1.25rem safe-area deficit the
+      // root content column does not absorb (#11144).
+      style={
+        {
+          "--shell-backnav-clearance":
+            "calc(3.25rem + min(var(--safe-area-top, 0px), 1.25rem))",
+        } as CSSProperties
+      }
+    >
       <ShellBackButton onBack={props.onNavigateBack} />
       <main className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
         <ViewRouter />
@@ -1543,6 +1585,45 @@ function ShellContent(props: ShellContentProps): ReactNode {
   if (props.isFullBleed) return <FullBleedShellContent {...props} />;
   if (props.isChat) return <ChatRouteShellContent {...props} />;
   return <RoutedShellContent {...props} />;
+}
+
+/**
+ * Vault modal, loaded on first open (#11351). `SecretsManagerSection` pulls the
+ * whole vault surface (tabs, tables, routing editor) plus its data layer; a
+ * static import here kept all of it on the eager boot graph even though the
+ * modal only ever renders after an explicit open dispatch (launcher row, ⌘⌥⌃V
+ * chord, menu accelerator). The open/close state lives in the lightweight
+ * `useSecretsManagerModal` hook module, so this mount can subscribe eagerly
+ * (never missing an open event) while the modal body stays on a lazy chunk
+ * until the first open. After that it stays mounted so close animations and
+ * in-modal state behave exactly as before.
+ */
+const VaultModal = lazy(() =>
+  import("./components/settings/SecretsManagerSection").then((m) => ({
+    default: m.VaultModal,
+  })),
+);
+
+function SecretsManagerModalMount(): ReactNode {
+  const { isOpen, initialTab, focusKey, focusProfileId, setOpen, clearFocus } =
+    useSecretsManagerModalState();
+  const [hasOpened, setHasOpened] = useState(false);
+  useEffect(() => {
+    if (isOpen) setHasOpened(true);
+  }, [isOpen]);
+  if (!hasOpened) return null;
+  return (
+    <Suspense fallback={null}>
+      <VaultModal
+        open={isOpen}
+        onOpenChange={setOpen}
+        initialTab={initialTab}
+        initialFocusKey={focusKey}
+        initialFocusProfileId={focusProfileId}
+        onConsumeInitial={clearFocus}
+      />
+    </Suspense>
+  );
 }
 
 function ShellFoundationMount() {
@@ -2293,7 +2374,17 @@ export function App() {
               detail:
                 "The auth probe could not reach /api/auth/me. If this is local development, start the local agent API with `bun run dev` or `bun run dev:desktop`, then retry.",
             }}
-            onRetry={retryStartup}
+            onRetry={() => {
+              // This screen is triggered by the AUTH probe failing
+              // (useAuthStatus publishes `server_unavailable` after its 10×1s
+              // retry budget), so `retryStartup()` alone is a no-op here —
+              // the startup coordinator is already in a ready/hydrating phase
+              // whose reducer has no RETRY arm. Re-probe auth so a transient
+              // outage (agent restart, phone network blip) actually recovers,
+              // and still kick the startup retry for the mixed case.
+              refetchAuth();
+              retryStartup();
+            }}
           />
           <BugReportModal />
         </BugReportProvider>
@@ -2449,7 +2540,7 @@ export function App() {
           onSave={contextMenu.confirmSaveCommand}
           onClose={contextMenu.closeSaveCommandModal}
         />
-        <SecretsManagerModalRoot />
+        <SecretsManagerModalMount />
         <CustomActionEditor
           open={customActionsEditorOpen}
           action={editingAction}

@@ -1,6 +1,5 @@
 /**
  * Agent detail page (`/dashboard/agents/:id`).
- * Ported from `@elizaos/cloud-frontend/src/dashboard/agents/[id]/Page.tsx`.
  */
 
 import { AGENT_PRICING } from "@elizaos/cloud-shared/lib/constants/agent-pricing";
@@ -24,6 +23,7 @@ import {
 import { Link, Navigate, useParams } from "react-router-dom";
 import { ApiError } from "../lib/api-client";
 import { useDocumentTitle } from "../lib/use-document-title";
+import { useRequireAuth } from "../lib/use-session-auth";
 import { ElizaAgentActions } from "./components/agent-actions";
 import { DockerLogsViewer } from "./components/docker-logs-viewer";
 import { ElizaAgentBackupsPanel } from "./components/eliza-agent-backups-panel";
@@ -33,7 +33,6 @@ import { ElizaConnectButton } from "./components/eliza-connect-button";
 import { useAgent } from "./lib/data/eliza-agents";
 import { useT } from "./lib/i18n";
 import { statusBadgeColor, statusDotColor } from "./lib/sandbox-status";
-import { useRequireAuth } from "./lib/use-session-auth";
 
 function formatDate(date: string | null): string {
   if (!date) return "—";

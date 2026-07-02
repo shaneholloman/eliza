@@ -459,6 +459,62 @@ describe("SwarmCoordinatorService", () => {
     });
     await coordinator.stop();
   });
+
+  it("sanitizes captured tool-output envelopes out of completionSummary (#11578)", async () => {
+    const acp = makeAcpStub({
+      agentType: "codex",
+      workdir: "/tmp/wd",
+      metadata: { label: "leaky-task", originRoomId: "origin-room-leak" },
+    });
+    const runtime = makeRuntime({ [AcpService.serviceType]: acp });
+    const coordinator = await SwarmCoordinatorService.start(runtime);
+
+    const fired = vi.fn(async () => {});
+    coordinator.setSwarmCompleteCallback(fired);
+
+    // The ACP turn finalText carries the orchestrator's own captured
+    // `[tool output: …]` envelope blocks; they must NOT reach the payload.
+    const leakyResponse =
+      "Deployed the site.\n" +
+      "[tool output: bash]\n$ npm run build\n… lots of raw log …\n[/tool output]\n" +
+      "Live at https://example.com/app/";
+    acp.emit("sess-leak", "task_complete", { response: leakyResponse });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(fired).toHaveBeenCalledTimes(1);
+    const summary = fired.mock.calls[0][0].tasks[0].completionSummary;
+    expect(summary).toContain("Deployed the site.");
+    expect(summary).toContain("https://example.com/app/");
+    expect(summary).not.toContain("[tool output:");
+    expect(summary).not.toContain("[/tool output]");
+    expect(summary).not.toContain("npm run build");
+    await coordinator.stop();
+  });
+
+  it("falls back to the default summary when the response was ONLY tool output (#11578)", async () => {
+    const acp = makeAcpStub({
+      agentType: "codex",
+      workdir: "/tmp/wd",
+      metadata: { label: "dump-only", originRoomId: "origin-room-dump" },
+    });
+    const runtime = makeRuntime({ [AcpService.serviceType]: acp });
+    const coordinator = await SwarmCoordinatorService.start(runtime);
+
+    const fired = vi.fn(async () => {});
+    coordinator.setSwarmCompleteCallback(fired);
+
+    acp.emit("sess-dump", "task_complete", {
+      response: "[tool output: bash]\nonly a raw dump\n[/tool output]",
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(fired).toHaveBeenCalledTimes(1);
+    expect(fired.mock.calls[0][0].tasks[0].completionSummary).toBe(
+      "Task completed.",
+    );
+    await coordinator.stop();
+  });
+
   it("caches session metadata per session so streaming events do not re-hit getSession", async () => {
     const acp = makeAcpStub({
       agentType: "codex",
@@ -575,7 +631,7 @@ describe("SwarmCoordinatorService", () => {
     }
   });
 
-  it("cancels the pending eviction when the session resumes within the grace window", async () => {
+  it("cancels the pending eviction and refreshes metadata when the session resumes within the grace window", async () => {
     vi.useFakeTimers();
     try {
       const acp = makeAcpStub({
@@ -586,19 +642,36 @@ describe("SwarmCoordinatorService", () => {
       const runtime = makeRuntime({ [AcpService.serviceType]: acp });
       const coordinator = await SwarmCoordinatorService.start(runtime);
 
+      const received: SwarmEvent[] = [];
+      coordinator.subscribe((e) => received.push(e));
+
       // Turn 1 completes and schedules the 60s eviction. task_complete fires at
-      // the end of every prompt turn — it is NOT the end of the session.
+      // the end of every prompt turn; it is NOT the end of the session.
       acp.emit("sess-resume", "task_complete", { response: "turn 1 done" });
       await vi.advanceTimersByTimeAsync(0);
       expect(coordinator.tasks.has("sess-resume")).toBe(true);
+      expect(received.at(-1)?.data).toMatchObject({ label: "build-site" });
+      expect(acp.getSession).toHaveBeenCalledTimes(1);
 
-      // A follow-up turn reuses the same session WITHIN the grace window: a
-      // non-terminal event must cancel the pending eviction.
+      // A follow-up turn reuses the same session WITHIN the grace window. Its
+      // persisted metadata may have changed since the first turn, so canceling
+      // the eviction must also drop the old enrichment snapshot.
+      acp.setSession({
+        agentType: "codex",
+        workdir: "/tmp/wd",
+        metadata: { label: "build-site-turn-2", initialTask: "build it again" },
+      });
       await vi.advanceTimersByTimeAsync(30_000);
       acp.emit("sess-resume", "tool_running", { toolCall: { title: "Bash" } });
       await vi.advanceTimersByTimeAsync(0);
 
-      // Past the original 60s deadline the live task state must survive — without
+      expect(received.at(-1)?.data).toMatchObject({
+        label: "build-site-turn-2",
+        initialTask: "build it again",
+      });
+      expect(acp.getSession).toHaveBeenCalledTimes(2);
+
+      // Past the original 60s deadline the live task state must survive. Without
       // the cancel it is evicted mid-turn, blinding Discord suppression + routing.
       await vi.advanceTimersByTimeAsync(60_000);
       expect(coordinator.tasks.has("sess-resume")).toBe(true);

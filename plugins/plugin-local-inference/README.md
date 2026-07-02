@@ -71,12 +71,12 @@ Key environment variables (all optional unless noted):
 
 ## Per-target local inference recommendations
 
-The runtime computes recommendations from the hardware probe; this table
-documents the current policy so device setup is reviewable without reading
-code. The source of truth is:
+The runtime already computes the recommendation from the hardware probe; this
+table documents the current policy so device setup is reviewable without
+reading code. The source of truth is:
 
 - `src/services/device-tier.ts` for `MAX` / `GOOD` / `OKAY` / `POOR`
-  classification, recommended mode, and the mobile context clamp.
+  classification and the mobile context clamp.
 - `src/services/recommendation.ts` for text-model slot ladders.
 - `src/runtime/embedding-presets.ts` for local embedding defaults.
 - `scripts/local-inference-thresholds.json` for backend tok/s floors used by
@@ -84,7 +84,7 @@ code. The source of truth is:
 
 | Target | Local mode | Text model policy | Context policy | Embeddings | Notes |
 |---|---|---|---|---|---|
-| Android / iOS phone, >= 6 GB RAM and >= 3 GB free | `OKAY` at best; local LM can run; voice defaults to cloud TTS/ASR with local turn detection, VAD, and wake-word only. Models load/unload instead of staying parallel-resident. | `TEXT_SMALL` uses `eliza-1-2b`; `TEXT_LARGE` tries `eliza-1-4b` then `eliza-1-2b`. | Mobile is capped at 64k even if coarse RAM math says 128k fits. | `gte-small_fp16.gguf`, 384 dimensions, 512 context. Use CPU on <= 8 GB or no accelerator; otherwise `gpuLayers: "auto"`. | Phone OS background-task limits are the reason for the tier cap; do not force 9B/27B on mobile for default routing. |
+| Android / iOS phone, >= 6 GB RAM and >= 3 GB free | `OKAY` at best; local LM can run; voice defaults to cloud TTS/ASR with local turn detection, VAD, and wake-word only. | `TEXT_SMALL` uses `eliza-1-2b`; `TEXT_LARGE` tries `eliza-1-4b` then `eliza-1-2b`. | Mobile is capped at 64k even if coarse RAM math says 128k fits. | `gte-small_fp16.gguf`, 384 dimensions, 512 context. Use CPU on <= 8 GB or no accelerator; otherwise `gpuLayers: "auto"`. | Phone OS background-task limits are the reason for the tier cap; do not force 9B/27B on mobile for default routing. |
 | 8 GB Apple Silicon | `OKAY`; local-capable with swapping discipline. | Prefer 2B/4B fits; avoid pinning larger tiers as defaults. | Use the fit selected by the dashboard; expect short or downscaled context under pressure. | CPU fallback if <= 8 GB; `gte-small` stays the embedding model. | `device-tier.ts` hard-caps 8 GB Apple Silicon at `OKAY`. |
 | Apple Silicon >= 16 GB with >= 8 GB free | `GOOD` when the free/effective-memory gates pass; all models can run serialized. | `TEXT_SMALL`: 2B then 4B. `TEXT_LARGE`: 27B, 9B, 4B, 2B in fit order. | Long-context variants are preferred when the RAM/VRAM headroom gate passes. | `gte-small` with accelerator offload. | `MAX` requires >= 32 GB shared RAM plus the `MAX` free/effective memory gates. |
 | Linux / Windows with discrete GPU >= 8 GB VRAM, >= 12 GB effective memory, and >= 8 GB free | `GOOD`; serialized local LM is recommended. | `TEXT_SMALL`: 2B then 4B. `TEXT_LARGE`: 27B, 9B, 4B, 2B in fit order. | Long-context variants are preferred when memory headroom passes. | `gte-small` with `gpuLayers: "auto"` on CUDA/Vulkan. | `MAX` requires >= 16 GB VRAM plus the free/effective memory gates. |
@@ -103,7 +103,9 @@ Operational knobs:
   for concurrent conversations; the engine warns when the conversation high
   water mark exceeds the running `--parallel` value.
 - Use `ELIZA_LOCAL_STREAM_TOKENS_PER_STEP` to trade streaming smoothness against
-  JS/FFI round trips. The default is `32`, clamped to `1`-`512`.
+  JS/FFI round trips. The shared FFI runner default is `32`, clamped to
+  `1`-`512`; the interactive chat path uses a finer default of `8` when the env
+  is unset (internal / planner / voice calls keep the coarse `32`).
 - Embedding overrides (`LOCAL_EMBEDDING_MODEL`,
   `LOCAL_EMBEDDING_GPU_LAYERS`, `LOCAL_EMBEDDING_CONTEXT_SIZE`,
   `LOCAL_EMBEDDING_DIMENSIONS`) should keep the SQL vector dimension in sync.

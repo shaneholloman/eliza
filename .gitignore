@@ -19,6 +19,8 @@ packages/ui/src/components/views/__e2e__/output-view-lifecycle/
 packages/ui/src/components/shell/__e2e__/output-bottombar/
 # Connector card e2e output (screenshots + bundles — regenerate via test:connectors-e2e; committed evidence lives in .github/issue-evidence/10705-connector-config-co-render/)
 packages/ui/src/components/pages/__e2e__/output-connectors/
+# Resize-handles e2e output (screenshots + html bundle — regenerate via the composites __e2e__ runner; committed evidence lives in .github/issue-evidence/11144-spatial-chrome-gestures/)
+packages/ui/src/components/composites/__e2e__/output-resize-handles/
 
 .next/
 **/.next/**
@@ -1181,7 +1183,6 @@ waifu.fun/
 /packages/shared/assets/concepts/concept_minipc.jpg
 /plugins/plugin-social-alpha/public/brand/concepts/concept_minipc.jpg
 /packages/research/chip/board/kicad/e1-phone/production/sourcing/public-cad-downloads/hirose_bm28b0_6_24dp_2_0_35v_53/BM28B0.6-24DP_2-0.35V_3d_stp.stp
-/packages/benchmarks/lifeops-bench/manifests/actions.manifest.json
 /packages/research/robot/assets/profiles/unitree-h1/mjcf/assets/right_knee_link.stl
 /packages/research/robot/assets/profiles/unitree-h1/mjcf/assets/left_knee_link.stl
 /packages/benchmarks/skillsbench/docs/infographic/comprehensive/comprehensive-square-v3.png

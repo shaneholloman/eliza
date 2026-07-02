@@ -1,14 +1,17 @@
 /**
  * Regression coverage for GET /api/v1/models/[...model] auth handling.
  *
- * The route's broad catch used to swallow AuthenticationError from
- * requireAuthOrApiKey and convert it into a 500 "Failed to fetch model details".
- * Unauthenticated requests must stay 401 while genuine downstream failures
- * still return 500.
+ * The route's broad try/catch used to swallow the AuthenticationError thrown
+ * by requireAuthOrApiKey and convert it into a 500 "Failed to fetch model
+ * details". An unauthenticated request must surface as a 401 (and other typed
+ * ApiErrors must keep their status), while genuine downstream failures stay 500.
  */
 
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Hono } from "hono";
+// Spread the real modules: bun's `mock.module` replaces the registry entry
+// process-wide, so dropping the other real exports would break later test
+// files that import from them.
 import * as authActual from "@/lib/auth";
 import * as providersActual from "@/lib/providers";
 import * as modelCatalogActual from "@/lib/services/model-catalog";
@@ -21,6 +24,9 @@ const requireAuthOrApiKey = mock();
 const getCachedGatewayModelById = mock();
 const getProviderForModel = mock();
 
+// Capture the real implementation BEFORE mock.module runs: the `authActual`
+// namespace is a live binding, so after mock.module it resolves to the mock
+// itself (delegating through it would recurse forever).
 const realRequireAuthOrApiKey = authActual.requireAuthOrApiKey;
 
 mock.module("@/lib/auth", () => ({
@@ -49,6 +55,8 @@ mock.module("@/lib/utils/logger", () => ({
   },
 }));
 
+// Mount exactly the way the codegen wires it in _router.generated.ts so the
+// named-splat param the handler reads (`c.req.param("*")`) is populated.
 const MODELS_DETAIL_MOUNT = "/api/v1/models/:*{.+}";
 
 const modelsDetailRoute = (await import("../v1/models/[...model]/route"))
@@ -67,6 +75,8 @@ beforeEach(() => {
   getCachedGatewayModelById.mockReset();
   getProviderForModel.mockReset();
 
+  // Default to the REAL auth resolution so the unauthenticated case exercises
+  // the genuine no-credentials path (throws AuthenticationError, status 401).
   requireAuthOrApiKey.mockImplementation(realRequireAuthOrApiKey);
 });
 
@@ -86,10 +96,13 @@ describe("GET /api/v1/models/[...model] auth handling", () => {
     };
     expect(body.success).toBe(false);
     expect(body.code).toBe("authentication_required");
+    // The pre-fix symptom: the generic 500 body leaking out of the catch.
     expect(body.error).not.toBe("Failed to fetch model details");
   });
 
   test("invalid API key returns 401, not 500", async () => {
+    // requireAuthOrApiKey throws AuthenticationError("Invalid or expired API
+    // key") for unknown keys; simulate that without a DB round-trip.
     requireAuthOrApiKey.mockImplementation(async () => {
       const { AuthenticationError } = await import("@/lib/api/errors");
       throw new AuthenticationError("Invalid or expired API key");
@@ -104,7 +117,7 @@ describe("GET /api/v1/models/[...model] auth handling", () => {
     expect(body.code).toBe("authentication_required");
   });
 
-  test("authenticated request still resolves the model", async () => {
+  test("authenticated request still resolves the model (200)", async () => {
     requireAuthOrApiKey.mockResolvedValue({
       user: { id: USER, organization_id: ORG },
       authMethod: "api_key",

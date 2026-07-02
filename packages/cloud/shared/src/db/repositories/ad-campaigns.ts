@@ -124,9 +124,11 @@ export class AdCampaignsRepository {
   }
 
   /**
-   * Atomically apply an allocation-changing update only if credits_allocated
-   * still matches the row observed by the caller. Returns the updated row for
-   * the winner, or undefined when a concurrent budget change already moved it.
+   * Atomically apply an allocation-changing update ONLY if `credits_allocated`
+   * still equals `expectedAllocated` (compare-and-swap). Returns the updated row
+   * when this caller won the claim, or `undefined` when a concurrent budget
+   * change already moved the allocation. Used to make a budget-decrease refund
+   * single-winner so two concurrent decreases can't both refund (#11292).
    */
   async claimAllocationChange(
     id: string,
@@ -149,8 +151,10 @@ export class AdCampaignsRepository {
   }
 
   /**
-   * Atomically delete the campaign and return the deleted row. A concurrent
-   * delete, or a retry after another caller removed it, returns undefined.
+   * Atomically delete the campaign and return the deleted row — but only the
+   * caller that actually removed the row gets it back; a concurrent second
+   * delete (or a retry after a mid-op failure) gets `undefined`. Gates the
+   * unused-budget refund so a delete can't double-refund (#11292).
    */
   async claimDelete(id: string, organizationId: string): Promise<AdCampaign | undefined> {
     const [deleted] = await db

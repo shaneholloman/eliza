@@ -23,7 +23,7 @@ export const CRON_ROUTES: Record<string, string> = {
  * Each schedule may map to multiple paths; `scheduled()` fans out to all of them.
  */
 export const CRON_FANOUT: Record<string, string[]> = {
-  "0 0 * * *": ["/api/cron/container-billing", "/api/cron/release-pending-earnings"],
+  "0 0 * * *": ["/api/cron/container-billing"],
   "0 1 * * *": ["/api/cron/compute-metrics"],
   "0 2 * * *": ["/api/cron/cleanup-webhook-events"],
   "0 3 * * *": [
@@ -68,6 +68,8 @@ export const CRON_FANOUT: Record<string, string[]> = {
     "/api/v1/cron/pool-replenish",
     // #9899 Tier-2 optimistic-billing backstop (no-op when the flag is off).
     "/api/cron/sweep-inference-charges",
+    // #11169 synchronous-reservation backstop for dropped waitUntil settles.
+    "/api/cron/sweep-credit-reservations",
   ],
   "0 */6 * * *": [
     "/api/cron/cleanup-anonymous-sessions",

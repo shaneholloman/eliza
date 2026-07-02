@@ -10,29 +10,13 @@ import { inboxRoutes } from "./routes/inbox-routes.ts";
 export const inboxPlugin: Plugin = {
   name: "@elizaos/plugin-inbox",
   description:
-    "Unified cross-channel inbox triage with unresolved-item tracking. Hosts the INBOX umbrella action (list/search/summarize fan-out across email/Discord/Telegram/WhatsApp/X/Slack and similar non-SMS channels) and the inboxTriage provider, backed by the InboxService/InboxRepository triage back-end. The cross-channel inbox read route (`GET /api/lifeops/inbox`) and the connector-coupled getInbox/cross-channel-context surfaces stay in @elizaos/plugin-personal-assistant, which delegates the triage domain here. (Android SMS is handled by plugin-messages.)",
+    "Unified cross-channel inbox triage with unresolved-item tracking. Hosts the INBOX umbrella action (list/search/summarize fan-out across email/Discord/Telegram/WhatsApp/X/Slack and similar non-SMS channels) and the inboxTriage provider, backed by the InboxService/InboxRepository triage back-end plus the aggregation domain in `inbox/aggregate.ts` (builders, request resolver, cached read-through InboxDomain). The legacy transport route `GET /api/lifeops/inbox` and the connector sources/cache tables stay in @elizaos/plugin-personal-assistant, which injects them through the aggregate seams and delegates the domain here. (Android SMS is handled by plugin-messages.)",
   dependencies: ["@elizaos/plugin-sql"],
   schema: inboxDbSchema,
   services: [InboxMigrationService],
   // Promote the INBOX_* subaction virtuals here so they exist wherever the
   // plugin loads (including standalone, without plugin-personal-assistant).
-  // The `triage` override sharpens the planner signal so a genuine triage
-  // request ("triage my inbox", "what needs my attention") routes to
-  // INBOX_TRIAGE — the `inbox_triage` optimized-prompt consumer — instead of
-  // the list/summarize reads (#11383).
-  actions: [
-    ...promoteSubactionsToActions(inboxAction, {
-      overrides: {
-        triage: {
-          description:
-            "subaction = triage — run the AI triage classifier over new cross-channel messages (urgent / needs_reply / notify / info / ignore) and return the prioritized queue",
-          descriptionCompressed:
-            "INBOX_TRIAGE classify new messages urgent|needs_reply|notify|info|ignore -> prioritized queue",
-          similes: ["TRIAGE_INBOX", "PRIORITIZE_INBOX", "CLASSIFY_INBOX"],
-        },
-      },
-    }),
-  ],
+  actions: [...promoteSubactionsToActions(inboxAction)],
   providers: [inboxTriageProvider, crossChannelContextProvider],
   routes: inboxRoutes,
   views: [

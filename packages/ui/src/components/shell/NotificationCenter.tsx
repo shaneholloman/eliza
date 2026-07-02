@@ -5,11 +5,20 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { OPEN_NOTIFICATION_CENTER_EVENT } from "../../events";
+import {
+  type BackIntentEventDetail,
+  ELIZA_BACK_INTENT_EVENT,
+  OPEN_NOTIFICATION_CENTER_EVENT,
+} from "../../events";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import {
+  Z_NOTIFICATION_BACKDROP,
+  Z_NOTIFICATION_OVERLAY,
+} from "../../lib/floating-layers";
 import { cn } from "../../lib/utils";
 import { useAppSelector } from "../../state";
 import { categoryIcon } from "../../state/notifications/category-icon";
@@ -119,7 +128,7 @@ function NotificationRow({
   return (
     <li
       className={cn(
-        "group relative flex items-start gap-3 rounded-sm pr-9 transition-colors hover:bg-surface",
+        "group relative flex items-start gap-3 rounded-sm pr-9 transition-colors hover:bg-surface pointer-coarse:pr-12",
         unread && "bg-surface/60",
       )}
     >
@@ -132,7 +141,7 @@ function NotificationRow({
           className={cn(
             "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-sm",
             notification.priority === "urgent"
-              ? "bg-status-error/15 text-status-error"
+              ? "bg-status-danger/15 text-status-danger"
               : notification.priority === "high"
                 ? "bg-accent/15 text-accent"
                 : "bg-surface text-muted-strong",
@@ -167,8 +176,11 @@ function NotificationRow({
         // invisible-but-hit-testable X silently deleted the notification on a
         // near-edge tap. Full opacity on hover; keyboard focus visibility is
         // the app-wide global treatment (per-component focus utilities are
-        // banned by no-focus-ring-gate).
-        className="absolute right-1.5 top-2.5 shrink-0 rounded-sm p-1 text-muted opacity-50 transition-opacity hover:bg-surface hover:text-txt group-hover:opacity-100"
+        // banned by no-focus-ring-gate). The glyph stays 22px on mouse, but on a
+        // coarse pointer the hit target grows to the 44px `touch` token (the
+        // house `pointer-coarse:min-*-touch` convention) so it isn't a
+        // sub-target tap zone on the phone sheet.
+        className="absolute right-1.5 top-2.5 flex shrink-0 items-center justify-center rounded-sm p-1 text-muted opacity-50 transition-opacity pointer-coarse:min-h-touch pointer-coarse:min-w-touch hover:bg-surface hover:text-txt group-hover:opacity-100"
       >
         <X className="h-3.5 w-3.5" />
       </button>
@@ -186,10 +198,17 @@ function CategoryFilterBar({
   onSelect: (next: CategoryFilter) => void;
 }): ReactNode {
   return (
-    /* Flat — no divider line; rows separate by whitespace. */
+    // Flat — no divider line; rows separate by whitespace. These are filter
+    // TOGGLES (they narrow the list below), not WAI-ARIA tabs — role="group" +
+    // aria-pressed buttons, matching the adjacent sort toggle. A tablist would
+    // promise roving-tabindex + arrow-key nav this bar doesn't implement.
+    // `shrink-0`: this is a horizontal scroll container (overflow-x-auto → auto
+    // min-height 0), so inside the flex-column shell it would otherwise be
+    // crushed vertically when the list overflows; the list `ul` is the scroller.
+    // biome-ignore lint/a11y/useSemanticElements: role="group" is correct for a labelled toolbar of filter toggles; <fieldset> is for grouped form fields, not a chip bar.
     <div
-      className="flex items-center gap-1 overflow-x-auto px-2 py-1.5"
-      role="tablist"
+      className="flex shrink-0 items-center gap-1 overflow-x-auto px-2 py-1.5"
+      role="group"
       aria-label="Filter notifications by category"
     >
       <FilterChip
@@ -224,8 +243,7 @@ function FilterChip({
   return (
     <button
       type="button"
-      role="tab"
-      aria-selected={active}
+      aria-pressed={active}
       onClick={onSelect}
       className={cn(
         "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
@@ -271,12 +289,16 @@ export function NotificationCenter({
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }): ReactNode {
-  const { notifications, unreadCount } = useNotifications();
+  const { notifications, unreadCount, hydrated } = useNotifications();
   const setActionNotice = useAppSelector((s) => s.setActionNotice);
   const [activeCategory, setActiveCategory] = useState<CategoryFilter>("all");
   // Default to attention-first (unread → priority → recency); the user can flip
   // to a plain most-recent-first timeline (#10706).
   const [sortMode, setSortMode] = useState<NotificationSortMode>("priority");
+  // The bell popover is CONTROLLED so a notification row that deep-links can
+  // close it after navigating (an uncontrolled Radix Popover stays open over the
+  // new view). Declared before any early return to respect the rules of hooks.
+  const [bellOpen, setBellOpen] = useState(false);
 
   // Surface detection — drives which shell the headless owner opens and how the
   // pull-down sheet sizes itself. Both are reactive, so a resize/rotate while
@@ -311,6 +333,20 @@ export function NotificationCenter({
     activeCategory !== "all" && !presentCategories.includes(activeCategory)
       ? "all"
       : activeCategory;
+
+  // Commit the drain fallback to state (not just the computed view): once a
+  // filtered category empties, the filter is genuinely reset to "all". Without
+  // this the stale `activeCategory` lingers, and a later notification of that
+  // same category refilling `presentCategories` silently snaps the open shell
+  // back to the old filter mid-read.
+  useEffect(() => {
+    if (
+      activeCategory !== "all" &&
+      !presentCategories.includes(activeCategory)
+    ) {
+      setActiveCategory("all");
+    }
+  }, [activeCategory, presentCategories]);
 
   const visibleNotifications = useMemo(() => {
     const filtered =
@@ -347,15 +383,95 @@ export function NotificationCenter({
   }, []);
 
   // Escape closes the controlled shells — sheet + panel (mirrors the popover's
-  // dismiss).
+  // dismiss). If a Radix dialog is stacked ON TOP (e.g. the Cmd+K command
+  // palette opened over the panel), let that topmost layer consume the Escape
+  // and peel one layer per press — the notification shell carries role="dialog"
+  // WITHOUT data-state="open", so this guard never blocks its own dismissal.
   useEffect(() => {
     if (!isControlled || !open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onOpenChange?.(false);
+      if (e.key !== "Escape") return;
+      if (document.querySelector('[role="dialog"][data-state="open"]')) return;
+      onOpenChange?.(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [isControlled, open, onOpenChange]);
+
+  // Android hardware/gesture back closes whichever notification surface is open
+  // FIRST (it is the topmost layer), so back never collapses the chat beneath it
+  // or backgrounds the app while a modal notification shell is up. Registered
+  // only while a shell is open; marks the intent handled so the chat overlay's
+  // back handler + the native fall-through don't also fire.
+  useEffect(() => {
+    const shellOpen = (isControlled && open) || bellOpen;
+    if (!shellOpen) return;
+    const onBackIntent = (e: Event) => {
+      const detail = (e as CustomEvent<BackIntentEventDetail>).detail;
+      if (!detail || detail.handled) return;
+      detail.handled = true;
+      if (isControlled) onOpenChange?.(false);
+      else setBellOpen(false);
+    };
+    window.addEventListener(ELIZA_BACK_INTENT_EVENT, onBackIntent);
+    return () =>
+      window.removeEventListener(ELIZA_BACK_INTENT_EVENT, onBackIntent);
+  }, [isControlled, open, bellOpen, onOpenChange]);
+
+  // Focus management for the controlled shells (sheet + panel). Unlike the bell
+  // path (Radix Popover manages focus for us), these are hand-rolled dialogs
+  // portaled to document.body, so we move focus IN on open, restore it to the
+  // opener (home pull-zone button / tray trigger) on close, and trap Tab within
+  // the dialog while open — the accessibility contract sibling overlays already
+  // meet (e.g. TranscriptViewerOverlay).
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!isControlled || !open) return;
+    restoreFocusRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    // The portal renders in the same commit, so the ref is set by the time this
+    // layout-adjacent effect runs.
+    dialogRef.current?.focus();
+    return () => {
+      const toRestore = restoreFocusRef.current;
+      restoreFocusRef.current = null;
+      if (toRestore?.isConnected) toRestore.focus();
+    };
+  }, [isControlled, open]);
+
+  // Wrap Tab within the dialog so keyboard focus can't walk out into the
+  // backgrounded app behind the overlay.
+  const onDialogKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== "Tab") return;
+      const root = dialogRef.current;
+      if (!root) return;
+      const focusables = Array.from(
+        root.querySelectorAll<HTMLElement>(
+          'a[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusables.length === 0) {
+        e.preventDefault();
+        root.focus();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === root)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    },
+    [],
+  );
 
   // Surface-agnostic open (#10706): the single always-mounted headless instance
   // listens for OPEN_NOTIFICATION_CENTER_EVENT and reveals the pull-down sheet.
@@ -473,7 +589,7 @@ export function NotificationCenter({
                 aria-pressed={sortMode === mode}
                 onClick={() => setSortMode(mode)}
                 className={cn(
-                  "rounded px-2 py-0.5 text-2xs font-medium transition-colors",
+                  "rounded-sm px-2 py-0.5 text-2xs font-medium transition-colors",
                   sortMode === mode
                     ? "bg-accent/15 text-accent"
                     : "text-muted hover:text-txt",
@@ -494,8 +610,18 @@ export function NotificationCenter({
             isControlled && "min-h-[9rem]",
           )}
         >
-          <Inbox className="h-7 w-7 text-muted/70" />
-          <span className="text-sm text-muted">You're all caught up</span>
+          {/* Distinguish "not loaded yet" from "genuinely empty": the store sets
+              `hydrated` only once the inbox fetch settles, so before that we show
+              a neutral loading line instead of the definitive "all caught up"
+              (which would flash then get replaced when rows arrive). */}
+          {hydrated ? (
+            <>
+              <Inbox className="h-7 w-7 text-muted/70" />
+              <span className="text-sm text-muted">You're all caught up</span>
+            </>
+          ) : (
+            <span className="text-sm text-muted">Loading…</span>
+          )}
         </div>
       ) : (
         <ul
@@ -513,7 +639,9 @@ export function NotificationCenter({
             <NotificationRow
               key={notification.id}
               notification={notification}
-              onClose={() => (isControlled ? onOpenChange?.(false) : undefined)}
+              onClose={() =>
+                isControlled ? onOpenChange?.(false) : setBellOpen(false)
+              }
             />
           ))}
         </ul>
@@ -535,28 +663,48 @@ export function NotificationCenter({
           aria-label="Dismiss notifications"
           data-testid="notification-sheet-backdrop"
           data-above-shell-overlay
+          // Not a Tab stop: Escape + the labelled Close button cover keyboard
+          // dismissal, so the first Tab inside the trapped dialog is a real
+          // control, not this invisible catcher.
+          tabIndex={-1}
           onClick={() => onOpenChange?.(false)}
-          className="fixed inset-0 z-[9500] bg-black/40"
+          style={{ zIndex: Z_NOTIFICATION_BACKDROP }}
+          className="fixed inset-0 bg-black/40"
         />
         <div
+          ref={dialogRef}
           role="dialog"
+          aria-modal="true"
           aria-label="Notifications"
           data-testid="notification-sheet"
           data-above-shell-overlay
+          tabIndex={-1}
+          onKeyDown={onDialogKeyDown}
+          style={{ zIndex: Z_NOTIFICATION_OVERLAY }}
           className={cn(
             // Floating sheet: flat (no drop shadow, app-wide direction); the
             // popover scrim + one outer edge give self-contained contrast. Short
             // landscape caps lower so it floats over the (already short) viewport.
-            "fixed inset-x-0 top-0 z-[9501] mx-auto flex w-[min(440px,calc(100vw-1rem))] flex-col overflow-hidden rounded-b-2xl border-x border-b border-border bg-popover",
+            "fixed inset-x-0 top-0 mx-auto flex w-[min(440px,calc(100vw-1rem))] flex-col overflow-hidden rounded-b-2xl border-x border-b border-border bg-popover outline-none",
             isShortLandscape ? "max-h-[75vh]" : "max-h-[85vh]",
             "pt-[var(--safe-area-top,0px)]",
             className,
           )}
         >
           {panelBody}
-          <div className="flex shrink-0 justify-center py-1.5">
-            <div className="h-1 w-9 rounded-full bg-muted/40" aria-hidden />
-          </div>
+          {/* The bottom grabber is a real dismiss control, not a fake drag
+              affordance: tapping it (or the pill) closes the sheet. Binding a
+              pull-up gesture to the whole sheet would fight the notification
+              list's own vertical scroll, so this is a plain click target. */}
+          <button
+            type="button"
+            aria-label="Dismiss notifications"
+            data-testid="notification-sheet-grabber"
+            onClick={() => onOpenChange?.(false)}
+            className="flex shrink-0 justify-center py-2"
+          >
+            <span className="h-1 w-9 rounded-full bg-muted/40" aria-hidden />
+          </button>
         </div>
       </>,
     );
@@ -577,18 +725,28 @@ export function NotificationCenter({
           aria-label="Dismiss notifications"
           data-testid="notification-panel-backdrop"
           data-above-shell-overlay
+          // Not a Tab stop (see the sheet backdrop): the full-screen catcher
+          // blocks background pointer interaction but must not be the first
+          // keyboard focus target inside the trapped dialog.
+          tabIndex={-1}
           onClick={() => onOpenChange?.(false)}
-          className="fixed inset-0 z-[9500]"
+          style={{ zIndex: Z_NOTIFICATION_BACKDROP }}
+          className="fixed inset-0"
         />
         <div
+          ref={dialogRef}
           role="dialog"
+          aria-modal="true"
           aria-label="Notifications"
           data-testid="notification-panel"
           data-above-shell-overlay
+          tabIndex={-1}
+          onKeyDown={onDialogKeyDown}
+          style={{ zIndex: Z_NOTIFICATION_OVERLAY }}
           className={cn(
             // Flat like the app's PopoverContent (border + bg, no shadow): the
             // 1px border defines the floating panel over content.
-            "fixed right-3 top-3 z-[9501] flex max-h-[min(560px,calc(100vh-1.5rem))] w-[400px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-xl border border-border bg-popover",
+            "fixed right-3 top-3 flex max-h-[min(560px,calc(100vh-1.5rem))] w-[400px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-xl border border-border bg-popover outline-none",
             className,
           )}
         >
@@ -599,7 +757,7 @@ export function NotificationCenter({
   }
 
   return (
-    <Popover>
+    <Popover open={bellOpen} onOpenChange={setBellOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
