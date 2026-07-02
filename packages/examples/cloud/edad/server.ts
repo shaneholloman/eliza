@@ -5,21 +5,21 @@
  *   GET  /                  → public/index.html
  *   GET  /style.css, etc.   → public/* static
  *   GET  /api/config        → non-secret OAuth config (app_id, cloud_url)
+ *   POST /api/auth/exchange → redeem the OAuth `code`, mint an app session
  *   POST /api/messages      → forwarded to ELIZA_CLOUD_URL via @elizaos/cloud-sdk
+ *   GET  /api/history       → this user's persisted chat history
  *   GET  /health            → "ok" for ECS health probes
  *
- * Auth: the browser obtains a Steward JWT via OAuth and sends it on every
- * /api/messages call as `x-user-token`. The server forwards that as the
- * SDK's bearer token, so the upstream debits the signed-in user's org
- * credit balance — keeping the monetization story honest.
- *
- * The SDK forwards `x-app-id` and `x-affiliate-code` as default headers
- * (when configured) so upstream attributes the inference markup to the
- * app creator and the affiliate share to the affiliate code holder.
+ * Auth: Eliza Cloud redirects back with a single-use `code` (`eac_...`), not a
+ * durable user token. The app redeems that code server-side, mints its own
+ * signed app session, and forwards inference upstream with the app owner's
+ * Cloud key plus `x-app-id` + `x-affiliate-code`. The owner key never leaves
+ * the server.
  */
 
 import { join } from "node:path";
 import { CloudApiError, ElizaCloudClient } from "@elizaos/cloud-sdk";
+import { mintAppSession, verifyAppSession } from "./app-session.ts";
 import { dbReady, getHistory, initDb, saveTurn, userRef } from "./db.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -30,6 +30,9 @@ const CLOUD_URL = (
 ).replace(/\/+$/, "");
 const AFFILIATE_CODE = process.env.ELIZA_AFFILIATE_CODE ?? "";
 const APP_ID = process.env.ELIZA_APP_ID ?? "";
+const OWNER_CLOUD_KEY =
+  process.env.ELIZAOS_CLOUD_API_KEY ?? process.env.ELIZA_CLOUD_API_KEY ?? "";
+const SESSION_SECRET = process.env.EDAD_SESSION_SECRET ?? OWNER_CLOUD_KEY;
 
 // Sticky headers attached to every upstream call. Empty values are
 // intentionally omitted: passing an unknown affiliate code makes upstream
@@ -89,11 +92,18 @@ function extractReplyText(result: unknown): string {
 
 async function forwardMessages(
   req: Request,
-  userToken: string,
+  userId: string,
 ): Promise<Response> {
+  if (!OWNER_CLOUD_KEY) {
+    return jsonError(
+      500,
+      "not_configured",
+      "this app is missing ELIZAOS_CLOUD_API_KEY.",
+    );
+  }
   const cloud = new ElizaCloudClient({
     baseUrl: CLOUD_URL,
-    bearerToken: userToken,
+    bearerToken: OWNER_CLOUD_KEY,
     defaultHeaders: STICKY_HEADERS,
   });
 
@@ -104,7 +114,7 @@ async function forwardMessages(
     // across sessions. No-op when the app has no DB (see db.ts); wrapped so a
     // persistence error never affects the reply the user gets back.
     if (dbReady()) {
-      const ref = userRef(userToken);
+      const ref = userRef(userId);
       await saveTurn(ref, "user", extractUserText(json));
       await saveTurn(ref, "assistant", extractReplyText(result));
     }
@@ -142,8 +152,20 @@ async function handleApi(req: Request, segments: string[]): Promise<Response> {
     );
   }
 
-  const userToken = req.headers.get("x-user-token")?.trim();
-  if (!userToken) {
+  if (
+    segments.length === 2 &&
+    segments[0] === "auth" &&
+    segments[1] === "exchange" &&
+    req.method === "POST"
+  ) {
+    return handleAuthExchange(req);
+  }
+
+  const userId = verifyAppSession(
+    req.headers.get("x-app-session")?.trim(),
+    SESSION_SECRET,
+  );
+  if (!userId) {
     return jsonError(
       401,
       "not_signed_in",
@@ -156,7 +178,7 @@ async function handleApi(req: Request, segments: string[]): Promise<Response> {
     segments[0] === "messages" &&
     req.method === "POST"
   ) {
-    return forwardMessages(req, userToken);
+    return forwardMessages(req, userId);
   }
 
   // Signed-in user's persisted chat history from this app's per-tenant DB.
@@ -166,7 +188,7 @@ async function handleApi(req: Request, segments: string[]): Promise<Response> {
     segments[0] === "history" &&
     req.method === "GET"
   ) {
-    const messages = dbReady() ? await getHistory(userRef(userToken)) : [];
+    const messages = dbReady() ? await getHistory(userRef(userId)) : [];
     return Response.json(
       { messages, db_enabled: dbReady() },
       { headers: { "cache-control": "no-store" } },
@@ -174,6 +196,75 @@ async function handleApi(req: Request, segments: string[]): Promise<Response> {
   }
 
   return jsonError(404, "not_found", "unknown route");
+}
+
+async function handleAuthExchange(req: Request): Promise<Response> {
+  if (!OWNER_CLOUD_KEY || !SESSION_SECRET || !APP_ID) {
+    return jsonError(
+      500,
+      "not_configured",
+      "this app is missing its Cloud key / app id. set ELIZAOS_CLOUD_API_KEY and ELIZA_APP_ID.",
+    );
+  }
+
+  let code = "";
+  try {
+    const body = (await req.json()) as { code?: unknown };
+    code = typeof body.code === "string" ? body.code.trim() : "";
+  } catch {
+    return jsonError(400, "bad_request", "expected a JSON body with `code`.");
+  }
+  if (!code) {
+    return jsonError(400, "missing_code", "no authorization code provided.");
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${CLOUD_URL}/api/v1/app-auth/session`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${code}`, "x-app-id": APP_ID },
+    });
+  } catch {
+    return jsonError(
+      502,
+      "upstream_unreachable",
+      "couldn't reach eliza cloud to finish sign-in. try again in a sec.",
+    );
+  }
+  if (!res.ok) {
+    return jsonError(
+      401,
+      "exchange_failed",
+      "sign-in code was invalid or already used. try signing in again.",
+    );
+  }
+
+  const session = (await res.json().catch(() => null)) as {
+    user?: { id?: unknown; email?: unknown; name?: unknown };
+  } | null;
+  const userId =
+    session && typeof session.user?.id === "string" ? session.user.id : "";
+  if (!userId) {
+    return jsonError(
+      502,
+      "exchange_failed",
+      "cloud returned no user identity.",
+    );
+  }
+
+  return Response.json(
+    {
+      session: mintAppSession(userId, SESSION_SECRET),
+      user: {
+        id: userId,
+        email:
+          typeof session?.user?.email === "string" ? session.user.email : null,
+        name:
+          typeof session?.user?.name === "string" ? session.user.name : null,
+      },
+    },
+    { headers: { "cache-control": "no-store" } },
+  );
 }
 
 async function serveStatic(
