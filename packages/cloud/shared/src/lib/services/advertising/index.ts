@@ -108,6 +108,14 @@ class AdvertisingService {
     return metadata;
   }
 
+  private assertAccountCanSpend(account: AdAccount): void {
+    if (account.status !== "active") {
+      throw new Error(
+        `Ad account is not active (status: ${account.status}); it must be approved before running campaigns`,
+      );
+    }
+  }
+
   getProvider(platform: AdPlatform): AdProvider {
     const provider = providers[platform];
     if (!provider) {
@@ -223,7 +231,9 @@ class AdvertisingService {
       account_name: input.accountName || validation.accountName || "Ad Account",
       access_token_secret_id: accessTokenSecret.id,
       refresh_token_secret_id: refreshTokenSecretId,
-      status: "active",
+      // Ad spend is money movement. New accounts require operator approval
+      // before campaigns, creatives, or inventory serves can spend against them.
+      status: "pending",
     });
 
     logger.info("[Advertising] Ad account connected", {
@@ -232,6 +242,89 @@ class AdvertisingService {
     });
 
     return account;
+  }
+
+  async approveAccount(accountId: string): Promise<AdAccount> {
+    const account = await adAccountsRepository.findById(accountId);
+    if (!account) {
+      throw new Error("Ad account not found");
+    }
+    if (account.status === "active") {
+      return account;
+    }
+    if (account.status !== "pending") {
+      throw new Error(
+        `Ad account cannot be approved from status "${account.status}" (only "pending" accounts can be approved)`,
+      );
+    }
+
+    const updated = await adAccountsRepository.updateStatus(accountId, "active");
+    if (!updated) {
+      throw new Error("Ad account not found");
+    }
+    logger.info("[Advertising] Ad account approved", { accountId });
+    return updated;
+  }
+
+  async rejectAccount(accountId: string): Promise<AdAccount> {
+    const account = await adAccountsRepository.findById(accountId);
+    if (!account) {
+      throw new Error("Ad account not found");
+    }
+    if (account.status === "suspended") {
+      return account;
+    }
+
+    const updated = await adAccountsRepository.updateStatus(accountId, "suspended");
+    if (!updated) {
+      throw new Error("Ad account not found");
+    }
+
+    const activeCampaigns = (await adCampaignsRepository.listByAdAccount(accountId)).filter(
+      (campaign) => campaign.status === "active",
+    );
+    if (activeCampaigns.length > 0) {
+      const externalActiveCampaigns = activeCampaigns.filter((campaign) =>
+        Boolean(campaign.external_campaign_id),
+      );
+      let credentials: AdAccountCredentials | undefined;
+      let provider: AdProvider | undefined;
+      if (externalActiveCampaigns.length > 0) {
+        try {
+          credentials = await this.getCredentials(account);
+          provider = this.getProvider(account.platform);
+        } catch (error) {
+          logger.error("[Advertising] Failed to load provider credentials while suspending account", {
+            accountId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      for (const campaign of activeCampaigns) {
+        if (campaign.external_campaign_id && credentials && provider) {
+          const result = await provider.pauseCampaign(
+            credentials,
+            campaign.external_campaign_id,
+          );
+          if (!result.success) {
+            logger.error("[Advertising] Failed to pause provider campaign for suspended account", {
+              accountId,
+              campaignId: campaign.id,
+              externalCampaignId: campaign.external_campaign_id,
+              error: result.error,
+            });
+          }
+        }
+        await adCampaignsRepository.updateStatus(campaign.id, "paused");
+      }
+    }
+
+    logger.info("[Advertising] Ad account rejected/suspended", {
+      accountId,
+      pausedCampaigns: activeCampaigns.length,
+    });
+    return updated;
   }
 
   async disconnectAccount(accountId: string, organizationId: string): Promise<void> {
@@ -450,6 +543,7 @@ class AdvertisingService {
     if (!account || account.organization_id !== input.organizationId) {
       throw new Error("Ad account not found");
     }
+    this.assertAccountCanSpend(account);
 
     await contentSafetyService.assertSafeForPublicUse({
       surface: "advertising_campaign",
@@ -626,6 +720,7 @@ class AdvertisingService {
     if (!account) {
       throw new Error("Ad account not found");
     }
+    this.assertAccountCanSpend(account);
 
     const credentials = await this.getCredentials(account);
     const provider = this.getProvider(account.platform);
@@ -733,6 +828,7 @@ class AdvertisingService {
     if (!account) {
       throw new Error("Ad account not found");
     }
+    this.assertAccountCanSpend(account);
 
     const credentials = await this.getCredentials(account);
     const provider = this.getProvider(account.platform);
@@ -971,6 +1067,11 @@ class AdvertisingService {
     if (!campaign || campaign.organization_id !== organizationId) {
       throw new Error("Campaign not found");
     }
+    const account = await adAccountsRepository.findById(campaign.ad_account_id);
+    if (!account) {
+      throw new Error("Ad account not found");
+    }
+    this.assertAccountCanSpend(account);
 
     const safetyReview = await contentSafetyService.assertSafeForPublicUse({
       surface: "advertising_creative",
@@ -994,34 +1095,30 @@ class AdvertisingService {
     }
 
     let preparedInput = input;
-    let account: AdAccount | undefined;
     let credentials: AdAccountCredentials | undefined;
     let provider: AdProvider | undefined;
     if (campaign.external_campaign_id) {
-      account = await adAccountsRepository.findById(campaign.ad_account_id);
-      if (account) {
-        try {
-          credentials = await this.getCredentials(account);
-          provider = this.getProvider(account.platform);
-          const preparedMedia = await this.prepareCreativeMediaForProvider(
-            organizationId,
-            account,
-            provider,
-            credentials,
-            input,
-          );
-          preparedInput = { ...input, media: preparedMedia };
-        } catch (error) {
-          await creditsService.refundCredits({
-            organizationId,
-            amount: AD_CREDIT_RATES.createCreative,
-            description: `Refund: Creative media upload failed - ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-            metadata: { campaignId: input.campaignId, creativeName: input.name },
-          });
-          throw error;
-        }
+      try {
+        credentials = await this.getCredentials(account);
+        provider = this.getProvider(account.platform);
+        const preparedMedia = await this.prepareCreativeMediaForProvider(
+          organizationId,
+          account,
+          provider,
+          credentials,
+          input,
+        );
+        preparedInput = { ...input, media: preparedMedia };
+      } catch (error) {
+        await creditsService.refundCredits({
+          organizationId,
+          amount: AD_CREDIT_RATES.createCreative,
+          description: `Refund: Creative media upload failed - ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          metadata: { campaignId: input.campaignId, creativeName: input.name },
+        });
+        throw error;
       }
     }
 
