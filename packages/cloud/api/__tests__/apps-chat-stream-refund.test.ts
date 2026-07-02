@@ -12,14 +12,12 @@
  */
 import { describe, expect, mock, test } from "bun:test";
 import {
-  reconcileChatSettleError,
   type ChatSettleCredits,
+  reconcileChatSettleError,
 } from "../v1/apps/[id]/chat/stream-refund";
 
 function makeCredits() {
-  const calls: Array<
-    Parameters<ChatSettleCredits["reconcileCredits"]>[0]
-  > = [];
+  const calls: Array<Parameters<ChatSettleCredits["reconcileCredits"]>[0]> = [];
   const reconcileCredits = mock(
     async (args: Parameters<ChatSettleCredits["reconcileCredits"]>[0]) => {
       calls.push(args);
@@ -53,8 +51,7 @@ const nonStreamingRefund = {
     "[App Chat] Non-streaming throw at/after the settle reconcile; NOT refunding (movement may have committed - sweep recovers a stranded hold)",
   refundLog:
     "[App Chat] Non-streaming settle never started after debit; refunding reserved hold (#11169)",
-  refundDescription:
-    "Chat refund (non-streaming settle failed): gpt-4o-mini",
+  refundDescription: "Chat refund (non-streaming settle failed): gpt-4o-mini",
   refundMetadata: {
     error: true,
     streaming: false,
