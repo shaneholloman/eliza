@@ -708,7 +708,7 @@ function handleSetBackend(
       );
     }
     const config = loadElizaConfig() as { env?: Record<string, unknown> };
-    config.env = { ...(config.env ?? {}), ELIZA_BRAIN_PROVIDER: provider };
+    config.env = { ...(config.env || {}), ELIZA_BRAIN_PROVIDER: provider };
     saveElizaConfig(config as Parameters<typeof saveElizaConfig>[0]);
     // Immediate effect: the runtime's useModel override reads this via getSetting.
     runtime.setSetting?.("ELIZA_BRAIN_PROVIDER", provider);
@@ -737,14 +737,14 @@ function handleSetBackend(
   // whatever currently wins and preserve any operator allow lock-list.
   const { routing: coding } = readEffectiveCodingRouting(runtime, config);
   if (tag) {
-    coding.byTag = { ...(coding.byTag ?? {}), [tag]: backend };
+    coding.byTag = { ...(coding.byTag || {}), [tag]: backend };
   } else {
     coding.default = backend;
   }
 
   // Persist to the config-env JSON for durability across restarts.
   config.env = {
-    ...(config.env ?? {}),
+    ...(config.env || {}),
     ELIZA_BACKEND_ROUTING: JSON.stringify({ coding }),
   };
   saveElizaConfig(config as Parameters<typeof saveElizaConfig>[0]);
