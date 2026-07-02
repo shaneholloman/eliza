@@ -49,6 +49,8 @@ app.post("/", async (c) => {
       api_key: bodyApiKey,
       page_url,
       referrer,
+      visitor_id,
+      session_id,
       screen_width,
       screen_height,
       pathname,
@@ -57,6 +59,8 @@ app.post("/", async (c) => {
       api_key?: string;
       page_url?: string;
       referrer?: string;
+      visitor_id?: string;
+      session_id?: string;
       screen_width?: number;
       screen_height?: number;
       pathname?: string;
@@ -102,7 +106,15 @@ app.post("/", async (c) => {
       ipAddress,
       userAgent,
       source,
-      metadata: { screen_width, screen_height, origin, referer, pathname },
+      metadata: {
+        screen_width,
+        screen_height,
+        origin,
+        referer,
+        pathname,
+        visitor_id,
+        session_id,
+      },
     });
 
     logger.debug("[Track] Page view recorded", {

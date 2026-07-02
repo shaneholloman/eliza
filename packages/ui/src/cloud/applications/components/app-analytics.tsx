@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Clock,
   DollarSign,
+  GitBranch,
   Globe,
   Loader2,
   RefreshCw,
@@ -95,6 +96,38 @@ interface Visitor {
   lastSeen: string;
 }
 
+interface SessionAnalytics {
+  summary: {
+    totalSessions: number;
+    uniqueVisitors: number;
+    totalPageViews: number;
+    avgPagesPerSession: number;
+    avgSessionDurationMs: number;
+    bounceRatePercent: number;
+  };
+  sessions: Array<{
+    sessionId: string;
+    visitorId: string;
+    startedAt: string;
+    endedAt: string;
+    durationMs: number;
+    pageViews: number;
+    entryPath: string;
+    exitPath: string;
+  }>;
+  funnel: {
+    totalEntrants: number;
+    steps: Array<{
+      path: string;
+      label: string;
+      sessions: number;
+      visitors: number;
+      conversionFromStartPercent: number;
+      conversionFromPreviousPercent: number;
+    }>;
+  };
+}
+
 interface AnalyticsOverviewResponse {
   success?: boolean;
   analytics?: Array<{
@@ -119,6 +152,11 @@ interface RequestStatsResponse {
 interface VisitorsResponse {
   success?: boolean;
   visitors?: Visitor[];
+}
+
+interface SessionsResponse {
+  success?: boolean;
+  sessions?: SessionAnalytics;
 }
 
 interface RequestLogsResponse {
@@ -157,7 +195,7 @@ const TYPE_LABELS: Record<string, string> = {
   agent: "Agent",
 };
 
-type TabValue = "overview" | "requests" | "visitors" | "logs";
+type TabValue = "overview" | "requests" | "visitors" | "sessions" | "logs";
 
 export function AppAnalytics({ appId }: AppAnalyticsProps) {
   const [isLoading, setIsLoading] = useState(true);
@@ -174,6 +212,8 @@ export function AppAnalytics({ appId }: AppAnalyticsProps) {
   const [requestLogs, setRequestLogs] = useState<RequestLog[]>([]);
   const [requestStats, setRequestStats] = useState<RequestStats | null>(null);
   const [visitors, setVisitors] = useState<Visitor[]>([]);
+  const [sessionAnalytics, setSessionAnalytics] =
+    useState<SessionAnalytics | null>(null);
   const [logsTotal, setLogsTotal] = useState(0);
   const [logsPage, setLogsPage] = useState(0);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
@@ -186,6 +226,7 @@ export function AppAnalytics({ appId }: AppAnalyticsProps) {
     { value: "overview", label: "Overview", icon: TrendingUp },
     { value: "requests", label: "Requests", icon: Activity },
     { value: "visitors", label: "Visitors", icon: Globe },
+    { value: "sessions", label: "Sessions", icon: GitBranch },
     { value: "logs", label: "Logs", icon: Clock },
   ];
 
@@ -213,12 +254,15 @@ export function AppAnalytics({ appId }: AppAnalyticsProps) {
   const fetchRequestStats = useCallback(async () => {
     setIsLoadingStats(true);
     try {
-      const [statsData, visitorsData] = await Promise.all([
+      const [statsData, visitorsData, sessionsData] = await Promise.all([
         api<RequestStatsResponse>(
           `/api/v1/apps/${appId}/analytics/requests?view=stats`,
         ),
         api<VisitorsResponse>(
           `/api/v1/apps/${appId}/analytics/requests?view=visitors&limit=10`,
+        ),
+        api<SessionsResponse>(
+          `/api/v1/apps/${appId}/analytics/requests?view=sessions&limit=20`,
         ),
       ]);
 
@@ -227,6 +271,9 @@ export function AppAnalytics({ appId }: AppAnalyticsProps) {
       }
       if (visitorsData.success && visitorsData.visitors) {
         setVisitors(visitorsData.visitors);
+      }
+      if (sessionsData.success && sessionsData.sessions) {
+        setSessionAnalytics(sessionsData.sessions);
       }
     } catch {
       toast.error("Failed to load request stats");
@@ -266,14 +313,20 @@ export function AppAnalytics({ appId }: AppAnalyticsProps) {
   );
 
   useEffect(() => {
-    if (activeTab === "requests" || activeTab === "visitors") {
+    if (
+      activeTab === "requests" ||
+      activeTab === "visitors" ||
+      activeTab === "sessions"
+    ) {
       fetchRequestStats();
     }
   }, [activeTab, fetchRequestStats]);
   useIntervalWhenDocumentVisible(
     fetchRequestStats,
     AUTO_REFRESH_INTERVAL,
-    activeTab === "requests" || activeTab === "visitors",
+    activeTab === "requests" ||
+      activeTab === "visitors" ||
+      activeTab === "sessions",
   );
 
   useEffect(() => {
@@ -741,6 +794,158 @@ export function AppAnalytics({ appId }: AppAnalyticsProps) {
                 )}
               </div>
             </>
+          )}
+        </div>
+      )}
+
+      {/* Sessions Tab */}
+      {activeTab === "sessions" && (
+        <div className="space-y-4">
+          {isLoadingStats ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-[var(--brand-orange)]" />
+            </div>
+          ) : sessionAnalytics ? (
+            <>
+              <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">
+                <MiniStatCard
+                  label="Sessions"
+                  value={sessionAnalytics.summary.totalSessions.toLocaleString(
+                    "en-US",
+                  )}
+                  color="text-[var(--brand-orange)]"
+                />
+                <MiniStatCard
+                  label="Visitors"
+                  value={sessionAnalytics.summary.uniqueVisitors.toLocaleString(
+                    "en-US",
+                  )}
+                  color="text-white"
+                />
+                <MiniStatCard
+                  label="Page Views"
+                  value={sessionAnalytics.summary.totalPageViews.toLocaleString(
+                    "en-US",
+                  )}
+                  color="text-green-400"
+                />
+                <MiniStatCard
+                  label="Pages/Session"
+                  value={sessionAnalytics.summary.avgPagesPerSession.toFixed(1)}
+                  color="text-white"
+                />
+                <MiniStatCard
+                  label="Bounce Rate"
+                  value={`${sessionAnalytics.summary.bounceRatePercent.toFixed(1)}%`}
+                  color="text-white"
+                />
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+                <div className="bg-neutral-900 rounded-sm p-4">
+                  <h3 className="text-sm font-medium text-white mb-4 flex items-center gap-2">
+                    <GitBranch className="h-4 w-4 text-[var(--brand-orange)]" />
+                    Funnel
+                  </h3>
+                  {sessionAnalytics.funnel.steps.length > 0 ? (
+                    <div className="space-y-3">
+                      {sessionAnalytics.funnel.steps.map((step) => (
+                        <div key={step.path} className="space-y-1.5">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-sm text-white truncate">
+                              {step.label}
+                            </span>
+                            <span className="text-xs text-neutral-400 whitespace-nowrap">
+                              {step.sessions.toLocaleString("en-US")} sessions
+                            </span>
+                          </div>
+                          <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-[var(--brand-orange)]"
+                              style={{
+                                width: `${Math.min(100, step.conversionFromStartPercent)}%`,
+                              }}
+                            />
+                          </div>
+                          <div className="flex items-center justify-between text-[11px] text-neutral-500">
+                            <span className="truncate">{step.path}</span>
+                            <span className="whitespace-nowrap">
+                              {step.conversionFromStartPercent.toFixed(1)}%
+                              total /{" "}
+                              {step.conversionFromPreviousPercent.toFixed(1)}%
+                              step
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-center text-neutral-500 py-8 text-sm">
+                      No funnel data available
+                    </p>
+                  )}
+                </div>
+
+                <div className="bg-neutral-900 rounded-sm p-4">
+                  <h3 className="text-sm font-medium text-white mb-4">
+                    Recent Sessions
+                  </h3>
+                  {sessionAnalytics.sessions.length > 0 ? (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-white/10">
+                            <th className="text-left py-2 px-3 text-neutral-500 font-medium text-xs">
+                              Entry
+                            </th>
+                            <th className="text-left py-2 px-3 text-neutral-500 font-medium text-xs">
+                              Exit
+                            </th>
+                            <th className="text-right py-2 px-3 text-neutral-500 font-medium text-xs">
+                              Views
+                            </th>
+                            <th className="text-right py-2 px-3 text-neutral-500 font-medium text-xs">
+                              Started
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sessionAnalytics.sessions.slice(0, 10).map((s) => (
+                            <tr
+                              key={s.sessionId}
+                              className="border-b border-white/5 hover:bg-white/5"
+                            >
+                              <td className="py-2 px-3 text-white text-xs max-w-[180px] truncate">
+                                {s.entryPath}
+                              </td>
+                              <td className="py-2 px-3 text-neutral-300 text-xs max-w-[180px] truncate">
+                                {s.exitPath}
+                              </td>
+                              <td className="py-2 px-3 text-right text-white text-xs">
+                                {s.pageViews.toLocaleString("en-US")}
+                              </td>
+                              <td className="py-2 px-3 text-right text-neutral-500 text-xs whitespace-nowrap">
+                                {formatDistanceToNow(new Date(s.startedAt), {
+                                  addSuffix: true,
+                                })}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="text-center text-neutral-500 py-8 text-sm">
+                      No session data available
+                    </p>
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="text-center text-neutral-500 py-12">
+              No session data available
+            </p>
           )}
         </div>
       )}
