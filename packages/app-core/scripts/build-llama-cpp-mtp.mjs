@@ -36,9 +36,16 @@
  *                                   run-mobile-build.mjs mtpTargetOutDir()
  *   ELIZA_MTP_LLAMA_CPP_SRC         override fork source tree
  *   ELIZA_IOS_DEPLOYMENT_TARGET     iOS min version (default 16.0)
- *   ELIZA_IOS_METAL_STD             Metal language std (default ios-metal2.4);
- *                                   the iOS min-version flag is appended here
- *                                   so embedded metallibs run on older devices
+ *   ELIZA_IOS_METAL_STD             Metal language std (default metal3.1 —
+ *                                   MSL >= 3.1 is REQUIRED for the bf16 kernel
+ *                                   family; ggml-metal.metal #if's every bf16
+ *                                   kernel out below __METAL_VERSION__ 310 and
+ *                                   A-series GPUs then fail bf16 mul_mm pipeline
+ *                                   lookup at decode time, #11612). metal3.1
+ *                                   raises the metallib's AIR floor to iOS 17;
+ *                                   on iOS 16 the embedded library fails to load
+ *                                   and the runtime cleanly falls back to CPU.
+ *                                   The iOS min-version flag is appended here.
  *   ELIZA_MTP_FORCE_REBUILD=1       ignore a cached slice and rebuild
  */
 
@@ -74,7 +81,11 @@ const STATE_DIR =
 
 const DEPLOYMENT_TARGET =
   process.env.ELIZA_IOS_DEPLOYMENT_TARGET?.trim() || "16.0";
-const IOS_METAL_STD = process.env.ELIZA_IOS_METAL_STD?.trim() || "ios-metal2.4";
+// metal3.1 (not ios-metal2.4): MSL >= 3.1 is required so the bf16 kernels
+// (kernel_mul_mm_bf16_f32 & co.) are emitted into the embedded metallib —
+// ggml-metal.metal auto-undefs GGML_METAL_HAS_BF16 below __METAL_VERSION__ 310,
+// and A-series GPUs (has_bfloat=true) then fail bf16 pipeline lookup (#11612).
+const IOS_METAL_STD = process.env.ELIZA_IOS_METAL_STD?.trim() || "metal3.1";
 
 // ── Fork source. The canonical fork is the in-repo submodule; the vendored
 //    ios-deps tree is the historical fallback. Both carry the eliza kernels.
