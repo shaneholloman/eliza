@@ -174,6 +174,45 @@ describe("/api/v1/files", () => {
     expect(body.files[0].url).toBe("https://blob.test/cloud-files/key.png");
   });
 
+  test("rejects upload requests with too many files before storage writes", async () => {
+    const form = new FormData();
+    for (let index = 0; index < 11; index += 1) {
+      form.append(
+        "files",
+        new File(["hello"], `hero-${index}.png`, { type: "image/png" }),
+      );
+    }
+
+    const res = await filesRoute.request(
+      "/",
+      { method: "POST", body: form },
+      env() as never,
+    );
+
+    expect(res.status).toBe(413);
+    expect(upload).not.toHaveBeenCalled();
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toContain("Too many files");
+  });
+
+  test("returns 413 when org storage quota cannot reserve upload bytes", async () => {
+    upload.mockRejectedValueOnce(
+      new cloudFilesActual.CloudFileQuotaExceededError(),
+    );
+    const form = new FormData();
+    form.append("file", new File(["hello"], "hero.png", { type: "image/png" }));
+
+    const res = await filesRoute.request(
+      "/",
+      { method: "POST", body: form },
+      env() as never,
+    );
+
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toBe("Storage quota exceeded for this organization");
+  });
+
   test("rejects malformed upload metadata as validation error", async () => {
     const form = new FormData();
     form.append("file", new File(["hello"], "hero.png", { type: "image/png" }));
