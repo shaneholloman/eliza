@@ -6,7 +6,7 @@ import {
 
 export type MediaRosterStatus = "wired" | "deferred" | "rejected";
 export type MediaRosterSurface = "image" | "video" | "music" | "audio";
-export type MediaRosterProvider = "fal" | "atlascloud" | "google";
+export type MediaRosterProvider = "fal" | "atlascloud" | "google" | "elevenlabs" | "suno";
 
 export interface MediaModelRosterEntry {
   family: string;
@@ -31,6 +31,36 @@ export const MEDIA_MODEL_ROSTER: readonly MediaModelRosterEntry[] = [
     wiredModelIds: ["fal-ai/flux/schnell", "fal-ai/flux/dev"],
     rationale:
       "FLUX.1 Schnell and Dev are priced and routed through the existing FAL image provider.",
+  },
+  {
+    family: "Atlas-hosted GPT Image 2",
+    provider: "atlascloud",
+    surfaces: ["image"],
+    status: "wired",
+    sourceUrls: ["https://www.atlascloud.ai/models/list"],
+    wiredModelIds: ["openai/gpt-image-2/text-to-image"],
+    rationale:
+      "GPT Image 2 is an Atlas Cloud image-generation model with an existing pricing definition and Atlas image provider route.",
+  },
+  {
+    family: "Atlas-hosted Seedream",
+    provider: "atlascloud",
+    surfaces: ["image"],
+    status: "wired",
+    sourceUrls: ["https://www.atlascloud.ai/models/list", "https://fal.ai/pricing"],
+    wiredModelIds: ["bytedance/seedream-v5.0-lite"],
+    rationale:
+      "Seedream is part of the current hosted image roster and is already indexed as an Atlas Cloud text-to-image model.",
+  },
+  {
+    family: "Atlas-hosted Qwen Image",
+    provider: "atlascloud",
+    surfaces: ["image"],
+    status: "wired",
+    sourceUrls: ["https://www.atlascloud.ai/models/list"],
+    wiredModelIds: ["qwen/qwen-image-2.0/text-to-image"],
+    rationale:
+      "Qwen Image 2.0 is already priced and routed through the Atlas Cloud image provider, so it belongs in the checked-in roster.",
   },
   {
     family: "Recraft",
@@ -86,6 +116,26 @@ export const MEDIA_MODEL_ROSTER: readonly MediaModelRosterEntry[] = [
     ],
     rationale:
       "Hailuo 2.3 video and MiniMax Music 2.6 have supported pricing definitions; music is cataloged for pricing while video is routed.",
+  },
+  {
+    family: "ElevenLabs Music",
+    provider: "elevenlabs",
+    surfaces: ["music"],
+    status: "wired",
+    sourceUrls: ["https://elevenlabs.io/docs/api-reference/music/compose"],
+    wiredModelIds: ["elevenlabs/music_v1"],
+    rationale:
+      "ElevenLabs Music v1 is in the music pricing definitions and is routed by the existing generate-music provider branch.",
+  },
+  {
+    family: "Suno-compatible music",
+    provider: "suno",
+    surfaces: ["music"],
+    status: "wired",
+    sourceUrls: ["https://docs.sunoapi.org/suno-api/generate-music/"],
+    wiredModelIds: ["suno/default"],
+    rationale:
+      "The Suno-compatible provider remains a supported music-generation option with explicit fallback pricing.",
   },
   {
     family: "Luma",

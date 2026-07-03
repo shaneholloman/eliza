@@ -7,10 +7,15 @@ describe("media model roster", () => {
 
     const requiredFamilies = [
       "FLUX",
+      "Atlas-hosted GPT Image 2",
+      "Atlas-hosted Seedream",
+      "Atlas-hosted Qwen Image",
       "Recraft",
       "Ideogram",
       "Kling",
       "MiniMax / Hailuo",
+      "ElevenLabs Music",
+      "Suno-compatible music",
       "Luma",
       "Runway",
       "Stable Audio",
@@ -51,6 +56,17 @@ describe("media model roster", () => {
           (entry.surfaces.includes("music") && indexes.music.has(modelId));
         expect(isIndexed, `${entry.family}: ${modelId}`).toBe(true);
       }
+    }
+  });
+
+  test("catalogs every supported media pricing model", () => {
+    const indexes = mediaRosterModelIndexes();
+    const wiredModelIds = new Set(
+      MEDIA_MODEL_ROSTER.flatMap((entry) => [...(entry.wiredModelIds ?? [])]),
+    );
+
+    for (const modelId of [...indexes.image, ...indexes.video, ...indexes.music]) {
+      expect(wiredModelIds.has(modelId), modelId).toBe(true);
     }
   });
 });
