@@ -165,30 +165,37 @@ describe("campaign spend requires an approved (active) account (#11364)", () => 
 describe("spend caps (#11364)", () => {
   test("setAccountSpendCap rejects lowering below already allocated campaign exposure", async () => {
     track(spyOn(adAccountsRepository, "findById").mockResolvedValue(makeAccount("active")));
-    track(spyOn(adCampaignsRepository, "sumCreditsAllocatedByAdAccount").mockResolvedValue(75));
-    const update = track(spyOn(adAccountsRepository, "update").mockResolvedValue(undefined));
+    const update = track(
+      spyOn(adAccountsRepository, "updateSpendCapWithAllocationCheck").mockResolvedValue({
+        status: "cap_exceeded",
+        allocated: 75,
+        cap: 50,
+      }),
+    );
 
     await expect(advertisingService.setAccountSpendCap(ACCOUNT_ID, ORG_ID, 50)).rejects.toThrow(
       /already has 75.00 allocated credits/,
     );
 
-    expect(update).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith(ACCOUNT_ID, ORG_ID, "50.00");
   });
 
   test("setAccountSpendCap persists a nullable cap for an org-owned account", async () => {
     track(spyOn(adAccountsRepository, "findById").mockResolvedValue(makeAccount("active")));
-    track(spyOn(adCampaignsRepository, "sumCreditsAllocatedByAdAccount").mockResolvedValue(25));
     const update = track(
-      spyOn(adAccountsRepository, "update").mockResolvedValue({
-        ...makeAccount("active"),
-        spend_cap_credits: "50.00",
+      spyOn(adAccountsRepository, "updateSpendCapWithAllocationCheck").mockResolvedValue({
+        status: "updated",
+        account: {
+          ...makeAccount("active"),
+          spend_cap_credits: "50.00",
+        },
       }),
     );
 
     const account = await advertisingService.setAccountSpendCap(ACCOUNT_ID, ORG_ID, 50);
 
     expect(account.spend_cap_credits).toBe("50.00");
-    expect(update).toHaveBeenCalledWith(ACCOUNT_ID, { spend_cap_credits: "50.00" });
+    expect(update).toHaveBeenCalledWith(ACCOUNT_ID, ORG_ID, "50.00");
   });
 
   test("createCampaign rejects a campaign cap below the marked-up budget before credit debit", async () => {

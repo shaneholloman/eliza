@@ -181,6 +181,19 @@ export class AdSlotsRepository {
           .returning();
         if (!event) return null; // replay — already served
 
+        // Serialize account-level spend-cap checks across all campaigns that
+        // belong to the same ad account. The conditional campaign update below
+        // still owns the campaign budget gate; this lock closes the multi-row
+        // account-cap write-skew window.
+        await tx.execute(sql`
+          SELECT cap_account.id
+          FROM ${adAccounts} cap_account
+          INNER JOIN ${adCampaigns} cap_campaign
+            ON cap_campaign.ad_account_id = cap_account.id
+          WHERE cap_campaign.id = ${input.campaignId}
+          FOR UPDATE
+        `);
+
         // Debit the advertiser's pre-funded campaign budget atomically. The
         // earlier eligibility query is only a candidate picker; this conditional
         // update is the money gate that prevents concurrent serves from
