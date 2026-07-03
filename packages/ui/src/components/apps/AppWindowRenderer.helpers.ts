@@ -1,5 +1,10 @@
 import { type ComponentType, createElement } from "react";
 import { RetainedLazyComponent } from "../../retained-lazy";
+import {
+  navigateToViews,
+  ViewErrorState,
+  ViewLoadingSkeleton,
+} from "../views/ViewStatusStates";
 import type { OverlayApp, OverlayAppContext } from "./overlay-app-api";
 
 const lazyComponentCache = new WeakMap<
@@ -19,7 +24,19 @@ export function getOverlayAppLazyComponent(
       loader,
       cacheKey: app.name,
       componentProps: props,
-      fallback: null,
+      // A failed overlay-app import (bundle 404 / network error / a module with
+      // no renderable default export) must surface the SAME recoverable
+      // "Failed to load view" card as a remote view — never a blank/white
+      // screen. `fallback` covers the loading gap; `onError` renders the card
+      // with a Retry that re-imports and a Back that exits the overlay.
+      fallback: createElement(ViewLoadingSkeleton),
+      onError: (error, retry) =>
+        createElement(ViewErrorState, {
+          viewId: app.name,
+          error,
+          onRetry: retry,
+          onBack: props.exitToApps ?? navigateToViews,
+        }),
     });
   };
   lazyComponentCache.set(app.loader, created);
