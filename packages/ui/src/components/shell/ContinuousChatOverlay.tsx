@@ -515,7 +515,11 @@ function SheetGrabber({
           // together. The bar paints at full opacity — a prior regression pinned
           // it to `opacity-0`, leaving the handle grabbable but invisible (#9142).
           "h-2.5 w-16 rounded-full opacity-100 transition-colors duration-300",
-          glow ? "bg-[rgba(255,180,120,0.8)]" : "bg-white/45",
+          // Pulse while the mic is hot / a reply is speaking: the warm bar
+          // breathes instead of sitting static, the "audio is on" cue.
+          glow
+            ? "animate-pulse bg-[rgba(255,180,120,0.8)] motion-reduce:animate-none"
+            : "bg-white/45",
         )}
       />
     </motion.button>
@@ -584,7 +588,11 @@ function PillHandle({
           // The bar paints at full opacity — a prior regression pinned it to
           // `opacity-0`, leaving the pill handle grabbable but invisible (#9142).
           "h-2.5 w-16 rounded-full opacity-100 transition-colors duration-300",
-          glow ? "bg-[rgba(255,180,120,0.8)]" : "bg-white/45",
+          // Same pulse as the SheetGrabber bar: while audio is on and the chat
+          // is collapsed to the pill, the pill itself pulses.
+          glow
+            ? "animate-pulse bg-[rgba(255,180,120,0.8)] motion-reduce:animate-none"
+            : "bg-white/45",
         )}
       />
     </button>
@@ -768,6 +776,96 @@ function TurnStatusIndicator({
         <TurnStatusInner status={status} />
       </div>
     </motion.div>
+  );
+}
+
+// After this long still booting, the banner escalates to a "taking longer than
+// usual" state with a settings escape, so a stuck boot never reads as a silent
+// hang. Exported for the unit test (see the __-seam note below).
+export const BOOT_SLOW_AFTER_MS = 90_000;
+
+// Grace before the banner appears: a warm agent leaves the "booting" phase
+// within a frame, so only a real cold boot outlasts this and shows the banner
+// — no flash on a first paint / warm reconnect.
+const BOOT_BANNER_GRACE_MS = 600;
+
+/**
+ * Cold-start boot feedback (resting, pre-send): an indeterminate spinner + live
+ * "Waking …" label, escalating after {@link BOOT_SLOW_AFTER_MS} to a "taking
+ * longer than usual" state with an Open-settings escape. The parent gates
+ * mounting on {@link BOOT_BANNER_GRACE_MS} (see the render site).
+ *
+ * Exported (with BOOT_SLOW_AFTER_MS) only as a unit-test seam — not part of the
+ * public overlay API; cf. `__renderThreadLineForParity`.
+ */
+export function BootStatusIndicator({
+  agentName,
+  onOpenSettings,
+  reduce,
+}: {
+  agentName: string;
+  onOpenSettings?: () => void;
+  reduce?: boolean;
+}): React.JSX.Element {
+  // Local elapsed timing is the only boot signal the overlay has (agentStatus
+  // carries no boot-start timestamp), and it suffices: the parent unmounts this
+  // the instant readiness flips, so the timer never outlives the boot.
+  const [slow, setSlow] = React.useState(false);
+  React.useEffect(() => {
+    const id = window.setTimeout(() => setSlow(true), BOOT_SLOW_AFTER_MS);
+    return () => window.clearTimeout(id);
+  }, []);
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      data-testid="chat-boot-status"
+      data-aesthetic-audit-ignore-text-density="true"
+      data-slow={slow ? "true" : undefined}
+      className="pointer-events-none relative mb-2 flex w-full justify-center"
+    >
+      <span
+        className={cn(
+          "inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-sm font-medium text-white/85",
+          FLOAT_SHADOW,
+        )}
+      >
+        {slow ? (
+          <>
+            <RotateCcw
+              className={cn(
+                "h-3.5 w-3.5 text-accent",
+                reduce ? "" : "animate-spin [animation-duration:2.4s]",
+              )}
+              aria-hidden="true"
+            />
+            <span>{agentName} is taking longer than usual to wake…</span>
+            {onOpenSettings ? (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                data-testid="chat-boot-open-settings"
+                className="pointer-events-auto ml-1 rounded-full border border-white/20 bg-white/10 px-2 py-0.5 text-[12px] text-white/90 transition-colors hover:border-white/35 hover:bg-white/20"
+              >
+                Open settings
+              </button>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <Loader2
+              className={cn(
+                "h-3.5 w-3.5 text-accent",
+                reduce ? "" : "animate-spin",
+              )}
+              aria-hidden="true"
+            />
+            <span>Waking {agentName}…</span>
+          </>
+        )}
+      </span>
+    </div>
   );
 }
 
@@ -1457,7 +1555,6 @@ export function ContinuousChatOverlay({
     setDictationSink,
     setTranscriptSessionSink,
     setComposerHasDraft,
-    transcript,
     needsAudioUnlock,
     unlockAudio,
     openSettings,
@@ -1465,7 +1562,6 @@ export function ContinuousChatOverlay({
     currentTab,
     clearConversation,
     stop,
-    modelStatus,
     speak,
     stopSpeaking,
     speaking,
@@ -1837,6 +1933,9 @@ export function ContinuousChatOverlay({
   const overlayRef = React.useRef<HTMLDivElement>(null);
   const panelRef = React.useRef<HTMLFieldSetElement>(null);
   const threadRef = React.useRef<HTMLDivElement>(null);
+  // The transcript's inner content wrapper — measured to size the onboarding
+  // sheet to its content (grow-from-the-bottom) instead of a tall empty panel.
+  const threadContentRef = React.useRef<HTMLDivElement>(null);
   const layoutShiftIntentTimerRef = React.useRef<number | null>(null);
   const markLayoutShiftIntent = React.useCallback(() => {
     const overlay = overlayRef.current;
@@ -2020,6 +2119,23 @@ export function ContinuousChatOverlay({
   const listening = phase === "listening";
   const hasDraft = draft.trim().length > 0;
   const hasImages = pendingImages.length > 0;
+
+  // `booting` (= `phase === "booting"`) is true whenever the agent isn't ready
+  // YET — including first paint before the status fetch resolves, even for a
+  // warm agent. So require it to hold past BOOT_BANNER_GRACE_MS before showing
+  // the banner: a warm agent flips ready within a frame and never crosses it.
+  const [showBootBanner, setShowBootBanner] = React.useState(false);
+  React.useEffect(() => {
+    if (!booting) {
+      setShowBootBanner(false);
+      return;
+    }
+    const id = window.setTimeout(
+      () => setShowBootBanner(true),
+      BOOT_BANNER_GRACE_MS,
+    );
+    return () => window.clearTimeout(id);
+  }, [booting]);
 
   // The suggestion strip is a keyboard-style row of one-tap prompts shown in the
   // RESTING (closed) state — ready, nothing typed or attached, not recording. It
@@ -2878,6 +2994,32 @@ export function ContinuousChatOverlay({
     }
     if (was) goToDetent("collapsed");
   }, [firstRunOpen, goToDetent]);
+
+  // Onboarding grows from the BOTTOM: size the sheet to its content (capped at
+  // full) via the freeH rest-height seam, so the greeting + choice widget sit
+  // just above the composer instead of floating under a tall empty panel. Drags
+  // are gated while onboarding, so nothing fights freeH; on completion
+  // goToDetent("collapsed") clears it and collapses smoothly. `data-detent`
+  // still reports "full" (the pinned-open contract) even when visually shorter.
+  // jsdom has no layout (offsetHeight 0), so this no-ops there — the unit tests
+  // keep the full-height pin.
+  React.useLayoutEffect(() => {
+    if (!firstRunOpen || typeof ResizeObserver === "undefined") return;
+    const content = threadContentRef.current;
+    if (!content) return;
+    const measure = () => {
+      const h = content.offsetHeight;
+      if (h <= 0) return; // not laid out (jsdom) — leave the full-height pin
+      const next = Math.min(h + 28, panelMaxH);
+      setFreeH((prev) =>
+        prev != null && Math.abs(prev - next) < 2 ? prev : next,
+      );
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [firstRunOpen, panelMaxH]);
 
   const openFromGrabber = React.useCallback(() => {
     if (hasRevealableThread) {
@@ -3865,13 +4007,18 @@ export function ContinuousChatOverlay({
     ? "pill"
     : !sheetOpen
       ? "collapsed"
-      : freeH != null
-        ? Math.min(freeH, panelMaxH) >= openH - 1
-          ? "full"
-          : "half"
-        : expanded
-          ? "full"
-          : "half";
+      : // Onboarding is a pinned-open sheet even when sized to its content
+        // (freeH); keep reporting "full" so the undismissable-onboarding
+        // contract (unit + on-device gesture suites) stays honest.
+        firstRunOpen
+        ? "full"
+        : freeH != null
+          ? Math.min(freeH, panelMaxH) >= openH - 1
+            ? "full"
+            : "half"
+          : expanded
+            ? "full"
+            : "half";
 
   return (
     <div
@@ -3923,24 +4070,10 @@ export function ContinuousChatOverlay({
         }}
       />
 
-      {/* Live interim transcript while listening. There's no "Listening…" text
-          cue — the input bar (or collapsed pill) glows with the speech glow to
-          confirm the mic is hot. Once the recognizer streams partials in, the
-          words appear here above the composer (replaced as more are heard). */}
-      {recording && transcript ? (
-        <div
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          className={cn(
-            "pointer-events-none relative mb-2 w-full max-w-3xl text-center text-sm italic text-white/85",
-            FLOAT_SHADOW,
-          )}
-        >
-          {transcript}
-          <span aria-hidden="true">…</span>
-        </div>
-      ) : null}
+      {/* No live interim transcript is shown above the composer while
+          listening — the spoken words land as the sent message when the turn
+          completes. The mic being hot is confirmed by the pulsing speech glow
+          on the input bar / grabber / collapsed pill instead of text. */}
 
       {/* Audio-unlock prompt. When autoplay policy blocks the first spoken
           reply, the ambient overlay would otherwise go silent with no recourse
@@ -3969,38 +4102,19 @@ export function ContinuousChatOverlay({
         </div>
       ) : null}
 
-      {/* Local model download/load status. Picking on-device inference drops the
-          user straight into chat (the download runs in the background), so this
-          non-blocking strip is the only place they see why a first reply is
-          slow. Send is NOT gated — the server holds the turn until the model is
-          ready — but the wait is now explained rather than silent. */}
-      {modelStatus.kind === "downloading" || modelStatus.kind === "loading" ? (
-        <div
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          data-testid="overlay-model-download-status"
-          className="pointer-events-none relative mb-2 flex w-full justify-center"
-        >
-          <span
-            className={cn(
-              "inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-sm font-medium text-white/85",
-              FLOAT_SHADOW,
-            )}
-          >
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
-            {modelStatus.kind === "downloading" ? (
-              <span>
-                Downloading {modelStatus.modelName ?? "local model"}
-                {typeof modelStatus.percent === "number"
-                  ? ` — ${Math.round(modelStatus.percent)}%`
-                  : "…"}
-              </span>
-            ) : (
-              <span>Loading {modelStatus.modelName ?? "local model"}…</span>
-            )}
-          </span>
-        </div>
+      {/* Local model download/load status renders as the home-grid
+          model-download widget only — no floating pill above the composer (the
+          double status read as clutter). Send stays ungated; the server holds
+          the turn until the model is ready. */}
+
+      {/* Cold-start boot feedback — sibling of the model-download banner above.
+          See BootStatusIndicator; `showBootBanner` is the grace-gated flag. */}
+      {showBootBanner ? (
+        <BootStatusIndicator
+          agentName={agentName}
+          onOpenSettings={openSettings}
+          reduce={reduce}
+        />
       ) : null}
 
       {/* Three tailored prompt suggestions — a keyboard-style strip shown in the
@@ -4369,8 +4483,13 @@ export function ContinuousChatOverlay({
                     />
                   ) : null}
                   {/* `mt-auto` keeps the latest line at the bottom (nearest the input)
-                  until the thread overflows, then it scrolls. */}
-                  <div className="mt-auto flex flex-col pb-3 pt-1">
+                  until the thread overflows, then it scrolls. The ref measures
+                  this content so onboarding can size the sheet to it (grow from
+                  the bottom). */}
+                  <div
+                    ref={threadContentRef}
+                    className="mt-auto flex flex-col pb-3 pt-1"
+                  >
                     {hasTopics
                       ? // Topic-grouped transcript: each cluster collapses via a
                         // gesture on its header (no visible buttons).
@@ -4670,7 +4789,7 @@ export function ContinuousChatOverlay({
                 disabled={firstRunOpen}
                 placeholder={
                   firstRunOpen
-                    ? "Tap a highlighted option above to continue"
+                    ? "Pick an option to continue"
                     : booting
                       ? `Ask ${agentName} — waking up…`
                       : (viewChatBinding?.placeholder ?? `Ask ${agentName}`)

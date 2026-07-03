@@ -195,6 +195,7 @@ describe("updateCampaign — reconciles the credit hold on a budget change", () 
         id: "acct-1",
         organization_id: ORG_ID,
         platform: "meta",
+        status: "active",
       } as never),
     );
     // getCredentials is private + hits the secrets vault; stub it out.
@@ -278,6 +279,52 @@ describe("updateCampaign — reconciles the credit hold on a budget change", () 
     expect((refund.mock.calls[0]?.[0] as { amount: number }).amount).toBeCloseTo(110, 9);
   });
 
+  test("#11800 budget INCREASE refunds and reverts provider if serialized account cap check loses a race", async () => {
+    track(
+      spyOn(adCampaignsRepository, "findById").mockResolvedValue(
+        makeCampaign({ external_campaign_id: "ext-1" }) as never,
+      ),
+    );
+    track(spyOn(adCampaignsRepository, "sumCreditsAllocatedByAdAccount").mockResolvedValue(0));
+    const deduct = track(
+      spyOn(creditsService, "deductCredits").mockResolvedValue({
+        success: true,
+      } as never),
+    );
+    const refund = track(
+      spyOn(creditsService, "refundCredits").mockResolvedValue({
+        success: true,
+      } as never),
+    );
+    const provider = stubProvider();
+    const providerUpdate = track(spyOn(provider, "updateCampaign"));
+    track(spyOn(advertisingService, "getProvider").mockReturnValue(provider));
+    track(
+      spyOn(
+        adCampaignsRepository,
+        "claimAllocationChangeWithAccountSpendCapCheck",
+      ).mockResolvedValue({
+        status: "cap_exceeded",
+        allocated: 220,
+        cap: 150,
+      }),
+    );
+
+    await expect(
+      advertisingService.updateCampaign(CAMPAIGN_ID, ORG_ID, {
+        budgetAmount: 200,
+      }),
+    ).rejects.toThrow("Ad account spend cap would be exceeded");
+
+    expect(deduct).toHaveBeenCalledTimes(1);
+    expect(refund).toHaveBeenCalledTimes(1);
+    expect((deduct.mock.calls[0]?.[0] as { amount: number }).amount).toBeCloseTo(110, 9);
+    expect((refund.mock.calls[0]?.[0] as { amount: number }).amount).toBeCloseTo(110, 9);
+    expect(providerUpdate).toHaveBeenCalledTimes(2);
+    expect(providerUpdate.mock.calls[0]?.[2]).toMatchObject({ budgetAmount: 200 });
+    expect(providerUpdate.mock.calls[1]?.[2]).toEqual({ budgetAmount: 100 });
+  });
+
   test("a name-only update charges and refunds nothing", async () => {
     track(
       spyOn(adCampaignsRepository, "findById").mockResolvedValue(
@@ -322,6 +369,7 @@ describe("updateCampaign — budget DECREASE refunds only unused + is atomic (#1
         id: "acct-1",
         organization_id: ORG_ID,
         platform: "meta",
+        status: "active",
       } as never),
     );
     track(

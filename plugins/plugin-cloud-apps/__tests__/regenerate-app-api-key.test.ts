@@ -193,6 +193,48 @@ describe("REGENERATE_APP_API_KEY", () => {
     expect((result?.data as { reason: string }).reason).toBe("no_key");
   });
 
+  it("confirm naming a DIFFERENT app refuses, rotates nothing, and clears the pending", async () => {
+    const rotations = trackRotations();
+    const runtime = keyedRuntime();
+    const cb = captureCallback();
+    await regenerateAppApiKeyAction.handler(
+      runtime,
+      makeMessage("regenerate the API key for Acme Bot"),
+      undefined,
+      undefined,
+      cb.fn,
+    );
+    const result = await regenerateAppApiKeyAction.handler(
+      runtime,
+      makeMessage("yes — rotate the key for Beta Dashboard"),
+      undefined,
+      { parameters: { confirm: true, appName: "Beta Dashboard" } },
+      cb.fn,
+    );
+
+    expect(rotations.count()).toBe(0);
+    expect(result?.success).toBe(false);
+    expect((result?.data as { reason: string }).reason).toBe(
+      "confirm_target_mismatch",
+    );
+    const reply = cb.calls.at(-1)?.text ?? "";
+    expect(reply).toContain("Beta Dashboard");
+    expect(reply).toContain("Acme Bot");
+    expect(reply).not.toContain(NEW_KEY);
+
+    const followUp = await regenerateAppApiKeyAction.handler(
+      runtime,
+      makeMessage("confirm"),
+      undefined,
+      { confirm: true },
+      cb.fn,
+    );
+    expect(rotations.count()).toBe(0);
+    expect((followUp?.data as { reason: string }).reason).toBe(
+      "no_pending_confirmation",
+    );
+  });
+
   it("surfaces a rotate API error", async () => {
     setRegenerateAppApiKey(() => Promise.reject(new Error("boom")));
     const runtime = keyedRuntime();

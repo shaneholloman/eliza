@@ -10,7 +10,7 @@ import {
   parseJsonModelRecord,
   requireConfirmation,
   resolveActionArgs,
-  runWithTrajectoryContext,
+  runWithTrajectoryPurpose,
   type SubactionsMap,
 } from "@elizaos/core";
 import {
@@ -110,15 +110,6 @@ type WebsiteBlockConversationTurn = {
   speaker: "user" | "assistant";
   text: string;
 };
-
-function coerceConfirmedFlag(value: unknown): boolean {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    return normalized === "true" || normalized === "yes" || normalized === "1";
-  }
-  return false;
-}
 
 function getMessageText(message: Memory): string {
   return typeof message.content.text === "string" ? message.content.text : "";
@@ -400,8 +391,8 @@ async function resolveWebsiteBlockPlanWithLlm(args: {
   ].join("\n");
 
   try {
-    const result = await runWithTrajectoryContext(
-      { purpose: "lifeops-website-block-planner" },
+    const result = await runWithTrajectoryPurpose(
+      "lifeops-website-block-planner",
       () =>
         args.runtime.useModel(ModelType.TEXT_LARGE, {
           prompt,
@@ -465,8 +456,8 @@ async function recoverWebsiteContextWithLlm(args: {
   ].join("\n");
 
   try {
-    const result = await runWithTrajectoryContext(
-      { purpose: "lifeops-website-block-recovery" },
+    const result = await runWithTrajectoryPurpose(
+      "lifeops-website-block-recovery",
       () =>
         args.runtime.useModel(ModelType.TEXT_LARGE, {
           prompt,

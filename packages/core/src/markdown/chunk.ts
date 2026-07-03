@@ -193,9 +193,14 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 		if (initialFence) {
 			const closeLine = `${initialFence.indent}${initialFence.marker}`;
 			const maxIdxIfNeedNewline = limit - (closeLine.length + 1);
+			// When the close line cannot fit inside `limit`, fall back to a hard
+			// break WITHOUT closing/reopening the fence — the limit is a hard cap,
+			// and reopening while consuming fewer chars than the reopen line adds
+			// makes `remaining` grow forever.
+			let bailed = false;
 
 			if (maxIdxIfNeedNewline <= 0) {
-				fenceToSplit = undefined;
+				bailed = true;
 				breakIdx = limit;
 			} else {
 				const minProgressIdx = Math.min(
@@ -224,8 +229,14 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 				}
 
 				if (!pickedNewline) {
-					if (minProgressIdx > maxIdxIfAlreadyNewline) {
-						fenceToSplit = undefined;
+					// The chunk needs room for the injected close line, plus a "\n"
+					// separator unless the break already lands right after one.
+					const breaksAfterNewline = remaining[minProgressIdx - 1] === "\n";
+					const maxProgressIdx = breaksAfterNewline
+						? maxIdxIfAlreadyNewline
+						: maxIdxIfNeedNewline;
+					if (minProgressIdx > maxProgressIdx) {
+						bailed = true;
 						breakIdx = limit;
 					} else {
 						breakIdx = Math.max(minProgressIdx, maxIdxIfNeedNewline);
@@ -235,7 +246,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 
 			const fenceAtBreak = findFenceSpanAt(spans, breakIdx);
 			fenceToSplit =
-				fenceAtBreak && fenceAtBreak.start === initialFence.start
+				!bailed && fenceAtBreak && fenceAtBreak.start === initialFence.start
 					? fenceAtBreak
 					: undefined;
 		}

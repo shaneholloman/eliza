@@ -210,6 +210,26 @@ describe("LiveDiarizationSession echo reference", () => {
 			expect(status.aec.playbackFramesReceived).toBe(1);
 			expect(status.aec.playbackSamplesReceived).toBe(320);
 		});
+
+		it("ingest() still captures AEC evidence when the fused diarizer cannot build (#11373 iOS)", async () => {
+			// On builds that ship no fused voice lib the diarizer never builds, but
+			// the AEC evidence transport must still work — otherwise on-device
+			// aec-capture is impossible (the whole reason iOS could not capture).
+			const session = new LiveDiarizationSession(fakeRuntime());
+			session.armAecCapture(2);
+			session.pushPlayback([playbackFrame(noise(320), 0)]);
+
+			// ingest must NOT throw despite the deterministic build failure.
+			await session.ingest([playbackFrame(noise(320), 0)]);
+			await session.ingest([playbackFrame(noise(320), 1)]);
+
+			const snap = session.aecCaptureSnapshot();
+			expect(snap.sampleCount).toBe(640);
+			const status = await session.status();
+			expect(status.ready).toBe(false); // diarizer never built
+			expect(status.framesReceived).toBe(2); // but frames were ingested
+			expect(typeof status.error).toBe("string"); // build failure surfaced
+		});
 	});
 
 	it("self-calibrates playback-to-mic delay from correlated echo", () => {
@@ -304,6 +324,101 @@ describe("LiveDiarizationSession echo reference", () => {
 			if (prevPlatform === undefined) delete process.env.ELIZA_PLATFORM;
 			else process.env.ELIZA_PLATFORM = prevPlatform;
 		}
+	});
+
+	describe("bounded AEC evidence capture (#11373)", () => {
+		/** Decode base64 LE-s16 into Float32 [-1,1]. */
+		function decodePcm16(b64: string): Float32Array {
+			const buf = Buffer.from(b64, "base64");
+			const out = new Float32Array(buf.length >> 1);
+			for (let i = 0; i < out.length; i += 1) {
+				out[i] = buf.readInt16LE(i * 2) / 32768;
+			}
+			return out;
+		}
+
+		it("captures nothing until armed, then buffers near + delay-0 far per frame", () => {
+			const session = new LiveDiarizationSession(fakeRuntime());
+			const playback = ramp(320);
+			session.pushPlayback([playbackFrame(playback, 0)]);
+
+			// Not armed → no-op.
+			session.captureAecFrame(noise(320), 0);
+			expect(session.aecCaptureStatus().sampleCount).toBe(0);
+
+			session.armAecCapture(1);
+			const near = noise(320);
+			session.captureAecFrame(near, 0);
+
+			const snap = session.aecCaptureSnapshot();
+			expect(snap.armed).toBe(true);
+			expect(snap.sampleCount).toBe(320);
+			expect(snap.sampleRate).toBe(SAMPLE_RATE);
+			expect(snap.startTimestampMs).toBe(0);
+
+			const capturedNear = decodePcm16(snap.nearPcm16);
+			const capturedFar = decodePcm16(snap.farPcm16);
+			expect(capturedNear).toHaveLength(320);
+			expect(capturedFar).toHaveLength(320);
+			for (let i = 0; i < 320; i += 1) {
+				expect(Math.abs(capturedNear[i] - near[i])).toBeLessThan(1e-3);
+				// Far side is the delay-0 reference: the pushed playback ramp.
+				expect(Math.abs(capturedFar[i] - playback[i])).toBeLessThan(1e-3);
+			}
+		});
+
+		it("stops at the sample cap and disarms itself", () => {
+			const session = new LiveDiarizationSession(fakeRuntime());
+			session.armAecCapture(1); // 16 000-sample cap
+			for (let i = 0; i < 60; i += 1) {
+				session.captureAecFrame(noise(320), i * 20);
+			}
+			const status = session.aecCaptureStatus();
+			// 50 frames fill the 16 000-sample budget; the 51st flips armed off.
+			expect(status.sampleCount).toBe(16_000);
+			expect(status.armed).toBe(false);
+		});
+
+		it("clamps maxSeconds to the hard 60 s ceiling", () => {
+			const session = new LiveDiarizationSession(fakeRuntime());
+			const status = session.armAecCapture(6_000);
+			expect(status.maxSamples).toBe(60 * SAMPLE_RATE);
+		});
+
+		it("re-arming restarts the window; disarm keeps it readable", () => {
+			const session = new LiveDiarizationSession(fakeRuntime());
+			session.armAecCapture(1);
+			session.captureAecFrame(noise(320), 0);
+			expect(session.aecCaptureStatus().sampleCount).toBe(320);
+
+			session.disarmAecCapture();
+			expect(session.aecCaptureStatus().armed).toBe(false);
+			// Disarm freezes but does not clear.
+			expect(session.aecCaptureSnapshot().sampleCount).toBe(320);
+			// Frames after disarm are ignored.
+			session.captureAecFrame(noise(320), 20);
+			expect(session.aecCaptureStatus().sampleCount).toBe(320);
+
+			session.armAecCapture(1);
+			expect(session.aecCaptureStatus().sampleCount).toBe(0);
+			expect(session.aecCaptureStatus().armed).toBe(true);
+		});
+
+		it("snapshot reports the delay state applied during the window", () => {
+			const prev = process.env.ELIZA_VOICE_ECHO_DELAY_MS;
+			process.env.ELIZA_VOICE_ECHO_DELAY_MS = "50";
+			try {
+				const session = new LiveDiarizationSession(fakeRuntime());
+				session.armAecCapture(1);
+				session.captureAecFrame(noise(320), 0);
+				const snap = session.aecCaptureSnapshot();
+				expect(snap.echoDelaySamples).toBe(800); // 50 ms @16 kHz
+				expect(snap.echoDelayCalibrated).toBe(false);
+			} finally {
+				if (prev === undefined) delete process.env.ELIZA_VOICE_ECHO_DELAY_MS;
+				else process.env.ELIZA_VOICE_ECHO_DELAY_MS = prev;
+			}
+		});
 	});
 
 	it("defaults the echo delay seed to 0 when no override is set", () => {

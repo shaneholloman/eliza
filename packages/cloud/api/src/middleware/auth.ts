@@ -105,6 +105,12 @@ const publicPathPrefixes = [
   // impression id — both behind IP-keyed rate limits.
   "/api/v1/marketing/inventory/serve",
   "/api/v1/marketing/inventory/click",
+  // Public advertiser conversion pixel/webhook. The signed campaign token is
+  // the capability and the route dedupes event ids before attribution.
+  "/api/v1/advertising/conversions/track",
+  // Public campaign performance reports use unguessable, hash-stored share
+  // tokens and fail closed when expired or revoked.
+  "/api/v1/advertising/reports",
   // Public hosted-frontend serve path: renders an app's active frontend from R2
   // for public visitors (fails closed to 404 on any unresolved host).
   "/api/v1/hosted-frontend/serve",

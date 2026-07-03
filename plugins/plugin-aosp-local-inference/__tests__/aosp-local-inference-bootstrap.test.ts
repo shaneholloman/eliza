@@ -314,8 +314,8 @@ describe("buildAospLoadModelArgs", () => {
             draftMin: 1,
             draftMax: 16,
             kvCacheType: {
-              k: "qjl1_256",
-              v: "q4_polar",
+              k: "q8_0",
+              v: "f16",
             },
           }),
         );
@@ -447,6 +447,65 @@ describe("readAssignedBundledModels", () => {
     );
 
     expect(readAssignedBundledModels(modelsDir).chat).toBe(defaultModel);
+  });
+
+  it("resolves container-relative registry rows against the current device root (#11669)", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "aosp-assigned-relative-"));
+    const modelsDir = path.join(root, "local-inference", "models");
+    const defaultBundle = path.join(modelsDir, "eliza-1-2b.bundle", "text");
+    mkdirSync(defaultBundle, { recursive: true });
+    const defaultModel = path.join(defaultBundle, "eliza-1-2b-32k.gguf");
+    writeFileSync(defaultModel, "default");
+    writeFileSync(
+      path.join(root, "local-inference", "assignments.json"),
+      JSON.stringify({
+        version: 1,
+        assignments: { TEXT_SMALL: "eliza-1-2b" },
+      }),
+    );
+    writeFileSync(
+      path.join(root, "local-inference", "registry.json"),
+      JSON.stringify({
+        version: 1,
+        models: [
+          {
+            id: "eliza-1-2b",
+            path: "models/eliza-1-2b.bundle/text/eliza-1-2b-32k.gguf",
+            source: "eliza-download",
+          },
+        ],
+      }),
+    );
+
+    expect(readAssignedBundledModels(modelsDir).chat).toBe(defaultModel);
+  });
+
+  it("returns no chat model when the registry row's artifact is genuinely absent", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "aosp-assigned-missing-"));
+    const modelsDir = path.join(root, "local-inference", "models");
+    mkdirSync(modelsDir, { recursive: true });
+    writeFileSync(
+      path.join(root, "local-inference", "assignments.json"),
+      JSON.stringify({
+        version: 1,
+        assignments: { TEXT_SMALL: "eliza-1-2b" },
+      }),
+    );
+    writeFileSync(
+      path.join(root, "local-inference", "registry.json"),
+      JSON.stringify({
+        version: 1,
+        models: [
+          {
+            id: "eliza-1-2b",
+            path: "models/eliza-1-2b.bundle/text/eliza-1-2b-32k.gguf",
+            source: "eliza-download",
+          },
+        ],
+      }),
+    );
+
+    expect(readAssignedBundledModels(modelsDir).chat).toBeNull();
   });
 });
 
@@ -648,7 +707,7 @@ describe("AOSP TEXT_TO_SPEECH backend selection", () => {
 });
 
 describe("buildAospLoadModelArgs", () => {
-  it("uses Eliza-1 compressed KV defaults for chat models", () => {
+  it("uses the Gemma KV defaults for chat models (q8_0 K, f16 V — V-quant needs FA, off on Android; QJL/Polar retired post-#9033)", () => {
     expect(buildAospLoadModelArgs("chat", "/models/chat.gguf")).toEqual({
       modelPath: "/models/chat.gguf",
       contextSize: 4096,
@@ -659,10 +718,26 @@ describe("buildAospLoadModelArgs", () => {
       useGpu: false,
       gpuLayers: 0,
       kvCacheType: {
-        k: "qjl1_256",
-        v: "q4_polar",
+        k: "q8_0",
+        v: "f16",
       },
     });
+  });
+
+  it("honours explicit KV-cache env overrides and rejects junk names", () => {
+    const prevK = process.env.ELIZA_LLAMA_KV_TYPE_K;
+    const prevV = process.env.ELIZA_LLAMA_KV_TYPE_V;
+    try {
+      process.env.ELIZA_LLAMA_KV_TYPE_K = "f16";
+      process.env.ELIZA_LLAMA_KV_TYPE_V = "garbage";
+      const args = buildAospLoadModelArgs("chat", "/models/chat.gguf");
+      expect(args.kvCacheType).toEqual({ k: "f16", v: "f16" });
+    } finally {
+      if (prevK === undefined) delete process.env.ELIZA_LLAMA_KV_TYPE_K;
+      else process.env.ELIZA_LLAMA_KV_TYPE_K = prevK;
+      if (prevV === undefined) delete process.env.ELIZA_LLAMA_KV_TYPE_V;
+      else process.env.ELIZA_LLAMA_KV_TYPE_V = prevV;
+    }
   });
 
   it("keeps embedding loads on small f16 KV so BGE does not inherit chat KV", () => {

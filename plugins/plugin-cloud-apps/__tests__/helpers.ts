@@ -10,6 +10,7 @@
 import { mock } from "bun:test";
 import type {
   ActivateAppFrontendResponse,
+  AdCampaignAttributionResponse,
   AppBackupSnapshot,
   AppDeployStatusResponse,
   AppDto,
@@ -18,6 +19,8 @@ import type {
   AppResponse,
   BuyAppDomainInput,
   BuyAppDomainResponse,
+  CampaignDaypartingResponse,
+  CampaignPerformanceReportResponse,
   CheckAppDomainInput,
   CheckAppDomainResponse,
   CreateAdSlotInput,
@@ -26,6 +29,8 @@ import type {
   CreateAppResponse,
   CreateBookingInput,
   CreateBookingResponse,
+  CreateCampaignReportShareInput,
+  CreateCampaignReportShareResponse,
   CreateInfluencerProfileInput,
   CreateInfluencerProfileResponse,
   DeleteAppResponse,
@@ -33,6 +38,8 @@ import type {
   DeployAppFrontendResponse,
   DeployAppInput,
   DeployAppResponse,
+  DuplicateAdCampaignInput,
+  DuplicateAdCampaignResponse,
   ExportAppBackupResponse,
   ListAdSlotsResponse,
   ListAppDomainsResponse,
@@ -42,6 +49,7 @@ import type {
   RegenerateAppApiKeyResponse,
   UpdateAppInput,
   UpdateAppMonetizationInput,
+  UpdateCampaignDaypartingInput,
   WithdrawAppEarningsRequest,
   WithdrawAppEarningsResponse,
 } from "@elizaos/cloud-sdk";
@@ -54,6 +62,24 @@ type CreateAdSlotFn = (
   input: CreateAdSlotInput,
 ) => Promise<CreateAdSlotResponse>;
 type ListAdSlotsFn = () => Promise<ListAdSlotsResponse>;
+type UpdateAdCampaignDaypartingFn = (
+  campaignId: string,
+  input: UpdateCampaignDaypartingInput,
+) => Promise<CampaignDaypartingResponse>;
+type DuplicateAdCampaignFn = (
+  campaignId: string,
+  input?: DuplicateAdCampaignInput,
+) => Promise<DuplicateAdCampaignResponse>;
+type GetAdCampaignAttributionFn = (
+  campaignId: string,
+) => Promise<AdCampaignAttributionResponse>;
+type GetAdCampaignPerformanceReportFn = (
+  campaignId: string,
+) => Promise<CampaignPerformanceReportResponse>;
+type CreateAdCampaignReportShareFn = (
+  campaignId: string,
+  input?: CreateCampaignReportShareInput,
+) => Promise<CreateCampaignReportShareResponse>;
 type ListFrontendDeploymentsFn = (
   appId: string,
 ) => Promise<ListAppFrontendDeploymentsResponse>;
@@ -107,7 +133,12 @@ type ListAppDomainsFn = (id: string) => Promise<ListAppDomainsResponse>;
 
 type CloudAppsTestRuntime = Pick<
   IAgentRuntime,
-  "agentId" | "getSetting" | "getTasks" | "createTask" | "deleteTask"
+  | "agentId"
+  | "getSetting"
+  | "getTasks"
+  | "createTask"
+  | "updateTask"
+  | "deleteTask"
 >;
 
 interface SdkState {
@@ -117,14 +148,17 @@ interface SdkState {
   deployApp: DeployAppFn;
   createAdSlot: CreateAdSlotFn;
   listAdSlots: ListAdSlotsFn;
+  updateAdCampaignDayparting: UpdateAdCampaignDaypartingFn;
+  duplicateAdCampaign: DuplicateAdCampaignFn;
+  getAdCampaignAttribution: GetAdCampaignAttributionFn;
+  getAdCampaignPerformanceReport: GetAdCampaignPerformanceReportFn;
+  createAdCampaignReportShare: CreateAdCampaignReportShareFn;
   deployAppFrontend: DeployAppFrontendFn;
   listAppFrontendDeployments: ListFrontendDeploymentsFn;
   activateAppFrontend: ActivateFrontendFn;
   createInfluencerProfile: CreateInfluencerProfileFn;
   createBooking: CreateBookingFn;
   listInfluencers: ListInfluencersFn;
-  createAdSlot: CreateAdSlotFn;
-  listAdSlots: ListAdSlotsFn;
   exportAppBackup: ExportAppBackupFn;
   getAppDeployStatus: GetAppDeployStatusFn;
   deleteApp: DeleteAppFn;
@@ -173,6 +207,115 @@ function defaultState(): SdkState {
         adTagToken: "v1.9999999999.deadbeef",
       }),
     listAdSlots: () => Promise.resolve({ success: true, slots: [] }),
+    updateAdCampaignDayparting: (_campaignId, input) =>
+      Promise.resolve({
+        success: true,
+        campaignId: "campaign_1",
+        status: "draft",
+        dayparting: input.dayparting,
+        updatedAt: "2026-07-02T00:00:00.000Z",
+      }),
+    duplicateAdCampaign: (_campaignId, input) =>
+      Promise.resolve({
+        success: true,
+        campaign: {
+          id: "campaign_copy",
+          name: input?.name ?? "Campaign Copy",
+          platform: "meta",
+          objective: "traffic",
+          status: "draft",
+          budgetType: "daily",
+          budgetAmount: "100.00",
+          budgetCurrency: "USD",
+          creditsAllocated: "0.00",
+          externalCampaignId: null,
+          dayparting: null,
+          sourceCampaignId: "campaign_1",
+          createdAt: "2026-07-02T00:00:00.000Z",
+        },
+        creativesCopied: 1,
+      }),
+    getAdCampaignAttribution: (campaignId) =>
+      Promise.resolve({
+        success: true,
+        campaignId,
+        appId: "app_1",
+        token: "payloadpart.signaturepart123456789",
+        pixelEndpoint:
+          "https://cloud.test/api/v1/advertising/conversions/track?token=payloadpart.signaturepart123456789",
+        webhookEndpoint:
+          "https://cloud.test/api/v1/advertising/conversions/track",
+        install: {
+          pixelHtml:
+            '<img src="https://cloud.test/api/v1/advertising/conversions/track?token=payloadpart.signaturepart123456789&eventType=conversion&dedupeKey=ORDER_OR_EVENT_ID" width="1" height="1" style="display:none" alt="" />',
+          webhook: {
+            url: "https://cloud.test/api/v1/advertising/conversions/track",
+            method: "POST",
+            body: {
+              token: "payloadpart.signaturepart123456789",
+              eventType: "purchase",
+              dedupeKey: "ORDER_OR_EVENT_ID",
+            },
+          },
+        },
+      }),
+    getAdCampaignPerformanceReport: (campaignId) =>
+      Promise.resolve({
+        success: true,
+        report: {
+          generatedAt: "2026-07-02T00:00:00.000Z",
+          campaign: {
+            id: campaignId,
+            name: "Campaign",
+            platform: "meta",
+            objective: "traffic",
+            status: "active",
+            externalCampaignId: "ext_1",
+            appId: null,
+            budgetType: "daily",
+            budgetAmount: 100,
+            budgetCurrency: "USD",
+            creditsAllocated: 110,
+            creditsSpent: 11,
+            startDate: null,
+            endDate: null,
+            createdAt: "2026-07-01T00:00:00.000Z",
+            updatedAt: "2026-07-02T00:00:00.000Z",
+          },
+          dateRange: null,
+          summary: {
+            spend: 10,
+            impressions: 1000,
+            clicks: 50,
+            conversions: 5,
+            ctr: 5,
+            cpc: 0.2,
+            cpm: 10,
+            conversionRate: 10,
+            costPerConversion: 2,
+            budgetUtilization: 10,
+            conversionValue: 0,
+          },
+          provider: {
+            platform: "meta",
+            accountId: "acct_1",
+            externalAccountId: "external_acct",
+            externalCampaignId: "ext_1",
+          },
+        },
+      }),
+    createAdCampaignReportShare: (campaignId, input) =>
+      Promise.resolve({
+        success: true,
+        share: {
+          id: "share_1",
+          campaignId,
+          token: "token_1",
+          publicPath: "/api/v1/advertising/reports/token_1",
+          publicUrl: "https://elizacloud.ai/api/v1/advertising/reports/token_1",
+          expiresAt: input?.expiresAt ?? "2026-07-09T00:00:00.000Z",
+        },
+      }),
     deployAppFrontend: () =>
       Promise.resolve({
         success: true,
@@ -332,6 +475,29 @@ export function setCreateAdSlot(fn: CreateAdSlotFn): void {
 export function setListAdSlots(fn: ListAdSlotsFn): void {
   state.listAdSlots = fn;
 }
+export function setUpdateAdCampaignDayparting(
+  fn: UpdateAdCampaignDaypartingFn,
+): void {
+  state.updateAdCampaignDayparting = fn;
+}
+export function setDuplicateAdCampaign(fn: DuplicateAdCampaignFn): void {
+  state.duplicateAdCampaign = fn;
+}
+export function setGetAdCampaignAttribution(
+  fn: GetAdCampaignAttributionFn,
+): void {
+  state.getAdCampaignAttribution = fn;
+}
+export function setGetAdCampaignPerformanceReport(
+  fn: GetAdCampaignPerformanceReportFn,
+): void {
+  state.getAdCampaignPerformanceReport = fn;
+}
+export function setCreateAdCampaignReportShare(
+  fn: CreateAdCampaignReportShareFn,
+): void {
+  state.createAdCampaignReportShare = fn;
+}
 export function setDeployAppFrontend(fn: DeployAppFrontendFn): void {
   state.deployAppFrontend = fn;
 }
@@ -412,6 +578,34 @@ export class FakeElizaCloudClient {
   }
   listAdSlots(): Promise<ListAdSlotsResponse> {
     return state.listAdSlots();
+  }
+  updateAdCampaignDayparting(
+    campaignId: string,
+    input: UpdateCampaignDaypartingInput,
+  ): Promise<CampaignDaypartingResponse> {
+    return state.updateAdCampaignDayparting(campaignId, input);
+  }
+  duplicateAdCampaign(
+    campaignId: string,
+    input?: DuplicateAdCampaignInput,
+  ): Promise<DuplicateAdCampaignResponse> {
+    return state.duplicateAdCampaign(campaignId, input);
+  }
+  getAdCampaignAttribution(
+    campaignId: string,
+  ): Promise<AdCampaignAttributionResponse> {
+    return state.getAdCampaignAttribution(campaignId);
+  }
+  getAdCampaignPerformanceReport(
+    campaignId: string,
+  ): Promise<CampaignPerformanceReportResponse> {
+    return state.getAdCampaignPerformanceReport(campaignId);
+  }
+  createAdCampaignReportShare(
+    campaignId: string,
+    input?: CreateCampaignReportShareInput,
+  ): Promise<CreateCampaignReportShareResponse> {
+    return state.createAdCampaignReportShare(campaignId, input);
   }
   deployAppFrontend(
     id: string,
@@ -520,6 +714,11 @@ export function makeRuntime(
       });
       return Promise.resolve(id);
     },
+    updateTask: (id: UUID, patch: Partial<Task>) => {
+      const idx = tasks.findIndex((task) => task.id === id);
+      if (idx >= 0) tasks[idx] = { ...tasks[idx], ...patch };
+      return Promise.resolve();
+    },
     deleteTask: (id: UUID) => {
       const idx = tasks.findIndex((task) => task.id === id);
       if (idx >= 0) tasks.splice(idx, 1);
@@ -578,6 +777,11 @@ export function memoryRuntime(
         `task-0000-0000-0000-${String(++taskCounter).padStart(12, "0")}` as UUID;
       tasks.push({ ...task, id, agentId: task.agentId ?? TEST_AGENT_ID });
       return Promise.resolve(id);
+    },
+    updateTask: (id: UUID, patch: Partial<Task>) => {
+      const idx = tasks.findIndex((task) => task.id === id);
+      if (idx >= 0) tasks[idx] = { ...tasks[idx], ...patch };
+      return Promise.resolve();
     },
     deleteTask: (id: UUID) => {
       const idx = tasks.findIndex((task) => task.id === id);

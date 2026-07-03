@@ -40,6 +40,7 @@ import { logger } from "@elizaos/core";
 import {
   extractAppReference,
   getCloudClient,
+  plannerOptionSources,
   resolveApp,
   resolveCloudApiKey,
   resolveCloudSiteBaseUrl,
@@ -48,6 +49,9 @@ import {
   buildConnectorCta,
   type ConnectorCta,
   confirmationRoomId,
+  confirmTargetMismatchMessage,
+  conflictingConfirmAmount,
+  conflictingConfirmTarget,
   deleteCloudAppConfirmation,
   findPendingCloudAppConfirmation,
   persistCloudAppConfirmation,
@@ -77,15 +81,22 @@ function newIdempotencyKey(): string {
 
 const AMOUNT_OPTION_KEYS = ["amount", "usd", "value"] as const;
 
-/** Parse a withdrawal amount (USD) from planner options or text; null = "all". */
+/**
+ * Parse a withdrawal amount (USD) from planner options or text; null = "all".
+ *
+ * MONEY-CRITICAL: on the real planner path the validated `amount` arrives
+ * NESTED under `options.parameters` (execute-planned-tool-call.ts), so the
+ * nested object is read before the top level ({@link plannerOptionSources}).
+ * Missing it here silently upgraded "withdraw $50" to the FULL withdrawable
+ * balance at the confirm stage.
+ */
 export function parseWithdrawAmount(
   text: string,
   options?: unknown,
 ): number | null {
-  if (options && typeof options === "object") {
-    const opts = options as Record<string, unknown>;
+  for (const source of plannerOptionSources(options)) {
     for (const key of AMOUNT_OPTION_KEYS) {
-      const v = opts[key];
+      const v = source[key];
       if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
       if (typeof v === "string") {
         const n = Number(v.replace(/[$,]/g, "").trim());
@@ -94,11 +105,14 @@ export function parseWithdrawAmount(
     }
   }
   const body = text ?? "";
-  // Prefer an explicit currency amount: "$50", "50 dollars", "50 usd".
+  // Prefer an explicit currency amount: "$50", "50 dollars", "50 usd". The
+  // bare-number fallback requires a standalone whitespace-bounded token not
+  // glued to letters, so a digit inside an app name ("Acme2") never reads as
+  // a dollar amount.
   const m =
     /\$\s*(\d+(?:\.\d+)?)/.exec(body) ??
-    /(\d+(?:\.\d+)?)\s*(?:dollars?|usd)\b/i.exec(body) ??
-    /\b(?:withdraw(?:al)?|cash\s*out|pay\s*out|payout)\b[^$\d]*?(\d+(?:\.\d+)?)\b/i.exec(
+    /(?:^|\s)(\d+(?:\.\d+)?)\s*(?:dollars?|usd)\b/i.exec(body) ??
+    /\b(?:withdraw(?:al)?|cash\s*out|pay\s*out|payout)\b[^$\d]*?(?:^|\s)(\d+(?:\.\d+)?)(?![A-Za-z0-9])/i.exec(
       body,
     );
   if (m) {
@@ -224,6 +238,41 @@ export const withdrawAppEarningsAction: Action = {
         slug: pending.metadata.appSlug ?? pending.metadata.appName,
       };
       const amount = pending.metadata.amount;
+
+      // Frozen-snapshot guard: a confirm whose own params name a DIFFERENT app
+      // or amount must never fund the frozen withdrawal the user is no longer
+      // talking about.
+      const appConflict = conflictingConfirmTarget(options, {
+        name: target.name,
+        id: target.id,
+        aliases: [target.slug],
+      });
+      const amountConflict = conflictingConfirmAmount(options, amount);
+      if (appConflict !== null || amountConflict !== null) {
+        const requested =
+          appConflict ??
+          `${usd(amountConflict ?? amount)} (not ${usd(amount)})`;
+        const msg = confirmTargetMismatchMessage(
+          requested,
+          `withdrawal of ${usd(amount)}`,
+          target.name,
+        );
+        await callback?.({ text: msg, actions: ["WITHDRAW_APP_EARNINGS"] });
+        return {
+          success: false,
+          text: `Confirm named "${requested}" but the pending withdrawal was ${usd(amount)} from ${target.name}; refused.`,
+          userFacingText: msg,
+          verifiedUserFacing: true,
+          data: {
+            reason: "confirm_target_mismatch",
+            withdrawn: false,
+            requested,
+            pendingTarget: { id: target.id, name: target.name },
+            amount,
+          },
+        };
+      }
+
       const cta =
         pending.metadata.cta ??
         buildConnectorCta(

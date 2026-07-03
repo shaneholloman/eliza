@@ -172,19 +172,9 @@ class TelegramAppAutomationService {
   }
 
   async generateAnnouncement(organizationId: string, app: App): Promise<string> {
-    const deduction = await creditsService.deductCredits({
-      organizationId,
-      amount: TELEGRAM_POST_COST,
-      description: `Telegram AI announcement: ${app.name}`,
-      metadata: { appId: app.id, type: "telegram_announcement" },
-    });
-
-    if (!deduction.success) {
-      throw new Error(
-        `Insufficient credits for AI generation. Required: $${TELEGRAM_POST_COST.toFixed(4)}`,
-      );
-    }
-
+    // All throwable prep (character-context DB fetch, prompt build) runs BEFORE
+    // the deduction: nothing may throw between the charge and the refunding try,
+    // or the user is charged for a generation that never ran (#11685).
     const config = app.telegram_automation as TelegramAutomationConfig;
     const vibeStyle = config?.vibeStyle || "professional and engaging";
 
@@ -235,6 +225,19 @@ Write in a ${vibeStyle} style. Keep it concise and engaging.
 Use appropriate emojis sparingly. Do not use hashtags excessively.
 Maximum 500 characters.`;
 
+    const deduction = await creditsService.deductCredits({
+      organizationId,
+      amount: TELEGRAM_POST_COST,
+      description: `Telegram AI announcement: ${app.name}`,
+      metadata: { appId: app.id, type: "telegram_announcement" },
+    });
+
+    if (!deduction.success) {
+      throw new Error(
+        `Insufficient credits for AI generation. Required: $${TELEGRAM_POST_COST.toFixed(4)}`,
+      );
+    }
+
     try {
       const result = await generateText({
         model: openai("gpt-5-mini"),
@@ -262,19 +265,7 @@ Maximum 500 characters.`;
     userMessage: string,
     userName?: string,
   ): Promise<string> {
-    const deduction = await creditsService.deductCredits({
-      organizationId,
-      amount: TELEGRAM_POST_COST,
-      description: `Telegram AI reply: ${app.name}`,
-      metadata: { appId: app.id, type: "telegram_reply" },
-    });
-
-    if (!deduction.success) {
-      throw new Error(
-        `Insufficient credits for AI generation. Required: $${TELEGRAM_POST_COST.toFixed(4)}`,
-      );
-    }
-
+    // Throwable prep stays ahead of the deduction — see generateAnnouncement (#11685).
     const config = app.telegram_automation as TelegramAutomationConfig;
     const vibeStyle = config?.vibeStyle || "helpful and friendly";
 
@@ -310,6 +301,19 @@ Website: ${app.website_url || app.app_url}
 Respond in a ${vibeStyle} style. Be helpful and concise.
 If asked about features not related to the app, politely redirect to the app's purpose.
 Maximum 300 characters.`;
+
+    const deduction = await creditsService.deductCredits({
+      organizationId,
+      amount: TELEGRAM_POST_COST,
+      description: `Telegram AI reply: ${app.name}`,
+      metadata: { appId: app.id, type: "telegram_reply" },
+    });
+
+    if (!deduction.success) {
+      throw new Error(
+        `Insufficient credits for AI generation. Required: $${TELEGRAM_POST_COST.toFixed(4)}`,
+      );
+    }
 
     try {
       const result = await generateText({

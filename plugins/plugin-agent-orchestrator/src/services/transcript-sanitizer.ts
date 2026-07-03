@@ -51,10 +51,18 @@ export function stripToolTranscript(text: string): string {
 }
 
 /**
- * Hard-cap any oversized text remnant. If `text` exceeds `maxChars`, replace it
- * entirely with a short elision marker recording the original length. Applied
+ * Hard-cap any oversized text remnant. If `text` exceeds `maxChars`, TRUNCATE
+ * it: keep the head and append a marker recording the original length. Applied
  * AFTER envelope stripping as defense-in-depth: even a remnant that is not a
  * recognized envelope (raw JSON, an unfenced dump) is bounded before relay.
+ *
+ * Never replaces the text wholesale — a legit long deliverable (a pure-prose
+ * plan or report over the cap) must relay its head, not vanish into a marker
+ * (regression from 37813124bf / #11605: the synthesis path posted literally
+ * "[output elided — N chars]" as the completion summary).
+ *
+ * The truncated result is bounded to `maxChars`, so re-applying this function
+ * (buildTaskResultLine re-sanitizes defensively) is a no-op.
  */
 export function elideLongBlocks(
   text: string,
@@ -62,7 +70,10 @@ export function elideLongBlocks(
 ): string {
   if (!text) return "";
   if (text.length <= maxChars) return text;
-  return `[output elided — ${text.length} chars]`;
+  const marker = `… [output truncated — ${text.length} chars total]`;
+  const headBudget = maxChars - marker.length - 1; // 1 = joining newline
+  if (headBudget <= 0) return marker; // degenerate tiny cap: marker only
+  return `${text.slice(0, headBudget).trimEnd()}\n${marker}`;
 }
 
 /**

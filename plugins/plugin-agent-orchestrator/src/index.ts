@@ -16,6 +16,7 @@ import type {
   ServiceClass,
   TargetInfo,
   ThreadHandle,
+  UUID,
 } from "@elizaos/core";
 import {
   createUniqueUuid,
@@ -827,9 +828,39 @@ Rules:
 Recent activity:
 {tail}`;
 
+/**
+ * Normalize a raw ACP `title` into either an informative noun or the empty
+ * string. The upstream `stringifyMaybe` serializer turns a missing title
+ * (`undefined`/`null`) into the literal two-character string `""` (a
+ * JSON-stringified empty string), and some adapters send whitespace- or
+ * quote-only titles. Left unhandled those became junk "tool calls" in the
+ * hb_signal summarizer prompt (`Tools the sub-agent has called recently: "", ""`).
+ * Strip surrounding quotes + whitespace; if nothing informative survives,
+ * return "" so the caller falls back to a kind-derived noun or "Tool".
+ */
+function sanitizeToolTitle(raw: string | undefined): string {
+  let t = (raw ?? "").trim();
+  // Peel matched surrounding quotes (straight or smart), repeatedly, so
+  // `""`, `''`, `"  "`, `"\"x\""` all collapse toward their inner content.
+  // Bounded iterations guard against pathological input.
+  for (let i = 0; i < 4; i++) {
+    const next = t
+      .replace(
+        /^["'\u201c\u201d\u2018\u2019]+|["'\u201c\u201d\u2018\u2019]+$/g,
+        "",
+      )
+      .trim();
+    if (next === t) break;
+    t = next;
+  }
+  // If nothing but punctuation/quotes remained, it carries no signal.
+  if (!/[\p{L}\p{N}]/u.test(t)) return "";
+  return t;
+}
+
 function formatToolCallForHuman(tc: AcpToolCall | undefined): string {
   if (!tc) return "tool";
-  const title = (tc.title ?? "").trim();
+  const title = sanitizeToolTitle(tc.title);
   const kind = (tc.kind ?? "").toLowerCase();
   const input = tc.rawInput ?? {};
   const firstLoc = Array.isArray(tc.locations) ? tc.locations[0] : undefined;
@@ -1000,6 +1031,17 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
   // request after the window still gets its own.
   const roomAckAt = new Map<string, number>();
   const ACK_ROOM_DEDUP_MS = 60_000;
+  // Resolved outbound target (channelId/serverId) cache, keyed by
+  // `${source}::${roomId}`. emitProgress is a hot recursive path; resolving the
+  // room's connector channel once per (source,roomId) avoids a getRoom lookup on
+  // every narration tick. See resolveEmitTarget below.
+  const emitTargetCacheByKey = new Map<string, EmitTarget>();
+  // Sessions that have already logged an emitProgress failure at WARN. A single
+  // unresolvable room (a stale/task-room UUID forwarded onto a verify-retry
+  // successor session that has no live connector channel) would otherwise emit a
+  // WARN on every narration tick + heartbeat. Warn once per session, then drop to
+  // debug so the log doesn't spam. Bounded like the other per-session sets.
+  const emitFailedSessions = new Set<string>();
   // Cache threads by (source, roomId, label) so a rate-limit retry, a
   // mid-flight crash recovery, or a follow-up spawn for the same logical
   // project reuses the existing thread instead of creating a duplicate.
@@ -1330,7 +1372,63 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
     delayedProgressFirstSeenAt.delete(sessionId);
   }
 
-  // emitProgress is the single hot path for sub-agent narration + heartbeat.
+  // Resolve the outbound connector target for a `{ source, roomId }` pair the
+  // SAME way the swarm-synthesis completion router does
+  // (packages/agent/.../server-helpers-swarm.ts routeSynthesisToConnector):
+  // look the room up and thread its `channelId` (falling back to the room id)
+  // plus `serverId` onto the target. This matters because the orchestrator
+  // takes `source`/`roomId` from `session.metadata`, and a verify-retry
+  // successor session (SubAgentRouter.retryIncompleteBuild) inherits the
+  // ORIGINAL session's `metadata.roomId`. That inherited roomId can be a
+  // stale/task-room UUID with no live connector-channel mapping — so a
+  // roomId-only target makes the Discord connector re-derive the channel from
+  // the room and throw "Could not resolve Discord channel ID for room …",
+  // spamming an Error+Warn on every narration tick. Supplying `channelId`
+  // up front lets the connector send directly (target.channelId short-circuits
+  // the room→channel derivation) and lands on the live room the synthesis
+  // router already routes to. Cached per (source,roomId): the hot narration
+  // path must not pay a getRoom lookup every tick. On any resolution miss we
+  // fall back to the bare `{ source, roomId }` — no worse than before.
+  type EmitTarget = {
+    source: string;
+    roomId: `${string}-${string}-${string}-${string}-${string}`;
+    channelId?: string;
+    serverId?: string;
+  };
+  async function resolveEmitTarget(target: {
+    source: string;
+    roomId: `${string}-${string}-${string}-${string}-${string}`;
+  }): Promise<EmitTarget> {
+    const key = `${target.source}::${target.roomId}`;
+    const cached = emitTargetCacheByKey.get(key);
+    if (cached) return cached;
+    let resolved: EmitTarget = { source: target.source, roomId: target.roomId };
+    try {
+      if (typeof runtime.getRoom === "function") {
+        const room = await runtime.getRoom(target.roomId as UUID);
+        if (room) {
+          resolved = {
+            source: target.source,
+            roomId: target.roomId,
+            // Mirror routeSynthesisToConnector: prefer the connector channel id,
+            // fall back to the room id when the room is its own channel.
+            channelId: room.channelId ?? room.id,
+            ...(room.serverId ? { serverId: room.serverId } : {}),
+          };
+        }
+      }
+    } catch {
+      // best-effort resolution — fall back to the bare target below
+    }
+    emitTargetCacheByKey.set(key, resolved);
+    if (emitTargetCacheByKey.size > 512) {
+      const oldest = emitTargetCacheByKey.keys().next().value;
+      if (oldest !== undefined) emitTargetCacheByKey.delete(oldest);
+    }
+    return resolved;
+  }
+
+  // emitProgress is the single hot path for sub-agent narration + hb_signal.
   // Routing ladder (capability-aware):
   //   1. THREAD exists (or can be created) → all narration goes in thread.
   //      This is the ANTI-POLLUTION key: thread messages never enter the
@@ -1400,6 +1498,13 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
       return;
     }
     try {
+      // Resolve the outbound connector target (channelId/serverId) up front so
+      // every send below routes the same way the swarm-synthesis completion
+      // router does — landing on the live connector channel even when the room
+      // id was inherited (verify-retry) from a session whose room no longer
+      // maps to a channel. Cached per (source,roomId); the original `target`
+      // is still used for state keys (source/roomId are unchanged by resolve).
+      const sendTarget = await resolveEmitTarget(target);
       // ── post into the per-session thread when supported ──
       if (state?.thread && typeof runtime.postToThreadOnTarget === "function") {
         if (state.lastText === displayText) return;
@@ -1410,7 +1515,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
         // (subtle) reason this can't use a `[...]` character class.
         const threadText = stripProgressLabelPrefix(displayText);
         await runtime.postToThreadOnTarget(
-          target,
+          sendTarget,
           state.thread,
           transientContent(threadText, "sub_agent_progress"),
         );
@@ -1425,7 +1530,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
       ) {
         if (state.lastText === displayText) return;
         await runtime.editMessageOnTarget(
-          target,
+          sendTarget,
           state.mainMessageId,
           transientContent(displayText, "sub_agent_progress"),
         );
@@ -1533,7 +1638,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
         }
       }
       const sent = await runtime.sendMessageToTarget(
-        target,
+        sendTarget,
         transientContent(initialText, "sub_agent_progress"),
       );
       const platformId = (sent?.metadata as Record<string, unknown> | undefined)
@@ -1561,7 +1666,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
         // message text. Skip it in "ack" mode — the plain ACK already conveys
         // "working on it" and the rocket reads as noise next to it.
         if (canReact && progressPolicy.mode !== "ack") {
-          void bestEffortReact(target, platformId, "🚀");
+          void bestEffortReact(sendTarget, platformId, "🚀");
         }
         // Resolve the per-(source,roomId,label) thread. Cache hit ⇒ reuse
         // (rate-limit retry / spawn-after-crash for the same logical project
@@ -1577,7 +1682,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
           let thread = threadCacheByKey.get(cacheKey);
           if (!thread) {
             try {
-              thread = await runtime.createThreadOnTarget(target, {
+              thread = await runtime.createThreadOnTarget(sendTarget, {
                 parentMessageId: platformId,
                 name: sessionLabel,
               });
@@ -1618,7 +1723,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
             ) {
               try {
                 await runtime.postToThreadOnTarget(
-                  target,
+                  sendTarget,
                   thread,
                   transientContent(displayText, "sub_agent_progress"),
                 );
@@ -1635,14 +1740,27 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
       // Release the first-post claim on failure so a retry can post the ACK
       // (on success it was already released once state was recorded).
       firstPostInFlight.delete(sessionId);
-      runtime.logger?.warn?.(
-        {
-          src: "@elizaos/plugin-agent-orchestrator",
-          sessionId,
-          err: err instanceof Error ? err.message : String(err),
-        },
-        "emitProgress failed",
-      );
+      // Fail-soft on repeat. A single unresolvable room (a stale/task-room
+      // UUID inherited by a verify-retry successor session) would otherwise
+      // WARN on every narration tick + heartbeat for the life of the session.
+      // WARN once per session so the failure is still visible, then drop to
+      // DEBUG for subsequent emits so the log doesn't spam.
+      const alreadyWarned = emitFailedSessions.has(sessionId);
+      const logFields = {
+        src: "@elizaos/plugin-agent-orchestrator",
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      };
+      if (alreadyWarned) {
+        runtime.logger?.debug?.(logFields, "emitProgress failed (repeat)");
+      } else {
+        emitFailedSessions.add(sessionId);
+        if (emitFailedSessions.size > 512) {
+          const oldest = emitFailedSessions.values().next().value;
+          if (oldest !== undefined) emitFailedSessions.delete(oldest);
+        }
+        runtime.logger?.warn?.(logFields, "emitProgress failed");
+      }
     }
   }
 
@@ -1653,6 +1771,16 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
   ): Promise<void> {
     const state = progressBySession.get(sessionId);
     if (!state) return;
+    // Resolve the connector channel the same way emitProgress does so the
+    // completion edit/reaction lands on the live channel (cached; a no-op when
+    // the target already carries a channelId or the room is unresolvable).
+    const sendTarget = target.roomId
+      ? await resolveEmitTarget({
+          source: target.source,
+          roomId:
+            target.roomId as `${string}-${string}-${string}-${string}-${string}`,
+        })
+      : target;
     const completionText =
       progressPolicy.mode === "threaded"
         ? `✅ [${state.label}] ${summary}`
@@ -1668,7 +1796,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
       if (state.canEdit && typeof runtime.editMessageOnTarget === "function") {
         try {
           await runtime.editMessageOnTarget(
-            target,
+            sendTarget,
             state.mainMessageId,
             transientContent(completionText, "sub_agent_complete"),
           );
@@ -1681,7 +1809,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
         // actually sees the outcome.
         try {
           await runtime.sendMessageToTarget(
-            target,
+            sendTarget,
             transientContent(completionText, "sub_agent_complete"),
           );
         } catch {
@@ -1690,7 +1818,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
       }
     }
     if (state.canReact) {
-      void bestEffortReact(target, state.mainMessageId, "✅");
+      void bestEffortReact(sendTarget, state.mainMessageId, "✅");
     }
   }
 
@@ -1700,8 +1828,15 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
   ): Promise<void> {
     const state = progressBySession.get(sessionId);
     if (!state) return;
+    const sendTarget = target.roomId
+      ? await resolveEmitTarget({
+          source: target.source,
+          roomId:
+            target.roomId as `${string}-${string}-${string}-${string}-${string}`,
+        })
+      : target;
     if (state.canReact) {
-      void bestEffortReact(target, state.mainMessageId, "❌");
+      void bestEffortReact(sendTarget, state.mainMessageId, "❌");
       return;
     }
     // No reaction support and no edit: post a terminal failure message so
@@ -1711,7 +1846,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
     if (!state.canEdit && !suppressFailurePost) {
       try {
         await runtime.sendMessageToTarget(
-          target,
+          sendTarget,
           transientContent(
             progressPolicy.mode === "threaded"
               ? `❌ [${state.label}] failed`
@@ -1899,6 +2034,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
           const terminalState = progressBySession.get(sessionId);
           progressBySession.delete(sessionId);
           firstPostInFlight.delete(sessionId);
+          emitFailedSessions.delete(sessionId);
           // Do NOT clear ackedSessions here. Sub-agents (notably opencode /
           // gpt-oss) emit trailing `message` events AFTER `task_complete`;
           // clearing the marker let those late events re-enter the spawn-ack
@@ -1933,7 +2069,21 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
           const tc = (data as { toolCall?: AcpToolCall })?.toolCall;
           const formatted = formatToolCallForHuman(tc);
           const id = tc?.id?.trim() ?? "";
-          if (formatted && formatted !== "tool") {
+          // Only record entries that carry signal. Reject:
+          //  - empty / whitespace-only `formatted` (defensive; sanitizeToolTitle
+          //    already collapses junk titles like the JSON-serialized `""`),
+          //  - the bare noun fallback ("tool"/"Tool") produced when the ACP
+          //    update has no kind, no informative title, and no args — a
+          //    content-free placeholder that used to pollute the heartbeat
+          //    summarizer prompt.
+          // Bare INFORMATIVE nouns (Bash/Read/Edit/Grep/WebFetch) are kept on
+          // purpose: they're the debounced fallback for arg-less updates and
+          // still tell the summarizer what class of work is happening.
+          const trimmedFormatted = formatted.trim();
+          const isNonInformative =
+            trimmedFormatted.length === 0 ||
+            trimmedFormatted.toLowerCase() === "tool";
+          if (!isNonInformative) {
             const arr = toolHistory.get(sessionId) ?? [];
             // Same toolCallId as an existing entry: replace it. claude-agent-acp
             // sends an initial `tool_call` with empty rawInput / generic title

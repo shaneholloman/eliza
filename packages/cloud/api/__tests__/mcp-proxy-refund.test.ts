@@ -106,6 +106,33 @@ test("unreachable upstream (502) refunds the upfront debit (#11637)", async () =
   expect(refundCredits).toHaveBeenCalledTimes(1);
 });
 
+test("non-owner org CANNOT invoke another org's PRIVATE MCP — 404, no billing (#11838)", async () => {
+  // user is org1 (beforeEach); the MCP is private and owned by org2.
+  getById.mockResolvedValue({
+    ...EXTERNAL_MCP,
+    is_public: false,
+    organization_id: "org2",
+  });
+  const res = await post();
+  expect(res.status).toBe(404);
+  expect(reserveAndDeductCredits).not.toHaveBeenCalled();
+  expect(safeFetch).not.toHaveBeenCalled();
+});
+
+test("non-owner org CAN invoke a PUBLIC MCP — monetization model preserved (#11838)", async () => {
+  getById.mockResolvedValue({
+    ...EXTERNAL_MCP,
+    is_public: true,
+    organization_id: "org2",
+  });
+  safeFetch.mockResolvedValue(
+    new Response(JSON.stringify({ ok: true }), { status: 200 }),
+  );
+  const res = await post();
+  expect(res.status).toBe(200);
+  expect(reserveAndDeductCredits).toHaveBeenCalledTimes(1);
+});
+
 test("unsafe/blocked external endpoint (400) refunds (#11637)", async () => {
   assertSafeOutboundUrl.mockRejectedValue(new Error("SSRF blocked"));
   const res = await post();
@@ -129,6 +156,22 @@ test("container-unavailable (503) refunds (#11637)", async () => {
   expect(refundCredits).toHaveBeenCalledTimes(1);
 });
 
+test("container lookup failure (502) refunds after upfront debit (#11637)", async () => {
+  getById.mockResolvedValue({
+    id: "test-mcp",
+    name: "Container MCP",
+    status: "live",
+    credits_per_request: "5",
+    endpoint_type: "container",
+    container_id: "c1",
+    organization_id: "org1",
+  });
+  containersGetById.mockRejectedValue(new Error("container DB down"));
+  const res = await post();
+  expect(res.status).toBe(502);
+  expect(refundCredits).toHaveBeenCalledTimes(1);
+});
+
 test("invalid JSON body (400) refunds after the upfront debit (#11637)", async () => {
   const res = await post("{not json");
   expect(res.status).toBe(400);
@@ -140,6 +183,20 @@ test("non-ok upstream status refunds (existing behavior preserved)", async () =>
   safeFetch.mockResolvedValue(new Response("upstream error", { status: 500 }));
   const res = await post();
   expect(res.status).toBe(500);
+  expect(refundCredits).toHaveBeenCalledTimes(1);
+});
+
+test("upstream response body read failure refunds before usage is recorded", async () => {
+  safeFetch.mockResolvedValue({
+    ok: true,
+    status: 200,
+    headers: new Headers({ "content-type": "application/json" }),
+    text: async () => {
+      throw new Error("body stream failed");
+    },
+  } as unknown as Response);
+  const res = await post();
+  expect(res.status).toBe(502);
   expect(refundCredits).toHaveBeenCalledTimes(1);
 });
 

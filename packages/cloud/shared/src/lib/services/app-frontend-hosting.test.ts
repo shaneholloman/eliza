@@ -152,6 +152,17 @@ describe("injectBeacon", () => {
     expect(out).toContain("sendBeacon");
     expect(out).toContain("pushState");
   });
+  test("injects stable visitor and session ids when provided by the serve route", () => {
+    const out = injectBeacon("<body></body>", "app-123", "https://site.test", {
+      visitorId: "visitor-123",
+      sessionId: "session-456",
+    });
+    expect(out).toContain("https://site.test/api/v1/track/pageview");
+    expect(out).toContain('"visitor-123"');
+    expect(out).toContain('"session-456"');
+    expect(out).toContain("visitor_id:v");
+    expect(out).toContain("session_id:sid");
+  });
   test("no-op without a body", () => {
     expect(injectBeacon("<div></div>", "app-123")).toBe("<div></div>");
   });

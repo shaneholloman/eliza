@@ -32,12 +32,14 @@
 import {
   createWriteStream,
   existsSync,
+  linkSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -72,6 +74,12 @@ import {
   createAospStreamingLlmBinding,
   streamGenerate,
 } from "./aosp-llama-streaming.js";
+import {
+  classifyInferenceRamClass,
+  InferenceIdleUnloader,
+  makeProcMeminfoPressureCheck,
+  resolveInferenceIdleUnloadMs,
+} from "./inference-memory-policy.js";
 
 const SERVICE_NAME = "localInferenceLoader";
 const PROVIDER = "eliza-aosp-llama";
@@ -89,7 +97,7 @@ let routeActivationLoader: AospLoader | null = null;
  */
 const LOCAL_INFERENCE_PRIORITY = 0;
 
-interface AospLoader {
+export interface AospLoader {
   loadModel(args: AospLoadModelArgs): Promise<void>;
   unloadModel(): Promise<void>;
   currentModelPath(): string | null;
@@ -113,6 +121,36 @@ interface AospLoader {
     embedding: number[];
     tokens: number;
   }>;
+}
+
+/**
+ * Route every model-touching loader call through the idle unloader's
+ * in-flight tracking (#11760): a use in flight blocks the idle unload, and
+ * completion refreshes the idle clock. `unloadModel` passes through untracked
+ * — an explicit unload IS the idle path's goal, and the voice handlers'
+ * out-of-band eviction must never be counted as model use.
+ */
+export function instrumentLoaderForIdleTracking(
+  loader: AospLoader,
+  unloader: InferenceIdleUnloader,
+): AospLoader {
+  const track =
+    <A extends unknown[], R>(fn: (...args: A) => Promise<R>) =>
+    async (...args: A): Promise<R> => {
+      const endUse = unloader.beginUse();
+      try {
+        return await fn(...args);
+      } finally {
+        endUse();
+      }
+    };
+  return {
+    currentModelPath: () => loader.currentModelPath(),
+    loadModel: track(loader.loadModel.bind(loader)),
+    unloadModel: () => loader.unloadModel(),
+    generate: track(loader.generate.bind(loader)),
+    embed: track(loader.embed.bind(loader)),
+  };
 }
 
 function writeAospActiveModelState(
@@ -169,6 +207,24 @@ function clearAospActiveModelState(): void {
   }
 }
 
+/** KV-cache type names the fused lib's `eliza_kv_cache_type` map accepts. */
+type AospKvCacheTypeName =
+  | "f16"
+  | "q8_0"
+  | "tbq3_0"
+  | "tbq4_0"
+  | "qjl1_256"
+  | "q4_polar";
+
+const AOSP_KV_CACHE_TYPE_NAMES: readonly AospKvCacheTypeName[] = [
+  "f16",
+  "q8_0",
+  "tbq3_0",
+  "tbq4_0",
+  "qjl1_256",
+  "q4_polar",
+];
+
 export interface AospLoadModelArgs {
   modelPath: string;
   contextSize?: number;
@@ -181,12 +237,12 @@ export interface AospLoadModelArgs {
   draftMax?: number;
   speculativeSamples?: number;
   mobileSpeculative?: boolean;
-  cacheTypeK?: "f16" | "tbq3_0" | "tbq4_0" | "qjl1_256" | "q4_polar";
-  cacheTypeV?: "f16" | "tbq3_0" | "tbq4_0" | "qjl1_256" | "q4_polar";
+  cacheTypeK?: AospKvCacheTypeName;
+  cacheTypeV?: AospKvCacheTypeName;
   disableThinking?: boolean;
   kvCacheType?: {
-    k?: "f16" | "tbq3_0" | "tbq4_0" | "qjl1_256" | "q4_polar";
-    v?: "f16" | "tbq3_0" | "tbq4_0" | "qjl1_256" | "q4_polar";
+    k?: AospKvCacheTypeName;
+    v?: AospKvCacheTypeName;
   };
 }
 
@@ -472,6 +528,29 @@ function readPositiveIntEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+/**
+ * Chat KV-cache type override (`ELIZA_LLAMA_KV_TYPE_K` / `_V`). The fork
+ * defaults (q8_0 / f16) are eliza-1's Gemma-safe memory policy: q8_0 halves the
+ * K cache, while f16 avoids the fused-lib flash-attn requirement for V-quant.
+ * The env knob lets a device profile pin another supported type without a
+ * rebuild.
+ */
+function readKvCacheTypeEnv(
+  name: string,
+  fallback: AospKvCacheTypeName,
+): AospKvCacheTypeName {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return fallback;
+  const match = AOSP_KV_CACHE_TYPE_NAMES.find((candidate) => candidate === raw);
+  if (!match) {
+    logger.warn(
+      `[aosp-local-inference] ${name}="${raw}" is not a recognised KV cache type (accepted: ${AOSP_KV_CACHE_TYPE_NAMES.join(", ")}); using ${fallback}`,
+    );
+    return fallback;
+  }
+  return match;
+}
+
 function readNonNegativeIntEnv(name: string): number | null {
   const raw = process.env[name]?.trim();
   if (!raw) return null;
@@ -686,9 +765,17 @@ export function buildAospLoadModelArgs(
         : undefined,
       useGpu: gpuLayers > 0,
       gpuLayers,
+      // Gemma-4 KV path (#11760): the QJL/PolarQuant kernels are retired for
+      // the shipped eliza-1 tiers (#8848/#9033 cutover — Gemma's dual head
+      // dims are incompatible), and current fused libs route the legacy names
+      // into the stock V-quant check, which hard-fails without flash-attn
+      // (disabled on Android: scalar-FA race). K=q8_0 halves the K cache and
+      // needs no FA; V stays f16 (V-quant requires FA). Matches the bionic
+      // host's KV decision (ELIZA_BIONIC_KV_QUANT=0) and the catalog's
+      // ELIZA_1_KV_QUANT=q8_0.
       kvCacheType: {
-        k: "qjl1_256",
-        v: "q4_polar",
+        k: readKvCacheTypeEnv("ELIZA_LLAMA_KV_TYPE_K", "q8_0"),
+        v: readKvCacheTypeEnv("ELIZA_LLAMA_KV_TYPE_V", "f16"),
       },
     };
   }
@@ -925,6 +1012,18 @@ function mapExistingModelPath(raw: unknown, modelsDir: string): string | null {
   if (typeof raw !== "string" || raw.trim().length === 0) return null;
   const candidate = raw.trim();
   const normalized = candidate.replaceAll("\\", "/");
+  // Container-relative rows (the canonical registry format since #11669) are
+  // stored relative to the local-inference dir — the parent of modelsDir.
+  if (!path.isAbsolute(candidate) && !/^[A-Za-z]:[\\/]/.test(candidate)) {
+    const parts = normalized.split("/").filter(Boolean);
+    if (parts.length === 0 || parts.some((p) => p === "." || p === "..")) {
+      return null;
+    }
+    const mapped = path.join(path.dirname(modelsDir), ...parts);
+    return existsSync(mapped) ? mapped : null;
+  }
+  // Legacy absolute rows from a previous container/state root: re-anchor by
+  // the `/local-inference/models/` suffix.
   const marker = "/local-inference/models/";
   const markerIndex = normalized.lastIndexOf(marker);
   if (markerIndex >= 0) {
@@ -2079,6 +2178,44 @@ function resolveAospFusedKokoroConfig(): AospFusedKokoroConfig | null {
   return { libPath, bundleRoot, kokoroGgufPath, kokoroVoicePath };
 }
 
+/**
+ * The fused lib resolves the chat GGUF strictly as `<bundleRoot>/text/*.gguf`,
+ * but Android first-run staging lays the curated model FLAT under `models/`.
+ * Mirror the bionic host's hardlink-bundle shim (`deriveBundleDir` in
+ * plugin-local-inference's bionic-host-loader) so the fused musl loader
+ * accepts the flat layout: hardlink (or symlink) the flat GGUF into
+ * `<bundleRoot>/text/` without copying the multi-GB model bytes. Best-effort —
+ * on failure the fused create/tokenize surfaces its own loud
+ * "no text GGUF found" diagnostic (verified live on emulator-5554).
+ */
+function ensureFusedTextBundleLayout(
+  modelPath: string,
+  bundleRoot: string,
+): void {
+  try {
+    if (!modelPath.endsWith(".gguf") || !existsSync(modelPath)) return;
+    if (path.basename(path.dirname(modelPath)) === "text") return;
+    const textDir = path.join(bundleRoot, "text");
+    const target = path.join(textDir, path.basename(modelPath));
+    if (existsSync(target)) return;
+    mkdirSync(textDir, { recursive: true });
+    try {
+      linkSync(modelPath, target);
+    } catch {
+      symlinkSync(modelPath, target);
+    }
+    writeAospLlamaDebugLog("bootstrap:fusedText:flatBundleShim", {
+      modelPath,
+      target,
+    });
+  } catch (err) {
+    writeAospLlamaDebugLog("bootstrap:fusedText:flatBundleShimFailed", {
+      modelPath,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 function resolveBundleRootFromModelPath(modelPath: string): string {
   const parts = modelPath.replaceAll("\\", "/").split("/");
   const bundleIndex = parts.findIndex((part) => part.endsWith(".bundle"));
@@ -2139,13 +2276,15 @@ function readFfiStringAndFree(
 }
 
 function readFfiPointer(
-  ffi: BunFfiModule,
+  _ffi: BunFfiModule,
   ptrBuffer: Buffer,
   offset = 0,
 ): bigint {
-  const viaFfi = ffi.read?.ptr?.(ptrBuffer, offset);
-  if (typeof viaFfi === "bigint") return viaFfi;
-  if (typeof viaFfi === "number") return BigInt(viaFfi);
+  // NOTE: never hand the Buffer to `ffi.read.ptr` — bun's `read.ptr` takes a
+  // raw Pointer NUMBER and throws "Expected a pointer" for a Buffer (verified
+  // on-device, bun 1.3.14). That throw masked every native error diagnostic
+  // on the fused-lib error paths. The out-param bytes live in JS memory, so a
+  // DataView read is always correct.
   const view = new DataView(
     ptrBuffer.buffer,
     ptrBuffer.byteOffset,
@@ -2488,6 +2627,8 @@ interface AospFusedTextLoaderState {
   gpuLayers?: number;
   contextSize: number | null;
   draftModelPath: string | null;
+  /** Set after a one-time f16 retry when the build rejects KV-quant. */
+  kvQuantRejected?: boolean;
 }
 
 /**
@@ -2715,6 +2856,10 @@ export async function tryBuildAospFusedTextLoader(): Promise<AospLoader | null> 
       // context is created lazily on the first load; its bundle root is
       // derived from the resolved model path so the loader does not need a
       // pre-staged bundle at boot.
+      ensureFusedTextBundleLayout(
+        args.modelPath,
+        state?.bundleRoot ?? resolveBundleRootFromModelPath(args.modelPath),
+      );
       if (!state) {
         const bundleRoot = resolveBundleRootFromModelPath(args.modelPath);
         const errCreate = Buffer.alloc(8);
@@ -2823,14 +2968,48 @@ export async function tryBuildAospFusedTextLoader(): Promise<AospLoader | null> 
         disableThinking: false,
         contextSize: active.contextSize,
       };
-      const result = await streamGenerate(active.binding, {
-        ctx: active.ctx,
-        config,
-        promptTokens,
-        ...(args.signal ? { signal: args.signal } : {}),
-        ...(args.onTextChunk ? { onTextChunk: args.onTextChunk } : {}),
-      });
-      return result.text;
+      const runStream = async () => {
+        const result = await streamGenerate(active.binding, {
+          ctx: active.ctx,
+          config,
+          promptTokens,
+          ...(args.signal ? { signal: args.signal } : {}),
+          ...(args.onTextChunk ? { onTextChunk: args.onTextChunk } : {}),
+        });
+        return result.text;
+      };
+      try {
+        return await runStream();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // Some fused-lib builds reject a quantized V cache without flash_attn
+        // ("V cache quantization requires flash_attn" → llm_stream_open fails
+        // to init the llama context). Retry ONCE with f16 KV so local text
+        // inference stays alive, and log loudly — the eliza-1 KV-quant memory
+        // optimization is disabled for the rest of this load.
+        const kvQuantRejection =
+          /flash_attn|failed to init llama context/i.test(message);
+        if (active.kvQuantRejected || !kvQuantRejection) {
+          throw err;
+        }
+        active.kvQuantRejected = true;
+        logger.warn(
+          `[aosp-local-inference] fused llm_stream_open rejected the KV-quant cache config (${message}); retrying with f16 KV cache — eliza-1 KV-quant memory optimization DISABLED for this model load. Set ELIZA_LLAMA_KV_TYPE_K/V=f16 to silence this retry, or ship a fused lib with flash_attn wired for quantized V cache.`,
+        );
+        writeAospLlamaDebugLog("bootstrap:fusedText:kvQuantRejected", {
+          message,
+        });
+        active.binding = createAospStreamingLlmBinding({
+          ctx: active.ctx,
+          symbols: active.symbols as unknown as AospFusedLlmSymbols,
+          helpers: active.helpers,
+          ...(typeof active.gpuLayers === "number"
+            ? { gpuLayers: active.gpuLayers }
+            : {}),
+          kvCacheTypes: { cacheTypeK: "f16", cacheTypeV: "f16" },
+        });
+        return await runStream();
+      }
     },
 
     async embed(args): Promise<{ embedding: number[]; tokens: number }> {
@@ -2902,20 +3081,59 @@ export async function ensureAospLocalInferenceHandlers(
   // cloud-fallback handler at priority -1 then routes recoverable failures to
   // a cloud provider via the local-unavailable classifier).
   console.log("[aosp-local-inference] building fused text loader…");
-  const textLoader = await tryBuildAospFusedTextLoader();
+  const fusedTextLoader = await tryBuildAospFusedTextLoader();
   console.log(
-    `[aosp-local-inference] fused text loader ${textLoader ? "ready" : "unavailable"}`,
+    `[aosp-local-inference] fused text loader ${fusedTextLoader ? "ready" : "unavailable"}`,
   );
-  if (!textLoader) {
+  if (!fusedTextLoader) {
     console.error("[aosp-local-inference] fused text loader unavailable");
     logger.error(
       "[aosp-local-inference] fused libelizainference text loader unavailable (lib absent or pre-ABI-v9); TEXT_* handlers NOT wired. Local text inference is unavailable.",
     );
     return false;
   }
+
+  // Inference memory policy (#11760): free the loaded model after a RAM-class
+  // idle window so the pinned weights don't keep this process at the top of
+  // lmkd's kill list between conversations. Every loader use routes through the
+  // instrumented wrapper so the idle clock is accurate; the unload flows
+  // through the same lifecycle plumbing the voice handlers' out-of-band
+  // eviction already uses (`unloadModel` + `markEvicted` → the next request
+  // reloads via `ensureChatLoaded`).
+  const inferenceRamClass = classifyInferenceRamClass();
+  const idleUnloadMs = resolveInferenceIdleUnloadMs(inferenceRamClass);
+  let markLifecycleEvicted: () => void = () => {};
+  const idleUnloader = new InferenceIdleUnloader({
+    idleUnloadMs,
+    // The bun agent never receives onTrimMemory (it is not an Android
+    // component), so /proc/meminfo MemAvailable is its pressure signal.
+    pressureCheck: makeProcMeminfoPressureCheck(inferenceRamClass),
+    isLoaded: () => fusedTextLoader.currentModelPath() !== null,
+    unload: async () => {
+      await fusedTextLoader.unloadModel();
+      markLifecycleEvicted();
+      writeAospLlamaDebugLog("bootstrap:idleUnload:released", {
+        idleUnloadMs,
+        ramClass: inferenceRamClass,
+      });
+    },
+    logger: {
+      info: (msg) => logger.info(msg),
+      warn: (msg) => logger.warn(msg),
+    },
+  });
+  const textLoader = instrumentLoaderForIdleTracking(
+    fusedTextLoader,
+    idleUnloader,
+  );
   routeActivationLoader = textLoader;
 
   const lifecycle = makeLoaderLifecycle(textLoader);
+  markLifecycleEvicted = lifecycle.markEvicted;
+  idleUnloader.start();
+  logger.info(
+    `[aosp-local-inference] inference memory policy: ramClass=${inferenceRamClass} idleUnloadMs=${idleUnloadMs} (#11760)`,
+  );
   // TEXT_EMBEDDING is wired unconditionally: chat + embedding loads share one
   // fused EliInferenceContext, and the C side resolves the text vs embedding
   // region per call (`llm_stream_*` vs `embed`), so there is no cross-mode

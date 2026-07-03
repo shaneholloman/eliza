@@ -36,9 +36,16 @@
  *                                   run-mobile-build.mjs mtpTargetOutDir()
  *   ELIZA_MTP_LLAMA_CPP_SRC         override fork source tree
  *   ELIZA_IOS_DEPLOYMENT_TARGET     iOS min version (default 16.0)
- *   ELIZA_IOS_METAL_STD             Metal language std (default ios-metal2.4);
- *                                   the iOS min-version flag is appended here
- *                                   so embedded metallibs run on older devices
+ *   ELIZA_IOS_METAL_STD             Metal language std (default metal3.1 —
+ *                                   MSL >= 3.1 is REQUIRED for the bf16 kernel
+ *                                   family; ggml-metal.metal #if's every bf16
+ *                                   kernel out below __METAL_VERSION__ 310 and
+ *                                   A-series GPUs then fail bf16 mul_mm pipeline
+ *                                   lookup at decode time, #11612). metal3.1
+ *                                   raises the metallib's AIR floor to iOS 17;
+ *                                   on iOS 16 the embedded library fails to load
+ *                                   and the runtime cleanly falls back to CPU.
+ *                                   The iOS min-version flag is appended here.
  *   ELIZA_MTP_FORCE_REBUILD=1       ignore a cached slice and rebuild
  */
 
@@ -74,7 +81,21 @@ const STATE_DIR =
 
 const DEPLOYMENT_TARGET =
   process.env.ELIZA_IOS_DEPLOYMENT_TARGET?.trim() || "16.0";
-const IOS_METAL_STD = process.env.ELIZA_IOS_METAL_STD?.trim() || "ios-metal2.4";
+// metal3.1 (not ios-metal2.4): MSL >= 3.1 is required so the bf16 kernels
+// (kernel_mul_mm_bf16_f32 & co.) are emitted into the embedded metallib —
+// ggml-metal.metal auto-undefs GGML_METAL_HAS_BF16 below __METAL_VERSION__ 310,
+// and A-series GPUs (has_bfloat=true) then fail bf16 pipeline lookup (#11612).
+const IOS_METAL_STD = process.env.ELIZA_IOS_METAL_STD?.trim() || "metal3.1";
+// The iOS *simulator* Metal toolchain (translated Metal) wedges/hangs compiling
+// the metal3.1 bf16 kernel set at model-load (observed: fixed slice pegs a core
+// for 20+ min with flat RSS and never finishes; the pre-#11612 ios-metal2.4 slice
+// loaded fine). The simulator does not need embedded bf16 kernels: the runtime
+// bf16-library gate (#11612, ggml_metal_device_init) probes for
+// kernel_mul_mm_bf16_f32, finds it absent at MSL < 3.1, and routes bf16 ops to
+// the CPU backend — so generation still runs. Keep the simulator slice at the
+// pre-#11612 MSL; the physical-device slices stay at metal3.1 for A-series bf16.
+const IOS_SIM_METAL_STD =
+  process.env.ELIZA_IOS_SIM_METAL_STD?.trim() || "ios-metal2.4";
 
 // ── Fork source. The canonical fork is the in-repo submodule; the vendored
 //    ios-deps tree is the historical fallback. Both carry the eliza kernels.
@@ -147,6 +168,11 @@ const REQUIRED_FUSED_SYMBOLS = [
   "eliza_inference_kokoro_load",
   "eliza_inference_kokoro_synthesize",
   "eliza_inference_kokoro_sample_rate",
+  // ABI v14 — Kokoro IPA input + G2P-kind query (#11776). iOS never links
+  // espeak, so without the IPA path the on-device Kokoro voice is unintelligible;
+  // require these so a slice built before the fork bump fails loudly here.
+  "eliza_inference_kokoro_g2p_kind",
+  "eliza_inference_kokoro_synthesize_ipa",
   "mtmd_init_from_file",
 ].map((symbol) => ({
   symbol,
@@ -303,7 +329,8 @@ function buildTarget(target) {
     : `-miphoneos-version-min=${DEPLOYMENT_TARGET}`;
   // ggml appends GGML_METAL_STD after -std=; CMake list expansion lets this
   // also pass the iOS deployment target into the embedded metallib compile.
-  const metalStdAndDeployment = `${IOS_METAL_STD};${metalDeploymentFlag}`;
+  const metalStd = t.isSimulator ? IOS_SIM_METAL_STD : IOS_METAL_STD;
+  const metalStdAndDeployment = `${metalStd};${metalDeploymentFlag}`;
 
   const buildDir = path.join(STATE_DIR, "local-inference", "mtp-build", target);
   if (process.env.ELIZA_MTP_FORCE_REBUILD === "1") {

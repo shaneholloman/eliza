@@ -857,6 +857,36 @@ describe("runOnboardingChat", () => {
       expect(result.reply).not.toContain("copied");
     });
 
+    test("insufficient-credits reply is deterministic and points at billing", async () => {
+      // With a live Cerebras client configured, only the deterministic
+      // early-return keeps the model out of the money-state reply; without
+      // this key the not-called assertion below is vacuously true.
+      cloudEnv = { CEREBRAS_API_KEY: "test-key" };
+      generateText.mockResolvedValue({ text: "model-improvised billing copy" });
+      ensureElizaAppProvisioning.mockResolvedValue({
+        status: "insufficient_credits",
+        agentId: null,
+        bridgeUrl: null,
+        sandbox: null,
+      });
+      const result = await runOnboardingChat({
+        message: "My name is Sam",
+        platform: "blooio",
+        platformUserId: PHONE,
+        sessionId: PLATFORM_SESSION,
+        trustedPlatformIdentity: true,
+        authenticatedUser: { userId: "user-1", organizationId: "org-1" },
+      });
+      expect(result.provisioning.status).toBe("insufficient_credits");
+      expect(result.handoffComplete).toBe(false);
+      expect(generateText).not.toHaveBeenCalled();
+      expect(result.reply).toContain("You're out of credits, Sam.");
+      expect(result.reply).toContain("/dashboard/billing");
+      expect(result.reply).toContain("usage-based:");
+      expect(result.reply).not.toContain("You're live");
+      expect(result.reply).not.toContain("copied");
+    });
+
     test("login-required fallback reply always ends with the exact login link", async () => {
       const result = await runTrustedPhoneTurn("My name is Sam");
       expect(result.requiresLogin).toBe(true);

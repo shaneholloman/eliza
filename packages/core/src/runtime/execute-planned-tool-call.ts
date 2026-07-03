@@ -2,7 +2,11 @@ import { validateToolArgs } from "../actions/validate-tool-args";
 import { evaluateConnectorAccountPolicies } from "../connectors/account-manager";
 import { checkSenderRole } from "../roles";
 import { emitStreamingHook, getStreamingContext } from "../streaming-context";
-import { getTrajectoryContext } from "../trajectory-context";
+import {
+	getTrajectoryContext,
+	runWithTrajectoryContext,
+} from "../trajectory-context";
+import { withActionStep } from "../trajectory-utils";
 import type {
 	Action,
 	ActionParameters,
@@ -105,6 +109,68 @@ function sensitiveActionResultMarker(
 		suppressed: true,
 		reason: "sensitive_action_result",
 	};
+}
+
+function readMetadataString(message: Memory, key: string): string | undefined {
+	const metadata = isContentRecord(message.metadata) ? message.metadata : null;
+	const value = metadata?.[key];
+	return typeof value === "string" && value.trim().length > 0
+		? value.trim()
+		: undefined;
+}
+
+function runWithMessageTrajectoryContext<T>(
+	runtime: IAgentRuntime,
+	message: Memory,
+	fn: () => Promise<T> | T,
+): Promise<T> | T {
+	const activeContext = getTrajectoryContext();
+	const trajectoryId = readMetadataString(message, "trajectoryId");
+	const runId =
+		typeof runtime.getCurrentRunId === "function"
+			? runtime.getCurrentRunId()
+			: undefined;
+	if (
+		typeof activeContext?.trajectoryStepId === "string" &&
+		activeContext.trajectoryStepId.trim().length > 0
+	) {
+		if (
+			trajectoryId &&
+			!(
+				typeof activeContext.trajectoryId === "string" &&
+				activeContext.trajectoryId.trim().length > 0
+			)
+		) {
+			return runWithTrajectoryContext(
+				{
+					...activeContext,
+					trajectoryId,
+					...(runId ? { runId } : {}),
+					...(message.roomId ? { roomId: message.roomId } : {}),
+					...(message.id ? { messageId: message.id } : {}),
+				},
+				fn,
+			);
+		}
+		return fn();
+	}
+
+	const trajectoryStepId = readMetadataString(message, "trajectoryStepId");
+	if (!trajectoryStepId) {
+		return fn();
+	}
+
+	return runWithTrajectoryContext(
+		{
+			...activeContext,
+			...(trajectoryId ? { trajectoryId } : {}),
+			trajectoryStepId,
+			...(runId ? { runId } : {}),
+			...(message.roomId ? { roomId: message.roomId } : {}),
+			...(message.id ? { messageId: message.id } : {}),
+		},
+		fn,
+	);
 }
 
 export async function executePlannedToolCall(
@@ -252,42 +318,50 @@ export async function executePlannedToolCall(
 		const actionCallback: typeof executorCtx.callback = callback
 			? (response, actionName) => callback(response, actionName ?? action.name)
 			: undefined;
-		// Egress (#10469): this is the true execution boundary. Restore real
-		// secrets into the handler args ONLY here — the model, transcripts, logs,
-		// and trajectory upstream kept the placeholders. Fail loud if the model
-		// emitted a this-turn placeholder we cannot resolve, so a placeholder is
-		// never sent to a real command/connector/endpoint. No-op (and zero cost)
-		// when secret-swap is disabled: there is no turn session on the context.
-		const secretSwapSession = getTrajectoryContext()?.secretSwapSession;
-		if (secretSwapSession && handlerOptions.parameters !== undefined) {
-			handlerOptions.parameters = secretSwapSession.restoreInValue(
-				handlerOptions.parameters,
-				{ failOnUnresolved: true },
-			);
-		}
-		// Egress (#10469 / #7007): restore real named-entity PII here too —
-		// including the REPLY action's own text, so the tool call runs against the
-		// real recipient and the user sees their real contacts, while the model,
-		// trajectory, and logs kept the surrogates. Best-effort (no failOnUnresolved):
-		// a surrogate the model rewrote, or a genuinely new name it introduced, is
-		// simply left as-is.
-		const piiSwapSession = getTrajectoryContext()?.piiSwapSession;
-		if (piiSwapSession && handlerOptions.parameters !== undefined) {
-			handlerOptions.parameters = piiSwapSession.restoreInValue(
-				handlerOptions.parameters,
-			);
-		}
-		const result = await runWithActionRoutingContext(
-			{ actionName: action.name, modelClass: action.modelClass },
-			() =>
-				action.handler(
-					runtime,
-					executorCtx.message,
-					executorCtx.state,
-					handlerOptions,
-					actionCallback,
-					executorCtx.responses,
-				),
+		const result = await runWithMessageTrajectoryContext(
+			runtime,
+			executorCtx.message,
+			async () => {
+				// Egress (#10469): this is the true execution boundary. Restore real
+				// secrets into the handler args ONLY here — the model, transcripts, logs,
+				// and trajectory upstream kept the placeholders. Fail loud if the model
+				// emitted a this-turn placeholder we cannot resolve, so a placeholder is
+				// never sent to a real command/connector/endpoint. No-op (and zero cost)
+				// when secret-swap is disabled: there is no turn session on the context.
+				const secretSwapSession = getTrajectoryContext()?.secretSwapSession;
+				if (secretSwapSession && handlerOptions.parameters !== undefined) {
+					handlerOptions.parameters = secretSwapSession.restoreInValue(
+						handlerOptions.parameters,
+						{ failOnUnresolved: true },
+					);
+				}
+				// Egress (#10469 / #7007): restore real named-entity PII here too —
+				// including the REPLY action's own text, so the tool call runs against the
+				// real recipient and the user sees their real contacts, while the model,
+				// trajectory, and logs kept the surrogates. Best-effort (no failOnUnresolved):
+				// a surrogate the model rewrote, or a genuinely new name it introduced, is
+				// simply left as-is.
+				const piiSwapSession = getTrajectoryContext()?.piiSwapSession;
+				if (piiSwapSession && handlerOptions.parameters !== undefined) {
+					handlerOptions.parameters = piiSwapSession.restoreInValue(
+						handlerOptions.parameters,
+					);
+				}
+				return runWithActionRoutingContext(
+					{ actionName: action.name, modelClass: action.modelClass },
+					() =>
+						withActionStep(runtime, action.name, () =>
+							action.handler(
+								runtime,
+								executorCtx.message,
+								executorCtx.state,
+								handlerOptions,
+								actionCallback,
+								executorCtx.responses,
+							),
+						),
+				);
+			},
 		);
 		resultForEvent = normalizeActionResult(action.name, result);
 	} catch (error) {

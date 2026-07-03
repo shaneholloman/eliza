@@ -56,7 +56,10 @@ import type { IAgentRuntime } from "@elizaos/core";
 import { logger, Service } from "@elizaos/core";
 import { AcpService } from "./acp-service.js";
 import { OrchestratorTaskService } from "./orchestrator-task-service.js";
-import { sanitizeCompletionRelay } from "./transcript-sanitizer.js";
+import {
+  DEFAULT_MAX_RELAY_CHARS,
+  sanitizeCompletionRelay,
+} from "./transcript-sanitizer.js";
 import { TERMINAL_SESSION_STATUSES } from "./types.js";
 
 export const SWARM_COORDINATOR_SERVICE_TYPE = "SWARM_COORDINATOR";
@@ -153,6 +156,14 @@ const STREAMING_SESSION_EVENTS = new Set(["message", "reasoning", "plan"]);
 // cedes ownership for these — notably NOT `stopped`, which the router does not
 // inject, so the coordinator stays the sole poster for stop/cancel/no-output.
 const ROUTER_OWNED_TERMINAL_EVENTS = new Set(["task_complete", "error"]);
+
+// Metadata key the sub-agent-router stamps on a session it hands off to a
+// successor (verify-retry / state-lost respawn / account failover) before
+// tearing it down. That teardown `stopped` is handoff plumbing, not a
+// user-facing terminal — the successor session posts the real completion, so
+// synthesis must not post the old one (#11711). Matching local literal (no
+// import from sub-agent-router — see the ROUTER_ORIGIN_UUID_RE note).
+const HANDED_OFF_SUCCESSOR_META_KEY = "handedOffToSuccessorSessionId";
 
 const LEGACY_TASK_EVICTION_GRACE_MS = 60_000;
 
@@ -272,6 +283,21 @@ export class SwarmCoordinatorService extends Service {
   private swarmCompleteCallback: SwarmCompleteCallback | null = null;
   private readonly inFlightDecisionSessions = new Set<string>();
   private readonly synthesizedCompletionSessions = new Set<string>();
+  // Sessions whose latest terminal event was ceded to the sub-agent-router
+  // (the router-owned skip in `runSwarmComplete`). The one-shot runners
+  // (runPromptAndClose / runPromptViaSmithers in actions/tasks.ts) ALWAYS stop
+  // the session right after the terminal — `closeSession` emits a `stopped`
+  // carrying the raw lastOutput, then the runner emits a second explicit
+  // `stopped` — so on EVERY routed completion a teardown `stopped` trails the
+  // ceded terminal. That stop is lifecycle plumbing of the SAME turn, not a
+  // user-facing end state: without this marker, synthesis posted a spurious
+  // "<label> stopped." / sanitized raw-output message to the origin channel
+  // seconds after the router's real completion post (#11689 residual), and
+  // leaked a terminal stop mid-respawn on error paths the router deliberately
+  // suppresses (before the #11711 handoff stamp lands). Cleared when the
+  // session resumes (a genuine stop on a later turn must still post), on
+  // legacy-task eviction, and on stop().
+  private readonly routerCededTerminalSessions = new Set<string>();
   // Per-session serialization chain for terminal-event synthesis. AcpService
   // invokes session-event listeners SYNCHRONOUSLY without awaiting them, so two
   // terminal events emitted back-to-back for the SAME session (e.g. a
@@ -378,6 +404,7 @@ export class SwarmCoordinatorService extends Service {
     this.swarmCompleteCallback = null;
     this.inFlightDecisionSessions.clear();
     this.synthesizedCompletionSessions.clear();
+    this.routerCededTerminalSessions.clear();
     this.terminalCompletionChains.clear();
     this.enrichmentMetadataCache.clear();
     for (const timer of this.legacyTaskEvictionTimers.values()) {
@@ -694,6 +721,11 @@ export class SwarmCoordinatorService extends Service {
     // turn's stale snapshot — so this must run BEFORE enrichment below.
     if (!this.isTerminalEvent(event)) {
       this.cancelLegacyTaskEviction(sessionId);
+      // Session resumed: the ceded-terminal marker belongs to the PREVIOUS
+      // turn. A genuine user stop on this new turn — which the router never
+      // posts — must synthesize again, so the marker must not outlive the turn
+      // whose teardown it suppresses.
+      this.routerCededTerminalSessions.delete(sessionId);
     }
 
     const enrichedData = this.shouldEnrichEvent(event)
@@ -841,6 +873,63 @@ export class SwarmCoordinatorService extends Service {
     }
     const meta = sessionMeta.metadata;
 
+    // Handoff teardown (#11711): a session the router handed off to a successor
+    // (verify-retry, state-lost respawn, or account failover) is torn down with
+    // a `stopped` terminal that is plumbing, not a user-facing end state — the
+    // successor session posts the real completion. The router stamps the old
+    // session with `handedOffToSuccessorSessionId` before teardown; skip its
+    // terminal so one task yields ONE completion, not one per lineage
+    // generation. A genuine user stop carries no marker and still synthesizes
+    // (the #11689 invariant). Do NOT claim the dedupe slot — the successor's
+    // terminal must remain free to post.
+    //
+    // Cache-staleness re-read (#11711 residual): the enrichment cache is warmed
+    // from the store on the earlier SAME-session `task_complete` — the one that
+    // triggered the verify-retry — which lands BEFORE the router stamps the
+    // marker on that session. So the cached snapshot the `stopped` reads here
+    // can pre-date the stamp and miss the marker, and the teardown-stop would
+    // be mistaken for a user stop and synthesized. Only for `stopped`, and only
+    // when the cached snapshot lacks the marker, re-read the store once via
+    // `getFreshSessionMetadata` (which also refreshes the cache). Fail-open: an
+    // unreadable/missing session yields `{}`, so an unknown session is treated
+    // as "not superseded" and still synthesizes — a genuine stop is never
+    // silenced.
+    if (readString(meta, HANDED_OFF_SUCCESSOR_META_KEY)) {
+      return;
+    }
+
+    // Teardown-stop of a router-ceded terminal (#11689 residual): the one-shot
+    // runners (runPromptAndClose / runPromptViaSmithers) unconditionally stop
+    // the session right after emitting task_complete / error, so on EVERY
+    // routed one-shot the ceded terminal is followed — deterministically, not
+    // as a rare race — by one `stopped` from closeSession (carrying the raw
+    // lastOutput as `response`) plus a second explicit one. The router posted
+    // (or, for suppressed failover errors, deliberately withheld pending
+    // respawn) the real outcome for this turn; synthesizing its teardown stop
+    // double-posts "<label> stopped." / raw output into the origin channel.
+    // Checked BEFORE the store re-read below (no stamp is needed — this covers
+    // the error path where teardown lands before the router stamps anything).
+    // Per-session terminal serialization (`maybeFireSwarmComplete`) guarantees
+    // a same-tick stopped observes the cession. A genuine user stop has no
+    // preceding ceded terminal on the current turn (the marker clears when the
+    // session resumes), so it still synthesizes.
+    if (
+      event === "stopped" &&
+      this.routerCededTerminalSessions.has(sessionId)
+    ) {
+      return;
+    }
+
+    if (
+      event === "stopped" &&
+      readString(
+        await this.getFreshSessionMetadata(sessionId),
+        HANDED_OFF_SUCCESSOR_META_KEY,
+      )
+    ) {
+      return;
+    }
+
     // Ownership rule (issue elizaOS/eliza#11634): the sub-agent-router owns the
     // completion→chat post for origin-routed sessions — it is origin-aware,
     // dedupe-keyed, respawn/retry-suppressing, and feeds the planner's clean
@@ -862,11 +951,16 @@ export class SwarmCoordinatorService extends Service {
     // This ownership check runs BEFORE the `synthesizedCompletionSessions`
     // dedupe guard, and a router-owned skip does NOT consume the slot: ACP
     // sessions are reused across follow-up turns, so a router-owned turn must
-    // not claim the session's synthesis slot — otherwise a later `stopped` on
-    // the SAME session (which the router does not post) would be swallowed. The
-    // double-synthesis race this ordering would otherwise open is closed by
-    // `maybeFireSwarmComplete`, which serializes all terminal events for a
-    // session so the second observes the first's completed decision.
+    // not claim the session's synthesis slot — otherwise a `stopped` on a
+    // LATER turn of the SAME session (which the router does not post) would be
+    // swallowed. Instead the skip records the cession in
+    // `routerCededTerminalSessions`, so THIS turn's teardown `stopped` — which
+    // the one-shot runners emit unconditionally right after the terminal — is
+    // recognized as plumbing and skipped above, while the marker is cleared as
+    // soon as the session resumes. The double-synthesis race this ordering
+    // would otherwise open is closed by `maybeFireSwarmComplete`, which
+    // serializes all terminal events for a session so the second observes the
+    // first's completed decision.
     //
     // Exempt coordinator-generated validated completions: the app-verification
     // / custom-validator path (dispatchCustomValidatorResult) synthesizes a
@@ -881,6 +975,7 @@ export class SwarmCoordinatorService extends Service {
       sessionHasRouterOrigin(meta) &&
       this.isRouterActive()
     ) {
+      this.routerCededTerminalSessions.add(sessionId);
       return;
     }
 
@@ -934,9 +1029,27 @@ export class SwarmCoordinatorService extends Service {
       readString(record, "summary") ??
       readString(record, "message") ??
       readString(record, "text");
-    const sanitizedSummary = rawSummary
-      ? sanitizeCompletionRelay(rawSummary)
+    // A custom-validator completion carries its user-facing verdict in
+    // `summary` ("App verification passed.") while `response` still holds the
+    // raw ACP finalText spread from enrichedData. The verdict exists ONLY on
+    // this record (the raw task_complete was withheld until validation), so it
+    // must not be shadowed by `response` in the read ladder: lead with it,
+    // then append the sanitized deliverable, budgeted so the combined text
+    // still fits the relay cap (buildTaskResultLine re-sanitizes defensively).
+    const validatorVerdict = isCustomValidatorResult(record)
+      ? (readString(record, "summary")?.trim() ?? "")
       : "";
+    const bodyBudget = validatorVerdict
+      ? DEFAULT_MAX_RELAY_CHARS - validatorVerdict.length - 2
+      : DEFAULT_MAX_RELAY_CHARS;
+    const sanitizedBody = rawSummary
+      ? sanitizeCompletionRelay(rawSummary, bodyBudget)
+      : "";
+    const sanitizedSummary = validatorVerdict
+      ? sanitizedBody && sanitizedBody !== validatorVerdict
+        ? `${validatorVerdict}\n\n${sanitizedBody}`
+        : validatorVerdict
+      : sanitizedBody;
     const completionSummary =
       sanitizedSummary ||
       (terminalStatus === "completed"
@@ -997,6 +1110,7 @@ export class SwarmCoordinatorService extends Service {
       this.legacyTaskEvictionTimers.delete(sessionId);
       this.tasks.delete(sessionId);
       this.synthesizedCompletionSessions.delete(sessionId);
+      this.routerCededTerminalSessions.delete(sessionId);
       this.enrichmentMetadataCache.delete(sessionId);
     }, LEGACY_TASK_EVICTION_GRACE_MS);
     this.legacyTaskEvictionTimers.set(sessionId, timer);
@@ -1040,6 +1154,37 @@ export class SwarmCoordinatorService extends Service {
 
   private shouldEnrichEvent(event: string): boolean {
     return !STREAMING_SESSION_EVENTS.has(event);
+  }
+
+  /**
+   * Cache-bypassing session-metadata read used by the handoff-teardown skip
+   * (#11711 residual). The enrichment cache can hold a pre-stamp snapshot of a
+   * session the router just superseded — warmed by the earlier same-session
+   * `task_complete` that triggered the retry, before the router stamped
+   * `handedOffToSuccessorSessionId` — so the `stopped` decision must be able to
+   * see a marker written after the cache was populated. Refreshes the cache so
+   * downstream reads in this same turn observe the fresh snapshot. Returns `{}`
+   * on any miss/error so callers treat "unknown" as "not superseded" and default
+   * to synthesizing (never silences a genuine stop).
+   */
+  private async getFreshSessionMetadata(
+    sessionId: string,
+  ): Promise<Record<string, unknown>> {
+    try {
+      const session = await this.acp()?.getSession(sessionId);
+      if (session && isRecord(session.metadata)) {
+        const refreshed: EnrichmentMetadata = {
+          metadata: session.metadata,
+          ...(session.workdir ? { workdir: session.workdir } : {}),
+          ...(session.agentType ? { agentType: session.agentType } : {}),
+        };
+        this.enrichmentMetadataCache.set(sessionId, refreshed);
+        return session.metadata;
+      }
+    } catch {
+      // fall through to empty — fail open (treat unknown as not-superseded)
+    }
+    return {};
   }
 
   private async getEnrichmentMetadata(

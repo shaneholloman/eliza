@@ -3,6 +3,7 @@ import Foundation
 import JavaScriptCore
 #endif
 import Darwin.Mach
+import os
 
 #if ELIZA_IOS_INCLUDE_LLAMA
 
@@ -59,6 +60,9 @@ private func c_llama_model_load_from_file(
 
 @_silgen_name("llama_model_free")
 private func c_llama_model_free(_ model: LlamaModelPtr)
+
+@_silgen_name("llama_model_n_layer")
+private func c_llama_model_n_layer(_ model: LlamaModelPtr) -> Int32
 
 @_silgen_name("llama_model_default_params")
 private func c_llama_model_default_params() -> LlamaModelParamsBag
@@ -223,6 +227,9 @@ private func shim_batch_reset(_ batch: UnsafeMutablePointer<LlamaBatch>)
 
 @_silgen_name("eliza_llama_log_silence")
 private func shim_log_silence()
+
+@_silgen_name("eliza_llama_log_to_file")
+private func shim_log_to_file(_ path: UnsafePointer<CChar>) -> Bool
 
 @_silgen_name("eliza_llama_has_metal")
 private func shim_has_metal() -> Bool
@@ -535,6 +542,28 @@ private func ggmlTypeFromString(_ raw: String?) -> Int32? {
     }
 }
 
+/// Routes ggml/llama logs to a pullable file under the app's writable state
+/// dir (issue #11612). iOS does not forward the embedded engine's stdio to
+/// devicectl/idevicesyslog, so without this sink the GGML_LOG_ERROR line that
+/// names a failing Metal kernel is unobservable on device. The file is
+/// capturable with `xcrun devicectl device copy from`. Falls back to
+/// silencing the logger when the sink file cannot be opened.
+private func installGgmlLogSink() {
+    let env = ProcessInfo.processInfo.environment
+    let stateDir = env["ELIZA_STATE_DIR"].flatMap { $0.isEmpty ? nil : $0 }
+        ?? SandboxPaths().appSupport.path
+    let logsDir = URL(fileURLWithPath: stateDir, isDirectory: true)
+        .appendingPathComponent("logs", isDirectory: true)
+    try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+    let logPath = logsDir.appendingPathComponent("ggml.log").path
+    if logPath.withCString({ shim_log_to_file($0) }) {
+        NSLog("[LlamaBridgeImpl] ggml/llama logs -> \(logPath)")
+    } else {
+        NSLog("[LlamaBridgeImpl] ggml log sink unavailable at \(logPath); silencing llama logs")
+        shim_log_silence()
+    }
+}
+
 private final class SessionRegistry {
     static let shared = SessionRegistry()
     private let queue = DispatchQueue(label: "ai.eliza.bun.llama.sessions")
@@ -545,7 +574,7 @@ private final class SessionRegistry {
     func ensureBackend() {
         queue.sync {
             if !backendInitialized {
-                shim_log_silence()
+                installGgmlLogSink()
                 c_llama_backend_init()
                 backendInitialized = true
             }
@@ -624,8 +653,53 @@ public final class LlamaBridgeImpl {
 
     private static func mobileBatchSizes(contextSize: UInt32) -> (logical: UInt32, physical: UInt32) {
         let logical = max(UInt32(1), min(contextSize, UInt32(4096)))
-        let physicalLimit: UInt32 = Self.isRunningInSimulator ? 512 : 1024
+        // #11612 GPU-OOM fix: the Metal compute buffer scales ~linearly with
+        // the physical micro-batch (n_ubatch). Measured on iPhone 16 Pro Max
+        // (A18): 1037 MiB at n_ubatch=1024, which pushed weights (4722 MiB,
+        // full offload) + compute + KV (36 MiB) ≈ 5795 MiB past the ~5461 MiB
+        // jetsam working set (2/3 of 8 GiB) → decode ret=-3 + jetsam. At 256
+        // the compute buffer is ~260 MiB: 4722 + 260 + 36 ≈ 5018 MiB fits
+        // with full-GPU speed retained. Prefill still chunks by the logical
+        // batch; llama.cpp splits it into n_ubatch slices internally.
+        let physicalLimit: UInt32 = Self.isRunningInSimulator ? 512 : 256
         return (logical, max(UInt32(1), min(logical, physicalLimit)))
+    }
+
+    /// Per-element Metal compute-buffer cost for the physical micro-batch:
+    /// 1037 MiB measured at n_ubatch=1024 on the mobile 4b tier (A18), plus
+    /// ~5% slack → ~1.05 MiB per element.
+    private static let computeBytesPerUbatchElement: UInt64 = 1_100_000
+
+    /// Wire-cost estimate for one loaded context at `ctx` tokens: KV +
+    /// per-token scratch, the n_ubatch-scaled compute buffer, and fixed
+    /// runtime overhead (Metal heaps, tokenizer, batch buffers, mmap page-in
+    /// slack). Weights are added by the caller — they are only wired for the
+    /// GPU-offloaded fraction of layers.
+    private static func nonWeightBytes(contextSize: UInt32) -> UInt64 {
+        let perTokenBytes: UInt64 = 64 * 1024
+        let computeBytes =
+            UInt64(Self.mobileBatchSizes(contextSize: contextSize).physical)
+            * Self.computeBytesPerUbatchElement
+        let runtimeOverheadBytes: UInt64 = 256 * 1024 * 1024
+        return UInt64(contextSize) * perTokenBytes + computeBytes + runtimeOverheadBytes
+    }
+
+    /// Read the transformer layer count from a GGUF via a CPU-only,
+    /// mmap-backed metadata load (no Metal wiring; clean pages only). Used
+    /// exclusively on the degraded partial-offload path, so the extra load
+    /// is paid only when the model already failed full-offload admission.
+    private static func probeLayerCount(path: String) -> Int32? {
+        var params = c_llama_model_default_params()
+        withUnsafeMutablePointer(to: &params) { ptr in
+            shim_model_params_set_n_gpu_layers(ptr, 0)
+            Self.forceModelCpuOnly(ptr)
+        }
+        guard let model = path.withCString({ cpath in
+            c_llama_model_load_from_file(cpath, params)
+        }) else { return nil }
+        defer { c_llama_model_free(model) }
+        let layers = c_llama_model_n_layer(model)
+        return layers > 0 ? layers : nil
     }
 
     /// Synchronously loads a GGUF and returns either a context_id or an error.
@@ -655,11 +729,74 @@ public final class LlamaBridgeImpl {
         }
         SessionRegistry.shared.ensureBackend()
 
+        // #11612: a load that exceeds the per-process jetsam budget kills the
+        // app (and on constrained devices can wedge the OS). Estimate the
+        // footprint up front — GPU-wired weights + KV/scratch + the
+        // n_ubatch-scaled Metal compute buffer + fixed overhead — then admit
+        // in order of least harm: shrink the context/KV first, next reduce
+        // the GPU layer offload (CPU-resident layers stay mmap-backed clean
+        // pages, which do not count against the jetsam footprint the way
+        // wired Metal buffers do), and only fail when not even a zero-offload
+        // load fits. Fit math (iPhone 16 Pro Max, A18, 8 GiB → ~5461 MiB
+        // headroom): weights 4722 + compute ~260 (n_ubatch 256) + KV 36
+        // ≈ 5018 MiB → full offload admitted.
+        let canUseGPU = useGPU && shim_has_metal() && !Self.isRunningInSimulator
+        var resolvedContextSize = contextSize
+        var nGpuLayers: Int32 = canUseGPU ? 999 : 0
+        let headroom = Self.jetsamHeadroomBytes()
+        if headroom > 0 {
+            let modelBytes = Self.fileSizeBytes(path)
+            let drafterBytes = draftModelPath.map { Self.fileSizeBytes($0) } ?? 0
+            let minContext: UInt32 = 1024
+            // When the GPU is off, weights are never wired — mmap pages them
+            // lazily and the OS can evict them — so only the wired fraction
+            // of the weights counts toward the budget.
+            func requiredBytes(_ ctx: UInt32, wiredWeightBytes: UInt64) -> UInt64 {
+                wiredWeightBytes + drafterBytes + Self.nonWeightBytes(contextSize: ctx)
+            }
+            let fullWeightBytes = canUseGPU ? modelBytes : 0
+            while requiredBytes(resolvedContextSize, wiredWeightBytes: fullWeightBytes) > headroom
+                && resolvedContextSize / 2 >= minContext {
+                resolvedContextSize /= 2
+            }
+            if requiredBytes(resolvedContextSize, wiredWeightBytes: fullWeightBytes) > headroom {
+                let fixedBytes = requiredBytes(resolvedContextSize, wiredWeightBytes: 0)
+                if canUseGPU && headroom > fixedBytes && modelBytes > 0 {
+                    // Partial offload: wire only the fitting fraction of
+                    // layers. Layer count comes from a CPU-only metadata
+                    // probe of the same GGUF (exact, no guessed constants).
+                    let weightBudget = headroom - fixedBytes
+                    let layerCount = Self.probeLayerCount(path: path) ?? 36
+                    let fitting = Int32(
+                        (Double(weightBudget) / Double(modelBytes)) * Double(layerCount)
+                    )
+                    nGpuLayers = max(0, min(layerCount, fitting))
+                    NSLog(
+                        "[LlamaBridgeImpl] memory budget: reduced n_gpu_layers 999 -> \(nGpuLayers)/\(layerCount) "
+                        + "(weights \(modelBytes / 1024 / 1024) MB > budget \(weightBudget / 1024 / 1024) MB, "
+                        + "headroom \(headroom / 1024 / 1024) MB, ctx \(resolvedContextSize))"
+                    )
+                } else {
+                    let needMB = requiredBytes(resolvedContextSize, wiredWeightBytes: fullWeightBytes) / (1024 * 1024)
+                    let haveMB = headroom / (1024 * 1024)
+                    return .failure(
+                        "llama_load_model: insufficient memory: \(path) needs ~\(needMB) MB "
+                        + "(ctx \(resolvedContextSize)) but only \(haveMB) MB is available before "
+                        + "the OS memory limit. Close other apps or use a smaller model."
+                    )
+                }
+            }
+            if resolvedContextSize != contextSize {
+                NSLog(
+                    "[LlamaBridgeImpl] memory budget: reduced context \(contextSize) -> \(resolvedContextSize) "
+                    + "(model \(modelBytes / 1024 / 1024) MB, headroom \(headroom / 1024 / 1024) MB)"
+                )
+            }
+        }
+
         let resolvedThreads = threads ?? min(4, Int32(ProcessInfo.processInfo.activeProcessorCount))
 
         var modelParams = c_llama_model_default_params()
-        let canUseGPU = useGPU && shim_has_metal() && !Self.isRunningInSimulator
-        let nGpuLayers: Int32 = canUseGPU ? 999 : 0
         withUnsafeMutablePointer(to: &modelParams) { ptr in
             shim_model_params_set_n_gpu_layers(ptr, nGpuLayers)
             if !canUseGPU {
@@ -673,10 +810,10 @@ public final class LlamaBridgeImpl {
             return .failure("llama_model_load_from_file failed for \(path)")
         }
 
-        let batchSizes = Self.mobileBatchSizes(contextSize: contextSize)
+        let batchSizes = Self.mobileBatchSizes(contextSize: resolvedContextSize)
         var ctxParams = c_llama_context_default_params()
         withUnsafeMutablePointer(to: &ctxParams) { ptr in
-            shim_context_params_set_n_ctx(ptr, contextSize)
+            shim_context_params_set_n_ctx(ptr, resolvedContextSize)
             shim_context_params_set_batch_sizes(ptr, batchSizes.logical, batchSizes.physical)
             shim_context_params_set_n_threads(ptr, resolvedThreads, resolvedThreads)
             Self.setContextGpuOffload(ptr, enabled: canUseGPU)
@@ -1552,6 +1689,26 @@ public final class LlamaBridgeImpl {
     }
 
     // MARK: - Private helpers
+
+    /// Per-process memory still grantable before jetsam kills the app
+    /// (`os_proc_available_memory`, iOS 13+). Returns 0 when the value is
+    /// unavailable (e.g. simulator), in which case the load-time memory
+    /// budget guard is skipped.
+    private static func jetsamHeadroomBytes() -> UInt64 {
+#if targetEnvironment(simulator)
+        return 0
+#else
+        return UInt64(max(0, os_proc_available_memory()))
+#endif
+    }
+
+    private static func fileSizeBytes(_ path: String) -> UInt64 {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = attrs[.size] as? NSNumber else {
+            return 0
+        }
+        return size.uint64Value
+    }
 
     private static func availableMemoryGB() -> Double {
         var info = task_vm_info_data_t()

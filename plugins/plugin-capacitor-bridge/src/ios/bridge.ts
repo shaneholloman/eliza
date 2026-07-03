@@ -25,6 +25,10 @@ import {
 	writeFileSync,
 } from "../shared/fs-proxy.ts";
 import { installMobileFsShim } from "../shared/fs-shim.ts";
+import {
+	resolveStoredModelPath,
+	toStoredModelPath,
+} from "../shared/local-inference-stored-path.ts";
 import { runModelGrind } from "./model-grind.ts";
 
 interface BridgeRequest {
@@ -1356,35 +1360,8 @@ function installedModelForCatalogEntry(
 	};
 }
 
-function isSubpath(target: string, root: string): boolean {
-	const relative = path.relative(root, target);
-	return (
-		relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
-	);
-}
-
-function normalizeStoredRelativeModelPath(input: string): string | null {
-	const normalized = input.trim().replaceAll("\\", "/");
-	if (
-		!normalized ||
-		normalized.includes("\0") ||
-		path.isAbsolute(normalized) ||
-		/^[A-Za-z]:[\\/]/.test(normalized) ||
-		normalized.startsWith("\\\\")
-	) {
-		return null;
-	}
-	const parts = normalized.split("/").filter(Boolean);
-	if (parts.length === 0) return null;
-	if (parts.some((part) => part === "." || part === "..")) return null;
-	return parts.join("/");
-}
-
 function toStoredInstalledModelPath(modelPath: string): string | null {
-	const root = path.resolve(localInferenceRootPath());
-	const resolved = path.resolve(modelPath);
-	if (!isSubpath(resolved, root)) return null;
-	return path.relative(root, resolved).split(path.sep).join("/");
+	return toStoredModelPath(modelPath, localInferenceRootPath());
 }
 
 function serializeInstalledModelEntry(
@@ -1500,32 +1477,10 @@ function scanGgufFiles(root: string): InstalledModelEntry[] {
 }
 
 function normalizeInstalledModelPath(rawPath: string): string | null {
-	const trimmed = rawPath.trim();
-	if (!trimmed || trimmed.includes("\0")) return null;
-	const currentRoot = localInferenceRootPath();
-	const candidates = new Set<string>();
-	const relativePath = normalizeStoredRelativeModelPath(trimmed);
-	if (relativePath) {
-		candidates.add(path.join(currentRoot, ...relativePath.split("/")));
-	}
-	candidates.add(trimmed);
-	candidates.add(trimmed.replace(/^\/private\/var\//, "/var/"));
-	const marker = "/local-inference/";
-	const markerIndex = trimmed.indexOf(marker);
-	if (markerIndex >= 0) {
-		const legacyRelativePath = normalizeStoredRelativeModelPath(
-			trimmed.slice(markerIndex + marker.length),
-		);
-		if (legacyRelativePath) {
-			candidates.add(path.join(currentRoot, ...legacyRelativePath.split("/")));
-		}
-	}
-	for (const candidate of candidates) {
-		try {
-			if (existsSync(candidate)) return candidate;
-		} catch {}
-	}
-	return null;
+	// Probe through the sandboxed fs proxy, not raw node:fs.
+	return resolveStoredModelPath(rawPath, localInferenceRootPath(), (p) =>
+		existsSync(p),
+	);
 }
 
 function readInstalledModels(): InstalledModelEntry[] {
@@ -1646,6 +1601,33 @@ async function shouldUseNativeLlamaGpu(): Promise<boolean> {
 	return hardware.metal_supported === true && hardware.is_simulator !== true;
 }
 
+const NATIVE_LOAD_OVERHEAD_BYTES = 768 * 1024 * 1024;
+
+/**
+ * #11612: loading a model that exceeds the device's remaining memory gets the
+ * whole app jetsam-killed (crash-loop) instead of failing. The native bridge
+ * enforces the authoritative per-process jetsam budget at load time
+ * (`LlamaBridgeImpl.loadModel`); this pre-flight check fails fast with a clean
+ * error before a multi-minute native load is even attempted.
+ */
+async function assertModelFitsDeviceMemory(
+	model: InstalledModelEntry,
+): Promise<void> {
+	if (!model.sizeBytes || model.sizeBytes <= 0) return;
+	const hardware = await nativeHardwareInfo();
+	if (hardware.is_simulator === true) return;
+	const availableBytes = Number(hardware.available_ram_gb ?? 0) * 1024 ** 3;
+	if (!Number.isFinite(availableBytes) || availableBytes <= 0) return;
+	const requiredBytes = model.sizeBytes + NATIVE_LOAD_OVERHEAD_BYTES;
+	if (requiredBytes > availableBytes) {
+		const requiredMb = Math.round(requiredBytes / (1024 * 1024));
+		const availableMb = Math.round(availableBytes / (1024 * 1024));
+		throw new Error(
+			`[ios-native-llama] insufficient memory to load ${model.id}: needs ~${requiredMb} MB but only ~${availableMb} MB is available. Close other apps or install a smaller model.`,
+		);
+	}
+}
+
 async function loadNativeLlamaModel(
 	model: InstalledModelEntry,
 	useGpu: boolean,
@@ -1692,6 +1674,7 @@ async function ensureNativeModelLoaded(
 	nativeLlamaState.loadedAt = null;
 	delete nativeLlamaState.error;
 	try {
+		await assertModelFitsDeviceMemory(model);
 		let requestedGpu = await shouldUseNativeLlamaGpu();
 		let record: Record<string, unknown>;
 		try {

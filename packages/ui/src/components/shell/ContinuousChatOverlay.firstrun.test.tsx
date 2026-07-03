@@ -92,6 +92,7 @@ const RUNTIME_CHOICE_MESSAGE = [
   "[CHOICE:first-run id=runtime]",
   "__first_run__:runtime:cloud=Eliza Cloud (managed)",
   "__first_run__:runtime:local=On this device",
+  "__first_run__:runtime:remote=Connect to a remote agent",
   "[/CHOICE]",
 ].join("\n");
 
@@ -130,9 +131,7 @@ describe("ContinuousChatOverlay first-run gating", () => {
 
     const input = screen.getByLabelText("message") as HTMLTextAreaElement;
     expect(input.disabled).toBe(true);
-    expect(input.placeholder).toBe(
-      "Tap a highlighted option above to continue",
-    );
+    expect(input.placeholder).toBe("Pick an option to continue");
 
     const attach = screen.getByTestId("chat-composer-attach");
     expect(attach.getAttribute("aria-disabled")).toBe("true");
@@ -262,6 +261,10 @@ describe("ContinuousChatOverlay first-run gating", () => {
     } as unknown as Partial<ShellController>);
     render(<ContinuousChatOverlay controller={controller} firstRunOpen />);
 
+    // All three location chips render — including the Remote third option.
+    expect(
+      screen.getByTestId("choice-__first_run__:runtime:remote"),
+    ).toBeTruthy();
     const localChoice = screen.getByTestId(
       "choice-__first_run__:runtime:local",
     );

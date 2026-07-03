@@ -61,7 +61,20 @@ let spawnSyncForTests:
  * without an NVIDIA GPU.
  *
  * The probe runs `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits`
- * with a 3-second timeout so a misbehaving driver cannot stall boot.
+ * with a 3-second timeout so a misbehaving driver cannot stall boot. When the
+ * first call is killed by that timeout, the probe retries once with an
+ * extended deadline: on RTD3 laptops (GPU runtime-suspended to D3cold) the
+ * first `nvidia-smi` after GPU sleep must cold-wake the card, which can take
+ * longer than 3 s. Without the retry the boot-time probe would report
+ * `gpu: null`, cache it, and wrongly demote embeddings to the CPU tier for
+ * the process lifetime. The killed first invocation already initiated the
+ * kernel's runtime-resume, so the retry normally answers quickly.
+ *
+ * A probe that fails FAST with a nonzero exit is NOT retried — that is a real
+ * "no usable GPU" answer. Observed on an RTX 5080 Laptop whose driver entered
+ * runtime-PM `error` state after a failed suspend (GSP unload timeout under
+ * host RAM pressure, issue #11339): `nvidia-smi` exits 6 immediately and the
+ * probe correctly degrades embedding selection to the CPU tier.
  */
 export function detectGpu(opts: { force?: boolean } = {}): GpuDetectionResult {
 	if (cached && !opts.force) return cached;
@@ -88,17 +101,54 @@ export function __setGpuDetectionSpawnSyncForTests(
 	spawnSyncForTests = runner;
 }
 
-function probe(): GpuDetectionResult {
-	const run = spawnSyncForTests ?? spawnSync;
-	const result = run(
-		"nvidia-smi",
-		["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
-		{
+const PROBE_TIMEOUT_MS = 3_000;
+/**
+ * Deadline for the single retry after a timed-out first call. RTD3 cold wake
+ * usually completes within a few seconds once the resume is in flight; 15 s
+ * gives headroom for a memory-pressured host without letting a truly hung
+ * driver stall boot indefinitely (worst case 3 s + 15 s, once per process —
+ * the result is cached).
+ */
+const COLD_WAKE_RETRY_TIMEOUT_MS = 15_000;
+
+const NVIDIA_SMI_ARGS = [
+	"--query-gpu=name,memory.total",
+	"--format=csv,noheader,nounits",
+];
+
+function runNvidiaSmi(timeoutMs: number): SpawnSyncReturns<string> {
+	if (spawnSyncForTests) {
+		return spawnSyncForTests("nvidia-smi", NVIDIA_SMI_ARGS, {
 			encoding: "utf8",
-			timeout: 3000,
+			timeout: timeoutMs,
 			stdio: ["ignore", "pipe", "pipe"],
-		},
-	);
+		});
+	}
+	return spawnSync("nvidia-smi", NVIDIA_SMI_ARGS, {
+		encoding: "utf8",
+		timeout: timeoutMs,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+}
+
+/**
+ * `true` when the spawn was killed by its own timeout. Both Node and Bun
+ * report a `spawnSync` timeout as `error.code === "ETIMEDOUT"` (verified on
+ * Node 25.2 and Bun 1.4). A missing binary (ENOENT) or a completed run with
+ * a failure exit code is not a timeout and must not be retried.
+ */
+function wasKilledByTimeout(result: SpawnSyncReturns<string>): boolean {
+	const { error } = result;
+	return error !== undefined && "code" in error && error.code === "ETIMEDOUT";
+}
+
+function probe(): GpuDetectionResult {
+	let result = runNvidiaSmi(PROBE_TIMEOUT_MS);
+	if (wasKilledByTimeout(result)) {
+		// RTD3 cold wake: the first call woke the GPU but was killed before the
+		// driver answered. Retry once — the wake is already in progress.
+		result = runNvidiaSmi(COLD_WAKE_RETRY_TIMEOUT_MS);
+	}
 	if (result.error || result.status !== 0) {
 		return EMPTY_RESULT;
 	}

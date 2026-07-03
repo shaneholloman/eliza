@@ -352,7 +352,8 @@ function sanitizeTrajectoryJsonValue(
 		const entries = Object.entries(value as Record<string, unknown>);
 		if (entries.length === 0) {
 			seen.delete(value);
-			return String(value);
+			const proto = Object.getPrototypeOf(value);
+			return proto === Object.prototype || proto === null ? {} : String(value);
 		}
 		const output: Record<string, JsonValue> = {};
 		for (const [key, entry] of entries.slice(

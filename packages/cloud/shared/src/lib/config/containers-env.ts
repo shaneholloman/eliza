@@ -75,14 +75,7 @@ export const containersEnv = {
   /** Token used for Docker registry pulls on container nodes. */
   registryToken(): string | undefined {
     const env = getCloudAwareEnv();
-    return pick(
-      env.CONTAINERS_REGISTRY_TOKEN,
-      env.ELIZA_APP_IMAGE_REGISTRY_TOKEN,
-      env.GHCR_TOKEN,
-      env.GITHUB_TOKEN,
-      env.GH_TOKEN,
-      env.CR_PAT,
-    );
+    return pick(env.CONTAINERS_REGISTRY_TOKEN, env.ELIZA_APP_IMAGE_REGISTRY_TOKEN, env.GHCR_TOKEN);
   },
 
   /** Filesystem path to a Docker registry token for container node pulls. */

@@ -144,3 +144,79 @@ test("checkBudgets can fail closed on missing measurements", () => {
   const peak = checks.find((c) => c.name === "peakRssMb");
   assert.equal(peak.pass, false);
 });
+
+test("checkBudgets(idle-reclaim) gates the tail RSS against maxPostIdleUnloadRssMb (#11760)", () => {
+  // A healthy idle-reclaim run: warm model at ~2400 MB, idle-unload fires,
+  // tail RSS collapses to the model-free footprint.
+  const reclaimed = summarizeResourceRun({
+    generations: [],
+    samples: [
+      { atMs: 0, residentMemoryMb: 2400 },
+      { atMs: 60_000, residentMemoryMb: 2400 },
+      { atMs: 120_000, residentMemoryMb: 900 },
+      { atMs: 150_000, residentMemoryMb: 900 },
+    ],
+  });
+  const budget = { maxPostIdleUnloadRssMb: 1600, maxPeakRssMb: 2600 };
+  const okChecks = checkBudgets(reclaimed, budget, {
+    workloadId: "idle-reclaim",
+  });
+  const okByName = Object.fromEntries(okChecks.map((c) => [c.name, c]));
+  assert.equal(okByName.postIdleRssMb.pass, true);
+  assert.equal(okByName.postIdleRssMb.value, 900);
+  assert.equal(okByName.peakRssMb.pass, true);
+  // The idle workload has no generations — throughput/TTFT/battery checks are
+  // intentionally absent (they could only ever read "not-measured").
+  assert.equal(okByName.decodeTokensPerSecondP50, undefined);
+  assert.equal(okByName.ttftMsP90, undefined);
+  assert.equal(okByName.batteryDrainPct, undefined);
+
+  // Regression: the policy stopped unloading — RSS never drops → FAIL loud.
+  const stuck = summarizeResourceRun({
+    generations: [],
+    samples: [
+      { atMs: 0, residentMemoryMb: 2400 },
+      { atMs: 60_000, residentMemoryMb: 2410 },
+      { atMs: 150_000, residentMemoryMb: 2405 },
+    ],
+  });
+  const stuckChecks = checkBudgets(stuck, budget, {
+    workloadId: "idle-reclaim",
+  });
+  const stuckByName = Object.fromEntries(stuckChecks.map((c) => [c.name, c]));
+  assert.equal(stuckByName.postIdleRssMb.pass, false);
+  assert.equal(stuckByName.postIdleRssMb.value, 2405);
+});
+
+test("checkBudgets(idle-reclaim) with a null budget records but never fails", () => {
+  const summary = summarizeResourceRun({
+    generations: [],
+    samples: [{ atMs: 0, residentMemoryMb: 2400 }],
+  });
+  const checks = checkBudgets(
+    summary,
+    { maxPostIdleUnloadRssMb: null },
+    { workloadId: "idle-reclaim" },
+  );
+  const postIdle = checks.find((c) => c.name === "postIdleRssMb");
+  assert.equal(postIdle.note, "no-baseline");
+  assert.equal(postIdle.pass, true);
+});
+
+test("checkBudgets without workloadId keeps the full check set (non-idle workloads unchanged)", () => {
+  const summary = summarizeResourceRun({
+    generations: [
+      { promptTokens: 64, outputTokens: 128, durationMs: 1000, ttftMs: 200 },
+    ],
+    samples: [{ atMs: 0, residentMemoryMb: 900 }],
+  });
+  const checks = checkBudgets(summary, {
+    maxPeakRssMb: 2000,
+    maxPostIdleUnloadRssMb: 1600,
+  });
+  const names = checks.map((c) => c.name);
+  assert.ok(names.includes("decodeTokensPerSecondP50"));
+  assert.ok(names.includes("peakRssMb"));
+  // postIdleRss is idle-reclaim-only — chat workloads must not be gated on it.
+  assert.ok(!names.includes("postIdleRssMb"));
+});

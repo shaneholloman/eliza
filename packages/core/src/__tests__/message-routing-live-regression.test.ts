@@ -2,6 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { parseActionParams } from "../actions";
 import type { Action, ActionResult, IAgentRuntime, Memory } from "../index";
 import {
+	parseMessageHandlerOutput,
+	routeMessageHandlerOutput,
+} from "../runtime/message-handler";
+import {
+	extractReplyTextFromTranscript,
+	looksLikeRawFieldTranscript,
+} from "../runtime/response-field-transcript";
+import {
 	actionResultsSuppressPostActionContinuation,
 	applyDirectCurrentCandidateBackstopToMessageHandler,
 	BUILTIN_RESPONSE_HANDLER_EVALUATORS,
@@ -85,6 +93,60 @@ describe("sub-agent completion relay — never promoted to tooling (false 'hit a
 			},
 		} as unknown as Memory;
 		expect(gate?.shouldRun(contextFor(fresh))).toBe(true);
+	});
+});
+
+describe("raw field-transcript leak — #11712 (text-mode HANDLE_RESPONSE)", () => {
+	// Live regression: a cli-inference / claude-sdk warm session in text mode
+	// echoed the field set back as a plain-text keyed transcript instead of JSON.
+	// The multi-line replyText (embedded blank line between the URL and the
+	// "built it out..." prose) broke naive segmentation, so the WHOLE raw
+	// transcript fell through as the reply and was shipped verbatim to discord.
+	const LEAKED = `shouldRespond: RESPOND
+
+replyText: it's live \u2600\ufe0f https://sol.shad0w.xyz/apps/aurora/
+
+built it out at /workspace/apps, aurora's got the modern design + interactive bits you asked for. go click around and tell me what's ugly.
+
+contexts: simple
+
+topics: website build, aurora
+
+emotion: none`;
+
+	it("parses the raw text-mode transcript to the clean replyText and routes it as a final_reply (no raw skeleton shipped)", () => {
+		const parsed = parseMessageHandlerOutput(LEAKED);
+		expect(parsed).not.toBeNull();
+		if (parsed === null) throw new Error("expected a parsed transcript");
+		// Route it exactly as the runtime would.
+		const route = routeMessageHandlerOutput(parsed);
+		expect(route.type).toBe("final_reply");
+		if (route.type !== "final_reply") throw new Error("expected final_reply");
+		// The reply is the intended replyText VALUE, not the raw transcript.
+		expect(route.reply).not.toContain("shouldRespond:");
+		expect(route.reply).not.toMatch(/^replyText:/m);
+		expect(route.reply).toContain("https://sol.shad0w.xyz/apps/aurora/");
+		expect(route.reply).toContain("\u2600\ufe0f");
+		expect(route.reply).toContain("built it out at /workspace/apps");
+	});
+
+	it("the send-boundary guard extracts replyText if a raw transcript still reaches it", () => {
+		expect(looksLikeRawFieldTranscript(LEAKED)).toBe(true);
+		const recovered = extractReplyTextFromTranscript(LEAKED);
+		expect(recovered).not.toBeNull();
+		expect(recovered).not.toContain("shouldRespond:");
+		expect(recovered).toContain("https://sol.shad0w.xyz/apps/aurora/");
+	});
+
+	it("leaves a normal reply untouched (guard does not false-positive)", () => {
+		expect(looksLikeRawFieldTranscript("it's live, go check it out")).toBe(
+			false,
+		);
+		expect(
+			looksLikeRawFieldTranscript(
+				"Here is the plan:\n1. build the page\n2. deploy it",
+			),
+		).toBe(false);
 	});
 });
 

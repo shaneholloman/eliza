@@ -16,6 +16,25 @@ import type { AppEnv } from "@/types/cloud-worker-env";
 
 const app = new Hono<AppEnv>();
 
+type CampaignRecord = NonNullable<
+  Awaited<ReturnType<typeof advertisingService.getCampaign>>
+>;
+
+function serializeTargeting(targeting: CampaignRecord["targeting"]) {
+  return {
+    locations: targeting.locations,
+    ageMin: targeting.age_min,
+    ageMax: targeting.age_max,
+    genders: targeting.genders,
+    interests: targeting.interests,
+    behaviors: targeting.behaviors,
+    customAudiences: targeting.custom_audiences,
+    excludedAudiences: targeting.excluded_audiences,
+    placements: targeting.placements,
+    languages: targeting.languages,
+  };
+}
+
 app.get("/", async (c) => {
   try {
     const user = await requireUserOrApiKeyWithOrg(c);
@@ -45,10 +64,15 @@ app.get("/", async (c) => {
         budgetType: c.budget_type,
         budgetAmount: c.budget_amount,
         budgetCurrency: c.budget_currency,
+        spendCapCredits: c.spend_cap_credits,
+        bidStrategy: c.metadata.bid_strategy,
+        optimizationGoal: c.metadata.optimization_goal,
         creditsAllocated: c.credits_allocated,
         creditsSpent: c.credits_spent,
         startDate: c.start_date?.toISOString(),
         endDate: c.end_date?.toISOString(),
+        dayparting: c.metadata.dayparting ?? null,
+        targeting: serializeTargeting(c.targeting),
         totalSpend: c.total_spend,
         totalImpressions: c.total_impressions,
         totalClicks: c.total_clicks,
@@ -84,11 +108,16 @@ app.post("/", async (c) => {
       budgetType: parsed.data.budgetType,
       budgetAmount: parsed.data.budgetAmount,
       budgetCurrency: parsed.data.budgetCurrency,
+      spendCapCredits: parsed.data.spendCapCredits,
+      bidStrategy: parsed.data.bidStrategy,
+      optimizationGoal: parsed.data.optimizationGoal,
       startDate: parsed.data.startDate
         ? new Date(parsed.data.startDate)
         : undefined,
       endDate: parsed.data.endDate ? new Date(parsed.data.endDate) : undefined,
       targeting: parsed.data.targeting,
+      dayparting: parsed.data.dayparting,
+      audienceSegmentId: parsed.data.audienceSegmentId,
       appId: parsed.data.appId,
     });
 
@@ -106,7 +135,12 @@ app.post("/", async (c) => {
         status: campaign.status,
         budgetType: campaign.budget_type,
         budgetAmount: campaign.budget_amount,
+        spendCapCredits: campaign.spend_cap_credits,
+        bidStrategy: campaign.metadata.bid_strategy,
+        optimizationGoal: campaign.metadata.optimization_goal,
         creditsAllocated: campaign.credits_allocated,
+        dayparting: campaign.metadata.dayparting ?? null,
+        targeting: serializeTargeting(campaign.targeting),
         createdAt: campaign.created_at.toISOString(),
       },
       201,

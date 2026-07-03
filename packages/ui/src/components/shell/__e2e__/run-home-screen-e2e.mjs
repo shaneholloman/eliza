@@ -14,13 +14,30 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { chromium } from "playwright";
 import {
+  FRAME_SAMPLER_INIT,
+  summarizeFrameSamples,
+} from "../../../hooks/frame-budget.ts";
+import {
   LAYOUT_SHIFT_OBSERVER_INIT,
   summarizeStability,
 } from "../../../testing/layout-stability.ts";
 import {
+  touchDragHold,
   touchLongPress,
   touchSwipe,
 } from "../../../testing/real-touch-gestures.ts";
+
+// Frame gate for the home↔launcher rail swipe — same factor-based thresholds as
+// the sibling real-overlay gates (run-perf-gate-e2e / run-chat-perf-gate): the
+// budget adapts to the runner's refresh rate instead of hard-coding a Hz.
+const FRAME_BUDGET = { targetFps: 60 };
+const FRAME_GATE = {
+  p95BudgetFactor: 2,
+  droppedFrameRatio: 0.2,
+  reportOnLongTask: false,
+};
+const DROPPED_FRAME_EPSILON_MS = 0.5;
+const MIN_FRAME_SAMPLES = 30;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = join(here, "output-home");
@@ -321,6 +338,8 @@ try {
   // it after the entrance animation finishes and assert the home doesn't jump
   // (CLS budget + no flicker flash) via the meta-tested summarizeStability.
   await mobile.addInitScript(LAYOUT_SHIFT_OBSERVER_INIT);
+  // Frame sampler for the rail-swipe FPS gate below (start()/read()/stop()).
+  await mobile.addInitScript(FRAME_SAMPLER_INIT);
   await mobile.goto(`${url}?native`);
   await mobile.waitForSelector('[data-testid="home-launcher-surface"]');
   await mobile.waitForSelector('[data-testid="home-screen"]');
@@ -416,6 +435,68 @@ try {
       `removed default tile ${id} is gone`,
     );
   }
+  // Home-grid geometry integrity (#11752). Every widget must apply its
+  // host-supplied grid-span classes to its root grid item; a widget that
+  // drops them collapses to a one-column (~85px) auto-placed cell whose
+  // icon+text flex content overflows the cell and paints over the neighboring
+  // card ("Overdr[icon]wn" collisions). Measure the real boxes: each grid
+  // item's painted content must fit its own cell, and no two items' painted
+  // content may intersect.
+  {
+    const TOLERANCE = 1; // px, subpixel rounding
+    const geometry = await mobile.evaluate(() => {
+      const host = document.querySelector('[data-testid="widget-host-home"]');
+      if (!host) return null;
+      return Array.from(host.children).map((el) => {
+        const rect = el.getBoundingClientRect();
+        // Painted-content box: the union of the item's own border box and every
+        // visible descendant box (overflowing flex children extend past it).
+        let { left, right, top, bottom } = rect;
+        for (const descendant of el.querySelectorAll("*")) {
+          const r = descendant.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          left = Math.min(left, r.left);
+          right = Math.max(right, r.right);
+          top = Math.min(top, r.top);
+          bottom = Math.max(bottom, r.bottom);
+        }
+        return {
+          testId:
+            el.getAttribute("data-testid") ||
+            el
+              .querySelector("[data-testid]")
+              ?.getAttribute("data-testid") ||
+            el.tagName.toLowerCase(),
+          overflowX: el.scrollWidth - el.clientWidth,
+          content: { left, right, top, bottom },
+        };
+      });
+    });
+    assert(geometry !== null, "home WidgetHost present for geometry probe");
+    assert(
+      (geometry ?? []).length > 1,
+      `home grid geometry probe sees multiple widgets (${geometry?.length ?? 0})`,
+    );
+    for (const item of geometry ?? []) {
+      assert(
+        item.overflowX <= TOLERANCE,
+        `home widget ${item.testId} content fits its grid cell (overflow ${item.overflowX}px)`,
+      );
+    }
+    const items = geometry ?? [];
+    for (let i = 0; i < items.length; i += 1) {
+      for (let j = i + 1; j < items.length; j += 1) {
+        const a = items[i].content;
+        const b = items[j].content;
+        const xOverlap = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+        const yOverlap = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+        assert(
+          !(xOverlap > TOLERANCE && yOverlap > TOLERANCE),
+          `home widgets ${items[i].testId} and ${items[j].testId} do not overlap (x ${Math.round(xOverlap)}px, y ${Math.round(yOverlap)}px)`,
+        );
+      }
+    }
+  }
   await snap(mobile, "mobile-home");
 
   // Layout-stability lock (#9304): the home cards rank + self-hide; a ranking
@@ -432,19 +513,57 @@ try {
     `home settle is layout-stable (CLS ${stability.cls.toFixed(4)} ≤ 0.1, ${stability.shiftCount} shifts)`,
   );
 
-  // Real touch pull-DOWN on the notification zone opens the NotificationCenter
-  // sheet (#10706) — previously only jsdom synthetic pointer events covered it.
+  // The resting notification "pill"/grabber is gone — the redesign removed the
+  // always-visible top indicator (and the pull "tag"); pulling down from
+  // anywhere brings the real sheet down.
   assert(
-    (await mobile.getByTestId("notification-sheet-close").count()) === 0,
+    (await mobile.getByTestId("home-notification-grabber").count()) === 0 &&
+      (await mobile.getByTestId("home-notification-reveal").count()) === 0,
+    "no resting pill/grabber and no pull-tag affordance (removed)",
+  );
+
+  const OPEN_SHEET = '[data-testid="notification-sheet"][data-open]';
+
+  // Mid-pull evidence: hold a partial downward drag from the dashboard body. The
+  // REAL sheet itself fades in and tracks the finger (it is mounted but NOT yet
+  // "open"), so this is what the user sees being pulled down. Screenshot it, then
+  // CANCEL — a short/cancelled pull must retract, leaving nothing open.
+  {
+    const drag = await touchDragHold(
+      mobile,
+      '[data-testid="home-screen"]',
+      0,
+      80,
+      { steps: 8, stepDelayMs: 12 },
+    );
+    await mobile.waitForTimeout(90);
+    assert(
+      (await mobile.getByTestId("notification-sheet").count()) === 1 &&
+        (await mobile.locator(OPEN_SHEET).count()) === 0,
+      "a partial pull reveals the real sheet, tracking the finger (not yet open)",
+    );
+    await snap(mobile, "mobile-notification-pull-reveal");
+    await drag.cancel();
+    await mobile.waitForTimeout(420);
+    assert(
+      (await mobile.getByTestId("notification-sheet").count()) === 0,
+      "a CANCELLED pull retracts the sheet (nothing left open)",
+    );
+  }
+
+  // iOS-style pull-down from ANYWHERE on the dashboard body fades in + pulls down
+  // the NotificationCenter sheet and settles it OPEN — a real touch drag over the
+  // widget list (scrolled to the top), not a thin top strip. This is the headline
+  // of the redesign, driven through the same CDP touch path as the rail swipes.
+  assert(
+    (await mobile.getByTestId("notification-sheet").count()) === 0,
     "notification sheet starts closed",
   );
-  await touchSwipeDown(mobile, "home-notification-pull-zone");
-  await mobile
-    .getByTestId("notification-sheet-close")
-    .waitFor({ state: "visible", timeout: 4000 });
+  await touchSwipeDown(mobile, "home-screen");
+  await mobile.locator(OPEN_SHEET).waitFor({ state: "visible", timeout: 4000 });
   assert(
-    await mobile.getByTestId("notification-sheet-close").isVisible(),
-    "real-touch pull-down opens the notification sheet",
+    (await mobile.locator(OPEN_SHEET).count()) === 1,
+    "real-touch pull-down from the dashboard body opens the notification sheet",
   );
   // On-screen + horizontally centered: the sheet must sit within the viewport,
   // not clipped to one side. (A `position: fixed` sheet trapped in the
@@ -462,19 +581,33 @@ try {
       `notification sheet is on-screen + centered (x ${Math.round(sheetBox?.x ?? -1)}, w ${Math.round(sheetBox?.width ?? -1)}, vw ${vw})`,
     );
   }
-  // Visual evidence of the mobile pull-down sheet shell (flat, full-width,
-  // safe-area aware) while it is open.
+  // Visual evidence of the open glass sheet — let the settle finish first so the
+  // capture is the resting sheet, not a mid-animation frame.
+  await mobile.waitForTimeout(450);
   await snap(mobile, "mobile-notification-sheet");
-  // Close it again (Escape — the sheet's documented dismiss) so the rail swipe
-  // below starts from a clean, settled home.
+  // Close it again (Escape — a documented dismiss) so the rail swipe below starts
+  // from a clean, settled home.
   await mobile.keyboard.press("Escape");
   await mobile
-    .getByTestId("notification-sheet-close")
+    .getByTestId("notification-sheet")
     .waitFor({ state: "detached", timeout: 4000 });
   assert(
-    (await mobile.getByTestId("notification-sheet-close").count()) === 0,
+    (await mobile.getByTestId("notification-sheet").count()) === 0,
     "the notification sheet closes again (Escape)",
   );
+
+  // The top-edge band (the iOS-natural place to start a pull, and the click /
+  // keyboard entry point) still opens the sheet via a pull too.
+  await touchSwipeDown(mobile, "home-notification-pull-zone");
+  await mobile.locator(OPEN_SHEET).waitFor({ state: "visible", timeout: 4000 });
+  assert(
+    (await mobile.locator(OPEN_SHEET).count()) === 1,
+    "a pull from the top-edge band also opens the notification sheet",
+  );
+  await mobile.keyboard.press("Escape");
+  await mobile
+    .getByTestId("notification-sheet")
+    .waitFor({ state: "detached", timeout: 4000 });
   await waitForSurfacePageSettled(mobile, "home");
 
   // Real touch left-swipe on the home half pages the outer rail to the
@@ -608,6 +741,57 @@ try {
   );
   await touchSwipeLeft(mobile, "home-launcher-home-page");
   await waitForSurfacePageSettled(mobile, "launcher");
+
+  // ── Rail-swipe FPS gate: sample REAL frames over three full home↔launcher
+  // round-trips (right swipe back home, left swipe to the launcher — the exact
+  // gesture the launcher redesign must keep smooth) and hard-fail on sustained
+  // jank via the same shared, meta-tested frame-budget detectors the chat perf
+  // gates use. The rail paints via rAF-paced translate3d, so a regression that
+  // moves work onto the drag path (layout, paint storms, main-thread stalls)
+  // shows up here as dropped frames / p95 blowout.
+  {
+    await mobile.evaluate(() => window.__ELIZA_FRAME.start());
+    for (let i = 0; i < 3; i += 1) {
+      await touchSwipeRight(mobile, "home-launcher-launcher-page");
+      await waitForSurfacePageSettled(mobile, "home");
+      await touchSwipeLeft(mobile, "home-launcher-home-page");
+      await waitForSurfacePageSettled(mobile, "launcher");
+    }
+    const { deltas, longTasks } = await mobile.evaluate(() =>
+      window.__ELIZA_FRAME.read(),
+    );
+    await mobile.evaluate(() => window.__ELIZA_FRAME.stop());
+    const s = summarizeFrameSamples(deltas, longTasks, FRAME_BUDGET);
+    // Chromium's headless rAF timestamps commonly quantize 60 Hz frames as
+    // 16.7-16.8ms. Treat those as on-budget; real drops still exceed the budget
+    // by more than the timestamp jitter and p95 remains the primary jank gate.
+    const effectiveDroppedFrames = deltas.filter(
+      (delta) =>
+        Number.isFinite(delta) &&
+        delta > s.budgetMs + DROPPED_FRAME_EPSILON_MS,
+    ).length;
+    const droppedPct =
+      (100 * effectiveDroppedFrames) / Math.max(1, s.sampleCount);
+    const overP95Budget = s.p95FrameMs > s.budgetMs * FRAME_GATE.p95BudgetFactor;
+    const overDroppedBudget =
+      effectiveDroppedFrames / Math.max(1, s.sampleCount) >=
+      FRAME_GATE.droppedFrameRatio;
+    console.log(
+      `  [rail-swipe] fps=${s.fps.toFixed(1)} p95=${s.p95FrameMs.toFixed(1)}ms ` +
+        `worst=${s.worstFrameMs.toFixed(1)}ms dropped=${effectiveDroppedFrames}/${s.sampleCount} ` +
+        `(${droppedPct.toFixed(0)}%) long=${s.longTasks}`,
+    );
+    assert(
+      s.sampleCount >= MIN_FRAME_SAMPLES,
+      `rail-swipe window captured ≥${MIN_FRAME_SAMPLES} frames (got ${s.sampleCount})`,
+    );
+    assert(
+      !overP95Budget && !overDroppedBudget,
+      `rail swipe stays within the frame budget (p95 ${s.p95FrameMs.toFixed(1)}ms ≤ ` +
+        `${(s.budgetMs * FRAME_GATE.p95BudgetFactor).toFixed(1)}ms, dropped ` +
+        `${droppedPct.toFixed(0)}% < ${(FRAME_GATE.droppedFrameRatio * 100).toFixed(0)}%)`,
+    );
+  }
 
   // ── ONE page of views. Developer tools are NOT a separate swipeable page any
   // more: when Developer Mode is on they sit on the SAME single page after the
@@ -769,6 +953,8 @@ try {
       `desktop notification panel is right-anchored on-screen (right edge ${Math.round(rightEdge)}, vw ${vw})`,
     );
   }
+  // Let the fade-in settle before capturing the glass panel.
+  await finePointer.waitForTimeout(300);
   await snap(finePointer, "desktop-notification-panel");
   await finePointer.getByTestId("notification-panel-backdrop").click();
   await finePointer

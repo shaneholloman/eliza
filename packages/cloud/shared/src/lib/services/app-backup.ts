@@ -4,7 +4,9 @@
  * Exports a portable, secret-free snapshot of an app's configuration so a
  * user/agent can back it up and recreate the app later (the "backing up" part of
  * the app lifecycle). Restore creates a NEW app from the snapshot (new slug + new
- * API key) and reapplies monetization + config. Frontend deployments are
+ * API key) and reapplies config + monetization pricing — monetization itself is
+ * always restored DISABLED because the new app starts at review_status=draft and
+ * must pass review before it can collect money. Frontend deployments are
  * immutable R2 artifacts referenced by content hash — the snapshot records the
  * active deployment's hash so the user can redeploy; the bytes are not embedded.
  */
@@ -79,17 +81,25 @@ export class AppBackupService {
 
   /**
    * Create a NEW app from a backup snapshot (new slug + API key) and reapply its
-   * config + monetization. Returns the new app and its (one-time) API key.
+   * config + monetization pricing. Returns the new app, its (one-time) API key,
+   * and any warnings.
+   *
+   * The backup's `monetization.enabled` flag is deliberately NOT honored: the
+   * restored app is a NEW app with `review_status=draft`, and enabling
+   * monetization requires the same approved-review gate as
+   * PUT /apps/:id/monetization. Trusting the client-supplied blob here would
+   * let anyone monetize an unapproved app (#11834).
    */
   async restoreApp(
     organizationId: string,
     userId: string,
     backup: AppBackup,
     overrideName?: string,
-  ): Promise<{ app: App; apiKey: string }> {
+  ): Promise<{ app: App; apiKey: string; warnings: string[] }> {
     if (backup.version !== APP_BACKUP_VERSION) {
       throw new Error(`Unsupported backup version: ${backup.version}`);
     }
+    const warnings: string[] = [];
     const created = await appsService.create({
       name: overrideName?.trim() || `${backup.app.name} (restored)`,
       description: backup.app.description ?? undefined,
@@ -110,7 +120,9 @@ export class AppBackupService {
       promotional_assets: backup.promotional_assets ?? null,
     });
 
-    // Reapply monetization settings (create() does not carry them).
+    // Reapply monetization PRICING (create() does not carry it), but always
+    // force monetization OFF: the enabled flag must come from the review flow,
+    // never from a client-supplied backup blob (#11834).
     if (
       backup.monetization.enabled ||
       backup.monetization.inference_markup_percentage > 0 ||
@@ -118,7 +130,7 @@ export class AppBackupService {
     ) {
       try {
         await appCreditsService.updateMonetizationSettings(created.app.id, {
-          monetizationEnabled: backup.monetization.enabled,
+          monetizationEnabled: false,
           inferenceMarkupPercentage: backup.monetization.inference_markup_percentage,
           purchaseSharePercentage: backup.monetization.purchase_share_percentage,
         });
@@ -128,13 +140,18 @@ export class AppBackupService {
           error: error instanceof Error ? error.message : String(error),
         });
       }
+      if (backup.monetization.enabled) {
+        warnings.push(
+          "Monetization was disabled on restore — submit the restored app for review to re-enable it.",
+        );
+      }
     }
 
     logger.info("[AppBackup] restored app from backup", {
       newAppId: created.app.id,
       sourceName: backup.app.name,
     });
-    return created;
+    return { ...created, warnings };
   }
 }
 

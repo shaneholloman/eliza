@@ -161,6 +161,20 @@ app.post("/", async (c) => {
     return c.json({ error: "MCP is not available" }, 404);
   }
 
+  // Owner-or-public gate (mirrors the GET handler): getById is unscoped and the
+  // catalog hides private MCPs, so without this a non-owner org could INVOKE
+  // another org's private live MCP — hitting the owner's backend/credentials
+  // while the caller is billed (cross-tenant IDOR, #11838). Public MCPs stay
+  // invokable by anyone (the monetization model); private MCPs are owner-only.
+  const { allowed } = resolveMcpProxyView({
+    mcpOrganizationId: mcp.organization_id,
+    mcpIsPublic: mcp.is_public,
+    viewerOrganizationId: user.organization_id,
+  });
+  if (!allowed) {
+    return c.json({ error: "MCP not found" }, 404);
+  }
+
   const creditsRequired = Number(mcp.credits_per_request || "1");
   let affiliateOwnerId: string | undefined;
   let affiliateCodeId: string | undefined;
@@ -223,19 +237,22 @@ app.post("/", async (c) => {
   // endpoint, unreachable upstream, container down, non-ok status) must return
   // the money — otherwise a momentarily-down MCP silently over-charges the org
   // (#11637). Refund on every failure branch, not only a non-ok HTTP status.
+  let refundedPrecharge = false;
   const refundPrecharge = async (
     reason: string,
-    status?: number,
+    metadata: Record<string, string | number | boolean | null | undefined> = {},
   ): Promise<void> => {
+    if (refundedPrecharge) return;
+    refundedPrecharge = true;
     await creditsService
       .refundCredits({
         organizationId: user.organization_id,
         amount: totalCreditsRequired / CREDITS_PER_DOLLAR,
-        description: `MCP refund: ${mcp.name} (failed)`,
+        description: `MCP refund: ${mcp.name} (${reason})`,
         metadata: {
           mcp_id: mcp.id,
           reason,
-          ...(status !== undefined && { status }),
+          ...metadata,
         },
       })
       .catch((refundError: Error | string) => {
@@ -272,10 +289,23 @@ app.post("/", async (c) => {
     targetUrl = parsed.toString();
     isExternalEndpoint = true;
   } else if (mcp.endpoint_type === "container" && mcp.container_id) {
-    const container = await containersService.getById(
-      mcp.container_id,
-      mcp.organization_id,
-    );
+    let container: Awaited<ReturnType<typeof containersService.getById>>;
+    try {
+      container = await containersService.getById(
+        mcp.container_id,
+        mcp.organization_id,
+      );
+    } catch (error) {
+      logger.error("[MCP Proxy] Failed to resolve MCP container", {
+        mcpId,
+        containerId: mcp.container_id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await refundPrecharge("container_lookup_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return c.json({ error: "MCP container not available" }, 502);
+    }
     if (!container?.load_balancer_url) {
       await refundPrecharge("container_unavailable");
       return c.json({ error: "MCP container not available" }, 503);
@@ -341,6 +371,22 @@ app.post("/", async (c) => {
     return c.json({ error: "Failed to reach MCP endpoint" }, 502);
   }
 
+  let responseBody: string;
+  try {
+    responseBody = await mcpResponse.text();
+  } catch (error) {
+    logger.error("[MCP Proxy] Failed to read MCP response body", {
+      mcpId,
+      status: mcpResponse.status,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await refundPrecharge("mcp_response_read_failed", {
+      status: mcpResponse.status,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return c.json({ error: "Failed to read MCP response" }, 502);
+  }
+
   if (mcpResponse.ok) {
     await userMcpsService
       .recordUsageWithoutDeduction({
@@ -370,10 +416,8 @@ app.post("/", async (c) => {
         });
       });
   } else {
-    await refundPrecharge("mcp_call_failed", mcpResponse.status);
+    await refundPrecharge("mcp_call_failed", { status: mcpResponse.status });
   }
-
-  const responseBody = await mcpResponse.text();
 
   return new Response(responseBody, {
     status: mcpResponse.status,

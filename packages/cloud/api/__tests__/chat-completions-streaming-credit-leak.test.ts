@@ -201,6 +201,7 @@ function callStreaming(
       label: string;
     } | null;
     signal?: AbortSignal;
+    useMonetizedAppBilling?: boolean;
   } = {},
 ) {
   return handleStreamingRequest(
@@ -224,6 +225,7 @@ function callStreaming(
     {} as never,
     "gateway" as never,
     options.pooledCredential ?? null,
+    options.useMonetizedAppBilling ?? false,
   );
 }
 
@@ -552,6 +554,63 @@ describe("streaming chat — success settles once, no double-refund", () => {
       credentialId: "pooled-credential-1",
       userId: USER,
     });
+  });
+
+  test("charged monetized-app + pooled call still attributes the affiliate (#11814)", async () => {
+    const settle = mock(async () => null);
+    let onFinishPromise: Promise<unknown> | undefined;
+
+    streamTextImpl = (config) => {
+      const onFinish = config.onFinish as
+        | ((event: {
+            text: string;
+            usage: {
+              inputTokens: number;
+              outputTokens: number;
+              totalTokens: number;
+            };
+          }) => Promise<unknown> | unknown)
+        | undefined;
+
+      return {
+        fullStream: (async function* () {
+          yield { type: "text-delta", id: "text-1", text: "pooled ok" };
+          onFinishPromise = Promise.resolve(
+            onFinish?.({
+              text: "pooled ok",
+              usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 },
+            }),
+          );
+          yield { type: "finish", finishReason: "stop" };
+        })(),
+      };
+    };
+
+    const res = await callStreaming(settle, {
+      affiliateCode: "SHOULD_PAY",
+      // Monetized-app request reserves REAL app credits, so it is NOT zero-rated
+      // even with a pooled key — the affiliate must still be attributed. Only a
+      // zero-rated pooled call (pooledCredential && !useMonetizedAppBilling)
+      // suppresses the affiliate (#11814).
+      useMonetizedAppBilling: true,
+      pooledCredential: {
+        organizationId: ORG,
+        credentialId: "pooled-credential-1",
+        providerId: "openai-api",
+        apiKey: "sk-pooled",
+        label: "Team OpenAI key",
+      },
+    });
+    const body = await res.text();
+    expect(onFinishPromise).toBeDefined();
+    await onFinishPromise;
+
+    expect(body).toContain("pooled ok");
+    expect(billUsage).toHaveBeenCalledTimes(1);
+    expect(
+      (billUsage.mock.calls[0][0] as { affiliateCode?: string | null })
+        .affiliateCode,
+    ).toBe("SHOULD_PAY");
   });
 
   test("settler reconciles to actual cost exactly once; a stray onError cannot re-refund", async () => {

@@ -24,6 +24,11 @@ import { useAppSelector } from "../../state";
 import { categoryIcon } from "../../state/notifications/category-icon";
 import { navigateDeepLink } from "../../state/notifications/navigate-deep-link";
 import {
+  closeNotificationCenter,
+  openNotificationCenter,
+  useNotificationShell,
+} from "../../state/notifications/notification-shell";
+import {
   clearNotifications,
   initNotifications,
   markAllNotificationsRead,
@@ -38,6 +43,22 @@ import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
 type NotificationSortMode = "priority" | "time";
+
+/**
+ * Real frosted-glass surface for the controlled shells (sheet + panel): a
+ * translucent dark base under heavy blur + saturation, a hairline border, a lit
+ * top edge (inset highlight), and a soft drop shadow for depth — deliberately
+ * NOT flat. The list cards float on top as their own lighter glass tiles.
+ */
+const GLASS_SURFACE =
+  "border border-white/15 bg-neutral-950/50 backdrop-blur-2xl backdrop-saturate-150 [box-shadow:inset_0_1px_0_0_rgba(255,255,255,0.18),0_24px_70px_-18px_rgba(0,0,0,0.8)]";
+
+/**
+ * Finger travel (px) that maps to a fully-revealed sheet during a pull. The
+ * open threshold (~60px) lands the reveal a little under half, so a committed
+ * pull then eases the rest of the way open.
+ */
+const SHEET_REVEAL_DISTANCE = 130;
 
 const CATEGORY_LABEL: Record<NotificationCategory, string> = {
   reminder: "Reminders",
@@ -126,32 +147,36 @@ function NotificationRow({
   );
 
   return (
+    // iOS-notification-center card: each notification is its own rounded glass
+    // tile floating on the blurred shell — a hairline border + a faint lit top
+    // edge give it depth without a second backdrop-blur (the shell carries the
+    // ONE blur; per-card blur would stack GPU filters on the phone).
     <li
       className={cn(
-        "group relative flex items-start gap-3 rounded-sm pr-9 transition-colors hover:bg-surface pointer-coarse:pr-12",
-        unread && "bg-surface/60",
+        "group relative flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.07] pr-9 transition-colors [box-shadow:inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:bg-white/[0.12] pointer-coarse:pr-12",
+        unread && "border-white/15 bg-white/[0.11]",
       )}
     >
       <button
         type="button"
         onClick={handleOpen}
-        className="flex min-w-0 flex-1 items-start gap-3 rounded-sm px-3 py-2.5 text-left"
+        className="flex min-w-0 flex-1 items-start gap-3 rounded-2xl px-3 py-2.5 text-left"
       >
         <span
           className={cn(
-            "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-sm",
+            "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg",
             notification.priority === "urgent"
-              ? "bg-status-danger/15 text-status-danger"
+              ? "bg-status-danger/20 text-status-danger"
               : notification.priority === "high"
-                ? "bg-accent/15 text-accent"
-                : "bg-surface text-muted-strong",
+                ? "bg-accent/20 text-accent"
+                : "bg-white/15 text-white/85",
           )}
         >
           {categoryIcon(notification.category)}
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium text-txt">
+            <span className="truncate text-sm font-medium text-white">
               {notification.title}
             </span>
             {unread && (
@@ -159,11 +184,11 @@ function NotificationRow({
             )}
           </span>
           {notification.body && (
-            <span className="mt-0.5 line-clamp-2 block text-xs text-muted">
+            <span className="mt-0.5 line-clamp-2 block text-xs text-white/70">
               {notification.body}
             </span>
           )}
-          <span className="mt-1 block text-[11px] text-muted/80">
+          <span className="mt-1 block text-[11px] text-white/50">
             {formatRelativeTime(notification.createdAt)}
           </span>
         </span>
@@ -180,7 +205,7 @@ function NotificationRow({
         // coarse pointer the hit target grows to the 44px `touch` token (the
         // house `pointer-coarse:min-*-touch` convention) so it isn't a
         // sub-target tap zone on the phone sheet.
-        className="absolute right-1.5 top-2.5 flex shrink-0 items-center justify-center rounded-sm p-1 text-muted opacity-50 transition-opacity pointer-coarse:min-h-touch pointer-coarse:min-w-touch hover:bg-surface hover:text-txt group-hover:opacity-100"
+        className="absolute right-1.5 top-2.5 flex shrink-0 items-center justify-center rounded-full p-1 text-white/60 opacity-50 transition-opacity pointer-coarse:min-h-touch pointer-coarse:min-w-touch hover:bg-white/10 hover:text-white group-hover:opacity-100"
       >
         <X className="h-3.5 w-3.5" />
       </button>
@@ -249,7 +274,7 @@ function FilterChip({
         "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
         active
           ? "bg-accent text-accent-foreground hover:bg-accent-hover"
-          : "text-muted-strong hover:bg-surface hover:text-txt",
+          : "text-white/70 hover:bg-white/10 hover:text-white",
       )}
     >
       {icon}
@@ -282,12 +307,21 @@ export function NotificationCenter({
   variant = "bell",
   open = false,
   onOpenChange,
+  dragPx = 0,
+  dragging = false,
+  exiting = false,
 }: {
   className?: string;
   headless?: boolean;
   variant?: "bell" | "sheet" | "panel" | "auto";
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Live pull distance (px) while the home pull is finger-tracking the sheet. */
+  dragPx?: number;
+  /** A pull is in progress — track the finger, no transition. */
+  dragging?: boolean;
+  /** Closing — animate out to closed, then the headless owner unmounts. */
+  exiting?: boolean;
 }): ReactNode {
   const { notifications, unreadCount, hydrated } = useNotifications();
   const setActionNotice = useAppSelector((s) => s.setActionNotice);
@@ -319,6 +353,31 @@ export function NotificationCenter({
   // self-bounded.
   const isControlled =
     effectiveVariant === "sheet" || effectiveVariant === "panel";
+
+  // Reveal progress 0..1 driving the controlled shells' fade + descent. While a
+  // pull is live it tracks the finger (dragPx); otherwise it eases to its
+  // settled target (open → 1, exiting/closed → 0). `entered` is false only on the
+  // very first frame of a non-drag open, so the shell mounts closed and animates
+  // IN (a direct tray/deep-link open still slides down); a drag-mounted shell is
+  // "entered" from the start so it tracks the finger with no closed flash.
+  const [entered, setEntered] = useState<boolean>(() => dragging || dragPx > 0);
+  useEffect(() => {
+    if (entered || typeof requestAnimationFrame !== "function") {
+      setEntered(true);
+      return;
+    }
+    const id = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(id);
+  }, [entered]);
+  const dragProgress = dragging
+    ? Math.min(1, Math.max(0, dragPx / SHEET_REVEAL_DISTANCE))
+    : 0;
+  const settledTarget = exiting ? 0 : open ? 1 : 0;
+  const revealProgress = dragging ? dragProgress : entered ? settledTarget : 0;
+  // Instant while the finger drives it; eased on settle / retract / enter.
+  const revealTransition = dragging
+    ? "none"
+    : "clip-path 320ms cubic-bezier(0.22,1,0.36,1), opacity 260ms ease-out, transform 320ms cubic-bezier(0.22,1,0.36,1)";
 
   // Categories actually present in the inbox, in a stable display order. Drives
   // the filter chips — empty/single-category inboxes get no filter clutter.
@@ -473,37 +532,57 @@ export function NotificationCenter({
     [],
   );
 
-  // Surface-agnostic open (#10706): the single always-mounted headless instance
-  // listens for OPEN_NOTIFICATION_CENTER_EVENT and reveals the pull-down sheet.
-  // This is how desktop — where the floating bell is hidden — gets a visible
-  // native way in (the "Notifications" menu/tray item and the
-  // `<scheme>://notifications` deep link both dispatch this event). Only the
-  // headless owner listens, so a transient pull-down/bell instance never double-
-  // opens.
-  const [selfOpen, setSelfOpen] = useState(false);
+  // The single always-mounted headless instance is the sole owner of the
+  // controlled shell. Its open/drag state lives in the shared shell store so the
+  // home pull gesture (a different subtree) can finger-track the real sheet. The
+  // surface-agnostic OPEN_NOTIFICATION_CENTER_EVENT (the "Notifications"
+  // menu/tray item + the `<scheme>://notifications` deep link, and the top-edge
+  // button) opens it directly — desktop, where the bell is hidden, gets a native
+  // way in. Only the headless owner listens, so a shell never double-opens.
+  const shell = useNotificationShell();
   useEffect(() => {
     if (!headless) return;
-    const onOpen = () => setSelfOpen(true);
+    const onOpen = () => openNotificationCenter();
     window.addEventListener(OPEN_NOTIFICATION_CENTER_EVENT, onOpen);
     return () =>
       window.removeEventListener(OPEN_NOTIFICATION_CENTER_EVENT, onOpen);
   }, [headless]);
 
+  // Keep the shell mounted through its exit animation: it is visible whenever it
+  // is open, being dragged, or partway revealed; on close we hold the mount for
+  // the transition, then drop it.
+  const shellActive = shell.open || shell.dragging || shell.dragPx > 0;
+  const [shellMounted, setShellMounted] = useState(shellActive);
+  useEffect(() => {
+    if (!headless) return;
+    if (shellActive) {
+      setShellMounted(true);
+      return;
+    }
+    const id = window.setTimeout(() => setShellMounted(false), 340);
+    return () => window.clearTimeout(id);
+  }, [headless, shellActive]);
+
   const hasUnread = unreadCount > 0;
 
   // Hidden for now: keep the store + toast routing live (the effect above) but
-  // render no bell. Drop the `headless` prop to bring the button back. When an
-  // OPEN_NOTIFICATION_CENTER_EVENT has fired, the headless owner renders the
-  // surface-appropriate controlled shell as a child (one level — no recursion):
-  // the top-right desktop panel on mouse-driven wide surfaces, the full-width
-  // pull-down sheet on touch/narrow ones.
+  // render no bell. Drop the `headless` prop to bring the button back. The
+  // headless owner renders the surface-appropriate controlled shell as a child
+  // (one level — no recursion), driven by the shell store: the desktop top-right
+  // panel on mouse-driven wide surfaces, the full-width pull-down sheet on
+  // touch/narrow ones. It stays mounted through its exit animation.
   if (headless) {
-    if (!selfOpen) return null;
+    if (!shellMounted) return null;
     return (
       <NotificationCenter
         variant="auto"
-        open
-        onOpenChange={setSelfOpen}
+        open={shell.open}
+        dragPx={shell.dragPx}
+        dragging={shell.dragging}
+        exiting={!shellActive}
+        onOpenChange={(next) =>
+          next ? openNotificationCenter() : closeNotificationCenter()
+        }
         className={className}
       />
     );
@@ -515,7 +594,9 @@ export function NotificationCenter({
           hierarchy separate it from the list (app-wide flat direction). */}
       <div className="flex items-center justify-between gap-2 px-3.5 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="text-sm font-semibold text-txt">Notifications</span>
+          <span className="text-sm font-semibold text-white">
+            Notifications
+          </span>
           {hasUnread && (
             <span className="rounded-full bg-accent/15 px-1.5 py-0.5 text-2xs font-semibold leading-none text-accent">
               {unreadCount > 99 ? "99+" : unreadCount}
@@ -529,6 +610,7 @@ export function NotificationCenter({
               size="icon-sm"
               aria-label="Mark all read"
               title="Mark all read"
+              className="text-white/70 hover:bg-white/10 hover:text-white"
               onClick={handleMarkAll}
             >
               <CheckCheck className="h-4 w-4" />
@@ -540,27 +622,15 @@ export function NotificationCenter({
               size="icon-sm"
               aria-label="Clear all"
               title="Clear all"
+              className="text-white/70 hover:bg-white/10 hover:text-white"
               onClick={handleClear}
             >
               <Trash2 className="h-4 w-4" />
             </Button>
           )}
-          {isControlled && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Close notifications"
-              title="Close"
-              data-testid={
-                effectiveVariant === "panel"
-                  ? "notification-panel-close"
-                  : "notification-sheet-close"
-              }
-              onClick={() => onOpenChange?.(false)}
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          )}
+          {/* No close X: the sheet dismisses by tapping the backdrop or grabber
+              (or Escape / back); the desktop panel by clicking outside. A close
+              button was redundant chrome. */}
         </div>
       </div>
       {presentCategories.length > 1 && (
@@ -572,10 +642,10 @@ export function NotificationCenter({
       )}
       {notifications.length > 1 && (
         <div className="flex items-center gap-2 px-3 py-1.5">
-          <span className="text-2xs font-medium uppercase tracking-wide text-muted">
+          <span className="text-2xs font-medium uppercase tracking-wide text-white/60">
             Sort
           </span>
-          <div className="ml-auto flex items-center gap-0.5 rounded-md bg-surface p-0.5">
+          <div className="ml-auto flex items-center gap-0.5 rounded-md bg-white/10 p-0.5">
             {(
               [
                 ["priority", "Priority"],
@@ -592,7 +662,7 @@ export function NotificationCenter({
                   "rounded-sm px-2 py-0.5 text-2xs font-medium transition-colors",
                   sortMode === mode
                     ? "bg-accent/15 text-accent"
-                    : "text-muted hover:text-txt",
+                    : "text-white/60 hover:text-white",
                 )}
               >
                 {label}
@@ -616,17 +686,19 @@ export function NotificationCenter({
               (which would flash then get replaced when rows arrive). */}
           {hydrated ? (
             <>
-              <Inbox className="h-7 w-7 text-muted/70" />
-              <span className="text-sm text-muted">You're all caught up</span>
+              <Inbox className="h-7 w-7 text-white/50" />
+              <span className="text-sm text-white/70">
+                You're all caught up
+              </span>
             </>
           ) : (
-            <span className="text-sm text-muted">Loading…</span>
+            <span className="text-sm text-white/70">Loading…</span>
           )}
         </div>
       ) : (
         <ul
           className={cn(
-            "overflow-y-auto p-1.5",
+            "flex flex-col gap-1.5 overflow-y-auto p-2",
             // Controlled shells are flex columns capped at a max height, so the
             // list is the flex scroller: it sizes to content but `min-h-0` lets
             // it shrink and scroll when the list overflows, keeping header +
@@ -649,13 +721,15 @@ export function NotificationCenter({
     </>
   );
 
-  // Mobile pull-down sheet: a full-width, top-anchored panel the home surface
-  // reveals with a downward pull (#10706), rounded at the bottom and safe-area
-  // aware. Backdrop dismisses; a grabber hints the gesture. In short landscape
-  // it caps lower so it floats over the (already short) viewport instead of
-  // swallowing it — the list stays the flex scroller.
+  // Mobile pull-down sheet: a full-width, top-anchored glass panel the home pull
+  // reveals by FADING IN and descending with the finger (#10706) — the real
+  // sheet tracks the drag (clip-reveal from the top edge), so there is no
+  // separate affordance. Rounded at the bottom, safe-area aware. Backdrop /
+  // grabber / Escape dismiss. Short landscape caps lower so it floats over the
+  // (already short) viewport instead of swallowing it — the list stays the flex
+  // scroller.
   if (effectiveVariant === "sheet") {
-    if (!open) return null;
+    if (!open && !dragging && dragPx <= 0 && !exiting) return null;
     return overlayPortal(
       <>
         <button
@@ -663,38 +737,52 @@ export function NotificationCenter({
           aria-label="Dismiss notifications"
           data-testid="notification-sheet-backdrop"
           data-above-shell-overlay
-          // Not a Tab stop: Escape + the labelled Close button cover keyboard
-          // dismissal, so the first Tab inside the trapped dialog is a real
-          // control, not this invisible catcher.
+          // Not a Tab stop: Escape + the backdrop/grabber cover dismissal, so the
+          // first Tab inside the trapped dialog is a real control, not this
+          // catcher. Non-interactive until fully open (a pull-in-progress must
+          // not eat the ongoing drag / a tap).
           tabIndex={-1}
           onClick={() => onOpenChange?.(false)}
-          style={{ zIndex: Z_NOTIFICATION_BACKDROP }}
-          className="fixed inset-0 bg-black/40"
+          style={{
+            zIndex: Z_NOTIFICATION_BACKDROP,
+            opacity: Math.min(1, revealProgress),
+            transition: revealTransition,
+            pointerEvents: open ? "auto" : "none",
+          }}
+          className="fixed inset-0 bg-black/55"
         />
         <div
           ref={dialogRef}
           role="dialog"
-          aria-modal="true"
+          aria-modal={open || undefined}
+          aria-hidden={!open || undefined}
           aria-label="Notifications"
           data-testid="notification-sheet"
+          data-open={open || undefined}
           data-above-shell-overlay
           tabIndex={-1}
           onKeyDown={onDialogKeyDown}
-          style={{ zIndex: Z_NOTIFICATION_OVERLAY }}
+          style={{
+            zIndex: Z_NOTIFICATION_OVERLAY,
+            // Reveal from the top edge (top-first) so the header + first cards
+            // lead as it descends; fade + a small settle ride along.
+            clipPath: `inset(0px 0px ${(1 - revealProgress) * 100}% 0px)`,
+            opacity: Math.min(1, revealProgress * 2),
+            transform: `translateY(${(revealProgress - 1) * 10}px)`,
+            transition: revealTransition,
+            pointerEvents: open ? "auto" : "none",
+          }}
           className={cn(
-            // Floating sheet: flat (no drop shadow, app-wide direction); the
-            // popover scrim + one outer edge give self-contained contrast. Short
-            // landscape caps lower so it floats over the (already short) viewport.
-            "fixed inset-x-0 top-0 mx-auto flex w-[min(440px,calc(100vw-1rem))] flex-col overflow-hidden rounded-b-2xl border-x border-b border-border bg-popover outline-none",
+            "fixed inset-x-0 top-0 mx-auto flex w-[min(440px,calc(100vw-1rem))] flex-col overflow-hidden rounded-b-3xl outline-none",
+            GLASS_SURFACE,
             isShortLandscape ? "max-h-[75vh]" : "max-h-[85vh]",
             "pt-[var(--safe-area-top,0px)]",
             className,
           )}
         >
           {panelBody}
-          {/* The bottom grabber is a real dismiss control, not a fake drag
-              affordance: tapping it (or the pill) closes the sheet. Binding a
-              pull-up gesture to the whole sheet would fight the notification
+          {/* The bottom grabber is a real dismiss control: tapping it closes the
+              sheet. Binding a pull-up gesture to the whole sheet would fight the
               list's own vertical scroll, so this is a plain click target. */}
           <button
             type="button"
@@ -703,7 +791,7 @@ export function NotificationCenter({
             onClick={() => onOpenChange?.(false)}
             className="flex shrink-0 justify-center py-2"
           >
-            <span className="h-1 w-9 rounded-full bg-muted/40" aria-hidden />
+            <span className="h-1 w-9 rounded-full bg-white/40" aria-hidden />
           </button>
         </div>
       </>,
@@ -717,7 +805,7 @@ export function NotificationCenter({
   // click-catcher dismisses on outside click (no modal scrim — this reads as a
   // panel, not a dialog); Escape also dismisses (effect above).
   if (effectiveVariant === "panel") {
-    if (!open) return null;
+    if (!open && !exiting) return null;
     return overlayPortal(
       <>
         <button
@@ -739,14 +827,22 @@ export function NotificationCenter({
           aria-modal="true"
           aria-label="Notifications"
           data-testid="notification-panel"
+          data-open={open || undefined}
           data-above-shell-overlay
           tabIndex={-1}
           onKeyDown={onDialogKeyDown}
-          style={{ zIndex: Z_NOTIFICATION_OVERLAY }}
+          style={{
+            zIndex: Z_NOTIFICATION_OVERLAY,
+            // No drag on desktop — just a quick fade + small drop on open/close.
+            opacity: revealProgress,
+            transform: `translateY(${(revealProgress - 1) * 8}px)`,
+            transition: revealTransition,
+          }}
           className={cn(
-            // Flat like the app's PopoverContent (border + bg, no shadow): the
-            // 1px border defines the floating panel over content.
-            "fixed right-3 top-3 flex max-h-[min(560px,calc(100vh-1.5rem))] w-[400px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-xl border border-border bg-popover outline-none",
+            // Same frosted-glass treatment as the mobile sheet so the two
+            // surfaces can't drift.
+            "fixed right-3 top-3 flex max-h-[min(560px,calc(100vh-1.5rem))] w-[400px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-2xl outline-none",
+            GLASS_SURFACE,
             className,
           )}
         >

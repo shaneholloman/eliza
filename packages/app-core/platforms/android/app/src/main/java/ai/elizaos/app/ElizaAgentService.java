@@ -174,6 +174,7 @@ public class ElizaAgentService extends Service {
     private volatile ElizaBionicInferenceServer bionicInferenceServer;
     private Thread startWorker;
     private volatile boolean shuttingDown;
+    private volatile boolean foregroundStartDenied;
     private volatile boolean detachedAgentMode;
     private volatile long detachedLaunchStartedAtMs;
     private int restartAttempts;
@@ -615,14 +616,34 @@ public class ElizaAgentService extends Service {
 
         Notification notification = buildNotification("Eliza agent", "Starting…");
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            );
-        } else {
-            startForeground(NOTIFICATION_ID, notification);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                );
+            } else {
+                startForeground(NOTIFICATION_ID, notification);
+            }
+        } catch (IllegalStateException error) {
+            if (!ElizaAgentWatchdogPolicy.isForegroundStartDenial(error)) {
+                throw error;
+            }
+            // Android 12+ denied the FGS start: AMS restarted the sticky
+            // service with no foreground activity (the post-LMK-kill path in
+            // #11506). Crashing here loops: AMS restarts the sticky service
+            // and the denial repeats. Stop cleanly instead; the next real
+            // (foreground) launch restarts the service, and a surviving
+            // detached agent process is left untouched for it to adopt.
+            Map<String, String> details = new LinkedHashMap<>();
+            details.put("exception", error.getClass().getName());
+            appendDiagnosticEvent("fgs-start-denied", details);
+            Log.w(TAG, "startForeground() denied (background sticky restart); "
+                + "stopping service cleanly instead of crash-looping.", error);
+            foregroundStartDenied = true;
+            shuttingDown = true;
+            stopSelf();
         }
     }
 
@@ -634,6 +655,17 @@ public class ElizaAgentService extends Service {
         details.put("flags", String.valueOf(flags));
         details.put("startId", String.valueOf(startId));
         appendDiagnosticEvent("service-onStartCommand", details);
+        if (foregroundStartDenied) {
+            // onCreate could not enter the foreground (background sticky
+            // restart on Android 12+) and already called stopSelf(); refuse
+            // the pending start so AMS does not re-deliver it. Stop this
+            // delivered start explicitly too: a startService() racing the
+            // teardown would otherwise leave this instance running as a
+            // started service that never entered the foreground.
+            appendDiagnosticEvent("service-start-refused-fgs-denied", details);
+            stopSelf(startId);
+            return START_NOT_STICKY;
+        }
         if (ACTION_STOP.equals(action)) {
             shuttingDown = true;
             appendDiagnosticEvent("service-stop-intent", details);
@@ -692,6 +724,105 @@ public class ElizaAgentService extends Service {
     public IBinder onBind(Intent intent) {
         // Not a bound service.
         return null;
+    }
+
+    /**
+     * Relay OS memory-pressure callbacks to the bionic inference host (#11760).
+     * The host pins 2+ GB of GL mtrack (model weights + KV cache) while its
+     * resident state exists; on the trim levels that signal real pressure
+     * ({@link InferenceMemoryPolicy#shouldReleaseOnTrim}) that state is freed so
+     * lmkd reclaims the memory without killing the app + agent. The release is
+     * dispatched off the main thread (it blocks behind an in-flight decode) and
+     * the next inference request reloads on demand — no app/agent state is lost.
+     */
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        ElizaBionicInferenceServer host = bionicInferenceServer;
+        if (host == null) {
+            return;
+        }
+        if (!InferenceMemoryPolicy.shouldReleaseOnTrim(level)) {
+            Log.i(TAG, "onTrimMemory(" + level + "): keeping resident inference state");
+            return;
+        }
+        Log.i(TAG, "onTrimMemory(" + level + "): releasing resident inference state");
+        host.releaseResidentAsync("onTrimMemory level=" + level);
+    }
+
+    // ── Inference memory policy (#11760) ─────────────────────────────────
+
+    /**
+     * Debug-property override surface for on-device/emulator verification:
+     * {@code adb shell setprop debug.eliza.inference.ram_class constrained} and
+     * {@code … .idle_unload_ms <ms>}. Read via reflection because
+     * {@code android.os.SystemProperties} is not public API; any failure just
+     * means "no override".
+     */
+    private static String readDebugProp(String name) {
+        try {
+            Class<?> sp = Class.forName("android.os.SystemProperties");
+            String value = (String) sp.getMethod("get", String.class).invoke(null, name);
+            return value == null || value.isEmpty() ? null : value;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private ActivityManager.MemoryInfo readMemoryInfo() {
+        ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+        ActivityManager.MemoryInfo info = new ActivityManager.MemoryInfo();
+        if (am != null) {
+            am.getMemoryInfo(info);
+        }
+        return info;
+    }
+
+    /** The device's inference RAM class (debug-prop override wins). */
+    private InferenceMemoryPolicy.RamClass inferenceRamClass() {
+        ActivityManager.MemoryInfo info = readMemoryInfo();
+        InferenceMemoryPolicy.RamClass ramClass = InferenceMemoryPolicy.classifyRamClass(
+            info.totalMem, readDebugProp("debug.eliza.inference.ram_class"));
+        Log.i(TAG, "inference memory policy: ramClass=" + ramClass
+            + " totalMem=" + (info.totalMem >> 20) + "MB"
+            + " availMem=" + (info.availMem >> 20) + "MB"
+            + " lmkThreshold=" + (info.threshold >> 20) + "MB"
+            + " nCtx=" + InferenceMemoryPolicy.llmContextTokens(ramClass)
+            + " idleUnloadMs=" + inferenceIdleUnloadMs(ramClass));
+        return ramClass;
+    }
+
+    private static long inferenceIdleUnloadMs(InferenceMemoryPolicy.RamClass ramClass) {
+        return InferenceMemoryPolicy.idleUnloadMs(
+            ramClass, readDebugProp("debug.eliza.inference.idle_unload_ms"));
+    }
+
+    /**
+     * Construct the bionic inference host with the device's memory policy: the
+     * RAM-class n_ctx default, the idle-unload timeout, and an
+     * {@code ActivityManager.getMemoryInfo()}-backed pressure probe.
+     */
+    private ElizaBionicInferenceServer newBionicInferenceServer(String defaultBundleDir) {
+        final InferenceMemoryPolicy.RamClass ramClass = inferenceRamClass();
+        ElizaBionicInferenceServer.MemoryPressureProbe probe =
+            new ElizaBionicInferenceServer.MemoryPressureProbe() {
+                @Override
+                public boolean shouldRelease() {
+                    ActivityManager.MemoryInfo info = readMemoryInfo();
+                    return InferenceMemoryPolicy.shouldReleaseOnAvailMem(
+                        ramClass, info.availMem, info.threshold, info.lowMemory);
+                }
+
+                @Override
+                public String describe() {
+                    ActivityManager.MemoryInfo info = readMemoryInfo();
+                    return "availMem=" + (info.availMem >> 20) + "MB threshold="
+                        + (info.threshold >> 20) + "MB lowMemory=" + info.lowMemory;
+                }
+            };
+        return new ElizaBionicInferenceServer(
+            BIONIC_INFERENCE_SOCKET_NAME, defaultBundleDir, ramClass,
+            inferenceIdleUnloadMs(ramClass), probe);
     }
 
     // ── Asset extraction ─────────────────────────────────────────────────
@@ -1189,8 +1320,7 @@ public class ElizaAgentService extends Service {
         try {
             String defaultBundleDir =
                 new File(getFilesDir(), "eliza-1/bundle").getAbsolutePath();
-            ElizaBionicInferenceServer host =
-                new ElizaBionicInferenceServer(BIONIC_INFERENCE_SOCKET_NAME, defaultBundleDir);
+            ElizaBionicInferenceServer host = newBionicInferenceServer(defaultBundleDir);
             host.start();
             bionicInferenceServer = host;
             Log.i(TAG, "ensureBionicVoiceHost: local voice host started"
@@ -1393,6 +1523,20 @@ public class ElizaAgentService extends Service {
                 Log.i(TAG, "libvoice_classifier.so present; exporting ELIZA_VOICE_CLASSIFIER_LIB="
                     + voiceClassifierLib.getAbsolutePath());
             }
+            // Fused voice engine (#11373): the bun agent's LiveDiarizationSession
+            // resolves libelizainference via ELIZA_INFERENCE_LIBRARY /
+            // ELIZA_INFERENCE_LIB_DIR (see live-diarization-session.ts). The lib
+            // ships as a jniLib and extracts into nativeLibraryDir, but nothing
+            // exported the env var, so /api/voice/audio-frames died with
+            // "fused libelizainference not found" at session construction —
+            // invisible to the module-load smoke, which never builds a session.
+            // Only export when the .so actually shipped (same guard as above).
+            File fusedInferenceLib = new File(nativeLibraryDir(), "libelizainference.so");
+            if (fusedInferenceLib.isFile() && !env.containsKey("ELIZA_INFERENCE_LIBRARY")) {
+                agentEnv.put("ELIZA_INFERENCE_LIBRARY", fusedInferenceLib.getAbsolutePath());
+                Log.i(TAG, "libelizainference.so present; exporting ELIZA_INFERENCE_LIBRARY="
+                    + fusedInferenceLib.getAbsolutePath());
+            }
             agentEnv.put("AGENT_ROOT", root.getAbsolutePath());
             agentEnv.put("RUNTIME_DIR", abiDir.getAbsolutePath());
             agentEnv.put("DEVICE_DIR", abiDir.getAbsolutePath());
@@ -1543,7 +1687,41 @@ public class ElizaAgentService extends Service {
             // delegate inference over an abstract-namespace UDS to the in-process
             // ElizaBionicInferenceServer, which runs libelizainference on the Mali
             // GPU. The musl agent never tries to load the native lib itself.
-            boolean delegateToBionicHost = fusedInferenceBundled && abiGgmlVulkan.isFile();
+            // The bionic host is served through the fused-voice JNI bridge
+            // (libelizavoicejni.so, ElizaVoiceNative → ElizaBionicInferenceServer).
+            // That bridge is only built by the app's externalNativeBuild when the
+            // staged libelizainference.so carries the fused-voice symbols; a build
+            // whose prebuilt lib lacks them silently ships WITHOUT the bridge (see
+            // build.gradle). Requiring it here means we never advertise a
+            // bionic-host serving path the server cannot actually stand up — the
+            // musl agent would otherwise register capacitor-llama handlers "(via
+            // bionic-host)" against a socket that never binds, and every turn
+            // would fail with a cryptic "bionic socket error: connect ENOENT".
+            boolean bionicJniBridgeBundled =
+                resolveBundledNativeLib(abiDir, "libelizavoicejni.so").isFile();
+            boolean delegateToBionicHost =
+                fusedInferenceBundled && abiGgmlVulkan.isFile() && bionicJniBridgeBundled;
+            // #11760: export the device RAM class + idle-unload default so the
+            // bun agent's in-process loader (plugin-aosp-local-inference) applies
+            // the same inference memory policy as the bionic host. Operator env
+            // always wins.
+            InferenceMemoryPolicy.RamClass inferenceRamClass = inferenceRamClass();
+            if (!env.containsKey("ELIZA_INFERENCE_RAM_CLASS")) {
+                agentEnv.put("ELIZA_INFERENCE_RAM_CLASS", inferenceRamClass.wireName());
+            }
+            if (!env.containsKey("ELIZA_LOCAL_IDLE_UNLOAD_MS")) {
+                agentEnv.put(
+                    "ELIZA_LOCAL_IDLE_UNLOAD_MS",
+                    String.valueOf(inferenceIdleUnloadMs(inferenceRamClass)));
+            }
+            if (fusedInferenceBundled && abiGgmlVulkan.isFile() && !bionicJniBridgeBundled) {
+                Log.w(TAG, "agent/" + abiDir.getName()
+                    + ": fused Vulkan libs are staged but libelizavoicejni.so is absent "
+                    + "(this build skipped the fused-voice JNI bridge); on-device GPU "
+                    + "inference via the bionic host is UNAVAILABLE. Rebuild with "
+                    + "stage-elizavoice-lib.mjs to re-enable. Falling back to the "
+                    + "non-delegated inference path.");
+            }
             if (delegateToBionicHost) {
                 agentEnv.put("ELIZA_BIONIC_HOST_DELEGATED", "1");
                 agentEnv.put("ELIZA_BIONIC_INFERENCE_SOCK", BIONIC_INFERENCE_SOCKET_NAME);
@@ -1568,10 +1746,26 @@ public class ElizaAgentService extends Service {
                 if (bionicInferenceServer == null) {
                     String defaultBundleDir =
                         new File(getFilesDir(), "eliza-1/bundle").getAbsolutePath();
-                    bionicInferenceServer =
-                        new ElizaBionicInferenceServer(BIONIC_INFERENCE_SOCKET_NAME, defaultBundleDir);
+                    bionicInferenceServer = newBionicInferenceServer(defaultBundleDir);
                 }
-                bionicInferenceServer.start();
+                // Guard the start: a failure here (e.g. the fused-voice native
+                // libs failing to dlopen) must NOT leave the delegation env set,
+                // or the musl agent registers dead "(via bionic-host)" handlers
+                // against a socket that never binds and every turn fails. On
+                // failure, retract the delegation so the caller falls through to
+                // the non-delegated inference path below. UnsatisfiedLinkError is
+                // an Error, not an Exception, so catch Throwable here.
+                try {
+                    bionicInferenceServer.start();
+                } catch (Throwable startError) {
+                    Log.e(TAG, "ElizaBionicInferenceServer.start() failed; disabling "
+                        + "bionic-host delegation for this launch: " + startError.getMessage(),
+                        startError);
+                    bionicInferenceServer = null;
+                    agentEnv.remove("ELIZA_BIONIC_HOST_DELEGATED");
+                    agentEnv.remove("ELIZA_BIONIC_INFERENCE_SOCK");
+                    delegateToBionicHost = false;
+                }
             }
             if (!delegateToBionicHost && nativeLlamaBundled
                     && !env.containsKey("ELIZA_LOCAL_LLAMA")) {
@@ -1640,7 +1834,16 @@ public class ElizaAgentService extends Service {
                 // multi-minute FFI call before it can answer health checks or
                 // honor aborts.
                 if (!env.containsKey("ELIZA_LLAMA_N_CTX")) {
-                    agentEnv.put("ELIZA_LLAMA_N_CTX", brandedAospBuild ? "16384" : "4096");
+                    // #11760: CONSTRAINED (5.7 GB-class) devices halve the branded
+                    // context — the in-process CPU path's KV + compute buffers
+                    // scale with n_ctx and contribute to the RSS that makes the
+                    // app lmkd's first target. The stock APK's 4096 is already at
+                    // the constrained cap.
+                    String nCtx = brandedAospBuild
+                        ? (inferenceRamClass == InferenceMemoryPolicy.RamClass.CONSTRAINED
+                            ? "8192" : "16384")
+                        : "4096";
+                    agentEnv.put("ELIZA_LLAMA_N_CTX", nCtx);
                 }
 
                 if (!env.containsKey("ELIZA_LLAMA_THREADS")) {

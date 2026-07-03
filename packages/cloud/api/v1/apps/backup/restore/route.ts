@@ -4,8 +4,9 @@
  * POST /api/v1/apps/backup/restore  { backup, name? }
  *
  * Creates a NEW app in the caller's org from a backup snapshot (new slug + new
- * API key) and reapplies its monetization + config. The returned api key is
- * shown once.
+ * API key) and reapplies its config + monetization pricing. Monetization is
+ * always restored disabled (the new app is review_status=draft and must pass
+ * review to monetize — #11834). The returned api key is shown once.
  */
 
 import { Hono } from "hono";
@@ -61,7 +62,11 @@ app.post("/", async (c) => {
       );
     }
 
-    const { app: restored, apiKey } = await appBackupService.restoreApp(
+    const {
+      app: restored,
+      apiKey,
+      warnings,
+    } = await appBackupService.restoreApp(
       user.organization_id,
       user.id,
       parsed.data.backup as unknown as AppBackup,
@@ -73,6 +78,7 @@ app.post("/", async (c) => {
         success: true,
         app: { id: restored.id, name: restored.name, slug: restored.slug },
         apiKey,
+        ...(warnings.length > 0 ? { warnings } : {}),
       },
       201,
     );

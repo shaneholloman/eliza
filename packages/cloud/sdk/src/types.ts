@@ -1350,6 +1350,166 @@ export interface ListAdSlotsResponse {
   slots: AdSlotDto[];
 }
 
+// ---- Advertising campaign management (#11599) ----
+
+export interface CampaignDaypartingWindow {
+  /** 0=Sunday .. 6=Saturday (JS `Date#getDay` / Meta adset_schedule convention). */
+  daysOfWeek: number[];
+  /** `HH:mm`, 24-hour, in the schedule's timezone. */
+  startTime: string;
+  /** `HH:mm` exclusive end; `"24:00"` = end of day. Must be after startTime. */
+  endTime: string;
+}
+
+export interface CampaignDaypartingSchedule {
+  /** IANA timezone the windows are evaluated in (never server-local time). */
+  timezone: string;
+  windows: CampaignDaypartingWindow[];
+}
+
+export interface AdCampaignDto {
+  id: string;
+  name: string;
+  platform: string;
+  objective: string;
+  status: string;
+  budgetType: string;
+  budgetAmount: string;
+  budgetCurrency?: string;
+  creditsAllocated?: string;
+  externalCampaignId?: string | null;
+  dayparting?: CampaignDaypartingSchedule | null;
+  sourceCampaignId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CampaignDaypartingResponse {
+  success: boolean;
+  campaignId: string;
+  status?: string;
+  dayparting: CampaignDaypartingSchedule | null;
+  updatedAt?: string;
+}
+
+export interface UpdateCampaignDaypartingInput {
+  dayparting: CampaignDaypartingSchedule | null;
+}
+
+export interface DuplicateAdCampaignInput {
+  name?: string;
+}
+
+export interface DuplicateAdCampaignResponse {
+  success: boolean;
+  campaign: AdCampaignDto;
+  creativesCopied: number;
+}
+
+export interface AdCampaignAttributionInstall {
+  pixelHtml: string;
+  webhook: {
+    url: string;
+    method: "POST";
+    body: Record<string, unknown>;
+  };
+}
+
+export interface AdCampaignAttributionResponse {
+  success: boolean;
+  campaignId: string;
+  appId: string | null;
+  token: string;
+  pixelEndpoint: string;
+  webhookEndpoint: string;
+  install: AdCampaignAttributionInstall;
+}
+
+export type CampaignReportFormat = "json" | "csv";
+
+export interface CampaignPerformanceReportSummary {
+  spend: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  ctr: number;
+  cpc: number;
+  cpm: number;
+  conversionRate: number;
+  costPerConversion: number;
+  budgetUtilization: number;
+  conversionValue: number;
+}
+
+export interface CampaignPerformanceReport {
+  generatedAt: string;
+  campaign: {
+    id: string;
+    name: string;
+    platform: string;
+    objective: string;
+    status: string;
+    externalCampaignId: string | null;
+    appId: string | null;
+    budgetType: string;
+    budgetAmount: number;
+    budgetCurrency: string;
+    creditsAllocated: number;
+    creditsSpent: number;
+    startDate: string | null;
+    endDate: string | null;
+    createdAt: string;
+    updatedAt: string;
+  };
+  dateRange: { start: string; end: string } | null;
+  summary: CampaignPerformanceReportSummary;
+  provider: {
+    platform: string;
+    accountId: string;
+    externalAccountId: string;
+    externalCampaignId: string | null;
+  };
+}
+
+export interface GetCampaignPerformanceReportOptions {
+  format?: CampaignReportFormat;
+  startDate?: string;
+  endDate?: string;
+}
+
+export interface CampaignPerformanceReportResponse {
+  success: boolean;
+  report: CampaignPerformanceReport;
+}
+
+export interface CreateCampaignReportShareInput {
+  expiresAt?: string;
+  expiresInHours?: number;
+}
+
+export interface CampaignReportShareDto {
+  id: string;
+  campaignId: string;
+  token: string;
+  publicPath: string;
+  publicUrl: string;
+  expiresAt: string;
+}
+
+export interface CreateCampaignReportShareResponse {
+  success: boolean;
+  share: CampaignReportShareDto;
+}
+
+export interface RevokeCampaignReportShareResponse {
+  success: boolean;
+  share: {
+    id: string;
+    status: string;
+    revokedAt: string | null;
+  };
+}
+
 // ---- Influencer marketplace (#10687) ----
 
 export interface InfluencerProfileDto {
@@ -1446,4 +1606,6 @@ export interface RestoreAppBackupResponse {
   success: boolean;
   app: { id: string; name: string; slug: string };
   apiKey: string;
+  /** e.g. monetization was disabled on restore pending review (#11834). */
+  warnings?: string[];
 }

@@ -660,7 +660,8 @@ try {
     await p.close();
   }
 
-  // recording: mic active + interim transcript
+  // recording: mic active — NO interim transcript text; the pulsing chrome cue
+  // (grabber/pill bar) is the "audio is on" signal instead.
   {
     const p = await ctrl();
     attachConsole(p, sink);
@@ -672,8 +673,16 @@ try {
       "RECORDING: mic shows active (aria-pressed)",
     );
     assert(
-      (await p.getByText("tell me the plan for", { exact: false }).count()) > 0,
-      "LISTENING: interim transcript line is rendered",
+      (await p.getByText("tell me the plan for", { exact: false }).count()) === 0,
+      "LISTENING: interim transcript text is NOT rendered above the composer",
+    );
+    assert(
+      await p
+        .getByTestId("chat-sheet-grabber")
+        .locator("span")
+        .first()
+        .evaluate((el) => el.className.includes("animate-pulse")),
+      "LISTENING: the grabber bar pulses while the mic is hot",
     );
     await snap(p, "state-recording-listening");
     await p.close();
@@ -1968,6 +1977,38 @@ try {
       `MULTI-SEND: sending while responding appends another message (${before} → ${after})`,
     );
     await snap(p, "state-multi-send-while-responding");
+    await p.close();
+  }
+
+  // ONBOARDING (firstRunOpen): the sheet is pinned open + undismissable, but now
+  // sized to its CONTENT so the greeting + choice widget sit just above the
+  // composer (it grows from the bottom) instead of floating under a tall empty
+  // full-screen panel. Assert the sheet's TOP sits in the LOWER portion of the
+  // viewport (content-sized, not full-height), the detent still reports the
+  // pinned "full" contract, and the composer shows the onboarding copy.
+  {
+    const p = await ctrl();
+    attachConsole(p, sink);
+    await p.goto(`${url}?firstrun`);
+    await p.waitForSelector('[data-testid="chat-sheet"]');
+    await p.waitForTimeout(700);
+    const vh = await viewportH(p);
+    const top = await panelTop(p);
+    assert(
+      (await detent(p)) === "full",
+      "ONBOARDING: sheet reports the pinned-open 'full' detent contract",
+    );
+    assert(
+      top > vh * 0.4,
+      `ONBOARDING: sheet is content-sized at the BOTTOM, not a full-screen panel (top ${Math.round(top)} > ${Math.round(vh * 0.4)})`,
+    );
+    assert(
+      (await p
+        .getByTestId("chat-composer-textarea")
+        .getAttribute("placeholder")) === "Pick an option to continue",
+      "ONBOARDING: composer placeholder is 'Pick an option to continue'",
+    );
+    await snap(p, "state-onboarding-bottom-anchored");
     await p.close();
   }
 } finally {

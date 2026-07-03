@@ -1154,7 +1154,7 @@ describe("ContinuousChatOverlay", () => {
     expect(input.hasAttribute("readonly")).toBe(false);
   });
 
-  it("renders the live interim transcript while recording", () => {
+  it("uses the pulsing chrome cue instead of rendering interim transcript text", () => {
     render(
       <ContinuousChatOverlay
         controller={makeController({
@@ -1164,7 +1164,11 @@ describe("ContinuousChatOverlay", () => {
         })}
       />,
     );
-    expect(screen.getByText(/tell me about the coast/)).toBeTruthy();
+    expect(screen.queryByText(/tell me about the coast/)).toBeNull();
+    const grabberCue = screen
+      .getByTestId("chat-sheet-grabber")
+      .querySelector("span");
+    expect(grabberCue?.className).toContain("animate-pulse");
   });
 
   it("keeps the ambient layer non-blocking for controls behind it", () => {
@@ -2968,5 +2972,73 @@ describe("ContinuousChatOverlay — OS assistant / deep-link launch (#9148)", ()
       // the debounced persist of the now-empty draft).
       expect(readChatDraft("conv-a")).toBeNull();
     });
+  });
+});
+
+// The cold-boot banner (chat-boot-status) is gated by the parent on a 600ms
+// grace delay so a warm agent — where `phase` is momentarily "booting" on first
+// paint before the status fetch resolves — never flashes it; only a genuine
+// cold boot (still booting past the window) shows it. This exercises that
+// parent gate end-to-end, which the isolated BootStatusIndicator test can't.
+describe("ContinuousChatOverlay — cold-boot banner grace gate", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("does not flash the banner for a warm agent that leaves booting within the grace window", () => {
+    const { rerender } = render(
+      <ContinuousChatOverlay
+        controller={makeController({ phase: "booting" })}
+      />,
+    );
+    // Warm agent: booting only briefly, flips ready before 600ms elapses.
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    rerender(
+      <ContinuousChatOverlay
+        controller={makeController({ phase: "summoned" })}
+      />,
+    );
+    act(() => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(screen.queryByTestId("chat-boot-status")).toBeNull();
+  });
+
+  it("shows the banner once a cold boot outlasts the grace window", () => {
+    render(
+      <ContinuousChatOverlay
+        controller={makeController({ phase: "booting" })}
+      />,
+    );
+    expect(screen.queryByTestId("chat-boot-status")).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(screen.getByTestId("chat-boot-status").textContent).toContain(
+      "Waking",
+    );
+  });
+
+  it("hides the banner the moment the agent becomes ready", () => {
+    const { rerender } = render(
+      <ContinuousChatOverlay
+        controller={makeController({ phase: "booting" })}
+      />,
+    );
+    act(() => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(screen.getByTestId("chat-boot-status")).toBeTruthy();
+    rerender(
+      <ContinuousChatOverlay
+        controller={makeController({ phase: "summoned" })}
+      />,
+    );
+    expect(screen.queryByTestId("chat-boot-status")).toBeNull();
   });
 });

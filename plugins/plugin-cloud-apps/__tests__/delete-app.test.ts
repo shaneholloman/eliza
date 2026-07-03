@@ -214,6 +214,89 @@ describe("DELETE_APP", () => {
     expect((result?.data as { reason: string }).reason).toBe("no_key");
   });
 
+  it("confirm naming a DIFFERENT app refuses, deletes nothing, and clears the pending", async () => {
+    const deletes = trackDeletes();
+    const runtime = keyedRuntime();
+    const cb = captureCallback();
+    await deleteAppAction.handler(
+      runtime,
+      makeMessage("delete Acme Bot"),
+      undefined,
+      undefined,
+      cb.fn,
+    );
+    // Real planner path: params nested under options.parameters.
+    const result = await deleteAppAction.handler(
+      runtime,
+      makeMessage("actually — yes, delete Beta Dashboard"),
+      undefined,
+      { parameters: { confirm: true, appName: "Beta Dashboard" } },
+      cb.fn,
+    );
+
+    expect(deletes.count()).toBe(0);
+    expect(result?.success).toBe(false);
+    expect((result?.data as { reason: string }).reason).toBe(
+      "confirm_target_mismatch",
+    );
+    const reply = cb.calls.at(-1)?.text ?? "";
+    expect(reply).toContain("Beta Dashboard");
+    expect(reply).toContain("Acme Bot");
+
+    // The stale pending is cleared: a follow-up bare confirm cannot delete the
+    // frozen target either.
+    const followUp = await deleteAppAction.handler(
+      runtime,
+      makeMessage("confirm"),
+      undefined,
+      { confirm: true },
+      cb.fn,
+    );
+    expect(deletes.count()).toBe(0);
+    expect((followUp?.data as { reason: string }).reason).toBe(
+      "no_pending_confirmation",
+    );
+  });
+
+  it("confirm re-naming the SAME app (partial name / generic filler) still deletes", async () => {
+    const deletes = trackDeletes();
+    const runtime = keyedRuntime();
+    await deleteAppAction.handler(
+      runtime,
+      makeMessage("delete Acme Bot"),
+      undefined,
+      undefined,
+      captureCallback().fn,
+    );
+    const result = await deleteAppAction.handler(
+      runtime,
+      makeMessage("yes delete acme"),
+      undefined,
+      { parameters: { confirm: true, appName: "acme" } },
+      captureCallback().fn,
+    );
+    expect(deletes.count()).toBe(1);
+    expect((result?.data as { deleted: boolean }).deleted).toBe(true);
+
+    // Generic filler ("my app") is not a target switch either.
+    await deleteAppAction.handler(
+      runtime,
+      makeMessage("delete Acme Bot"),
+      undefined,
+      undefined,
+      captureCallback().fn,
+    );
+    const generic = await deleteAppAction.handler(
+      runtime,
+      makeMessage("yes delete my app"),
+      undefined,
+      { parameters: { confirm: true, appName: "my app" } },
+      captureCallback().fn,
+    );
+    expect(deletes.count()).toBe(2);
+    expect((generic?.data as { deleted: boolean }).deleted).toBe(true);
+  });
+
   it("surfaces a delete API error", async () => {
     setDeleteApp(() => Promise.reject(new Error("boom")));
     const runtime = keyedRuntime();

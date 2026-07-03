@@ -578,6 +578,7 @@ const corePackages = [
   "@elizaos/core",
   "@elizaos/shared",
   "@elizaos/shared/brand",
+  "@elizaos/shared/voice/aec",
   "@elizaos/shared-brand",
   "@elizaos/ui",
   "@elizaos/plugin-sql",
@@ -618,6 +619,21 @@ const dedupeTargets = {
     "shared",
     "src",
     "brand",
+    "index.ts",
+  ),
+  // Pin the AEC subpath to src as well (#11373). Without this the subpath
+  // resolves through the exports map to the compiled `dist/voice/aec/index.js`
+  // re-export barrel, which Bun.build's lazy CJS-interop lowering drops while
+  // keeping its consumers — on device the live-diarization status route then
+  // dies with `EchoReferenceBuffer is not defined` at session construction
+  // (invisible to the module-load smoke, which never constructs the session).
+  "@elizaos/shared/voice/aec": path.resolve(
+    repoRoot,
+    "packages",
+    "shared",
+    "src",
+    "voice",
+    "aec",
     "index.ts",
   ),
   "@elizaos/shared-brand": path.resolve(
@@ -1132,6 +1148,38 @@ const workspaceSrcFallbackPlugin = {
       const subpath = segments.slice(2).join("/");
       const pkgDir = resolvePackageDir(pkgName);
       if (!pkgDir) return undefined;
+
+      // Identity-pinned packages (see dedupePlugin) must resolve their
+      // SUBPATH imports from the same src tree as the bare-name import.
+      // Letting a subpath like `@elizaos/core/node` fall through to the
+      // compiled dist would bundle a SECOND copy of core (the flat
+      // dist/node bundle) next to the pinned src copy — the exact dual-
+      // identity failure the dedupePlugin exists to prevent ("two distinct
+      // AgentRuntime classes"). `@elizaos/core/connectors/account-manager`
+      // and friends already fall back to src because dist has no per-module
+      // files, but `dist/node` exists as a directory and slipped past the
+      // dist-presence check below.
+      if (Object.hasOwn(dedupeTargets, pkgName) && subpath) {
+        // `<pkg>/node` is an entry alias for the package barrel — pin it to
+        // the same dedupe target as the bare name.
+        if (subpath === "node") {
+          return { path: dedupeTargets[pkgName], namespace: "file" };
+        }
+        const pinnedSrcDir = path.dirname(dedupeTargets[pkgName]);
+        const cleanedPinned = subpath.replace(/\.js$/, "");
+        for (const candidate of [
+          `${cleanedPinned}.ts`,
+          `${cleanedPinned}.tsx`,
+          `${cleanedPinned}/index.ts`,
+          `${cleanedPinned}/index.tsx`,
+        ]) {
+          const full = path.join(pinnedSrcDir, candidate);
+          if (existsSync(full)) {
+            return { path: full, namespace: "file" };
+          }
+        }
+        // No src match — fall through to the generic handling below.
+      }
 
       // Skip if dist exists and contains the requested entry — let the
       // default resolver handle it normally. Some workspace packages build a

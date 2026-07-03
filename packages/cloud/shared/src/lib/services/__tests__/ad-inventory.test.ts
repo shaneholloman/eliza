@@ -25,6 +25,7 @@ process.env.MOCK_REDIS = "1";
 import { pushSchema } from "drizzle-kit/api";
 import { eq } from "drizzle-orm";
 import { closeDatabaseConnectionsForTests, dbWrite } from "../../../db/client";
+import { adSlotsRepository } from "../../../db/repositories/ad-slots";
 import { adAccounts } from "../../../db/schemas/ad-accounts";
 import { adCampaigns } from "../../../db/schemas/ad-campaigns";
 import { adCreatives } from "../../../db/schemas/ad-creatives";
@@ -83,7 +84,16 @@ async function seedPublisher() {
 }
 
 async function seedAdvertiserCampaign(
-  opts: { status?: string; allocated?: string; spent?: string } = {},
+  opts: {
+    status?: string;
+    accountStatus?: "active" | "pending" | "suspended" | "disconnected";
+    allocated?: string;
+    spent?: string;
+    dayparting?: {
+      timezone: string;
+      windows: Array<{ daysOfWeek: number[]; startTime: string; endTime: string }>;
+    };
+  } = {},
 ) {
   const [org] = await dbWrite
     .insert(organizations)
@@ -101,6 +111,7 @@ async function seedAdvertiserCampaign(
       platform: "meta",
       external_account_id: uniq("acct"),
       account_name: "Adv Account",
+      status: opts.accountStatus ?? "active",
     })
     .returning();
   const [campaign] = await dbWrite
@@ -115,6 +126,7 @@ async function seedAdvertiserCampaign(
       budget_type: "daily",
       credits_allocated: opts.allocated ?? "100.00",
       credits_spent: opts.spent ?? "0.00",
+      ...(opts.dayparting ? { metadata: { dayparting: opts.dayparting } } : {}),
     })
     .returning();
   const [creative] = await dbWrite
@@ -128,7 +140,12 @@ async function seedAdvertiserCampaign(
       destination_url: "https://advertiser.example.com",
     })
     .returning();
-  return { orgId: org.id, campaignId: campaign.id, creativeId: creative.id };
+  return {
+    orgId: org.id,
+    accountId: account.id,
+    campaignId: campaign.id,
+    creativeId: creative.id,
+  };
 }
 
 async function creatorBalance(userId: string): Promise<number> {
@@ -244,6 +261,61 @@ describe("Ad Inventory / SSP (#10687)", () => {
     expect(await creatorBalance(pub.userId)).toBe(0);
   });
 
+  test("no eligible ad when the campaign account is suspended", async () => {
+    if (!pgliteReady) return;
+    const pub = await seedPublisher();
+    await seedAdvertiserCampaign({ accountStatus: "suspended" });
+    const slot = await service.createSlot({
+      appId: pub.appId,
+      organizationId: pub.orgId,
+      name: "S",
+      format: "banner",
+      floorCpm: 20,
+    });
+
+    expect(await service.serveAd(slot)).toBeNull();
+    expect(await creatorBalance(pub.userId)).toBe(0);
+  });
+
+  test("serve debit gate re-checks account status after candidate selection", async () => {
+    if (!pgliteReady) return;
+    const pub = await seedPublisher();
+    const adv = await seedAdvertiserCampaign();
+    const slot = await service.createSlot({
+      appId: pub.appId,
+      organizationId: pub.orgId,
+      name: "Race",
+      format: "banner",
+      floorCpm: 20,
+    });
+
+    await dbWrite
+      .update(adAccounts)
+      .set({ status: "suspended" })
+      .where(eq(adAccounts.id, adv.accountId));
+
+    const event = await adSlotsRepository.recordServe({
+      slotId: slot.id,
+      campaignId: adv.campaignId,
+      creativeId: adv.creativeId,
+      impressionId: uniq("impression"),
+      price: 0.02,
+      publisherRevenue: 0.014,
+    });
+
+    expect(event).toBeNull();
+    const campaign = await dbWrite.query.adCampaigns.findFirst({
+      where: eq(adCampaigns.id, adv.campaignId),
+    });
+    expect(Number(campaign?.credits_spent)).toBe(0);
+    expect(campaign?.total_impressions).toBe(0);
+    const events = await dbWrite
+      .select()
+      .from(adSlotEvents)
+      .where(eq(adSlotEvents.slot_id, slot.id));
+    expect(events).toHaveLength(0);
+  });
+
   test("serve does not overspend a campaign whose remaining budget is below the impression price", async () => {
     if (!pgliteReady) return;
     const pub = await seedPublisher();
@@ -286,6 +358,7 @@ describe("Ad Inventory / SSP (#10687)", () => {
         platform: "meta",
         external_account_id: uniq("acct"),
         account_name: "Self",
+        status: "active",
       })
       .returning();
     await dbWrite.insert(adCampaigns).values({
@@ -306,6 +379,72 @@ describe("Ad Inventory / SSP (#10687)", () => {
       floorCpm: 20,
     });
     expect(await service.serveAd(slot)).toBeNull();
+  });
+
+  test("dayparting gates the serve path: outside its window a campaign is neither served nor billed (#11599)", async () => {
+    if (!pgliteReady) return;
+    const pub = await seedPublisher();
+    // A window that can never contain "now": keyed to a UTC weekday 3 days away.
+    const offWindowDay = (new Date().getUTCDay() + 3) % 7;
+    const adv = await seedAdvertiserCampaign({
+      dayparting: {
+        timezone: "UTC",
+        windows: [{ daysOfWeek: [offWindowDay], startTime: "00:00", endTime: "24:00" }],
+      },
+    });
+    const slot = await service.createSlot({
+      appId: pub.appId,
+      organizationId: pub.orgId,
+      name: "S",
+      format: "banner",
+      floorCpm: 20,
+    });
+
+    expect(await service.serveAd(slot)).toBeNull();
+
+    const campaign = await dbWrite.query.adCampaigns.findFirst({
+      where: eq(adCampaigns.id, adv.campaignId),
+    });
+    expect(Number(campaign?.credits_spent)).toBe(0);
+    expect(campaign?.total_impressions).toBe(0);
+    expect(await creatorBalance(pub.userId)).toBe(0);
+  });
+
+  test("dayparting: an in-window campaign serves while a richer out-of-window competitor is skipped", async () => {
+    if (!pgliteReady) return;
+    const pub = await seedPublisher();
+    const offWindowDay = (new Date().getUTCDay() + 3) % 7;
+    // Bigger budget — would win the budget-ranked selection without the gate.
+    const blocked = await seedAdvertiserCampaign({
+      allocated: "500.00",
+      dayparting: {
+        timezone: "UTC",
+        windows: [{ daysOfWeek: [offWindowDay], startTime: "00:00", endTime: "24:00" }],
+      },
+    });
+    const allowed = await seedAdvertiserCampaign({
+      dayparting: {
+        timezone: "UTC",
+        windows: [{ daysOfWeek: [0, 1, 2, 3, 4, 5, 6], startTime: "00:00", endTime: "24:00" }],
+      },
+    });
+    const slot = await service.createSlot({
+      appId: pub.appId,
+      organizationId: pub.orgId,
+      name: "S",
+      format: "banner",
+      floorCpm: 20,
+    });
+
+    const served = await service.serveAd(slot);
+    expect(served).not.toBeNull();
+    expect(served?.campaignId).toBe(allowed.campaignId);
+
+    const blockedRow = await dbWrite.query.adCampaigns.findFirst({
+      where: eq(adCampaigns.id, blocked.campaignId),
+    });
+    expect(Number(blockedRow?.credits_spent)).toBe(0);
+    expect(blockedRow?.total_impressions).toBe(0);
   });
 
   test("clicks are recorded once (dedup on impression id)", async () => {

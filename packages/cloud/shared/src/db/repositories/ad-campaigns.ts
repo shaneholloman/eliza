@@ -1,6 +1,6 @@
-import { and, count, desc, eq, sql, sum } from "drizzle-orm";
+import { and, count, desc, eq, ne, sql, sum } from "drizzle-orm";
 import { db } from "../client";
-import { type AdPlatform } from "../schemas/ad-accounts";
+import { type AdPlatform, adAccounts } from "../schemas/ad-accounts";
 import {
   type AdCampaign,
   adCampaigns,
@@ -11,6 +11,12 @@ import {
 } from "../schemas/ad-campaigns";
 
 export type { AdCampaign, BudgetType, CampaignObjective, CampaignStatus, NewAdCampaign };
+
+export type AccountSpendCapAllocationResult =
+  | { status: "created"; campaign: AdCampaign }
+  | { status: "updated"; campaign: AdCampaign }
+  | { status: "cap_exceeded"; allocated: number; cap: number }
+  | { status: "conflict" };
 
 /**
  * Repository for ad campaign database operations.
@@ -77,6 +83,44 @@ export class AdCampaignsRepository {
     return campaign;
   }
 
+  async createWithAccountSpendCapCheck(
+    data: NewAdCampaign,
+    allocationCredits: number,
+  ): Promise<AccountSpendCapAllocationResult> {
+    return await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext(${`ad_account_spend_cap:${data.ad_account_id}`}))`,
+      );
+
+      const [account] = await tx
+        .select({ spendCapCredits: adAccounts.spend_cap_credits })
+        .from(adAccounts)
+        .where(
+          and(
+            eq(adAccounts.id, data.ad_account_id as string),
+            eq(adAccounts.organization_id, data.organization_id as string),
+          ),
+        )
+        .limit(1);
+      if (!account) return { status: "conflict" };
+
+      if (account.spendCapCredits) {
+        const [result] = await tx
+          .select({ total: sum(adCampaigns.credits_allocated) })
+          .from(adCampaigns)
+          .where(eq(adCampaigns.ad_account_id, data.ad_account_id as string));
+        const allocated = Number(result?.total ?? 0) + allocationCredits;
+        const cap = Number(account.spendCapCredits);
+        if (allocated > cap + 1e-9) {
+          return { status: "cap_exceeded", allocated, cap };
+        }
+      }
+
+      const [campaign] = await tx.insert(adCampaigns).values(data).returning();
+      return { status: "created", campaign };
+    });
+  }
+
   async update(id: string, data: Partial<NewAdCampaign>): Promise<AdCampaign | undefined> {
     const [updated] = await db
       .update(adCampaigns)
@@ -119,6 +163,21 @@ export class AdCampaignsRepository {
     return updated;
   }
 
+  async sumCreditsAllocatedByAdAccount(
+    adAccountId: string,
+    options?: { excludeCampaignId?: string },
+  ): Promise<number> {
+    const conditions = [eq(adCampaigns.ad_account_id, adAccountId)];
+    if (options?.excludeCampaignId) {
+      conditions.push(ne(adCampaigns.id, options.excludeCampaignId));
+    }
+    const [result] = await db
+      .select({ total: sum(adCampaigns.credits_allocated) })
+      .from(adCampaigns)
+      .where(and(...conditions));
+    return Number(result?.total ?? 0);
+  }
+
   async delete(id: string): Promise<void> {
     await db.delete(adCampaigns).where(eq(adCampaigns.id, id));
   }
@@ -148,6 +207,54 @@ export class AdCampaignsRepository {
       )
       .returning();
     return updated;
+  }
+
+  async claimAllocationChangeWithAccountSpendCapCheck(
+    id: string,
+    organizationId: string,
+    adAccountId: string,
+    expectedAllocated: string,
+    newAllocatedCredits: number,
+    data: Partial<NewAdCampaign>,
+  ): Promise<AccountSpendCapAllocationResult> {
+    return await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext(${`ad_account_spend_cap:${adAccountId}`}))`,
+      );
+
+      const [account] = await tx
+        .select({ spendCapCredits: adAccounts.spend_cap_credits })
+        .from(adAccounts)
+        .where(and(eq(adAccounts.id, adAccountId), eq(adAccounts.organization_id, organizationId)))
+        .limit(1);
+      if (!account) return { status: "conflict" };
+
+      if (account.spendCapCredits) {
+        const [result] = await tx
+          .select({ total: sum(adCampaigns.credits_allocated) })
+          .from(adCampaigns)
+          .where(and(eq(adCampaigns.ad_account_id, adAccountId), ne(adCampaigns.id, id)));
+        const allocated = Number(result?.total ?? 0) + newAllocatedCredits;
+        const cap = Number(account.spendCapCredits);
+        if (allocated > cap + 1e-9) {
+          return { status: "cap_exceeded", allocated, cap };
+        }
+      }
+
+      const [updated] = await tx
+        .update(adCampaigns)
+        .set({ ...data, updated_at: new Date() })
+        .where(
+          and(
+            eq(adCampaigns.id, id),
+            eq(adCampaigns.organization_id, organizationId),
+            eq(adCampaigns.credits_allocated, expectedAllocated),
+          ),
+        )
+        .returning();
+      if (!updated) return { status: "conflict" };
+      return { status: "updated", campaign: updated };
+    });
   }
 
   /**

@@ -57,6 +57,7 @@ const PGLITE_TIMEOUT = 60_000;
 const FRESH_UUID = "00000000-0000-4000-8000-00000000ffff";
 
 let appsService: typeof import("../../../lib/services/apps").appsService;
+let appAnalyticsService: typeof import("../../../lib/services/app-analytics").appAnalyticsService;
 let pgliteReady = true;
 
 // Monotonic counter keeps seeded slugs/identities unique across tests without
@@ -102,6 +103,7 @@ beforeAll(async () => {
   }
   try {
     ({ appsService } = await import("../../../lib/services/apps"));
+    ({ appAnalyticsService } = await import("../../../lib/services/app-analytics"));
 
     // Generate DDL from the real schema objects and apply it to the same
     // PGlite connection the repository queries through (`dbWrite`). Enums must
@@ -738,5 +740,82 @@ describe("AppsService.create organization cap", () => {
         process.env.ELIZA_CLOUD_MAX_APPS_PER_ORG = previousLimit;
       }
     }
+  });
+});
+
+describe("AppAnalyticsService session analytics from app_requests", () => {
+  test("groups real pageview rows into sessions and ordered funnel steps", async () => {
+    if (!pgliteReady) return;
+    const { organizationId, userId } = await seedOrgAndUser();
+    const app = await createApp({
+      name: "Session Analytics App",
+      organization_id: organizationId,
+      created_by_user_id: userId,
+    });
+
+    await appsRepository.logRequest({
+      app_id: app.id,
+      request_type: "pageview",
+      source: "hosted_frontend",
+      ip_address: "203.0.113.10",
+      user_agent: "test-agent",
+      input_tokens: 0,
+      output_tokens: 0,
+      credits_used: "0.00",
+      status: "success",
+      metadata: {
+        visitor_id: "visitor-real-a",
+        session_id: "session-real-a",
+        page_url: "/",
+      },
+      created_at: new Date("2026-07-02T12:00:00.000Z"),
+    });
+    await appsRepository.logRequest({
+      app_id: app.id,
+      request_type: "pageview",
+      source: "hosted_frontend",
+      ip_address: "203.0.113.10",
+      user_agent: "test-agent",
+      input_tokens: 0,
+      output_tokens: 0,
+      credits_used: "0.00",
+      status: "success",
+      metadata: {
+        visitor_id: "visitor-real-a",
+        session_id: "session-real-a",
+        page_url: "/checkout",
+      },
+      created_at: new Date("2026-07-02T12:03:00.000Z"),
+    });
+    await appsRepository.logRequest({
+      app_id: app.id,
+      request_type: "pageview",
+      source: "hosted_frontend",
+      ip_address: "203.0.113.11",
+      user_agent: "test-agent",
+      input_tokens: 0,
+      output_tokens: 0,
+      credits_used: "0.00",
+      status: "success",
+      metadata: {
+        visitor_id: "visitor-real-b",
+        session_id: "session-real-b",
+        page_url: "/",
+      },
+      created_at: new Date("2026-07-02T12:01:00.000Z"),
+    });
+
+    const analytics = await appAnalyticsService.getSessionAnalytics(app.id, {
+      funnelSteps: ["/", "/checkout"],
+    });
+
+    expect(analytics.summary.totalSessions).toBe(2);
+    expect(analytics.summary.totalPageViews).toBe(3);
+    expect(analytics.sessions.map((session) => session.sessionId).sort()).toEqual([
+      "session-real-a",
+      "session-real-b",
+    ]);
+    expect(analytics.funnel.steps.map((step) => step.sessions)).toEqual([2, 1]);
+    expect(analytics.funnel.steps[1]?.conversionFromStartPercent).toBe(50);
   });
 });

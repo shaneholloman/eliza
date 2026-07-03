@@ -12,7 +12,8 @@
 
 import { and, asc, desc, eq, gt, gte, isNull, sql } from "drizzle-orm";
 import { dbRead, dbWrite } from "../helpers";
-import { adCampaigns } from "../schemas/ad-campaigns";
+import { adAccounts } from "../schemas/ad-accounts";
+import { type AdCampaign, adCampaigns } from "../schemas/ad-campaigns";
 import { adCreatives } from "../schemas/ad-creatives";
 import {
   type AdSlot,
@@ -32,6 +33,8 @@ export interface EligibleAd {
   callToAction: string | null;
   destinationUrl: string | null;
   media: unknown;
+  /** Campaign delivery windows (#11599); null = deliver at any time. */
+  dayparting: NonNullable<AdCampaign["metadata"]["dayparting"]> | null;
 }
 
 /** An impression whose publisher earnings credit has not yet settled. */
@@ -102,13 +105,15 @@ export class AdSlotsRepository {
   }
 
   /**
-   * Pick an eligible active creative for a slot format: an active campaign with
-   * remaining budget (credits_allocated > credits_spent) that is NOT owned by
-   * the publisher's own org (no self-serve), joined to one of its active
-   * creatives. Highest remaining budget wins (a simple first-price proxy).
+   * Pick eligible active creatives for a slot: active campaigns with remaining
+   * budget (credits_allocated > credits_spent) that are NOT owned by the
+   * publisher's own org (no self-serve), joined to their active creatives.
+   * Highest remaining budget first (a simple first-price proxy). Returns a
+   * bounded candidate list so the service can apply time-of-day (dayparting)
+   * gating (#11599) before committing to one.
    */
-  async findEligibleAd(input: { publisherOrgId: string }): Promise<EligibleAd | undefined> {
-    const [row] = await dbRead
+  async findEligibleAds(input: { publisherOrgId: string; limit: number }): Promise<EligibleAd[]> {
+    const rows = await dbRead
       .select({
         campaignId: adCampaigns.id,
         creativeId: adCreatives.id,
@@ -117,20 +122,26 @@ export class AdSlotsRepository {
         callToAction: adCreatives.call_to_action,
         destinationUrl: adCreatives.destination_url,
         media: adCreatives.media,
+        metadata: adCampaigns.metadata,
       })
       .from(adCampaigns)
+      .innerJoin(adAccounts, eq(adAccounts.id, adCampaigns.ad_account_id))
       .innerJoin(adCreatives, eq(adCreatives.campaign_id, adCampaigns.id))
       .where(
         and(
           eq(adCampaigns.status, "active"),
+          eq(adAccounts.status, "active"),
           eq(adCreatives.status, "active"),
           sql`${adCampaigns.organization_id} <> ${input.publisherOrgId}`,
           gt(sql`${adCampaigns.credits_allocated} - ${adCampaigns.credits_spent}`, sql`0`),
         ),
       )
       .orderBy(desc(sql`${adCampaigns.credits_allocated} - ${adCampaigns.credits_spent}`))
-      .limit(1);
-    return row;
+      .limit(input.limit);
+    return rows.map(({ metadata, ...row }) => ({
+      ...row,
+      dayparting: metadata.dayparting ?? null,
+    }));
   }
 
   /**
@@ -170,6 +181,19 @@ export class AdSlotsRepository {
           .returning();
         if (!event) return null; // replay — already served
 
+        // Serialize account-level spend-cap checks across all campaigns that
+        // belong to the same ad account. The conditional campaign update below
+        // still owns the campaign budget gate; this lock closes the multi-row
+        // account-cap write-skew window.
+        await tx.execute(sql`
+          SELECT cap_account.id
+          FROM ${adAccounts} cap_account
+          INNER JOIN ${adCampaigns} cap_campaign
+            ON cap_campaign.ad_account_id = cap_account.id
+          WHERE cap_campaign.id = ${input.campaignId}
+          FOR UPDATE
+        `);
+
         // Debit the advertiser's pre-funded campaign budget atomically. The
         // earlier eligibility query is only a candidate picker; this conditional
         // update is the money gate that prevents concurrent serves from
@@ -184,10 +208,29 @@ export class AdSlotsRepository {
           .where(
             and(
               eq(adCampaigns.id, input.campaignId),
+              eq(adCampaigns.status, "active"),
+              sql`exists (
+                select 1 from ${adAccounts}
+                where ${adAccounts.id} = ${adCampaigns.ad_account_id}
+                  and ${adAccounts.status} = 'active'
+              )`,
               gte(
                 sql`${adCampaigns.credits_allocated} - ${adCampaigns.credits_spent}`,
                 sql`${price}`,
               ),
+              sql`(${adCampaigns.spend_cap_credits} is null or ${adCampaigns.credits_spent} + ${price}::numeric <= ${adCampaigns.spend_cap_credits})`,
+              sql`exists (
+                select 1 from ${adAccounts} cap_account
+                where cap_account.id = ${adCampaigns.ad_account_id}
+                  and (
+                    cap_account.spend_cap_credits is null
+                    or (
+                      select coalesce(sum(account_campaigns.credits_spent), 0)
+                      from ${adCampaigns} account_campaigns
+                      where account_campaigns.ad_account_id = cap_account.id
+                    ) + ${price}::numeric <= cap_account.spend_cap_credits
+                  )
+              )`,
             ),
           )
           .returning({ id: adCampaigns.id });
