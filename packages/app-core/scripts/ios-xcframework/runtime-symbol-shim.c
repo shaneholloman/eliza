@@ -866,6 +866,48 @@ void eliza_llama_log_silence(void) {
     llama_log_set(NULL, NULL);
 }
 
+/*
+ * GGML/llama log file sink (issue #11612).
+ *
+ * The embedded llama engine runs inside the Bun engine host, whose stdio iOS
+ * does not forward to devicectl/idevicesyslog — so the GGML_LOG_ERROR lines
+ * that name a failing Metal kernel (ggml_metal_library_compile_pipeline) are
+ * unobservable on device. This sink routes the shared ggml/llama logger
+ * (llama_log_set forwards to ggml_log_set) to an append-only file under the
+ * app's writable state dir, pullable with `xcrun devicectl device copy from`.
+ */
+static FILE *          eliza_llama_log_sink      = NULL;
+static pthread_mutex_t eliza_llama_log_sink_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void eliza_llama_log_sink_callback(enum ggml_log_level level, const char * text, void * user_data) {
+    (void) level;
+    (void) user_data;
+    if (text == NULL) return;
+    pthread_mutex_lock(&eliza_llama_log_sink_lock);
+    if (eliza_llama_log_sink != NULL) {
+        fputs(text, eliza_llama_log_sink);
+        /* the failing-kernel line must be on disk even when the process dies
+         * right after (jetsam, abort), so flush every line */
+        fflush(eliza_llama_log_sink);
+    }
+    pthread_mutex_unlock(&eliza_llama_log_sink_lock);
+}
+
+bool eliza_llama_log_to_file(const char * path) {
+    if (path == NULL || path[0] == '\0') return false;
+    FILE * f = fopen(path, "a");
+    if (f == NULL) return false;
+    setvbuf(f, NULL, _IOLBF, 0);
+    pthread_mutex_lock(&eliza_llama_log_sink_lock);
+    if (eliza_llama_log_sink != NULL) {
+        fclose(eliza_llama_log_sink);
+    }
+    eliza_llama_log_sink = f;
+    pthread_mutex_unlock(&eliza_llama_log_sink_lock);
+    llama_log_set(eliza_llama_log_sink_callback, NULL);
+    return true;
+}
+
 bool eliza_llama_has_metal(void) {
     return llama_supports_gpu_offload();
 }
