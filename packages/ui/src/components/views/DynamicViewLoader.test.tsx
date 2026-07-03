@@ -664,6 +664,53 @@ describe("DynamicViewLoader", () => {
     expect(screen.getByText("View ID: broken.view")).toBeTruthy();
   });
 
+  it("shows the recoverable card (never a blank screen) when the bundle import rejects, and Retry re-imports", async () => {
+    // Mode 1: a rejected dynamic import (bundle 404 / network / fetch error)
+    // must land on the SAME "Failed to load view" card with a working Retry —
+    // not a blank/white render.
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const bundleUrl = "https://capability.example.test/assets/network-fail.js";
+    let attempt = 0;
+    window.__ELIZA_DYNAMIC_VIEW_BUNDLE_IMPORT__ = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error("Failed to fetch dynamically imported module");
+      }
+      return {
+        default: function RecoveredPanel() {
+          return <div>Network recovered v{attempt}</div>;
+        },
+      };
+    });
+
+    const { container } = render(
+      <DynamicViewLoader bundleUrl={bundleUrl} viewId="network.view" />,
+    );
+
+    const retry = await screen.findByRole("button", { name: /retry/i });
+    // The actual card is in the DOM (not an empty container).
+    expect(screen.getByText("Failed to load view")).toBeTruthy();
+    expect(screen.getByText("View ID: network.view")).toBeTruthy();
+    expect(
+      screen.getByText("Failed to fetch dynamically imported module"),
+    ).toBeTruthy();
+    expect(container.textContent).not.toBe("");
+
+    await act(async () => {
+      retry.click();
+    });
+
+    // Retry actually re-attempts the import — the fixed bundle mounts.
+    await screen.findByText("Network recovered v2");
+    expect(screen.queryByText("Failed to load view")).toBeNull();
+    expect(window.__ELIZA_DYNAMIC_VIEW_BUNDLE_IMPORT__).toHaveBeenCalledTimes(
+      2,
+    );
+    consoleError.mockRestore();
+  });
+
   it("recovers a view that crashes at render when Retry re-imports a fixed bundle", async () => {
     // A render crash must not latch the ErrorBoundary forever: clicking Retry
     // evicts the cached module, bumps reloadKey (which re-keys the boundary so

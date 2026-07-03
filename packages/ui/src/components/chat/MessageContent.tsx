@@ -32,6 +32,7 @@ import { defaultRegistry } from "../config-ui/config-renderer.helpers";
 import { UiRenderer } from "../config-ui/ui-renderer";
 import { Button } from "../ui/button";
 import { CodeBlock } from "../ui/code-block";
+import { Input } from "../ui/input";
 import { AccountConnectBlock } from "./AccountConnectBlock";
 import { MessageAttachments } from "./MessageAttachments";
 import {
@@ -698,6 +699,7 @@ export function SensitiveRequestBlock({
         <form className="space-y-3" onSubmit={handleSubmit}>
           {fields.map((field) => {
             const label = field.label ?? field.name;
+            const inputId = `sensitive-request-${field.name.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
             const isUpload = field.input === "image" || field.input === "file";
             if (isUpload) {
               const accept =
@@ -708,12 +710,17 @@ export function SensitiveRequestBlock({
                     : undefined;
               const hasValue = Boolean(values[field.name]);
               return (
-                <label key={field.name} className="block text-xs space-y-1">
+                <label
+                  key={field.name}
+                  htmlFor={inputId}
+                  className="block text-xs space-y-1"
+                >
                   <span className="font-medium">{label}</span>
-                  <input
+                  <Input
+                    id={inputId}
                     aria-label={label}
                     data-testid={`sensitive-request-file-${field.name}`}
-                    className="w-full border border-border bg-bg px-2 py-1.5 text-sm"
+                    className="border-border bg-bg px-2 py-1.5 text-sm"
                     type="file"
                     accept={accept}
                     // Mobile: prefer the rear camera for image capture (2FA QR/seed).
@@ -757,11 +764,16 @@ export function SensitiveRequestBlock({
               );
             }
             return (
-              <label key={field.name} className="block text-xs space-y-1">
+              <label
+                key={field.name}
+                htmlFor={inputId}
+                className="block text-xs space-y-1"
+              >
                 <span className="font-medium">{label}</span>
-                <input
+                <Input
+                  id={inputId}
                   aria-label={label}
-                  className="w-full border border-border bg-bg px-2 py-1.5 text-sm"
+                  className="border-border bg-bg px-2 py-1.5 text-sm"
                   type={field.input === "secret" ? "password" : "text"}
                   value={values[field.name] ?? ""}
                   onChange={(event) => {
@@ -1209,8 +1221,8 @@ export function MessageContent({
         <MessageAttachments attachments={message.attachments} />
       ) : null}
       {analysisMode && message.actionName && (
-        <div className="my-2 border border-purple-500/20 rounded-sm bg-purple-500/5 overflow-hidden">
-          <div className="bg-purple-500/10 px-3 py-1 text-xs font-mono font-bold text-purple-500 uppercase tracking-wider">
+        <div className="my-2 overflow-hidden rounded-sm border border-accent/20 bg-accent/5">
+          <div className="bg-accent/10 px-3 py-1 text-xs font-mono font-bold text-accent uppercase tracking-wider">
             ACTION TAKEN
           </div>
           <div className="px-3 py-2 text-xs font-mono text-muted space-y-1">
@@ -1221,8 +1233,8 @@ export function MessageContent({
       {analysisMode &&
         message.actionCallbackHistory &&
         message.actionCallbackHistory.length > 0 && (
-          <div className="my-2 border border-blue-500/20 rounded-sm bg-blue-500/5 overflow-hidden">
-            <div className="bg-blue-500/10 px-3 py-1 text-xs font-mono font-bold text-blue-500 uppercase tracking-wider">
+          <div className="my-2 overflow-hidden rounded-sm border border-border/60 bg-surface/70">
+            <div className="bg-bg-accent px-3 py-1 text-xs font-mono font-bold text-muted-strong uppercase tracking-wider">
               ACTION CALLBACK HISTORY
             </div>
             <div className="px-3 py-2 text-xs font-mono text-muted space-y-1">
@@ -1234,7 +1246,7 @@ export function MessageContent({
                   return (
                     <div
                       key={`${message.id}:action-callback:${n}:${log}`}
-                      className="break-words border-b border-blue-500/10 pb-1 last:border-0 last:pb-0"
+                      className="break-words border-b border-border/40 pb-1 last:border-0 last:pb-0"
                     >
                       {log}
                     </div>

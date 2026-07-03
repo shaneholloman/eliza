@@ -432,11 +432,9 @@ export function CharacterHubView({
         section: "experience",
         title: "Experience",
         body: recentExperience ? (
-          <span className="line-clamp-2 text-xs italic text-muted">
-            {recentExperience.learning ||
-              recentExperience.result ||
-              recentExperience.context ||
-              recentExperience.type}
+          <span className="text-xs font-medium text-muted">
+            {experienceRecords.length} experience
+            {experienceRecords.length === 1 ? "" : "s"}
           </span>
         ) : (
           <EmptyCta>Teach Eliza in chat</EmptyCta>
@@ -794,15 +792,16 @@ export function CharacterHubView({
         <WidgetHost slot="character" className="mb-4" />
         {isSubPage ? (
           <div className="mb-5 flex items-center gap-2">
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => navigateToSection("overview")}
-              className="inline-flex items-center gap-1 text-sm text-muted transition-colors hover:text-txt"
+              className="h-auto gap-1 px-0 py-0 text-sm font-normal text-muted transition-colors hover:bg-transparent hover:text-txt"
               aria-label="Back to Character hub"
             >
               <ChevronLeft className="h-4 w-4" aria-hidden />
               Character
-            </button>
+            </Button>
             <span className="text-lg font-semibold text-txt">
               {activeSectionLabel}
             </span>

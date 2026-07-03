@@ -13,8 +13,10 @@ import {
   Pencil,
   RotateCcw,
   SendHorizontal,
+  Sparkles,
   Square,
   Volume2,
+  X,
 } from "lucide-react";
 import {
   AnimatePresence,
@@ -63,6 +65,7 @@ import {
   useChatComposerDraftPersistence,
   writeChatDraft,
 } from "../../state/ChatComposerContext.hooks";
+import { useConversationMessages } from "../../state/ConversationMessagesContext.hooks";
 import { goHome, goLauncher } from "../../state/shell-surface-store";
 import { useViewChatBinding } from "../../state/view-chat-binding";
 import { copyTextToClipboard } from "../../utils/clipboard";
@@ -77,8 +80,14 @@ import {
 import { InlineWidgetText } from "../chat/InlineWidgetText";
 import { MessageAttachments } from "../chat/MessageAttachments";
 import { SensitiveRequestBlock } from "../chat/MessageContent";
+import { findChoiceRegions } from "../chat/message-choice-parser";
+import { findFollowupsRegions } from "../chat/message-followups-parser";
+import { findFormRegions } from "../chat/message-form-parser";
 import { ThinkingBlock } from "../chat/ThinkingBlock";
 import { withTranscriptMarker } from "../chat/TranscriptViewerOverlay";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { Textarea } from "../ui/textarea";
 import {
   measureSafeAreaInsetTop,
   resolveChatPanelLayout,
@@ -91,6 +100,12 @@ import { deriveChannelTopics, groupMessagesByTopic } from "./topic-grouping";
 import { type PullGestureBinding, usePullGesture } from "./use-pull-gesture";
 import { usePromptSuggestions } from "./usePromptSuggestions";
 import type { ConversationNav, ShellController } from "./useShellController";
+
+/**
+ * Server source tag for decider-pushed proactive suggestions (#8792) — mirrors
+ * PROACTIVE_INTERACTION_SOURCE in the agent's proactive-interaction decider.
+ */
+const PROACTIVE_SUGGESTION_SOURCE = "proactive-interaction";
 
 /** No-op slash controller so the overlay renders without a provider (stories). */
 const EMPTY_SLASH_CONTROLLER: SlashCommandController = {
@@ -310,8 +325,9 @@ function SoftButton({
   testId?: string;
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="icon-lg"
       data-testid={testId}
       aria-label={label}
       aria-pressed={active}
@@ -329,7 +345,7 @@ function SoftButton({
         // Hover and active express through icon color alone — neutral resting →
         // neutral hover, accent for active — never a background/border, never
         // blue.
-        "grid h-11 w-11 shrink-0 place-items-center bg-transparent transition-colors",
+        "grid h-11 w-11 shrink-0 place-items-center bg-transparent p-0 transition-colors hover:bg-transparent",
         active ? "text-accent" : "text-white/75 hover:text-white",
         disabled && "opacity-40",
       )}
@@ -339,7 +355,7 @@ function SoftButton({
       ) : glyph ? (
         <Glyph d={glyph} className="h-[30px] w-[30px]" />
       ) : null}
-    </button>
+    </Button>
   );
 }
 
@@ -362,8 +378,9 @@ function HeaderButton({
   testId?: string;
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="icon-sm"
       data-testid={testId}
       aria-label={label}
       aria-pressed={active}
@@ -374,7 +391,7 @@ function HeaderButton({
         // Icon-only, same borderless language as SoftButton: no capsule, no
         // background — the glyph alone carries the control. Neutral resting →
         // neutral hover; active expresses as the accent color, never a fill.
-        "grid h-9 w-9 shrink-0 place-items-center bg-transparent transition-colors",
+        "grid h-9 w-9 shrink-0 place-items-center bg-transparent p-0 transition-colors hover:bg-transparent",
         disabled
           ? // On the view it targets: shown but inert + dimmed (we disable, not hide).
             "cursor-default text-white/35"
@@ -384,7 +401,7 @@ function HeaderButton({
       )}
     >
       <Icon className="h-[18px] w-[18px]" aria-hidden />
-    </button>
+    </Button>
   );
 }
 
@@ -549,8 +566,8 @@ function PillHandle({
   pilled: boolean;
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
       data-testid="chat-pill"
       aria-label="open chat"
       // No onClick: the pull-gesture binding is the single tap authority (a tap
@@ -571,7 +588,7 @@ function PillHandle({
       className={cn(
         // The bar hugs the BOTTOM (small pb) where the collapsed input sat — not
         // floating mid-air; the tall pt keeps a generous upward grab/flick zone.
-        "flex cursor-grab touch-none select-none items-end justify-center px-16 pb-1.5 pt-10 active:cursor-grabbing",
+        "h-auto w-auto cursor-grab touch-none select-none items-end rounded-none bg-transparent px-16 pb-1.5 pt-10 hover:bg-transparent active:cursor-grabbing",
         // Interactive only while pilled. When NOT pilled the (faded) handle must
         // let taps fall through to the composer textarea below it — otherwise its
         // tall hit zone steals the tap and the keyboard never opens.
@@ -595,7 +612,7 @@ function PillHandle({
             : "bg-white/45",
         )}
       />
-    </button>
+    </Button>
   );
 }
 
@@ -842,14 +859,15 @@ export function BootStatusIndicator({
             />
             <span>{agentName} is taking longer than usual to wake…</span>
             {onOpenSettings ? (
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={onOpenSettings}
                 data-testid="chat-boot-open-settings"
-                className="pointer-events-auto ml-1 rounded-full border border-white/20 bg-white/10 px-2 py-0.5 text-[12px] text-white/90 transition-colors hover:border-white/35 hover:bg-white/20"
+                className="pointer-events-auto ml-1 h-auto rounded-full border border-white/20 bg-white/10 px-2 py-0.5 text-[12px] text-white/90 transition-colors hover:border-white/35 hover:bg-white/20"
               >
                 Open settings
-              </button>
+              </Button>
             ) : null}
           </>
         ) : (
@@ -909,6 +927,24 @@ function isNestedInteractiveTarget(
 }
 
 /**
+ * True when an assistant turn's content carries an inline interactive widget
+ * (a `[CHOICE:…]` / `[FORM:…]` / `[FOLLOWUPS:…]` block — e.g. every first-run
+ * onboarding turn). Such a bubble must NOT be wrapped in the tap-to-reveal
+ * `role="button"` container: WebKit exposes an ARIA button as an ATOMIC AX leaf
+ * (its aria-label becomes the node's name and all descendants are dropped), so
+ * the wrapper silently removes the choice buttons + text from the native
+ * accessibility tree — invisible to VoiceOver AND to XCUITest. The parser
+ * helpers reset their own regex lastIndex, so repeated calls are safe.
+ */
+function messageHasInteractiveWidget(content: string): boolean {
+  return (
+    findChoiceRegions(content).length > 0 ||
+    findFormRegions(content).length > 0 ||
+    findFollowupsRegions(content).length > 0
+  );
+}
+
+/**
  * True while there's a live (non-collapsed) text selection. The
  * conversation-swipe binding lives on the transcript surface, which contains
  * the selectable message bubbles — so a MOUSE drag to highlight bubble text
@@ -943,8 +979,9 @@ function ThreadLineActionButton({
   testId?: string;
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="icon-sm"
       aria-label={label}
       title={label}
       data-testid={testId}
@@ -953,14 +990,14 @@ function ThreadLineActionButton({
         onClick();
       }}
       className={cn(
-        "flex h-7 w-7 items-center justify-center rounded-full transition-colors",
+        "h-7 w-7 rounded-full p-0 transition-colors",
         active
           ? "bg-[rgb(255,88,0)]/25 text-white"
           : "bg-white/10 text-white/80 hover:bg-white/20",
       )}
     >
       {icon}
-    </button>
+    </Button>
   );
 }
 
@@ -989,7 +1026,7 @@ function ThreadLineEditor({
   }, []);
   return (
     <div className="flex flex-col gap-2">
-      <textarea
+      <Textarea
         ref={ref}
         aria-label="Edit message"
         data-testid="thread-line-edit-input"
@@ -1009,25 +1046,28 @@ function ThreadLineEditor({
           }
         }}
         rows={Math.min(6, Math.max(1, value.split("\n").length))}
-        className="w-full resize-none rounded-lg bg-white/10 px-2.5 py-1.5 text-[14px] text-white outline-none [overflow-wrap:anywhere]"
+        className="min-h-0 w-full resize-none rounded-lg border-0 bg-white/10 px-2.5 py-1.5 text-[14px] text-white outline-none [overflow-wrap:anywhere]"
       />
       <div className="flex items-center justify-end gap-1.5">
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
           data-testid="thread-line-edit-cancel"
           onClick={onCancel}
-          className="rounded-full bg-white/10 px-3 py-1 text-[13px] font-medium text-white/80 transition-colors hover:bg-white/20"
+          className="h-auto rounded-full bg-white/10 px-3 py-1 text-[13px] font-medium text-white/80 transition-colors hover:bg-white/20"
         >
           Cancel
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="default"
+          size="sm"
           data-testid="thread-line-edit-save"
           onClick={onSave}
-          className="rounded-full bg-[rgb(255,88,0)] px-3 py-1 text-[13px] font-medium text-white transition-colors hover:bg-[rgb(214,74,0)]"
+          className="h-auto rounded-full bg-[rgb(255,88,0)] px-3 py-1 text-[13px] font-medium text-white transition-colors hover:bg-[rgb(214,74,0)]"
         >
           Send
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -1045,6 +1085,8 @@ const ThreadLine = React.memo(function ThreadLine({
   onOpenSettings,
   turnStatus,
   suppressReasoning,
+  onAcceptSuggestion,
+  onDismissSuggestion,
 }: {
   message: ShellMessage;
   floating?: boolean;
@@ -1070,9 +1112,19 @@ const ThreadLine = React.memo(function ThreadLine({
   turnStatus?: ChatTurnStatus | null;
   /** Hide reasoning while the assistant turn is still streaming. */
   suppressReasoning?: boolean;
+  /** Accept ("Do it") a proactive suggestion (#8792) — sends the implied
+   *  action as a real turn and clears the bubble. Stable identity. */
+  onAcceptSuggestion?: (message: ShellMessage) => void;
+  /** Dismiss a proactive suggestion (#8792) — removes the bubble locally; the
+   *  server-side per-surface cooldown guards immediate re-noise. Stable id. */
+  onDismissSuggestion?: (messageId: string) => void;
 }): React.JSX.Element {
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
+  // Proactive suggestion bubbles (#8792): distinct affordance (Suggestion chip
+  // + "Do it" + dismiss) on assistant turns pushed by the interaction decider.
+  const isSuggestion =
+    isAssistant && message.source === PROACTIVE_SUGGESTION_SOURCE;
 
   // Press-and-hold to copy an assistant answer — the only extraction affordance
   // on touch (no hover row). A still hold past COPY_HOLD_MS copies + flashes
@@ -1156,6 +1208,14 @@ const ThreadLine = React.memo(function ThreadLine({
   const canEdit =
     isUser && !!onEdit && trimmed.length > 0 && !message.id.startsWith("temp-");
   const hasActions = canRowCopy || canSpeak || canEdit;
+  // An assistant turn that carries an inline choice/form/followups widget (every
+  // first-run onboarding turn) must stay a plain container — never the
+  // tap-to-reveal `role="button"` bubble, which WebKit collapses into a single
+  // atomic AX node and thereby hides the choice buttons from VoiceOver + XCUITest.
+  const hasInteractiveWidget = React.useMemo(
+    () => isAssistant && messageHasInteractiveWidget(message.content),
+    [isAssistant, message.content],
+  );
 
   // A recoverable assistant failure (the agent was rate-limited or the provider
   // stalled / the stream was interrupted) gets a one-tap Retry that re-sends the
@@ -1176,7 +1236,7 @@ const ThreadLine = React.memo(function ThreadLine({
     if (sel && sel.toString().trim().length > 0) return;
     setRevealed((v) => !v);
   }, [hasActions, editing]);
-  const bubbleInteractive = hasActions && !editing;
+  const bubbleInteractive = hasActions && !editing && !hasInteractiveWidget;
   const handleBubbleClick = React.useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (!bubbleInteractive) return;
@@ -1268,14 +1328,15 @@ const ThreadLine = React.memo(function ThreadLine({
           <div className="mb-2.5 whitespace-pre-wrap text-[13px] leading-relaxed text-white/80 [overflow-wrap:anywhere]">
             {message.content}
           </div>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             data-testid="chat-no-provider-settings"
             onClick={() => onOpenSettings?.()}
-            className="rounded-full border border-white/20 bg-white/15 px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-white/25   "
+            className="h-auto rounded-full border border-white/20 bg-white/15 px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-white/25   "
           >
             Open Settings
-          </button>
+          </Button>
         </div>
       </motion.div>
     );
@@ -1303,6 +1364,12 @@ const ThreadLine = React.memo(function ThreadLine({
       : isUser
         ? "text-white"
         : "text-white/90",
+    // Suggestion treatment (#8792): dashed accent edge + faint accent tint so
+    // a proactive offer reads as a suggestion, not a normal reply — mirrors
+    // the composite ChatMessage's affordance. Placed last so it wins over the
+    // floating hairline.
+    isSuggestion &&
+      "border border-dashed border-[rgb(255,88,0)]/45 bg-[rgb(255,88,0)]/[0.06]",
   );
   const bubbleContent =
     isUser && editing ? (
@@ -1314,6 +1381,51 @@ const ThreadLine = React.memo(function ThreadLine({
       />
     ) : (
       <>
+        {isSuggestion ? (
+          // Proactive suggestion affordance (#8792): Suggestion chip + accept
+          // ("Do it") + dismiss. stopPropagation keeps these taps from
+          // toggling the bubble's click-to-reveal action row.
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-1 text-[12px] font-medium text-[rgb(255,148,84)]">
+              <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+              Suggestion
+            </span>
+            <div className="flex items-center gap-1">
+              {onAcceptSuggestion ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  data-testid="thread-line-suggestion-accept"
+                  title="Do it"
+                  aria-label="Do it"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAcceptSuggestion(message);
+                  }}
+                  className="h-auto rounded-full bg-white/10 px-2.5 py-0.5 text-[12px] font-medium text-[rgb(255,148,84)] transition-colors hover:bg-white/20"
+                >
+                  Do it
+                </Button>
+              ) : null}
+              {onDismissSuggestion ? (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  data-testid="thread-line-suggestion-dismiss"
+                  title="Dismiss suggestion"
+                  aria-label="Dismiss suggestion"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDismissSuggestion(message.id);
+                  }}
+                  className="h-6 w-6 rounded-full bg-white/10 text-white/70 transition-colors hover:bg-white/20"
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         <div data-chat-selectable="true">
           {isAssistant &&
           !message.content.trim() &&
@@ -1416,11 +1528,16 @@ const ThreadLine = React.memo(function ThreadLine({
             onClick={handleBubbleClick}
             onKeyDown={handleBubbleKeyDown}
             className={bubbleClassName}
+            data-proactive-suggestion={isSuggestion ? "true" : undefined}
           >
             {bubbleContent}
           </div>
         ) : (
-          <div {...(copyHandlers ?? {})} className={bubbleClassName}>
+          <div
+            {...(copyHandlers ?? {})}
+            className={bubbleClassName}
+            data-proactive-suggestion={isSuggestion ? "true" : undefined}
+          >
             {bubbleContent}
           </div>
         )}
@@ -1476,19 +1593,20 @@ const ThreadLine = React.memo(function ThreadLine({
             Always visible on the failed turn (not gated behind the reveal row)
             so a stalled turn isn't a dead end the user has to retype. */}
         {canRetry ? (
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             data-testid="thread-line-retry"
             aria-label="Retry"
             onClick={(e) => {
               e.stopPropagation();
               onRetry?.(message.id);
             }}
-            className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-[13px] font-medium text-white/80 transition-colors hover:bg-white/20"
+            className="h-auto gap-1.5 rounded-full bg-white/10 px-3 py-1 text-[13px] font-medium text-white/80 transition-colors hover:bg-white/20"
           >
             <RotateCcw className="h-3.5 w-3.5" aria-hidden />
             Retry
-          </button>
+          </Button>
         ) : null}
       </div>
     </motion.div>
@@ -1500,10 +1618,16 @@ const ThreadLine = React.memo(function ThreadLine({
  * + settings handlers, reasoning shown). Test-only seam for the component-tree
  * render-parity contract (render-parity.contract.test.tsx, #9954), which diffs
  * this surface's structure against ChatView's MessageContent over a shared
- * corpus. Not part of the public overlay API — keep usage to that contract.
+ * corpus, and for the proactive-suggestion affordance unit test (#8792 —
+ * optional accept/dismiss handlers). Not part of the public overlay API — keep
+ * usage to those tests.
  */
 export function __renderThreadLineForParity(
   message: ShellMessage,
+  handlers?: {
+    onAcceptSuggestion?: (message: ShellMessage) => void;
+    onDismissSuggestion?: (messageId: string) => void;
+  },
 ): React.JSX.Element {
   return (
     <ThreadLine
@@ -1511,6 +1635,8 @@ export function __renderThreadLineForParity(
       floating
       onCopy={() => {}}
       onOpenSettings={() => {}}
+      onAcceptSuggestion={handlers?.onAcceptSuggestion}
+      onDismissSuggestion={handlers?.onDismissSuggestion}
     />
   );
 }
@@ -1689,6 +1815,26 @@ export function ContinuousChatOverlay({
       }
     },
     [send],
+  );
+
+  // Proactive suggestions (#8792) — same semantics as the composite ChatView:
+  // dismiss removes the bubble from the live transcript only (the server-side
+  // per-surface cooldown keeps the same offer from immediately re-appearing);
+  // accept ("Do it") sends the implied action as a real turn through the SAME
+  // send() path an edit-resend uses, then clears the bubble.
+  const { removeConversationMessage } = useConversationMessages();
+  const handleDismissSuggestion = React.useCallback(
+    (messageId: string) => {
+      removeConversationMessage(messageId);
+    },
+    [removeConversationMessage],
+  );
+  const handleAcceptSuggestion = React.useCallback(
+    (m: ShellMessage) => {
+      send("Yes, let's do it.");
+      removeConversationMessage(m.id);
+    },
+    [send, removeConversationMessage],
   );
 
   const slash = slashProp ?? EMPTY_SLASH_CONTROLLER;
@@ -2100,6 +2246,8 @@ export function ContinuousChatOverlay({
           onOpenSettings={openSettings}
           turnStatus={isInFlight ? turnStatus : undefined}
           suppressReasoning={responding && isLastAssistant}
+          onAcceptSuggestion={handleAcceptSuggestion}
+          onDismissSuggestion={handleDismissSuggestion}
         />
       );
     },
@@ -2115,6 +2263,8 @@ export function ContinuousChatOverlay({
       openSettings,
       responding,
       turnStatus,
+      handleAcceptSuggestion,
+      handleDismissSuggestion,
     ],
   );
 
@@ -4023,6 +4173,26 @@ export function ContinuousChatOverlay({
             ? "full"
             : "half";
 
+  // Onboarding-state probe: the newest first-run CHOICE turn's step id + option
+  // values, surfaced as sr-only static AX text (mirrors chat-detent-probe /
+  // home-launcher-page-probe) so an on-device XCUITest can observe and drive
+  // first-run deterministically even where the WKWebView AX tree is imperfect.
+  const firstRunProbe = React.useMemo(() => {
+    if (!firstRunOpen) return null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const region = findChoiceRegions(messages[i].content).find(
+        (r) => r.scope === "first-run" || r.scope.startsWith("first-run"),
+      );
+      if (region) {
+        return {
+          step: region.id,
+          choices: region.options.map((o) => o.value).join(","),
+        };
+      }
+    }
+    return null;
+  }, [firstRunOpen, messages]);
+
   return (
     <div
       ref={overlayRef}
@@ -4088,12 +4258,13 @@ export function ContinuousChatOverlay({
           aria-live="polite"
           className="pointer-events-none relative mb-2 flex w-full justify-center"
         >
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={unlockAudio}
             data-testid="overlay-voice-audio-unlock"
             className={cn(
-              "pointer-events-auto inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
+              "pointer-events-auto h-auto gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
               "border-warn/40 bg-warn/15 text-warn hover:bg-warn/25",
               "  ",
               FLOAT_SHADOW,
@@ -4101,7 +4272,7 @@ export function ContinuousChatOverlay({
           >
             <Glyph d={SPEAKER_MUTED_GLYPH} />
             <span>Tap to enable sound</span>
-          </button>
+          </Button>
         </div>
       ) : null}
 
@@ -4138,21 +4309,22 @@ export function ContinuousChatOverlay({
           data-testid="chat-suggestions"
         >
           {suggestions.map((s, i) => (
-            <button
+            <Button
               key={s}
-              type="button"
+              variant="ghost"
+              size="sm"
               data-testid={`chat-suggestion-${i}`}
               aria-label={s}
               onClick={() => pickSuggestion(s)}
               className={cn(
-                "max-w-full truncate rounded-full border border-white/15 bg-black/40 px-3 py-1.5",
+                "h-auto max-w-full truncate rounded-full border border-white/15 bg-black/40 px-3 py-1.5",
                 "text-[12px] text-white/80 transition-colors",
                 "hover:border-white/30 hover:bg-white/15 hover:text-white",
                 "  ",
               )}
             >
               {s}
-            </button>
+            </Button>
           ))}
         </motion.fieldset>
       ) : null}
@@ -4272,6 +4444,11 @@ export function ContinuousChatOverlay({
           <span className="sr-only" data-testid="chat-detent-probe">
             {`chat-detent:${detentLabel}`}
           </span>
+          {firstRunProbe ? (
+            <span className="sr-only" data-testid="onboarding-state-probe">
+              {`onboarding-step:${firstRunProbe.step} onboarding-choices:${firstRunProbe.choices}`}
+            </span>
+          ) : null}
           {/* CONTENT — sheen, glow, thread, composer. Crossfades with the glass
               and goes fully inert while pilled (opacity 0 + `inert` removes it
               from pointer, tab order, and the a11y tree) so it can't be reached
@@ -4569,17 +4746,18 @@ export function ContinuousChatOverlay({
                     {pendingImages.map((img, i) => {
                       const kind = chatUploadKind(img.mimeType);
                       const removeButton = (
-                        <button
-                          type="button"
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
                           aria-label={`remove ${img.name}`}
                           onClick={() => removeImage(i)}
                           // Small visual disc, but a 44px-class hit zone via the
                           // invisible `before` overlay so it's thumb-tappable
                           // without crowding the tile.
-                          className="absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full border border-white/20 bg-black/70 text-xs text-white/90 transition-colors before:absolute before:-inset-3 before:content-[''] hover:bg-black/90"
+                          className="absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full border border-white/20 bg-black/70 p-0 text-xs text-white/90 transition-colors before:absolute before:-inset-3 before:content-[''] hover:bg-black/90"
                         >
                           ×
-                        </button>
+                        </Button>
                       );
                       const tileKey = `${img.name}-${img.mimeType}-${img.data.length}`;
                       if (kind === "image") {
@@ -4629,7 +4807,7 @@ export function ContinuousChatOverlay({
                 ) : null}
               </div>
             ) : null}
-            <input
+            <Input
               ref={fileInputRef}
               type="file"
               accept={CHAT_UPLOAD_ACCEPT}
@@ -4689,7 +4867,7 @@ export function ContinuousChatOverlay({
                 onClick={() => fileInputRef.current?.click()}
                 testId="chat-composer-attach"
               />
-              <textarea
+              <Textarea
                 ref={inputRef}
                 rows={1}
                 value={draft}

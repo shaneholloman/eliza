@@ -38,7 +38,7 @@ import { client } from "../api";
 import { getCloudAuthToken } from "../api/client-cloud";
 import { startTutorial } from "../components/pages/tutorial/tutorial-controller";
 import { getBootConfig } from "../config/boot-config";
-import { useAppSelectorShallow } from "../state";
+import { ACCENT_PRESETS, useAppSelectorShallow } from "../state";
 import { useConversationMessages } from "../state/ConversationMessagesContext.hooks";
 import { preOpenWindow } from "../utils";
 import { normalizeFirstRunName } from "./first-run";
@@ -46,6 +46,11 @@ import {
   FIRST_RUN_ACTION_PREFIX,
   setFirstRunActionHandler,
 } from "./first-run-action-channel";
+import {
+  clearCloudLoginPending,
+  markCloudLoginPending,
+  readCloudLoginPending,
+} from "./first-run-cloud-resume";
 import {
   bindCloudAgent,
   type FirstRunFinishDraft,
@@ -170,6 +175,20 @@ function finishErrorMessage(message: string): string {
   return `${lead}\n\nYou can try again, pick a different way to run your agent, or configure a model provider yourself in Settings.`;
 }
 
+// The "make it yours" accent step. Reuses the shared ACCENT_PRESETS (the same
+// list Appearance settings renders) so onboarding + Settings drive one
+// persisted preference. In-chat CHOICE options render as text buttons, so each
+// carries an emoji swatch to hint its color. Non-blocking: it's seeded next to
+// the tutorial CHOICE, so a user who ignores it just taps the tutorial option;
+// the `default` swatch keeps the brand accent.
+const ACCENT_CHOICE = [
+  "[CHOICE:first-run id=accent]",
+  ...ACCENT_PRESETS.map(
+    (p) => `${FIRST_RUN_ACTION_PREFIX}accent:${p.id}=${p.swatch} ${p.label}`,
+  ),
+  "[/CHOICE]",
+].join("\n");
+
 function cloudOAuthSecretRequest(
   status: ConversationSecretRequest["status"],
 ): ConversationSecretRequest {
@@ -256,6 +275,7 @@ export function useFirstRunConductor(): void {
     showActionBanner,
     setTab,
     setState,
+    setUiAccent,
     uiLanguage,
   } = useAppSelectorShallow((s) => ({
     firstRunComplete: s.firstRunComplete,
@@ -266,6 +286,7 @@ export function useFirstRunConductor(): void {
     showActionBanner: s.showActionBanner,
     setTab: s.setTab,
     setState: s.setState,
+    setUiAccent: s.setUiAccent,
     uiLanguage: s.uiLanguage,
   }));
   const { setConversationMessages } = useConversationMessages();
@@ -335,6 +356,15 @@ export function useFirstRunConductor(): void {
 
   const seedTutorial = React.useCallback(() => {
     provisionedRef.current = true;
+    // "Make it yours" — the accent step is seeded alongside the tutorial prompt
+    // so it never blocks finishing: a user who ignores it just taps a tutorial
+    // option below. Picking a swatch applies + persists the accent live.
+    seedTurn(
+      makeTurn(
+        "first-run:appearance",
+        `First, make it yours — pick an accent color (or keep the default and continue below).\n\n${ACCENT_CHOICE}`,
+      ),
+    );
     seedTurn(
       makeTurn(
         "first-run:tutorial",
@@ -351,19 +381,32 @@ export function useFirstRunConductor(): void {
 
   const seedBackupRestoreChoice = React.useCallback(
     (backups: LocalAgentBackupMetadata[]) => {
-      latestLocalBackupRef.current = newestLocalBackup(backups);
-      if (!latestLocalBackupRef.current) {
-        seedRuntimeChoice();
-        return;
-      }
-      seedTurn(
-        makeTurn(
-          "first-run:backup-restore",
-          `${RESTORE_GREETING}\n\n${BACKUP_RESTORE_CHOICE}`,
-        ),
-      );
+      const latest = newestLocalBackup(backups);
+      // The greeting + runtime choice is already seeded on mount, so there is
+      // nothing to fall back to when there is no restorable backup.
+      if (!latest) return;
+      latestLocalBackupRef.current = latest;
+      // Offer restore as an ADDITIONAL turn below the greeting — but only while
+      // the user has NOT advanced past it (picking a runtime seeds a
+      // provider / cloud-oauth / remote-connect / tutorial / error turn, all
+      // source "first_run" with a non-greeting id). The atomic updater also
+      // prevents a double-seed if the backup probe ever fires twice (the
+      // restore turn itself is source "first_run" + non-greeting id).
+      setConversationMessages((prev) => {
+        const advancedPastGreeting = prev.some(
+          (m) => m.source === "first_run" && m.id !== "first-run:greeting",
+        );
+        if (advancedPastGreeting) return prev;
+        return [
+          ...prev,
+          makeTurn(
+            "first-run:backup-restore",
+            `${RESTORE_GREETING}\n\n${BACKUP_RESTORE_CHOICE}`,
+          ),
+        ];
+      });
     },
-    [seedRuntimeChoice, seedTurn],
+    [setConversationMessages],
   );
 
   // Ports for the headless finish use case. completeFirstRun is INTERCEPTED:
@@ -487,6 +530,9 @@ export function useFirstRunConductor(): void {
     void listOrAutoProvisionCloudAgent(draftRef.current, portsRef.current)
       .then((outcome) => {
         if (outcome.kind === "done" || outcome.kind === "pick-cloud-agent") {
+          // Login resolved + provisioning is proceeding — the resume marker has
+          // served its purpose; drop it so a later relaunch doesn't re-resume.
+          clearCloudLoginPending();
           replaceTurn(
             "first-run:cloud-oauth",
             makeTurn("first-run:cloud-oauth", "Eliza Cloud connected.", {
@@ -514,6 +560,33 @@ export function useFirstRunConductor(): void {
       });
   }, [handleOutcome]);
 
+  // Continue an interrupted cloud/hybrid flow once the connection is present.
+  // Shared by (a) the auto-resume effect below — used when the user connects
+  // from the retry turn's OAuth block and the store later learns the connection
+  // landed — and (b) the mount-time cloud-login rehydrate, which calls this
+  // directly when the durable token already made the connection live at launch
+  // (the effect fired once before the marker was armed, so it can't self-fire).
+  const runCloudResume = React.useCallback(
+    (resume: "cloud" | "hybrid") => {
+      if (busyRef.current || provisionedRef.current) return;
+      pendingCloudResumeRef.current = null;
+      if (resume === "cloud") {
+        replaceTurn(
+          "first-run:cloud-oauth",
+          makeTurn(
+            "first-run:cloud-oauth",
+            "Connecting your Eliza Cloud account…",
+            { secretRequest: cloudOAuthSecretRequest("pending") },
+          ),
+        );
+        startCloudProvisionFlow();
+        return;
+      }
+      startProviderFinish();
+    },
+    [replaceTurn, startCloudProvisionFlow, startProviderFinish],
+  );
+
   // Auto-resume: when the user connects Eliza Cloud from the retry turn's
   // OAuth block (instead of re-picking a runtime), continue the interrupted
   // flow the moment the store learns the connection landed. A fresh pick
@@ -521,28 +594,18 @@ export function useFirstRunConductor(): void {
   React.useEffect(() => {
     if (!active || !elizaCloudConnected) return;
     const resume = pendingCloudResumeRef.current;
-    if (!resume || busyRef.current || provisionedRef.current) return;
-    pendingCloudResumeRef.current = null;
-    if (resume === "cloud") {
-      replaceTurn(
-        "first-run:cloud-oauth",
-        makeTurn(
-          "first-run:cloud-oauth",
-          "Connecting your Eliza Cloud account…",
-          { secretRequest: cloudOAuthSecretRequest("pending") },
-        ),
-      );
-      startCloudProvisionFlow();
-      return;
-    }
-    startProviderFinish();
-  }, [
-    active,
-    elizaCloudConnected,
-    replaceTurn,
-    startCloudProvisionFlow,
-    startProviderFinish,
-  ]);
+    if (!resume) return;
+    runCloudResume(resume);
+  }, [active, elizaCloudConnected, runCloudResume]);
+
+  // Read-only mirrors so the mount effect can resume immediately when the
+  // durable token already made the connection live at launch — without adding
+  // elizaCloudConnected/runCloudResume to the mount effect's deps (which would
+  // re-register the action handler and re-seed on every connection change).
+  const elizaCloudConnectedRef = React.useRef(elizaCloudConnected);
+  elizaCloudConnectedRef.current = elizaCloudConnected;
+  const runCloudResumeRef = React.useRef(runCloudResume);
+  runCloudResumeRef.current = runCloudResume;
 
   const handleFirstRunAction = React.useCallback(
     (value: string): boolean => {
@@ -558,14 +621,24 @@ export function useFirstRunConductor(): void {
       // finish call is still in flight — consume those as no-ops instead of
       // starting a concurrent flow.
       if (busyRef.current) return true;
-      // Once provisioning succeeded only the tutorial pick is live; taps on
-      // leftover runtime/provider/cloud-agent widgets must not re-provision.
-      if (provisionedRef.current && group !== "tutorial") return true;
+      // Once provisioning succeeded only the wrap-up picks (accent + tutorial)
+      // are live; taps on leftover runtime/provider/cloud-agent widgets must not
+      // re-provision.
+      if (
+        provisionedRef.current &&
+        group !== "tutorial" &&
+        group !== "accent"
+      ) {
+        return true;
+      }
       // Once the real gate flipped (tutorial pick or the Settings escape),
       // every further first-run pick is a stale-widget no-op.
       if (completedRef.current) return true;
-      // A fresh pick supersedes any armed connect-and-resume continuation.
+      // A fresh pick supersedes any armed connect-and-resume continuation —
+      // including the durable cloud-resume marker (the cloud/hybrid branches
+      // below re-arm it if the new pick is a cloud one).
       pendingCloudResumeRef.current = null;
+      clearCloudLoginPending();
 
       if (group === "runtime") {
         if (id !== "cloud" && id !== "local" && id !== "remote") return true;
@@ -575,6 +648,14 @@ export function useFirstRunConductor(): void {
             runtime: "cloud",
             localInference: "cloud-inference",
           };
+          // Persist a resume marker BEFORE the (device) external-browser OAuth
+          // backgrounds/evicts the WebView, so a cold-launch on return
+          // rehydrates this cloud flow instead of restarting at the greeting.
+          markCloudLoginPending({
+            runtime: "cloud",
+            localInference: "cloud-inference",
+            agentName: draftRef.current.agentName,
+          });
           const connecting = makeTurn(
             "first-run:cloud-oauth",
             "Connecting your Eliza Cloud account…",
@@ -684,6 +765,14 @@ export function useFirstRunConductor(): void {
             ...draftRef.current,
             localInference: "cloud-inference",
           };
+          // Hybrid (local runtime + Cloud inference) also opens the external
+          // OAuth browser — persist a resume marker so a WebView eviction on
+          // return rehydrates the hybrid finish rather than restarting.
+          markCloudLoginPending({
+            runtime: "hybrid",
+            localInference: "cloud-inference",
+            agentName: draftRef.current.agentName,
+          });
         } else {
           // on-device: run every model locally (kicks off the download now).
           draftRef.current = {
@@ -756,6 +845,15 @@ export function useFirstRunConductor(): void {
         return true;
       }
 
+      if (group === "accent") {
+        // "Make it yours": apply + persist the chosen accent live. Non-blocking
+        // — the tutorial CHOICE seeded alongside still finishes onboarding, so
+        // this never gates completion. Garbage ids are consumed as no-ops.
+        if (!ACCENT_PRESETS.some((p) => p.id === id)) return true;
+        setUiAccent(id);
+        return true;
+      }
+
       if (group === "tutorial") {
         if (id !== "start" && id !== "skip") return true;
         completedRef.current = true;
@@ -781,6 +879,7 @@ export function useFirstRunConductor(): void {
       seedError,
       startCloudProvisionFlow,
       startProviderFinish,
+      setUiAccent,
     ],
   );
   const handleActionRef = React.useRef(handleFirstRunAction);
@@ -794,25 +893,58 @@ export function useFirstRunConductor(): void {
     }
     resetFirstRunPersistGuard();
     setFirstRunActionHandler((value) => handleActionRef.current(value));
+    // Cloud-login resume: if the app was cold-launched mid cloud OAuth (the
+    // external browser evicted the WebView on a device), rehydrate the
+    // interrupted cloud/hybrid flow instead of restarting at the greeting.
+    // The durable steward token (persisted at login) makes elizaCloudConnected
+    // recompute true after relaunch, so the auto-resume effect above completes
+    // onboarding into chat; the re-tappable OAuth turn below is the fallback if
+    // login never finished — either way the user is never bounced back to
+    // "where should your agent run?".
+    const cloudResume = readCloudLoginPending();
+    if (cloudResume) {
+      draftRef.current = {
+        ...draftRef.current,
+        agentName: cloudResume.agentName || draftRef.current.agentName,
+        runtime: cloudResume.runtime === "cloud" ? "cloud" : "local",
+        localInference: cloudResume.localInference,
+      };
+      pendingCloudResumeRef.current = cloudResume.runtime;
+      seedTurn(
+        makeTurn(
+          "first-run:cloud-oauth",
+          "Connecting your Eliza Cloud account…",
+          { secretRequest: cloudOAuthSecretRequest("pending") },
+        ),
+      );
+      // If the durable token already made the connection live at launch, the
+      // auto-resume effect above fired once before this marker was armed, so it
+      // won't self-fire — resume now. Otherwise leave the marker armed for the
+      // effect to catch when elizaCloudConnected flips true after the poll.
+      if (elizaCloudConnectedRef.current) {
+        runCloudResumeRef.current(cloudResume.runtime);
+      }
+    } else {
+      // Seed the greeting + runtime choice IMMEDIATELY on mount — never gate it
+      // on the agent-readiness probe below. `listLocalAgentBackups()` hits the
+      // local agent API, which on a fresh/booting/wedged device can hang
+      // indefinitely; coupling the greeting to it stranded the user at a locked
+      // composer ("Tap a highlighted option above to continue") with no visible
+      // choices. The backup probe is now a purely additive upgrade.
+      seedRuntimeChoice();
+    }
     let cancelled = false;
     void client
       .listLocalAgentBackups()
       .then((backups) => {
-        if (cancelled) return;
-        if (backups.length > 0) {
-          seedBackupRestoreChoice(backups);
-          return;
-        }
-        seedRuntimeChoice();
+        if (!cancelled && backups.length > 0) seedBackupRestoreChoice(backups);
       })
-      .catch(() => {
-        if (!cancelled) seedRuntimeChoice();
-      });
+      .catch(() => {});
     return () => {
       cancelled = true;
       setFirstRunActionHandler(null);
     };
-  }, [active, seedBackupRestoreChoice, seedRuntimeChoice]);
+  }, [active, seedBackupRestoreChoice, seedRuntimeChoice, seedTurn]);
 }
 
 /** Mount point — call once inside the AppContext provider tree. Renders null. */

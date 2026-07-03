@@ -77,14 +77,15 @@ export function ChatEmptyStateWithRecommendations({
       {recs.length > 0 ? (
         <div className="flex flex-wrap items-center justify-center gap-2">
           {recs.map((rec) => (
-            <button
+            <Button
               key={rec.label}
-              type="button"
+              variant="secondary"
+              size="sm"
               onClick={() => prefill(rec.prompt ?? rec.label)}
-              className="inline-flex min-h-11 max-w-full items-center rounded-full bg-surface/70 px-3 py-1.5 text-xs text-txt transition-colors hover:bg-surface hover:text-txt-strong"
+              className="min-h-11 max-w-full rounded-full bg-surface/70 px-3 py-1.5 text-xs text-txt transition-colors hover:bg-surface hover:text-txt-strong"
             >
               <span className="truncate">{rec.label}</span>
-            </button>
+            </Button>
           ))}
         </div>
       ) : null}

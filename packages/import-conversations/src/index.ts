@@ -1,0 +1,15 @@
+/**
+ * @elizaos/import-conversations — bring prior AI conversation history
+ * (ChatGPT / Claude / Hermes exports) into elizaOS as searchable, scoped
+ * knowledge.
+ *
+ * Track A ships the shared core: the normalized conversation contract, the
+ * secret-redacting / transcript-rendering ingestion pipeline (storing through
+ * an injectable DocumentSink port), idempotency + uninstall manifest, plan/apply
+ * report, and the importer registry that source parsers (Tracks B/C/D) register
+ * against.
+ */
+
+export * from "./core/index.ts";
+export type { ParseOptions } from "./parsers/hermes.ts";
+export { default as hermesParser, detect, parse } from "./parsers/hermes.ts";

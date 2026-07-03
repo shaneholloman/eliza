@@ -415,7 +415,8 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
                     })}
               </p>
               {settings.totalCreatorEarnings > 0 && (
-                <button
+                <Button
+                  variant="ghost"
                   type="button"
                   onClick={() =>
                     navigate(`/dashboard/apps/${appId}?tab=earnings`)
@@ -427,7 +428,7 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
                     defaultValue: "$" + "{{amount}}" + " earned",
                   })}
                   <ChevronRight className="h-3 w-3" />
-                </button>
+                </Button>
               )}
             </div>
           </div>
@@ -483,7 +484,8 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
               />
               <div className="flex gap-1.5 flex-wrap">
                 {[0, 25, 50, 100, 200].map((preset) => (
-                  <button
+                  <Button
+                    variant="ghost"
                     type="button"
                     key={preset}
                     className={cn(
@@ -497,7 +499,7 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
                     }
                   >
                     {preset}%
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>
@@ -544,7 +546,8 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
               />
               <div className="flex gap-1.5 flex-wrap">
                 {[0, 10, 20, 30, 50].map((preset) => (
-                  <button
+                  <Button
+                    variant="ghost"
                     type="button"
                     key={preset}
                     className={cn(
@@ -558,7 +561,7 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
                     }
                   >
                     {preset}%
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>

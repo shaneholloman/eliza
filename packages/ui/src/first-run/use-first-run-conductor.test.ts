@@ -13,7 +13,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   client: {
-    listLocalAgentBackups: vi.fn(async () => []),
+    listLocalAgentBackups: vi.fn(
+      async (): Promise<LocalAgentBackupMetadata[]> => [],
+    ),
     restoreLocalAgentBackup: vi.fn(async () => undefined),
     getAuthStatus: vi.fn(async () => ({ required: false })),
     getCloudStatus: vi.fn(async () => ({ connected: true })),
@@ -52,7 +54,7 @@ vi.mock("./auto-download-recommended", () => ({
     mocks.autoDownloadRecommendedLocalModelInBackground,
 }));
 
-import type { ConversationMessage } from "../api";
+import type { ConversationMessage, LocalAgentBackupMetadata } from "../api";
 import { __setAppValueForTests } from "../state/app-store";
 import {
   ConversationMessagesCtx,
@@ -60,6 +62,11 @@ import {
 } from "../state/ConversationMessagesContext.hooks";
 import type { AppContextValue } from "../state/internal";
 import { tryHandleFirstRunAction } from "./first-run-action-channel";
+import {
+  clearCloudLoginPending,
+  markCloudLoginPending,
+  readCloudLoginPending,
+} from "./first-run-cloud-resume";
 import {
   type FirstRunFinishDraft,
   type FirstRunFinishPorts,
@@ -268,7 +275,47 @@ describe("useFirstRunConductor", () => {
     unmount();
   });
 
-  it("On this device → provider:other ('configure in Settings') opens the Settings tab and exits first-run without running a finish flow", async () => {
+  it("seeds a skippable accent step at wrap-up: picking a swatch applies + persists the accent live, garbage picks no-op, and it never gates completion", async () => {
+    const setUiAccent = vi.fn();
+    const spies = seedAppStore({ setUiAccent });
+    const { turn, unmount } = renderConductor();
+
+    await waitForTurn(turn, "first-run:greeting");
+    expect(tryHandleFirstRunAction("__first_run__:runtime:local")).toBe(true);
+    await waitForTurn(turn, "first-run:provider");
+    expect(tryHandleFirstRunAction("__first_run__:provider:on-device")).toBe(
+      true,
+    );
+
+    // Wrap-up seeds BOTH the accent step and the tutorial prompt, so accent is
+    // optional — the tutorial CHOICE is already present to finish.
+    const appearance = await waitForTurn(turn, "first-run:appearance");
+    await waitForTurn(turn, "first-run:tutorial");
+    expect(appearance.text).toContain("make it yours");
+    expect(appearance.text).toContain("__first_run__:accent:default=");
+    expect(appearance.text).toContain("__first_run__:accent:green=");
+    expect(appearance.source).toBe("first_run");
+
+    // Picking a swatch applies + persists via the shared store setter; it does
+    // NOT complete first-run (that stays deferred to the tutorial pick).
+    expect(tryHandleFirstRunAction("__first_run__:accent:green")).toBe(true);
+    expect(setUiAccent).toHaveBeenCalledTimes(1);
+    expect(setUiAccent).toHaveBeenCalledWith("green");
+    expect(spies.completeFirstRun).not.toHaveBeenCalled();
+
+    // A garbage accent id under the reserved prefix is consumed as a no-op.
+    expect(tryHandleFirstRunAction("__first_run__:accent:bogus")).toBe(true);
+    expect(setUiAccent).toHaveBeenCalledTimes(1);
+
+    // The tutorial pick is still the single real completion — accent skippable.
+    expect(tryHandleFirstRunAction("__first_run__:tutorial:skip")).toBe(true);
+    expect(spies.completeFirstRun).toHaveBeenCalledTimes(1);
+    expect(spies.completeFirstRun).toHaveBeenCalledWith("chat");
+
+    unmount();
+  });
+
+  it("keeps BYOK reachable after the runtime chooser was trimmed to Cloud + On this device: On this device → provider:other finishes the LOCAL runtime with configure-later (one POST, no model download, Settings handoff banner) instead of dead-ending to Settings", async () => {
     const spies = seedAppStore();
     const { turn, transcript, unmount } = renderConductor();
     const greeting = await waitForTurn(turn, "first-run:greeting");
@@ -286,28 +333,39 @@ describe("useFirstRunConductor", () => {
     // The provider sub-choice still offers "Other / configure in Settings" (BYOK).
     expect(provider.text).toContain("__first_run__:provider:other=");
 
-    // Selecting it must actually land the user in Settings and exit onboarding —
-    // NOT run a local finish that could fail and re-loop the questions.
+    // Selecting it finishes the LOCAL runtime with `configure-later`: the finish
+    // path starts + persists the runtime (one POST /api/first-run) and hands off
+    // provider setup to Settings via the "Open Settings" action banner. It does
+    // NOT dead-end to Settings before persisting — the old exit-to-Settings path
+    // never ran a finish, so a broken finish had no recovery turn.
     expect(tryHandleFirstRunAction("__first_run__:provider:other")).toBe(true);
-    await waitFor(() => {
-      expect(spies.setTab).toHaveBeenCalledWith("settings");
-    });
-    expect(spies.completeFirstRun).toHaveBeenCalledTimes(1);
-    expect(spies.completeFirstRun).toHaveBeenCalledWith("settings");
+    const tutorial = await waitForTurn(turn, "first-run:tutorial");
+    expect(tutorial.text).toContain("__first_run__:tutorial:start=");
 
-    // No finish flow ran: no POST, no model download, and no tutorial prompt
-    // (first-run is over — the user is in Settings).
-    expect(mocks.client.submitFirstRun).not.toHaveBeenCalled();
+    // Exactly one POST, and NO model download (configure-later ships no model —
+    // the user brings their own provider keys in Settings).
+    expect(mocks.client.submitFirstRun).toHaveBeenCalledTimes(1);
     expect(
       mocks.autoDownloadRecommendedLocalModelInBackground,
     ).not.toHaveBeenCalled();
-    expect(transcript.current.some((m) => m.id === "first-run:tutorial")).toBe(
-      false,
-    );
+    // The Settings handoff is a non-blocking action banner, NOT a gate flip:
+    // the real completion stays deferred to the tutorial pick.
+    expect(spies.showActionBanner).toHaveBeenCalledTimes(1);
+    expect(spies.completeFirstRun).not.toHaveBeenCalled();
 
-    // A confused double-tap must not flip the gate twice.
+    // After provisioning, re-taps on the leftover provider widget are consumed
+    // as no-ops — no second finish, POST stays at exactly once.
     expect(tryHandleFirstRunAction("__first_run__:provider:other")).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(mocks.client.submitFirstRun).toHaveBeenCalledTimes(1);
+
+    // The tutorial pick is the single real completion, into chat.
+    expect(tryHandleFirstRunAction("__first_run__:tutorial:skip")).toBe(true);
     expect(spies.completeFirstRun).toHaveBeenCalledTimes(1);
+    expect(spies.completeFirstRun).toHaveBeenCalledWith("chat");
+    expect(transcript.current.some((m) => m.id === "first-run:greeting")).toBe(
+      true,
+    );
     unmount();
   });
 
@@ -327,6 +385,73 @@ describe("useFirstRunConductor", () => {
       false,
     );
     unmount();
+  });
+
+  it("seeds the greeting IMMEDIATELY even when the local-backup probe never settles (cold-start unblock)", async () => {
+    // The regression: a fresh/booting device whose agent API hangs left the
+    // greeting unseeded (it used to be gated inside the backups probe's
+    // continuations), stranding the user at a locked composer. The greeting
+    // must now appear regardless of the probe.
+    mocks.client.listLocalAgentBackups.mockReturnValue(
+      new Promise<never>(() => {}), // never resolves and never rejects
+    );
+    seedAppStore();
+    const { turn, transcript, unmount } = renderConductor();
+
+    const greeting = await waitForTurn(turn, "first-run:greeting");
+    expect(greeting.text).toContain("where should your agent run?");
+    // And the runtime pick still works while the probe is stuck.
+    expect(tryHandleFirstRunAction("__first_run__:runtime:local")).toBe(true);
+    await waitForTurn(turn, "first-run:provider");
+    // No backup-restore turn was seeded (the probe never returned any).
+    expect(
+      transcript.current.some((m) => m.id === "first-run:backup-restore"),
+    ).toBe(false);
+    unmount();
+  });
+
+  it("appends the backup-restore choice below the greeting when backups exist — but not once the user advanced past it", async () => {
+    // Backups resolve AFTER the greeting is already up: restore is offered as
+    // an additional turn, never replacing the greeting.
+    const backup = {
+      fileName: "backup-1.tar",
+      path: "/backups/backup-1.tar",
+      createdAt: "2026-07-01T00:00:00.000Z",
+      agentId: "agent-1",
+      stateSha256: "sha-1",
+      sizeBytes: 10,
+    };
+    mocks.client.listLocalAgentBackups.mockResolvedValue([backup]);
+    seedAppStore();
+    const { turn, unmount } = renderConductor();
+    await waitForTurn(turn, "first-run:greeting");
+    const restore = await waitForTurn(turn, "first-run:backup-restore");
+    expect(restore.text).toContain("__first_run__:backup-restore:");
+    unmount();
+
+    // Now the racing case: if the user picks a runtime BEFORE the (slow) backup
+    // probe resolves, the restore turn must NOT be appended after the fact.
+    vi.clearAllMocks();
+    let resolveBackups: (b: LocalAgentBackupMetadata[]) => void = () => {};
+    mocks.client.listLocalAgentBackups.mockReturnValue(
+      new Promise<LocalAgentBackupMetadata[]>((resolve) => {
+        resolveBackups = resolve;
+      }),
+    );
+    seedAppStore();
+    const second = renderConductor();
+    await waitForTurn(second.turn, "first-run:greeting");
+    expect(tryHandleFirstRunAction("__first_run__:runtime:local")).toBe(true);
+    await waitForTurn(second.turn, "first-run:provider");
+    // Backups arrive late — the user already advanced, so no restore turn.
+    resolveBackups([backup]);
+    await Promise.resolve();
+    expect(
+      second.transcript.current.some(
+        (m) => m.id === "first-run:backup-restore",
+      ),
+    ).toBe(false);
+    second.unmount();
   });
 
   it("REMOTE pick seeds the inline URL+token connect form (no provider step, no immediate finish)", async () => {
@@ -413,6 +538,80 @@ describe("useFirstRunConductor", () => {
     expect(tryHandleFirstRunAction("__first_run__:tutorial:start")).toBe(true);
     expect(spies.completeFirstRun).toHaveBeenCalledWith("chat");
     expect(readTutorialState().active).toBe(true);
+    unmount();
+  });
+
+  it("arms a durable cloud-login resume marker synchronously when the cloud runtime is picked", async () => {
+    // The marker must be persisted at pick time — BEFORE the external browser
+    // login can background/evict the WebView — so an eviction mid-login can
+    // resume on relaunch instead of restarting at the greeting. Assert it
+    // synchronously, before the async provision completes and clears it.
+    seedAppStore();
+    const { turn, unmount } = renderConductor();
+    await waitForTurn(turn, "first-run:greeting");
+    expect(readCloudLoginPending()).toBeNull();
+
+    expect(tryHandleFirstRunAction("__first_run__:runtime:cloud")).toBe(true);
+    expect(readCloudLoginPending()).toMatchObject({
+      runtime: "cloud",
+      localInference: "cloud-inference",
+    });
+    unmount();
+  });
+
+  it("resumes an interrupted cloud login on relaunch (no greeting restart) when the durable marker + connection are present", async () => {
+    // Simulate the device flow AFTER the eviction+relaunch: the resume marker
+    // was persisted before the external browser login evicted the WebView, and
+    // the durable steward token makes elizaCloudConnected recompute true at
+    // mount. The conductor must CONTINUE into chat, not re-seed the "where
+    // should your agent run?" greeting.
+    markCloudLoginPending({
+      runtime: "cloud",
+      localInference: "cloud-inference",
+      agentName: "Eliza",
+    });
+    const spies = seedAppStore(); // elizaCloudConnected: true (durable token)
+    const { transcript, turn, unmount } = renderConductor();
+
+    // It resumes straight into provisioning and completes onboarding into chat…
+    await waitForTurn(turn, "first-run:tutorial");
+    expect(mocks.client.selectOrProvisionCloudAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.client.submitFirstRun).toHaveBeenCalledTimes(1);
+    // …and NEVER bounced the user back to the runtime chooser.
+    expect(transcript.current.some((m) => m.id === "first-run:greeting")).toBe(
+      false,
+    );
+    // Completion clears the durable marker so a later launch starts clean.
+    expect(readCloudLoginPending()).toBeNull();
+
+    // "Take the tutorial" completes onboarding into chat.
+    expect(tryHandleFirstRunAction("__first_run__:tutorial:start")).toBe(true);
+    expect(spies.completeFirstRun).toHaveBeenCalledWith("chat");
+    unmount();
+  });
+
+  it("clears the cloud resume marker on a fresh local runtime pick so a relaunch never resumes an abandoned cloud flow", async () => {
+    // The user had armed a cloud marker, then came back and chose local. Local
+    // is the latest intent — the stale cloud marker must be cleared.
+    markCloudLoginPending({
+      runtime: "cloud",
+      localInference: "cloud-inference",
+      agentName: "Eliza",
+    });
+    // A local marker does not resume (readCloudLoginPending rejects non-cloud),
+    // so the greeting seeds normally and we can drive a fresh local pick.
+    clearCloudLoginPending();
+    seedAppStore();
+    const { turn, unmount } = renderConductor();
+    await waitForTurn(turn, "first-run:greeting");
+    // Re-arm as if a prior cloud attempt left the marker behind.
+    markCloudLoginPending({
+      runtime: "cloud",
+      localInference: "cloud-inference",
+      agentName: "Eliza",
+    });
+    expect(tryHandleFirstRunAction("__first_run__:runtime:local")).toBe(true);
+    expect(readCloudLoginPending()).toBeNull();
     unmount();
   });
 

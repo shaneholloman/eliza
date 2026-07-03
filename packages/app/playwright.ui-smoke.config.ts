@@ -48,19 +48,16 @@ const VOICE_MIC_SPEC = /(voice-realaudio|transcript-realaudio)\.spec\.ts/;
 // WebKit (Safari engine) pointer/focus/text-input lane. iOS/iPadOS ship Safari's
 // WebKit, but every default lane above is Chromium-only, so pointer, focus, and
 // text-input regressions specific to WebKit go uncaught. This lane re-runs the
-// chat pointer/focus/composer specs plus the plugin-views visual spec on
-// WebKit. Scoped to keyless, stub-backed specs that need no
+// chat pointer/focus/composer specs plus the plugin-views keyboard focus-order
+// audit on WebKit. Scoped to keyless, stub-backed specs that need no
 // Chromium-only permissions (clipboard/microphone) or fake-media launch flags,
 // so they run green on WebKit (chat-message-actions and wallet-inventory grant
 // clipboard permissions WebKit does not support and are intentionally excluded).
 // CDP-touch specs (Input.dispatchTouchEvent is Chromium-only) stay on Chromium.
-// plugin-views-visual is included for its renders + console-error +
-// composer-focus audit (focus walk recorded to audit JSON): the registered
-// plugin views ship in the iOS/macOS WKWebView, so a WebKit render or focus
-// divergence must be caught here, not only on Chromium. (TUI focus-reach
-// assertion is Linux-CI-authoritative; macOS WebKit Tab may skip buttons per
-// platform keyboard-UI mode.)
-// Opt-in via PLAYWRIGHT_WEBKIT=1: WebKit is a separate browser download
+// plugin-views-visual is included for its Tab-order keyboard-navigation audit:
+// the registered plugin views ship in the iOS/macOS WKWebView, so a WebKit focus
+// or sequential-focus-navigation divergence must be caught here, not only on
+// Chromium. Opt-in via PLAYWRIGHT_WEBKIT=1: WebKit is a separate browser download
 // (`playwright install webkit`) not present on every machine, so gating keeps the
 // default lane from reddening where WebKit is absent.
 const WEBKIT_POINTER_FOCUS_SPEC =

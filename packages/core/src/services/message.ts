@@ -237,6 +237,7 @@ import { isObjectRecord as isRecord } from "../utils/type-guards";
 import { maybeHandleAnalysisActivation } from "./analysis-mode-handler";
 import { ChannelTopicsService } from "./channel-topics";
 import { runPostTurnEvaluators } from "./evaluator";
+import { runBotNoiseTriage } from "./message/bot-noise-triage";
 import {
 	findAvailableActionName,
 	findWebLookupActionName,
@@ -8864,6 +8865,46 @@ export class DefaultMessageService implements IMessageService {
 			}
 		}
 
+		// Cheap-tier triage for unaddressed bot/webhook traffic. A relay channel
+		// flooding automated embeds otherwise burns a full composeState + Stage 1
+		// RESPONSE_HANDLER call (the most expensive model in the stack — on
+		// subscription-backed providers ~1000 IGNOREs/day drain the daily session
+		// budget and take the agent down) just to conclude IGNORE. Triage those
+		// turns on TEXT_SMALL BEFORE state composition; an IGNORE verdict ends the
+		// turn with zero large-tier calls. Addressed/human/private-channel turns
+		// never enter this gate, and any triage failure falls open to the full
+		// pipeline.
+		const botNoiseTriage = await runBotNoiseTriage({
+			runtime,
+			message,
+			explicitlyAddressesAgent,
+		});
+		if (botNoiseTriage.applied && !botNoiseTriage.respond) {
+			runtime.logger.info(
+				{
+					src: "service:message",
+					agentId: runtime.agentId,
+					roomId: message.roomId,
+					entityId: message.entityId,
+				},
+				"Unaddressed bot/webhook message ignored by small-model triage (skipped Stage 1)",
+			);
+			await this.emitRunEnded(
+				runtime,
+				runId,
+				message,
+				startTime,
+				"bot_noise_triage",
+			);
+			return {
+				didRespond: false,
+				responseContent: null,
+				responseMessages: [],
+				state: { values: {}, data: {}, text: "" } as State,
+				mode: "none",
+			};
+		}
+
 		// Room context for shouldRespond (fetch before compose so providers see
 		// post-attachment and post-incoming-hook message state).
 		const room = await runtime.getRoom(message.roomId);
@@ -9166,7 +9207,7 @@ export class DefaultMessageService implements IMessageService {
 						error: errMsg,
 						stack: errStack,
 					},
-					"v5 message runtime failed; returning structured failure reply",
+					"v5 message runtime failed",
 				);
 				// Mirror to process.stderr so bench / orchestrator runs can see
 				// the underlying cause when runtime.logger output is buffered or
@@ -9182,17 +9223,54 @@ export class DefaultMessageService implements IMessageService {
 				} catch {
 					// stderr write must never throw the runtime.
 				}
-				shouldRespondToMessage = true;
-				terminalDecision = null;
-				strategyResult = await this.buildStructuredFailureReply(
+				// Rate limits and provider outages throw from the Stage 1 model
+				// call itself — before any RESPOND/IGNORE decision exists. For
+				// ambiguous group traffic the pre-failure outcome would have been
+				// IGNORE, so an unconditional failure reply spams rooms that never
+				// addressed the agent (observed live: 91 canned-failure sends in
+				// 2 days into relay rooms during a rate-limit window). Surface
+				// failure text only when the turn deterministically addressed the
+				// agent (DM/API/SELF channel, platform mention/reply, whitelisted
+				// source, name+tag address), the turn is autonomous, or an early
+				// ack already went out (the user saw the bot engage). Everything
+				// else stays silent, matching the IGNORE it would have gotten.
+				const failureGate = this.shouldRespond(
 					runtime,
 					message,
-					state,
-					responseId,
-					"running the native tool message runtime",
+					room ?? undefined,
+					mentionContext,
 				);
-				_usedV5Runtime = true;
-				state = strategyResult.state;
+				const addressedForFailureReply =
+					failureGate.shouldRespond ||
+					mentionContext?.isMention === true ||
+					mentionContext?.isReply === true ||
+					isAutonomous ||
+					earlyReplyMessages.length > 0;
+				if (addressedForFailureReply) {
+					shouldRespondToMessage = true;
+					terminalDecision = null;
+					strategyResult = await this.buildStructuredFailureReply(
+						runtime,
+						message,
+						state,
+						responseId,
+						"running the native tool message runtime",
+					);
+					_usedV5Runtime = true;
+					state = strategyResult.state;
+				} else {
+					runtime.logger.info(
+						{
+							src: "service:message",
+							agentId: runtime.agentId,
+							roomId: message.roomId,
+							reason: failureGate.reason,
+						},
+						"v5 runtime failed before a respond decision on an unaddressed message; suppressing failure reply",
+					);
+					shouldRespondToMessage = false;
+					terminalDecision = "IGNORE";
+				}
 			}
 		} else if (!hasTextGenerationHandler(runtime)) {
 			await runtime.applyPipelineHooks(

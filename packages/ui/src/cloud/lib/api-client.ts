@@ -25,9 +25,11 @@
  */
 
 import { Capacitor, CapacitorHttp } from "@capacitor/core";
+import { getElizaApiToken } from "@elizaos/shared";
 import { STEWARD_TOKEN_KEY } from "@elizaos/shared/steward-session-client";
 import { isElectrobunRuntime } from "../../bridge/electrobun-runtime";
 import { getBootConfig } from "../../config/boot-config";
+import { decodeJwtPayload } from "./jwt";
 
 // The single Eliza Cloud API host the native/Electrobun transport is allowed to
 // reach cross-origin. Kept deliberately narrow: only this exact host relaxes the
@@ -152,6 +154,60 @@ function readStewardToken(): string | null {
   } catch {
     return null;
   }
+}
+
+function clearStoredStewardTokenIfCurrent(token: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (window.localStorage.getItem(STEWARD_TOKEN_KEY) === token) {
+      window.localStorage.removeItem(STEWARD_TOKEN_KEY);
+      window.dispatchEvent(new CustomEvent("steward-token-sync"));
+    }
+  } catch {
+    // ignore storage/event failures; the fallback token path can still proceed.
+  }
+}
+
+function readLiveNativeStewardToken(token: string): string | null {
+  const claims = decodeJwtPayload(token);
+  const expMs = typeof claims?.exp === "number" ? claims.exp * 1000 : null;
+  if (!claims || expMs === null || expMs <= Date.now()) {
+    clearStoredStewardTokenIfCurrent(token);
+    return null;
+  }
+  return token;
+}
+
+/**
+ * Resolve the Cloud bearer for the auth header. The Steward session JWT stays
+ * first (canonical, unchanged). On native/Electrobun ONLY, fall back to the
+ * owner cloud API key: device-code sign-in never writes `STEWARD_TOKEN_KEY` —
+ * it stores the cloud API key on the agent client, which mirrors it into boot
+ * config + the `__ELIZA_API_TOKEN__` global (see `ElizaClient.setToken`). So
+ * without this fallback every native Apps API call left the WebView with NO
+ * Authorization header and 401'd (#11930). The chain mirrors the canonical
+ * `getCloudAuthToken()` in `../../api/client-cloud.ts` (steward JWT →
+ * `__ELIZA_CLOUD_AUTH_TOKEN__` global → client REST token), read here via the
+ * token's out-of-band mirrors because this module has no client handle. The
+ * Cloud API accepts both a Steward JWT and the owner API key. Web stays
+ * byte-identical (steward token or nothing, exactly as before).
+ */
+function readCloudBearerToken(): string | null {
+  const stewardToken = readStewardToken()?.trim();
+  if (stewardToken) {
+    if (!isNativeCloudRuntime()) return stewardToken;
+    const liveToken = readLiveNativeStewardToken(stewardToken);
+    if (liveToken) return liveToken;
+  }
+  if (!isNativeCloudRuntime()) return null;
+  const globalToken = (globalThis as Record<string, unknown>)
+    .__ELIZA_CLOUD_AUTH_TOKEN__;
+  if (typeof globalToken === "string" && globalToken.trim()) {
+    return globalToken.trim();
+  }
+  const restToken =
+    getBootConfig().apiToken?.trim() || getElizaApiToken()?.trim();
+  return restToken || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -334,7 +390,7 @@ export async function apiFetch(
     headers.set("Content-Type", "application/json");
   }
   if (!skipAuth) {
-    const token = readStewardToken();
+    const token = readCloudBearerToken();
     if (token && !headers.has("Authorization")) {
       headers.set("Authorization", `Bearer ${token}`);
     }
