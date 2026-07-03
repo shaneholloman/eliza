@@ -1,4 +1,5 @@
 import type { PricingBillingSource } from "../../services/ai-pricing-definitions";
+import { atlasCloudVideoProvider } from "./atlascloud-video-generation";
 import { falVideoProvider } from "./fal-video-generation";
 import type { VideoProvider } from "./types";
 
@@ -17,3 +18,4 @@ export function getVideoProvider(billingSource: PricingBillingSource): VideoProv
 }
 
 registerVideoProvider(falVideoProvider);
+registerVideoProvider(atlasCloudVideoProvider);
