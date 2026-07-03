@@ -149,10 +149,6 @@ app.post("/", async (c) => {
         413,
       );
     }
-
-    const metadata = parseMetadata(form.get("metadata"));
-    const apiKeyId = c.get("apiKeyId") as string | undefined;
-    const uploaded = [];
     for (const file of files) {
       if (file.size > MAX_UPLOAD_BYTES) {
         return c.json(
@@ -163,6 +159,14 @@ app.post("/", async (c) => {
           413,
         );
       }
+    }
+
+    const metadata = parseMetadata(form.get("metadata"));
+    const apiKeyId = c.get("apiKeyId") as string | undefined;
+    const uploaded: Array<
+      Awaited<ReturnType<typeof cloudFilesService.upload>>
+    > = [];
+    for (const file of files) {
       try {
         uploaded.push(
           await cloudFilesService.upload(c.env, {
@@ -174,6 +178,24 @@ app.post("/", async (c) => {
           }),
         );
       } catch (error) {
+        for (let index = uploaded.length - 1; index >= 0; index -= 1) {
+          const uploadedFile = uploaded[index];
+          await cloudFilesService
+            .delete(c.env, user.organization_id, uploadedFile.id)
+            .catch((deleteError) => {
+              logger.warn(
+                "[CloudFiles API] Failed to roll back multipart upload after failure",
+                {
+                  organizationId: user.organization_id,
+                  fileId: uploadedFile.id,
+                  error:
+                    deleteError instanceof Error
+                      ? deleteError.message
+                      : String(deleteError),
+                },
+              );
+            });
+        }
         if (error instanceof CloudFileQuotaExceededError) {
           return c.json({ success: false, error: error.message }, 413);
         }
