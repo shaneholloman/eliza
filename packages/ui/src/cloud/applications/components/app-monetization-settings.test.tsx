@@ -197,4 +197,73 @@ describe("AppMonetizationSettings review gate", () => {
       }),
     );
   });
+
+  it("renders an already-approved app with an enabled toggle and no submit button", async () => {
+    apiMock.mockResolvedValue({
+      success: true,
+      monetization: {
+        monetizationEnabled: false,
+        inferenceMarkupPercentage: 25,
+        purchaseSharePercentage: 10,
+        platformOffsetAmount: 1,
+        totalCreatorEarnings: 0,
+      },
+    });
+
+    renderMonetization(makeApp({ review_status: "approved" }));
+
+    expect(await screen.findByText("Review approved")).toBeTruthy();
+    expect((screen.getByRole("switch") as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Submit for review" }),
+    ).toBeNull();
+  });
+
+  it("keeps the toggle gated on a rejected app and offers resubmission", async () => {
+    apiMock.mockResolvedValue({
+      success: true,
+      monetization: {
+        monetizationEnabled: false,
+        inferenceMarkupPercentage: 25,
+        purchaseSharePercentage: 10,
+        platformOffsetAmount: 1,
+        totalCreatorEarnings: 0,
+      },
+    });
+
+    renderMonetization(makeApp({ review_status: "rejected" }));
+
+    expect(await screen.findByText("Review rejected")).toBeTruthy();
+    expect((screen.getByRole("switch") as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(
+      screen.getByRole("button", { name: "Submit for review" }),
+    ).toBeTruthy();
+  });
+
+  it("keeps the toggle gated while a review is pending", async () => {
+    apiMock.mockResolvedValue({
+      success: true,
+      monetization: {
+        monetizationEnabled: false,
+        inferenceMarkupPercentage: 25,
+        purchaseSharePercentage: 10,
+        platformOffsetAmount: 1,
+        totalCreatorEarnings: 0,
+      },
+    });
+
+    renderMonetization(makeApp({ review_status: "under_review" }));
+
+    expect(await screen.findByText("Review in progress")).toBeTruthy();
+    expect((screen.getByRole("switch") as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Submit for review" }),
+    ).toBeNull();
+  });
 });
