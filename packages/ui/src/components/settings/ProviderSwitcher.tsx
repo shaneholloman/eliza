@@ -311,8 +311,20 @@ export function ProviderSwitcher(props: ProviderSwitcherProps = {}) {
  * The provider currently routing this agent's intelligence, surfaced as a single
  * anchored row above the chip cloud so "what's powering me right now" is answered
  * without scanning every chip for the filled/active state.
+ *
+ * Honesty note: most coding-plan subscriptions (Claude Subscription, Gemini/
+ * z.ai/Kimi/DeepSeek coding plans) can be the "current" selection WITHOUT
+ * routing the main chat inference — `applySubscriptionProviderConfig`
+ * (packages/agent/src/api/provider-switch-config.ts) records them for the
+ * task-agent orchestrator and only sets a runtime `model.primary` for the
+ * Codex plan (`openai-codex`). A bare "Active" here therefore read as "this
+ * now powers chat", which is false for Claude. Those entries get a qualified
+ * label + note so the summary states what the selection actually does; the
+ * Codex plan (which really can power the runtime) keeps the plain label.
+ *
+ * @internal Exported for testing only.
  */
-function ActiveProviderSummary({
+export function ActiveProviderSummary({
   entry,
   t,
 }: {
@@ -320,6 +332,10 @@ function ActiveProviderSummary({
   t: (key: string, vars?: Record<string, unknown>) => string;
 }) {
   const Icon = entry.icon;
+  // Mirrors the `runtimeApplicable` rule in provider-switch-config.ts: of the
+  // subscription selections only openai-codex may drive runtime inference.
+  const codingAgentsOnly =
+    entry.category === "subscription" && entry.id !== "openai-subscription";
   return (
     <SettingsRow
       label={
@@ -331,9 +347,21 @@ function ActiveProviderSummary({
           {entry.label}
         </span>
       }
+      description={
+        codingAgentsOnly
+          ? t("providerswitcher.codingSubscriptionChatNote", {
+              defaultValue:
+                "Powers coding agents & workflows only — chat replies keep using the Intelligence provider above.",
+            })
+          : undefined
+      }
       control={
         <span className="text-xs text-accent">
-          {t("providerswitcher.activeProvider", { defaultValue: "Active" })}
+          {codingAgentsOnly
+            ? t("providerswitcher.activeProviderCodingAgents", {
+                defaultValue: "Active for coding agents",
+              })
+            : t("providerswitcher.activeProvider", { defaultValue: "Active" })}
         </span>
       }
     />
