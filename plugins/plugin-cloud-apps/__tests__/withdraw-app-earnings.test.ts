@@ -18,7 +18,7 @@ mock.module("@elizaos/cloud-sdk", () => ({
   ElizaCloudClient: FakeElizaCloudClient,
 }));
 
-const { withdrawAppEarningsAction } = await import(
+const { parseWithdrawAmount, withdrawAppEarningsAction } = await import(
   "../src/actions/withdraw-app-earnings.ts"
 );
 
@@ -186,6 +186,64 @@ describe("WITHDRAW_APP_EARNINGS", () => {
     expect(result?.success).toBe(true);
   });
 
+  it("MONEY REGRESSION: planner-nested amount stages $50, NOT the full balance", async () => {
+    // Real planner path (execute-planned-tool-call.ts): validated args arrive
+    // under options.parameters and the text carries no digits. The old
+    // top-level-only read missed the amount → requested=null → the FULL $100
+    // balance was staged and a confirm withdrew all of it.
+    const withdrawals = trackWithdrawals();
+    const runtime = keyedRuntime();
+    const cb = captureCallback();
+    const first = await withdrawAppEarningsAction.handler(
+      runtime,
+      makeMessage("withdraw fifty dollars from my Acme Bot earnings"),
+      undefined,
+      { parameters: { appName: "Acme Bot", amount: 50 } },
+      cb.fn,
+    );
+    expect((first?.data as { amount: number }).amount).toBe(50);
+    expect(cb.calls[0]?.text).toContain("$50.00");
+    expect(cb.calls[0]?.text).not.toContain("$100.00");
+    expect(withdrawals.calls).toHaveLength(0);
+
+    const result = await withdrawAppEarningsAction.handler(
+      runtime,
+      makeMessage("confirmo"),
+      undefined,
+      { parameters: { confirm: true } },
+      captureCallback().fn,
+    );
+    expect(result?.success).toBe(true);
+    expect(withdrawals.calls).toHaveLength(1);
+    expect(withdrawals.calls[0]?.request.amount).toBe(50); // NOT the full 100
+  });
+
+  it("REGRESSION: a digit inside the app name never reads as an amount", async () => {
+    // "withdraw my Acme2 earnings" — the old bare-number regex captured the
+    // "2" of "Acme2" as $2.00 (here: a below-threshold refusal; elsewhere a
+    // wrong staged amount). It must stage the full balance instead.
+    const acme2 = makeApp({
+      id: "id-acme2",
+      name: "Acme2",
+      slug: "acme2",
+      monetization_enabled: true,
+    });
+    setListApps(() => Promise.resolve({ success: true, apps: [acme2] }));
+    const withdrawals = trackWithdrawals();
+    const cb = captureCallback();
+    const result = await withdrawAppEarningsAction.handler(
+      keyedRuntime(),
+      makeMessage("withdraw my Acme2 earnings"),
+      undefined,
+      undefined,
+      cb.fn,
+    );
+    expect(result?.success).toBe(true);
+    expect((result?.data as { amount: number }).amount).toBe(100);
+    expect(cb.calls[0]?.text).toContain("$100.00");
+    expect(withdrawals.calls).toHaveLength(0);
+  });
+
   it("structured confirm without a pending prompt does NOT withdraw", async () => {
     const withdrawals = trackWithdrawals();
     const result = await withdrawAppEarningsAction.handler(
@@ -328,5 +386,66 @@ describe("WITHDRAW_APP_EARNINGS", () => {
     );
     expect(result?.success).toBe(false);
     expect((result?.data as { reason: string }).reason).toBe("error");
+  });
+});
+
+describe("parseWithdrawAmount — planner options (nested `parameters` first) + text", () => {
+  it("MONEY REGRESSION: reads the amount nested under options.parameters — the real planner shape", () => {
+    // Missing this returned null → the handler staged the FULL withdrawable
+    // balance for a "withdraw fifty dollars from Acme" ask.
+    expect(
+      parseWithdrawAmount("withdraw fifty dollars from Acme", {
+        parameters: { amount: 50 },
+      }),
+    ).toBe(50);
+    expect(
+      parseWithdrawAmount("", { parameters: { amount: "$1,250.50" } }),
+    ).toBe(1250.5);
+    expect(parseWithdrawAmount("", { parameters: { usd: 25 } })).toBe(25);
+  });
+
+  it("nested planner args win over top-level keys", () => {
+    expect(
+      parseWithdrawAmount("", { amount: 10, parameters: { amount: 50 } }),
+    ).toBe(50);
+  });
+
+  it("still reads top-level options (direct handler calls)", () => {
+    expect(parseWithdrawAmount("", { amount: 50 })).toBe(50);
+    expect(parseWithdrawAmount("", { value: "75" })).toBe(75);
+  });
+
+  it("ignores non-positive / non-numeric option values", () => {
+    expect(parseWithdrawAmount("", { parameters: { amount: 0 } })).toBeNull();
+    expect(parseWithdrawAmount("", { parameters: { amount: -5 } })).toBeNull();
+    expect(
+      parseWithdrawAmount("", { parameters: { amount: "fifty" } }),
+    ).toBeNull();
+  });
+
+  it("parses explicit currency and standalone amounts from text", () => {
+    expect(parseWithdrawAmount("withdraw $50 from Acme")).toBe(50);
+    expect(parseWithdrawAmount("withdraw 50 dollars from Acme")).toBe(50);
+    expect(parseWithdrawAmount("cash out 12.5 usd")).toBe(12.5);
+    expect(parseWithdrawAmount("withdraw 50 from Acme")).toBe(50);
+    expect(parseWithdrawAmount("payout 25")).toBe(25);
+  });
+
+  it("REGRESSION: a digit glued into an app name is NOT an amount", () => {
+    // The old bare-number regex captured the "2" of "Acme2" → $2.00.
+    expect(parseWithdrawAmount("withdraw my Acme2 earnings")).toBeNull();
+    expect(parseWithdrawAmount("cash out App2000")).toBeNull();
+    expect(parseWithdrawAmount("payout for my a1b2 app")).toBeNull();
+  });
+
+  it("rejects a number glued to trailing letters (not a standalone token)", () => {
+    expect(parseWithdrawAmount("withdraw 50k from Acme")).toBeNull();
+  });
+
+  it("returns null (= full balance) when no amount appears anywhere", () => {
+    expect(parseWithdrawAmount("withdraw my Acme earnings")).toBeNull();
+    expect(parseWithdrawAmount("withdraw fifty dollars")).toBeNull();
+    expect(parseWithdrawAmount("")).toBeNull();
+    expect(parseWithdrawAmount("", undefined)).toBeNull();
   });
 });
