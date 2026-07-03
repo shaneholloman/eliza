@@ -114,6 +114,18 @@ async function collectControls(
         textarea: "textbox",
       };
 
+      const NATIVE_ROLE_OVERRIDES: Record<string, readonly string[]> = {
+        button: [
+          "combobox",
+          "menuitem",
+          "menuitemcheckbox",
+          "menuitemradio",
+          "option",
+          "tab",
+        ],
+        textarea: ["combobox"],
+      };
+
       const isVisible = (el: Element): boolean => {
         const style = window.getComputedStyle(el);
         if (
@@ -228,6 +240,7 @@ async function collectControls(
           explicitRole &&
           implicit &&
           explicitRole !== implicit &&
+          !(NATIVE_ROLE_OVERRIDES[tag] ?? []).includes(explicitRole) &&
           // <a> without href has no implicit link role, so an explicit role is fine.
           !(tag === "a" && !el.getAttribute("href"))
         ) {
@@ -291,6 +304,24 @@ async function collectControls(
         const rect = el.getBoundingClientRect();
         const width = Math.round(rect.width * 100) / 100;
         const height = Math.round(rect.height * 100) / 100;
+
+        if (
+          tag === "input" &&
+          (type === "color" || type === "file") &&
+          (el.classList.contains("sr-only") ||
+            rect.width <= 1 ||
+            rect.height <= 1)
+        ) {
+          results.push({
+            descriptor,
+            width,
+            height,
+            status: "exception",
+            kind: "geometry",
+            reason: `visually-hidden ${type} input; visible proxy button is the tap surface`,
+          });
+          continue;
+        }
 
         // Nested inner control: an interactive element inside another
         // interactive element — the OUTER element is the real tap surface.
