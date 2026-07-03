@@ -3042,3 +3042,68 @@ describe("ContinuousChatOverlay — cold-boot banner grace gate", () => {
     expect(screen.queryByTestId("chat-boot-status")).toBeNull();
   });
 });
+
+// When no LLM/model provider is configured the agent's `canRespond` never flips,
+// so `phase` stays "booting" forever. Without this fix the "Waking …" spinner
+// would spin indefinitely; instead the controller flags `noProviderConfigured`
+// and the overlay suppresses the boot banner (the in-transcript no_provider gate
+// is the real error surface) and stops promising the agent is "waking up".
+describe("ContinuousChatOverlay — no LLM provider configured", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("suppresses the forever 'Waking …' boot banner when no provider is configured", () => {
+    render(
+      <ContinuousChatOverlay
+        controller={makeController({
+          phase: "booting",
+          noProviderConfigured: true,
+        })}
+      />,
+    );
+    // Well past the 600ms grace window — a cold boot WOULD show the banner here.
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    // No spinner: the agent is not "waking", it's misconfigured.
+    expect(screen.queryByTestId("chat-boot-status")).toBeNull();
+  });
+
+  it("still shows the boot banner when it IS a genuine warm-up (no no_provider signal)", () => {
+    render(
+      <ContinuousChatOverlay
+        controller={makeController({
+          phase: "booting",
+          noProviderConfigured: false,
+        })}
+      />,
+    );
+    act(() => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(screen.getByTestId("chat-boot-status").textContent).toContain(
+      "Waking",
+    );
+  });
+
+  it("swaps the 'waking up…' composer placeholder for a Settings CTA hint", () => {
+    render(
+      <ContinuousChatOverlay
+        controller={makeController({
+          phase: "booting",
+          noProviderConfigured: true,
+        })}
+      />,
+    );
+    const input = screen.getByLabelText("message");
+    const placeholder = input.getAttribute("placeholder") ?? "";
+    expect(placeholder).not.toContain("waking up");
+    expect(placeholder).toContain("Settings");
+    // Typing is still allowed (the send comes back with the gate again if needed).
+    expect(input.hasAttribute("readonly")).toBe(false);
+  });
+});
