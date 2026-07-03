@@ -1,4 +1,4 @@
-import { type IAgentRuntime, Service } from "@elizaos/core";
+import { type IAgentRuntime, logger, Service } from "@elizaos/core";
 import type {
   CreateLifeOpsCalendarEventAttendee,
   CreateLifeOpsCalendarEventRequest,
@@ -51,6 +51,17 @@ import {
   normalizeOptionalString,
   requireNonEmptyString,
 } from "../internal/normalize.js";
+import {
+  cancelAllMeetingAutoJoinTasks,
+  reconcileMeetingAutoJoin,
+  restoreMeetingAutoJoinAnchors,
+} from "../meetings/auto-join.js";
+import {
+  isMeetingAutoJoinPolicy,
+  type MeetingAutoJoinSettings,
+  readMeetingAutoJoinSettings,
+  writeMeetingAutoJoinPolicy,
+} from "../meetings/auto-join-settings.js";
 import {
   CalendarRepository,
   createLifeOpsCalendarSyncState,
@@ -209,10 +220,92 @@ export class CalendarService extends Service {
   static override async start(
     runtime: IAgentRuntime,
   ): Promise<CalendarService> {
-    return new CalendarService(runtime);
+    const service = new CalendarService(runtime);
+    // Anchor registrations for meeting auto-join are in-memory; restore them
+    // for upcoming events so persisted join tasks resolve after a restart.
+    // Best-effort: the schema may not be migrated yet on first boot.
+    void service.restoreMeetingAutoJoinAnchorsOnBoot();
+    return service;
   }
 
   override async stop(): Promise<void> {}
+
+  private async restoreMeetingAutoJoinAnchorsOnBoot(): Promise<void> {
+    try {
+      const nowIso = new Date().toISOString();
+      const horizonIso = new Date(
+        Date.now() + 14 * 24 * 60 * 60 * 1000,
+      ).toISOString();
+      const events = [
+        ...(await this.repo.listCalendarEvents(
+          this.agentId(),
+          "google",
+          nowIso,
+          horizonIso,
+        )),
+        ...(await this.repo.listCalendarEvents(
+          this.agentId(),
+          APPLE_CALENDAR_PROVIDER,
+          nowIso,
+          horizonIso,
+        )),
+      ];
+      await restoreMeetingAutoJoinAnchors(this.runtime, this.agentId(), events);
+    } catch (error) {
+      logger.debug(
+        { src: "calendar:service", error },
+        "[CalendarService] Meeting auto-join anchor restore skipped (calendar store not ready yet).",
+      );
+    }
+  }
+
+  async getMeetingAutoJoin(): Promise<MeetingAutoJoinSettings> {
+    return readMeetingAutoJoinSettings(this.runtime);
+  }
+
+  async setMeetingAutoJoin(policy: unknown): Promise<MeetingAutoJoinSettings> {
+    if (!isMeetingAutoJoinPolicy(policy)) {
+      throw new CalendarServiceError(
+        400,
+        'policy must be one of "off", "ask", "all"',
+      );
+    }
+    const settings = await writeMeetingAutoJoinPolicy(this.runtime, policy);
+    if (policy === "off") {
+      await cancelAllMeetingAutoJoinTasks(this.runtime, this.agentId());
+    } else {
+      // Re-reconcile upcoming events under the new policy so tasks flip
+      // between direct-join and approval-gated without waiting for a sync.
+      await this.reconcileUpcomingMeetingAutoJoin();
+    }
+    return settings;
+  }
+
+  private async reconcileUpcomingMeetingAutoJoin(): Promise<void> {
+    const nowIso = new Date().toISOString();
+    const horizonIso = new Date(
+      Date.now() + 14 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const events = [
+      ...(await this.repo.listCalendarEvents(
+        this.agentId(),
+        "google",
+        nowIso,
+        horizonIso,
+      )),
+      ...(await this.repo.listCalendarEvents(
+        this.agentId(),
+        APPLE_CALENDAR_PROVIDER,
+        nowIso,
+        horizonIso,
+      )),
+    ];
+    await reconcileMeetingAutoJoin({
+      runtime: this.runtime,
+      agentId: this.agentId(),
+      events,
+    });
+  }
 
   /** LifeOps injects its connector + reminder + audit implementation here. */
   setGate(gate: CalendarHostGate): void {
@@ -458,6 +551,12 @@ export class CalendarService extends Service {
       await this.repo.upsertCalendarEvent(event, grant.side);
     }
     await this.syncCalendarReminderPlans(nextEvents);
+    await reconcileMeetingAutoJoin({
+      runtime: this.runtime,
+      agentId: this.agentId(),
+      events: nextEvents,
+      removedEventIds,
+    });
     await this.repo.upsertCalendarSyncState(
       createLifeOpsCalendarSyncState({
         agentId: this.agentId(),
@@ -534,6 +633,12 @@ export class CalendarService extends Service {
       await this.repo.upsertCalendarEvent(event, "owner");
     }
     await this.syncCalendarReminderPlans(nextEvents);
+    await reconcileMeetingAutoJoin({
+      runtime: this.runtime,
+      agentId: this.agentId(),
+      events: nextEvents,
+      removedEventIds,
+    });
     await this.repo.upsertCalendarSyncState(
       createLifeOpsCalendarSyncState({
         agentId: this.agentId(),
@@ -761,6 +866,11 @@ export class CalendarService extends Service {
     });
     await this.repo.upsertCalendarEvent(event, grant.side);
     await this.syncCalendarReminderPlans([event]);
+    await reconcileMeetingAutoJoin({
+      runtime: this.runtime,
+      agentId: this.agentId(),
+      events: [event],
+    });
     await this.recordCalendarEventAudit(
       event.id,
       "calendar event created through plugin-google",
@@ -792,6 +902,11 @@ export class CalendarService extends Service {
     }
     await this.repo.upsertCalendarEvent(nativeEvent.data, "owner");
     await this.syncCalendarReminderPlans([nativeEvent.data]);
+    await reconcileMeetingAutoJoin({
+      runtime: this.runtime,
+      agentId: this.agentId(),
+      events: [nativeEvent.data],
+    });
     await this.recordCalendarEventAudit(
       nativeEvent.data.id,
       "calendar event created through native Apple Calendar",
@@ -904,6 +1019,11 @@ export class CalendarService extends Service {
     });
     await this.repo.upsertCalendarEvent(event, grant.side);
     await this.syncCalendarReminderPlans([event]);
+    await reconcileMeetingAutoJoin({
+      runtime: this.runtime,
+      agentId: this.agentId(),
+      events: [event],
+    });
     await this.recordCalendarEventAudit(
       event.id,
       "calendar event updated through plugin-google",
@@ -932,6 +1052,11 @@ export class CalendarService extends Service {
     }
     await this.repo.upsertCalendarEvent(nativeEvent.data, "owner");
     await this.syncCalendarReminderPlans([nativeEvent.data]);
+    await reconcileMeetingAutoJoin({
+      runtime: this.runtime,
+      agentId: this.agentId(),
+      events: [nativeEvent.data],
+    });
     await this.recordCalendarEventAudit(
       nativeEvent.data.id,
       "calendar event updated through native Apple Calendar",
@@ -996,6 +1121,12 @@ export class CalendarService extends Service {
       grant.side,
     );
     await this.deleteCalendarReminderPlansForEvents(cachedOwnerIds);
+    await reconcileMeetingAutoJoin({
+      runtime: this.runtime,
+      agentId: this.agentId(),
+      events: [],
+      removedEventIds: cachedOwnerIds,
+    });
     await this.recordCalendarEventAudit(
       eventId,
       "calendar event deleted through plugin-google",
@@ -1030,6 +1161,12 @@ export class CalendarService extends Service {
       "owner",
     );
     await this.deleteCalendarReminderPlansForEvents(cachedOwnerIds);
+    await reconcileMeetingAutoJoin({
+      runtime: this.runtime,
+      agentId: this.agentId(),
+      events: [],
+      removedEventIds: cachedOwnerIds,
+    });
     await this.recordCalendarEventAudit(
       eventId,
       "calendar event deleted through native Apple Calendar",
