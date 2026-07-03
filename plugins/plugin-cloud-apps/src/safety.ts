@@ -71,9 +71,13 @@ export interface CloudAppConfirmationMetadata {
   /** The exact domain a pending BUY_APP_DOMAIN confirmation is for. */
   domain?: string;
   /**
-   * True when the pending BUY_APP_DOMAIN is a recovery retry of a purchase
-   * that already charged + registered but failed to attach (the server
-   * finishes it without a new charge).
+   * True when the pending is a recovery retry of a money move whose earlier
+   * attempt already (or may already) have committed server-side:
+   * BUY_APP_DOMAIN — the purchase charged + registered but failed to attach
+   * (the server finishes it without a new charge); BOOK_INFLUENCER — the fund
+   * call failed at the transport level, so the escrow may already be held and
+   * the pending's taskId is the sole holder of the idempotency key the server
+   * dedupes/resumes on. Recovery retries complete without a second charge.
    */
   recovery?: boolean;
   cta?: ConnectorCta;
@@ -101,9 +105,10 @@ export const CONFIRM_TTL_MS = 15 * 60 * 1000;
 /**
  * True when a pending confirmation is older than {@link CONFIRM_TTL_MS}.
  *
- * A BUY_APP_DOMAIN recovery retry never expires: it completes with no new
- * charge — there is no stale price to protect, and expiring it would strand a
- * paid, unattached domain.
+ * A recovery retry never expires: it completes with no new charge — there is
+ * no stale price to protect, and expiring it would strand money already
+ * committed server-side (a paid, unattached domain; an influencer escrow whose
+ * idempotency key only the pending still holds).
  */
 export function pendingExpired(
   pending: PendingCloudAppConfirmation,
@@ -214,6 +219,33 @@ export async function persistCloudAppConfirmation(
       intentCreatedAt: metadata.intentCreatedAt ?? new Date().toISOString(),
     },
   });
+}
+
+/**
+ * Mark an existing pending confirmation as a recovery retry IN PLACE.
+ *
+ * The task is updated, never deleted + re-created: for BOOK_INFLUENCER the
+ * taskId is the escrow idempotency key (`influencer-confirm-<taskId>`), so a
+ * re-created task would mint a new key and let a user retry fund a SECOND
+ * escrow instead of resuming the first (#11844). Failures are logged and
+ * swallowed — the pending (and its key) survives either way; only the TTL
+ * exemption is best-effort.
+ */
+export async function markCloudAppConfirmationRecovery(
+  runtime: IAgentRuntime,
+  pending: PendingCloudAppConfirmation,
+): Promise<void> {
+  try {
+    await runtime.updateTask(pending.taskId as UUID, {
+      metadata: { ...pending.metadata, recovery: true },
+    });
+  } catch (err) {
+    logger.warn(
+      `[plugin-cloud-apps] failed to mark confirm task ${pending.taskId} as recovery: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
 }
 
 export async function deleteCloudAppConfirmation(

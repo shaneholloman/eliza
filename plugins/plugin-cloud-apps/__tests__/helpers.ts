@@ -133,7 +133,12 @@ type ListAppDomainsFn = (id: string) => Promise<ListAppDomainsResponse>;
 
 type CloudAppsTestRuntime = Pick<
   IAgentRuntime,
-  "agentId" | "getSetting" | "getTasks" | "createTask" | "deleteTask"
+  | "agentId"
+  | "getSetting"
+  | "getTasks"
+  | "createTask"
+  | "updateTask"
+  | "deleteTask"
 >;
 
 interface SdkState {
@@ -709,6 +714,11 @@ export function makeRuntime(
       });
       return Promise.resolve(id);
     },
+    updateTask: (id: UUID, patch: Partial<Task>) => {
+      const idx = tasks.findIndex((task) => task.id === id);
+      if (idx >= 0) tasks[idx] = { ...tasks[idx], ...patch };
+      return Promise.resolve();
+    },
     deleteTask: (id: UUID) => {
       const idx = tasks.findIndex((task) => task.id === id);
       if (idx >= 0) tasks.splice(idx, 1);
@@ -767,6 +777,11 @@ export function memoryRuntime(
         `task-0000-0000-0000-${String(++taskCounter).padStart(12, "0")}` as UUID;
       tasks.push({ ...task, id, agentId: task.agentId ?? TEST_AGENT_ID });
       return Promise.resolve(id);
+    },
+    updateTask: (id: UUID, patch: Partial<Task>) => {
+      const idx = tasks.findIndex((task) => task.id === id);
+      if (idx >= 0) tasks[idx] = { ...tasks[idx], ...patch };
+      return Promise.resolve();
     },
     deleteTask: (id: UUID) => {
       const idx = tasks.findIndex((task) => task.id === id);
