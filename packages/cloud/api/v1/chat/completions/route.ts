@@ -1419,6 +1419,7 @@ export async function handleChatCompletionsPOST(
           webSearchOptions,
           billingSource,
           pooledCredential,
+          useMonetizedAppBilling,
         )
       : await handleNonStreamingRequest(
           model,
@@ -1440,6 +1441,7 @@ export async function handleChatCompletionsPOST(
           webSearchOptions,
           billingSource,
           pooledCredential,
+          useMonetizedAppBilling,
           options.executionCtx,
         );
     // Emit per-step pre-forward timing as a readable header (#9899). Debug-only
@@ -1698,13 +1700,15 @@ async function handleStreamingRequest(
   webSearchOptions: ReturnType<typeof buildProviderNativeWebSearchTools>,
   billingSource: PricingBillingSource,
   pooledCredential: PooledInferenceCredential | null,
+  useMonetizedAppBilling: boolean,
 ) {
   const provider = getProviderFromModel(model);
   const tools = convertTools(request.tools);
   const toolChoice = mapToolChoice(request.tool_choice);
   const experimentalOutput = mapResponseFormat(request.response_format);
   const billingPrompt = buildChatPromptForBilling(request);
-  const billingAffiliateCode = pooledCredential ? null : affiliateCode;
+  const billingAffiliateCode =
+    pooledCredential && !useMonetizedAppBilling ? null : affiliateCode;
   let deliveredText = "";
   let streamingSettlementPromise: Promise<CreditReconciliationResult | null> | null =
     null;
@@ -2137,13 +2141,15 @@ async function handleNonStreamingRequest(
   webSearchOptions: ReturnType<typeof buildProviderNativeWebSearchTools>,
   billingSource: PricingBillingSource,
   pooledCredential: PooledInferenceCredential | null,
+  useMonetizedAppBilling: boolean,
   executionCtx: { waitUntil(promise: Promise<unknown>): void } | undefined,
 ) {
   const provider = getProviderFromModel(model);
   const tools = convertTools(request.tools);
   const toolChoice = mapToolChoice(request.tool_choice);
   const experimentalOutput = mapResponseFormat(request.response_format);
-  const billingAffiliateCode = pooledCredential ? null : affiliateCode;
+  const billingAffiliateCode =
+    pooledCredential && !useMonetizedAppBilling ? null : affiliateCode;
 
   const safeParamsNonStream = getSafeModelParams(model, {
     temperature: request.temperature,
