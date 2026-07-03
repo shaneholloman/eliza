@@ -1,6 +1,8 @@
 import {
   SUPPORTED_IMAGE_MODELS,
+  SUPPORTED_VIDEO_MODELS,
   type SupportedImageModelDefinition,
+  type SupportedVideoModelDefinition,
 } from "../../ai-pricing-definitions";
 import { getCachedExternalEntries } from "../cache";
 import { EXTERNAL_CACHE_TTL_MS, type PreparedPricingEntry } from "../types";
@@ -20,6 +22,14 @@ const ATLAS_IMAGE_PRICE_BY_MODEL: Record<string, number> = {
   "google/nano-banana-2/text-to-image": 0.03,
   // Qwen Image 2.0 (Alibaba).
   "qwen/qwen-image-2.0/text-to-image": 0.02,
+};
+
+const ATLAS_VIDEO_PRICE_BY_MODEL: Record<string, number> = {
+  // Vidu Q3 Turbo Text-to-Video Atlas page lists $0.04/sec, currently discounted to $0.034/sec.
+  // Bill the undiscounted rate to avoid undercharging when a promotion ends.
+  "vidu/q3-turbo/text-to-video": 0.04,
+  // Vidu Image-to-Video 2.0 Atlas page lists $0.075/sec.
+  "vidu/image-to-video-2.0": 0.075,
 };
 
 function buildAtlasImageEntry(
@@ -57,8 +67,43 @@ function buildAtlasImageSnapshotEntries(): PreparedPricingEntry[] {
   );
 }
 
+function buildAtlasVideoEntry(
+  model: SupportedVideoModelDefinition,
+  unitPrice: number,
+): PreparedPricingEntry {
+  const fetchedAt = new Date();
+  return {
+    billingSource: "atlascloud",
+    provider: model.provider,
+    model: model.modelId,
+    productFamily: "video",
+    chargeType: "generation",
+    unit: "second",
+    unitPrice,
+    dimensions: model.defaultParameters,
+    sourceKind: "atlascloud_catalog",
+    sourceUrl: model.pageUrl,
+    fetchedAt,
+    staleAfter: new Date(fetchedAt.getTime() + EXTERNAL_CACHE_TTL_MS),
+    metadata: {
+      tier: "manual_override_recommended",
+      note: "Manual Atlas Cloud video pricing seed. Refresh with account-specific pricing before production if needed.",
+    },
+  };
+}
+
+function buildAtlasVideoSnapshotEntries(): PreparedPricingEntry[] {
+  return SUPPORTED_VIDEO_MODELS.filter((model) => model.billingSource === "atlascloud").flatMap(
+    (model) => {
+      const unitPrice = ATLAS_VIDEO_PRICE_BY_MODEL[model.modelId];
+      if (unitPrice === undefined) return [];
+      return [buildAtlasVideoEntry(model, unitPrice)];
+    },
+  );
+}
+
 export async function fetchAtlasCloudCatalogEntries(): Promise<PreparedPricingEntry[]> {
   return await getCachedExternalEntries("atlascloud", async () => {
-    return buildAtlasImageSnapshotEntries();
+    return [...buildAtlasImageSnapshotEntries(), ...buildAtlasVideoSnapshotEntries()];
   });
 }

@@ -77,10 +77,16 @@ app.post("/", async (c) => {
     const apiKeys = {
       FAL_KEY: envString(c.env.FAL_KEY),
       FAL_API_KEY: envString(c.env.FAL_API_KEY),
+      ATLASCLOUD_API_KEY: envString(c.env.ATLASCLOUD_API_KEY),
+      ATLASCLOUD_BASE_URL: envString(c.env.ATLASCLOUD_BASE_URL),
     };
     if (provider.isConfigured && !provider.isConfigured(apiKeys)) {
       const providerName =
-        definition.provider === "fal" ? "Fal" : definition.provider;
+        definition.billingSource === "atlascloud"
+          ? "Atlas Cloud"
+          : definition.provider === "fal"
+            ? "Fal"
+            : definition.provider;
       return jsonError(
         c,
         503,

@@ -130,8 +130,8 @@ export interface SupportedImageModelDefinition {
 
 export interface SupportedVideoModelDefinition {
   modelId: string;
-  provider: "fal";
-  billingSource: "fal";
+  provider: string;
+  billingSource: PricingBillingSource;
   label: string;
   pageUrl: string;
   pricingParser:
@@ -143,7 +143,8 @@ export interface SupportedVideoModelDefinition {
     | "hailuo_pro"
     | "wan"
     | "pixverse"
-    | "seedance";
+    | "seedance"
+    | "atlascloud_snapshot";
   defaultParameters: {
     durationSeconds: number;
     resolution?: string;
@@ -308,6 +309,32 @@ export const SUPPORTED_IMAGE_MODELS: SupportedImageModelDefinition[] = [
 export const DEFAULT_IMAGE_MODEL_ID = "google/nano-banana-2/text-to-image";
 
 export const SUPPORTED_VIDEO_MODELS: SupportedVideoModelDefinition[] = [
+  {
+    modelId: "vidu/q3-turbo/text-to-video",
+    provider: "vidu",
+    billingSource: "atlascloud",
+    label: "Vidu Q3 Turbo Text-to-Video",
+    pageUrl: "https://www.atlascloud.ai/models/vidu/q3-turbo/text-to-video",
+    pricingParser: "atlascloud_snapshot",
+    defaultParameters: {
+      durationSeconds: 5,
+      resolution: "720p",
+      audio: false,
+    },
+  },
+  {
+    modelId: "vidu/image-to-video-2.0",
+    provider: "vidu",
+    billingSource: "atlascloud",
+    label: "Vidu Image-to-Video 2.0",
+    pageUrl: "https://www.atlascloud.ai/models/vidu/image-to-video-2.0",
+    pricingParser: "atlascloud_snapshot",
+    defaultParameters: {
+      durationSeconds: 4,
+      resolution: "720p",
+      audio: false,
+    },
+  },
   {
     modelId: "fal-ai/veo3",
     provider: "fal",
