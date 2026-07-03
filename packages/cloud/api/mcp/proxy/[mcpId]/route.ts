@@ -161,6 +161,20 @@ app.post("/", async (c) => {
     return c.json({ error: "MCP is not available" }, 404);
   }
 
+  // Owner-or-public gate (mirrors the GET handler): getById is unscoped and the
+  // catalog hides private MCPs, so without this a non-owner org could INVOKE
+  // another org's private live MCP — hitting the owner's backend/credentials
+  // while the caller is billed (cross-tenant IDOR, #11838). Public MCPs stay
+  // invokable by anyone (the monetization model); private MCPs are owner-only.
+  const { allowed } = resolveMcpProxyView({
+    mcpOrganizationId: mcp.organization_id,
+    mcpIsPublic: mcp.is_public,
+    viewerOrganizationId: user.organization_id,
+  });
+  if (!allowed) {
+    return c.json({ error: "MCP not found" }, 404);
+  }
+
   const creditsRequired = Number(mcp.credits_per_request || "1");
   let affiliateOwnerId: string | undefined;
   let affiliateCodeId: string | undefined;
