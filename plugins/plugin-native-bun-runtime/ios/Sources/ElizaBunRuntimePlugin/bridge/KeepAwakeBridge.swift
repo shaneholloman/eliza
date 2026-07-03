@@ -1,5 +1,4 @@
 import Foundation
-import JavaScriptCore
 #if canImport(UIKit)
     import UIKit
 #endif
@@ -30,17 +29,12 @@ public final class KeepAwakeBridge {
 
     public init() {}
 
-    public func install(into ctx: JSContext) {
-        ctx.installBridgeFunction(name: "keep_awake_set") { args in
-            let enabled = args.first?.toBool() ?? false
-            self.setHolder(enabled)
-            return true
-        }
-    }
-
     /// Acquire (`true`) or release (`false`) an idle-timer hold. This is the
-    /// entry point the full-Bun `host_call` dispatch (`FullBunEngineHost`) uses,
-    /// mirroring the JSContext `keep_awake_set` closure above.
+    /// entry point the full-Bun `host_call` dispatch (`FullBunEngineHost`) uses;
+    /// the JSContext compat path installs `keep_awake_set` via the separate
+    /// `KeepAwakeBridge+JSContext.swift` extension (which funnels into
+    /// `setEnabled`). Keeping this core type JavaScriptCore-free lets it compile
+    /// into the full-Bun engine build, whose podspec omits JavaScriptCore.
     public func setEnabled(_ enabled: Bool) {
         setHolder(enabled)
     }
