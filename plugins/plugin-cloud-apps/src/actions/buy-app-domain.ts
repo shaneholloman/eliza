@@ -69,6 +69,9 @@ import {
   CONFIRM_TTL_MS,
   type ConnectorCta,
   confirmationRoomId,
+  confirmTargetMismatchMessage,
+  conflictingConfirmDomain,
+  conflictingConfirmTarget,
   deleteCloudAppConfirmation,
   findPendingCloudAppConfirmation,
   pendingExpired,
@@ -363,6 +366,38 @@ export const buyAppDomainAction: Action = {
           userFacingText: CANCELED_MESSAGE,
           verifiedUserFacing: true,
           data: { purchased: false, canceled: true },
+        };
+      }
+
+      // Frozen-snapshot guard: a confirm whose own params name a DIFFERENT
+      // domain or app must never fund the frozen purchase the user is no
+      // longer talking about.
+      const domainConflict = conflictingConfirmDomain(options, domain);
+      const appConflict = conflictingConfirmTarget(options, {
+        name: target.name,
+        id: target.id,
+        aliases: target.slug ? [target.slug] : [],
+      });
+      if (domainConflict !== null || appConflict !== null) {
+        const requested = domainConflict ?? appConflict ?? "";
+        const msg = confirmTargetMismatchMessage(
+          requested,
+          `purchase of ${domain}`,
+          domainConflict !== null ? domain : target.name,
+        );
+        await callback?.({ text: msg, actions: ["BUY_APP_DOMAIN"] });
+        return {
+          success: false,
+          text: `Confirm named "${requested}" but the pending purchase was ${domain} for ${target.name}; refused.`,
+          userFacingText: msg,
+          verifiedUserFacing: true,
+          data: {
+            reason: "confirm_target_mismatch",
+            purchased: false,
+            requested,
+            domain,
+            pendingTarget: { id: target.id, name: target.name },
+          },
         };
       }
 

@@ -207,6 +207,92 @@ describe("BOOK_INFLUENCER (two-phase money confirm)", () => {
     expect(res.success).toBe(false);
     expect(res.data).toMatchObject({ reason: "no_pending_confirmation" });
   });
+
+  it("MONEY: confirm naming a DIFFERENT influencer refuses, funds nothing, clears the pending", async () => {
+    const runtime = keyedRuntime();
+    const { calls } = trackBookings();
+    await bookInfluencerAction.handler(
+      runtime,
+      makeMessage("hire Nova to promote my app for $200"),
+      undefined,
+      { profileId: "inf_1", influencer: "Nova", amount: 200, brief: "post" },
+      captureCallback().fn,
+    );
+
+    const cb = captureCallback();
+    const result = await bookInfluencerAction.handler(
+      runtime,
+      makeMessage("yes — book Blaze instead"),
+      undefined,
+      { parameters: { confirm: true, influencer: "Blaze" } },
+      cb.fn,
+    );
+
+    expect(calls).toHaveLength(0);
+    expect(result.success).toBe(false);
+    expect((result.data as { reason: string }).reason).toBe(
+      "confirm_target_mismatch",
+    );
+    const reply = cb.calls.at(-1)?.text ?? "";
+    expect(reply).toContain("Blaze");
+    expect(reply).toContain("Nova");
+
+    // Pending cleared: a later bare confirm cannot fund the stale booking.
+    const followUp = await bookInfluencerAction.handler(
+      runtime,
+      makeMessage("confirm"),
+      undefined,
+      { confirm: true },
+      captureCallback().fn,
+    );
+    expect(calls).toHaveLength(0);
+    expect((followUp.data as { reason: string }).reason).toBe(
+      "no_pending_confirmation",
+    );
+  });
+
+  it("MONEY: confirm carrying a DIFFERENT structured budget refuses (frozen $200 vs turn $999)", async () => {
+    const runtime = keyedRuntime();
+    const { calls } = trackBookings();
+    await bookInfluencerAction.handler(
+      runtime,
+      makeMessage("hire Nova for $200"),
+      undefined,
+      { profileId: "inf_1", influencer: "Nova", amount: 200, brief: "post" },
+      captureCallback().fn,
+    );
+    const result = await bookInfluencerAction.handler(
+      runtime,
+      makeMessage("confirm at $999"),
+      undefined,
+      { parameters: { confirm: true, amount: 999 } },
+      captureCallback().fn,
+    );
+    expect(calls).toHaveLength(0);
+    expect((result.data as { reason: string }).reason).toBe(
+      "confirm_target_mismatch",
+    );
+
+    // Re-ask + a confirm that re-names the SAME influencer and budget books.
+    await bookInfluencerAction.handler(
+      runtime,
+      makeMessage("hire Nova for $200"),
+      undefined,
+      { profileId: "inf_1", influencer: "Nova", amount: 200, brief: "post" },
+      captureCallback().fn,
+    );
+    const ok = await bookInfluencerAction.handler(
+      runtime,
+      makeMessage("yes book Nova for $200"),
+      undefined,
+      { parameters: { confirm: true, influencer: "Nova", amount: 200 } },
+      captureCallback().fn,
+    );
+    expect(ok.success).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.amount).toBe(200);
+    expect(calls[0]?.profileId).toBe("inf_1");
+  });
 });
 
 describe("BOOK_INFLUENCER pending-stacking + TTL guards", () => {
@@ -809,6 +895,52 @@ describe("BOOK_INFLUENCER escrow idempotency-key survival (#11844)", () => {
     const done = await confirm(runtime);
     expect(done.success).toBe(true);
     expect(escrow.calls.length).toBe(2);
+    expect(escrow.calls[1]?.idempotencyKey).toBe(
+      escrow.calls[0]?.idempotencyKey,
+    );
+    expect(escrow.holds.length).toBe(1);
+  });
+
+  it("a mismatched confirm against a recovery pending refuses but keeps the same-key repair pending alive", async () => {
+    const runtime = keyedRuntime();
+    const escrow = new FakeEscrow();
+    escrow.install();
+    await stagePending(runtime);
+
+    escrow.failNext = "response_lost";
+    await confirm(runtime);
+    const pending = await findPendingCloudAppConfirmation(
+      runtime,
+      roomOf(runtime),
+      "BOOK_INFLUENCER",
+    );
+    expect(pending?.metadata.recovery).toBe(true);
+
+    const mismatch = await bookInfluencerAction.handler(
+      runtime,
+      makeMessage("yes, book Mallory instead"),
+      undefined,
+      { parameters: { confirm: true, influencer: "Mallory" } },
+      undefined,
+    );
+    expect(mismatch.success).toBe(false);
+    expect(mismatch.data).toMatchObject({
+      reason: "confirm_target_mismatch",
+      recovery: true,
+    });
+    expect(escrow.calls.length).toBe(1);
+    expect(escrow.holds.length).toBe(1);
+
+    const stillPending = await findPendingCloudAppConfirmation(
+      runtime,
+      roomOf(runtime),
+      "BOOK_INFLUENCER",
+    );
+    expect(stillPending?.taskId).toBe(pending?.taskId);
+    expect(stillPending?.metadata.recovery).toBe(true);
+
+    const repaired = await confirm(runtime);
+    expect(repaired.success).toBe(true);
     expect(escrow.calls[1]?.idempotencyKey).toBe(
       escrow.calls[0]?.idempotencyKey,
     );

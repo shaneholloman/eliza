@@ -3,6 +3,10 @@ import {
   buildConnectorCta,
   CONFIRM_TTL_MS,
   confirmationPrompt,
+  confirmReferenceMatchesTarget,
+  conflictingConfirmAmount,
+  conflictingConfirmDomain,
+  conflictingConfirmTarget,
   pendingExpired,
   readStructuredConfirmation,
 } from "../src/safety.ts";
@@ -56,6 +60,157 @@ describe("readStructuredConfirmation", () => {
     expect(readStructuredConfirmation({ confirm: "yes" })).toBe(null);
     expect(
       readStructuredConfirmation({ confirm: "delete Acme Bot — yes" }),
+    ).toBe(null);
+  });
+});
+
+describe("confirmReferenceMatchesTarget (frozen-target guard)", () => {
+  it("matches the frozen target by id, exact name, alias, and partial name", () => {
+    expect(confirmReferenceMatchesTarget(TARGET.id, TARGET)).toBe(true);
+    expect(confirmReferenceMatchesTarget("Acme Bot", TARGET)).toBe(true);
+    expect(confirmReferenceMatchesTarget("acme bot", TARGET)).toBe(true);
+    expect(confirmReferenceMatchesTarget("acme-bot", TARGET)).toBe(true);
+    // Partial names of the SAME target must never read as a switch.
+    expect(confirmReferenceMatchesTarget("Acme", TARGET)).toBe(true);
+    // A longer phrase containing the frozen name still matches.
+    expect(confirmReferenceMatchesTarget("the Acme Bot app", TARGET)).toBe(
+      true,
+    );
+  });
+
+  it("treats generic filler as a non-reference (never blocks)", () => {
+    expect(confirmReferenceMatchesTarget("my app", TARGET)).toBe(true);
+    expect(confirmReferenceMatchesTarget("the app", TARGET)).toBe(true);
+    expect(confirmReferenceMatchesTarget("it", TARGET)).toBe(true);
+  });
+
+  it("rejects a clearly different target", () => {
+    expect(confirmReferenceMatchesTarget("Beta Dashboard", TARGET)).toBe(false);
+    expect(
+      confirmReferenceMatchesTarget(
+        "99999999-8888-7777-6666-555555555555",
+        TARGET,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("conflictingConfirmTarget", () => {
+  it("returns null on a bare confirm (no reference sent)", () => {
+    expect(conflictingConfirmTarget({ confirm: true }, TARGET)).toBe(null);
+    expect(
+      conflictingConfirmTarget({ parameters: { confirm: true } }, TARGET),
+    ).toBe(null);
+    expect(conflictingConfirmTarget(undefined, TARGET)).toBe(null);
+  });
+
+  it("returns null when the confirm turn re-names the SAME target", () => {
+    expect(
+      conflictingConfirmTarget(
+        { parameters: { confirm: true, appName: "acme" } },
+        TARGET,
+      ),
+    ).toBe(null);
+  });
+
+  it("returns the conflicting reference when a DIFFERENT target is named (nested planner path)", () => {
+    expect(
+      conflictingConfirmTarget(
+        { parameters: { confirm: true, appName: "Beta Dashboard" } },
+        TARGET,
+      ),
+    ).toBe("Beta Dashboard");
+    expect(
+      conflictingConfirmTarget({ confirm: true, appName: "Beta" }, TARGET),
+    ).toBe("Beta");
+  });
+
+  it("honors custom reference keys (influencer bookings)", () => {
+    expect(
+      conflictingConfirmTarget(
+        { parameters: { confirm: true, influencer: "Bob Creator" } },
+        { name: "Alice Creator", id: "profile-1" },
+        ["profileId", "influencer"],
+      ),
+    ).toBe("Bob Creator");
+    expect(
+      conflictingConfirmTarget(
+        { parameters: { confirm: true, profileId: "profile-1" } },
+        { name: "Alice Creator", id: "profile-1" },
+        ["profileId", "influencer"],
+      ),
+    ).toBe(null);
+  });
+});
+
+describe("conflictingConfirmAmount", () => {
+  it("returns null on a bare confirm or a matching amount", () => {
+    expect(conflictingConfirmAmount({ confirm: true }, 100)).toBe(null);
+    expect(conflictingConfirmAmount({ parameters: { amount: 100 } }, 100)).toBe(
+      null,
+    );
+    expect(
+      conflictingConfirmAmount({ parameters: { amount: "100" } }, 100),
+    ).toBe(null);
+    expect(
+      conflictingConfirmAmount({ parameters: { amount: "$100" } }, 100),
+    ).toBe(null);
+  });
+
+  it("returns the conflicting amount when the confirm turn names a different one", () => {
+    expect(conflictingConfirmAmount({ parameters: { amount: 50 } }, 100)).toBe(
+      50,
+    );
+    expect(conflictingConfirmAmount({ amount: "50" }, 100)).toBe(50);
+  });
+
+  it("ignores prose amounts (never guesses)", () => {
+    expect(
+      conflictingConfirmAmount({ parameters: { amount: "fifty bucks" } }, 100),
+    ).toBe(null);
+  });
+});
+
+describe("conflictingConfirmDomain", () => {
+  it("returns null on a bare confirm or the same domain", () => {
+    expect(conflictingConfirmDomain({ confirm: true }, "yourbrand.com")).toBe(
+      null,
+    );
+    expect(
+      conflictingConfirmDomain(
+        { parameters: { domain: "yourbrand.com" } },
+        "yourbrand.com",
+      ),
+    ).toBe(null);
+    expect(
+      conflictingConfirmDomain(
+        { parameters: { domain: "WWW.YourBrand.com" } },
+        "yourbrand.com",
+      ),
+    ).toBe(null);
+  });
+
+  it("domains compare exactly: a substring domain is a DIFFERENT domain", () => {
+    expect(
+      conflictingConfirmDomain(
+        { parameters: { domain: "brand.com" } },
+        "yourbrand.com",
+      ),
+    ).toBe("brand.com");
+    expect(
+      conflictingConfirmDomain(
+        { parameters: { domain: "other.io" } },
+        "yourbrand.com",
+      ),
+    ).toBe("other.io");
+  });
+
+  it("ignores values that don't look like a domain", () => {
+    expect(
+      conflictingConfirmDomain(
+        { parameters: { domain: "the domain" } },
+        "yourbrand.com",
+      ),
     ).toBe(null);
   });
 });

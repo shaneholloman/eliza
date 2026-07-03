@@ -186,6 +186,91 @@ describe("WITHDRAW_APP_EARNINGS", () => {
     expect(result?.success).toBe(true);
   });
 
+  it("MONEY: confirm naming a DIFFERENT app refuses, moves nothing, clears the pending", async () => {
+    const withdrawals = trackWithdrawals();
+    const runtime = keyedRuntime();
+    const cb = captureCallback();
+    await withdrawAppEarningsAction.handler(
+      runtime,
+      makeMessage("withdraw $50 from Acme Bot"),
+      undefined,
+      undefined,
+      cb.fn,
+    );
+    const result = await withdrawAppEarningsAction.handler(
+      runtime,
+      makeMessage("yes — withdraw from Beta Dashboard"),
+      undefined,
+      { parameters: { confirm: true, appName: "Beta Dashboard" } },
+      cb.fn,
+    );
+
+    expect(withdrawals.calls).toHaveLength(0);
+    expect(result?.success).toBe(false);
+    expect((result?.data as { reason: string }).reason).toBe(
+      "confirm_target_mismatch",
+    );
+    const reply = cb.calls.at(-1)?.text ?? "";
+    expect(reply).toContain("Beta Dashboard");
+    expect(reply).toContain("Acme Bot");
+
+    // Pending cleared: a later bare confirm cannot fund the stale withdrawal.
+    const followUp = await withdrawAppEarningsAction.handler(
+      runtime,
+      makeMessage("confirm"),
+      undefined,
+      { confirm: true },
+      cb.fn,
+    );
+    expect(withdrawals.calls).toHaveLength(0);
+    expect((followUp?.data as { reason: string }).reason).toBe(
+      "no_pending_confirmation",
+    );
+  });
+
+  it("MONEY: confirm carrying a DIFFERENT structured amount refuses (frozen $50 vs turn $500)", async () => {
+    const withdrawals = trackWithdrawals();
+    const runtime = keyedRuntime();
+    const cb = captureCallback();
+    await withdrawAppEarningsAction.handler(
+      runtime,
+      makeMessage("withdraw $50 from Acme Bot"),
+      undefined,
+      undefined,
+      cb.fn,
+    );
+    const result = await withdrawAppEarningsAction.handler(
+      runtime,
+      makeMessage("confirm, make it $500"),
+      undefined,
+      { parameters: { confirm: true, amount: 500 } },
+      cb.fn,
+    );
+    expect(withdrawals.calls).toHaveLength(0);
+    expect((result?.data as { reason: string }).reason).toBe(
+      "confirm_target_mismatch",
+    );
+
+    // A matching structured amount on the confirm turn still withdraws.
+    await withdrawAppEarningsAction.handler(
+      runtime,
+      makeMessage("withdraw $50 from Acme Bot"),
+      undefined,
+      undefined,
+      cb.fn,
+    );
+    const ok = await withdrawAppEarningsAction.handler(
+      runtime,
+      makeMessage("confirm the $50 withdrawal"),
+      undefined,
+      { parameters: { confirm: true, appName: "Acme Bot", amount: 50 } },
+      cb.fn,
+    );
+    expect(ok?.success).toBe(true);
+    expect(withdrawals.calls).toHaveLength(1);
+    expect(withdrawals.calls[0]?.request.amount).toBe(50);
+  });
+
   it("MONEY REGRESSION: planner-nested amount stages $50, NOT the full balance", async () => {
     // Real planner path (execute-planned-tool-call.ts): validated args arrive
     // under options.parameters and the text carries no digits. The old

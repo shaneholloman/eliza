@@ -49,6 +49,9 @@ import {
   buildConnectorCta,
   type ConnectorCta,
   confirmationRoomId,
+  confirmTargetMismatchMessage,
+  conflictingConfirmAmount,
+  conflictingConfirmTarget,
   deleteCloudAppConfirmation,
   findPendingCloudAppConfirmation,
   persistCloudAppConfirmation,
@@ -235,6 +238,41 @@ export const withdrawAppEarningsAction: Action = {
         slug: pending.metadata.appSlug ?? pending.metadata.appName,
       };
       const amount = pending.metadata.amount;
+
+      // Frozen-snapshot guard: a confirm whose own params name a DIFFERENT app
+      // or amount must never fund the frozen withdrawal the user is no longer
+      // talking about.
+      const appConflict = conflictingConfirmTarget(options, {
+        name: target.name,
+        id: target.id,
+        aliases: [target.slug],
+      });
+      const amountConflict = conflictingConfirmAmount(options, amount);
+      if (appConflict !== null || amountConflict !== null) {
+        const requested =
+          appConflict ??
+          `${usd(amountConflict ?? amount)} (not ${usd(amount)})`;
+        const msg = confirmTargetMismatchMessage(
+          requested,
+          `withdrawal of ${usd(amount)}`,
+          target.name,
+        );
+        await callback?.({ text: msg, actions: ["WITHDRAW_APP_EARNINGS"] });
+        return {
+          success: false,
+          text: `Confirm named "${requested}" but the pending withdrawal was ${usd(amount)} from ${target.name}; refused.`,
+          userFacingText: msg,
+          verifiedUserFacing: true,
+          data: {
+            reason: "confirm_target_mismatch",
+            withdrawn: false,
+            requested,
+            pendingTarget: { id: target.id, name: target.name },
+            amount,
+          },
+        };
+      }
+
       const cta =
         pending.metadata.cta ??
         buildConnectorCta(
