@@ -858,6 +858,11 @@ describe("runOnboardingChat", () => {
     });
 
     test("insufficient-credits reply is deterministic and points at billing", async () => {
+      // With a live Cerebras client configured, only the deterministic
+      // early-return keeps the model out of the money-state reply; without
+      // this key the not-called assertion below is vacuously true.
+      cloudEnv = { CEREBRAS_API_KEY: "test-key" };
+      generateText.mockResolvedValue({ text: "model-improvised billing copy" });
       ensureElizaAppProvisioning.mockResolvedValue({
         status: "insufficient_credits",
         agentId: null,
