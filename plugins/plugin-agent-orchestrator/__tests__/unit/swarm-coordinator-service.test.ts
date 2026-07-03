@@ -916,11 +916,16 @@ describe("SwarmCoordinatorService", () => {
     await coordinator.stop();
   });
 
-  it("a router-owned task_complete does NOT consume the session's synthesis slot (later stopped still fires)", async () => {
-    // ACP sessions are reused across turns. A router-owned task_complete is
-    // skipped here, but must NOT mark the session synthesized — otherwise a
-    // later `stopped` (which the router never posts) would be swallowed by the
-    // dedupe guard and go silent.
+  it("does NOT synthesize the teardown `stopped` that follows a router-owned task_complete (#11689 residual)", async () => {
+    // Every planner-spawned one-shot (TASKS op=create → runPromptAndClose /
+    // runPromptViaSmithers in actions/tasks.ts) emits task_complete on
+    // success, then in its `finally` ALWAYS stops the session:
+    // AcpService.closeSession emits a `stopped` carrying response=lastOutput
+    // (raw agent output), and the runner emits a second explicit `stopped`.
+    // The router posts the real completion; both teardown stops are lifecycle
+    // plumbing of that SAME ceded terminal. Synthesizing them posted a
+    // spurious "<label> stopped." / sanitized raw-output message to the origin
+    // channel seconds after every routed completion.
     const acp = makeAcpStub({
       agentType: "codex",
       workdir: "/tmp/wd",
@@ -940,14 +945,98 @@ describe("SwarmCoordinatorService", () => {
     const fired = vi.fn(async () => {});
     coordinator.setSwarmCompleteCallback(fired);
 
-    // Turn 1: router-owned completion — skipped, slot NOT consumed.
-    acp.emit("sess-reuse", "task_complete", { response: "deployed" });
-    await new Promise((r) => setTimeout(r, 0));
+    // Router-owned completion — ceded to the router, no synthesis.
+    acp.emit("sess-oneshot", "task_complete", { response: "deployed" });
+    await flushChains();
     expect(fired).not.toHaveBeenCalled();
 
-    // Turn 2: same session stops — router does not post this, so synthesis must.
+    // Deterministic teardown from the one-shot runner's finally block:
+    // closeSession's stopped (raw lastOutput) + the explicit stopped.
+    acp.emit("sess-oneshot", "stopped", {
+      sessionId: "sess-oneshot",
+      response: "[tool output: raw transcript]\ndeployed",
+    });
+    acp.emit("sess-oneshot", "stopped", { sessionId: "sess-oneshot" });
+    await flushChains();
+
+    expect(fired).not.toHaveBeenCalled();
+    await coordinator.stop();
+  });
+
+  it("does NOT leak a teardown `stopped` after a router-owned error the router suppresses (failover/state-lost)", async () => {
+    // The router deliberately suppresses state-lost / account-failover errors
+    // while it respawns under cap — but the one-shot runner stops the session
+    // BEFORE the router stamps `handedOffToSuccessorSessionId`, so the
+    // teardown `stopped` used to synthesize a terminal "<label> stopped."
+    // mid-respawn. The ceded-terminal marker must catch it without depending
+    // on the handoff stamp having landed yet.
+    const acp = makeAcpStub({
+      agentType: "codex",
+      workdir: "/tmp/wd",
+      metadata: {
+        label: "build-site",
+        originRoomId: ROUTER_ROOM_ID,
+        taskRoomId: ROUTER_TASK_ROOM_ID,
+        source: "discord",
+      },
+    });
+    const runtime = makeRuntime({
+      [AcpService.serviceType]: acp,
+      [SUB_AGENT_ROUTER_SERVICE_TYPE]: makeRouterStub(true),
+    });
+    const coordinator = await SwarmCoordinatorService.start(runtime);
+
+    const fired = vi.fn(async () => {});
+    coordinator.setSwarmCompleteCallback(fired);
+
+    acp.emit("sess-failover", "error", {
+      failureKind: "session_state_lost",
+      message: "Sub-agent state was lost (process exited without persisting).",
+    });
+    acp.emit("sess-failover", "stopped", { sessionId: "sess-failover" });
+    await flushChains();
+
+    expect(fired).not.toHaveBeenCalled();
+    await coordinator.stop();
+  });
+
+  it("a `stopped` AFTER the session resumes still synthesizes (cession is per-turn; sessions are reused)", async () => {
+    // ACP sessions are reused across follow-up turns. The ceded-terminal
+    // marker belongs to the PREVIOUS turn only: once the session resumes (any
+    // non-terminal event), a later stop — which the router never posts — must
+    // synthesize again or a genuine mid-turn user stop would go silent.
+    const acp = makeAcpStub({
+      agentType: "codex",
+      workdir: "/tmp/wd",
+      metadata: {
+        label: "build-site",
+        originRoomId: ROUTER_ROOM_ID,
+        taskRoomId: ROUTER_TASK_ROOM_ID,
+        source: "discord",
+      },
+    });
+    const runtime = makeRuntime({
+      [AcpService.serviceType]: acp,
+      [SUB_AGENT_ROUTER_SERVICE_TYPE]: makeRouterStub(true),
+    });
+    const coordinator = await SwarmCoordinatorService.start(runtime);
+
+    const fired = vi.fn(async () => {});
+    coordinator.setSwarmCompleteCallback(fired);
+
+    // Turn 1: router-owned completion — ceded (marker set).
+    acp.emit("sess-reuse", "task_complete", { response: "deployed" });
+    await flushChains();
+    expect(fired).not.toHaveBeenCalled();
+
+    // Turn 2 begins: session resumes — cession marker cleared.
+    acp.emit("sess-reuse", "tool_running", { toolCall: { title: "Bash" } });
+    await flushChains();
+
+    // User stops mid-turn 2: router does not post stops, synthesis must.
     acp.emit("sess-reuse", "stopped", {});
-    await new Promise((r) => setTimeout(r, 0));
+    await flushChains();
+
     expect(fired).toHaveBeenCalledTimes(1);
     expect(fired.mock.calls[0][0]).toMatchObject({
       stopped: 1,
@@ -1087,11 +1176,14 @@ describe("SwarmCoordinatorService", () => {
     const fired = vi.fn(async () => {});
     coordinator.setSwarmCompleteCallback(fired);
 
-    // Warm the cache with the pre-stamp snapshot (mirrors the task_complete that
-    // triggered the retry populating the enrichment cache from the store).
-    acp.emit("sess-stale", "task_complete", { response: "turn done" });
+    // Warm the cache with the pre-stamp snapshot via a NON-terminal enriched
+    // event. (A router-owned task_complete would ALSO record an in-memory
+    // ceded-terminal marker that short-circuits the stopped before the
+    // re-read; this test isolates the store-backed handoff path, which is the
+    // layer that survives a coordinator restart or a resumed-then-handed-off
+    // session where the in-memory marker is gone.)
+    acp.emit("sess-stale", "tool_running", { toolCall: { title: "Bash" } });
     await new Promise((r) => setTimeout(r, 0));
-    fired.mockClear();
 
     // The router now stamps the marker on the store AFTER the cache was warmed.
     acp.setSession({
@@ -1138,10 +1230,12 @@ describe("SwarmCoordinatorService", () => {
     const fired = vi.fn(async () => {});
     coordinator.setSwarmCompleteCallback(fired);
 
-    // Warm the cache, then drop the session from the store so the re-read misses.
-    acp.emit("sess-openmiss", "task_complete", { response: "turn done" });
+    // Warm the cache via a non-terminal enriched event (a router-owned
+    // task_complete would record the in-memory ceded-terminal marker and skip
+    // the stopped before the re-read runs), then drop the session from the
+    // store so the re-read misses.
+    acp.emit("sess-openmiss", "tool_running", { toolCall: { title: "Bash" } });
     await new Promise((r) => setTimeout(r, 0));
-    fired.mockClear();
     acp.setSession(undefined);
 
     acp.emit("sess-openmiss", "stopped", {});
@@ -1322,13 +1416,12 @@ describe("SwarmCoordinatorService", () => {
     await coordinator.stop();
   });
 
-  it("still fires the `stopped` when it races a router-owned terminal on the same session (no swallow)", async () => {
-    // Regression (codex review, #11634): a router-owned task_complete/error and
-    // a `stopped` emitted back-to-back for one router-origin session. The
-    // router owns (and skips synthesis for) the task_complete but NEVER posts
-    // `stopped`, so synthesis must still deliver the stop. Per-session
-    // serialization guarantees the router-owned skip does not consume the slot
-    // AND the `stopped` is not swallowed by a claim/release race.
+  it("suppresses the `stopped` racing a router-owned terminal on the same session (same-tick teardown)", async () => {
+    // A router-owned task_complete and its teardown `stopped` emitted
+    // back-to-back in one tick — the exact sequence the one-shot runner's
+    // `finally` produces on EVERY routed success. Per-session serialization
+    // guarantees the `stopped` observes the cession the task_complete
+    // recorded, so no spurious "<label> stopped." post races through.
     const acp = makeAcpStub({
       agentType: "codex",
       workdir: "/tmp/wd",
@@ -1348,17 +1441,13 @@ describe("SwarmCoordinatorService", () => {
     const fired = vi.fn(async () => {});
     coordinator.setSwarmCompleteCallback(fired);
 
-    // Router-owned task_complete (skipped) immediately followed by a stopped
-    // (must post) — same tick, racing the metadata await.
+    // Router-owned task_complete (ceded) immediately followed by the teardown
+    // stopped — same tick, racing the metadata await.
     acp.emit("sess-race-router", "task_complete", { response: "deployed" });
     acp.emit("sess-race-router", "stopped", {});
     await flushChains();
 
-    expect(fired).toHaveBeenCalledTimes(1);
-    expect(fired.mock.calls[0][0]).toMatchObject({
-      stopped: 1,
-      tasks: [{ sessionId: "sess-race-router", status: "stopped" }],
-    });
+    expect(fired).not.toHaveBeenCalled();
     await coordinator.stop();
   });
 

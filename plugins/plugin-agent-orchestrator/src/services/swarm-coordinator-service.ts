@@ -283,6 +283,21 @@ export class SwarmCoordinatorService extends Service {
   private swarmCompleteCallback: SwarmCompleteCallback | null = null;
   private readonly inFlightDecisionSessions = new Set<string>();
   private readonly synthesizedCompletionSessions = new Set<string>();
+  // Sessions whose latest terminal event was ceded to the sub-agent-router
+  // (the router-owned skip in `runSwarmComplete`). The one-shot runners
+  // (runPromptAndClose / runPromptViaSmithers in actions/tasks.ts) ALWAYS stop
+  // the session right after the terminal — `closeSession` emits a `stopped`
+  // carrying the raw lastOutput, then the runner emits a second explicit
+  // `stopped` — so on EVERY routed completion a teardown `stopped` trails the
+  // ceded terminal. That stop is lifecycle plumbing of the SAME turn, not a
+  // user-facing end state: without this marker, synthesis posted a spurious
+  // "<label> stopped." / sanitized raw-output message to the origin channel
+  // seconds after the router's real completion post (#11689 residual), and
+  // leaked a terminal stop mid-respawn on error paths the router deliberately
+  // suppresses (before the #11711 handoff stamp lands). Cleared when the
+  // session resumes (a genuine stop on a later turn must still post), on
+  // legacy-task eviction, and on stop().
+  private readonly routerCededTerminalSessions = new Set<string>();
   // Per-session serialization chain for terminal-event synthesis. AcpService
   // invokes session-event listeners SYNCHRONOUSLY without awaiting them, so two
   // terminal events emitted back-to-back for the SAME session (e.g. a
@@ -389,6 +404,7 @@ export class SwarmCoordinatorService extends Service {
     this.swarmCompleteCallback = null;
     this.inFlightDecisionSessions.clear();
     this.synthesizedCompletionSessions.clear();
+    this.routerCededTerminalSessions.clear();
     this.terminalCompletionChains.clear();
     this.enrichmentMetadataCache.clear();
     for (const timer of this.legacyTaskEvictionTimers.values()) {
@@ -705,6 +721,11 @@ export class SwarmCoordinatorService extends Service {
     // turn's stale snapshot — so this must run BEFORE enrichment below.
     if (!this.isTerminalEvent(event)) {
       this.cancelLegacyTaskEviction(sessionId);
+      // Session resumed: the ceded-terminal marker belongs to the PREVIOUS
+      // turn. A genuine user stop on this new turn — which the router never
+      // posts — must synthesize again, so the marker must not outlive the turn
+      // whose teardown it suppresses.
+      this.routerCededTerminalSessions.delete(sessionId);
     }
 
     const enrichedData = this.shouldEnrichEvent(event)
@@ -876,6 +897,29 @@ export class SwarmCoordinatorService extends Service {
     if (readString(meta, HANDED_OFF_SUCCESSOR_META_KEY)) {
       return;
     }
+
+    // Teardown-stop of a router-ceded terminal (#11689 residual): the one-shot
+    // runners (runPromptAndClose / runPromptViaSmithers) unconditionally stop
+    // the session right after emitting task_complete / error, so on EVERY
+    // routed one-shot the ceded terminal is followed — deterministically, not
+    // as a rare race — by one `stopped` from closeSession (carrying the raw
+    // lastOutput as `response`) plus a second explicit one. The router posted
+    // (or, for suppressed failover errors, deliberately withheld pending
+    // respawn) the real outcome for this turn; synthesizing its teardown stop
+    // double-posts "<label> stopped." / raw output into the origin channel.
+    // Checked BEFORE the store re-read below (no stamp is needed — this covers
+    // the error path where teardown lands before the router stamps anything).
+    // Per-session terminal serialization (`maybeFireSwarmComplete`) guarantees
+    // a same-tick stopped observes the cession. A genuine user stop has no
+    // preceding ceded terminal on the current turn (the marker clears when the
+    // session resumes), so it still synthesizes.
+    if (
+      event === "stopped" &&
+      this.routerCededTerminalSessions.has(sessionId)
+    ) {
+      return;
+    }
+
     if (
       event === "stopped" &&
       readString(
@@ -907,11 +951,16 @@ export class SwarmCoordinatorService extends Service {
     // This ownership check runs BEFORE the `synthesizedCompletionSessions`
     // dedupe guard, and a router-owned skip does NOT consume the slot: ACP
     // sessions are reused across follow-up turns, so a router-owned turn must
-    // not claim the session's synthesis slot — otherwise a later `stopped` on
-    // the SAME session (which the router does not post) would be swallowed. The
-    // double-synthesis race this ordering would otherwise open is closed by
-    // `maybeFireSwarmComplete`, which serializes all terminal events for a
-    // session so the second observes the first's completed decision.
+    // not claim the session's synthesis slot — otherwise a `stopped` on a
+    // LATER turn of the SAME session (which the router does not post) would be
+    // swallowed. Instead the skip records the cession in
+    // `routerCededTerminalSessions`, so THIS turn's teardown `stopped` — which
+    // the one-shot runners emit unconditionally right after the terminal — is
+    // recognized as plumbing and skipped above, while the marker is cleared as
+    // soon as the session resumes. The double-synthesis race this ordering
+    // would otherwise open is closed by `maybeFireSwarmComplete`, which
+    // serializes all terminal events for a session so the second observes the
+    // first's completed decision.
     //
     // Exempt coordinator-generated validated completions: the app-verification
     // / custom-validator path (dispatchCustomValidatorResult) synthesizes a
@@ -926,6 +975,7 @@ export class SwarmCoordinatorService extends Service {
       sessionHasRouterOrigin(meta) &&
       this.isRouterActive()
     ) {
+      this.routerCededTerminalSessions.add(sessionId);
       return;
     }
 
@@ -1060,6 +1110,7 @@ export class SwarmCoordinatorService extends Service {
       this.legacyTaskEvictionTimers.delete(sessionId);
       this.tasks.delete(sessionId);
       this.synthesizedCompletionSessions.delete(sessionId);
+      this.routerCededTerminalSessions.delete(sessionId);
       this.enrichmentMetadataCache.delete(sessionId);
     }, LEGACY_TASK_EVICTION_GRACE_MS);
     this.legacyTaskEvictionTimers.set(sessionId, timer);
