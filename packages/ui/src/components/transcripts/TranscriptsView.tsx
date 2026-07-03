@@ -14,11 +14,11 @@
 import {
   MEETING_PLATFORM_LABELS,
   type MeetingJoinRequest,
+  type MeetingPlatform,
   type MeetingSession,
 } from "@elizaos/shared";
 import type {
   Transcript,
-  TranscriptSource,
   TranscriptStatus,
   TranscriptSummary,
 } from "@elizaos/shared/transcripts";
@@ -34,13 +34,19 @@ import { meetingTranscriptMeta } from "./meeting-live";
 import { TranscriptPlayer } from "./TranscriptPlayer";
 
 /**
- * List-row projection with the meeting-aware fields the meetings pipeline
- * writes on its summaries (absent on plain recordings).
+ * List-row projection. `source` + the server-computed `meeting` fields are
+ * already part of {@link TranscriptSummary}; this alias documents the intent at
+ * the view boundary without widening the contract.
  */
-export type MeetingAwareTranscriptSummary = TranscriptSummary & {
-  source?: TranscriptSource;
-  metadata?: Record<string, unknown>;
-};
+export type MeetingAwareTranscriptSummary = TranscriptSummary;
+
+/** Look up the label for a summary's platform, only if it's a known platform. */
+function platformLabel(platform: string | undefined): string | null {
+  if (!platform) return null;
+  return platform in MEETING_PLATFORM_LABELS
+    ? MEETING_PLATFORM_LABELS[platform as MeetingPlatform]
+    : null;
+}
 
 export interface TranscriptsViewProps {
   transcripts: MeetingAwareTranscriptSummary[];
@@ -112,7 +118,12 @@ function TranscriptRow({
 }): React.JSX.Element {
   const isMeeting = summary.source === "meeting";
   const isLive = isMeeting && summary.status === "recording";
-  const meta = isMeeting ? meetingTranscriptMeta(summary) : null;
+  // The server projects the meeting badge + participant count onto the summary
+  // (summarizeTranscript); the row only displays them — it never counts a
+  // roster array here.
+  const meeting = isMeeting ? summary.meeting : undefined;
+  const meetingPlatformLabel = platformLabel(meeting?.platform);
+  const participantCount = meeting?.participantCount ?? 0;
   const status = STATUS_LABEL[summary.status];
   const { ref, agentProps } = useAgentElement<HTMLButtonElement>({
     id: `transcript-${agentSafeId(summary.id)}`,
@@ -144,13 +155,13 @@ function TranscriptRow({
         ) : null}
       </div>
       <div className="mt-0.5 flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-muted [&>span]:shrink-0">
-        {meta?.platform ? (
+        {meetingPlatformLabel ? (
           <>
             <span
               className="truncate"
               data-testid={`transcript-platform-${summary.id}`}
             >
-              {MEETING_PLATFORM_LABELS[meta.platform]}
+              {meetingPlatformLabel}
             </span>
             <span aria-hidden>·</span>
           </>
@@ -158,12 +169,12 @@ function TranscriptRow({
         <span>{formatDate(summary.createdAt)}</span>
         <span aria-hidden>·</span>
         <span>{formatDuration(summary.durationMs)}</span>
-        {meta && meta.participants.length > 0 ? (
+        {isMeeting && participantCount > 0 ? (
           <>
             <span aria-hidden>·</span>
             <span data-testid={`transcript-participants-${summary.id}`}>
-              {meta.participants.length}{" "}
-              {meta.participants.length === 1 ? "participant" : "participants"}
+              {participantCount}{" "}
+              {participantCount === 1 ? "participant" : "participants"}
             </span>
           </>
         ) : !isMeeting && summary.speakerCount > 1 ? (

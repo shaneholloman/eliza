@@ -11,13 +11,23 @@
  * without a reload.
  */
 
-import type { MeetingJoinRequest, MeetingSession } from "@elizaos/shared";
+import type {
+  MeetingJoinRequest,
+  MeetingSession,
+  MeetingSessionStatus,
+} from "@elizaos/shared";
 import type { Transcript } from "@elizaos/shared/transcripts";
 import * as React from "react";
 import { client } from "../../api/client";
 import { parseMeetingStatusEvent } from "../../api/client-meetings";
 import type { MeetingAwareTranscriptSummary } from "./TranscriptsView";
 import { TranscriptsView } from "./TranscriptsView";
+
+/** Session states after which the transcript is finalized (no longer live). */
+const TERMINAL_MEETING_STATUSES: ReadonlySet<MeetingSessionStatus> = new Set([
+  "ended",
+  "failed",
+]);
 
 export function TranscriptsPage(): React.JSX.Element {
   const [transcripts, setTranscripts] = React.useState<
@@ -32,6 +42,20 @@ export function TranscriptsPage(): React.JSX.Element {
   );
   const [joiningMeeting, setJoiningMeeting] = React.useState(false);
   const [meetingError, setMeetingError] = React.useState<string | null>(null);
+
+  // The live-selected id, mirrored into a ref so the WebSocket subscription
+  // (which must not re-bind on every selection change) can read it.
+  const selectedIdRef = React.useRef<string | null>(null);
+  selectedIdRef.current = selectedId;
+
+  const loadTranscript = React.useCallback((id: string) => {
+    return client
+      .getTranscript(id)
+      .then((r) => setSelected(r.transcript))
+      .catch((e) =>
+        setError(e instanceof Error ? e.message : "Failed to load transcript"),
+      );
+  }, []);
 
   const refresh = React.useCallback(async () => {
     const [listResult, meetingsResult] = await Promise.allSettled([
@@ -69,26 +93,37 @@ export function TranscriptsPage(): React.JSX.Element {
 
   // Session lifecycle over the agent WebSocket: keep the active strip fresh
   // and re-list transcripts when a live meeting record appears/finalizes.
+  // When the finalized session is the transcript currently OPEN in the detail
+  // pane, also refetch that record so it flips out of "recording" — the list
+  // refresh alone leaves the open pane polling forever (LiveMeetingPane).
   React.useEffect(() => {
     return client.onWsEvent("meeting-status", (data) => {
       const event = parseMeetingStatusEvent(data);
       if (!event) return;
+      const { session } = event;
+      if (
+        TERMINAL_MEETING_STATUSES.has(session.status) &&
+        session.transcriptId &&
+        session.transcriptId === selectedIdRef.current
+      ) {
+        loadTranscript(session.transcriptId).catch(() => {
+          // Transient — a re-select or the next event re-loads.
+        });
+      }
       refresh().catch(() => {
         // Transient — the next status event or view entry re-lists.
       });
     });
-  }, [refresh]);
+  }, [refresh, loadTranscript]);
 
-  const onSelect = React.useCallback((id: string) => {
-    setSelectedId(id);
-    setSelected(null);
-    client
-      .getTranscript(id)
-      .then((r) => setSelected(r.transcript))
-      .catch((e) =>
-        setError(e instanceof Error ? e.message : "Failed to load transcript"),
-      );
-  }, []);
+  const onSelect = React.useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      setSelected(null);
+      void loadTranscript(id);
+    },
+    [loadTranscript],
+  );
 
   const onJoinMeeting = React.useCallback(
     (input: MeetingJoinRequest) => {

@@ -23,7 +23,9 @@ import { parseMeetingUrl } from "@elizaos/shared";
 import { client } from "@elizaos/ui/api";
 import { useAppSelector } from "@elizaos/ui/state";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { CalendarClientMethods } from "../../api/client-calendar.js";
+// Side-effect import installs the calendar client methods onto the ui client
+// prototype. The `/api/meetings` methods (requestMeetingBot / listMeetings) are
+// the canonical `@elizaos/ui` ones, already installed via `@elizaos/ui/api`.
 import "../../api/client-calendar.js";
 import {
   type CalendarViewMode,
@@ -35,8 +37,6 @@ import {
   type CalendarSnapshot,
   CalendarSpatialView,
 } from "./CalendarSpatialView.tsx";
-
-const calendarClient = client as typeof client & CalendarClientMethods;
 
 const ACTIVE_SESSIONS_POLL_MS = 15_000;
 
@@ -132,7 +132,7 @@ export function CalendarView() {
 
   const refreshActiveSessions = useCallback(async () => {
     try {
-      const { sessions } = await calendarClient.listMeetingSessions({
+      const { sessions } = await client.listMeetings({
         active: true,
       });
       const live = new Set<string>();
@@ -175,7 +175,7 @@ export function CalendarView() {
       }
       setJoiningIds((current) => new Set(current).add(event.id));
       try {
-        await calendarClient.requestMeetingJoin({
+        await client.requestMeetingBot({
           platform: parsed.platform,
           meetingUrl: parsed.meetingUrl,
           calendarEventId: event.id,

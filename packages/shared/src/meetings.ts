@@ -15,11 +15,7 @@
 import type { TranscriptSegment } from "./transcripts.js";
 
 /** Platforms an agent can attend. Browser-bot: meet/teams/zoom. Native RX: discord. */
-export type MeetingPlatform =
-  | "google_meet"
-  | "teams"
-  | "zoom"
-  | "discord";
+export type MeetingPlatform = "google_meet" | "teams" | "zoom" | "discord";
 
 export const MEETING_PLATFORMS: readonly MeetingPlatform[] = [
   "google_meet",
@@ -146,6 +142,21 @@ export interface ParsedMeetingUrl {
   nativeMeetingId: string;
 }
 
+/**
+ * Percent-decode a URL segment, returning null (never throwing) on a malformed
+ * escape like a lone `%`. `decodeURIComponent` throws `URIError` on such input,
+ * and this parser runs on every keystroke in the Transcripts view + inside
+ * JOIN_MEETING.validate and POST /api/meetings, so a bad character must degrade
+ * to "not a recognizable meeting link", not crash the surface.
+ */
+function safeDecodeUriComponent(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
 const MEET_URL_RE =
   /^https?:\/\/meet\.google\.com\/([a-z]{3}-?[a-z]{4}-?[a-z]{3})(?:\?.*)?$/i;
 const TEAMS_URL_RE =
@@ -164,7 +175,10 @@ export function parseMeetingUrl(raw: string): ParsedMeetingUrl | null {
   const url = raw.trim();
   const meet = MEET_URL_RE.exec(url);
   if (meet) {
-    const id = meet[1].replace(/-/g, "");
+    // MEET_URL_RE is case-insensitive, so lowercase the parsed id before
+    // canonicalizing — otherwise `ABC-DEFG-HIJ` and `abc-defg-hij` produce
+    // different native ids and the already_joined dedup can be bypassed by case.
+    const id = meet[1].toLowerCase().replace(/-/g, "");
     const canonical = `${id.slice(0, 3)}-${id.slice(3, 7)}-${id.slice(7)}`;
     return {
       platform: "google_meet",
@@ -186,14 +200,20 @@ export function parseMeetingUrl(raw: string): ParsedMeetingUrl | null {
   }
   const teamsShort = TEAMS_SHORT_RE.exec(url);
   if (teamsShort) {
-    return { platform: "teams", meetingUrl: url, nativeMeetingId: teamsShort[1] };
-  }
-  const teams = TEAMS_URL_RE.exec(url);
-  if (teams) {
     return {
       platform: "teams",
       meetingUrl: url,
-      nativeMeetingId: decodeURIComponent(teams[1]).slice(0, 128),
+      nativeMeetingId: teamsShort[1],
+    };
+  }
+  const teams = TEAMS_URL_RE.exec(url);
+  if (teams) {
+    const decoded = safeDecodeUriComponent(teams[1]);
+    if (decoded === null) return null;
+    return {
+      platform: "teams",
+      meetingUrl: url,
+      nativeMeetingId: decoded.slice(0, 128),
     };
   }
   return null;

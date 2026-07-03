@@ -18,8 +18,6 @@ import type {
   LifeOpsCalendarSummary,
   LifeOpsNextCalendarEventContext,
   ListLifeOpsCalendarsRequest,
-  MeetingJoinRequest,
-  MeetingSession,
   SetLifeOpsCalendarIncludedRequest,
 } from "@elizaos/shared";
 // Load the `@elizaos/ui` barrel so the `declare module "@elizaos/ui"`
@@ -62,13 +60,13 @@ export interface CalendarClientMethods {
   setMeetingAutoJoinPolicy(
     policy: MeetingAutoJoinPolicy,
   ): Promise<MeetingAutoJoinSettings>;
-  /** Ask the meetings plugin to send the agent into a meeting now. */
-  requestMeetingJoin(data: MeetingJoinRequest): Promise<MeetingSession>;
-  /** List meeting sessions (`active: true` narrows to live ones). */
-  listMeetingSessions(options?: {
-    active?: boolean;
-  }): Promise<{ sessions: MeetingSession[] }>;
 }
+
+// The `/api/meetings` client (requestMeetingBot / listMeetings / getMeeting /
+// stopMeeting) is canonical in `@elizaos/ui` (packages/ui/src/api/client-meetings.ts)
+// and already installed on this same prototype via the `@elizaos/ui/api`
+// side-effect import. Do NOT re-declare meeting join/list methods here — call
+// the ui client's `requestMeetingBot` / `listMeetings` directly.
 
 declare module "@elizaos/ui" {
   interface ElizaClient extends CalendarClientMethods {}
@@ -213,28 +211,5 @@ calendarClientPrototype.setMeetingAutoJoinPolicy = async function (
       method: "PUT",
       body: JSON.stringify({ policy }),
     },
-  );
-};
-
-calendarClientPrototype.requestMeetingJoin = async function (
-  this: ElizaClient,
-  data: MeetingJoinRequest,
-) {
-  return this.fetch<MeetingSession>("/api/meetings", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-};
-
-calendarClientPrototype.listMeetingSessions = async function (
-  this: ElizaClient,
-  options: { active?: boolean } = {},
-) {
-  const params = new URLSearchParams();
-  if (options.active !== undefined)
-    params.set("active", options.active ? "1" : "0");
-  const query = params.toString();
-  return this.fetch<{ sessions: MeetingSession[] }>(
-    `/api/meetings${query ? `?${query}` : ""}`,
   );
 };

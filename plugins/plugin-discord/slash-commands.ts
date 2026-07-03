@@ -532,6 +532,9 @@ const transcribeCommand: SlashCommand = {
 	name: "transcribe",
 	description:
 		"Start or stop live meeting transcription for the current voice channel",
+	// Recording a voice channel is a consent-sensitive mutation — gate it to
+	// ADMIN, matching the other mutating commands (settings/model/app).
+	requiredRole: "ADMIN",
 	options: [
 		{
 			name: "mode",

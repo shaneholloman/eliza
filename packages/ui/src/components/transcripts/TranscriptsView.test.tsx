@@ -21,6 +21,7 @@ const summaries: TranscriptSummary[] = [
     durationMs: 65_000,
     speakerCount: 2,
     status: "ready",
+    source: "voice-session",
     preview: "ship the build",
     hasAudio: true,
   },
@@ -31,6 +32,7 @@ const summaries: TranscriptSummary[] = [
     durationMs: 5_000,
     speakerCount: 1,
     status: "processing",
+    source: "voice-session",
     preview: "",
     hasAudio: false,
   },
@@ -114,6 +116,9 @@ describe("TranscriptsView", () => {
     expect(screen.getByTestId("transcripts-empty")).toBeTruthy();
   });
 
+  // The server-computed list-row projection (summarizeTranscript): the badge
+  // platform + the participant COUNT are already on the summary; the roster
+  // names live only on the full transcript record (detail pane).
   const meetingSummary: MeetingAwareTranscriptSummary = {
     id: "m1",
     title: "Weekly sync",
@@ -124,13 +129,19 @@ describe("TranscriptsView", () => {
     preview: "",
     hasAudio: false,
     source: "meeting",
-    metadata: {
+    meeting: {
       platform: "google_meet",
-      participants: [
-        { id: "1", displayName: "Alice" },
-        { id: "2", displayName: "Bob" },
-      ],
+      participantCount: 2,
     },
+  };
+
+  /** The full meeting record the detail pane renders (roster names + platform). */
+  const meetingDetailMetadata = {
+    platform: "google_meet",
+    participants: [
+      { id: "1", displayName: "Alice" },
+      { id: "2", displayName: "Bob" },
+    ],
   };
 
   it("renders platform badge, participant count, and LIVE on a live meeting row", () => {
@@ -177,7 +188,7 @@ describe("TranscriptsView", () => {
       title: "Weekly sync",
       source: "meeting",
       status: "ready",
-      metadata: meetingSummary.metadata,
+      metadata: meetingDetailMetadata,
     };
     render(
       <TranscriptsView
