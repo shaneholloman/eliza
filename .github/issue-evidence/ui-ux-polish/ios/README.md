@@ -83,4 +83,30 @@ UI inconsistency; they belong to the wallet / tasks / chat-composer surfaces.
 
 ## Physical device
 
-See lane summary — device deploy status recorded there.
+`ios:device:deploy --device 59EBB356-…` (MoonCycles, iPhone 16 Pro Max,
+connected) was attempted. The full device (`iphoneos`) build **succeeded** and
+the app + all 3 appexes were **code-signed and verified**:
+
+```
+** BUILD SUCCEEDED **
+[ios-device-deploy] app profile: iOS Team Provisioning Profile: ai.elizaos.app … expires 2027-06-22
+[ios-device-deploy] signing identity: Apple Development: Shaw Walters (UT5K5Q5EVF)
+[ios-device-deploy] codesign plan: 14 step(s) (2 frameworks, 8 nested dylibs, 3 appexes, 1 app)
+[ios-device-deploy] codesign --verify --deep --strict: OK
+```
+
+The on-device **install** is the exact blocker — the device rejects it:
+
+```
+ERROR: The capability "Install Application" is not supported by this device.
+       (com.apple.dt.CoreDeviceError error 1001)
+       CapabilityName = Install Application
+       DeviceIdentifier = 59EBB356-5069-… (MoonCycles)
+```
+
+This is a device-side state blocker (Developer Mode not enabled / device not
+provisioned to accept development installs — it also emitted "No provider was
+found"). It cannot be cleared remotely; it requires physically enabling
+Developer Mode and unlocking the device. Build + signing on our side are clean,
+so physical-device on-device capture is **N/A this run — blocked by device
+state, not by the build**. The simulator run above is the on-device proof.
