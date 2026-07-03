@@ -771,6 +771,100 @@ function TurnStatusIndicator({
   );
 }
 
+// A dedicated agent's cold boot can take 30–120s+ (a container spinning up).
+// Past this with no readiness the boot banner escalates from a plain "waking…"
+// to a "taking longer than usual" state that surfaces a settings escape — so a
+// stuck boot never reads as a silent hang.
+export const BOOT_SLOW_AFTER_MS = 90_000;
+
+// Grace window before the cold-boot banner appears. A warm agent flips out of
+// the "booting" phase within a frame; only a real cold boot stays booting past
+// this, so the banner never flashes on a first paint / warm reconnect.
+const BOOT_BANNER_GRACE_MS = 600;
+
+/**
+ * Cold-start boot feedback (resting, pre-send). While the agent container is
+ * still warming, the composer alone gave no visible progress — just a static
+ * placeholder — for the 30–120s+ a dedicated agent takes to boot. This banner
+ * fills that silent window with an indeterminate spinner + a live "Waking …"
+ * label, escalating after {@link BOOT_SLOW_AFTER_MS} to a "taking longer than
+ * usual" state with an Open-settings escape. The post-send path is unchanged
+ * (optimistic user bubble + the inline "Waking the agent" turn-status). The
+ * parent gates mounting on a grace delay so a warm agent (which flips to ready
+ * within a frame) never flashes it. Token-consistent with the sibling
+ * model-download banner: same centered glass pill, same `text-accent` spinner,
+ * same reduced-motion + aria-live semantics.
+ */
+export function BootStatusIndicator({
+  agentName,
+  onOpenSettings,
+  reduce,
+}: {
+  agentName: string;
+  onOpenSettings?: () => void;
+  reduce?: boolean;
+}): React.JSX.Element {
+  // Local elapsed timing is the only boot signal the overlay has (agentStatus
+  // carries no boot-start timestamp), and it suffices: the parent unmounts this
+  // the instant readiness flips, so the timer never outlives the boot.
+  const [slow, setSlow] = React.useState(false);
+  React.useEffect(() => {
+    const id = window.setTimeout(() => setSlow(true), BOOT_SLOW_AFTER_MS);
+    return () => window.clearTimeout(id);
+  }, []);
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      data-testid="chat-boot-status"
+      data-slow={slow ? "true" : undefined}
+      className="pointer-events-none relative mb-2 flex w-full justify-center"
+    >
+      <span
+        className={cn(
+          "inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-sm font-medium text-white/85",
+          FLOAT_SHADOW,
+        )}
+      >
+        {slow ? (
+          <>
+            <RotateCcw
+              className={cn(
+                "h-3.5 w-3.5 text-accent",
+                reduce ? "" : "animate-spin [animation-duration:2.4s]",
+              )}
+              aria-hidden="true"
+            />
+            <span>{agentName} is taking longer than usual to wake…</span>
+            {onOpenSettings ? (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                data-testid="chat-boot-open-settings"
+                className="pointer-events-auto ml-1 rounded-full border border-white/20 bg-white/10 px-2 py-0.5 text-[12px] text-white/90 transition-colors hover:border-white/35 hover:bg-white/20"
+              >
+                Open settings
+              </button>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <Loader2
+              className={cn(
+                "h-3.5 w-3.5 text-accent",
+                reduce ? "" : "animate-spin",
+              )}
+              aria-hidden="true"
+            />
+            <span>Waking {agentName}…</span>
+          </>
+        )}
+      </span>
+    </div>
+  );
+}
+
 /**
  * One turn of the transcript as a chat bubble — assistant on the left, user on
  * the right. Memoized so a live drag (which re-renders the overlay on every
@@ -2020,6 +2114,25 @@ export function ContinuousChatOverlay({
   const listening = phase === "listening";
   const hasDraft = draft.trim().length > 0;
   const hasImages = pendingImages.length > 0;
+
+  // Delay-show the cold-boot banner. `booting` is `phase === "booting"`, which
+  // is true whenever the agent isn't ready yet — including the first paint,
+  // before the status fetch resolves, even for a warm agent. A warm agent
+  // flips to ready within a frame or two, so gating the banner on `booting`
+  // holding continuously past a short grace window shows it only for a genuine
+  // cold boot (which stays booting for 30–120s+) and never flashes on mount.
+  const [showBootBanner, setShowBootBanner] = React.useState(false);
+  React.useEffect(() => {
+    if (!booting) {
+      setShowBootBanner(false);
+      return;
+    }
+    const id = window.setTimeout(
+      () => setShowBootBanner(true),
+      BOOT_BANNER_GRACE_MS,
+    );
+    return () => window.clearTimeout(id);
+  }, [booting]);
 
   // The suggestion strip is a keyboard-style row of one-tap prompts shown in the
   // RESTING (closed) state — ready, nothing typed or attached, not recording. It
@@ -4001,6 +4114,19 @@ export function ContinuousChatOverlay({
             )}
           </span>
         </div>
+      ) : null}
+
+      {/* Cold-start boot feedback. A dedicated agent's container takes 30–120s+
+          to warm; before this the composer alone showed only a static
+          placeholder for that whole window. This sibling banner explains the
+          wait and, past 90s, escalates to a settings escape. Gated on a grace
+          delay so a warm agent never flashes it. */}
+      {showBootBanner ? (
+        <BootStatusIndicator
+          agentName={agentName}
+          onOpenSettings={openSettings}
+          reduce={reduce}
+        />
       ) : null}
 
       {/* Three tailored prompt suggestions — a keyboard-style strip shown in the
