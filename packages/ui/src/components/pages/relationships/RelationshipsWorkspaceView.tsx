@@ -432,6 +432,7 @@ export function RelationshipsWorkspaceView({
           graph={graph}
           selectedPersonId={selectedPersonId}
           onSelectPersonId={setSelectedPersonId}
+          mobileTitle={t("relationships.people", { defaultValue: "People" })}
         />
       }
       contentHeader={contentHeader}

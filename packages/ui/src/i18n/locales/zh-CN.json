@@ -5409,6 +5409,7 @@
   "relationships.selectPerson": "选择人员",
   "relationships.selectPersonDesc": "从列表或关系图中选择人员。",
   "relationships.activity": "活动",
+  "relationships.people": "人员",
   "agentorchestrator.justNow": "刚刚",
   "agentorchestrator.secondsAgo": "{{count}} 秒前",
   "agentorchestrator.minutesAgo": "{{count}} 分钟前",

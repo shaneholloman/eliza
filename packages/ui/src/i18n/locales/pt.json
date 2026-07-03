@@ -5409,6 +5409,7 @@
   "relationships.selectPerson": "Selecionar uma pessoa",
   "relationships.selectPersonDesc": "Escolha uma pessoa na lista ou no gráfico.",
   "relationships.activity": "Atividade",
+  "relationships.people": "Pessoas",
   "agentorchestrator.justNow": "agora mesmo",
   "agentorchestrator.secondsAgo": "{{count}}s atrás",
   "agentorchestrator.minutesAgo": "{{count}}m atrás",

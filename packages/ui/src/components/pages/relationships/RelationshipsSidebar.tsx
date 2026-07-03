@@ -3,22 +3,30 @@ import type { RelationshipsGraphSnapshot } from "../../../api/client-types-relat
 import { SidebarContent } from "../../composites/sidebar/sidebar-content";
 import { SidebarPanel } from "../../composites/sidebar/sidebar-panel";
 import { SidebarScrollRegion } from "../../composites/sidebar/sidebar-scroll-region";
-import { AppPageSidebar } from "../../shared/AppPageSidebar";
+import {
+  AppPageSidebar,
+  type AppPageSidebarProps,
+} from "../../shared/AppPageSidebar";
 
 export function RelationshipsSidebar({
   graph,
   selectedPersonId,
   onSelectPersonId,
+  ...sidebarProps
 }: {
   graph: RelationshipsGraphSnapshot | null;
   selectedPersonId: string | null;
   onSelectPersonId: (personId: string) => void;
-}) {
+} & Omit<AppPageSidebarProps, "children">) {
+  // Forward the layout-injected sidebar props (PageLayout's mobile drawer
+  // clones this element with `variant="mobile"` / `onMobileClose` / a
+  // className) so the drawer actually renders the mobile chrome.
   return (
     <AppPageSidebar
       testId="relationships-sidebar"
       collapsible
       contentIdentity="relationships"
+      {...sidebarProps}
     >
       <SidebarPanel>
         <SidebarScrollRegion className="mt-2">

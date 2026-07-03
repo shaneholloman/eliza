@@ -5409,6 +5409,7 @@
   "relationships.selectPerson": "Chọn một người",
   "relationships.selectPersonDesc": "Chọn một người từ danh sách hoặc đồ thị.",
   "relationships.activity": "Hoạt động",
+  "relationships.people": "Người",
   "agentorchestrator.justNow": "vừa xong",
   "agentorchestrator.secondsAgo": "{{count}} giây trước",
   "agentorchestrator.minutesAgo": "{{count}} phút trước",

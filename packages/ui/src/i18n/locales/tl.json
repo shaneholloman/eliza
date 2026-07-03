@@ -5409,6 +5409,7 @@
   "relationships.selectPerson": "Pumili ng tao",
   "relationships.selectPersonDesc": "Pumili ng tao mula sa listahan o graph.",
   "relationships.activity": "Aktibidad",
+  "relationships.people": "Mga Tao",
   "agentorchestrator.justNow": "kaagad lamang",
   "agentorchestrator.secondsAgo": "{{count}}s na ang nakalipas",
   "agentorchestrator.minutesAgo": "{{count}}m na ang nakalipas",

@@ -5409,6 +5409,7 @@
   "relationships.selectPerson": "사람 선택",
   "relationships.selectPersonDesc": "목록이나 그래프에서 사람을 선택하세요.",
   "relationships.activity": "활동",
+  "relationships.people": "사람",
   "agentorchestrator.justNow": "방금",
   "agentorchestrator.secondsAgo": "{{count}}초 전",
   "agentorchestrator.minutesAgo": "{{count}}분 전",

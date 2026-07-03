@@ -33,9 +33,10 @@ export interface AppWorkspaceChromeProps {
  * The chrome renders NO mobile sidebar strip. The old top-of-pane
  * `MobileWorkspaceSidebarSwitcher` (an orphan icon button floating above every
  * view's own header) is gone: on mobile each `PageLayout` renders its own
- * labeled inline drawer trigger (`page-layout-mobile-sidebar-trigger`) inside
- * the view content, below the view's header, so the control reads as part of
- * the view instead of detached shell chrome.
+ * labeled drawer trigger (`page-layout-mobile-sidebar-trigger`). Views with a
+ * `ViewHeader` move that trigger into the header's right slot via
+ * `WorkspaceMobileSidebarScope` + `ViewHeaderSidebarTrigger`; views without
+ * one keep the inline trigger inside the view content.
  */
 export function AppWorkspaceChrome({
   nav,

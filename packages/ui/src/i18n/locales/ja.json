@@ -5409,6 +5409,7 @@
   "relationships.selectPerson": "人物を選択",
   "relationships.selectPersonDesc": "リストまたはグラフから人物を選択してください。",
   "relationships.activity": "アクティビティ",
+  "relationships.people": "人物",
   "agentorchestrator.justNow": "たった今",
   "agentorchestrator.secondsAgo": "{{count}} 秒前",
   "agentorchestrator.minutesAgo": "{{count}} 分前",

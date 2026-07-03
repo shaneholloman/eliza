@@ -5452,6 +5452,7 @@
   "relationships.selectPerson": "Select a person",
   "relationships.selectPersonDesc": "Choose a person from the list or graph.",
   "relationships.activity": "Activity",
+  "relationships.people": "People",
   "agentorchestrator.justNow": "just now",
   "agentorchestrator.secondsAgo": "{{count}}s ago",
   "agentorchestrator.minutesAgo": "{{count}}m ago",
