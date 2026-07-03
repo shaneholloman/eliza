@@ -293,7 +293,10 @@ final class GestureSemanticsUITests: XCTestCase {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if app.state == .notRunning { break }
-            if markerValue(Self.detentPrefix, in: app) != nil { return }
+            if markerValue(Self.detentPrefix, in: app) != nil {
+                completeFirstRunIfPresent(in: app)
+                return
+            }
             Thread.sleep(forTimeInterval: 1.0)
         }
         attachScreenshot(named: "boot-no-detent-probe")
@@ -317,6 +320,49 @@ final class GestureSemanticsUITests: XCTestCase {
             "boot did not reach an interactive renderer within \(Int(timeout))s "
                 + "— boot coverage lives in BootCaptureUITests"
         )
+    }
+
+    /// A fresh install boots into the first-run placement question ("where
+    /// should your agent run?"), which pins the chat sheet open and locks the
+    /// composer — every gesture precondition then skips. Choosing "On this
+    /// device" is the REAL user path for this device lane (the local-agent
+    /// mode the phone runs everywhere else); after the choice the onboarding
+    /// lock clears and the sheet/rail become gesture-testable while the model
+    /// downloads in the background. Bounded and screenshot-documented; if the
+    /// lock never clears the gesture tests still skip honestly downstream.
+    private func completeFirstRunIfPresent(in app: XCUIApplication) {
+        let onDevice = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label == 'On this device'")
+        ).firstMatch
+        guard onDevice.waitForExistence(timeout: 3), onDevice.isHittable else {
+            return
+        }
+        attachScreenshot(named: "firstrun-00-placement-choice")
+        onDevice.tap()
+
+        // The composer lock is AX-visible as the "Tap a highlighted option"
+        // hint; wait (bounded) for it to clear, tapping any follow-up
+        // highlighted option that appears along the way.
+        let env = ProcessInfo.processInfo.environment
+        let timeout =
+            Double(env["ELIZA_FIRSTRUN_TIMEOUT_SECONDS"] ?? "") ?? 240
+        let hint = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] 'highlighted option'")
+        ).firstMatch
+        let deadline = Date().addingTimeInterval(timeout)
+        var lastShot = Date.distantPast
+        while Date() < deadline {
+            if !hint.exists {
+                attachScreenshot(named: "firstrun-20-lock-cleared")
+                return
+            }
+            if Date().timeIntervalSince(lastShot) > 30 {
+                attachScreenshot(named: "firstrun-10-waiting-for-lock-clear")
+                lastShot = Date()
+            }
+            Thread.sleep(forTimeInterval: 2.0)
+        }
+        attachScreenshot(named: "firstrun-30-lock-never-cleared")
     }
 
     // MARK: - Probe markers
