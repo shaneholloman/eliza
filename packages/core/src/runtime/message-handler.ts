@@ -7,6 +7,10 @@ import type {
 import type { AgentContext } from "../types/contexts";
 import { normalizeTopics } from "./builtin-field-evaluators";
 import { parseJsonObject, stripJsonStructuralJunkReply } from "./json-output";
+import {
+	parseFieldTranscript,
+	splitTranscriptList,
+} from "./response-field-transcript";
 
 export type V5MessageHandlerOutput = MessageHandlerResult;
 
@@ -48,7 +52,14 @@ export function parseMessageHandlerOutput(
 ): V5MessageHandlerOutput | null {
 	const parsed = parseJsonObject<Record<string, unknown>>(raw);
 	if (!parsed) {
-		return null;
+		// Some providers (cli-inference / claude-sdk warm sessions in text mode)
+		// echo the field set back as a plain-text keyed transcript instead of
+		// JSON: `shouldRespond: RESPOND\n\nreplyText: ...`. Recover the fields
+		// with the transcript grammar (multi-line values with embedded blank
+		// lines terminate only at the next `^<knownField>:` line). Without this
+		// the whole raw transcript falls through the tolerant plain-text path and
+		// is shipped verbatim to the user channel (#11712).
+		return parseMessageHandlerFieldTranscript(raw);
 	}
 
 	const processMessage = normalizeMessageHandlerAction(parsed.shouldRespond);
@@ -65,6 +76,60 @@ export function parseMessageHandlerOutput(
 	);
 
 	const extract = parseExtract(parsed);
+
+	const normalizedPlan: V5MessageHandlerOutput["plan"] = {
+		contexts,
+		reply: replyRaw,
+	};
+	if (candidateActions.length > 0) {
+		normalizedPlan.candidateActions = candidateActions;
+	}
+
+	return {
+		processMessage,
+		plan: normalizedPlan,
+		thought: "",
+		...(extract ? { extract } : {}),
+	};
+}
+
+/**
+ * Parse the plain-text keyed field transcript into a MessageHandlerResult.
+ * Mirrors the JSON path in {@link parseMessageHandlerOutput} but sources the
+ * fields from {@link parseFieldTranscript}. Returns null when the text is not a
+ * recognizable transcript (no known field lines) so the caller can fall through
+ * to the tolerant plain-text handler.
+ */
+function parseMessageHandlerFieldTranscript(
+	raw: string,
+): V5MessageHandlerOutput | null {
+	const transcript = parseFieldTranscript(raw);
+	if (!transcript) return null;
+	const { fields } = transcript;
+
+	// Require at least the routing field plus a reply-bearing field before we
+	// treat the text as a structured transcript. A lone stray `topics:` line in
+	// otherwise-prose output should NOT be reinterpreted as an envelope.
+	const hasShouldRespond = typeof fields.shouldRespond === "string";
+	const hasReplyText = typeof fields.replyText === "string";
+	if (!hasShouldRespond && !hasReplyText) return null;
+
+	const processMessage = normalizeMessageHandlerAction(fields.shouldRespond);
+	const contexts = splitTranscriptList(fields.contexts);
+	const replyRaw =
+		typeof fields.replyText === "string"
+			? stripJsonStructuralJunkReply(fields.replyText)
+			: undefined;
+	const candidateActions = normalizeStringHints(
+		splitTranscriptList(fields.candidateActionNames),
+		12,
+	);
+
+	const extract = parseExtract({
+		facts: splitTranscriptList(fields.facts),
+		addressedTo: splitTranscriptList(fields.addressedTo),
+		topics: splitTranscriptList(fields.topics),
+	});
 
 	const normalizedPlan: V5MessageHandlerOutput["plan"] = {
 		contexts,
