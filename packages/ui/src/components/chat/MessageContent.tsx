@@ -542,7 +542,7 @@ export function MessageUiSpecBlock({
         </Button>
       </div>
       {showRaw && (
-        <div className="px-3 py-2 bg-card overflow-x-auto">
+        <div className="px-3 py-2 bg-card overflow-x-auto overscroll-x-contain">
           <pre className="text-2xs text-muted font-mono whitespace-pre-wrap break-words m-0">
             {raw}
           </pre>
@@ -1170,7 +1170,7 @@ export function MessageContent({
                   <div className="bg-accent/10 px-3 py-1 text-xs font-mono font-bold text-accent uppercase tracking-wider">
                     &lt;{seg.tag}&gt;
                   </div>
-                  <pre className="px-3 py-2 text-xs font-mono whitespace-pre-wrap break-words text-muted m-0 overflow-x-auto">
+                  <pre className="px-3 py-2 text-xs font-mono whitespace-pre-wrap break-words text-muted m-0 overflow-x-auto overscroll-x-contain">
                     {seg.content.trim()}
                   </pre>
                 </div>

@@ -232,7 +232,7 @@ function CategoryFilterBar({
     // crushed vertically when the list overflows; the list `ul` is the scroller.
     // biome-ignore lint/a11y/useSemanticElements: role="group" is correct for a labelled toolbar of filter toggles; <fieldset> is for grouped form fields, not a chip bar.
     <div
-      className="flex shrink-0 items-center gap-1 overflow-x-auto px-2 py-1.5"
+      className="flex shrink-0 items-center gap-1 overflow-x-auto overscroll-x-contain px-2 py-1.5"
       role="group"
       aria-label="Filter notifications by category"
     >

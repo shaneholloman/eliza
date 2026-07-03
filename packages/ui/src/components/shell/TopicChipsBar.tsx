@@ -23,7 +23,7 @@ export function TopicChipsBar({
     <div
       data-testid="topic-chips-bar"
       className={cn(
-        "flex shrink-0 items-center gap-1.5 overflow-x-auto pb-2 pt-1",
+        "flex shrink-0 items-center gap-1.5 overflow-x-auto overscroll-x-contain pb-2 pt-1",
         "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         className,
       )}
