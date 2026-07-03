@@ -795,30 +795,28 @@ class AdvertisingService {
     if (!account || account.organization_id !== organizationId) {
       throw new Error("Ad account not found");
     }
-    const normalized = this.normalizeSpendCapCredits(spendCapCredits);
-    if (normalized) {
-      const allocated = await adCampaignsRepository.sumCreditsAllocatedByAdAccount(accountId);
-      const cap = Number(normalized);
-      if (allocated > cap + 1e-9) {
-        throw ValidationError(
-          `Ad account already has ${allocated.toFixed(
-            2,
-          )} allocated credits, which exceeds the requested ${cap.toFixed(2)} cap`,
-        );
-      }
-    }
-    const updated = await adAccountsRepository.update(accountId, {
-      spend_cap_credits: normalized,
-    });
-    if (!updated) {
+    const normalized = this.normalizeSpendCapCredits(spendCapCredits) ?? null;
+    const result = await adAccountsRepository.updateSpendCapWithAllocationCheck(
+      accountId,
+      organizationId,
+      normalized,
+    );
+    if (result.status === "not_found") {
       throw new Error("Ad account not found");
+    }
+    if (result.status === "cap_exceeded") {
+      throw ValidationError(
+        `Ad account already has ${result.allocated.toFixed(
+          2,
+        )} allocated credits, which exceeds the requested ${result.cap.toFixed(2)} cap`,
+      );
     }
     logger.info("[Advertising] Ad account spend cap updated", {
       accountId,
       organizationId,
       spendCapCredits: normalized,
     });
-    return updated;
+    return result.account;
   }
 
   async disconnectAccount(accountId: string, organizationId: string): Promise<void> {
@@ -1162,34 +1160,48 @@ class AdvertisingService {
     let campaign: AdCampaign | null = null;
     try {
       // Create campaign record
-      campaign = await adCampaignsRepository.create({
-        organization_id: input.organizationId,
-        ad_account_id: input.adAccountId,
-        external_campaign_id: result.externalCampaignId,
-        name: input.name,
-        platform: account.platform,
-        objective: input.objective,
-        status: "pending",
-        budget_type: input.budgetType,
-        budget_amount: String(input.budgetAmount),
-        budget_currency: input.budgetCurrency || "USD",
-        credits_allocated: String(budgetCredits),
-        spend_cap_credits: campaignSpendCap,
-        start_date: input.startDate,
-        end_date: input.endDate,
-        targeting: targeting ? this.toDbTargeting(targeting) : {},
-        app_id: input.appId,
-        metadata: {
-          ...(input.bidStrategy ? { bid_strategy: input.bidStrategy } : {}),
-          ...(input.optimizationGoal ? { optimization_goal: input.optimizationGoal } : {}),
-          ...(dayparting
-            ? {
-                dayparting,
-                dayparting_provider_synced_at: new Date().toISOString(),
-              }
-            : {}),
+      const allocation = await adCampaignsRepository.createWithAccountSpendCapCheck(
+        {
+          organization_id: input.organizationId,
+          ad_account_id: input.adAccountId,
+          external_campaign_id: result.externalCampaignId,
+          name: input.name,
+          platform: account.platform,
+          objective: input.objective,
+          status: "pending",
+          budget_type: input.budgetType,
+          budget_amount: String(input.budgetAmount),
+          budget_currency: input.budgetCurrency || "USD",
+          credits_allocated: String(budgetCredits),
+          spend_cap_credits: campaignSpendCap,
+          start_date: input.startDate,
+          end_date: input.endDate,
+          targeting: targeting ? this.toDbTargeting(targeting) : {},
+          app_id: input.appId,
+          metadata: {
+            ...(input.bidStrategy ? { bid_strategy: input.bidStrategy } : {}),
+            ...(input.optimizationGoal ? { optimization_goal: input.optimizationGoal } : {}),
+            ...(dayparting
+              ? {
+                  dayparting,
+                  dayparting_provider_synced_at: new Date().toISOString(),
+                }
+              : {}),
+          },
         },
-      });
+        budgetCredits,
+      );
+      if (allocation.status === "cap_exceeded") {
+        throw ValidationError(
+          `Ad account spend cap would be exceeded: ${allocation.allocated.toFixed(
+            2,
+          )} credits requested against ${allocation.cap.toFixed(2)} cap`,
+        );
+      }
+      if (allocation.status !== "created") {
+        throw new Error("Ad account changed concurrently; please retry");
+      }
+      campaign = allocation.campaign;
 
       // Record budget allocation transaction
       await adTransactionsRepository.create({
@@ -1457,6 +1469,61 @@ class AdvertisingService {
           metadata: { type: "ad_budget_decrease_refund", campaignId },
         });
       }
+    } else if (budgetCreditDelta > 0 && newCreditsAllocated !== undefined) {
+      const allocation = await adCampaignsRepository.claimAllocationChangeWithAccountSpendCapCheck(
+        campaignId,
+        organizationId,
+        account.id,
+        campaign.credits_allocated,
+        newCreditsAllocated,
+        updateData,
+      );
+      if (allocation.status === "cap_exceeded") {
+        await provider
+          .updateCampaign(credentials, campaign.external_campaign_id, {
+            budgetAmount: Number(campaign.budget_amount),
+          })
+          .catch((revertError) => {
+            logger.error("[Advertising] Failed to revert provider budget after account cap race", {
+              campaignId,
+              error: revertError instanceof Error ? revertError.message : String(revertError),
+            });
+          });
+        await creditsService.refundCredits({
+          organizationId,
+          amount: budgetCreditDelta,
+          description: `Ad budget increase refund (account cap exceeded): ${campaign.name}`,
+          metadata: { type: "ad_budget_increase_refund", campaignId },
+        });
+        throw ValidationError(
+          `Ad account spend cap would be exceeded: ${allocation.allocated.toFixed(
+            2,
+          )} credits requested against ${allocation.cap.toFixed(2)} cap`,
+        );
+      }
+      if (allocation.status !== "updated") {
+        await provider
+          .updateCampaign(credentials, campaign.external_campaign_id, {
+            budgetAmount: Number(campaign.budget_amount),
+          })
+          .catch((revertError) => {
+            logger.error(
+              "[Advertising] Failed to revert provider budget after concurrent campaign update",
+              {
+                campaignId,
+                error: revertError instanceof Error ? revertError.message : String(revertError),
+              },
+            );
+          });
+        await creditsService.refundCredits({
+          organizationId,
+          amount: budgetCreditDelta,
+          description: `Ad budget increase refund (concurrent update): ${campaign.name}`,
+          metadata: { type: "ad_budget_increase_refund", campaignId },
+        });
+        throw new Error("Campaign budget changed concurrently; please retry");
+      }
+      updated = allocation.campaign;
     } else {
       updated = await adCampaignsRepository.update(campaignId, updateData);
     }
