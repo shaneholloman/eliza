@@ -33,6 +33,8 @@ import type {
   CreateCampaignReportShareResponse,
   CreateInfluencerProfileInput,
   CreateInfluencerProfileResponse,
+  CreatePressReleaseInput,
+  CreatePressReleaseResponse,
   DeleteAppResponse,
   DeployAppFrontendInput,
   DeployAppFrontendResponse,
@@ -46,7 +48,11 @@ import type {
   ListAppFrontendDeploymentsResponse,
   ListAppsResponse,
   ListInfluencersResponse,
+  ListPressReleasesResponse,
+  PressReleaseDto,
   RegenerateAppApiKeyResponse,
+  SubmitPressReleaseInput,
+  SubmitPressReleaseResponse,
   UpdateAppInput,
   UpdateAppMonetizationInput,
   UpdateCampaignDaypartingInput,
@@ -104,6 +110,14 @@ type CreateInfluencerProfileFn = (
   input: CreateInfluencerProfileInput,
 ) => Promise<CreateInfluencerProfileResponse>;
 type ListInfluencersFn = (niche?: string) => Promise<ListInfluencersResponse>;
+type CreatePressReleaseFn = (
+  input: CreatePressReleaseInput,
+) => Promise<CreatePressReleaseResponse>;
+type ListPressReleasesFn = () => Promise<ListPressReleasesResponse>;
+type SubmitPressReleaseFn = (
+  releaseId: string,
+  input?: SubmitPressReleaseInput,
+) => Promise<SubmitPressReleaseResponse>;
 type ExportAppBackupFn = (appId: string) => Promise<ExportAppBackupResponse>;
 type DeployAppFn = (
   id: string,
@@ -168,6 +182,9 @@ interface SdkState {
   createInfluencerProfile: CreateInfluencerProfileFn;
   createBooking: CreateBookingFn;
   listInfluencers: ListInfluencersFn;
+  createPressRelease: CreatePressReleaseFn;
+  listPressReleases: ListPressReleasesFn;
+  submitPressRelease: SubmitPressReleaseFn;
   exportAppBackup: ExportAppBackupFn;
   getAppDeployStatus: GetAppDeployStatusFn;
   deleteApp: DeleteAppFn;
@@ -390,6 +407,57 @@ function defaultState(): SdkState {
           brief: "b",
         },
       }),
+    createPressRelease: (input) =>
+      Promise.resolve({
+        success: true,
+        release: {
+          id: "pr_1",
+          organization_id: "org",
+          created_by_user_id: "user",
+          title: input.title,
+          summary: input.summary ?? null,
+          body: input.body,
+          boilerplate: input.boilerplate ?? null,
+          status: "draft",
+          target_audience: input.targetAudience ?? {},
+          target_regions: input.targetRegions ?? [],
+          assets: input.assets ?? [],
+          embargo_at: input.embargoAt ?? null,
+          submitted_at: null,
+          distributed_at: null,
+          failed_reason: null,
+          idempotency_key: input.idempotencyKey ?? null,
+          metadata: input.metadata ?? {},
+          created_at: "2026-07-03T00:00:00.000Z",
+          updated_at: "2026-07-03T00:00:00.000Z",
+        } satisfies PressReleaseDto,
+      }),
+    listPressReleases: () => Promise.resolve({ success: true, releases: [] }),
+    submitPressRelease: (releaseId) =>
+      Promise.resolve({
+        success: true,
+        release: {
+          id: releaseId,
+          organization_id: "org",
+          created_by_user_id: "user",
+          title: "Launch",
+          summary: null,
+          body: "Body",
+          boilerplate: null,
+          status: "submitted",
+          target_audience: {},
+          target_regions: [],
+          assets: [],
+          embargo_at: null,
+          submitted_at: "2026-07-03T00:00:00.000Z",
+          distributed_at: null,
+          failed_reason: null,
+          idempotency_key: null,
+          metadata: {},
+          created_at: "2026-07-03T00:00:00.000Z",
+          updated_at: "2026-07-03T00:00:00.000Z",
+        } satisfies PressReleaseDto,
+      }),
     exportAppBackup: () =>
       Promise.resolve({
         success: true,
@@ -529,6 +597,15 @@ export function setListInfluencers(fn: ListInfluencersFn): void {
 export function setCreateBooking(fn: CreateBookingFn): void {
   state.createBooking = fn;
 }
+export function setCreatePressRelease(fn: CreatePressReleaseFn): void {
+  state.createPressRelease = fn;
+}
+export function setListPressReleases(fn: ListPressReleasesFn): void {
+  state.listPressReleases = fn;
+}
+export function setSubmitPressRelease(fn: SubmitPressReleaseFn): void {
+  state.submitPressRelease = fn;
+}
 export function setExportAppBackup(fn: ExportAppBackupFn): void {
   state.exportAppBackup = fn;
 }
@@ -643,6 +720,20 @@ export class FakeElizaCloudClient {
   }
   createBooking(input: CreateBookingInput): Promise<CreateBookingResponse> {
     return state.createBooking(input);
+  }
+  createPressRelease(
+    input: CreatePressReleaseInput,
+  ): Promise<CreatePressReleaseResponse> {
+    return state.createPressRelease(input);
+  }
+  listPressReleases(): Promise<ListPressReleasesResponse> {
+    return state.listPressReleases();
+  }
+  submitPressRelease(
+    releaseId: string,
+    input?: SubmitPressReleaseInput,
+  ): Promise<SubmitPressReleaseResponse> {
+    return state.submitPressRelease(releaseId, input);
   }
   exportAppBackup(appId: string): Promise<ExportAppBackupResponse> {
     return state.exportAppBackup(appId);
