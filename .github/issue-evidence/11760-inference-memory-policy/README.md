@@ -22,20 +22,23 @@ real ambient pressure with the constrained profile active; the device-exact
 
 | file | what |
 | --- | --- |
-| `exit-info-before-install.txt` | `dumpsys activity exit-info` before installing this build (shared-emulator churn visible: PACKAGE_UPDATED entries from sibling sessions) |
-| `exit-info-after-soak.txt` | same dump after the soak — the acceptance row: no `reason=3 (LOW_MEMORY)` kill of `ai.elizaos.app` during the soak window |
-| `policy-decision-logs.txt` | logcat + agent-log lines showing the RAM-class decision, the exported env, and each release (idle / pressure) with reasons |
-| `meminfo-timeline.tsv` | `dumpsys meminfo ai.elizaos.app` (TOTAL PSS/RSS) + bun agent process RSS sampled through load → chat → idle-unload → reload → pressure-release |
-| `soak-driver.log` | full transcript of the soak driver (chat turns via `/v1/chat/completions`, ballast mount, timings) |
+| `exit-info-before-install.txt` | `dumpsys activity exit-info` before installing this build |
+| `exit-info-after-soak.txt` | same dump after the soak. Acceptance row: the app's only exit reasons are `10 (USER REQUESTED)` (this session's + sibling-session `am force-stop`s) and `16 (PACKAGE UPDATED)` (this session's reinstalls) — **zero `reason=3 (LOW_MEMORY)`** |
+| `lmkd-survival.txt` | headline acceptance evidence: during the soak lmkd fired **38 kills across 28 other packages** under "low watermark is breached" while `ai.elizaos.app` was killed **0 times** |
+| `policy-decision-logs.txt` | Java (`ElizaAgent`) + TS (`aosp-local-inference`) RAM-class decisions (all `ramClass=CONSTRAINED nCtx=4096 idleUnloadMs=120000`), the on-device pressure release, and the working post-KV-fix generate |
+| `logcat-relevant.txt` | filtered logcat slice: every policy decision + release + lmkd line + our-app process death |
+| `meminfo-timeline.tsv` | `dumpsys meminfo ai.elizaos.app` (TOTAL PSS/RSS) + bun agent VmRSS + `/proc/meminfo` MemAvailable sampled every 15 s across the soak |
+| `soak-driver.log` | transcript of the soak driver (chat turns via `/v1/chat/completions`, timings, phase markers) |
 
-## Soak protocol
+## What was observed
 
-1. Install the current-tree debug APK (web bundle + agent bundle baked from this branch).
-2. Force the constrained profile via debug props (above), launch, wait for `/api/health`.
-3. Chat turn → model loads (RSS climbs by the weights + ctx footprint).
-4. Idle ≥ 2 min → **idle unload** log + RSS drop (policy lever a).
-5. Chat turn again → model reloads on demand, reply returned (lossless recovery).
-6. Mount a tmpfs ballast and fill until `MemAvailable` < 12 % of MemTotal →
-   **pressure release** log + RSS drop while the app stays foreground (lever c).
-7. ≥ 10 min total under this ambient pressure; final `exit-info` shows no
-   LOW_MEMORY kill of the app during the window.
+- **RAM-class policy fires** — three independent constrained decisions logged (`totalMem≈2975MB`, `lmkThreshold=216MB`, `nCtx=4096`, `idleUnloadMs=120000`) from both the Java probe and the TS bootstrap.
+- **KV fix verified** — after fixing the retired-QJL-KV bug this soak surfaced, a real on-device generate completed (`fast path done, latencyMs=3782`, `cacheTypeK=q8_0 cacheTypeV=f16`).
+- **Pressure release fires (lever c)** — the in-process leg released the model at `MemAvailable=233MB / MemTotal=2976MB` under real pressure.
+- **Acceptance met** — lmkd actively reclaimed 28 other apps under low-watermark pressure and never targeted `ai.elizaos.app`; exit-info is clean of `reason=3 LOW_MEMORY`.
+
+## Honest caveats
+
+- The session-shared AVD reported **MemTotal ≈ 2.9 GiB** at soak time (`ActivityManager` totalMem=2975 MB) — measured RAM class `CONSTRAINED`, *harder* than the 5.7 GB Pixel 6a target. It is CPU-path (no `libggml-vulkan.so` staged → the bionic Vulkan delegation is inactive, so there is no Mali GL-mtrack term to reclaim); the same `resetResident`/`unloadModel` release plumbing is covered by the Java + TS unit tests.
+- Sibling sessions reinstalled a different APK mid-run (documented shared-emulator hazard). Each clobber was reclaimed by reinstalling this branch's APK; the app's non-LMK exits above are those reinstalls/force-stops, not policy behavior.
+- The device-exact 10-min Pixel 6a soak (Mali GL mtrack + that device's lmkd tables) is the hardware-lab row → #11734.
