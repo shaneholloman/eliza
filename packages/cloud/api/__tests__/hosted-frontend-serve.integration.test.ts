@@ -179,6 +179,61 @@ describe("public hosted-frontend serve", () => {
     expect(trackPageView).toHaveBeenCalled();
   });
 
+  test("sets analytics cookies and records matching hosted-frontend session metadata", async () => {
+    getBySlugImpl = async (slug) => (slug === "cool" ? APP : undefined);
+    getActiveImpl = async (id) =>
+      id === "app_1" ? activeDeployment : undefined;
+    const res = await app.request(
+      "/api/v1/hosted-frontend/serve?host=cool.sites.elizacloud.ai",
+      {
+        headers: {
+          cookie:
+            "eliza_visitor_id=visitor-abc123; eliza_session_id=session-def456",
+        },
+      },
+      ENV,
+    );
+
+    expect(res.status).toBe(200);
+    const setCookie = res.headers.getSetCookie?.() ?? [];
+    expect(setCookie.join("\n")).toContain("eliza_visitor_id=visitor-abc123");
+    expect(setCookie.join("\n")).toContain("eliza_session_id=session-def456");
+    expect(trackPageView).toHaveBeenCalledWith(
+      "app_1",
+      expect.objectContaining({
+        source: "hosted_frontend",
+        metadata: expect.objectContaining({
+          visitor_id: "visitor-abc123",
+          session_id: "session-def456",
+        }),
+      }),
+    );
+    expect(await res.text()).toContain('"visitor-abc123"');
+  });
+
+  test("ignores malformed analytics cookies instead of failing the hosted page", async () => {
+    getBySlugImpl = async (slug) => (slug === "cool" ? APP : undefined);
+    getActiveImpl = async (id) =>
+      id === "app_1" ? activeDeployment : undefined;
+    const res = await app.request(
+      "/api/v1/hosted-frontend/serve?host=cool.sites.elizacloud.ai",
+      { headers: { cookie: "eliza_visitor_id=%E0%A4%A" } },
+      ENV,
+    );
+
+    expect(res.status).toBe(200);
+    expect(trackPageView).toHaveBeenCalledWith(
+      "app_1",
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          visitor_id: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+          ),
+        }),
+      }),
+    );
+  });
+
   test("synthesizes robots.txt (allow + sitemap link) for a hosted frontend", async () => {
     getBySlugImpl = async (slug) => (slug === "cool" ? APP : undefined);
     getActiveImpl = async () => activeDeployment;

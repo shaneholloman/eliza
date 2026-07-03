@@ -12,6 +12,7 @@ import {
 import { apiKeysService } from "@/lib/services/api-keys";
 import { appsService } from "@/lib/services/apps";
 import { logger } from "@/lib/utils/logger";
+import { safeAnalyticsId } from "@/lib/utils/safe-analytics-id";
 import type { AppEnv } from "@/types/cloud-worker-env";
 
 function detectSource(
@@ -49,6 +50,8 @@ app.post("/", async (c) => {
       api_key: bodyApiKey,
       page_url,
       referrer,
+      visitor_id,
+      session_id,
       screen_width,
       screen_height,
       pathname,
@@ -57,6 +60,8 @@ app.post("/", async (c) => {
       api_key?: string;
       page_url?: string;
       referrer?: string;
+      visitor_id?: string;
+      session_id?: string;
       screen_width?: number;
       screen_height?: number;
       pathname?: string;
@@ -102,7 +107,17 @@ app.post("/", async (c) => {
       ipAddress,
       userAgent,
       source,
-      metadata: { screen_width, screen_height, origin, referer, pathname },
+      metadata: {
+        screen_width,
+        screen_height,
+        origin,
+        referer,
+        pathname,
+        // Boundary-validated: same rule as the hosted-serve cookie ids. Reject
+        // wrong types / oversized / unsafe values instead of persisting them.
+        visitor_id: safeAnalyticsId(visitor_id) ?? undefined,
+        session_id: safeAnalyticsId(session_id) ?? undefined,
+      },
     });
 
     logger.debug("[Track] Page view recorded", {
