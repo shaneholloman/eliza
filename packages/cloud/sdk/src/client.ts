@@ -2,6 +2,7 @@ import { CloudApiClient, CloudApiError, ElizaCloudHttpClient } from "./http.js";
 import { ElizaCloudPublicRoutesClient } from "./public-routes.js";
 import {
   type ActivateAppFrontendResponse,
+  type AdCampaignAttributionResponse,
   type AffiliateCodeResponse,
   type AgentLifecycleResponse,
   type AgentListResponse,
@@ -21,6 +22,7 @@ import {
   type AuthPairResponse,
   type BuyAppDomainInput,
   type BuyAppDomainResponse,
+  type CampaignDaypartingResponse,
   type ChatCompletionRequest,
   type ChatCompletionResponse,
   type CheckAppDomainInput,
@@ -68,6 +70,8 @@ import {
   type DeployAppFrontendResponse,
   type DeployAppInput,
   type DeployAppResponse,
+  type DuplicateAdCampaignInput,
+  type DuplicateAdCampaignResponse,
   type ElizaCloudClientOptions,
   type EmbeddingsRequest,
   type EmbeddingsResponse,
@@ -108,6 +112,7 @@ import {
   type SnapshotType,
   type UpdateAppInput,
   type UpdateAppMonetizationInput,
+  type UpdateCampaignDaypartingInput,
   type UpdateContainerRequest,
   type UpsertAffiliateCodeRequest,
   type UserProfileResponse,
@@ -964,6 +969,50 @@ export class ElizaCloudClient {
     return this.request<ListAdSlotsResponse>(
       "GET",
       "/api/v1/marketing/inventory",
+    );
+  }
+
+  /** `GET /api/v1/advertising/campaigns/:id/dayparting` — read a campaign's delivery windows. */
+  getAdCampaignDayparting(
+    campaignId: string,
+  ): Promise<CampaignDaypartingResponse> {
+    return this.request<CampaignDaypartingResponse>(
+      "GET",
+      `/api/v1/advertising/campaigns/${encodeURIComponent(campaignId)}/dayparting`,
+    );
+  }
+
+  /** `PUT /api/v1/advertising/campaigns/:id/dayparting` — replace or clear delivery windows. */
+  updateAdCampaignDayparting(
+    campaignId: string,
+    input: UpdateCampaignDaypartingInput,
+  ): Promise<CampaignDaypartingResponse> {
+    return this.request<CampaignDaypartingResponse>(
+      "PUT",
+      `/api/v1/advertising/campaigns/${encodeURIComponent(campaignId)}/dayparting`,
+      { json: input },
+    );
+  }
+
+  /** `POST /api/v1/advertising/campaigns/:id/duplicate` — duplicate campaign config locally. */
+  duplicateAdCampaign(
+    campaignId: string,
+    input: DuplicateAdCampaignInput = {},
+  ): Promise<DuplicateAdCampaignResponse> {
+    return this.request<DuplicateAdCampaignResponse>(
+      "POST",
+      `/api/v1/advertising/campaigns/${encodeURIComponent(campaignId)}/duplicate`,
+      { json: input },
+    );
+  }
+
+  /** `GET /api/v1/advertising/campaigns/:id/attribution` — signed pixel/webhook install contract. */
+  getAdCampaignAttribution(
+    campaignId: string,
+  ): Promise<AdCampaignAttributionResponse> {
+    return this.request<AdCampaignAttributionResponse>(
+      "GET",
+      `/api/v1/advertising/campaigns/${encodePathParam(campaignId)}/attribution`,
     );
   }
 

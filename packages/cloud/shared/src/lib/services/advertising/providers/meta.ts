@@ -8,6 +8,7 @@ import type {
   AdProviderCreativeResult,
   AdProviderMetricsResult,
   AdProviderValidationResult,
+  CampaignDaypartingSchedule,
   CampaignMetrics,
   CreateCampaignInput,
   CreateCreativeInput,
@@ -62,6 +63,38 @@ interface MetaAdImagesResponse {
       permalink_url?: string;
     }
   >;
+}
+
+export function mapBidControlsToMetaAdSet(input: CreateCampaignInput): {
+  billing_event: string;
+  optimization_goal: string;
+} {
+  const effectiveGoal =
+    input.optimizationGoal ??
+    (input.bidStrategy === "cpa"
+      ? "conversions"
+      : input.bidStrategy === "cpc"
+        ? "clicks"
+        : "reach");
+
+  if (effectiveGoal === "conversions") {
+    return {
+      billing_event: "IMPRESSIONS",
+      optimization_goal: "OFFSITE_CONVERSIONS",
+    };
+  }
+
+  if (effectiveGoal === "clicks") {
+    return {
+      billing_event: "LINK_CLICKS",
+      optimization_goal: "LINK_CLICKS",
+    };
+  }
+
+  return {
+    billing_event: "IMPRESSIONS",
+    optimization_goal: "REACH",
+  };
 }
 
 function isRetryableError(code: number): boolean {
@@ -153,6 +186,23 @@ function mapObjectiveToMeta(objective: string): string {
     conversions: "OUTCOME_SALES",
   };
   return mapping[objective] || "OUTCOME_AWARENESS";
+}
+
+function localTimeToMinute(value: string): number {
+  const [hour, minute] = value.split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+export function mapDaypartingToMetaAdSetSchedule(schedule: CampaignDaypartingSchedule): Array<{
+  days: number[];
+  start_minute: number;
+  end_minute: number;
+}> {
+  return schedule.windows.map((window) => ({
+    days: window.daysOfWeek,
+    start_minute: localTimeToMinute(window.startTime),
+    end_minute: localTimeToMinute(window.endTime),
+  }));
 }
 
 function mapCtaToMeta(cta?: string): string {
@@ -281,8 +331,7 @@ export const metaAdsProvider: AdProvider = {
         name: `${input.name} - Ad Set`,
         campaign_id: campaign.id,
         status: "PAUSED",
-        billing_event: "IMPRESSIONS",
-        optimization_goal: "REACH",
+        ...mapBidControlsToMetaAdSet(input),
       };
 
       if (input.budgetType === "daily") {
@@ -296,6 +345,12 @@ export const metaAdsProvider: AdProvider = {
       }
       if (input.endDate) {
         adSetParams.end_time = input.endDate.toISOString();
+      }
+      if (input.dayparting?.windows.length) {
+        adSetParams.adset_schedule = JSON.stringify(
+          mapDaypartingToMetaAdSetSchedule(input.dayparting),
+        );
+        adSetParams.timezone_type = "advertiser";
       }
 
       // Build targeting
@@ -326,11 +381,41 @@ export const metaAdsProvider: AdProvider = {
       }
 
       if (input.targeting?.interests?.length) {
+        const flexibleSpec: Record<string, unknown> = {
+          interests: input.targeting.interests.map((i) => ({ name: i })),
+        };
+        if (input.targeting.behaviors?.length) {
+          flexibleSpec.behaviors = input.targeting.behaviors.map((behavior) => ({
+            name: behavior,
+          }));
+        }
+        targeting.flexible_spec = [flexibleSpec];
+      } else if (input.targeting?.behaviors?.length) {
         targeting.flexible_spec = [
           {
-            interests: input.targeting.interests.map((i) => ({ name: i })),
+            behaviors: input.targeting.behaviors.map((behavior) => ({
+              name: behavior,
+            })),
           },
         ];
+      }
+
+      if (input.targeting?.customAudiences?.length) {
+        targeting.custom_audiences = input.targeting.customAudiences.map((id) => ({ id }));
+      }
+
+      if (input.targeting?.excludedAudiences?.length) {
+        targeting.excluded_custom_audiences = input.targeting.excludedAudiences.map((id) => ({
+          id,
+        }));
+      }
+
+      if (input.targeting?.placements?.length) {
+        targeting.publisher_platforms = input.targeting.placements;
+      }
+
+      if (input.targeting?.languages?.length) {
+        targeting.locales = input.targeting.languages;
       }
 
       adSetParams.targeting = JSON.stringify(targeting);

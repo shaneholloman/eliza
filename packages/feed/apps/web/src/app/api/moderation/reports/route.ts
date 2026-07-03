@@ -160,8 +160,14 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
   const authUser = await authenticate(request);
 
   const body = await request.json();
-  const { reportType, reportedUserId, reportedPostId, category, reason, evidence } =
-    CreateReportSchema.parse(body);
+  const {
+    reportType,
+    reportedUserId,
+    reportedPostId,
+    category,
+    reason,
+    evidence,
+  } = CreateReportSchema.parse(body);
 
   // The report target must match the declared report type so we don't persist
   // a "post" report that only carries a user id (or vice versa).
@@ -200,10 +206,11 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
     }
   }
 
+  let reportedPostAuthorId: string | null = null;
   if (reportType === "post" && reportedPostId) {
     const post = await db.post.findUnique({
       where: { id: reportedPostId },
-      select: { id: true },
+      select: { authorId: true },
     });
     if (!post) {
       return successResponse(
@@ -211,13 +218,21 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
         404,
       );
     }
+    if (post.authorId === authUser.userId) {
+      return successResponse(
+        { success: false, error: "You cannot report your own post" },
+        400,
+      );
+    }
+    reportedPostAuthorId = post.authorId;
   }
 
   const report = await db.report.create({
     data: {
       id: await generateSnowflakeId(),
       reporterId: authUser.userId,
-      reportedUserId: reportType === "user" ? reportedUserId : null,
+      reportedUserId:
+        reportType === "user" ? reportedUserId : reportedPostAuthorId,
       reportedPostId: reportType === "post" ? reportedPostId : null,
       reportType,
       category,

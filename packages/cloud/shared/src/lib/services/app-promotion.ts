@@ -17,7 +17,11 @@ import type { PostContent, SocialPlatform } from "../types/social-media";
 import { extractErrorMessage } from "../utils/error-handling";
 import { logger } from "../utils/logger";
 import { advertisingService } from "./advertising";
-import type { AdPlatform } from "./advertising/types";
+import type {
+  AdPlatform,
+  CampaignBidStrategy,
+  CampaignOptimizationGoal,
+} from "./advertising/types";
 import { appsService } from "./apps";
 import { creditsService } from "./credits";
 import { discordAppAutomationService } from "./discord-automation/app-automation";
@@ -53,8 +57,11 @@ export interface PromotionConfig {
     budget: number;
     budgetType: "daily" | "lifetime";
     objective: "awareness" | "traffic" | "engagement" | "app_promotion";
+    bidStrategy?: CampaignBidStrategy;
+    optimizationGoal?: CampaignOptimizationGoal;
     duration?: number;
     targetLocations?: string[];
+    audienceSegmentId?: string;
   };
   twitterAutomation?: {
     enabled: boolean;
@@ -581,10 +588,16 @@ Return ONLY valid JSON, no markdown.`;
       objective: config.objective,
       budgetType: config.budgetType,
       budgetAmount: config.budget,
+      bidStrategy: config.bidStrategy,
+      optimizationGoal: config.optimizationGoal,
       startDate,
       endDate,
       appId: app.id,
-      targeting: config.targetLocations?.length ? { locations: config.targetLocations } : undefined,
+      audienceSegmentId: config.audienceSegmentId,
+      targeting:
+        !config.audienceSegmentId && config.targetLocations?.length
+          ? { locations: config.targetLocations }
+          : undefined,
     });
 
     if (content) {

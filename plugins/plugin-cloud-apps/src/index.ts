@@ -47,6 +47,11 @@
  */
 
 import type { Plugin } from "@elizaos/core";
+import { getAdCampaignAttributionAction } from "./actions/ad-attribution.js";
+import {
+  duplicateAdCampaignAction,
+  setAdCampaignDaypartingAction,
+} from "./actions/ad-campaigns.js";
 import {
   createAdSlotAction,
   listAdSlotsAction,
@@ -78,6 +83,11 @@ import { updateMonetizationAction } from "./actions/update-monetization.js";
 import { withdrawAppEarningsAction } from "./actions/withdraw-app-earnings.js";
 import { cloudAppsProvider } from "./providers/cloud-apps.js";
 
+export { getAdCampaignAttributionAction } from "./actions/ad-attribution.js";
+export {
+  duplicateAdCampaignAction,
+  setAdCampaignDaypartingAction,
+} from "./actions/ad-campaigns.js";
 export {
   createAdSlotAction,
   listAdSlotsAction,
@@ -135,8 +145,11 @@ export const cloudAppsPlugin: Plugin = {
     getAppEarningsAction,
     withdrawAppEarningsAction,
     regenerateAppApiKeyAction,
+    getAdCampaignAttributionAction,
     createAdSlotAction,
     listAdSlotsAction,
+    setAdCampaignDaypartingAction,
+    duplicateAdCampaignAction,
     createInfluencerProfileAction,
     listInfluencersAction,
     bookInfluencerAction,

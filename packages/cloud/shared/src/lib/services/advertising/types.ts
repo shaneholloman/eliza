@@ -7,7 +7,9 @@
 import type { AdAccountStatus, AdPlatform } from "../../../db/schemas/ad-accounts";
 import type {
   BudgetType,
+  CampaignBidStrategy,
   CampaignObjective,
+  CampaignOptimizationGoal,
   CampaignStatus,
 } from "../../../db/schemas/ad-campaigns";
 import type { CallToAction, CreativeStatus, CreativeType } from "../../../db/schemas/ad-creatives";
@@ -17,7 +19,9 @@ export type {
   AdPlatform,
   BudgetType,
   CallToAction,
+  CampaignBidStrategy,
   CampaignObjective,
+  CampaignOptimizationGoal,
   CampaignStatus,
   CreativeStatus,
   CreativeType,
@@ -69,6 +73,41 @@ export interface CampaignTargeting {
   languages?: string[];
 }
 
+export interface CampaignDaypartingWindow {
+  daysOfWeek: number[];
+  startTime: string;
+  endTime: string;
+}
+
+export interface CampaignDaypartingSchedule {
+  timezone: string;
+  windows: CampaignDaypartingWindow[];
+}
+
+export interface AudienceSegment {
+  id: string;
+  organizationId: string;
+  name: string;
+  description?: string | null;
+  targeting: CampaignTargeting;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateAudienceSegmentInput {
+  organizationId: string;
+  userId?: string;
+  name: string;
+  description?: string;
+  targeting: CampaignTargeting;
+}
+
+export interface UpdateAudienceSegmentInput {
+  name?: string;
+  description?: string | null;
+  targeting?: CampaignTargeting;
+}
+
 export interface CreateCampaignInput {
   organizationId: string;
   adAccountId: string;
@@ -77,18 +116,30 @@ export interface CreateCampaignInput {
   budgetType: BudgetType;
   budgetAmount: number;
   budgetCurrency?: string;
+  bidStrategy?: CampaignBidStrategy;
+  optimizationGoal?: CampaignOptimizationGoal;
   startDate?: Date;
   endDate?: Date;
   targeting?: CampaignTargeting;
+  dayparting?: CampaignDaypartingSchedule;
+  audienceSegmentId?: string;
   appId?: string;
 }
 
 export interface UpdateCampaignInput {
   name?: string;
   budgetAmount?: number;
+  bidStrategy?: CampaignBidStrategy;
+  optimizationGoal?: CampaignOptimizationGoal;
   startDate?: Date;
   endDate?: Date;
   targeting?: CampaignTargeting;
+  dayparting?: CampaignDaypartingSchedule | null;
+  audienceSegmentId?: string;
+}
+
+export interface DuplicateCampaignInput {
+  name?: string;
 }
 
 export interface CampaignMetrics {
@@ -96,10 +147,74 @@ export interface CampaignMetrics {
   impressions: number;
   clicks: number;
   conversions: number;
+  providerConversions?: number;
+  firstPartyConversions?: number;
+  conversionValue?: number;
   ctr?: number;
   cpc?: number;
   cpm?: number;
   roas?: number;
+}
+
+export interface AttributionTokenResult {
+  campaignId: string;
+  appId?: string | null;
+  token: string;
+}
+
+export interface CreateAttributionLinkInput {
+  campaignId: string;
+  organizationId: string;
+  destinationUrl: string;
+  creativeId?: string;
+  source?: string;
+  medium?: string;
+  content?: string;
+  term?: string;
+}
+
+export interface AttributionLinkResult {
+  id: string;
+  campaignId: string;
+  creativeId?: string | null;
+  destinationUrl: string;
+  utmUrl: string;
+  utm: {
+    source: string;
+    medium: string;
+    campaign: string;
+    content?: string | null;
+    term?: string | null;
+  };
+}
+
+export type ConversionEventType =
+  | "conversion"
+  | "purchase"
+  | "signup"
+  | "lead"
+  | "install"
+  | "custom";
+
+export interface RecordConversionInput {
+  token: string;
+  eventType: ConversionEventType;
+  dedupeKey: string;
+  value?: number;
+  currency?: string;
+  sourceUrl?: string;
+  referrer?: string;
+  userAgent?: string;
+  occurredAt?: Date;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RecordConversionResult {
+  eventId: string;
+  campaignId: string;
+  organizationId: string;
+  appId?: string | null;
+  inserted: boolean;
 }
 
 // ============================================

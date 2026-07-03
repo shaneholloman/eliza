@@ -2,9 +2,10 @@
  * Runtime wiring for the ScheduledTask spine.
  *
  * Bridges the runner's typed dependencies to the live `IAgentRuntime` /
- * `LifeOpsRepository`. Diagnostic providers below stand in until callers register
- * the production `OwnerFactStore`, `GlobalPauseStore`, `EntityStore`,
- * `RelationshipStore`, and connector / channel registries.
+ * `LifeOpsRepository`: DB-backed task/log stores, the production dispatcher,
+ * owner facts, global pause, the LifeOps subject store, and the runtime
+ * event → task-fire bridge. The activity-bus view keeps a warn-once
+ * diagnostic stand-in until `registerActivitySignalBus` runs in plugin init.
  */
 
 import crypto from "node:crypto";
@@ -32,6 +33,8 @@ import {
   createScheduledTaskRunner,
   createTaskGateRegistry,
   getAnchorRegistry,
+  getScheduledTaskRunner,
+  installScheduledTaskEventBridge,
   registerAnchorRegistry,
   registerAppLifeOpsAnchors,
   registerBuiltInCompletionChecks,
@@ -52,10 +55,12 @@ import {
   ownerFactsToView,
   resolveOwnerFactStore,
 } from "../owner/fact-store.js";
+import { getEventKindRegistry } from "../registries/event-kind-registry.js";
 import { LifeOpsRepository } from "../repository.js";
 import { preferEffectiveMergedState } from "../schedule-state.js";
 import { getSendPolicyRegistry } from "../send-policy/index.js";
 import { getActivitySignalBus } from "../signals/bus.js";
+import { createLifeOpsSubjectStoreView } from "./subject-store.js";
 
 interface RepositoryBackedStores {
   store: ScheduledTaskStore;
@@ -75,6 +80,26 @@ function getLifeOpsScheduledTaskSubjectStore(
   runtime: IAgentRuntime,
 ): SubjectStoreView | null {
   return subjectStoresByRuntime.get(runtime) ?? null;
+}
+
+/**
+ * Default `SubjectStoreView` for runner deps: prefer a store registered via
+ * `registerLifeOpsScheduledTaskSubjectStore` — resolved on every call, since
+ * registration may happen after the deps are built — and otherwise fall back
+ * to the production LifeOps-backed view (entities / relationships / work
+ * threads).
+ */
+function makeRuntimeSubjectStoreView(
+  runtime: IAgentRuntime,
+  agentId: string,
+): SubjectStoreView {
+  const lifeOpsView = createLifeOpsSubjectStoreView(runtime, agentId);
+  return {
+    wasUpdatedSince(args) {
+      const registered = getLifeOpsScheduledTaskSubjectStore(runtime);
+      return (registered ?? lifeOpsView).wasUpdatedSince(args);
+    },
+  };
 }
 
 /**
@@ -211,34 +236,6 @@ function makeMissingActivityBusView(
             agentId: runtime.agentId,
           },
           "ActivitySignalBus not registered; completion-checks depending on activity signals will report no-signal. Call registerActivitySignalBus during plugin init.",
-        );
-      }
-      return false;
-    },
-  };
-}
-
-/**
- * Diagnostic stand-in for `SubjectStoreView` when no store was injected.
- * Same warn-once semantics as the activity-bus shim; `subject_updated`
- * completion-checks will report no-update until a real store is wired.
- */
-function makeRuntimeSubjectStoreView(runtime: IAgentRuntime): SubjectStoreView {
-  let warned = false;
-  return {
-    wasUpdatedSince(args) {
-      const registered = getLifeOpsScheduledTaskSubjectStore(runtime);
-      if (registered) {
-        return registered.wasUpdatedSince(args);
-      }
-      if (!warned) {
-        warned = true;
-        logger.warn(
-          {
-            src: "lifeops:scheduled-task:runtime-wiring",
-            agentId: runtime.agentId,
-          },
-          "SubjectStore not registered; subject_updated completion-checks will report no-update. Inject a SubjectStoreView via createRuntimeScheduledTaskRunner({ subjectStore }).",
         );
       }
       return false;
@@ -562,8 +559,14 @@ function buildLifeOpsRunnerDeps(
     opts.activity ??
     getActivitySignalBus(opts.runtime) ??
     makeMissingActivityBusView(opts.runtime);
+  // Production default: the real LifeOps-backed subject store (entities /
+  // relationships / work threads). Kinds without a durable per-id store yet
+  // (document / calendar_event / self) warn once inside the view. The
+  // runtime-registered store is consulted per call, not snapshotted here:
+  // runner deps are built during plugin init, before callers get a chance to
+  // register (e.g. registerLifeOpsScheduledTaskSubjectStore in tests).
   const subjectStore: SubjectStoreView =
-    opts.subjectStore ?? makeRuntimeSubjectStoreView(opts.runtime);
+    opts.subjectStore ?? makeRuntimeSubjectStoreView(opts.runtime, opts.agentId);
 
   return {
     store: stores.store,
@@ -633,4 +636,34 @@ export function registerLifeOpsScheduledTaskRunnerDeps(
   registerScheduledTaskRunnerDeps(runtime, (rt, agentId) =>
     buildLifeOpsRunnerDeps({ runtime: rt, agentId }),
   );
+}
+
+/**
+ * Subscribe every event kind in PA's `EventKindRegistry` to the spine's
+ * event → task-fire bridge, so `runtime.emitEvent(eventKind, payload)` fires
+ * the `{ kind: "event", eventKind }` scheduled tasks whose optional `filter`
+ * subset-matches the payload. Without this install the `event` trigger kind
+ * is schema-accepted but never fired by anything (`isScheduledTaskDue`
+ * deliberately reports event tasks not-due — they are push-fired here).
+ *
+ * Called from PA `init` immediately after `registerEventKindRegistry`; the
+ * registry missing is a wiring bug, not a fallback case. The runner resolves
+ * lazily per emitted event through the cached `ScheduledTaskRunnerService`
+ * host, never a stale handle. Returns the uninstall function.
+ */
+export function installLifeOpsScheduledTaskEventBridge(
+  runtime: IAgentRuntime,
+): () => void {
+  const registry = getEventKindRegistry(runtime);
+  if (!registry) {
+    throw new Error(
+      "[lifeops:scheduled-task:runtime-wiring] EventKindRegistry is not registered; call registerEventKindRegistry before installLifeOpsScheduledTaskEventBridge.",
+    );
+  }
+  return installScheduledTaskEventBridge({
+    runtime,
+    eventKinds: registry.list().map((c) => c.eventKind),
+    getRunner: () =>
+      getScheduledTaskRunner(runtime, { agentId: String(runtime.agentId) }),
+  });
 }
