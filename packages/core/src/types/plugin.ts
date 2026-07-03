@@ -1,4 +1,5 @@
 import type { AppPackageRouteContext } from "../api/route-helpers";
+import type { ConnectorSourceDefinition } from "../connectors";
 import type { ResponseHandlerEvaluator } from "../runtime/response-handler-evaluators";
 import type { ResponseHandlerFieldEvaluator } from "../runtime/response-handler-field-evaluator";
 import type { Character } from "./agent";
@@ -16,6 +17,8 @@ import type { ShortcutDefinition } from "./shortcut";
 import type { TestSuite } from "./testing";
 import type { ViewKind } from "./view-kind";
 
+export type RouteRuntimeMode = "local" | "local-only" | "cloud" | "remote";
+
 /**
  * Type for a service class constructor.
  * This is more flexible than `typeof Service` to allow for:
@@ -25,6 +28,8 @@ import type { ViewKind } from "./view-kind";
 export interface ServiceClass {
 	/** The service type identifier */
 	serviceType: string;
+	/** True when multiple implementations may intentionally share this service type. */
+	allowsMultiple?: boolean;
 	/** Factory method to create and start the service */
 	start(runtime: IAgentRuntime): Promise<Service>;
 	/** Stop service for a runtime - optional as not all services implement this */
@@ -131,6 +136,13 @@ interface BaseRoute {
 	 * Use for legacy API paths that must remain stable (e.g. `/api/telegram-setup/status`).
 	 */
 	rawPath?: boolean;
+	/**
+	 * Runtime modes where this route is visible. Hosts that support runtime modes
+	 * hide routes outside this list with 404 before handler logic runs.
+	 */
+	modes?: ReadonlyArray<RouteRuntimeMode>;
+	/** Free-form one-liner documenting why the route is scoped to those modes. */
+	modeReason?: string;
 	/** x402 micropayment gate: object, or `true` to use `character.settings.x402` defaults */
 	x402?: X402Config | true;
 	/** Runs before payment; invalid → 402 with accepts payload */
@@ -443,6 +455,11 @@ export interface PluginAppNavTab {
 	icon?: string;
 	/** Route path the tab links to (e.g. "/inventory"). */
 	path: string;
+	/**
+	 * Optional shell tab id this route should activate when it is not the same
+	 * as `id` (for example, an app-shell page that lives inside a built-in tab).
+	 */
+	tabAffinity?: string;
 	/** Sort priority within the nav (lower = first). Default 100. */
 	order?: number;
 	/**
@@ -729,6 +746,16 @@ export interface ViewDeclaration {
 	order?: number;
 	/** Tags for search and discovery (e.g. ["finance", "crypto"]). */
 	tags?: string[];
+	/**
+	 * Runtime action names especially relevant while this view is foreground.
+	 * Hosts use these as view-scoped affinity hints so plugins keep their own
+	 * view -> action relationship with the view declaration.
+	 */
+	relatedActions?: string[];
+	/**
+	 * Optional free-form planner hints for this view.
+	 */
+	contextHints?: string[];
 	/** Relative path from the plugin's package root to its hero image. */
 	heroImagePath?: string;
 	/** Screen background policy for this view. Defaults to `"opaque"`. */
@@ -1179,6 +1206,13 @@ export interface Plugin {
 	};
 	events?: PluginEvents;
 	routes?: Route[];
+	/**
+	 * Connector source names and aliases owned by this plugin. The runtime
+	 * registers these during plugin registration so source normalization and
+	 * connector-source metadata live with the connector plugin instead of in
+	 * core/shared trunk maps.
+	 */
+	connectorSources?: ConnectorSourceDefinition[];
 	tests?: TestSuite[];
 
 	dependencies?: string[];

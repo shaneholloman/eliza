@@ -5,6 +5,7 @@ import {
 	withCanonicalProviderDocs,
 } from "./action-docs";
 import { ensureConnection as ensureConnectionStandalone } from "./connection";
+import { registerConnectorSourceDefinitions } from "./connectors";
 import { deriveKnownSecrets } from "./constants/secrets";
 import { InMemoryDatabaseAdapter } from "./database/inMemoryAdapter";
 import {
@@ -28,6 +29,7 @@ import {
 	nativeRuntimeFeatureDefaults,
 	nativeRuntimeFeaturePluginNames,
 	resolveNativeRuntimeFeatureFromPluginName,
+	resolveNativeRuntimeFeatureFromServiceType,
 } from "./plugins/native-features";
 import {
 	executeChainWithFallback,
@@ -312,13 +314,6 @@ const STABLE_PROMPT_PROVIDER_NAMES = new Set([
 const STRUCTURED_CODE_FENCE_PATTERN = /```([^\n`]*)\r?\n?([\s\S]*?)```/g;
 const JSON_OBJECT_KEY_PATTERN =
 	/(?:["'][^"'\n]+["']|[A-Za-z_][A-Za-z0-9_-]*)\s*:/;
-const WEB_SEARCH_SERVICE_TYPE = "web_search";
-const INTENTIONAL_MULTI_SERVICE_TYPES = new Set<string>([
-	"wallet",
-	"lp_pool",
-	"token_data",
-	"trajectories",
-]);
 
 /**
  * Thrown by `AgentRuntime.useModel` when a text-generation model is requested
@@ -1156,7 +1151,10 @@ export class AgentRuntime implements IAgentRuntime {
 	): void {
 		if (
 			existingServiceClasses.length === 0 ||
-			INTENTIONAL_MULTI_SERVICE_TYPES.has(String(serviceType))
+			serviceClass.allowsMultiple === true ||
+			existingServiceClasses.some(
+				(existing) => existing.allowsMultiple === true,
+			)
 		) {
 			return;
 		}
@@ -1350,16 +1348,7 @@ export class AgentRuntime implements IAgentRuntime {
 	private resolveNativeFeatureForServiceType(
 		serviceType: ServiceTypeName | string,
 	): NativeRuntimeFeature | null {
-		switch (serviceType) {
-			case "documents":
-				return "documents";
-			case "relationships":
-				return "relationships";
-			case "trajectories":
-				return "trajectories";
-			default:
-				return null;
-		}
+		return resolveNativeRuntimeFeatureFromServiceType(serviceType);
 	}
 
 	private isNativeFeatureServiceEnabled(
@@ -2050,6 +2039,12 @@ export class AgentRuntime implements IAgentRuntime {
 					pluginToRegister.priority,
 				);
 			}
+		}
+		if (pluginToRegister.connectorSources) {
+			registerConnectorSourceDefinitions(
+				pluginToRegister.connectorSources,
+				pluginToRegister.name,
+			);
 		}
 		if (pluginToRegister.routes) {
 			for (const route of pluginToRegister.routes) {
@@ -4614,9 +4609,6 @@ export class AgentRuntime implements IAgentRuntime {
 			{ src: "agent", agentId: this.agentId, serviceType },
 			"Registering service (lazy; start() on first getService)",
 		);
-		if (serviceType === WEB_SEARCH_SERVICE_TYPE) {
-			this.ensureWebSearchCategoryRegistered();
-		}
 
 		this.serviceRegistrationStatus.set(serviceType, "pending");
 		if (!this.servicePromises.has(serviceType)) {
@@ -9649,76 +9641,6 @@ ${section_end}`;
 			{ src: "agent", agentId: this.agentId, action, channelId: roomId },
 			"Control message sent",
 		);
-	}
-
-	private ensureWebSearchCategoryRegistered(): void {
-		if (this.searchCategories.has("web")) {
-			return;
-		}
-		this.registerSearchCategory({
-			category: "web",
-			label: "Web search",
-			description:
-				"Search current web pages and discovery surfaces through IWebSearchService.",
-			contexts: ["documents", "browser"],
-			filters: [
-				{
-					name: "query",
-					label: "Query",
-					type: "string",
-					required: true,
-				},
-				{
-					name: "limit",
-					label: "Limit",
-					type: "number",
-					description: "Maximum results to return.",
-				},
-				{
-					name: "region",
-					label: "Region",
-					type: "string",
-					description: "Optional region code.",
-				},
-				{
-					name: "language",
-					label: "Language",
-					type: "string",
-					description: "Optional language code.",
-				},
-				{
-					name: "sortBy",
-					label: "Sort",
-					type: "enum",
-					options: [
-						{ label: "Relevance", value: "relevance" },
-						{ label: "Date", value: "date" },
-						{ label: "Popularity", value: "popularity" },
-					],
-				},
-				{
-					name: "safeSearch",
-					label: "Safe search",
-					type: "enum",
-					options: [
-						{ label: "Strict", value: "strict" },
-						{ label: "Moderate", value: "moderate" },
-						{ label: "Off", value: "off" },
-					],
-				},
-			],
-			resultSchemaSummary:
-				"SearchResponse: query, results with title/url/description/snippet/source/publishedDate, suggestions, relatedSearches, nextPageToken.",
-			capabilities: [
-				"search",
-				"news",
-				"images",
-				"videos",
-				"suggestions",
-				"page_info",
-			],
-			serviceType: WEB_SEARCH_SERVICE_TYPE,
-		});
 	}
 
 	registerSearchCategory(registration: SearchCategoryRegistration): void {

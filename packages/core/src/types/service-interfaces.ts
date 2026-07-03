@@ -5,6 +5,7 @@
  * Data types are proto-generated; runtime classes remain TypeScript.
  */
 
+import type { ControlMessageAction } from "./messaging";
 import type { Content, JsonObject, JsonValue, UUID } from "./primitives";
 import { Service, ServiceType } from "./service";
 
@@ -122,12 +123,31 @@ export interface IMessageBusService extends Service {
 	): Promise<void>;
 }
 
+export interface ControlTransportMessage {
+	type: "controlMessage";
+	payload: {
+		action: ControlMessageAction;
+		target?: string;
+		roomId: UUID;
+	};
+}
+
+export abstract class IControlTransportService extends Service {
+	static override readonly serviceType = ServiceType.CONTROL_TRANSPORT;
+
+	public readonly capabilityDescription =
+		"Dispatches backend control messages to interactive clients.";
+
+	abstract sendMessage(message: ControlTransportMessage): Promise<void>;
+}
+
 // ============================================================================
 // Token & Wallet Interfaces
 // ============================================================================
 
 export abstract class ITokenDataService extends Service {
 	static override readonly serviceType = ServiceType.TOKEN_DATA;
+	static override readonly allowsMultiple = true;
 	public readonly capabilityDescription =
 		"Provides standardized access to token market data.";
 
@@ -156,6 +176,7 @@ export abstract class ITokenDataService extends Service {
 
 export abstract class IWalletService extends Service {
 	static override readonly serviceType = ServiceType.WALLET;
+	static override readonly allowsMultiple = true;
 
 	public readonly capabilityDescription =
 		"Provides standardized access to wallet balances and portfolios.";
@@ -177,6 +198,7 @@ export abstract class IWalletService extends Service {
 
 export abstract class ILpService extends Service {
 	static override readonly serviceType = "lp_pool";
+	static override readonly allowsMultiple = true;
 
 	public readonly capabilityDescription =
 		"Provides standardized access to DEX liquidity pools.";

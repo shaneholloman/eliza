@@ -37,11 +37,16 @@ export interface ServiceTypeRegistry {
 	CONNECTOR_ACCOUNT: "connector_account";
 	CONNECTOR_ACCOUNT_STORAGE: "connector_account_storage";
 	AGENT_EVENT: "agent_event";
+	CONTROL_TRANSPORT: "control_transport";
 	OPTIMIZED_PROMPT: "optimized_prompt";
 	CHANNEL_TOPICS: "channel_topics";
 	COMMANDS: "commands";
 	MOBILE_DEVICE_BRIDGE: "mobile_device_bridge";
 	SCREEN_CAPTURE: "screen_capture";
+	DOCUMENTS: "documents";
+	RELATIONSHIPS: "relationships";
+	FOLLOW_UP: "follow_up";
+	TRAJECTORIES: "trajectories";
 	UNKNOWN: "unknown";
 }
 
@@ -69,6 +74,7 @@ export type IsValidServiceType<T extends string> = T extends ServiceTypeName
 export type TypedServiceClass<T extends ServiceTypeName> = {
 	new (runtime?: IAgentRuntime): Service;
 	serviceType: T;
+	allowsMultiple?: boolean;
 	start(runtime: IAgentRuntime): Promise<Service>;
 };
 
@@ -132,6 +138,7 @@ export const ServiceType = {
 	CONNECTOR_ACCOUNT: "connector_account",
 	CONNECTOR_ACCOUNT_STORAGE: "connector_account_storage",
 	AGENT_EVENT: "agent_event",
+	CONTROL_TRANSPORT: "control_transport",
 	NOTIFICATION: "notification",
 	MEDIA_GENERATION: "media_generation",
 	VOICE_CACHE: "voice_cache",
@@ -140,6 +147,10 @@ export const ServiceType = {
 	COMMANDS: "commands",
 	MOBILE_DEVICE_BRIDGE: "mobile_device_bridge",
 	SCREEN_CAPTURE: "screen_capture",
+	DOCUMENTS: "documents",
+	RELATIONSHIPS: "relationships",
+	FOLLOW_UP: "follow_up",
+	TRAJECTORIES: "trajectories",
 	UNKNOWN: "unknown",
 } as const;
 
@@ -160,6 +171,9 @@ export abstract class Service {
 
 	/** Service type */
 	static serviceType: string;
+
+	/** True when multiple implementations may intentionally share this service type. */
+	static allowsMultiple?: boolean;
 
 	/** Service name */
 	abstract capabilityDescription: string;

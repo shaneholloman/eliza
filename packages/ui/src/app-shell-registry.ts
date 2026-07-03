@@ -1,5 +1,6 @@
 import type { AppShellBackgroundPolicy, ViewKind } from "@elizaos/core";
 import type { ComponentType } from "react";
+import { getUiRegistryStore } from "./registry-host";
 
 export type AppShellPageLoader = () => Promise<{
   default: ComponentType<Record<string, unknown>>;
@@ -22,6 +23,11 @@ export interface AppShellPageRegistration {
   icon?: string;
   /** Route path the tab links to. */
   path: string;
+  /**
+   * Optional shell tab id this route activates. Defaults to `id`; use this for
+   * plugin pages that are mounted under an existing built-in tab.
+   */
+  tabAffinity?: string;
   /** Sort priority within the nav (lower = first). Default 100. */
   order?: number;
   /**
@@ -59,25 +65,14 @@ interface AppShellPageRegistryStore {
   version: number;
 }
 
-function appShellPageRegistryKey(): symbol {
-  return Symbol.for("elizaos.app-core.app-shell-page-registry");
-}
+const APP_SHELL_PAGE_REGISTRY_STORE = "app-shell-pages";
 
 function getRegistryStore(): AppShellPageRegistryStore {
-  const globalObject = globalThis as Record<PropertyKey, unknown>;
-  const registryKey = appShellPageRegistryKey();
-  const existing = globalObject[registryKey] as
-    | AppShellPageRegistryStore
-    | null
-    | undefined;
-  if (existing) return existing;
-  const created: AppShellPageRegistryStore = {
+  return getUiRegistryStore(APP_SHELL_PAGE_REGISTRY_STORE, () => ({
     entries: new Map<string, AppShellPageRegistration>(),
-    listeners: new Set(),
+    listeners: new Set<() => void>(),
     version: 0,
-  };
-  globalObject[registryKey] = created;
-  return created;
+  }));
 }
 
 export function registerAppShellPage(

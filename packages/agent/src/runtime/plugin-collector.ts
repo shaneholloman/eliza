@@ -37,6 +37,7 @@ import {
   LEAN_CHAT_EXCLUDED_PLUGINS,
   LEAN_CHAT_PLUGINS,
   MOBILE_CORE_PLUGINS,
+  MOBILE_MODEL_PROVIDER_PLUGINS,
   MOBILE_VIEW_PLUGINS,
   OPTIONAL_CORE_PLUGINS,
 } from "./core-plugins.ts";
@@ -48,19 +49,6 @@ const STORE_BUILD_LOCAL_EXECUTION_PLUGINS = new Set<string>([
   "@elizaos/plugin-shell",
   "@elizaos/plugin-coding-tools",
 ]);
-
-function isOptionalProviderPackageAvailable(pluginName: string): boolean {
-  if (pluginName !== "@elizaos/plugin-vercel-ai-gateway") return true;
-  return (
-    existsSync(path.join(process.cwd(), "plugins/plugin-vercel-ai-gateway")) ||
-    existsSync(
-      path.join(
-        process.cwd(),
-        "node_modules/@elizaos/plugin-vercel-ai-gateway",
-      ),
-    )
-  );
-}
 
 /**
  * Agent orchestrator ships as the standalone @elizaos/plugin-agent-orchestrator package;
@@ -599,10 +587,7 @@ export function collectPluginNames(
         continue;
       }
     }
-    if (
-      process.env[envKey]?.trim() &&
-      isOptionalProviderPackageAvailable(pluginName)
-    ) {
+    if (process.env[envKey]?.trim()) {
       pluginsToLoad.add(pluginName);
       track(pluginName, `env: ${envKey}`);
     }
@@ -756,10 +741,7 @@ export function collectPluginNames(
       ...MOBILE_VIEW_PLUGINS,
       ...(onElizaOsAndroid ? ELIZAOS_ANDROID_CORE_PLUGINS : []),
       ...(onElizaOsAndroid ? ELIZAOS_ANDROID_TERMINAL_PLUGINS : []),
-      "@elizaos/plugin-anthropic",
-      "@elizaos/plugin-openai",
-      "@elizaos/plugin-ollama",
-      "@elizaos/plugin-elizacloud",
+      ...MOBILE_MODEL_PROVIDER_PLUGINS,
     ]);
     for (const pluginName of Array.from(pluginsToLoad)) {
       if (!mobileAllowed.has(pluginName)) {
