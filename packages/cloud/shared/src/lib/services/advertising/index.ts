@@ -7,6 +7,7 @@ import {
   adCreativesRepository,
   adTransactionsRepository,
 } from "../../../db/repositories";
+import { ValidationError } from "../../api/cloud-worker-errors";
 import { logger } from "../../utils/logger";
 import { type ContentSafetyReview, contentSafetyService } from "../content-safety";
 import { creditsService } from "../credits";
@@ -55,6 +56,8 @@ class AdvertisingService {
     const text = [
       "name" in input ? `Campaign name: ${input.name}` : undefined,
       "objective" in input && input.objective ? `Objective: ${input.objective}` : undefined,
+      input.bidStrategy ? `Bid strategy: ${input.bidStrategy}` : undefined,
+      input.optimizationGoal ? `Optimization goal: ${input.optimizationGoal}` : undefined,
     ];
     if (input.targeting) {
       text.push(`Targeting: ${JSON.stringify(input.targeting)}`);
@@ -149,6 +152,17 @@ class AdvertisingService {
       throw new Error(`Advertising platform ${platform} is not supported`);
     }
     return provider;
+  }
+
+  private assertBidControlsSupported(
+    platform: AdPlatform,
+    input: Pick<CreateCampaignInput | UpdateCampaignInput, "bidStrategy" | "optimizationGoal">,
+  ): void {
+    if ((input.bidStrategy || input.optimizationGoal) && platform === "tiktok") {
+      throw ValidationError(
+        "TikTok campaign creation does not support campaign-level bid strategy controls through this adapter",
+      );
+    }
   }
 
   // ============================================
@@ -559,6 +573,7 @@ class AdvertisingService {
     if (dayparting) {
       this.assertProviderCanApplyDayparting(account.platform);
     }
+    this.assertBidControlsSupported(account.platform, input);
 
     await contentSafetyService.assertSafeForPublicUse({
       surface: "advertising_campaign",
@@ -661,12 +676,16 @@ class AdvertisingService {
         end_date: input.endDate,
         targeting: input.targeting || {},
         app_id: input.appId,
-        metadata: dayparting
-          ? {
-              dayparting,
-              dayparting_provider_synced_at: new Date().toISOString(),
-            }
-          : {},
+        metadata: {
+          ...(input.bidStrategy ? { bid_strategy: input.bidStrategy } : {}),
+          ...(input.optimizationGoal ? { optimization_goal: input.optimizationGoal } : {}),
+          ...(dayparting
+            ? {
+                dayparting,
+                dayparting_provider_synced_at: new Date().toISOString(),
+              }
+            : {}),
+        },
       });
 
       // Record budget allocation transaction
@@ -731,6 +750,16 @@ class AdvertisingService {
     organizationId: string,
     input: UpdateCampaignInput,
   ): Promise<AdCampaign> {
+    // No ad-platform adapter applies bid-control changes to a live campaign
+    // (Meta bid controls live on the ad set created with the campaign;
+    // Google/TikTok updates only push name/budget/dates). Reject explicitly
+    // instead of persisting local metadata the platform never receives.
+    if (input.bidStrategy !== undefined || input.optimizationGoal !== undefined) {
+      throw ValidationError(
+        "Bid strategy and optimization goal can only be set at campaign creation; ad platform adapters do not apply bid-control changes to live campaigns",
+      );
+    }
+
     const campaign = await adCampaignsRepository.findById(campaignId);
     if (!campaign || campaign.organization_id !== organizationId) {
       throw new Error("Campaign not found");
