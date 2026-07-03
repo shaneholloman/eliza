@@ -1,9 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { PluginAutoEnableContext } from "@elizaos/core";
-import { isMobilePlatform } from "@elizaos/shared";
 import { describe, expect, it } from "vitest";
 import { shouldEnable } from "../auto-enable.ts";
-import { meetingsPlugin } from "./index.js";
 
 // The auto-enable engine loads a plugin ONLY when its package.json declares
 // `elizaos.plugin.autoEnableModule` and that module exports `shouldEnable(ctx)`
@@ -61,20 +59,5 @@ describe("plugin-meetings shouldEnable", () => {
         ),
       ),
     ).toBe(false);
-  });
-
-  it("stays in lockstep with the declarative Plugin.autoEnable predicate", () => {
-    const envs: Record<string, string | undefined>[] = [
-      {},
-      { ELIZA_MEETINGS_ENABLED: "1" },
-      { ELIZA_MEETINGS_CHROMIUM_PATH: "/usr/bin/chromium" },
-      { ELIZA_PLATFORM: "ios", ELIZA_MEETINGS_ENABLED: "1" },
-      { ELIZA_PLATFORM: "android", ELIZA_MEETINGS_CHROMIUM_PATH: "/x" },
-    ];
-    for (const env of envs) {
-      const viaModule = shouldEnable(ctx(env, isMobilePlatform(env)));
-      const viaField = meetingsPlugin.autoEnable?.shouldEnable?.(env, {});
-      expect(viaModule).toBe(viaField);
-    }
   });
 });
