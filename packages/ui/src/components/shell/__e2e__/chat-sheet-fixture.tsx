@@ -111,6 +111,11 @@ const initialTranscribing = params.has("transcribing");
 // `?failure=no_provider` ends the thread with a failed assistant turn so the
 // recovery gate (Connect a provider → Open Settings) can be screenshot.
 const failureKind = params.get("failure");
+// `?noprovider=off` forces the pre-fix behaviour (boot spinner keeps spinning
+// even with a no_provider turn present) so the before/after can be captured from
+// the SAME fixture. Unset → the real controller behaviour: once the server has
+// reported no_provider, `noProviderConfigured` is true.
+const forceNoProviderOff = params.get("noprovider") === "off";
 const SEED_WITH_FAILURE: ShellMessage[] =
   failureKind === "no_provider"
     ? [
@@ -285,6 +290,13 @@ function Harness(): React.JSX.Element {
         ? { kind: "thinking" as const }
         : null,
     messages,
+    // Mirrors the real controller: true once the latest assistant turn carries
+    // `failureKind: "no_provider"`. Drives the overlay to suppress the forever
+    // "Waking …" boot banner and swap the composer placeholder for a Settings
+    // hint (the in-transcript no_provider gate is the error surface).
+    noProviderConfigured:
+      !forceNoProviderOff &&
+      messages[messages.length - 1]?.failureKind === "no_provider",
     canSend: initialCanSend && phase !== "booting",
     recording,
     handsFree,
