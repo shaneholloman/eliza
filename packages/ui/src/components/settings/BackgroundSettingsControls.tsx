@@ -51,7 +51,7 @@ function ColorSwatch({
       title={preset.label}
       aria-label={`Set background to ${preset.label}`}
       aria-pressed={selected}
-      className="relative h-12 w-12 shrink-0 rounded-full transition-transform hover:scale-105"
+      className="relative h-11 w-11 shrink-0 rounded-full transition-transform hover:scale-105"
       style={{ backgroundColor: preset.color }}
       {...agentProps}
     >
@@ -219,7 +219,7 @@ export function BackgroundSettingsControls({
           onClick={() => colorInputRef.current?.click()}
           title="Custom color"
           aria-label="Pick a custom background color"
-          className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full transition-transform hover:scale-105"
+          className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-transform hover:scale-105"
           style={{
             background:
               "conic-gradient(from 0deg, #ef5a1f, #f59e0b, #65a30d, #059669, #57534e, #e11d48, #dc2626, #ef5a1f)",
@@ -328,14 +328,14 @@ export function BackgroundSettingsControls({
             disabled={generating}
             // biome-ignore lint/a11y/noAutofocus: focus the field the user just opened
             autoFocus
-            className="min-w-0 flex-1 rounded-lg border border-border/50 bg-bg/60 px-3 py-2 text-sm text-txt placeholder:text-muted"
+            className="h-11 min-w-0 flex-1 rounded-lg border border-border/50 bg-bg/60 px-3 text-sm text-txt placeholder:text-muted"
           />
           <button
             type="submit"
             disabled={generating || prompt.trim().length === 0}
             title="Generate"
             aria-label="Generate background from prompt"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-foreground transition-colors hover:bg-accent/90 disabled:opacity-50"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-foreground transition-colors hover:bg-accent/90 disabled:opacity-50"
           >
             {generating ? (
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden />

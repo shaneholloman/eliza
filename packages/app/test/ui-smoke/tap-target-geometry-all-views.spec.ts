@@ -26,7 +26,6 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { devices, expect, type Page, test } from "@playwright/test";
 import {
   hideContinuousChatOverlay,
@@ -45,13 +44,9 @@ test.use({ ...devices["Pixel 7"] });
 /** Apple HIG floor, with 0.5px slack for sub-pixel layout rounding. */
 const MIN_TAP_PX = 44 - 0.5;
 
-const REPORT_DIR = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../../..",
-  ".github",
-  "issue-evidence",
-  "10722-tap-target-geometry",
-);
+// Machine-readable run report (per-view control records + violation counts),
+// written under the package cwd alongside the other Playwright artifacts.
+const REPORT_DIR = path.resolve("test-results", "tap-target-geometry");
 
 type ControlKind = "geometry" | "coherence";
 
@@ -104,16 +99,24 @@ async function collectControls(
         "input:not([type=hidden])",
         "select",
         "textarea",
-        "[data-agent-id]",
+        // Agent-surface elements: only the tappable roles. Bare [data-agent-id]
+        // also matched role="region" surfaces (default), which are containers
+        // and legitimately non-44px.
+        "[data-agent-id][data-agent-role=button]",
+        "[data-agent-id][data-agent-role=tab]",
       ].join(",");
 
       const NATIVE_IMPLICIT_ROLE: Record<string, string> = {
         button: "button",
         a: "link",
-        select: "listbox",
+        // A plain <select> maps to "combobox"; only multiple/size>1 maps to
+        // "listbox" (covered via NATIVE_ROLE_OVERRIDES below).
+        select: "combobox",
         textarea: "textbox",
       };
 
+      // Explicit roles ARIA-in-HTML permits on each native element even though
+      // they differ from the implicit role.
       const NATIVE_ROLE_OVERRIDES: Record<string, readonly string[]> = {
         button: [
           "combobox",
@@ -123,6 +126,16 @@ async function collectControls(
           "option",
           "tab",
         ],
+        a: [
+          "button",
+          "tab",
+          "menuitem",
+          "option",
+          "switch",
+          "checkbox",
+          "radio",
+        ],
+        select: ["listbox"],
         textarea: ["combobox"],
       };
 

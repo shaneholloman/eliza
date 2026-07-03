@@ -2,12 +2,15 @@
  * Canonical built-in view route enumeration for the ui-smoke lane.
  *
  * Mirrors the `@elizaos/ui` navigation `TAB_PATHS` table (inlined so the
- * Playwright runner never imports the UI bundle). Consumed by the generic
- * per-view coverage specs — `all-views-interaction.spec.ts` (semantic
- * interaction coverage) and `tap-target-geometry.spec.ts` (rendered-geometry
- * 44px tap-target + role/DOM coherence gate) — so both walk the exact same set
- * of surfaces. The `all-views-aesthetic-audit.spec.ts` "builtin coverage
- * matches navigation TAB_PATHS" guard keeps this in lockstep with navigation.
+ * Playwright runner never imports the UI bundle), plus non-tab surfaces such
+ * as `/settings/voice`. Consumed by the generic per-view coverage specs —
+ * `all-views-interaction.spec.ts` (semantic interaction coverage) and
+ * `tap-target-geometry-all-views.spec.ts` (rendered-geometry 44px tap-target +
+ * role/DOM coherence gate) — so both walk the exact same set of surfaces.
+ * The `all-views-aesthetic-audit.spec.ts` "builtin coverage matches navigation
+ * TAB_PATHS" guard asserts this table stays a superset of navigation
+ * TAB_PATHS (path agreement on shared ids + every distinct navigation route
+ * covered), so a newly added tab fails that suite until it is added here.
  */
 export type ViewRoute = { id: string; path: string };
 

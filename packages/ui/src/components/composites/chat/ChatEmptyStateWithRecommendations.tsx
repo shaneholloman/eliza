@@ -81,9 +81,9 @@ export function ChatEmptyStateWithRecommendations({
               key={rec.label}
               type="button"
               onClick={() => prefill(rec.prompt ?? rec.label)}
-              className="inline-flex min-h-11 max-w-full items-center truncate rounded-full bg-surface/70 px-3 py-1.5 text-xs text-txt transition-colors hover:bg-surface hover:text-txt-strong"
+              className="inline-flex min-h-11 max-w-full items-center rounded-full bg-surface/70 px-3 py-1.5 text-xs text-txt transition-colors hover:bg-surface hover:text-txt-strong"
             >
-              {rec.label}
+              <span className="truncate">{rec.label}</span>
             </button>
           ))}
         </div>
