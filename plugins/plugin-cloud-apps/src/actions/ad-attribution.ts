@@ -102,8 +102,9 @@ export const getAdCampaignAttributionAction: Action = {
       const attribution = await client.getAdCampaignAttribution(campaignId);
       const reply = [
         `Campaign ${attribution.campaignId} attribution is ready.`,
-        `Pixel: ${attribution.install.pixelHtml}`,
+        "The signed pixel snippet and webhook token were fetched and kept out of connector chat.",
         `Webhook: POST ${attribution.webhookEndpoint}`,
+        "Copy the signed install payload from the trusted Cloud UI/API response.",
       ].join("\n");
       await callback?.({
         text: reply,

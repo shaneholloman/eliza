@@ -64,7 +64,8 @@ describe("GET_AD_CAMPAIGN_ATTRIBUTION", () => {
         webhookEndpoint:
           "https://cloud.test/api/v1/advertising/conversions/track",
         install: {
-          pixelHtml: '<img src="https://cloud.test/pixel" />',
+          pixelHtml:
+            '<img src="https://cloud.test/api/v1/advertising/conversions/track?token=payloadpart.signaturepart123456789&eventType=conversion&dedupeKey=ORDER_OR_EVENT_ID" />',
           webhook: {
             url: "https://cloud.test/api/v1/advertising/conversions/track",
             method: "POST",
@@ -88,8 +89,11 @@ describe("GET_AD_CAMPAIGN_ATTRIBUTION", () => {
 
     expect(res.success).toBe(true);
     expect(capturedCampaignId).toBe("camp_123");
-    expect(res.userFacingText).toContain("Pixel:");
+    expect(res.userFacingText).toContain("kept out of connector chat");
     expect(res.userFacingText).toContain("Webhook: POST");
+    expect(res.userFacingText).not.toContain("payloadpart");
+    expect(res.userFacingText).not.toContain("<img");
+    expect(cb.calls[0]?.text).not.toContain("payloadpart");
     expect(res.data).toMatchObject({
       attribution: {
         campaignId: "camp_123",

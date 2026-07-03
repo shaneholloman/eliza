@@ -638,40 +638,34 @@ export async function executeInboxQueueOperation(args: {
           : 50;
       const classification = parseClassification(args.params.classification);
       let classifiedCount = 0;
-      // A `classification` filter is a read of the already-persisted queue
-      // ("show my urgent items") — serve the filtered rows without the
-      // cross-channel fetch + LLM classification pass.
-      if (!classification) {
-        // 1. Pull fresh cross-channel messages through the same fan-out
-        //    `list` uses, then classify only the ones without a persisted
-        //    entry yet. `InboxService.triage` runs the LLM triage classifier
-        //    (`classifyMessages`, model calls tagged `purpose:
-        //    "inbox_triage"`) and persists one triage entry per new message.
-        const since =
-          typeof args.params.since === "string" &&
-          args.params.since.trim().length > 0
-            ? args.params.since.trim()
-            : undefined;
-        const { merged } = await fetchInboxItems({
-          runtime: args.runtime,
-          platforms: resolvePlatforms(args.params.platforms),
-          ...(since ? { since } : {}),
-          limit,
-        });
-        const alreadyTriaged = await repo.getBySourceMessageIds(
-          merged.map((item) => item.id),
-        );
-        const freshMessages = merged
-          .filter((item) => !alreadyTriaged.has(item.id))
-          .map((item) => toInboundMessage(item));
-        if (freshMessages.length > 0) {
-          const service = new InboxService(args.runtime);
-          const { triaged } = await service.triage(freshMessages);
-          classifiedCount = triaged.length;
-        }
+      // 1. Pull fresh cross-channel messages through the same fan-out `list`
+      //    uses, then classify only the ones without a persisted entry yet.
+      //    `classification` narrows the queue returned below; it must not skip
+      //    the LLM classifier for a fresh triage request.
+      const since =
+        typeof args.params.since === "string" &&
+        args.params.since.trim().length > 0
+          ? args.params.since.trim()
+          : undefined;
+      const { merged } = await fetchInboxItems({
+        runtime: args.runtime,
+        platforms: resolvePlatforms(args.params.platforms),
+        ...(since ? { since } : {}),
+        limit,
+      });
+      const alreadyTriaged = await repo.getBySourceMessageIds(
+        merged.map((item) => item.id),
+      );
+      const freshMessages = merged
+        .filter((item) => !alreadyTriaged.has(item.id))
+        .map((item) => toInboundMessage(item));
+      if (freshMessages.length > 0) {
+        const service = new InboxService(args.runtime);
+        const { triaged } = await service.triage(freshMessages);
+        classifiedCount = triaged.length;
       }
       // 2. Return the pending queue, which now includes the rows the
-      //    classifier just persisted.
+      //    classifier just persisted, optionally narrowed by classification.
       const entries = classification
         ? await repo.getByClassification(classification, {
             limit,
@@ -879,7 +873,7 @@ export const inboxAction: Action & {
     {
       name: "classification",
       description:
-        "Optional triage queue filter for persisted items: ignore | info | notify | needs_reply | urgent. When set on triage, reads the queue without classifying fresh messages.",
+        "Optional triage queue filter for returned persisted items: ignore | info | notify | needs_reply | urgent. Fresh messages are still classified first.",
       schema: {
         type: "string" as const,
         enum: ["ignore", "info", "notify", "needs_reply", "urgent"],

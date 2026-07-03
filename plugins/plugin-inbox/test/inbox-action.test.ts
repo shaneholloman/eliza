@@ -533,22 +533,44 @@ describe("INBOX umbrella action — cross-channel inbox", () => {
       ).toHaveLength(1);
     });
 
-    it("serves a classification-filtered read from the persisted queue without fetching or classifying", async () => {
+    it("classifies fresh messages before applying a classification-filtered queue read", async () => {
       const gmailFetcher = vi.fn(async () => [
         makeItem({
           platform: "gmail",
-          id: "gmail-should-not-fetch",
-          snippet: "must never reach the classifier",
+          id: "gmail-should-classify",
+          snippet: "production is down and needs urgent review",
           receivedAt: "2026-05-11T10:00:00.000Z",
         }),
       ]);
       setInboxFetchers({ gmail: gmailFetcher });
 
-      const { runtime, calls } = makeDbRuntime(() => [
-        makeTriageRow({ id: "entry-urgent-1", classification: "urgent" }),
-      ]);
-      const useModel = vi.fn();
+      const { runtime, calls } = makeDbRuntime((sql) => {
+        if (sql.includes("SELECT source_message_id")) return [];
+        if (sql.includes("WHERE source_message_id =")) return [];
+        if (sql.includes("life_inbox_triage_examples")) return [];
+        if (sql.startsWith("INSERT")) return [];
+        if (sql.includes("classification = ")) {
+          return [
+            makeTriageRow({ id: "entry-urgent-1", classification: "urgent" }),
+          ];
+        }
+        return [];
+      });
+      const useModel = vi.fn(async () =>
+        JSON.stringify({
+          results: [
+            {
+              classification: "urgent",
+              urgency: "high",
+              confidence: 0.92,
+              reasoning: "production outage",
+              suggestedResponse: null,
+            },
+          ],
+        }),
+      );
       (runtime as { useModel?: unknown }).useModel = useModel;
+      (runtime as { getService?: unknown }).getService = () => null;
 
       const result = await callInbox(
         runtime,
@@ -561,10 +583,14 @@ describe("INBOX umbrella action — cross-channel inbox", () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data).toMatchObject({ subaction: "triage", classified: 0 });
-      expect(gmailFetcher).not.toHaveBeenCalled();
-      expect(useModel).not.toHaveBeenCalled();
-      const select = calls[0]?.sql ?? "";
+      expect(result.data).toMatchObject({ subaction: "triage", classified: 1 });
+      expect(gmailFetcher).toHaveBeenCalledTimes(1);
+      expect(useModel).toHaveBeenCalledTimes(1);
+      const prompt = (useModel.mock.calls[0]?.[1] as { prompt: string }).prompt;
+      expect(prompt).toContain("production is down and needs urgent review");
+      const select = calls.find((call) =>
+        call.sql.includes("classification = "),
+      )?.sql;
       expect(select).toContain("classification = ");
     });
 
