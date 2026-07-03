@@ -33,7 +33,8 @@ import {
 
 // unit/preload.ts injects OPENAI_API_KEY="mock-openai-api-key-for-testing" as a
 // placeholder for modules that validate config at import time. That mock cannot
-// serve embeddings, so it must count as "not configured" here.
+// serve embeddings, so it must count as "not configured" here — otherwise the CI
+// unit lane (which has no real key) would run these tests straight into a 401.
 const embeddingProviderConfigured = Boolean(
   process.env.ELIZACLOUD_API_KEY ||
     (process.env.OPENAI_API_KEY &&
@@ -224,7 +225,6 @@ describe("Layer 2 — generationDepth prevents recursive amplification", () => {
 // ─── Layer 3: Embedding Grounding Catches Semantic Drift ────────────────────
 
 describe("Layer 3 — [EMBEDDING] semantic grounding catches drift", () => {
-  // Skip only when no real embedding API key is configured.
   test.skipIf(!embeddingProviderConfigured)(
     "[EMBEDDING] topically related content has high cosine similarity",
     async () => {
@@ -244,7 +244,6 @@ describe("Layer 3 — [EMBEDDING] semantic grounding catches drift", () => {
     },
   );
 
-  // Skip only when no real embedding API key is configured.
   test.skipIf(!embeddingProviderConfigured)(
     "[EMBEDDING] completely unrelated content has low cosine similarity",
     async () => {
@@ -264,7 +263,6 @@ describe("Layer 3 — [EMBEDDING] semantic grounding catches drift", () => {
     },
   );
 
-  // Skip only when no real embedding API key is configured.
   test.skipIf(!embeddingProviderConfigured)(
     "[EMBEDDING] verbatim copy detected by near-1.0 similarity",
     async () => {
@@ -282,7 +280,6 @@ describe("Layer 3 — [EMBEDDING] semantic grounding catches drift", () => {
     },
   );
 
-  // Skip only when no real embedding API key is configured.
   test.skipIf(!embeddingProviderConfigured)(
     "[EMBEDDING] grounding rejects content that drifts semantically even with keyword overlap",
     async () => {
@@ -552,7 +549,6 @@ describe("Regression — known contamination patterns", () => {
     );
   });
 
-  // Skip only when no real embedding API key is configured.
   test.skipIf(!embeddingProviderConfigured)(
     "[EMBEDDING] near-duplicate fact detection prevents DB bloat",
     async () => {

@@ -54,6 +54,33 @@ export type GuardedFetchResult = {
 
 const DEFAULT_MAX_REDIRECTS = 3;
 
+/**
+ * Credential-bearing headers that must never follow a redirect to a different
+ * origin. Standard fetch (browsers, undici) strips these when a redirect
+ * crosses origins; because this guard follows redirects manually with
+ * `redirect: "manual"`, it must do the same — otherwise a compromised or
+ * malicious server can 302 an authenticated request to an attacker origin and
+ * capture the caller's `Authorization` bearer token or cookies.
+ */
+const CROSS_ORIGIN_STRIPPED_HEADERS = [
+	"authorization",
+	"proxy-authorization",
+	"cookie",
+] as const;
+
+function stripCredentialHeaders(
+	headers: HeadersInit | undefined,
+): HeadersInit | undefined {
+	if (!headers) {
+		return headers;
+	}
+	const cleaned = new Headers(headers);
+	for (const name of CROSS_ORIGIN_STRIPPED_HEADERS) {
+		cleaned.delete(name);
+	}
+	return cleaned;
+}
+
 type NodePinnedFetchDefaults = {
 	lookupFn: LookupFn;
 	pinnedFetchImpl: PinnedLookupFetchLike;
@@ -87,9 +114,9 @@ async function loadNodePinnedFetchDefaults(): Promise<NodePinnedFetchDefaults | 
 	try {
 		return await nodePinnedFetchDefaults;
 	} catch (error) {
-		// Do not memoize the failure as a permanent null — allow a retry on the
-		// next guarded fetch in case the failure was transient.
-		nodePinnedFetchDefaults = undefined;
+		// Keep the rejected import memoized. In a Node-like runtime the pinned
+		// transport is the DNS-rebinding defense; once it is known unavailable,
+		// guarded fetches must keep failing closed for this process.
 		logger.error(
 			{ error },
 			"[FetchGuard] Failed to load the pinned DNS transport on a Node-like runtime; failing closed",
@@ -198,6 +225,7 @@ export async function fetchWithSsrfGuard(
 	const visited = new Set<string>();
 	let currentUrl = params.url;
 	let redirectCount = 0;
+	let hopHeaders = params.init?.headers;
 
 	while (true) {
 		let parsedUrl: URL;
@@ -211,7 +239,6 @@ export async function fetchWithSsrfGuard(
 			await release();
 			throw new Error("Invalid URL: must be http or https");
 		}
-
 		try {
 			let pinned: PinnedHostname | undefined;
 			if (lookupFn) {
@@ -259,6 +286,7 @@ export async function fetchWithSsrfGuard(
 
 			const init: RequestInit = {
 				...(params.init ? { ...params.init } : {}),
+				...(hopHeaders ? { headers: hopHeaders } : {}),
 				redirect: "manual",
 				...(signal ? { signal } : {}),
 			};
@@ -286,12 +314,21 @@ export async function fetchWithSsrfGuard(
 					await release();
 					throw new Error(`Too many redirects (limit: ${maxRedirects})`);
 				}
-				const nextUrl = new URL(location, parsedUrl).toString();
+				const nextParsedUrl = new URL(location, parsedUrl);
+				const nextUrl = nextParsedUrl.toString();
 				if (visited.has(nextUrl)) {
 					await release();
 					throw new Error("Redirect loop detected");
 				}
 				visited.add(nextUrl);
+				// A redirect hop that crosses origins must not carry the caller's
+				// credentials on the next request (matches standard fetch redirect
+				// semantics). Keep the stripped header state for later hops too;
+				// credentials deleted by a cross-origin redirect are not restored if
+				// the chain redirects back to the original origin.
+				if (parsedUrl.origin !== nextParsedUrl.origin) {
+					hopHeaders = stripCredentialHeaders(hopHeaders);
+				}
 				void response.body?.cancel();
 				currentUrl = nextUrl;
 				continue;

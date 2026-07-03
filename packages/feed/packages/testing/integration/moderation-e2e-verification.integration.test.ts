@@ -294,6 +294,7 @@ describe("NPC Moderation - Special Handling", () => {
     // User1 has muted the NPC (from previous test)
     const mutedIds = await getMutedUserIds(testUser1.id);
 
+    // The real feed filter must drop the muted NPC's post
     const visiblePosts = filterPostsByModeration(
       [{ id: npcPost.id, authorId: testNPC.id }],
       [],

@@ -95,7 +95,11 @@ async function insertReservation(
   return (res.rows[0] as { id: string }).id;
 }
 
-async function insertAppChatReservation(amount: number, ageMs = 0): Promise<string> {
+async function insertAppChatReservation(
+  amount: number,
+  ageMs = 0,
+  metadataOverrides: Record<string, unknown> = {},
+): Promise<string> {
   const createdAt = new Date(Date.now() - ageMs).toISOString();
   const metadata = {
     appId: "app-chat-test",
@@ -109,6 +113,7 @@ async function insertAppChatReservation(amount: number, ageMs = 0): Promise<stri
     estimated_cost: amount / 1.5,
     reserved_amount: amount,
     totalCost: amount,
+    ...metadataOverrides,
   };
   const res = await dbWrite.execute(
     `INSERT INTO credit_transactions (
@@ -948,6 +953,73 @@ describe("CreditsService reservation settlement marker (#11169)", () => {
       expect(Number(settlements[0]?.amount)).toBeCloseTo(0.5, 6);
       expect(settlements[0]?.stripe_payment_intent_id).toBe(`reconcile-refund:${reservationId}`);
       expect(await countByType("refund")).toBe(1);
+    },
+    PGLITE_TIMEOUT,
+  );
+
+  test(
+    "sweep does not settle monetized app-chat holds through the generic lane",
+    async () => {
+      if (!pgliteReady) return;
+      // Production monetized shape (#11592): base estimate $1.00, 1.5x buffer
+      // -> reserved base $1.50, 20% creator markup -> $1.80 org hold
+      // (`computeInferenceCharge`), creator earnings recorded at deduct time;
+      // #11683 requires the sweep to use the app-credits settle lane, not the
+      // generic `recon:<holdId>:refund` lane. This synthetic fixture does not
+      // carry the creator id needed for immutable charge-time accounting, so the
+      // safe behavior is to skip and retry later, leaving the hold open. The
+      // real app-credits-lane proof for markup math and late-settle dedup lives
+      // in app-chat-sweep-double-refund.test.ts.
+      await seedOrg("8.2"); // org had 10, paid the 1.8 hold
+      const reservationId = await insertAppChatReservation(1.8, 25 * 60 * 1000, {
+        estimated_cost: 1.0,
+        reserved_amount: 1.5,
+        totalCost: 1.8,
+        baseCost: 1.5,
+        creatorMarkup: 0.3,
+        markupPercentage: 20,
+      });
+
+      const stats = await creditsService.sweepStaleReservations({
+        graceMs: 20 * 60 * 1000,
+        batchSize: 10,
+      });
+
+      expect(stats.scanned).toBe(1);
+      expect(stats.settled).toBe(0);
+      expect(stats.refunds).toBe(0);
+      expect(stats.skipped).toBe(1);
+      expect(await getBalance()).toBeCloseTo(8.2, 6);
+      expect(await getReservationSettledAt(reservationId)).toBeNull();
+      expect(await settlementRowsForReservation(reservationId)).toEqual([]);
+      expect(await countByType("refund")).toBe(0);
+    },
+    PGLITE_TIMEOUT,
+  );
+
+  test(
+    "sweep skips an app-chat hold without a usable base pair instead of guessing",
+    async () => {
+      if (!pgliteReady) return;
+      await seedOrg("8.2");
+      const reservationId = await insertAppChatReservation(1.8, 25 * 60 * 1000, {
+        estimated_cost: null,
+        reserved_amount: null,
+      });
+
+      const stats = await creditsService.sweepStaleReservations({
+        graceMs: 20 * 60 * 1000,
+        batchSize: 10,
+      });
+
+      expect(stats.scanned).toBe(1);
+      expect(stats.settled).toBe(0);
+      expect(stats.skipped).toBe(1);
+      expect(stats.noops).toBe(0);
+      expect(stats.refunds).toBe(0);
+      expect(await getBalance()).toBeCloseTo(8.2, 6);
+      expect(await getReservationSettledAt(reservationId)).toBeNull();
+      expect(await settlementRowsForReservation(reservationId)).toEqual([]);
     },
     PGLITE_TIMEOUT,
   );

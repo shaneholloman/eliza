@@ -227,6 +227,21 @@ function metadataNumber(value: unknown): number | null {
   return null;
 }
 
+/**
+ * Org-charge a generic stale hold settles to during the stranded-reservation
+ * sweep. Generic reservation rows (`credit_reservation_v1`) store
+ * `estimated_cost` in ORG-CHARGE units — the same unit as the row amount — so
+ * the sweep settles to it directly (missing estimate means exact-cost, no
+ * refund). App-chat rows are routed through `sweepAppChatReservation` before
+ * this helper because their estimates are in base-cost units and must use the
+ * app-credits settle lane for markup and creator-earnings reconciliation.
+ */
+function staleHoldSettleCost(reservedAmount: number, metadata: Record<string, unknown>): number {
+  const estimate =
+    metadataNumber(metadata.estimated_cost) ?? metadataNumber(metadata.estimatedCost);
+  return estimate ?? reservedAmount;
+}
+
 function toCreditTransaction(row: CreditMutationRow): CreditTransaction {
   if (!row.id || !row.organization_id || !row.amount || !row.type || !row.created_at) {
     throw new Error("[CreditsService] Credit mutation did not return a transaction row");
@@ -1741,10 +1756,6 @@ export class CreditsService {
       for (const row of rows) {
         const reservedAmount = Math.abs(parseNumeric(row.amount, "reservation_amount"));
         const reservationMetadata = parseMetadata(row.metadata);
-        const actualCost =
-          metadataNumber(reservationMetadata.estimated_cost) ??
-          metadataNumber(reservationMetadata.estimatedCost) ??
-          reservedAmount;
         const description = (row.description ?? "Credit reservation").replace(
           /\s+\(reserved\)$/,
           "",
@@ -1771,6 +1782,7 @@ export class CreditsService {
             );
             continue;
           }
+          const actualCost = staleHoldSettleCost(reservedAmount, reservationMetadata);
           const settlement = await this.reconcileReservationTransaction({
             organizationId: row.organization_id,
             reservationTransactionId: row.id,
