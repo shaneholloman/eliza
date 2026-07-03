@@ -51,6 +51,16 @@
       },
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./parsers/hermes": {
+      "types": "./dist/parsers/hermes.d.ts",
+      "eliza-source": {
+        "types": "./src/parsers/hermes.ts",
+        "import": "./src/parsers/hermes.ts",
+        "default": "./src/parsers/hermes.ts"
+      },
+      "import": "./dist/parsers/hermes.js",
+      "default": "./dist/parsers/hermes.js"
     }
   },
   "devDependencies": {
