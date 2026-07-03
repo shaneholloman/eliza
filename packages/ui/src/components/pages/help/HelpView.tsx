@@ -176,12 +176,24 @@ function HelpViewBody(): React.ReactElement {
         return;
       }
       if (link.settingsSection) {
-        try {
-          window.location.hash = link.settingsSection;
-        } catch {
-          /* ignore */
+        // Deep-link the target section through the `eliza:navigate:view`
+        // `subview` channel — the same path the agent + slash-command flows use
+        // (App.tsx routes it into SettingsView's `initialSection`). Setting
+        // `window.location.hash` before `setTab` never survived: setTab pushes
+        // the bare `/settings` path, which clears the fragment BEFORE
+        // SettingsView mounts and reads it — so the user landed on the generic
+        // Settings hub instead of the promised section.
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(
+            new CustomEvent("eliza:navigate:view", {
+              detail: {
+                viewId: "settings",
+                viewPath: "/settings",
+                subview: link.settingsSection,
+              },
+            }),
+          );
         }
-        setTab("settings");
         return;
       }
       if (link.tab) setTab(link.tab);
