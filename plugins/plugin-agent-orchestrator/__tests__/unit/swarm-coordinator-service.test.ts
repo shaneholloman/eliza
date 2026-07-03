@@ -294,7 +294,10 @@ describe("SwarmCoordinatorService", () => {
           sessionId: "sess-validated",
           label: "build-site",
           status: "completed",
-          completionSummary: "deployed",
+          // The verdict exists ONLY on the custom-validator record (the raw
+          // task_complete was withheld until validation) — it must lead, with
+          // the agent's own deliverable preserved after it.
+          completionSummary: "App verification passed.\n\ndeployed",
           roomId: "origin-room-7",
           replyToExternalMessageId: "discord-msg-7",
         },
@@ -499,6 +502,80 @@ describe("SwarmCoordinatorService", () => {
     expect(summary).not.toContain("[tool output:");
     expect(summary).not.toContain("[/tool output]");
     expect(summary).not.toContain("npm run build");
+    await coordinator.stop();
+  });
+
+  it("relays the head of a long pure-prose deliverable instead of destroying it (#11605)", async () => {
+    const acp = makeAcpStub({
+      agentType: "codex",
+      workdir: "/tmp/wd",
+      metadata: { label: "plan-task", originRoomId: "origin-room-plan" },
+    });
+    const runtime = makeRuntime({ [AcpService.serviceType]: acp });
+    const coordinator = await SwarmCoordinatorService.start(runtime);
+
+    const fired = vi.fn(async () => {});
+    coordinator.setSwarmCompleteCallback(fired);
+
+    // A dashboard/API-spawned task asked for "a detailed migration plan in
+    // your final message": 2.4KB of pure prose, no tool-output envelopes, so
+    // stripping is a no-op. Pre-fix this synthesized as literally
+    // "[output elided — 2496 chars]" — total data loss on the relay path
+    // (buildTaskResultLine posts completionSummary verbatim, no LLM pass).
+    const prose = "Step: migrate the users table, then the posts. ".repeat(52);
+    acp.emit("sess-prose", "task_complete", { response: prose });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(fired).toHaveBeenCalledTimes(1);
+    const summary = fired.mock.calls[0][0].tasks[0].completionSummary;
+    expect(summary).not.toBe(`[output elided — ${prose.length} chars]`);
+    expect(summary.startsWith("Step: migrate the users table")).toBe(true);
+    // Marker records the post-strip length (strip trims trailing whitespace).
+    expect(summary).toMatch(/… \[output truncated — \d+ chars total\]$/);
+    expect(summary.length).toBeLessThanOrEqual(2000);
+    await coordinator.stop();
+  });
+
+  it("posts the validated verdict plus the deliverable head when finalText exceeds the relay cap (#11605)", async () => {
+    const acp = makeAcpStub({
+      agentType: "codex",
+      workdir: "/tmp/wd",
+      metadata: {
+        label: "build-app",
+        originRoomId: "origin-room-verify",
+        validator: {
+          service: "app-verification",
+          method: "verifyApp",
+          params: { appName: "demo-app" },
+        },
+      },
+    });
+    const verification = {
+      verifyApp: vi.fn(async () => ({ verdict: "pass", checks: [] })),
+    };
+    const runtime = makeRuntime({
+      [AcpService.serviceType]: acp,
+      "app-verification": verification,
+    });
+    const coordinator = await SwarmCoordinatorService.start(runtime);
+
+    const fired = vi.fn(async () => {});
+    coordinator.setSwarmCompleteCallback(fired);
+
+    // Raw ACP finalText over the 2KB cap. Pre-fix the read ladder took
+    // `response` first and the sanitizer hard-replaced it, so the user saw
+    // "[output elided — 3000 chars]" — the "App verification passed." verdict
+    // that ONLY this record carries never posted.
+    const longFinal = "Built the demo app end to end. ".repeat(97); // ~3KB
+    acp.emit("sess-verified-long", "task_complete", { response: longFinal });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(fired).toHaveBeenCalledTimes(1);
+    const summary = fired.mock.calls[0][0].tasks[0].completionSummary;
+    expect(summary.startsWith("App verification passed.")).toBe(true);
+    expect(summary).toContain("Built the demo app end to end.");
+    expect(summary).not.toContain("[output elided");
+    expect(summary.length).toBeLessThanOrEqual(2000);
     await coordinator.stop();
   });
 

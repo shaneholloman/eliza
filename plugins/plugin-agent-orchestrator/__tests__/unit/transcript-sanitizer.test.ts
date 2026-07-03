@@ -90,11 +90,28 @@ describe("elideLongBlocks", () => {
     expect(elideLongBlocks("short", 2000)).toBe("short");
   });
 
-  it("elides a remnant over the cap into a length marker", () => {
+  it("TRUNCATES an over-cap remnant, preserving the head (#11605 destroyed it)", () => {
+    // Regression for 37813124bf (#11605): a legit long deliverable (pure
+    // prose, no envelopes) was hard-REPLACED by the elision marker — total
+    // data loss. It must instead relay the head plus a truncation marker.
+    const prose = "Step 1: back up the database. ".repeat(100); // 3000 chars
+    const out = elideLongBlocks(prose);
+    expect(out).not.toBe(`[output elided — ${prose.length} chars]`);
+    expect(out.startsWith("Step 1: back up the database.")).toBe(true);
+    expect(out).toContain(`${prose.length} chars total]`);
+  });
+
+  it("bounds the truncated result to the cap", () => {
     const big = "x".repeat(DEFAULT_MAX_RELAY_CHARS + 500);
     const out = elideLongBlocks(big);
-    expect(out).toBe(`[output elided — ${big.length} chars]`);
-    expect(out.length).toBeLessThan(60);
+    expect(out.length).toBeLessThanOrEqual(DEFAULT_MAX_RELAY_CHARS);
+    expect(out).toContain(`${big.length} chars total]`);
+  });
+
+  it("is idempotent: re-sanitizing truncated output is a no-op (buildTaskResultLine re-applies it)", () => {
+    const big = "w".repeat(5000);
+    const once = elideLongBlocks(big);
+    expect(elideLongBlocks(once)).toBe(once);
   });
 
   it("keeps text exactly at the cap", () => {
@@ -104,11 +121,27 @@ describe("elideLongBlocks", () => {
 });
 
 describe("sanitizeCompletionRelay", () => {
-  it("strips envelopes then elides an oversized remnant", () => {
+  it("strips envelopes then truncates the oversized remnant, keeping the head", () => {
     const remnant = "z".repeat(DEFAULT_MAX_RELAY_CHARS + 100);
     const input = `${remnant}\n[tool output: t]\nbody\n[/tool output]`;
     const out = sanitizeCompletionRelay(input);
-    expect(out).toBe(`[output elided — ${remnant.length} chars]`);
+    expect(out.startsWith("zzz")).toBe(true);
+    expect(out).toContain(`${remnant.length} chars total]`);
+    expect(out).not.toContain("[tool output:");
+    expect(out.length).toBeLessThanOrEqual(DEFAULT_MAX_RELAY_CHARS);
+  });
+
+  it("does NOT reduce a long pure-prose deliverable to a bare marker (#11605 regression)", () => {
+    // The confirmed failure: a 2.4KB detailed-migration-plan answer (strip is
+    // a no-op — no envelopes) synthesized as literally the elision marker.
+    const prose = "Here is the detailed migration plan you asked for. ".repeat(
+      48,
+    ); // ~2.4KB
+    const out = sanitizeCompletionRelay(prose);
+    expect(out).not.toBe(`[output elided — ${prose.length} chars]`);
+    expect(
+      out.startsWith("Here is the detailed migration plan you asked for."),
+    ).toBe(true);
   });
 
   it("returns empty when the whole payload was tool output", () => {

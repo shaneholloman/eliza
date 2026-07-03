@@ -56,7 +56,10 @@ import type { IAgentRuntime } from "@elizaos/core";
 import { logger, Service } from "@elizaos/core";
 import { AcpService } from "./acp-service.js";
 import { OrchestratorTaskService } from "./orchestrator-task-service.js";
-import { sanitizeCompletionRelay } from "./transcript-sanitizer.js";
+import {
+  DEFAULT_MAX_RELAY_CHARS,
+  sanitizeCompletionRelay,
+} from "./transcript-sanitizer.js";
 import { TERMINAL_SESSION_STATUSES } from "./types.js";
 
 export const SWARM_COORDINATOR_SERVICE_TYPE = "SWARM_COORDINATOR";
@@ -976,9 +979,27 @@ export class SwarmCoordinatorService extends Service {
       readString(record, "summary") ??
       readString(record, "message") ??
       readString(record, "text");
-    const sanitizedSummary = rawSummary
-      ? sanitizeCompletionRelay(rawSummary)
+    // A custom-validator completion carries its user-facing verdict in
+    // `summary` ("App verification passed.") while `response` still holds the
+    // raw ACP finalText spread from enrichedData. The verdict exists ONLY on
+    // this record (the raw task_complete was withheld until validation), so it
+    // must not be shadowed by `response` in the read ladder: lead with it,
+    // then append the sanitized deliverable, budgeted so the combined text
+    // still fits the relay cap (buildTaskResultLine re-sanitizes defensively).
+    const validatorVerdict = isCustomValidatorResult(record)
+      ? (readString(record, "summary")?.trim() ?? "")
       : "";
+    const bodyBudget = validatorVerdict
+      ? DEFAULT_MAX_RELAY_CHARS - validatorVerdict.length - 2
+      : DEFAULT_MAX_RELAY_CHARS;
+    const sanitizedBody = rawSummary
+      ? sanitizeCompletionRelay(rawSummary, bodyBudget)
+      : "";
+    const sanitizedSummary = validatorVerdict
+      ? sanitizedBody && sanitizedBody !== validatorVerdict
+        ? `${validatorVerdict}\n\n${sanitizedBody}`
+        : validatorVerdict
+      : sanitizedBody;
     const completionSummary =
       sanitizedSummary ||
       (terminalStatus === "completed"
