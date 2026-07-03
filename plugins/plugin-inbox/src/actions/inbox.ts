@@ -876,6 +876,21 @@ export const inboxAction: Action & {
       description: "Explicit owner confirmation for sending reply/approve.",
       schema: { type: "boolean" as const },
     },
+    {
+      name: "classification",
+      description:
+        "Optional triage queue filter for persisted items: ignore | info | notify | needs_reply | urgent. When set on triage, reads the queue without classifying fresh messages.",
+      schema: {
+        type: "string" as const,
+        enum: ["ignore", "info", "notify", "needs_reply", "urgent"],
+      },
+    },
+    {
+      name: "includeSnoozed",
+      description:
+        "When true, include snoozed triage queue entries in triage reads.",
+      schema: { type: "boolean" as const },
+    },
   ],
   examples,
   handler: async (

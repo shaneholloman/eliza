@@ -158,6 +158,14 @@ describe("INBOX umbrella action — cross-channel inbox", () => {
       }
     });
 
+    it("exposes triage queue filter parameters to routed tool calls", () => {
+      const parameterNames = new Set(
+        (inboxAction.parameters ?? []).map((parameter) => parameter.name),
+      );
+      expect(parameterNames).toContain("classification");
+      expect(parameterNames).toContain("includeSnoozed");
+    });
+
     it("rejects calls with no subaction selector", async () => {
       const result = await callInbox(makeRuntime(), makeMessage(), {});
       expect(result.success).toBe(false);
