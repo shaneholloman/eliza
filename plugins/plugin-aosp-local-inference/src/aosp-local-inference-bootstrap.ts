@@ -67,11 +67,6 @@ import {
   resolveAospElizaInferenceLibPath,
 } from "./aosp-llama-paths.js";
 import {
-  classifyInferenceRamClass,
-  InferenceIdleUnloader,
-  resolveInferenceIdleUnloadMs,
-} from "./inference-memory-policy.js";
-import {
   type AospFfiPointerHelpers,
   type AospFusedLlmSymbols,
   type AospFusedStreamingLlmBinding,
@@ -79,6 +74,11 @@ import {
   createAospStreamingLlmBinding,
   streamGenerate,
 } from "./aosp-llama-streaming.js";
+import {
+  classifyInferenceRamClass,
+  InferenceIdleUnloader,
+  resolveInferenceIdleUnloadMs,
+} from "./inference-memory-policy.js";
 
 const SERVICE_NAME = "localInferenceLoader";
 const PROVIDER = "eliza-aosp-llama";
