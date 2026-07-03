@@ -432,11 +432,9 @@ export function CharacterHubView({
         section: "experience",
         title: "Experience",
         body: recentExperience ? (
-          <span className="line-clamp-2 text-xs italic text-muted">
-            {recentExperience.learning ||
-              recentExperience.result ||
-              recentExperience.context ||
-              recentExperience.type}
+          <span className="text-xs font-medium text-muted">
+            {experienceRecords.length} experience
+            {experienceRecords.length === 1 ? "" : "s"}
           </span>
         ) : (
           <EmptyCta>Teach Eliza in chat</EmptyCta>
@@ -797,7 +795,7 @@ export function CharacterHubView({
             <button
               type="button"
               onClick={() => navigateToSection("overview")}
-              className="inline-flex items-center gap-1 text-sm text-muted transition-colors hover:text-txt"
+              className="inline-flex min-h-11 items-center gap-1 rounded-sm px-2 text-sm text-muted transition-colors hover:text-txt"
               aria-label="Back to Character hub"
             >
               <ChevronLeft className="h-4 w-4" aria-hidden />

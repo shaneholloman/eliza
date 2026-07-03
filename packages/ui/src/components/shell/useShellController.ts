@@ -192,6 +192,12 @@ export interface ShellController {
   /** True while a conversation switch or clear is fetching messages. The overlay
    *  only renders the spinner when the visible thread is empty. */
   conversationLoading?: boolean;
+  /** True once the server has told us (via a `no_provider` assistant turn) that
+   *  no LLM/model provider is configured. Distinct from a transient warm-up: the
+   *  agent's `canRespond` stays false forever, so the overlay uses this to stop
+   *  showing the "Waking …" boot indicator and to explain the real cause instead.
+   *  The controller also auto-navigates to Settings on its rising edge. */
+  noProviderConfigured?: boolean;
 }
 
 /**
@@ -610,6 +616,9 @@ export function useShellController(): ShellController {
         role: message.role,
         content: message.text,
         createdAt: message.timestamp,
+        // Invariant per id (like role/createdAt), so the cache compare above
+        // can omit it. Drives the suggestion affordance (#8792).
+        ...(message.source ? { source: message.source } : {}),
         failureKind: message.failureKind,
         ...(message.reasoning ? { reasoning: message.reasoning } : {}),
         ...(message.attachments?.length
@@ -1044,6 +1053,45 @@ export function useShellController(): ShellController {
           ? "idle"
           : "summoned";
 
+  // AUTHORITATIVE "no LLM/model provider configured" signal. The server stamps
+  // an assistant turn with `failureKind: "no_provider"` when it tried to answer
+  // but no provider plugin is wired (server `computeCanRespond` requires a
+  // registered TEXT handler, so `canRespond` stays false FOREVER — not a
+  // transient warm-up where it flips true a beat later). Because `ready`
+  // (`deriveAgentReady`) keys off `canRespond`, the shell would otherwise sit in
+  // the `booting` phase indefinitely — the "Waking …" banner + "waking up…"
+  // composer placeholder never clear, reading as an infinite spinner even though
+  // the send already came back with the actionable no-provider gate. Derived
+  // from the LATEST assistant turn so a later successful reply (provider added
+  // in Settings) clears it automatically.
+  const noProviderConfigured = React.useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (message?.role === "assistant") {
+        return message.failureKind === "no_provider";
+      }
+    }
+    return false;
+  }, [messages]);
+
+  // On the false→true edge, route the user straight to Settings — where the
+  // model provider is configured — instead of leaving them staring at a chat
+  // that can never answer. The in-transcript no-provider gate remains the error
+  // surface (with its own "Open Settings" CTA); this just makes the hop
+  // automatic. Ref-guarded so it fires once per occurrence, not on every render,
+  // and re-arms once the condition clears (provider wired → a later miss routes
+  // again).
+  const noProviderNavigatedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!noProviderConfigured) {
+      noProviderNavigatedRef.current = false;
+      return;
+    }
+    if (noProviderNavigatedRef.current) return;
+    noProviderNavigatedRef.current = true;
+    openSettings();
+  }, [noProviderConfigured, openSettings]);
+
   // Live mirror of whether the agent is speaking, for the converse commit
   // closure's echo guard (it reads at send time, after this render).
   const speakingRef = React.useRef(false);
@@ -1364,5 +1412,6 @@ export function useShellController(): ShellController {
     // pinned a perpetual loading spinner and let the grabber/pill open the sheet
     // into a never-resolving loader.
     conversationLoading,
+    noProviderConfigured,
   };
 }

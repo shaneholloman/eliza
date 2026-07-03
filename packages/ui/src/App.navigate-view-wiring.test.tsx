@@ -479,21 +479,24 @@ describe("App navigate-view event wiring", () => {
     expect(queryByTestId("app-background-shader")).toBeNull();
   });
 
-  it("renders shell back chrome on app routes and uses browser history", async () => {
+  it("renders no global corner back button on app routes (removed in favor of per-page back affordances + browser/OS back)", async () => {
     appState.tab = "apps";
     window.history.replaceState(null, "", "/chat");
     window.history.pushState(null, "", "/apps/remote-ledger");
-    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
 
-    render(<App />);
+    const { queryByTestId } = render(<App />);
 
+    // The route mounts (its remote view loader is requested)…
     await waitFor(() => {
-      expect(screen.getByTestId("shell-back-button")).toBeTruthy();
+      expect(dynamicViewLoaderMock.render).toHaveBeenCalled();
     });
-    fireEvent.click(screen.getByTestId("shell-back-button"));
 
-    expect(back).toHaveBeenCalledTimes(1);
-    expect(appState.setTab).not.toHaveBeenCalledWith("chat");
+    // …but the floating top-left corner back button that used to overlap page
+    // content (Apps gallery section headings, the Character/Knowledge
+    // breadcrumb) is gone. Pages that need a back affordance render their own
+    // in-context control; everyone can also use browser/OS back.
+    expect(queryByTestId("shell-back-button")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Go back" })).toBeNull();
   });
 
   it("lets a view explicitly share the Home/Launcher background", async () => {

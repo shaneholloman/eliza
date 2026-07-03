@@ -458,6 +458,27 @@ export function bindReadyPhase(
           ? data.subview
           : undefined;
       const alwaysOnTop = data.alwaysOnTop === true;
+      // Multi-view layout fields for the split-view / tile-views actions. The
+      // server broadcasts `views`/`layout`/`placement` (views-routes.ts
+      // layoutPayload); dropping them here made an agent "split A and B"
+      // degrade to a single view — createNavigateViewHandler saw only
+      // `viewId` and laid out one pane.
+      const layoutViews = Array.isArray(data.views)
+        ? data.views.filter(
+            (value): value is string =>
+              typeof value === "string" && value.length > 0,
+          )
+        : undefined;
+      const views =
+        layoutViews && layoutViews.length > 0 ? layoutViews : undefined;
+      const layout =
+        typeof data.layout === "string" && data.layout.length > 0
+          ? data.layout
+          : undefined;
+      const placement =
+        typeof data.placement === "string" && data.placement.length > 0
+          ? data.placement
+          : undefined;
       window.dispatchEvent(
         new CustomEvent("eliza:navigate:view", {
           detail: {
@@ -467,6 +488,9 @@ export function bindReadyPhase(
             viewType,
             action,
             subview,
+            views,
+            layout,
+            placement,
             alwaysOnTop,
           },
         }),

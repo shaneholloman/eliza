@@ -8,11 +8,10 @@ import {
   isViewVisible,
   type ViewKind,
 } from "@elizaos/core";
-import { ArrowLeft, X } from "lucide-react";
+import { X } from "lucide-react";
 import "./components/chat/chat-source-registration";
 import {
   type ComponentType,
-  type CSSProperties,
   type LazyExoticComponent,
   lazy,
   type ReactNode,
@@ -104,7 +103,6 @@ import {
   useAppSelector,
   useAppSelectorShallow,
 } from "./state";
-import { goHome } from "./state/shell-surface-store";
 import { isShellPaintable } from "./state/startup-coordinator";
 import { firstRunOwnsLoginSurface } from "./state/top-level-auth-gate";
 import { isLoopbackGatewayHost } from "./state/use-startup-shell-controller";
@@ -1411,32 +1409,6 @@ const APP_SHELL_CLASS =
 const APP_SHELL_CLASS_TRANSPARENT =
   "flex flex-col flex-1 min-h-0 w-full font-body text-txt";
 
-function ShellBackButton({ onBack }: { onBack: () => void }): ReactNode {
-  // 44px (`h-11 w-11`) button = the Apple-HIG minimum touch target enforced by
-  // the rendered-geometry gate (tap-target-geometry.spec.ts); the 36px visual
-  // circle sits centered inside, so the resting look is unchanged while the
-  // hit area is honest. Offsets keep the circle at the historical position
-  // (safe-area + 0.75rem). The shell wrappers that render this button set
-  // --shell-backnav-clearance (consumed by SpatialSurface as top padding) so
-  // the fixed z-[60] chrome never occludes a spatial view's first row (#11144);
-  // the clearance must cover the button's bottom edge (0.5rem + 2.75rem =
-  // 3.25rem) — guarded by spatial/dom.backnav-clearance.test.tsx.
-  return (
-    <button
-      type="button"
-      aria-label="Go back"
-      title="Go back"
-      data-testid="shell-back-button"
-      onClick={onBack}
-      className="group fixed left-[calc(var(--safe-area-left,0px)+0.5rem)] top-[calc(var(--safe-area-top,0px)+0.5rem)] z-[60] grid h-11 w-11 place-items-center bg-transparent"
-    >
-      <span className="grid h-9 w-9 place-items-center rounded-full border border-border/60 bg-bg/90 text-txt shadow-sm transition-colors group-hover:bg-muted/70">
-        <ArrowLeft className="h-4 w-4" aria-hidden />
-      </span>
-    </button>
-  );
-}
-
 type ShellContentProps = {
   actionNotice: ActionNotice | null;
   availableViewsForLayout: ViewRegistryEntry[];
@@ -1453,7 +1425,6 @@ type ShellContentProps = {
   uiShellMode: string;
   viewLayout: ActiveViewLayout | null;
   onClearViewLayout: () => void;
-  onNavigateBack: () => void;
 };
 
 function ChatRouteShellContent(props: ShellContentProps): ReactNode {
@@ -1512,26 +1483,7 @@ function RoutedShellContent(props: ShellContentProps): ReactNode {
       ? APP_SHELL_CLASS_TRANSPARENT
       : APP_SHELL_CLASS;
   return (
-    // --shell-backnav-clearance reserves top space for the fixed ShellBackButton
-    // so spatial views' first row (filter chips) clears it (#11144). The button
-    // bottom sits at safe-area-top + 3.25rem (0.5rem offset + 2.75rem hit target) in
-    // VIEWPORT coords, but this wrapper lives inside the root content column,
-    // which absorbs only max(safe-area-top - 1.25rem, 1.25rem) of the safe area
-    // — up to 1.25rem less than the button's full safe-area offset on notched
-    // devices. min(safe-area-top, 1.25rem) adds back exactly that deficit:
-    // 3.25rem at safe-area-top 0, tight at real notch insets (≥ 2.5rem).
-    // Consumed by SpatialSurface (spatial/dom.tsx); unset elsewhere → 0px.
-    <div
-      key={`tab-shell-${props.tab}`}
-      className={shellClass}
-      style={
-        {
-          "--shell-backnav-clearance":
-            "calc(3.25rem + min(var(--safe-area-top, 0px), 1.25rem))",
-        } as CSSProperties
-      }
-    >
-      <ShellBackButton onBack={props.onNavigateBack} />
+    <div key={`tab-shell-${props.tab}`} className={shellClass}>
       {props.desktopTabBar}
       <main className={routedShellMainClass(props.tab)}>
         {props.viewLayout ? (
@@ -1554,20 +1506,7 @@ function RoutedShellContent(props: ShellContentProps): ReactNode {
  */
 function FullBleedShellContent(props: ShellContentProps): ReactNode {
   return (
-    <div
-      key={`fullbleed-shell-${props.tab}`}
-      className={APP_SHELL_CLASS}
-      // Same clearance contract as RoutedShellContent (see the derivation
-      // there): 3.25rem button clearance + the ≤1.25rem safe-area deficit the
-      // root content column does not absorb (#11144).
-      style={
-        {
-          "--shell-backnav-clearance":
-            "calc(3.25rem + min(var(--safe-area-top, 0px), 1.25rem))",
-        } as CSSProperties
-      }
-    >
-      <ShellBackButton onBack={props.onNavigateBack} />
+    <div key={`fullbleed-shell-${props.tab}`} className={APP_SHELL_CLASS}>
       <main className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
         <ViewRouter />
       </main>
@@ -2190,30 +2129,6 @@ export function App() {
     setViewLayout(null);
   }, []);
 
-  const handleShellBack = useCallback(() => {
-    setViewLayout(null);
-    setActiveDesktopTabId(null);
-
-    if (typeof window !== "undefined") {
-      const currentPath = getWindowNavigationPath();
-      if (!isRouteRootPath(currentPath) && window.history.length > 1) {
-        window.history.back();
-        return;
-      }
-
-      const chatPath = pathForTab("chat");
-      if (shouldUseHashNavigation()) {
-        window.location.hash = chatPath;
-      } else if (getWindowNavigationPath() !== chatPath) {
-        window.history.pushState(null, "", chatPath);
-        window.dispatchEvent(new PopStateEvent("popstate"));
-      }
-    }
-
-    setTab("chat");
-    goHome();
-  }, [setTab]);
-
   // desktopTabBar is computed here (after handlers) so the memo below can
   // reference a stable value. Rendered inside each shell variant, not at the
   // outer level, so Header + TabBar + content stack correctly per shell.
@@ -2269,7 +2184,6 @@ export function App() {
         uiShellMode={uiShellMode}
         viewLayout={viewLayout}
         onClearViewLayout={handleClearViewLayout}
-        onNavigateBack={handleShellBack}
       />
     ),
     [
@@ -2285,7 +2199,6 @@ export function App() {
       availableViewsForDesktopTabs,
       viewLayout,
       handleClearViewLayout,
-      handleShellBack,
     ],
   );
 

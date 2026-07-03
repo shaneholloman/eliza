@@ -737,6 +737,14 @@ export type AppDeploymentStatus =
   | "deployed"
   | "failed";
 
+/** Monetization review lifecycle of an app (server enum `app_review_status`). */
+export type AppReviewStatus =
+  | "draft"
+  | "submitted"
+  | "under_review"
+  | "approved"
+  | "rejected";
+
 /** Discord social-automation config stored on an app (jsonb column). */
 export interface AppDiscordAutomation {
   enabled: boolean;
@@ -839,6 +847,9 @@ export interface AppDto {
   response_notifications: boolean | null;
   is_active: boolean;
   is_approved: boolean;
+  review_status: AppReviewStatus;
+  review_content_hash: string | null;
+  reviewed_at: string | null;
   created_at: string;
   updated_at: string;
   last_used_at: string | null;
@@ -867,7 +878,12 @@ export interface CreateAppInput {
   logo_url?: string;
   /** Skip provisioning a GitHub repo for the app. */
   skipGitHubRepo?: boolean;
-  /** Apply monetization at creation, saving a follow-up call. */
+  /**
+   * Persist create-time monetization defaults.
+   *
+   * `true` is rejected with `app_review_required`; create the app, submit it
+   * for review, then enable monetization after approval.
+   */
   monetization_enabled?: boolean;
   /** Inference markup percentage, 0–1000. */
   inference_markup_percentage?: number;

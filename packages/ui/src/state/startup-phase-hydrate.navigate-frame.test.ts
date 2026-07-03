@@ -209,6 +209,74 @@ describe("agent view-switch raw WS frame to DOM navigate event", () => {
     teardown();
   });
 
+  it("forwards the split/tile layout fields so a multi-view action keeps every view", () => {
+    // Mirrors broadcastWs(...) for POST /api/views/:id/navigate with
+    // action:"tile-views" — the server spreads `layoutPayload`
+    // (views/layout/placement, views-routes.ts) into the frame. Dropping any
+    // of them here degrades an agent "tile A and B" to a single view.
+    clientMock.deliverFrame(
+      JSON.stringify({
+        type: "shell:navigate:view",
+        viewId: "browser",
+        viewPath: "/apps/browser",
+        viewLabel: "Browser",
+        viewType: "gui",
+        action: "tile-views",
+        views: ["browser", "wallet"],
+        layout: "horizontal",
+        placement: "left",
+      }),
+    );
+
+    expect(navHandler).toHaveBeenCalledTimes(1);
+    const detail = (navHandler.mock.calls[0][0] as CustomEvent).detail;
+    expect(detail.action).toBe("tile-views");
+    expect(detail.views).toEqual(["browser", "wallet"]);
+    expect(detail.layout).toBe("horizontal");
+    expect(detail.placement).toBe("left");
+    teardown();
+  });
+
+  it("sanitizes untrusted layout fields (non-string views entries, wrong types)", () => {
+    clientMock.deliverFrame(
+      JSON.stringify({
+        type: "shell:navigate:view",
+        viewId: "browser",
+        viewPath: "/apps/browser",
+        viewType: "gui",
+        action: "split-view",
+        views: ["browser", 7, "", null, "wallet"],
+        layout: 42,
+        placement: ["top"],
+      }),
+    );
+
+    expect(navHandler).toHaveBeenCalledTimes(1);
+    const detail = (navHandler.mock.calls[0][0] as CustomEvent).detail;
+    expect(detail.views).toEqual(["browser", "wallet"]);
+    expect(detail.layout).toBeUndefined();
+    expect(detail.placement).toBeUndefined();
+    teardown();
+  });
+
+  it("omits the layout fields on a plain single-view frame", () => {
+    clientMock.deliverFrame(
+      JSON.stringify({
+        type: "shell:navigate:view",
+        viewId: "settings",
+        viewPath: "/settings",
+        viewType: "gui",
+      }),
+    );
+
+    expect(navHandler).toHaveBeenCalledTimes(1);
+    const detail = (navHandler.mock.calls[0][0] as CustomEvent).detail;
+    expect(detail.views).toBeUndefined();
+    expect(detail.layout).toBeUndefined();
+    expect(detail.placement).toBeUndefined();
+    teardown();
+  });
+
   it("routes an xr view frame through the same type dispatch", () => {
     clientMock.deliverFrame(
       JSON.stringify({
