@@ -46,12 +46,6 @@ export function startTutorial(): void {
   set({ active: true, stepIndex: 0 });
 }
 
-/** Non-reactive read of whether the tour is currently running (for launch shims
- *  that must not re-start an already-active tour on a strict/dev double-mount). */
-export function isTutorialActive(): boolean {
-  return store().state.active;
-}
-
 /** Stop + mark complete so it never nags again (but stays re-runnable from the tile). */
 export function stopTutorial(): void {
   set({ active: false, stepIndex: 0 });
