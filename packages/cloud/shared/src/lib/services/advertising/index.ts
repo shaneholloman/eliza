@@ -20,6 +20,7 @@ import { linkedinAdsProvider } from "./providers/linkedin";
 import { metaAdsProvider } from "./providers/meta";
 import { redditAdsProvider } from "./providers/reddit";
 import { tiktokAdsProvider } from "./providers/tiktok";
+import { xTwitterAdsProvider } from "./providers/x-twitter";
 import { DaypartingScheduleSchema } from "./schemas";
 import type {
   AdAccountCredentials,
@@ -54,6 +55,7 @@ const providers: Record<AdPlatform, AdProvider | null> = {
   meta: metaAdsProvider,
   google: googleAdsProvider,
   tiktok: tiktokAdsProvider,
+  "x-twitter": xTwitterAdsProvider,
   reddit: redditAdsProvider,
   linkedin: linkedinAdsProvider,
 };

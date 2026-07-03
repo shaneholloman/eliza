@@ -7,7 +7,7 @@ import { users } from "./users";
 /**
  * Ad platform type.
  */
-export type AdPlatform = "meta" | "google" | "tiktok" | "reddit" | "linkedin";
+export type AdPlatform = "meta" | "google" | "tiktok" | "x-twitter" | "reddit" | "linkedin";
 
 /**
  * Ad account status.
@@ -65,6 +65,8 @@ export const adAccounts = pgTable(
         timezone?: string;
         // TikTok-specific
         advertiser_id?: string;
+        // X/Twitter Ads-specific
+        promotable_user_ids?: string[];
         // Reddit-specific
         business_ids?: string[];
         profile_ids?: string[];
