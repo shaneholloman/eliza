@@ -254,6 +254,14 @@ const nativeStubs = {
   // portable mobile payload. Mobile does not run desktop password-auth routes,
   // so fail closed if anything reaches this surface.
   "@node-rs/argon2": path.join(stubsDir, "argon2.cjs"),
+  // `fsevents` is a macOS-only OPTIONAL native `.node` file-watcher pulled in
+  // transitively by `chokidar`. On the macOS build host Bun inlines its
+  // `fsevents-*.node` binary into the payload (it has no iOS/Android slice), so
+  // the native-addon leak guard fails the build. Every consumer already treats
+  // fsevents as optional and falls back to polling when it is absent (the normal
+  // non-macOS path), so map it to an empty module — the agent never watches
+  // files on-device.
+  fsevents: path.join(stubsDir, "empty.cjs"),
   "@types/react": path.join(stubsDir, "null-plugin.cjs"),
   "@types/react/jsx-runtime": path.join(stubsDir, "null-plugin.cjs"),
   "@types/react/jsx-dev-runtime": path.join(stubsDir, "null-plugin.cjs"),
