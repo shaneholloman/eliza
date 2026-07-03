@@ -5,6 +5,7 @@ import {
   type CloudFilesRepository,
   cloudFilesRepository,
 } from "../../db/repositories/cloud-files";
+import { orgStorageQuotaRepository } from "../../db/repositories/org-storage-quota";
 import type { Bindings } from "../../types/cloud-worker-env";
 import { publicUrlForR2Key } from "../storage/r2-public-object";
 import { logger } from "../utils/logger";
@@ -22,6 +23,18 @@ export interface CloudFileStorage {
     },
   ): Promise<unknown>;
   delete(key: string): Promise<unknown>;
+}
+
+export interface CloudFileQuotaRepository {
+  tryReserveBytes(organizationId: string, bytes: bigint): Promise<bigint | null>;
+  releaseBytes(organizationId: string, bytes: bigint): Promise<void>;
+}
+
+export class CloudFileQuotaExceededError extends Error {
+  constructor() {
+    super("Storage quota exceeded for this organization");
+    this.name = "CloudFileQuotaExceededError";
+  }
 }
 
 export interface UploadCloudFileInput {
@@ -57,7 +70,10 @@ export interface CloudFileListInput {
 }
 
 export class CloudFilesService {
-  constructor(private readonly repository: CloudFilesRepository = cloudFilesRepository) {}
+  constructor(
+    private readonly repository: CloudFilesRepository = cloudFilesRepository,
+    private readonly quotaRepository: CloudFileQuotaRepository = orgStorageQuotaRepository,
+  ) {}
 
   async list(input: CloudFileListInput) {
     return await this.repository.listByOrganization(input.organizationId, {
@@ -92,17 +108,24 @@ export class CloudFilesService {
       `${objectId}-${sha256.slice(0, 16)}${extension}`,
     ].join("/");
 
-    await env.BLOB.put(key, bytes, {
-      httpMetadata: { contentType: mimeType },
-      customMetadata: {
-        organizationId: input.organizationId,
-        userId: input.userId ?? "",
-        sha256,
-        source: "upload",
-      },
-    });
+    const sizeBytes = BigInt(bytes.byteLength);
+    const reserved = await this.quotaRepository.tryReserveBytes(input.organizationId, sizeBytes);
+    if (reserved === null) {
+      throw new CloudFileQuotaExceededError();
+    }
 
+    let wroteObject = false;
     try {
+      await env.BLOB.put(key, bytes, {
+        httpMetadata: { contentType: mimeType },
+        customMetadata: {
+          organizationId: input.organizationId,
+          userId: input.userId ?? "",
+          sha256,
+          source: "upload",
+        },
+      });
+      wroteObject = true;
       return await this.repository.create({
         id: objectId,
         organization_id: input.organizationId,
@@ -112,19 +135,22 @@ export class CloudFilesService {
         kind: kindFromMime(mimeType),
         filename,
         mime_type: mimeType,
-        size_bytes: BigInt(bytes.byteLength),
+        size_bytes: sizeBytes,
         sha256,
         storage_key: key,
         storage_url: publicUrlForR2Key(env, key),
         metadata: input.metadata ?? {},
       });
     } catch (error) {
-      await env.BLOB.delete(key).catch((deleteError) => {
-        logger.warn("[CloudFiles] Failed to clean up object after metadata insert failure", {
-          storageKey: key,
-          error: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      if (wroteObject) {
+        await env.BLOB.delete(key).catch((deleteError) => {
+          logger.warn("[CloudFiles] Failed to clean up object after metadata insert failure", {
+            storageKey: key,
+            error: deleteError instanceof Error ? deleteError.message : String(deleteError),
+          });
         });
-      });
+      }
+      await this.quotaRepository.releaseBytes(input.organizationId, sizeBytes);
       throw error;
     }
   }
@@ -157,13 +183,18 @@ export class CloudFilesService {
     );
     if (activeReferences > 0) return deleted;
 
-    await env.BLOB.delete(deleted.storage_key).catch((error) => {
+    try {
+      await env.BLOB.delete(deleted.storage_key);
+      if (deleted.source === "upload") {
+        await this.quotaRepository.releaseBytes(organizationId, deleted.size_bytes);
+      }
+    } catch (error) {
       logger.warn("[CloudFiles] Failed to delete object after file deletion", {
         id,
         storageKey: deleted.storage_key,
         error: error instanceof Error ? error.message : String(error),
       });
-    });
+    }
     return deleted;
   }
 }

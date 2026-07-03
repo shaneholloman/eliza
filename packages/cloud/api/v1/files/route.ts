@@ -10,11 +10,15 @@ import {
   RateLimitPresets,
   rateLimit,
 } from "@/lib/middleware/rate-limit-hono-cloudflare";
-import { cloudFilesService } from "@/lib/services/cloud-files";
+import {
+  CloudFileQuotaExceededError,
+  cloudFilesService,
+} from "@/lib/services/cloud-files";
 import { logger } from "@/lib/utils/logger";
 import type { AppEnv } from "@/types/cloud-worker-env";
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+const MAX_UPLOAD_FILES = 10;
 
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -136,6 +140,15 @@ app.post("/", async (c) => {
         400,
       );
     }
+    if (files.length > MAX_UPLOAD_FILES) {
+      return c.json(
+        {
+          success: false,
+          error: `Too many files in one request; maximum is ${MAX_UPLOAD_FILES}`,
+        },
+        413,
+      );
+    }
 
     const metadata = parseMetadata(form.get("metadata"));
     const apiKeyId = c.get("apiKeyId") as string | undefined;
@@ -150,15 +163,22 @@ app.post("/", async (c) => {
           413,
         );
       }
-      uploaded.push(
-        await cloudFilesService.upload(c.env, {
-          organizationId: user.organization_id,
-          userId: user.id,
-          apiKeyId,
-          file,
-          metadata,
-        }),
-      );
+      try {
+        uploaded.push(
+          await cloudFilesService.upload(c.env, {
+            organizationId: user.organization_id,
+            userId: user.id,
+            apiKeyId,
+            file,
+            metadata,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof CloudFileQuotaExceededError) {
+          return c.json({ success: false, error: error.message }, 413);
+        }
+        throw error;
+      }
     }
 
     logger.info("[CloudFiles API] Uploaded files", {

@@ -15,6 +15,8 @@ function makeRepository() {
     id: "file-1",
     organization_id: ORG,
     storage_key: "cloud-files/key.png",
+    source: "upload",
+    size_bytes: 5n,
   }));
   const activeStorageKeyReferences = mock(async () => 0);
   return {
@@ -23,6 +25,13 @@ function makeRepository() {
     listByOrganization: mock(),
     softDeleteByOrgAndId,
     activeStorageKeyReferences,
+  };
+}
+
+function makeQuota() {
+  return {
+    tryReserveBytes: mock(async () => 5n),
+    releaseBytes: mock(async () => undefined),
   };
 }
 
@@ -52,8 +61,9 @@ function makeEnv() {
 describe("CloudFilesService", () => {
   test("uploads bytes to R2 and records org-scoped metadata", async () => {
     const repository = makeRepository();
+    const quota = makeQuota();
     const env = makeEnv();
-    const service = new CloudFilesService(repository as never);
+    const service = new CloudFilesService(repository as never, quota);
 
     const file = new File(["hello"], "hello.png", { type: "image/png" });
     const result = await service.upload(env as never, {
@@ -64,6 +74,8 @@ describe("CloudFilesService", () => {
     });
 
     expect(env.BLOB.put).toHaveBeenCalledTimes(1);
+    expect(quota.tryReserveBytes).toHaveBeenCalledWith(ORG, 5n);
+    expect(quota.releaseBytes).not.toHaveBeenCalled();
     expect(repository.create).toHaveBeenCalledTimes(1);
     const createArg = repository.create.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(createArg.organization_id).toBe(ORG);
@@ -81,8 +93,9 @@ describe("CloudFilesService", () => {
   test("removes uploaded bytes if metadata creation fails", async () => {
     const repository = makeRepository();
     repository.create.mockRejectedValueOnce(new Error("insert failed"));
+    const quota = makeQuota();
     const env = makeEnv();
-    const service = new CloudFilesService(repository as never);
+    const service = new CloudFilesService(repository as never, quota);
 
     const file = new File(["hello"], "hello.png", { type: "image/png" });
     await expect(
@@ -96,13 +109,37 @@ describe("CloudFilesService", () => {
     const putKey = env.BLOB.put.mock.calls[0]?.[0];
     expect(putKey).toBeTruthy();
     expect(env.BLOB.delete).toHaveBeenCalledWith(putKey);
+    expect(quota.releaseBytes).toHaveBeenCalledWith(ORG, 5n);
     expect(env.objects.size).toBe(0);
+  });
+
+  test("rejects uploads when org storage quota cannot reserve bytes", async () => {
+    const repository = makeRepository();
+    const quota = makeQuota();
+    quota.tryReserveBytes.mockResolvedValueOnce(null);
+    const env = makeEnv();
+    const service = new CloudFilesService(repository as never, quota);
+
+    const file = new File(["hello"], "hello.png", { type: "image/png" });
+    await expect(
+      service.upload(env as never, {
+        organizationId: ORG,
+        userId: USER,
+        file,
+      }),
+    ).rejects.toThrow("Storage quota exceeded for this organization");
+
+    expect(quota.tryReserveBytes).toHaveBeenCalledWith(ORG, 5n);
+    expect(env.BLOB.put).not.toHaveBeenCalled();
+    expect(repository.create).not.toHaveBeenCalled();
+    expect(quota.releaseBytes).not.toHaveBeenCalled();
   });
 
   test("soft delete removes the object after the last active reference", async () => {
     const repository = makeRepository();
+    const quota = makeQuota();
     const env = makeEnv();
-    const service = new CloudFilesService(repository as never);
+    const service = new CloudFilesService(repository as never, quota);
 
     const result = await service.delete(env as never, ORG, "file-1");
 
@@ -110,6 +147,7 @@ describe("CloudFilesService", () => {
     expect(repository.softDeleteByOrgAndId).toHaveBeenCalledWith(ORG, "file-1");
     expect(repository.activeStorageKeyReferences).toHaveBeenCalledWith(ORG, "cloud-files/key.png");
     expect(env.BLOB.delete).toHaveBeenCalledWith("cloud-files/key.png");
+    expect(quota.releaseBytes).toHaveBeenCalledWith(ORG, 5n);
   });
 
   test("mime kind classifier covers managed media families", () => {
