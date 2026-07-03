@@ -90,6 +90,34 @@ export interface PendingCloudAppConfirmation {
   metadata: CloudAppConfirmationMetadata;
 }
 
+/**
+ * A pending money confirmation is honored for this long; after that the gated
+ * action refuses a bare confirm and asks the user to re-state the intent.
+ * Shared by every gated action so a stale pending can never fund a
+ * booking/purchase the user has long forgotten about.
+ */
+export const CONFIRM_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * True when a pending confirmation is older than {@link CONFIRM_TTL_MS}.
+ *
+ * A BUY_APP_DOMAIN recovery retry never expires: it completes with no new
+ * charge — there is no stale price to protect, and expiring it would strand a
+ * paid, unattached domain.
+ */
+export function pendingExpired(
+  pending: PendingCloudAppConfirmation,
+  now: number = Date.now(),
+): boolean {
+  if (pending.metadata.recovery === true) return false;
+  const at =
+    typeof pending.metadata.intentCreatedAt === "string"
+      ? Date.parse(pending.metadata.intentCreatedAt)
+      : Number.NaN;
+  if (!Number.isFinite(at)) return false;
+  return now - at > CONFIRM_TTL_MS;
+}
+
 export function readStructuredConfirmation(options?: unknown): boolean | null {
   if (!options || typeof options !== "object") return null;
   const opts = options as Record<string, unknown>;

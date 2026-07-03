@@ -26,12 +26,15 @@ stays empty. Construction lives in `src/client.ts` (`getCloudClient`).
 src/
   index.ts               Plugin registration: the actions[] array + CLOUD_APPS provider.
   client.ts              getCloudClient (SDK construction), resolveCloudApiKey/BaseUrl/SiteBaseUrl,
-                         app-reference resolution (matchAppByReference/resolveApp — id → exact
-                         name/slug → whole-word-in-sentence → fragment; ties = ambiguous),
+                         reference resolution (generic matchByReference + matchAppByReference/
+                         resolveApp — id → exact name/slug → whole-word-in-sentence → fragment;
+                         ties = ambiguous; BOOK_INFLUENCER reuses it for profiles),
                          and the app formatters (formatAppLine/formatAppDetail).
   safety.ts              Two-phase confirm state machine for destructive/paid actions:
                          readStructuredConfirmation (planner boolean, NEVER prose parsing),
                          persist/find/deleteCloudAppConfirmation (task-backed, room-scoped),
+                         CONFIRM_TTL_MS + pendingExpired (shared 15-min pending TTL; expired
+                         pendings refuse the bare confirm and are re-stated/re-quoted),
                          confirmationPrompt, buildConnectorCta (label+https URL only — never a
                          secret/amount). CloudAppConfirmationAction is the gated-action union.
   deploy-gate.ts         runDeployGate: poll deploy status → READY, then reachability-probe the

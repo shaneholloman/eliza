@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import {
   buildConnectorCta,
+  CONFIRM_TTL_MS,
   confirmationPrompt,
+  pendingExpired,
   readStructuredConfirmation,
 } from "../src/safety.ts";
 
@@ -90,5 +92,67 @@ describe("buildConnectorCta", () => {
   it("rejects non-http(s) URLs (no creds/money smuggling)", () => {
     expect(() => buildConnectorCta("x", "javascript:alert(1)")).toThrow();
     expect(() => buildConnectorCta("x", "not a url")).toThrow();
+  });
+});
+
+describe("pendingExpired (shared confirm TTL)", () => {
+  const base = {
+    taskId: "task-1",
+    metadata: {
+      roomId: "room-1",
+      action: "BOOK_INFLUENCER" as const,
+      appId: "inf_1",
+      appName: "Nova",
+      amount: 200,
+    },
+  };
+
+  it("a fresh pending is not expired", () => {
+    const pending = {
+      ...base,
+      metadata: {
+        ...base.metadata,
+        intentCreatedAt: new Date().toISOString(),
+      },
+    };
+    expect(pendingExpired(pending)).toBe(false);
+  });
+
+  it("a pending older than CONFIRM_TTL_MS is expired", () => {
+    const pending = {
+      ...base,
+      metadata: {
+        ...base.metadata,
+        intentCreatedAt: new Date(
+          Date.now() - CONFIRM_TTL_MS - 1000,
+        ).toISOString(),
+      },
+    };
+    expect(pendingExpired(pending)).toBe(true);
+  });
+
+  it("a pending with no/invalid intentCreatedAt never expires (no timestamp to age)", () => {
+    expect(pendingExpired(base)).toBe(false);
+    expect(
+      pendingExpired({
+        ...base,
+        metadata: { ...base.metadata, intentCreatedAt: "not-a-date" },
+      }),
+    ).toBe(false);
+  });
+
+  it("a BUY_APP_DOMAIN recovery retry never expires (no new charge at stake)", () => {
+    const pending = {
+      ...base,
+      metadata: {
+        ...base.metadata,
+        action: "BUY_APP_DOMAIN" as const,
+        recovery: true,
+        intentCreatedAt: new Date(
+          Date.now() - CONFIRM_TTL_MS * 10,
+        ).toISOString(),
+      },
+    };
+    expect(pendingExpired(pending)).toBe(false);
   });
 });
