@@ -10,8 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // skeleton, keys never fetched. These tests reproduce the page-reload reality:
 // ONLY a persisted localStorage JWT, no Steward provider mounted.
 
-import { useAuthenticatedQueryGate as useApiKeysGate } from "../../api-keys/auth-gate";
-import { useAuthenticatedQueryGate as useAnalyticsGate } from "./auth-query";
+import { useAuthenticatedQueryGate } from "../../lib/auth-query";
+
+const useAnalyticsGate = useAuthenticatedQueryGate;
+const useApiKeysGate = useAuthenticatedQueryGate;
 
 function makeJwt(payload: Record<string, unknown>): string {
   const b64url = (value: object) =>
