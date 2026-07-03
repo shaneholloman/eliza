@@ -16,7 +16,13 @@
  *   - a budget needs an explicit currency cue — a bare number in the message is
  *     never treated as dollars,
  *   - influencer names resolve through the ambiguity-aware matcher (client.ts);
- *     ties ask the user instead of booking a lookalike profile.
+ *     ties ask the user instead of booking a lookalike profile,
+ *   - the pending is deleted only AFTER the fund call resolves (#11844): its
+ *     taskId is the sole holder of the escrow idempotency key
+ *     (`influencer-confirm-<taskId>`), so on a transport-level failure the
+ *     pending is kept and marked `recovery: true` — a re-confirm re-sends the
+ *     SAME key and the server resumes/dedupes the exact booking (its funding
+ *     resume) instead of funding a second escrow.
  */
 
 import type { InfluencerProfileDto } from "@elizaos/cloud-sdk";
@@ -34,12 +40,15 @@ import {
   matchByReference,
   type ReferenceMatch,
   resolveCloudApiKey,
+  resolveCloudSiteBaseUrl,
 } from "../client.js";
+import { cloudErrorInfo } from "../domain-intent.js";
 import {
   CONFIRM_TTL_MS,
   confirmationRoomId,
   deleteCloudAppConfirmation,
   findPendingCloudAppConfirmation,
+  markCloudAppConfirmationRecovery,
   pendingExpired,
   persistCloudAppConfirmation,
   readStructuredConfirmation,
@@ -204,8 +213,26 @@ export const bookInfluencerAction: Action = {
           data: { reason: "no_pending_confirmation" },
         };
       }
-      await deleteCloudAppConfirmation(runtime, pending.taskId);
+      const isRecovery = pending.metadata.recovery === true;
       if (confirmation === false) {
+        await deleteCloudAppConfirmation(runtime, pending.taskId);
+        if (isRecovery) {
+          // The earlier fund attempt failed at the transport level, so the
+          // escrow may already be held server-side. Never claim "nothing
+          // happened" — tell the user where to check and how to get a refund.
+          const bookingsUrl = `${resolveCloudSiteBaseUrl(runtime)}/dashboard/marketing/influencers`;
+          const msg =
+            `Okay — I won't retry that booking. Heads up: my earlier attempt to fund ${pending.metadata.appName} for ${usd(pending.metadata.amount)} didn't confirm either way, ` +
+            `so the booking may already exist with the budget held in escrow. Check your bookings at ${bookingsUrl} — if it's there you can cancel it for a full refund.`;
+          await callback?.({ text: msg, actions: ["BOOK_INFLUENCER"] });
+          return {
+            success: true,
+            text: `Recovery retry for ${pending.metadata.appName} canceled; the earlier attempt may have funded the escrow.`,
+            userFacingText: msg,
+            verifiedUserFacing: true,
+            data: { booked: false, canceled: true, recovery: true },
+          };
+        }
         await callback?.({
           text: CANCELED_MESSAGE,
           actions: ["BOOK_INFLUENCER"],
@@ -218,7 +245,10 @@ export const bookInfluencerAction: Action = {
           data: { booked: false, canceled: true },
         };
       }
+      // A recovery retry never expires (safety.ts): it resumes/replays money
+      // already committed under the same key rather than staging a new charge.
       if (pendingExpired(pending)) {
+        await deleteCloudAppConfirmation(runtime, pending.taskId);
         const msg =
           `That booking request for ${pending.metadata.appName} is more than ${Math.round(CONFIRM_TTL_MS / 60000)} minutes old, so I didn't fund anything. ` +
           `Ask me to book ${pending.metadata.appName} again and I'll re-confirm the details.`;
@@ -236,10 +266,16 @@ export const bookInfluencerAction: Action = {
           profileId: pending.metadata.appId,
           brief: pending.metadata.brief,
           amount: pending.metadata.amount,
-          // Stable per-confirmation key: a transport-level retry of this
-          // confirm cannot fund a second escrow (server dedupes on it).
+          // Stable per-confirmation key: the server dedupes/resumes on it, so
+          // a retry of this confirm can never fund a second escrow. The
+          // pending task is that key's ONLY holder — it must outlive any
+          // transport failure of this call (#11844).
           idempotencyKey: `influencer-confirm-${pending.taskId}`,
         });
+        // The server resolved the fund call at the business level (success or
+        // a clean rejection with no money held) — only now is the pending
+        // (and the idempotency key its taskId carries) done with.
+        await deleteCloudAppConfirmation(runtime, pending.taskId);
         if (!result.success) {
           const msg = result.error
             ? `I couldn't fund that booking: ${result.error}`
@@ -252,7 +288,9 @@ export const bookInfluencerAction: Action = {
             data: { reason: "error" },
           };
         }
-        const reply = `Booked ${pending.metadata.appName} for ${usd(pending.metadata.amount)} — the budget is held in escrow and released when you approve their deliverable.`;
+        const reply = isRecovery
+          ? `Booked ${pending.metadata.appName} for ${usd(pending.metadata.amount)} — the retry completed the earlier attempt, so you were charged exactly once. The budget is held in escrow and released when you approve their deliverable.`
+          : `Booked ${pending.metadata.appName} for ${usd(pending.metadata.amount)} — the budget is held in escrow and released when you approve their deliverable.`;
         await callback?.({ text: reply, actions: ["BOOK_INFLUENCER"] });
         return {
           success: true,
@@ -263,19 +301,60 @@ export const bookInfluencerAction: Action = {
             booked: true,
             booking: { id: result.booking?.id },
             amount: pending.metadata.amount,
+            ...(isRecovery ? { recovery: true } : {}),
           },
         };
       } catch (err) {
+        const info = cloudErrorInfo(err);
         logger.warn(
-          `[BOOK_INFLUENCER] createBooking failed: ${err instanceof Error ? err.message : String(err)}`,
+          `[BOOK_INFLUENCER] createBooking failed (${info.status ?? "transport"}/${info.code ?? "-"}): ${info.message}`,
         );
-        await callback?.({ text: ERROR_MESSAGE, actions: ["BOOK_INFLUENCER"] });
+        if (info.status !== null && info.status < 500) {
+          // The server answered with a definite rejection — no escrow was
+          // held (a failed debit retires the funding row server-side), so the
+          // confirm is settled and the pending can go.
+          await deleteCloudAppConfirmation(runtime, pending.taskId);
+          if (info.status === 402) {
+            const billingUrl = `${resolveCloudSiteBaseUrl(runtime)}/dashboard/billing`;
+            const msg =
+              `Not enough credits to book ${pending.metadata.appName} for ${usd(pending.metadata.amount)} — nothing was funded. ` +
+              `Add credits and ask me again: ${billingUrl}`;
+            await callback?.({ text: msg, actions: ["BOOK_INFLUENCER"] });
+            return {
+              success: false,
+              text: "Insufficient credits for the booking.",
+              userFacingText: msg,
+              verifiedUserFacing: true,
+              data: { reason: "insufficient_credits", booked: false },
+            };
+          }
+          const msg = `I couldn't fund that booking: ${info.message}. Nothing was funded.`;
+          await callback?.({ text: msg, actions: ["BOOK_INFLUENCER"] });
+          return {
+            success: false,
+            text: `Booking rejected: ${info.message}`,
+            userFacingText: msg,
+            error: err instanceof Error ? err : new Error(String(err)),
+            data: { reason: "error", booked: false },
+          };
+        }
+        // Transport failure or 5xx: the outcome is UNKNOWN — the escrow may
+        // be fully funded (response lost) or stranded mid-funding. KEEP the
+        // pending and mark it recovery: its taskId is the sole holder of the
+        // idempotency key, so a re-confirm re-sends the SAME key and the
+        // server's funding resume finishes or replays the exact booking —
+        // never a second hold (#11844).
+        await markCloudAppConfirmationRecovery(runtime, pending);
+        const msg =
+          `I couldn't confirm whether the booking of ${pending.metadata.appName} for ${usd(pending.metadata.amount)} was funded — the Cloud API didn't answer. ` +
+          `Reply to confirm again and I'll retry safely: the retry completes or replays this same booking and can never charge you twice. Or cancel and I'll leave it.`;
+        await callback?.({ text: msg, actions: ["BOOK_INFLUENCER"] });
         return {
           success: false,
-          text: "Booking failed.",
-          userFacingText: ERROR_MESSAGE,
+          text: `Fund call for ${pending.metadata.appName} failed in transit; kept the pending for a same-key retry.`,
+          userFacingText: msg,
           error: err instanceof Error ? err : new Error(String(err)),
-          data: { reason: "error" },
+          data: { reason: "error", booked: false, recovery: true },
         };
       }
     }
@@ -284,13 +363,17 @@ export const bookInfluencerAction: Action = {
     // Never stack pendings: while a fresh one is waiting, re-prompt for it so a
     // later bare confirm can only ever fund the booking the user was shown.
     if (pending && !pendingExpired(pending)) {
+      const label = `${pending.metadata.appName}${
+        typeof pending.metadata.amount === "number"
+          ? ` for ${usd(pending.metadata.amount)}`
+          : ""
+      }`;
       const stillMsg =
-        `The booking of ${pending.metadata.appName}${
-          typeof pending.metadata.amount === "number"
-            ? ` for ${usd(pending.metadata.amount)}`
-            : ""
-        } is still waiting for confirmation. ` +
-        `Reply with a clear confirmation or cancellation.`;
+        pending.metadata.recovery === true
+          ? `My earlier attempt to fund the booking of ${label} didn't confirm either way. ` +
+            `Reply to confirm and I'll retry safely — it completes or replays that same booking and can never charge you twice. Or cancel to leave it.`
+          : `The booking of ${label} is still waiting for confirmation. ` +
+            `Reply with a clear confirmation or cancellation.`;
       await callback?.({ text: stillMsg, actions: ["BOOK_INFLUENCER"] });
       return {
         success: true,
