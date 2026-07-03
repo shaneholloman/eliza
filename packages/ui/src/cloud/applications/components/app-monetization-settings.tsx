@@ -98,6 +98,11 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
   });
   const [hasChanges, setHasChanges] = useState(false);
   const [showEnableDialog, setShowEnableDialog] = useState(false);
+  // The last monetization-enabled state the server confirmed. Only an ENABLE
+  // transition (server-disabled → enabled) is review-gated; disabling and
+  // editing an already-enabled row are always allowed.
+  const [serverMonetizationEnabled, setServerMonetizationEnabled] =
+    useState(false);
 
   useEffect(() => {
     setReviewStatus(app.review_status);
@@ -111,6 +116,7 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
         if (cancelled) return;
         if (data.success && data.monetization) {
           setSettings(data.monetization);
+          setServerMonetizationEnabled(data.monetization.monetizationEnabled);
         }
       })
       .catch((error) => {
@@ -132,7 +138,13 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
   }, [appId, t]);
 
   const handleSave = async () => {
-    if (settings.monetizationEnabled && reviewStatus !== "approved") {
+    // Only the ENABLE transition is review-gated. Saving markup/share edits on
+    // an already-enabled row, or disabling, must never be blocked here — the
+    // server is the source of truth and re-enforces (returning review_status in
+    // a 403 body the UI parses).
+    const isEnableTransition =
+      settings.monetizationEnabled && !serverMonetizationEnabled;
+    if (isEnableTransition && reviewStatus !== "approved") {
       toast.error(
         t("cloud.monetization.reviewRequiredSave", {
           defaultValue:
@@ -152,6 +164,7 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
           purchaseSharePercentage: settings.purchaseSharePercentage,
         },
       });
+      setServerMonetizationEnabled(settings.monetizationEnabled);
       toast.success(
         t("cloud.monetization.saved", { defaultValue: "Settings saved" }),
       );
@@ -202,6 +215,7 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
         },
       );
       if (data.review_status) setReviewStatus(data.review_status);
+      setServerMonetizationEnabled(enabled);
       toast.success(
         enabled
           ? t("cloud.monetization.enabled", {
@@ -296,7 +310,7 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
               </div>
               <div className="min-w-0">
                 <p className="text-sm font-medium text-white">
-                  {getReviewStatusLabel(reviewStatus)}
+                  {getReviewStatusLabel(reviewStatus, t)}
                 </p>
                 <p className="mt-1 text-xs text-neutral-500">
                   {reviewApproved
@@ -373,8 +387,12 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
                       })}
                 </p>
                 <Switch
+                  // The server always allows DISABLING; only ENABLING is
+                  // review-gated. So the switch must stay interactive for a
+                  // legacy enabled-but-unapproved row — otherwise it's trapped
+                  // ON with no way to turn it off.
                   checked={settings.monetizationEnabled}
-                  disabled={!reviewApproved}
+                  disabled={!reviewApproved && !settings.monetizationEnabled}
                   onCheckedChange={(checked) => {
                     if (checked && !settings.monetizationEnabled) {
                       setShowEnableDialog(true);
@@ -657,18 +675,31 @@ function isReviewStatusErrorBody(
   );
 }
 
-function getReviewStatusLabel(status: App["review_status"]): string {
+function getReviewStatusLabel(
+  status: App["review_status"],
+  t: ReturnType<typeof useCloudT>,
+): string {
   switch (status) {
     case "approved":
-      return "Review approved";
+      return t("cloud.monetization.reviewStatusApproved", {
+        defaultValue: "Review approved",
+      });
     case "submitted":
-      return "Review submitted";
+      return t("cloud.monetization.reviewStatusSubmitted", {
+        defaultValue: "Review submitted",
+      });
     case "under_review":
-      return "Review in progress";
+      return t("cloud.monetization.reviewStatusInProgress", {
+        defaultValue: "Review in progress",
+      });
     case "rejected":
-      return "Review rejected";
+      return t("cloud.monetization.reviewStatusRejected", {
+        defaultValue: "Review rejected",
+      });
     default:
-      return "Review required";
+      return t("cloud.monetization.reviewStatusRequired", {
+        defaultValue: "Review required",
+      });
   }
 }
 

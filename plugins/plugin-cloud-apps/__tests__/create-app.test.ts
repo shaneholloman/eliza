@@ -103,32 +103,44 @@ describe("CREATE_APP", () => {
     expect(reply).not.toContain("eliza_app_secret_do_not_leak");
   });
 
-  it("passes monetization config through to createApp", async () => {
+  it("creates a monetization-requested app un-monetized and guides the user to review", async () => {
     let received: CreateAppInput | null = null;
     setCreateApp((input) => {
       received = input;
+      // The server would 403 `app_review_required` if we ever sent
+      // monetization_enabled:true, so the created app is always un-monetized.
       return Promise.resolve({
         success: true,
         app: makeApp({
           name: "Coin",
-          monetization_enabled: true,
+          monetization_enabled: false,
           inference_markup_percentage: 20,
         }),
         apiKey: "k",
       });
     });
 
+    const cb = captureCallback();
     await createAppAction.handler(
       keyedRuntime(),
       makeMessage("create a monetized app called Coin with 20% markup"),
       undefined,
       undefined,
-      captureCallback().fn,
+      cb.fn,
     );
 
     const body = received as unknown as CreateAppInput;
-    expect(body.monetization_enabled).toBe(true);
+    // NEVER send monetization_enabled at create — the API hard-403s it.
+    expect(body.monetization_enabled).toBeUndefined();
+    // Pricing defaults still flow through so they're ready post-approval.
     expect(body.inference_markup_percentage).toBe(20);
+
+    // The success reply must tell the user the app is un-monetized and how to
+    // monetize it: submit for review, then enable after approval.
+    const reply = cb.calls[0]?.text ?? "";
+    expect(reply.toLowerCase()).toContain("review");
+    expect(reply).toContain("/api/v1/apps/:id/review");
+    expect(reply.toLowerCase()).toContain("monetization");
   });
 
   it("asks for a name when none can be parsed (no create call)", async () => {
