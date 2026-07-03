@@ -156,7 +156,7 @@ export * from "./markdown";
 export * from "./media";
 export * from "./memory";
 export * from "./messaging/interactions";
-export * from "./mobile-device-bridge-hooks";
+export * from "./mobile-device-bridge-service";
 export * from "./model-gateway";
 // Export network utilities (SSRF protection, secure fetch)
 export * from "./network";
@@ -271,7 +271,6 @@ export * from "./services/optimized-prompt";
 export { resolveOptimizedPromptForRuntime } from "./services/optimized-prompt-resolver";
 export * from "./services/pairing";
 export * from "./services/pairing-integration";
-export * from "./services/plugin-hooks";
 export * from "./services/relationships-graph-builder";
 export * from "./services/runtime-capability-service";
 export * from "./services/setup-cli";
@@ -298,6 +297,7 @@ export {
 	settingsDebugCloudSummary,
 } from "./settings-debug";
 export { sanitizeSpeechText } from "./spoken-text";
+export * from "./target-sources";
 export {
 	availableProviderNames,
 	isLiveTestEnabled,
@@ -374,7 +374,6 @@ export { formatError } from "./utils/format-error";
 /** Single-lane local inference scheduling: interactive-over-background gate + device-class background budgets (#11914). */
 export * from "./utils/inference-priority-gate";
 // Export Node-specific utilities
-export * from "./utils/plugin-loader";
 export * from "./utils/prompt-compression";
 // Canonical env-var reader with legacy-alias back-compat
 export * from "./utils/read-env";

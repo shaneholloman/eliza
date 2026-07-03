@@ -39,6 +39,8 @@ export interface ServiceTypeRegistry {
 	AGENT_EVENT: "agent_event";
 	OPTIMIZED_PROMPT: "optimized_prompt";
 	CHANNEL_TOPICS: "channel_topics";
+	COMMANDS: "commands";
+	MOBILE_DEVICE_BRIDGE: "mobile_device_bridge";
 	UNKNOWN: "unknown";
 }
 
@@ -134,6 +136,8 @@ export const ServiceType = {
 	VOICE_CACHE: "voice_cache",
 	OPTIMIZED_PROMPT: "optimized_prompt",
 	CHANNEL_TOPICS: "channel_topics",
+	COMMANDS: "commands",
+	MOBILE_DEVICE_BRIDGE: "mobile_device_bridge",
 	UNKNOWN: "unknown",
 } as const;
 

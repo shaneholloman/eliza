@@ -38,6 +38,7 @@ import {
   sendJson,
   sendJsonError,
   stringToUuid,
+  tryHandleTrajectoryReadRoutes,
   type UUID,
 } from "@elizaos/core";
 import type {
@@ -341,7 +342,7 @@ function getPluginRegistryApi(): Promise<
   return pluginRegistryApiPromise;
 }
 
-import { getGlobalAwarenessRegistry } from "../awareness/registry.ts";
+import { walletDiagnosticDescriptor } from "@elizaos/plugin-wallet/diagnostic";
 import {
   type ElizaConfig,
   loadElizaConfig,
@@ -355,6 +356,7 @@ import {
   type AgentEventServiceLike,
   getAgentEventService,
 } from "../runtime/agent-event-service.ts";
+import { getAgentHostBridge } from "../runtime/host-bridge.ts";
 import {
   resolvePreferredProviderId,
   resolvePrimaryModel,
@@ -429,6 +431,10 @@ import { wireCoordinatorBridgesWhenReady } from "./coordinator-wiring.ts";
 import { createDeliveryDedupeState } from "./delivery-dedupe.ts";
 import { computeCanRespond } from "./health-routes.ts";
 import { pushWithBatchEvict } from "./memory-bounds.ts";
+import {
+  buildPluginDiagnosticEntry,
+  resolveWalletDiagnosticStatus,
+} from "./plugin-diagnostic.ts";
 import { createRuntimeReadyGate } from "./runtime-ready-gate.ts";
 import {
   cloneWithoutBlockedObjectKeys,
@@ -488,7 +494,6 @@ import {
   tryHandleMusicPlayerStatusFallbackLazy,
   tryHandleRuntimePluginRoute,
 } from "./server-lazy-routes.ts";
-import { tryHandleTrajectoryFallback } from "./trajectory-fallback-routes.ts";
 import {
   EVM_PLUGIN_PACKAGE,
   resolveWalletAutomationMode as resolveAgentAutomationModeFromConfig,
@@ -1551,63 +1556,18 @@ function persistAgentAutomationMode(
   };
 }
 
+/**
+ * Build the EVM wallet diagnostic card from the plugin-owned static descriptor
+ * (identity, config keys, tags, prerequisite labels) merged with the
+ * host-resolved runtime status. No plugin-specific literals live in the host.
+ */
 function buildPluginEvmDiagnosticEntry(
   state: Pick<ServerState, "config" | "runtime">,
 ): PluginEntry {
-  const capability = resolveWalletCapabilityStatus(state);
-  const enabled =
-    capability.pluginEvmLoaded ||
-    capability.pluginEvmRequired ||
-    (state.config.plugins?.allow ?? []).some((entry) => {
-      return (
-        entry === EVM_PLUGIN_PACKAGE || entry === "evm" || entry === "wallet"
-      );
-    });
-
-  const capabilityStatus = capability.pluginEvmLoaded
-    ? capability.pluginEvmRequired
-      ? "loaded"
-      : "auto-enabled"
-    : enabled
-      ? capability.evmAddress || capability.localSignerAvailable
-        ? "blocked"
-        : "missing-prerequisites"
-      : "disabled";
-
-  return {
-    id: "evm",
-    name: "Plugin EVM",
-    description:
-      "EVM wallet runtime for balance, transfer, and trade actions. Required for wallet execution in chat.",
-    tags: ["wallet", "evm", "bsc", "onchain"],
-    enabled,
-    configured: capability.pluginEvmRequired,
-    envKey: "EVM_PRIVATE_KEY",
-    category: "feature",
-    source: "bundled",
-    configKeys: [
-      "EVM_PRIVATE_KEY",
-      "BSC_RPC_URL",
-      "BSC_TESTNET_RPC_URL",
-      "ELIZA_WALLET_NETWORK",
-    ],
-    parameters: [],
-    validationErrors: [],
-    validationWarnings: [],
-    npmName: EVM_PLUGIN_PACKAGE,
-    isActive: capability.pluginEvmLoaded,
-    autoEnabled: capability.pluginEvmRequired && !capability.pluginEvmLoaded,
-    managementMode: "core-optional",
-    capabilityStatus,
-    capabilityReason: capability.executionReady
-      ? "Wallet execution is ready."
-      : capability.executionBlockedReason,
-    prerequisites: [
-      { label: "wallet present", met: Boolean(capability.evmAddress) },
-      { label: "rpc ready", met: capability.rpcReady },
-      { label: "plugin loaded", met: capability.pluginEvmLoaded },
-    ],
-  };
+  return buildPluginDiagnosticEntry(
+    walletDiagnosticDescriptor,
+    resolveWalletDiagnosticStatus(walletDiagnosticDescriptor, state),
+  );
 }
 
 import { resolveWalletExportRejection as _resolveWalletExportRejection } from "./server-helpers-wallet.ts";
@@ -1937,32 +1897,6 @@ async function handleRequest(
     method === "GET" &&
     pathname === "/api/first-run/status" &&
     isCloudProvisioned;
-  // Webhook exemptions: handlers MUST authenticate callers (see plugin handlers).
-  // WhatsApp: X-Hub-Signature-256 HMAC (WHATSAPP_APP_SECRET).
-  // BlueBubbles: X-BlueBubbles-Webhook-Secret (BLUEBUBBLES_WEBHOOK_SECRET).
-  const isWhatsAppWebhookEndpoint = pathname === "/api/whatsapp/webhook";
-  let blueBubblesWebhookPath =
-    pathname === "/webhooks/bluebubbles" ? "/webhooks/bluebubbles" : null;
-  if (pathname.startsWith("/webhooks/")) {
-    const { resolveBlueBubblesWebhookPath } = await getOptionalPluginApi<{
-      resolveBlueBubblesWebhookPath: (args: unknown) => string;
-    }>("imessage");
-    blueBubblesWebhookPath =
-      typeof resolveBlueBubblesWebhookPath === "function"
-        ? resolveBlueBubblesWebhookPath({
-            runtime: state.runtime
-              ? {
-                  getService: (type: string) =>
-                    (
-                      state.runtime as { getService: (t: string) => unknown }
-                    ).getService(type),
-                }
-              : undefined,
-          })
-        : blueBubblesWebhookPath;
-  }
-  const isBlueBubblesWebhookEndpoint =
-    blueBubblesWebhookPath != null && pathname === blueBubblesWebhookPath;
   const isAuthProtectedPath = isAuthProtectedRoute(pathname);
 
   const canonicalizeRestartReason = (reason: string): string => {
@@ -2069,24 +2003,15 @@ async function handleRequest(
   // static-UI catch-all, otherwise the SPA index.html is served and the user
   // ends up on the password screen.
   //
-  // Guard the call: in the on-device mobile bundle this app-core export can
-  // come through as `undefined` (circular re-export init order under Bun.build),
-  // and an unguarded call throws on EVERY request — 500-ing /api/auth/status
-  // and wedging the dashboard at "Connecting to backend…". The route is a
-  // cloud-SSO handoff that a local on-device agent never legitimately serves,
-  // so skipping it when unavailable is safe.
-  // Dynamic import (matching the account-pool / vault-mirror seams in this
-  // package) so agent never *statically* imports @elizaos/app-core: the static
-  // import was what produced the circular re-export init-order `undefined`
-  // above, and it is the build-time edge that puts @elizaos/app-core <->
-  // @elizaos/agent in a Turbo dependency cycle (#9626). `.catch(() => null)`
-  // keeps the on-device path graceful when app-core isn't present at all.
-  const cloudPairMod = await import(
-    /* @vite-ignore */ "@elizaos/app-core/api/cloud-pair-route"
-  ).catch(() => null);
+  // The cloud-SSO handoff route is owned by the app-core host and injected
+  // downward through the agent host bridge (see ../runtime/host-bridge.ts) so
+  // agent never imports `@elizaos/app-core`. A local on-device agent never
+  // legitimately serves it, so the bridge omits the handler and the request
+  // falls through to the normal pipeline.
+  const handleCloudPairRoute = getAgentHostBridge().handleCloudPairRoute;
   if (
-    typeof cloudPairMod?.handleCloudPairRoute === "function" &&
-    (await cloudPairMod.handleCloudPairRoute(req, res))
+    typeof handleCloudPairRoute === "function" &&
+    (await handleCloudPairRoute(req, res))
   ) {
     return;
   }
@@ -2108,8 +2033,6 @@ async function handleRequest(
     !isAuthEndpoint &&
     !isHealthEndpoint &&
     !isCloudFirstRunStatusEndpoint &&
-    !isWhatsAppWebhookEndpoint &&
-    !isBlueBubblesWebhookEndpoint &&
     !isPublicRuntimePluginRoute({
       runtime: state.runtime,
       method,
@@ -3053,9 +2976,9 @@ async function handleRequest(
               detectRuntimeModel,
             ),
           resolveProviderFromModel,
-          getGlobalAwarenessRegistry: coerce<
-            AgentStatusRouteArg["deps"]["getGlobalAwarenessRegistry"]
-          >(getGlobalAwarenessRegistry),
+          getAwarenessRegistry: coerce<
+            AgentStatusRouteArg["deps"]["getAwarenessRegistry"]
+          >(() => state.runtime?.getService("AWARENESS_REGISTRY") ?? null),
           RegistryService,
         },
       });
@@ -3107,7 +3030,7 @@ async function handleRequest(
   // ── WhatsApp routes (/api/whatsapp/*) ────────────────────────────────────
   // Moved to @elizaos/plugin-whatsapp setup-routes.ts (registered via Plugin.routes).
 
-  // ── BlueBubbles routes (/api/bluebubbles/*, /webhooks/bluebubbles) ──
+  // ── BlueBubbles routes ──────────────────────────────────────────────────
   // Extracted to @elizaos/plugin-bluebubbles setup-routes.ts (Plugin.routes).
 
   // ── Notification + inbox routes (/api/notifications/*, /api/inbox/*) ──
@@ -3699,13 +3622,13 @@ async function handleRequest(
     return;
   }
 
-  // ── Trajectory read fallback ────────────────────────────────────────────
+  // ── Trajectory read routes (owned by core TrajectoriesService) ──────────
   // Serves GET /api/trajectories[/:id|/stats] from the core TrajectoriesService
   // when no plugin owns the route (mobile / training disabled), so the realtime
   // trajectory viewer works without @elizaos/plugin-training. Runs AFTER the
   // plugin routes above, so plugin-training's richer route wins when present.
   if (
-    await tryHandleTrajectoryFallback({
+    await tryHandleTrajectoryReadRoutes({
       pathname,
       method,
       url,

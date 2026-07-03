@@ -300,7 +300,6 @@
     "@elizaos/plugin-anthropic": "workspace:*",
     "@elizaos/plugin-aosp-local-inference": "workspace:*",
     "@elizaos/plugin-app-control": "workspace:*",
-    "@elizaos/plugin-app-manager": "workspace:*",
     "@elizaos/plugin-background-runner": "workspace:*",
     "@elizaos/plugin-browser": "workspace:*",
     "@elizaos/plugin-capacitor-bridge": "workspace:*",
@@ -383,13 +382,5 @@
     "typescript": "^6.0.3",
     "vite": "^8.0.8",
     "vitest": "^4.0.18"
-  },
-  "peerDependencies": {
-    "@elizaos/app-core": "workspace:*"
-  },
-  "peerDependenciesMeta": {
-    "@elizaos/app-core": {
-      "optional": true
-    }
   }
 }

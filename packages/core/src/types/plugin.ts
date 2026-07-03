@@ -166,6 +166,12 @@ interface BaseRoute {
 interface PublicRoute extends BaseRoute {
 	public: true;
 	name: string; // Name is required for public routes
+	/**
+	 * Reviewed reason this route may bypass the central auth gate.
+	 * Public routes without this intent are rejected by route registration and
+	 * dispatchers.
+	 */
+	publicReason: string;
 }
 
 interface PrivateRoute extends BaseRoute {
@@ -174,6 +180,15 @@ interface PrivateRoute extends BaseRoute {
 }
 
 export type Route = PublicRoute | PrivateRoute;
+
+export function assertPublicRouteIntent(route: Route, source = "plugin"): void {
+	if (route.public !== true) return;
+	const reason = (route as { publicReason?: unknown }).publicReason;
+	if (typeof reason === "string" && reason.trim().length > 0) return;
+	throw new Error(
+		`[RouteAuth] Public route ${source}:${route.type} ${route.path} must declare publicReason`,
+	);
+}
 
 /** Route that may include x402 payment fields (alias for authoring clarity) */
 export type PaymentEnabledRoute = Route;
@@ -303,6 +318,48 @@ export interface PluginAppLaunchDiagnostic {
 	code: string;
 	severity: "info" | "warning" | "error";
 	message: string;
+}
+
+/**
+ * A single prerequisite a plugin declares for its diagnostic card. The host
+ * resolves runtime state and maps {@link key} to a satisfied boolean; the
+ * plugin owns the human-readable {@link label}.
+ */
+export interface PluginDiagnosticPrerequisite {
+	/** Stable key the host's status resolver maps to a satisfied boolean. */
+	key: string;
+	/** Human-readable label shown on the diagnostic card. */
+	label: string;
+}
+
+/**
+ * Static metadata a plugin contributes so the host can render its diagnostic
+ * card without hardcoding the plugin's identity, config keys, tags, or
+ * prerequisites. The host resolves the runtime-dynamic status (enabled,
+ * capability, prerequisite satisfaction) separately and merges it with this
+ * descriptor. Owning this here keeps a single source of truth: renaming a
+ * config key changes the descriptor, not the host.
+ */
+export interface PluginDiagnosticDescriptor {
+	id: string;
+	name: string;
+	description: string;
+	tags: string[];
+	envKey: string | null;
+	category:
+		| "ai-provider"
+		| "connector"
+		| "streaming"
+		| "database"
+		| "app"
+		| "feature";
+	source: "bundled" | "store";
+	configKeys: string[];
+	npmName: string;
+	managementMode: "standard" | "core-optional";
+	/** Config-allowlist entries that mean "this plugin is enabled". */
+	aliases: string[];
+	prerequisites: PluginDiagnosticPrerequisite[];
 }
 
 export interface PluginAppBridgeLaunchContext {

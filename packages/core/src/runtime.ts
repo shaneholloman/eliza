@@ -7,7 +7,6 @@ import {
 import { ensureConnection as ensureConnectionStandalone } from "./connection";
 import { deriveKnownSecrets } from "./constants/secrets";
 import { InMemoryDatabaseAdapter } from "./database/inMemoryAdapter";
-import { createAdvancedMemoryPlugin } from "./features/advanced-memory/index";
 import {
 	type CapabilityConfig,
 	createBasicCapabilitiesPlugin,
@@ -22,6 +21,7 @@ import { createLogger } from "./logger";
 import { simpleHash } from "./optimization/ab-analysis";
 import { getOptimizationRootDir } from "./optimization-root-dir";
 import { installRuntimePluginLifecycle } from "./plugin-lifecycle";
+import { createCoreSecurityHooksPlugin } from "./plugins/core-security-hooks";
 import {
 	getNativeRuntimeFeaturePlugin,
 	type NativeRuntimeFeature,
@@ -35,6 +35,7 @@ import {
 	maybeReroute,
 	resolveChain,
 } from "./runtime/action-model-routing";
+import { getActionRolePolicyWarnings } from "./runtime/action-role-policy";
 import {
 	getActionRoutingContext,
 	runWithActionRoutingContext,
@@ -101,6 +102,7 @@ import {
 	type ActionResult,
 	type Agent,
 	type AppendConnectorAccountAuditEventParams,
+	assertPublicRouteIntent,
 	ChannelType,
 	type Character,
 	type Component,
@@ -145,6 +147,7 @@ import {
 	type Metadata,
 	type ModelHandler,
 	type ModelParamsMap,
+	type ModelRegistrationInfo,
 	type ModelResultMap,
 	ModelType,
 	type ModelTypeName,
@@ -1036,6 +1039,11 @@ export class AgentRuntime implements IAgentRuntime {
 			documents: opts.enableDocuments,
 			relationships: opts.enableRelationships,
 			trajectories: opts.enableTrajectories,
+			// Character flags are the explicit override for these two features
+			// (default false in the registry); build-character-config surfaces
+			// them as flags deliberately.
+			advancedPlanning: character.advancedPlanning,
+			advancedMemory: character.advancedMemory,
 		};
 		// Generate deterministic UUID from character name
 		// Falls back to random UUID only if no character name is provided
@@ -2022,6 +2030,7 @@ export class AgentRuntime implements IAgentRuntime {
 		}
 		if (pluginToRegister.routes) {
 			for (const route of pluginToRegister.routes) {
+				assertPublicRouteIntent(route, pluginToRegister.name);
 				const routePath = route.path.startsWith("/")
 					? route.path
 					: `/${route.path}`;
@@ -2354,6 +2363,15 @@ export class AgentRuntime implements IAgentRuntime {
 			this.registerPlugin(basicCapabilitiesPlugin),
 		);
 
+		// Always-on core message-path security defenses. Registered through the
+		// plugin lifecycle (GHSA-gh63-5vpj-39qp incoming-message hardening + #9949
+		// injection-risk stamping) so their pipeline hooks appear in plugin
+		// bookkeeping and dispose with the runtime, rather than a lazy dynamic
+		// import buried in initialize.
+		pluginRegistrationPromises.push(
+			this.registerPlugin(createCoreSecurityHooksPlugin()),
+		);
+
 		for (const feature of Object.keys(
 			nativeRuntimeFeatureDefaults,
 		) as NativeRuntimeFeature[]) {
@@ -2365,27 +2383,36 @@ export class AgentRuntime implements IAgentRuntime {
 			}
 		}
 
-		if (this.character.advancedPlanning === true) {
-			const { createAdvancedPlanningPlugin } = await import(
-				"./features/advanced-planning/index.ts"
-			);
-			pluginRegistrationPromises.push(
-				this.registerPlugin(createAdvancedPlanningPlugin()),
-			);
-		}
-
-		if (this.character.advancedMemory === true) {
-			pluginRegistrationPromises.push(
-				this.registerPlugin(createAdvancedMemoryPlugin()),
-			);
-		}
-
 		for (const plugin of this.characterPlugins) {
 			if (plugin && !this.isPluginManagedAsNativeFeature(plugin)) {
 				pluginRegistrationPromises.push(this.registerPlugin(plugin));
 			}
 		}
 		await Promise.all(pluginRegistrationPromises);
+		for (const warning of getActionRolePolicyWarnings(this.actions)) {
+			if (warning.type === "unmatched") {
+				this.logger.warn(
+					{
+						src: "agent",
+						agentId: this.agentId,
+						action: warning.actionName,
+						policyRole: warning.policyRole,
+					},
+					"[AgentRuntime] ACTION_ROLE_POLICY entry does not match a registered action name",
+				);
+				continue;
+			}
+			this.logger.warn(
+				{
+					src: "agent",
+					agentId: this.agentId,
+					action: warning.actionName,
+					policyRole: warning.policyRole,
+					declaredRole: warning.declaredRole,
+				},
+				"[AgentRuntime] ACTION_ROLE_POLICY entry lowers the action's declared role gate",
+			);
+		}
 
 		const allowNoDatabase =
 			options?.allowNoDatabase === true ||
@@ -2418,19 +2445,6 @@ export class AgentRuntime implements IAgentRuntime {
 
 		// Initialize message service
 		this.messageService = new DefaultMessageService();
-
-		const { registerCoreIncomingMessageSecurityHook } = await import(
-			"./security/incoming-message-security.js"
-		);
-		registerCoreIncomingMessageSecurityHook(this);
-
-		// #9949: stamp deterministic injection RiskFactors during the
-		// parallel-with-should-respond phase so the role-keyed verify gate in the
-		// message service can escalate borderline USER/GUEST messages.
-		const { registerCoreShouldRespondRiskHook } = await import(
-			"./features/trust/should-respond-risk-gate.js"
-		);
-		registerCoreShouldRespondRiskHook(this);
 
 		// Run migrations for all loaded plugins (unless explicitly skipped for serverless mode)
 		const skipMigrations = options?.skipMigrations ?? false;
@@ -4641,6 +4655,39 @@ export class AgentRuntime implements IAgentRuntime {
 				return (a.registrationOrder || 0) - (b.registrationOrder || 0);
 			});
 		}
+
+		// Announce the registration so observers (e.g. the local-inference
+		// routing table) can mirror the model registry without patching the
+		// runtime or capturing handlers. Fire-and-forget: a no-op when nothing
+		// is subscribed, and registry bookkeeping must never block boot.
+		void this.emitEvent(EventType.MODEL_REGISTERED, {
+			modelType: modelKey,
+			provider,
+			priority: priority || 0,
+		});
+	}
+
+	/**
+	 * Handler-free snapshot of every registered model handler, sorted by
+	 * priority (descending) then registration order within each model type —
+	 * the same order `getModel`/`useModel` select in. Exposes the private
+	 * `models` map as metadata so hosts and observers can render a routing
+	 * table or seed a mirror without touching handler functions. Pair with the
+	 * {@link EventType.MODEL_REGISTERED} event to stay live.
+	 */
+	getModelRegistrations(): ModelRegistrationInfo[] {
+		const out: ModelRegistrationInfo[] = [];
+		for (const [modelType, handlers] of this.models) {
+			for (const h of handlers) {
+				out.push({
+					modelType,
+					provider: h.provider,
+					priority: h.priority || 0,
+					registrationOrder: h.registrationOrder || 0,
+				});
+			}
+		}
+		return out;
 	}
 
 	/**
