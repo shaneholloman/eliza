@@ -142,19 +142,9 @@ class TwitterAppAutomationService {
     app: App,
     type: "promotional" | "engagement" | "educational" | "announcement" = "promotional",
   ): Promise<GeneratedTweet> {
-    const deduction = await creditsService.deductCredits({
-      organizationId,
-      amount: TWITTER_POST_COST,
-      description: `Twitter AI tweet: ${app.name}`,
-      metadata: { appId: app.id, type: "twitter_tweet" },
-    });
-
-    if (!deduction.success) {
-      throw new Error(
-        `Insufficient credits for AI generation. Required: $${TWITTER_POST_COST.toFixed(4)}`,
-      );
-    }
-
+    // All throwable prep (character-context DB fetch, prompt build) runs BEFORE
+    // the deduction: nothing may throw between the charge and the refunding try,
+    // or the user is charged for a generation that never ran (#11685).
     const config = app.twitter_automation as TwitterAutomationConfig | null;
     const vibeStyle = config?.vibeStyle ?? "professional yet approachable";
     const topics = config?.topics?.join(", ") ?? "";
@@ -230,6 +220,19 @@ Requirements:
 - Match the vibe style specified
 
 Return ONLY the tweet text, nothing else.`;
+
+    const deduction = await creditsService.deductCredits({
+      organizationId,
+      amount: TWITTER_POST_COST,
+      description: `Twitter AI tweet: ${app.name}`,
+      metadata: { appId: app.id, type: "twitter_tweet" },
+    });
+
+    if (!deduction.success) {
+      throw new Error(
+        `Insufficient credits for AI generation. Required: $${TWITTER_POST_COST.toFixed(4)}`,
+      );
+    }
 
     try {
       const twModel = "anthropic/claude-sonnet-4.6";
