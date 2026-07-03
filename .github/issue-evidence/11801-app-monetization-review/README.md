@@ -21,6 +21,7 @@
 | `bun run --cwd packages/ui test -- src/cloud/applications/components/app-monetization-settings.test.tsx` | PASS - draft app shows Submit for review, POSTs `/review`, reflects approved status, then allows enabling monetization. |
 | `bun run --cwd packages/cloud/api typecheck` | PASS |
 | `bun run --cwd packages/cloud/shared typecheck` | PASS |
+| `bun run --cwd packages/cloud/sdk typecheck` | PASS - SDK `AppDto` review fields and create-input monetization warning stay type-safe. |
 | `bun run --cwd packages/ui typecheck` | PASS |
 | `bun run --cwd packages/cloud/api lint` | PASS |
 | `bun run --cwd packages/cloud/shared lint` | PASS |
