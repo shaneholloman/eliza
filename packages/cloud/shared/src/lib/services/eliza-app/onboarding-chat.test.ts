@@ -857,6 +857,31 @@ describe("runOnboardingChat", () => {
       expect(result.reply).not.toContain("copied");
     });
 
+    test("insufficient-credits reply is deterministic and points at billing", async () => {
+      ensureElizaAppProvisioning.mockResolvedValue({
+        status: "insufficient_credits",
+        agentId: null,
+        bridgeUrl: null,
+        sandbox: null,
+      });
+      const result = await runOnboardingChat({
+        message: "My name is Sam",
+        platform: "blooio",
+        platformUserId: PHONE,
+        sessionId: PLATFORM_SESSION,
+        trustedPlatformIdentity: true,
+        authenticatedUser: { userId: "user-1", organizationId: "org-1" },
+      });
+      expect(result.provisioning.status).toBe("insufficient_credits");
+      expect(result.handoffComplete).toBe(false);
+      expect(generateText).not.toHaveBeenCalled();
+      expect(result.reply).toContain("You're out of credits, Sam.");
+      expect(result.reply).toContain("/dashboard/billing");
+      expect(result.reply).toContain("usage-based:");
+      expect(result.reply).not.toContain("You're live");
+      expect(result.reply).not.toContain("copied");
+    });
+
     test("login-required fallback reply always ends with the exact login link", async () => {
       const result = await runTrustedPhoneTurn("My name is Sam");
       expect(result.requiresLogin).toBe(true);
