@@ -46,6 +46,9 @@ import { cloudErrorInfo } from "../domain-intent.js";
 import {
   CONFIRM_TTL_MS,
   confirmationRoomId,
+  confirmTargetMismatchMessage,
+  conflictingConfirmAmount,
+  conflictingConfirmTarget,
   deleteCloudAppConfirmation,
   findPendingCloudAppConfirmation,
   markCloudAppConfirmationRecovery,
@@ -243,6 +246,56 @@ export const bookInfluencerAction: Action = {
           userFacingText: CANCELED_MESSAGE,
           verifiedUserFacing: true,
           data: { booked: false, canceled: true },
+        };
+      }
+      // Frozen-snapshot guard: a confirm whose own params name a DIFFERENT
+      // influencer or budget must never fund the frozen booking the user is no
+      // longer talking about. (`appId`/`appName` carry the profile id + display
+      // name for this action.)
+      const profileConflict = conflictingConfirmTarget(
+        options,
+        { name: pending.metadata.appName, id: pending.metadata.appId },
+        ["profileId", "influencer"],
+      );
+      const budgetConflict = conflictingConfirmAmount(
+        options,
+        pending.metadata.amount,
+      );
+      if (profileConflict !== null || budgetConflict !== null) {
+        const requested =
+          profileConflict ??
+          `${usd(budgetConflict ?? 0)} (not ${usd(pending.metadata.amount)})`;
+        let msg: string;
+        if (isRecovery) {
+          msg =
+            `Your confirmation names "${requested}", but the pending recovery retry is for "${pending.metadata.appName}" at ${usd(pending.metadata.amount)}. ` +
+            `I did not retry or start a new booking, and I kept the recovery pending so its same escrow key survives. ` +
+            `Reply to confirm again to safely complete or replay the earlier attempt, or cancel to leave it.`;
+        } else {
+          await deleteCloudAppConfirmation(runtime, pending.taskId);
+          msg = confirmTargetMismatchMessage(
+            requested,
+            `booking of ${usd(pending.metadata.amount)}`,
+            pending.metadata.appName,
+          );
+        }
+        await callback?.({ text: msg, actions: ["BOOK_INFLUENCER"] });
+        return {
+          success: false,
+          text: `Confirm named "${requested}" but the pending booking was ${pending.metadata.appName} for ${usd(pending.metadata.amount)}; refused.`,
+          userFacingText: msg,
+          verifiedUserFacing: true,
+          data: {
+            reason: "confirm_target_mismatch",
+            booked: false,
+            requested,
+            pendingTarget: {
+              id: pending.metadata.appId,
+              name: pending.metadata.appName,
+            },
+            amount: pending.metadata.amount,
+            ...(isRecovery ? { recovery: true } : {}),
+          },
         };
       }
       // A recovery retry never expires (safety.ts): it resumes/replays money

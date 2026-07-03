@@ -33,6 +33,8 @@ import { invalidateAppsCache } from "../providers/cloud-apps.js";
 import {
   confirmationPrompt,
   confirmationRoomId,
+  confirmTargetMismatchMessage,
+  conflictingConfirmTarget,
   deleteCloudAppConfirmation,
   findPendingCloudAppConfirmation,
   persistCloudAppConfirmation,
@@ -154,6 +156,35 @@ export const deleteAppAction: Action = {
         name: pending.metadata.appName,
         slug: pending.metadata.appSlug ?? pending.metadata.appName,
       };
+
+      // Frozen-target guard: a confirm whose own params name a DIFFERENT app
+      // must never delete the frozen one the user is no longer talking about.
+      const conflict = conflictingConfirmTarget(options, {
+        name: target.name,
+        id: target.id,
+        aliases: [target.slug],
+      });
+      if (conflict !== null) {
+        const msg = confirmTargetMismatchMessage(
+          conflict,
+          "delete",
+          target.name,
+        );
+        await callback?.({ text: msg, actions: ["DELETE_APP"] });
+        return {
+          success: false,
+          text: `Confirm named "${conflict}" but the pending delete was for ${target.name}; refused.`,
+          userFacingText: msg,
+          verifiedUserFacing: true,
+          data: {
+            reason: "confirm_target_mismatch",
+            deleted: false,
+            requested: conflict,
+            pendingTarget: { id: target.id, name: target.name },
+          },
+        };
+      }
+
       try {
         const result = await client.deleteApp(target.id);
         // Any delete attempt can change the app inventory — force the provider to

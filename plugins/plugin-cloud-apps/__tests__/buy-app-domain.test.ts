@@ -336,6 +336,79 @@ describe("BUY_APP_DOMAIN confirm turn", () => {
     expect(replies[0]?.text).toContain("charged $13.99");
   });
 
+  it("MONEY: confirm naming a DIFFERENT domain refuses, buys nothing, clears the pending", async () => {
+    const runtime = keyedRuntime();
+    const { calls } = trackBuys();
+    await stagePurchase(runtime);
+
+    const { fn, calls: replies } = captureCallback();
+    const result = await buyAppDomainAction.handler?.(
+      runtime,
+      makeMessage("yes, buy othersite.net"),
+      undefined,
+      { parameters: { confirm: true, domain: "othersite.net" } },
+      fn,
+    );
+
+    expect(calls.length).toBe(0);
+    expect(result?.success).toBe(false);
+    expect(result?.data?.reason).toBe("confirm_target_mismatch");
+    const reply = replies.at(-1)?.text ?? "";
+    expect(reply).toContain("othersite.net");
+    expect(reply).toContain("example.com");
+
+    // Pending cleared: a later bare confirm cannot buy the stale domain.
+    const followUp = await buyAppDomainAction.handler?.(
+      runtime,
+      makeMessage("confirm"),
+      undefined,
+      { confirm: true },
+      undefined,
+    );
+    expect(calls.length).toBe(0);
+    expect(followUp?.data?.reason).toBe("no_pending_confirmation");
+  });
+
+  it("MONEY: confirm naming a DIFFERENT app refuses, buys nothing", async () => {
+    setListApps(() => Promise.resolve({ success: true, apps: [APP, OTHER] }));
+    const runtime = keyedRuntime();
+    const { calls } = trackBuys();
+    await stagePurchase(runtime);
+
+    const result = await buyAppDomainAction.handler?.(
+      runtime,
+      makeMessage("yes — attach it to Other App"),
+      undefined,
+      { parameters: { confirm: true, appName: "Other App" } },
+      undefined,
+    );
+    expect(calls.length).toBe(0);
+    expect(result?.data?.reason).toBe("confirm_target_mismatch");
+  });
+
+  it("confirm re-naming the SAME domain + app still buys exactly once", async () => {
+    const runtime = keyedRuntime();
+    const { calls } = trackBuys();
+    await stagePurchase(runtime);
+
+    const result = await buyAppDomainAction.handler?.(
+      runtime,
+      makeMessage("confirm buying example.com for Acme Bot"),
+      undefined,
+      {
+        parameters: {
+          confirm: true,
+          domain: "example.com",
+          appName: "Acme Bot",
+        },
+      },
+      undefined,
+    );
+    expect(calls.length).toBe(1);
+    expect(calls[0].input.domain).toBe("example.com");
+    expect(result?.success).toBe(true);
+  });
+
   it("reads confirm from nested options.parameters (real planner path)", async () => {
     const runtime = keyedRuntime();
     const { calls } = trackBuys();

@@ -31,6 +31,8 @@ import {
 } from "../client.js";
 import {
   confirmationRoomId,
+  confirmTargetMismatchMessage,
+  conflictingConfirmTarget,
   deleteCloudAppConfirmation,
   findPendingCloudAppConfirmation,
   persistCloudAppConfirmation,
@@ -155,6 +157,35 @@ export const regenerateAppApiKeyAction: Action = {
         name: pending.metadata.appName,
         slug: pending.metadata.appSlug ?? pending.metadata.appName,
       };
+
+      // Frozen-target guard: a confirm whose own params name a DIFFERENT app
+      // must never rotate the frozen app's key.
+      const conflict = conflictingConfirmTarget(options, {
+        name: target.name,
+        id: target.id,
+        aliases: [target.slug],
+      });
+      if (conflict !== null) {
+        const msg = confirmTargetMismatchMessage(
+          conflict,
+          "API-key rotation",
+          target.name,
+        );
+        await callback?.({ text: msg, actions: ["REGENERATE_APP_API_KEY"] });
+        return {
+          success: false,
+          text: `Confirm named "${conflict}" but the pending rotation was for ${target.name}; refused.`,
+          userFacingText: msg,
+          verifiedUserFacing: true,
+          data: {
+            reason: "confirm_target_mismatch",
+            rotated: false,
+            requested: conflict,
+            pendingTarget: { id: target.id, name: target.name },
+          },
+        };
+      }
+
       try {
         const result = await client.regenerateAppApiKey(target.id);
         const newKey =
