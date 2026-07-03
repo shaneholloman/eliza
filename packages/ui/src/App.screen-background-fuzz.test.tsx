@@ -431,6 +431,8 @@ const BUILTIN_TABS: { tab: BuiltinTab; path: string }[] = [
   { tab: "trajectories", path: "/trajectories" },
   { tab: "transcripts", path: "/transcripts" },
   { tab: "relationships", path: "/relationships" },
+  { tab: "experience", path: "/character/experience" },
+  { tab: "character-skills", path: "/character/skills" },
   { tab: "memories", path: "/memories" },
   { tab: "rolodex", path: "/rolodex" },
   { tab: "runtime", path: "/runtime" },
