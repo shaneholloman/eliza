@@ -474,6 +474,9 @@ final class ElizaBionicInferenceServer {
             }
             final long ms = android.os.SystemClock.elapsedRealtime() - t0;
             final double tokS = ms > 0 ? produced * 1000.0 / ms : 0.0;
+            // Refresh under residentLock: a policy tick blocked on this lock
+            // must re-read a fresh idle clock, not the pre-turn one.
+            lastInferenceAtMs = android.os.SystemClock.elapsedRealtime();
             return new JSONObject()
                 .put("ok", true)
                 .put("tokens", produced)
@@ -561,6 +564,8 @@ final class ElizaBionicInferenceServer {
                     .put("tokens", produced).put("ms", ms).put("tokS", tokS)
                     .put("text", sb.toString()).put("resident", true).toString());
                 out.flush();
+                // Refresh under residentLock (see generateResident).
+                lastInferenceAtMs = android.os.SystemClock.elapsedRealtime();
                 Log.i(TAG, "GENERATE_STREAM done (resident): " + produced + " tok @ "
                     + String.format(java.util.Locale.US, "%.2f", tokS) + " tok/s");
             }
@@ -586,6 +591,10 @@ final class ElizaBionicInferenceServer {
      * the 1.27 GB model per call. Caller must hold residentLock.
      */
     private long ensureResidentCtx(String bundleDir) {
+        // Op start, under residentLock — a policy tick blocked on the lock must
+        // re-read a fresh idle clock (embed/tts/asr/image update the post-op
+        // edge in handleConnection, outside the lock).
+        lastInferenceAtMs = android.os.SystemClock.elapsedRealtime();
         if (residentCtx == 0L || !bundleDir.equals(residentBundle)) {
             resetResident();
             residentCtx = ElizaVoiceNative.nativeContextCreate(bundleDir);
