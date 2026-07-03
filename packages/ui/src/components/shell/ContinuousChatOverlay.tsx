@@ -1566,6 +1566,9 @@ export function ContinuousChatOverlay({
     stopSpeaking,
     speaking,
   } = controller;
+  // True once the server has reported no LLM/model provider is configured (a
+  // `no_provider` assistant turn). Defaulted for minimal mock controllers.
+  const noProviderConfigured = controller.noProviderConfigured ?? false;
   // Defensive default so a minimal mock controller (stories/tests) that predates
   // the swipe-nav surface still renders without crashing.
   const conversationNav = controller.conversationNav ?? EMPTY_CONVERSATION_NAV;
@@ -4108,8 +4111,11 @@ export function ContinuousChatOverlay({
           the turn until the model is ready. */}
 
       {/* Cold-start boot feedback — sibling of the model-download banner above.
-          See BootStatusIndicator; `showBootBanner` is the grace-gated flag. */}
-      {showBootBanner ? (
+          See BootStatusIndicator; `showBootBanner` is the grace-gated flag.
+          Suppressed once we know no provider is configured: the agent will NEVER
+          become ready, so "Waking …" would spin forever — the in-transcript
+          no-provider gate is the honest error surface instead. */}
+      {showBootBanner && !noProviderConfigured ? (
         <BootStatusIndicator
           agentName={agentName}
           onOpenSettings={openSettings}
@@ -4790,13 +4796,19 @@ export function ContinuousChatOverlay({
                 placeholder={
                   firstRunOpen
                     ? "Pick an option to continue"
-                    : booting
-                      ? `Ask ${agentName} — waking up…`
-                      : (viewChatBinding?.placeholder ?? `Ask ${agentName}`)
+                    : noProviderConfigured
+                      ? "Connect a model provider in Settings to chat"
+                      : booting
+                        ? `Ask ${agentName} — waking up…`
+                        : (viewChatBinding?.placeholder ?? `Ask ${agentName}`)
                 }
                 aria-label="message"
                 data-testid="chat-composer-textarea"
-                aria-describedby={booting ? "cc-booting-hint" : undefined}
+                aria-describedby={
+                  booting && !noProviderConfigured
+                    ? "cc-booting-hint"
+                    : undefined
+                }
                 // Combobox semantics (role + aria-*) are applied as one spread,
                 // and only when a slash catalog is wired in — a plain message
                 // box otherwise.
