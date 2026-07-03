@@ -47,10 +47,9 @@ mock.module("@feed/api", () => ({
           );
         }
         if (name === "ZodError") {
-          return new Response(
-            JSON.stringify({ error: "Validation failed" }),
-            { status: 400 },
-          );
+          return new Response(JSON.stringify({ error: "Validation failed" }), {
+            status: 400,
+          });
         }
         throw error;
       }
@@ -129,9 +128,11 @@ describe("POST /api/moderation/reports", () => {
   it("creates a user report and feeds the evaluation pipeline", async () => {
     mockAuthenticate.mockResolvedValue({ userId: "reporter-1" });
     mockUserFindUnique.mockResolvedValue({ id: "u2" });
-    mockReportCreate.mockImplementation(async ({ data }: { data: unknown }) => ({
-      ...(data as Record<string, unknown>),
-    }));
+    mockReportCreate.mockImplementation(
+      async ({ data }: { data: unknown }) => ({
+        ...(data as Record<string, unknown>),
+      }),
+    );
 
     const res = (await POST(
       postRequest({
@@ -156,9 +157,11 @@ describe("POST /api/moderation/reports", () => {
   it("assigns high priority to severe categories", async () => {
     mockAuthenticate.mockResolvedValue({ userId: "reporter-1" });
     mockUserFindUnique.mockResolvedValue({ id: "u2" });
-    mockReportCreate.mockImplementation(async ({ data }: { data: unknown }) => ({
-      ...(data as Record<string, unknown>),
-    }));
+    mockReportCreate.mockImplementation(
+      async ({ data }: { data: unknown }) => ({
+        ...(data as Record<string, unknown>),
+      }),
+    );
 
     const res = (await POST(
       postRequest({
@@ -175,10 +178,12 @@ describe("POST /api/moderation/reports", () => {
 
   it("creates a post report", async () => {
     mockAuthenticate.mockResolvedValue({ userId: "reporter-1" });
-    mockPostFindUnique.mockResolvedValue({ id: "p9" });
-    mockReportCreate.mockImplementation(async ({ data }: { data: unknown }) => ({
-      ...(data as Record<string, unknown>),
-    }));
+    mockPostFindUnique.mockResolvedValue({ authorId: "post-author-1" });
+    mockReportCreate.mockImplementation(
+      async ({ data }: { data: unknown }) => ({
+        ...(data as Record<string, unknown>),
+      }),
+    );
 
     const res = (await POST(
       postRequest({
@@ -192,7 +197,7 @@ describe("POST /api/moderation/reports", () => {
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body.report.reportedPostId).toBe("p9");
-    expect(body.report.reportedUserId).toBeNull();
+    expect(body.report.reportedUserId).toBe("post-author-1");
     expect(body.report.priority).toBe("low");
   });
 
@@ -269,9 +274,11 @@ describe("POST /api/moderation/reports", () => {
   it("still succeeds when the evaluation pipeline throws", async () => {
     mockAuthenticate.mockResolvedValue({ userId: "reporter-1" });
     mockUserFindUnique.mockResolvedValue({ id: "u2" });
-    mockReportCreate.mockImplementation(async ({ data }: { data: unknown }) => ({
-      ...(data as Record<string, unknown>),
-    }));
+    mockReportCreate.mockImplementation(
+      async ({ data }: { data: unknown }) => ({
+        ...(data as Record<string, unknown>),
+      }),
+    );
     mockEvaluateReport.mockRejectedValue(new Error("AI down"));
 
     const res = (await POST(
@@ -289,9 +296,7 @@ describe("POST /api/moderation/reports", () => {
 
 describe("GET /api/moderation/reports", () => {
   it("returns 401 when unauthenticated", async () => {
-    mockRequirePermission.mockRejectedValue(
-      new AuthenticationError("no auth"),
-    );
+    mockRequirePermission.mockRejectedValue(new AuthenticationError("no auth"));
     const res = (await GET(getRequest())) as Response;
     expect(res.status).toBe(401);
   });
@@ -312,9 +317,7 @@ describe("GET /api/moderation/reports", () => {
     mockReportFindMany.mockResolvedValue([{ id: "r1" }, { id: "r2" }]);
     mockReportCount.mockResolvedValue(2);
 
-    const res = (await GET(
-      getRequest("?status=pending&limit=10"),
-    )) as Response;
+    const res = (await GET(getRequest("?status=pending&limit=10"))) as Response;
 
     expect(res.status).toBe(200);
     const body = await res.json();
