@@ -667,22 +667,32 @@ export async function resolveLocalInferenceLoadArgs(
 		// Two MTP shapes: embedded-draft-head MTP embeds the draft head in
 		// the text GGUF (no `drafterFile` in the catalog) and runs with no
 		// separate draft model; separate-drafter MTP declares a `drafterFile`
-		// and requires the bundled drafter GGUF to be present on disk.
+		// and needs the bundled drafter GGUF to be present on disk.
 		const sameFileMtp = !mtp.drafterFile;
 		const drafterPath = sameFileMtp
 			? undefined
 			: resolveMtpDrafterPath(installed, catalog, manifestLoader);
-		if (!sameFileMtp && installed.bundleRoot && !drafterPath) {
-			throw new Error(
-				`[local-inference] ${installed.id} declares a separate-drafter MTP but no bundled drafter GGUF was found under ${installed.bundleRoot}`,
+		if (!sameFileMtp && !drafterPath) {
+			// Back-compat with pre-MTP-cutover installs (#11517): bundles
+			// downloaded before the tier's gemma4-assistant drafter was hosted
+			// (and single-file installs with no bundleRoot) have no
+			// `mtp/drafter-<tier>.gguf` on disk. The drafter is a perf-only
+			// speculative-decoding artifact — never brick an installed model
+			// over it. Load without MTP; re-downloading the bundle picks the
+			// drafter up.
+			console.warn(
+				`[local-inference] ${installed.id} declares a separate-drafter MTP but no drafter GGUF was found${
+					installed.bundleRoot ? ` under ${installed.bundleRoot}` : ""
+				}; loading without speculative decoding. Re-download the model to enable the MTP drafter.`,
 			);
+		} else {
+			args.useGpu = true;
+			args.draftModelPath = drafterPath;
+			args.draftMin = mtp.draftMin;
+			args.draftMax = mtp.draftMax;
+			args.speculativeSamples = mtp.draftMax;
+			args.mobileSpeculative = true;
 		}
-		args.useGpu = true;
-		args.draftModelPath = drafterPath;
-		args.draftMin = mtp.draftMin;
-		args.draftMax = mtp.draftMax;
-		args.speculativeSamples = mtp.draftMax;
-		args.mobileSpeculative = true;
 	}
 
 	mergeOverrides(args, overrides);
