@@ -651,15 +651,17 @@ export class ElizaClient {
   }
 
   /**
-   * Persist a base URL to every consumer that reads it out-of-band (boot config,
-   * localStorage, the `window.__ELIZA_API_BASE__` global). Shared by
-   * {@link setBaseUrl} and {@link repointBaseUrl} so both keep the same
-   * persistence semantics — the only difference between them is the WS handling.
+   * Persist a base URL to every consumer that reads it out-of-band (the
+   * boot-config store, plus localStorage). Shared by {@link setBaseUrl} and
+   * {@link repointBaseUrl} so both keep the same persistence semantics — the
+   * only difference between them is the WS handling.
    */
   private persistBaseUrl(normalized: string): void {
-    // Update boot config so other consumers (resolveApiUrl, etc.) see the new base.
-    const config = getBootConfig();
-    setBootConfig({ ...config, apiBase: normalized || undefined });
+    if (normalized) {
+      setElizaApiBase(normalized);
+    } else {
+      clearElizaApiBase();
+    }
     if (typeof window !== "undefined") {
       if (normalized) {
         window.localStorage.setItem(LOCAL_STORAGE_API_BASE_KEY, normalized);
@@ -668,17 +670,6 @@ export class ElizaClient {
       }
       // Clean up legacy sessionStorage entry (same key was used historically)
       window.sessionStorage.removeItem(LOCAL_STORAGE_API_BASE_KEY);
-    }
-    // Mirror to window.__ELIZA_API_BASE__ so the Capacitor agent plugin's web
-    // fallback (native-plugins/agent/src/web.ts) and any other consumers that
-    // read the global directly see the same base. Electrobun's main↔renderer
-    // bridge also writes this; mirroring in setBaseUrl() makes mobile + dev-
-    // server + Electrobun behave consistently for any caller (Local Agent,
-    // Remote Agent, Eliza Cloud).
-    if (normalized) {
-      setElizaApiBase(normalized);
-    } else {
-      clearElizaApiBase();
     }
   }
 
