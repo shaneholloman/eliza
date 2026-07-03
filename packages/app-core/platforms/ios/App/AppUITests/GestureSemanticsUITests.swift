@@ -331,21 +331,34 @@ final class GestureSemanticsUITests: XCTestCase {
     /// downloads in the background. Bounded and screenshot-documented; if the
     /// lock never clears the gesture tests still skip honestly downstream.
     private func completeFirstRunIfPresent(in app: XCUIApplication) {
+        // The placement modal mounts AFTER the detent probe appears (the boot
+        // conductor settles first), so poll a generous window rather than a
+        // single short existence check.
         let onDevice = app.descendants(matching: .any).matching(
             NSPredicate(format: "label == 'On this device'")
         ).firstMatch
-        guard onDevice.waitForExistence(timeout: 3), onDevice.isHittable else {
-            return
+        var found = false
+        let mountDeadline = Date().addingTimeInterval(20)
+        while Date() < mountDeadline {
+            if onDevice.exists, onDevice.isHittable {
+                found = true
+                break
+            }
+            Thread.sleep(forTimeInterval: 1.0)
         }
+        guard found else { return }
         attachScreenshot(named: "firstrun-00-placement-choice")
         onDevice.tap()
 
         // The composer lock is AX-visible as the "Tap a highlighted option"
-        // hint; wait (bounded) for it to clear, tapping any follow-up
-        // highlighted option that appears along the way.
+        // hint; wait (bounded) for it to clear. A fresh container has to
+        // download + load the local model before the lock clears, so honor the
+        // agent-ready budget when no first-run-specific one is set.
         let env = ProcessInfo.processInfo.environment
         let timeout =
-            Double(env["ELIZA_FIRSTRUN_TIMEOUT_SECONDS"] ?? "") ?? 240
+            Double(env["ELIZA_FIRSTRUN_TIMEOUT_SECONDS"] ?? "")
+            ?? Double(env["ELIZA_AGENT_READY_TIMEOUT_SECONDS"] ?? "")
+            ?? 240
         let hint = app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] 'highlighted option'")
         ).firstMatch
@@ -356,7 +369,7 @@ final class GestureSemanticsUITests: XCTestCase {
                 attachScreenshot(named: "firstrun-20-lock-cleared")
                 return
             }
-            if Date().timeIntervalSince(lastShot) > 30 {
+            if Date().timeIntervalSince(lastShot) > 60 {
                 attachScreenshot(named: "firstrun-10-waiting-for-lock-clear")
                 lastShot = Date()
             }
