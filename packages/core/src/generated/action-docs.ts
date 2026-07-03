@@ -80,7 +80,7 @@ export const coreActionsSpec = {
 		{
 			name: "REPLY",
 			description:
-				"Send a direct chat reply in the current conversation/thread. Default if the agent is responding with a message and no other action. Use REPLY at the beginning of a chain of actions as an acknowledgement, and at the end of a chain of actions as a final response. This is not an email reply, inbox workflow, or external-channel send — use the dedicated connector actions for those surfaces.",
+				"Send a direct chat reply in the current conversation/thread. Default if the agent is responding with a message and no other action. Use REPLY at the beginning of a chain of actions as an acknowledgement, and at the end of a chain of actions as a final response. Do NOT use REPLY to send to a different channel/person or to run an email/inbox workflow — use MESSAGE (action=send) for a directed send to another channel or DM, MESSAGE inbox operations for triage/drafts, and POST to publish to a public feed.",
 			similes: ["GREET", "RESPOND", "RESPONSE"],
 			parameters: [],
 			examples: [
@@ -1701,7 +1701,7 @@ export const allActionsSpec = {
 		{
 			name: "REPLY",
 			description:
-				"Send a direct chat reply in the current conversation/thread. Default if the agent is responding with a message and no other action. Use REPLY at the beginning of a chain of actions as an acknowledgement, and at the end of a chain of actions as a final response. This is not an email reply, inbox workflow, or external-channel send — use the dedicated connector actions for those surfaces.",
+				"Send a direct chat reply in the current conversation/thread. Default if the agent is responding with a message and no other action. Use REPLY at the beginning of a chain of actions as an acknowledgement, and at the end of a chain of actions as a final response. Do NOT use REPLY to send to a different channel/person or to run an email/inbox workflow — use MESSAGE (action=send) for a directed send to another channel or DM, MESSAGE inbox operations for triage/drafts, and POST to publish to a public feed.",
 			similes: ["GREET", "RESPOND", "RESPONSE"],
 			parameters: [],
 			examples: [
@@ -3452,7 +3452,7 @@ export const allActionsSpec = {
 			parameters: [],
 			similes: ["WALK_FORWARD", "MOVE_FORWARD", "GO_FORWARD"],
 			descriptionCompressed:
-				"Start walking the AiNex robot forward. Sends walk.set+walk.command:start to the bridge. the robot keeps walking until AINEX_STOP is issued. Options: speed...",
+				"Start walking the AiNex robot forward. Sends walk.set+walk.command:start to the bridge. the robot keeps walking until AINEX_STOP is issued. Options: speed (1-4), x (0-0.05).",
 		},
 		{
 			name: "AINEX_WAVE",
@@ -4341,7 +4341,7 @@ export const allActionsSpec = {
 						],
 					},
 					descriptionCompressed:
-						"Calendar op. feed, next_event, search_events, create_event, update_event, delete_event, trip_window, bulk_reschedule, check_availability, propose_times...",
+						"Calendar op. feed, next_event, search_events, create_event, update_event, delete_event, trip_window, bulk_reschedule, check_availability, propose_times, update_preferences.",
 				},
 				{
 					name: "intent",
@@ -5619,6 +5619,68 @@ export const allActionsSpec = {
 			],
 		},
 		{
+			name: "DRAFT_PRESS_RELEASE",
+			description:
+				"Create a draft press release in Eliza Cloud. Use when the user asks to draft or save a PR/press release for later distribution.",
+			parameters: [
+				{
+					name: "title",
+					description: "Press release headline/title.",
+					required: true,
+					schema: {
+						type: "string",
+					},
+					descriptionCompressed: "Press release headline/title.",
+				},
+				{
+					name: "body",
+					description: "Full press release body.",
+					required: true,
+					schema: {
+						type: "string",
+					},
+					descriptionCompressed: "Full press release body.",
+				},
+				{
+					name: "summary",
+					description: "Optional short summary.",
+					required: false,
+					schema: {
+						type: "string",
+					},
+					descriptionCompressed: "Optional short summary.",
+				},
+				{
+					name: "targetRegions",
+					description: "Optional target regions such as US or EU.",
+					required: false,
+					schema: {
+						type: "array",
+						items: {
+							type: "string",
+						},
+					},
+					descriptionCompressed: "Optional target regions such as US or EU.",
+				},
+			],
+			descriptionCompressed: "Create a draft press release.",
+			similes: ["CREATE_PRESS_RELEASE", "DRAFT_PR", "WRITE_PRESS_RELEASE"],
+			exampleCalls: [
+				{
+					user: "Use DRAFT_PRESS_RELEASE with the provided parameters.",
+					actions: ["DRAFT_PRESS_RELEASE"],
+					params: {
+						DRAFT_PRESS_RELEASE: {
+							title: "example",
+							body: "example",
+							summary: "example",
+							targetRegions: "example",
+						},
+					},
+				},
+			],
+		},
+		{
 			name: "DUPLICATE_AD_CAMPAIGN",
 			description:
 				"Duplicate a Cloud advertising campaign config and creatives into a new draft. Requires structured campaignId; optional name sets the copy name.",
@@ -6308,6 +6370,15 @@ export const allActionsSpec = {
 			],
 		},
 		{
+			name: "GET_MEETING_TRANSCRIPT",
+			description:
+				"Retrieve the live or final transcript of a meeting the notetaker bot attended.",
+			parameters: [],
+			similes: ["MEETING_NOTES", "SHOW_MEETING_TRANSCRIPT"],
+			descriptionCompressed:
+				"Retrieve the live or final transcript of a meeting the notetaker bot attended.",
+		},
+		{
 			name: "GIT_PATHOLOGY",
 			description:
 				"Forensic git-history analysis for a path/glob surface. Returns peaks (peak quality moments), drift inflections (where rot started), and a post-mortem narrative. Use when the user asks 'when did this code get bad', 'where did rot start in X', or 'analyze git pathology for Y'. Actions: report (default), list (show cached reports).",
@@ -6394,7 +6465,7 @@ export const allActionsSpec = {
 				},
 			],
 			descriptionCompressed:
-				"Forensic git-history analysis for a path/glob surface. Returns peaks (peak quality moments), drift inflections (where rot started), and a post-mortem...",
+				"Forensic git-history analysis for a path/glob surface. Returns peaks (peak quality moments), drift inflections (where rot started), and a post-mortem narrative. Use when user asks 'when did this code get bad', 'where did rot start in X', or 'analyze git pathology for Y'. Actions: report (default), list (show cached reports).",
 		},
 		{
 			name: "GITHUB",
@@ -6602,7 +6673,7 @@ export const allActionsSpec = {
 				"TAG_VOICE",
 			],
 			descriptionCompressed:
-				"Attach a name to the most recently heard, still-unidentified voice so agent recognizes that person across sessions. Use when the owner says who a recent...",
+				'Attach a name to the most recently heard, still-unidentified voice so agent recognizes that person across sessions. Use when the owner says who a recent speaker is ("that was Jill", "this is my friend Sam").',
 		},
 		{
 			name: "INBOX",
@@ -6628,7 +6699,7 @@ export const allActionsSpec = {
 						],
 					},
 					descriptionCompressed:
-						"Inbox op: list | search | summarize | triage (classify new msgs with the AI triage classifier, then return the pending queue) | reply | snooze | archive |...",
+						"Inbox op: list | search | summarize | triage (classify new msgs with the AI triage classifier, then return the pending queue) | reply | snooze | archive | approve.",
 				},
 				{
 					name: "platforms",
@@ -6759,6 +6830,32 @@ export const allActionsSpec = {
 			],
 		},
 		{
+			name: "JOIN_MEETING",
+			description:
+				"Send the agent's notetaker bot into a live Google Meet, Microsoft Teams, or Zoom meeting to attend and transcribe it in real time. Use this WHENEVER the message contains a Meet / Teams / Zoom meeting link (meet.google.com, teams.microsoft.com / teams.live.com, zoom.us / app.zoom.us) and the user wants the agent to join, attend, sit in on, cover, take notes on, record, or transcribe that meeting or call. Prefer this over calendar, reminder, scheduling, or plain reply actions when a joinable meeting URL is present — those only schedule or acknowledge, whereas this actually joins the call now. Requires a meeting URL in the message or a meetingUrl parameter.",
+			parameters: [],
+			similes: [
+				"INVITE_TO_MEETING",
+				"ATTEND_MEETING",
+				"TAKE_MEETING_NOTES",
+				"TRANSCRIBE_MEETING",
+				"RECORD_MEETING",
+				"SEND_NOTETAKER",
+				"JOIN_CALL",
+			],
+			descriptionCompressed:
+				"Send agent's notetaker bot into a live Google Meet, Microsoft Teams, or Zoom meeting to attend and transcribe it in real time. Use this WHENEVER the msg contains a Meet/Teams/Zoom meeting link (meet.google.com, teams.microsoft.com/teams.live.com, zoom.us/app.zoom.us) and user wants agent to join, attend, sit in on, cover, take notes on, record, or transcribe that meeting or call. Prefer this over calendar, reminder, scheduling, or plain reply actions when a joinable meeting URL is present - those only schedule or acknowledge, whereas this joins the call now. Requires a meeting URL in the msg or a meetingUrl param.",
+		},
+		{
+			name: "LEAVE_MEETING",
+			description:
+				"Leave a meeting the notetaker bot is currently attending and finalize its transcript.",
+			parameters: [],
+			similes: ["EXIT_MEETING", "STOP_MEETING_TRANSCRIPTION"],
+			descriptionCompressed:
+				"Leave a meeting the notetaker bot is attending and finalize its transcript.",
+		},
+		{
 			name: "LINEAR",
 			description:
 				"Manage Linear issues/comments/activity. Ops: create_issue, get_issue, update_issue, delete_issue, create_comment, update_comment, delete_comment, list_comments, get_activity, clear_activity, search_issues. Infer op if omitted.",
@@ -6785,7 +6882,7 @@ export const allActionsSpec = {
 						],
 					},
 					descriptionCompressed:
-						"Operation: create_issue, get_issue, update_issue, delete_issue, create_comment, update_comment, delete_comment, list_comments, get_activity, clear_activity...",
+						"Operation: create_issue, get_issue, update_issue, delete_issue, create_comment, update_comment, delete_comment, list_comments, get_activity, clear_activity, search_issues. Infer if omitted.",
 				},
 			],
 			descriptionCompressed:
@@ -6894,6 +6991,14 @@ export const allActionsSpec = {
 			descriptionCompressed:
 				"Browse influencer profiles to book for promotion.",
 			similes: ["BROWSE_INFLUENCERS", "FIND_INFLUENCERS", "SEARCH_INFLUENCERS"],
+		},
+		{
+			name: "LIST_PRESS_RELEASES",
+			description:
+				"List the user's Eliza Cloud press releases and statuses. Use before choosing a draft to submit or edit.",
+			parameters: [],
+			descriptionCompressed: "List press release drafts/submissions.",
+			similes: ["LIST_PR_DRAFTS", "SHOW_PRESS_RELEASES", "MY_PRESS_RELEASES"],
 		},
 		{
 			name: "MANAGE_BROWSER_BRIDGE",
@@ -7068,21 +7173,14 @@ export const allActionsSpec = {
 				"USE_MCP",
 				"CALL_MCP_TOOL",
 				"CALL_TOOL",
-				"USE_TOOL",
 				"USE_MCP_TOOL",
-				"EXECUTE_TOOL",
 				"EXECUTE_MCP_TOOL",
-				"RUN_TOOL",
 				"RUN_MCP_TOOL",
-				"INVOKE_TOOL",
 				"INVOKE_MCP_TOOL",
 				"READ_MCP_RESOURCE",
 				"READ_RESOURCE",
-				"GET_RESOURCE",
 				"GET_MCP_RESOURCE",
-				"FETCH_RESOURCE",
 				"FETCH_MCP_RESOURCE",
-				"ACCESS_RESOURCE",
 				"ACCESS_MCP_RESOURCE",
 			],
 			exampleCalls: [
@@ -8734,7 +8832,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"For action=run: shell command, executed via /bin/bash -c. Keep routine inspection commands bounded. avoid broad scans like du -sh /* when a targeted path is...",
+						"For action=run: shell command, executed via /bin/bash -c. Keep routine inspection commands bounded. avoid broad scans like du -sh /* when a targeted path is enough. For JSON API data, prefer jq or node. use python3, not python, unless the environment explicitly shows python exists. For public unauthenticated API reads, quote URLs and prefer stable no-key endpoints. avoid deprecated, region-blocked, or exchange-gated endpoints when a neutral data API can answer the same question. For crypto spot prices, prefer CoinGecko simple price or Coinbase spot before exchange-gated APIs. avoid legacy Coindesk and Binance when a neutral source can answer. If stdout/stderr are marked empty, the command produced no output. try a different command/source when user still needs a value. Include every requested path in df, e.g. df -h//home. For cleanup candidates, follow the first bounded du result with a targeted du on the largest readable directory before answering. avoid && between du probes when permission-denied paths are expected.",
 				},
 				{
 					name: "description",
@@ -8765,7 +8863,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"Absolute cwd. must not resolve under blocked path. Omit unless user supplied this exact directory or the session was explicitly moved. default session cwd is...",
+						"Absolute cwd. must not resolve under blocked path. Omit unless user supplied this exact directory or the session was explicitly moved. default session cwd is safer than remembered paths.",
 				},
 				{
 					name: "limit",
@@ -8983,6 +9081,58 @@ export const allActionsSpec = {
 				"Stop the long-form voice transcription running on user's device.",
 		},
 		{
+			name: "SUBMIT_PRESS_RELEASE",
+			description:
+				"Submit a press release for paid/provider-backed distribution. Requires explicit confirmation before calling the Cloud submit route.",
+			parameters: [
+				{
+					name: "releaseId",
+					description: "Press release id to submit.",
+					required: false,
+					schema: {
+						type: "string",
+					},
+					descriptionCompressed: "Press release id to submit.",
+				},
+				{
+					name: "title",
+					description: "Press release title to resolve.",
+					required: false,
+					schema: {
+						type: "string",
+					},
+					descriptionCompressed: "Press release title to resolve.",
+				},
+				{
+					name: "confirm",
+					description:
+						"Follow-up: true confirms the pending submit, false cancels.",
+					required: false,
+					schema: {
+						type: "boolean",
+					},
+					descriptionCompressed:
+						"Follow-up: true confirms the pending submit, false cancels.",
+				},
+			],
+			descriptionCompressed:
+				"Submit a press release for provider-backed distribution; requires confirm.",
+			similes: ["SUBMIT_PR", "DISTRIBUTE_PRESS_RELEASE", "SEND_PRESS_RELEASE"],
+			exampleCalls: [
+				{
+					user: "Use SUBMIT_PRESS_RELEASE with the provided parameters.",
+					actions: ["SUBMIT_PRESS_RELEASE"],
+					params: {
+						SUBMIT_PRESS_RELEASE: {
+							releaseId: "example",
+							title: "example",
+							confirm: false,
+						},
+					},
+				},
+			],
+		},
+		{
 			name: "TASKS",
 			description:
 				"Planner surface for orchestrator workspace operations and coding task delegation to dedicated ACP coding sub-agents (elizaos / pi-agent / opencode / claude / codex). ",
@@ -9012,7 +9162,7 @@ export const allActionsSpec = {
 						],
 					},
 					descriptionCompressed:
-						"Task operation: create, spawn_agent, send, stop_agent, list_agents, cancel, history, control, share, provision_workspace, submit_workspace, manage_issues...",
+						"Task operation: create, spawn_agent, send, stop_agent, list_agents, cancel, history, control, share, provision_workspace, submit_workspace, manage_issues, archive, reopen.",
 				},
 				{
 					name: "op",
@@ -9109,7 +9259,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"Heuristic backend guess (elizaos, pi-agent, opencode, codex, or claude) for create/spawn_agent/control.resume. This is a weak hint - it loses to the operator...",
+						"Heuristic backend guess (elizaos, pi-agent, opencode, codex, or claude) for create/spawn_agent/control.resume. This is a weak hint - it loses to the operator default/pin and to character routing. To honor an EXPLICIT user request use requestedBackend instead.",
 				},
 				{
 					name: "appMonetized",
@@ -9120,7 +9270,7 @@ export const allActionsSpec = {
 						type: "boolean",
 					},
 					descriptionCompressed:
-						"Set true when user wants the app to EARN MONEY/charge for access - e.g. 'people pay $1 to chat with X', 'charge per msg', 'a paid app', 'monetized', a...",
+						"Set true when user wants the app to EARN MONEY/charge for access - e.g. 'people pay $1 to chat with X', 'charge per msg', 'a paid app', 'monetized', a paywall, or per-use pricing. Judge user's INTENT, not specific keywords. When true the sub-agent gets the monetized Eliza Cloud contract (register for an appId, inference markup, OAuth + affiliate billing) instead of a free static page. Leave unset for a normal free app or non-app task.",
 				},
 				{
 					name: "requestedBackend",
@@ -9132,7 +9282,7 @@ export const allActionsSpec = {
 						enum: ["elizaos", "pi-agent", "opencode", "codex", "claude"],
 					},
 					descriptionCompressed:
-						"Set ONLY when user EXPLICITLY named a coding backend for THIS task (e.g. 'use codex', 'have claude build it') - one of elizaos, pi-agent, opencode, codex...",
+						"Set ONLY when user EXPLICITLY named a coding backend for THIS task (e.g. 'use codex', 'have claude build it') - one of elizaos, pi-agent, opencode, codex, claude. Leave unset if user did not name one. never guess. Unlike agentType this overrides the configured default/pin.",
 				},
 				{
 					name: "taskComplexity",
@@ -9144,7 +9294,7 @@ export const allActionsSpec = {
 						enum: ["simple", "moderate", "hard"],
 					},
 					descriptionCompressed:
-						"Your honest assessment of this coding task's difficulty: 'simple' (small/routine), 'moderate', or 'hard' (large, subtle, multi-file, or architectural). Used...",
+						"Your honest assessment of this coding task's difficulty: 'simple' (small/routine), 'moderate', or 'hard' (large, subtle, multi-file, or architectural). Used only to route to whichever backend the character configured for that difficulty (character.routing.coding.byTag). Judge the task itself - do not echo words from user.",
 				},
 				{
 					name: "agents",
@@ -9233,7 +9383,7 @@ export const allActionsSpec = {
 						type: "boolean",
 					},
 					descriptionCompressed:
-						"For action=spawn_agent, suppress the immediate visible acknowledgement when user explicitly requested no interim reply, such as 'reply only after...",
+						"For action=spawn_agent, suppress the immediate visible acknowledgement when user explicitly requested no interim reply, such as 'reply only after verification'. The sub-agent completion router will post the final result.",
 				},
 				{
 					name: "input",
@@ -10088,7 +10238,7 @@ export const allActionsSpec = {
 				},
 			],
 			descriptionCompressed:
-				"Tunnel operations dispatched by `action`: start, stop, status. The `start` action accepts an optional `port` (defaults to 3000). `stop` and `status` take no...",
+				"Tunnel operations dispatched by `action`: start, stop, status. The `start` action accepts an optional `port` (defaults to 3000). `stop` and `status` take no params. Backed by whichever tunnel plugin is active (local Tailscale CLI, Eliza Cloud headscale, or ngrok).",
 		},
 		{
 			name: "UPDATE_APP",
@@ -10180,8 +10330,6 @@ export const allActionsSpec = {
 				"CALL_SKILL",
 				"USE_AGENT_SKILL",
 				"RUN_AGENT_SKILL",
-				"USE_CAPABILITY",
-				"RUN_CAPABILITY",
 			],
 			exampleCalls: [
 				{
@@ -10815,7 +10963,7 @@ export const allActionsSpec = {
 						},
 					},
 					descriptionCompressed:
-						"Thread lifecycle ops array. Item: type, optional workThreadId, sourceWorkThreadIds, instruction, reason, title, summary, sourceRef, trigger for...",
+						"Thread lifecycle ops array. Item: type, optional workThreadId, sourceWorkThreadIds, instruction, reason, title, summary, sourceRef, trigger for schedule_followup.",
 				},
 			],
 			descriptionCompressed:
@@ -11135,7 +11283,7 @@ export const allActionsSpec = {
 				"Describe what the user is currently looking at through their XR headset camera. Use this when the user asks 'what do you see', 'look at this', or any question about their surroundings.",
 			parameters: [],
 			descriptionCompressed:
-				"Describe what user is looking at through their XR headset camera. Use when user asks 'what do you see', 'look at this', or any question about their...",
+				"Describe what user is looking at through their XR headset camera. Use when user asks 'what do you see', 'look at this', or any question about their surroundings.",
 		},
 		{
 			name: "XR_RESIZE_VIEW",
@@ -11206,7 +11354,7 @@ export const allActionsSpec = {
 				},
 			],
 			descriptionCompressed:
-				"Resizes or repositions the active XR view panel. Set scale (0.5 = half, 1.0 = default, 2.0 = double), distance in meters (1.5 = default, smaller = closer)...",
+				"Resizes or repositions the active XR view panel. Set scale (0.5 = half, 1.0 = default, 2.0 = double), distance in meters (1.5 = default, smaller = closer), or fullscreen.",
 		},
 		{
 			name: "XR_SWITCH_VIEW",

@@ -351,7 +351,7 @@ export function ActiveProviderSummary({
         codingAgentsOnly
           ? t("providerswitcher.codingSubscriptionChatNote", {
               defaultValue:
-                "Powers coding agents & workflows only — chat replies keep using the Intelligence provider above.",
+                "Powers coding agents & workflows only — chat replies keep using your selected Intelligence provider (Cloud or Local).",
             })
           : undefined
       }

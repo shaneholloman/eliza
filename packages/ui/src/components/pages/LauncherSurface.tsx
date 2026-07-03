@@ -1,4 +1,5 @@
 import * as React from "react";
+import { dispatchChatOpen } from "../../events";
 import { useRoutableViews } from "../../hooks/useAvailableViews";
 import { type ViewEntry, viewToEntry } from "../../hooks/view-catalog";
 import { isAospShellEnabled } from "../../navigation";
@@ -13,6 +14,7 @@ import { useEnabledViewKinds } from "../../state/useViewKinds";
 import { recordRecentViewId } from "../../view-recents";
 import { Launcher } from "./Launcher";
 import { curateLauncherPages } from "./launcher-curation";
+import { startTutorial } from "./tutorial/tutorial-controller";
 
 export const LauncherSurface = React.memo(
   function LauncherSurface(): React.JSX.Element {
@@ -58,8 +60,11 @@ export const LauncherSurface = React.memo(
     );
 
     const handleLaunch = React.useCallback((entry: ViewEntry) => {
-      const path = entry.path ?? `/apps/${entry.id}`;
       recordRecentViewId(entry.id);
+      // The Tutorial tile skips the TutorialView splash: start the interactive
+      // tour directly and land on the chat home so it overlays the real chat.
+      const isTutorial = entry.id === "tutorial";
+      const path = isTutorial ? "/chat" : (entry.path ?? `/apps/${entry.id}`);
       try {
         if (typeof window === "undefined") return;
         if (window.location.protocol === "file:") {
@@ -67,6 +72,13 @@ export const LauncherSurface = React.memo(
         } else {
           window.history.pushState(null, "", path);
           window.dispatchEvent(new PopStateEvent("popstate"));
+        }
+        if (isTutorial) {
+          startTutorial();
+        } else if (entry.id === "chat") {
+          // The Messages tile lands on `/chat` (the ambient home). Open the chat
+          // so the user arrives in a conversation, not on a collapsed pill.
+          dispatchChatOpen();
         }
       } catch {
         // Sandboxed navigation is best-effort.

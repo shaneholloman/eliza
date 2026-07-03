@@ -33,6 +33,8 @@ import {
 import { toast } from "sonner";
 import { DiscordIcon } from "../../../../cloud-ui/components/icons";
 import { Alert, AlertDescription } from "../../../../components/primitives";
+import { Button } from "../../../../components/ui/button";
+import { Input } from "../../../../components/ui/input";
 import { useCloudT } from "../../../shell/CloudI18nProvider";
 import {
   configuredStewardTenantId,
@@ -543,7 +545,8 @@ export default function StewardLoginSection() {
         <p className="text-sm text-white/72">
           Check your inbox and click the link to sign in.
         </p>
-        <button
+        <Button
+          variant="ghost"
           type="button"
           className="text-sm text-white/68 transition-colors hover:text-white"
           onClick={() => {
@@ -552,7 +555,7 @@ export default function StewardLoginSection() {
           }}
         >
           ← Back to login
-        </button>
+        </Button>
       </div>
     );
   }
@@ -581,11 +584,10 @@ export default function StewardLoginSection() {
           </Alert>
         )}
 
-        <input
+        <Input
           type="text"
           inputMode="numeric"
           autoComplete="one-time-code"
-          // biome-ignore lint/a11y/noAutofocus: code-entry step expects focus
           autoFocus
           maxLength={8}
           placeholder="123456"
@@ -600,7 +602,8 @@ export default function StewardLoginSection() {
           className="w-full border border-white/20 bg-black px-4 py-3 text-center text-lg tracking-[0.5em] text-white placeholder:tracking-normal placeholder:text-white/40 outline-none transition    disabled:opacity-50"
         />
 
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={handleVerifyOtpAndRegister}
           disabled={loading !== null || otpCode.trim().length < 4}
@@ -610,10 +613,11 @@ export default function StewardLoginSection() {
           {t("cloud.login.otp.createPasskey", {
             defaultValue: "Create passkey",
           })}
-        </button>
+        </Button>
 
         <div className="flex items-center justify-between text-sm">
-          <button
+          <Button
+            variant="ghost"
             type="button"
             className="text-white/68 transition-colors hover:text-white"
             onClick={() => {
@@ -624,15 +628,16 @@ export default function StewardLoginSection() {
             }}
           >
             ← {t("cloud.login.back", { defaultValue: "Back" })}
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
             type="button"
             className="text-white/68 transition-colors hover:text-white disabled:opacity-50"
             disabled={loading !== null}
             onClick={startPasskeySignup}
           >
             {t("cloud.login.otp.resend", { defaultValue: "Resend code" })}
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -669,7 +674,7 @@ export default function StewardLoginSection() {
         </Alert>
       )}
 
-      <input
+      <Input
         ref={emailInputRef}
         type="email"
         placeholder={t("cloud.login.emailPlaceholder", {
@@ -687,7 +692,8 @@ export default function StewardLoginSection() {
 
       <div className="flex gap-2">
         {providers.passkey !== false && (
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={handlePasskey}
             disabled={isLoading}
@@ -695,10 +701,11 @@ export default function StewardLoginSection() {
           >
             {loading === "passkey" ? <Spinner /> : <PasskeyIcon />}{" "}
             {t("cloud.login.button.passkey", { defaultValue: "Passkey" })}
-          </button>
+          </Button>
         )}
         {providers.email !== false && (
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={handleEmail}
             disabled={isLoading}
@@ -706,7 +713,7 @@ export default function StewardLoginSection() {
           >
             {loading === "email" ? <Spinner /> : <EmailIcon />}{" "}
             {t("cloud.login.button.magicLink", { defaultValue: "Magic Link" })}
-          </button>
+          </Button>
         )}
       </div>
 
@@ -727,7 +734,8 @@ export default function StewardLoginSection() {
       {hasOAuthProviders && (
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {providers.google && (
-            <button
+            <Button
+              variant="ghost"
               type="button"
               onClick={() => handleOAuth("google")}
               disabled={isLoading}
@@ -735,10 +743,11 @@ export default function StewardLoginSection() {
             >
               {loading === "google" ? <Spinner /> : <GoogleIcon />}{" "}
               {t("cloud.login.button.google", { defaultValue: "Google" })}
-            </button>
+            </Button>
           )}
           {providers.discord && (
-            <button
+            <Button
+              variant="ghost"
               type="button"
               onClick={() => handleOAuth("discord")}
               disabled={isLoading}
@@ -750,10 +759,11 @@ export default function StewardLoginSection() {
                 <DiscordIcon className="h-4 w-4" />
               )}{" "}
               {t("cloud.login.button.discord", { defaultValue: "Discord" })}
-            </button>
+            </Button>
           )}
           {providers.github && (
-            <button
+            <Button
+              variant="ghost"
               type="button"
               onClick={() => handleOAuth("github")}
               disabled={isLoading}
@@ -765,7 +775,7 @@ export default function StewardLoginSection() {
                 <Github className="h-4 w-4" />
               )}{" "}
               {t("cloud.login.button.github", { defaultValue: "GitHub" })}
-            </button>
+            </Button>
           )}
         </div>
       )}

@@ -198,6 +198,58 @@ describe("AppMonetizationSettings review gate", () => {
     );
   });
 
+  it("lets a legacy enabled-but-unapproved app be turned OFF (never traps it ON)", async () => {
+    apiMock.mockImplementation((path: string, init?: { method?: string }) => {
+      if (path === "/api/v1/apps/app_1/monetization" && !init) {
+        // Legacy row: monetization is ON server-side even though the app has
+        // not passed review. The server always allows DISABLING.
+        return Promise.resolve({
+          success: true,
+          monetization: {
+            monetizationEnabled: true,
+            inferenceMarkupPercentage: 25,
+            purchaseSharePercentage: 10,
+            platformOffsetAmount: 1,
+            totalCreatorEarnings: 0,
+          },
+        });
+      }
+      if (
+        path === "/api/v1/apps/app_1/monetization" &&
+        init?.method === "PUT"
+      ) {
+        return Promise.resolve({ success: true });
+      }
+      return Promise.reject(new Error(`Unexpected API call: ${path}`));
+    });
+
+    const user = userEvent.setup({ delay: null });
+    // review_status stays unapproved (draft) despite monetization being on.
+    renderMonetization(makeApp({ monetization_enabled: true }));
+
+    // The switch must render ENABLED (interactive) so the user can turn it off —
+    // the old `disabled={!reviewApproved}` trapped it ON.
+    const switchEl = (await screen.findByRole("switch")) as HTMLButtonElement;
+    expect(switchEl.disabled).toBe(false);
+    expect(switchEl.getAttribute("aria-checked")).toBe("true");
+
+    // Turning it OFF hits the update path directly (no enable dialog, no block).
+    await user.click(switchEl);
+
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith("/api/v1/apps/app_1/monetization", {
+        method: "PUT",
+        json: {
+          monetizationEnabled: false,
+          inferenceMarkupPercentage: 25,
+          purchaseSharePercentage: 10,
+        },
+      }),
+    );
+    // It must NOT have been blocked with the review-required error.
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
   it("renders an already-approved app with an enabled toggle and no submit button", async () => {
     apiMock.mockResolvedValue({
       success: true,

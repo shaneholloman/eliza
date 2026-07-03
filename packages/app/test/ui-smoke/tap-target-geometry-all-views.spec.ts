@@ -26,7 +26,6 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { devices, expect, type Page, test } from "@playwright/test";
 import {
   hideContinuousChatOverlay,
@@ -45,13 +44,9 @@ test.use({ ...devices["Pixel 7"] });
 /** Apple HIG floor, with 0.5px slack for sub-pixel layout rounding. */
 const MIN_TAP_PX = 44 - 0.5;
 
-const REPORT_DIR = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../../..",
-  ".github",
-  "issue-evidence",
-  "10722-tap-target-geometry",
-);
+// Machine-readable run report (per-view control records + violation counts),
+// written under the package cwd alongside the other Playwright artifacts.
+const REPORT_DIR = path.resolve("test-results", "tap-target-geometry");
 
 type ControlKind = "geometry" | "coherence";
 
@@ -65,25 +60,6 @@ type ControlRecord = {
   reason: string;
 };
 
-const INTERACTIVE_SELECTOR = [
-  "button",
-  "[role=button]",
-  "[role=tab]",
-  "[role=switch]",
-  "[role=menuitem]",
-  "[role=menuitemcheckbox]",
-  "[role=menuitemradio]",
-  "[role=option]",
-  "[role=link]",
-  "[role=checkbox]",
-  "[role=radio]",
-  "a[href]",
-  "input:not([type=hidden])",
-  "select",
-  "textarea",
-  "[data-agent-id]",
-].join(",");
-
 /**
  * Documented per-view exceptions for controls that survive the in-page filters
  * but are known-acceptable below the floor. Keyed by view id; each entry is a
@@ -96,40 +72,6 @@ const DOCUMENTED_EXCEPTIONS: Record<
   ReadonlyArray<{ match: RegExp; reason: string }>
 > = {};
 
-async function waitForVisibleInteractiveControl(
-  page: Page,
-  view: string,
-): Promise<void> {
-  await page
-    .waitForFunction(
-      (selector) =>
-        Array.from(document.querySelectorAll(selector)).some((el) => {
-          const style = window.getComputedStyle(el);
-          if (
-            style.display === "none" ||
-            style.visibility === "hidden" ||
-            style.visibility === "collapse" ||
-            Number.parseFloat(style.opacity || "1") === 0
-          ) {
-            return false;
-          }
-          const rect = el.getBoundingClientRect();
-          return rect.width > 0 && rect.height > 0;
-        }),
-      INTERACTIVE_SELECTOR,
-      {
-        polling: 250,
-        timeout: 30_000,
-      },
-    )
-    .catch((error) => {
-      throw new Error(
-        `${view}: expected at least one visible interactive control before collecting tap-target geometry`,
-        { cause: error },
-      );
-    });
-}
-
 /**
  * Collect, classify, and (in-page) exception-filter every interactive control
  * in the current view. Runs entirely in the page so geometry + computed style +
@@ -140,14 +82,41 @@ async function collectControls(
   view: string,
 ): Promise<ControlRecord[]> {
   const raw = await page.evaluate(
-    ({ minTap, selector }) => {
+    ({ minTap }) => {
+      const INTERACTIVE_SELECTOR = [
+        "button",
+        "[role=button]",
+        "[role=tab]",
+        "[role=switch]",
+        "[role=menuitem]",
+        "[role=menuitemcheckbox]",
+        "[role=menuitemradio]",
+        "[role=option]",
+        "[role=link]",
+        "[role=checkbox]",
+        "[role=radio]",
+        "a[href]",
+        "input:not([type=hidden])",
+        "select",
+        "textarea",
+        // Agent-surface elements: only the tappable roles. Bare [data-agent-id]
+        // also matched role="region" surfaces (default), which are containers
+        // and legitimately non-44px.
+        "[data-agent-id][data-agent-role=button]",
+        "[data-agent-id][data-agent-role=tab]",
+      ].join(",");
+
       const NATIVE_IMPLICIT_ROLE: Record<string, string> = {
         button: "button",
         a: "link",
-        select: "listbox",
+        // A plain <select> maps to "combobox"; only multiple/size>1 maps to
+        // "listbox" (covered via NATIVE_ROLE_OVERRIDES below).
+        select: "combobox",
         textarea: "textbox",
       };
 
+      // Explicit roles ARIA-in-HTML permits on each native element even though
+      // they differ from the implicit role.
       const NATIVE_ROLE_OVERRIDES: Record<string, readonly string[]> = {
         button: [
           "combobox",
@@ -157,6 +126,16 @@ async function collectControls(
           "option",
           "tab",
         ],
+        a: [
+          "button",
+          "tab",
+          "menuitem",
+          "option",
+          "switch",
+          "checkbox",
+          "radio",
+        ],
+        select: ["listbox"],
         textarea: ["combobox"],
       };
 
@@ -247,7 +226,7 @@ async function collectControls(
           .join(" ");
       };
 
-      const nodes = Array.from(document.querySelectorAll(selector));
+      const nodes = Array.from(document.querySelectorAll(INTERACTIVE_SELECTOR));
       const results: Array<{
         descriptor: string;
         width: number;
@@ -362,7 +341,7 @@ async function collectControls(
         const nestedInInteractive = (() => {
           let parent = el.parentElement;
           while (parent) {
-            if (parent.matches(selector)) return true;
+            if (parent.matches(INTERACTIVE_SELECTOR)) return true;
             parent = parent.parentElement;
           }
           return false;
@@ -437,7 +416,7 @@ async function collectControls(
 
       return results;
     },
-    { minTap: MIN_TAP_PX, selector: INTERACTIVE_SELECTOR },
+    { minTap: MIN_TAP_PX },
   );
 
   return raw.map((r) => ({ ...r, view }));
@@ -464,7 +443,6 @@ test.describe("tap-target rendered-geometry + role/DOM coherence gate", () => {
     }) => {
       await openAppPath(page, view.path);
       await page.locator("body").waitFor({ state: "visible", timeout: 60_000 });
-      await waitForVisibleInteractiveControl(page, view.id);
 
       const records = await collectControls(page, view.id);
       allRecords.push(...records);

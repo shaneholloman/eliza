@@ -237,6 +237,7 @@ import { isObjectRecord as isRecord } from "../utils/type-guards";
 import { maybeHandleAnalysisActivation } from "./analysis-mode-handler";
 import { ChannelTopicsService } from "./channel-topics";
 import { runPostTurnEvaluators } from "./evaluator";
+import { runBotNoiseTriage } from "./message/bot-noise-triage";
 import {
 	findAvailableActionName,
 	findWebLookupActionName,
@@ -3902,12 +3903,30 @@ export function messageHandlerFromFieldResult(
 	// live bug where "build the app" came back with contexts=[simple] +
 	// candidateActionNames=[TASKS_SPAWN_AGENT], so shouldPreferCompleteDirectReply
 	// treated the spawn as "weak", suppressed it, and the bot said "I'm building
-	// it" while never spawning. Still safe: looksLikeCodingWorkRequest excludes
+	// it" while never spawning. Still safe: the text gate below excludes
 	// creative-writing / explanation asks, and the candidate must be a REGISTERED
 	// delegation action — so this never fires on a poem or a how-do-I question.
+	const modelRoutedPlanningContext = rawContexts.some(
+		(context) => context.toLowerCase() !== SIMPLE_CONTEXT_ID,
+	);
+	// Text gate for the delegation commitment. When the model routed a planning
+	// context of its OWN (dual model-authored signal: context + candidate), the
+	// commitment stands unless the ask is a class delegation can never serve
+	// (creative writing, explanation, explicit no-spawn) — requiring positive
+	// coding keywords in the CURRENT message was the live ack-then-nothing hole
+	// (2026-07-01, trajectory tj-df82b48e763b7b): a follow-up critique of prior
+	// build work ("this isn't your best work") carries no coding keywords — the
+	// work context lives in conversation history — so the complete-direct-reply
+	// override dropped the model's TASKS_SPAWN_AGENT plan and shipped its ack
+	// ("Let me take another pass…") as the whole turn. In the contradictory
+	// contexts=[simple] shape the candidate is the only signal, so the message
+	// itself must still look like coding work.
+	const delegationTextGate = modelRoutedPlanningContext
+		? !looksLikeDelegationExcludedAsk(currentMessageText)
+		: looksLikeCodingWorkRequest(currentMessageText);
 	const modelCommittedToDelegation =
 		!preemptDirect &&
-		looksLikeCodingWorkRequest(currentMessageText) &&
+		delegationTextGate &&
 		modelProvidedRunnableDelegationCandidate(
 			rawCandidateActions,
 			runtimeContext?.actions ?? [],
@@ -3921,10 +3940,38 @@ export function messageHandlerFromFieldResult(
 			// direct answer into forced planning.
 			{ requireUnambiguous: initialPlanningContexts.length === 0 },
 		);
+	// The model can also route a planning context AND name candidates that
+	// resolve to NOTHING in the registry (e.g. SEND_ATTACHMENT / UPLOAD_FILE for
+	// "attach that here"). That is still a committed plan — the model believes
+	// tool work is needed and wrote its replyText as an ACK per the Stage-1
+	// field contract — but the candidates expose a capability gap, so the
+	// complete-direct-reply override must not reinterpret the full-sentence ack
+	// ("On it — attaching now.") as a finished answer and ship the promise as
+	// the WHOLE turn (live ack-then-nothing regression, 2026-07-01: trajectory
+	// tj-823d6382b54c66). The planner turn is where an unresolvable plan gets an
+	// honest "I can't do that here" instead of a silent broken promise. Keyed on
+	// the model-authored plan shape (contexts + candidates it emitted vs the
+	// action registry), never on the reply text. Registered candidates are not
+	// commitment by themselves: weak-class ones stay overridable (a complete
+	// answer beats a stray SHELL hint), non-weak ones already block the override
+	// via hasOnlyWeakDirectReplyPlanningSignals, and delegation-class ones are
+	// the guard above.
+	const modelCommittedToPlanning =
+		!preemptDirect &&
+		modelRoutedPlanningContext &&
+		runtimeContext !== undefined &&
+		rawCandidateActions.some((name) => {
+			const normalized = normalizeActionIdentifier(name);
+			return (
+				canonicalPlannerControlActionName(normalized) === null &&
+				!exposedActionMatches(runtimeContext.actions, normalized)
+			);
+		});
 	const preferCompleteDirectReply =
 		!preemptDirect &&
 		requestedPlanning &&
 		!modelCommittedToDelegation &&
+		!modelCommittedToPlanning &&
 		shouldPreferCompleteDirectReply({
 			replyText: replyTextRaw,
 			candidateActions: runnableCandidateActions,
@@ -7270,28 +7317,38 @@ function looksLikeActionExplanationRequest(text: string): boolean {
 	return !asksToExecuteAfterExplanation;
 }
 
+// Ask classes a coding delegation can never serve: an explicit "don't spawn",
+// an explanation/teaching ask, or creative writing that isn't a coding task.
+// Shared by looksLikeCodingWorkRequest (as its exclusion list) and the
+// delegation-commitment gate in messageHandlerFromFieldResult.
+function looksLikeDelegationExcludedAsk(text: string): boolean {
+	const normalized = text.toLowerCase();
+	if (!normalized.trim()) {
+		return false;
+	}
+	if (
+		/\b(?:do not|don't|dont|without)\s+(?:spawn|delegate|use|start)\s+(?:a\s+)?(?:sub[- ]?agent|task[- ]?agent|coding agent|opencode|codex|claude)\b/iu.test(
+			normalized,
+		)
+	) {
+		return true;
+	}
+	if (looksLikeActionExplanationRequest(normalized)) {
+		return true;
+	}
+	return (
+		looksLikeCreativeWritingRequest(normalized) &&
+		!looksLikeCreativeCodingWorkRequest(normalized)
+	);
+}
+
 function looksLikeCodingWorkRequest(text: string): boolean {
 	const normalized = text.toLowerCase();
 	if (!normalized.trim()) {
 		return false;
 	}
 
-	if (
-		/\b(?:do not|don't|dont|without)\s+(?:spawn|delegate|use|start)\s+(?:a\s+)?(?:sub[- ]?agent|task[- ]?agent|coding agent|opencode|codex|claude)\b/iu.test(
-			normalized,
-		)
-	) {
-		return false;
-	}
-
-	if (looksLikeActionExplanationRequest(normalized)) {
-		return false;
-	}
-
-	if (
-		looksLikeCreativeWritingRequest(normalized) &&
-		!looksLikeCreativeCodingWorkRequest(normalized)
-	) {
+	if (looksLikeDelegationExcludedAsk(normalized)) {
 		return false;
 	}
 
@@ -8864,6 +8921,46 @@ export class DefaultMessageService implements IMessageService {
 			}
 		}
 
+		// Cheap-tier triage for unaddressed bot/webhook traffic. A relay channel
+		// flooding automated embeds otherwise burns a full composeState + Stage 1
+		// RESPONSE_HANDLER call (the most expensive model in the stack — on
+		// subscription-backed providers ~1000 IGNOREs/day drain the daily session
+		// budget and take the agent down) just to conclude IGNORE. Triage those
+		// turns on TEXT_SMALL BEFORE state composition; an IGNORE verdict ends the
+		// turn with zero large-tier calls. Addressed/human/private-channel turns
+		// never enter this gate, and any triage failure falls open to the full
+		// pipeline.
+		const botNoiseTriage = await runBotNoiseTriage({
+			runtime,
+			message,
+			explicitlyAddressesAgent,
+		});
+		if (botNoiseTriage.applied && !botNoiseTriage.respond) {
+			runtime.logger.info(
+				{
+					src: "service:message",
+					agentId: runtime.agentId,
+					roomId: message.roomId,
+					entityId: message.entityId,
+				},
+				"Unaddressed bot/webhook message ignored by small-model triage (skipped Stage 1)",
+			);
+			await this.emitRunEnded(
+				runtime,
+				runId,
+				message,
+				startTime,
+				"bot_noise_triage",
+			);
+			return {
+				didRespond: false,
+				responseContent: null,
+				responseMessages: [],
+				state: { values: {}, data: {}, text: "" } as State,
+				mode: "none",
+			};
+		}
+
 		// Room context for shouldRespond (fetch before compose so providers see
 		// post-attachment and post-incoming-hook message state).
 		const room = await runtime.getRoom(message.roomId);
@@ -9166,7 +9263,7 @@ export class DefaultMessageService implements IMessageService {
 						error: errMsg,
 						stack: errStack,
 					},
-					"v5 message runtime failed; returning structured failure reply",
+					"v5 message runtime failed",
 				);
 				// Mirror to process.stderr so bench / orchestrator runs can see
 				// the underlying cause when runtime.logger output is buffered or
@@ -9182,17 +9279,54 @@ export class DefaultMessageService implements IMessageService {
 				} catch {
 					// stderr write must never throw the runtime.
 				}
-				shouldRespondToMessage = true;
-				terminalDecision = null;
-				strategyResult = await this.buildStructuredFailureReply(
+				// Rate limits and provider outages throw from the Stage 1 model
+				// call itself — before any RESPOND/IGNORE decision exists. For
+				// ambiguous group traffic the pre-failure outcome would have been
+				// IGNORE, so an unconditional failure reply spams rooms that never
+				// addressed the agent (observed live: 91 canned-failure sends in
+				// 2 days into relay rooms during a rate-limit window). Surface
+				// failure text only when the turn deterministically addressed the
+				// agent (DM/API/SELF channel, platform mention/reply, whitelisted
+				// source, name+tag address), the turn is autonomous, or an early
+				// ack already went out (the user saw the bot engage). Everything
+				// else stays silent, matching the IGNORE it would have gotten.
+				const failureGate = this.shouldRespond(
 					runtime,
 					message,
-					state,
-					responseId,
-					"running the native tool message runtime",
+					room ?? undefined,
+					mentionContext,
 				);
-				_usedV5Runtime = true;
-				state = strategyResult.state;
+				const addressedForFailureReply =
+					failureGate.shouldRespond ||
+					mentionContext?.isMention === true ||
+					mentionContext?.isReply === true ||
+					isAutonomous ||
+					earlyReplyMessages.length > 0;
+				if (addressedForFailureReply) {
+					shouldRespondToMessage = true;
+					terminalDecision = null;
+					strategyResult = await this.buildStructuredFailureReply(
+						runtime,
+						message,
+						state,
+						responseId,
+						"running the native tool message runtime",
+					);
+					_usedV5Runtime = true;
+					state = strategyResult.state;
+				} else {
+					runtime.logger.info(
+						{
+							src: "service:message",
+							agentId: runtime.agentId,
+							roomId: message.roomId,
+							reason: failureGate.reason,
+						},
+						"v5 runtime failed before a respond decision on an unaddressed message; suppressing failure reply",
+					);
+					shouldRespondToMessage = false;
+					terminalDecision = "IGNORE";
+				}
 			}
 		} else if (!hasTextGenerationHandler(runtime)) {
 			await runtime.applyPipelineHooks(

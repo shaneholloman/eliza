@@ -192,6 +192,42 @@ describe("DEPLOY_FRONTEND", () => {
       });
     });
 
+    it("reports NOT yet live when the deployment is not active", async () => {
+      setDeployAppFrontend(() =>
+        Promise.resolve({
+          success: true,
+          deployment: {
+            id: "fe_1",
+            app_id: "app_1",
+            version: 1,
+            status: "ready",
+            r2_prefix: "p/",
+            content_hash: "b".repeat(64),
+            file_count: 1,
+            total_bytes: 42,
+            error: null,
+            created_at: "2026-06-29T00:00:00.000Z",
+            activated_at: null,
+          },
+        }),
+      );
+      const cb = captureCallback();
+      const res = await deployFrontendAction.handler(
+        keyedRuntime(),
+        makeMessage("publish Acme Bot"),
+        undefined,
+        { files: [{ path: "index.html", content: "<html></html>" }] },
+        cb.fn,
+      );
+      expect(res.success).toBe(true);
+      expect(res.data).toMatchObject({
+        deployment: { version: 1, status: "ready" },
+      });
+      expect(cb.calls).toHaveLength(1);
+      expect(cb.calls[0]?.text).toContain("NOT yet live (status: ready)");
+      expect(cb.calls[0]?.text).not.toContain("is now live");
+    });
+
     it("reads a build directory and uploads its files (text + base64)", async () => {
       tmp = await fs.mkdtemp(path.join(tmpdir(), "fe-deploy-"));
       await fs.writeFile(

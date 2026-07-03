@@ -30,7 +30,12 @@ function readStyle(name: string): string {
   return raw.replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
-/** Extract the first CSS declaration block whose selector list matches `selector`. */
+/**
+ * Extract the first CSS declaration block whose selector list matches
+ * `selector`. Called only from inside `it()` bodies so an exact-string
+ * selector mismatch (CSS formatting drift) reports as a named test failure
+ * instead of a describe-collection error.
+ */
 function ruleBody(css: string, selector: string): string {
   const idx = css.indexOf(selector);
   expect(idx, `selector \`${selector}\` not found`).toBeGreaterThanOrEqual(0);
@@ -41,29 +46,28 @@ function ruleBody(css: string, selector: string): string {
   return css.slice(open + 1, close);
 }
 
-describe("styles.css root scroll-root overscroll-behavior", () => {
-  const css = readStyle("styles.css");
-  const rootBody = ruleBody(css, "html,\nbody");
+function stylesRootBody(): string {
+  return ruleBody(readStyle("styles.css"), "html,\nbody");
+}
 
+describe("styles.css root scroll-root overscroll-behavior", () => {
   it("relaxes the X axis so the desktop swipe-to-navigate gesture works", () => {
-    expect(rootBody).toMatch(/overscroll-behavior-x:\s*auto/);
+    expect(stylesRootBody()).toMatch(/overscroll-behavior-x:\s*auto/);
   });
 
   it("keeps the Y axis locked to preserve vertical bounce/pull-to-refresh suppression", () => {
-    expect(rootBody).toMatch(/overscroll-behavior-y:\s*(none|contain)/);
+    expect(stylesRootBody()).toMatch(/overscroll-behavior-y:\s*(none|contain)/);
   });
 
   it("does NOT use a blanket `overscroll-behavior: none` on the scroll-root (it would kill the swipe gesture)", () => {
-    expect(rootBody).not.toMatch(/overscroll-behavior:\s*none/);
+    expect(stylesRootBody()).not.toMatch(/overscroll-behavior:\s*none/);
   });
 });
 
 describe("base.css native shell keeps both overscroll axes locked", () => {
-  const css = readStyle("base.css");
-
   it("still locks overscroll-behavior on native (body.native) shells", () => {
     const nativeBody = ruleBody(
-      css,
+      readStyle("base.css"),
       "body.native,\nbody.platform-ios,\nbody.platform-android",
     );
     expect(nativeBody).toMatch(/overscroll-behavior:\s*none/);

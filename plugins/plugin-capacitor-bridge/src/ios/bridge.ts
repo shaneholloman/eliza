@@ -9,10 +9,23 @@ import {
 	createMessageMemory,
 	type GenerateTextParams,
 	type IAgentRuntime,
+	type Memory,
+	type MemoryMetadata,
 	ModelType,
 	stringToUuid,
 	type UUID,
 } from "@elizaos/core";
+import {
+	summarizeTranscript,
+	type Transcript,
+	type TranscriptScope,
+	type TranscriptSegment,
+	type TranscriptSource,
+	type TranscriptSummary,
+	transcriptDurationMs,
+	transcriptPreview,
+	transcriptSpeakerCount,
+} from "@elizaos/shared/transcripts";
 import {
 	createWriteStream,
 	existsSync,
@@ -90,7 +103,7 @@ interface HttpRequestPayload {
 	timeoutMs?: unknown;
 }
 
-interface IosBridgeBackend {
+export interface IosBridgeBackend {
 	/**
 	 * The runtime is the canonical entry point for IPC routing. `dispatchRoute`
 	 * runs the matched route handler directly, with no loopback HTTP hop.
@@ -536,6 +549,7 @@ async function startIosBridgeBackend(): Promise<IosBridgeBackend> {
 	const runtime = await bootRuntimeWithRetry(bootElizaRuntime);
 	installIosNativeLlamaHandlers(runtime);
 	installKeepAwakeBridge();
+	installBackgroundDownloadBridge();
 
 	maybeAutoRunModelGrind();
 
@@ -981,6 +995,615 @@ function bytesResponse(
 		bodyBase64: body.toString("base64"),
 		bodyEncoding: "utf-8",
 	};
+}
+
+// ── Query-param helpers (mirror @elizaos/shared parsePositiveInteger) ─────────
+
+/** First value of a `splitPathAndQuery` param (arrays collapse to their head). */
+function queryParam(
+	query: Record<string, string | string[]>,
+	key: string,
+): string | null {
+	const raw = query[key];
+	if (Array.isArray(raw)) return raw[0] ?? null;
+	return typeof raw === "string" ? raw : null;
+}
+
+/** Parse a non-negative integer query value, falling back on absent/invalid. */
+function parsePositiveInteger(value: string | null, fallback: number): number {
+	if (value == null) return fallback;
+	const parsed = Number.parseInt(value, 10);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+// ── Memory Viewer routes (mirror packages/agent/src/api/memory-routes.ts) ─────
+// The iOS runtime never registers the agent's memory-routes (those bind to
+// node:http via dispatch-route); mirror the feed/browse/stats handlers directly
+// against `backend.runtime` so the Memories view has a backend on device.
+
+const MEMORY_BROWSE_DEFAULT_LIMIT = 50;
+const MEMORY_BROWSE_MAX_LIMIT = 200;
+const MEMORY_FEED_DEFAULT_LIMIT = 50;
+const MEMORY_FEED_MAX_LIMIT = 100;
+const MEMORY_TABLE_NAMES = [
+	"messages",
+	"memories",
+	"facts",
+	"documents",
+] as const;
+
+interface MemoryBrowseItem {
+	id: string;
+	type: string;
+	text: string;
+	entityId: string | null;
+	roomId: string | null;
+	agentId: string | null;
+	createdAt: number;
+	metadata: Record<string, unknown> | null;
+	source: string | null;
+}
+
+type TaggedMemory = Memory & { _table: string };
+
+/** Ordering key — `Memory.createdAt` is optional; rows without one sort oldest. */
+function memoryCreatedAt(memory: { createdAt?: number }): number {
+	return memory.createdAt ?? 0;
+}
+
+/** Newest-first comparator shared by the browse/feed list routes. */
+function byNewestFirst(
+	a: { createdAt?: number },
+	b: { createdAt?: number },
+): number {
+	return memoryCreatedAt(b) - memoryCreatedAt(a);
+}
+
+function memoryToBrowseItem(memory: TaggedMemory): MemoryBrowseItem {
+	const content = memory.content as Record<string, unknown> | undefined;
+	return {
+		id: memory.id ?? "",
+		type: memory._table,
+		text: (content?.text as string) ?? "",
+		entityId: memory.entityId,
+		roomId: memory.roomId,
+		agentId: memory.agentId ?? null,
+		createdAt: memoryCreatedAt(memory),
+		metadata: (memory.metadata as Record<string, unknown>) ?? null,
+		source: (content?.source as string) ?? null,
+	};
+}
+
+function hasBrowsableContent(memory: TaggedMemory): boolean {
+	const text = (memory.content as { text?: string } | undefined)?.text;
+	return typeof text === "string" && text.trim().length > 0;
+}
+
+function resolveMemoryTableFilter(
+	typeParam: string | null,
+): readonly string[] | undefined {
+	if (!typeParam) return undefined;
+	const t = typeParam.toLowerCase();
+	if (MEMORY_TABLE_NAMES.includes(t as (typeof MEMORY_TABLE_NAMES)[number])) {
+		return [t];
+	}
+	return undefined;
+}
+
+/** Boolean keyword match for filtering (whole query or any term ≥2 chars). */
+function matchesMemoryKeyword(text: string, query: string): boolean {
+	const normalizedText = text.toLowerCase();
+	const normalizedQuery = query.toLowerCase().trim();
+	if (!normalizedText || !normalizedQuery) return false;
+	if (normalizedText.includes(normalizedQuery)) return true;
+	return normalizedQuery
+		.split(/\s+/)
+		.filter((term) => term.length >= 2)
+		.some((term) => normalizedText.includes(term));
+}
+
+async function fetchMemoriesFromTables(
+	runtime: IAgentRuntime,
+	params: {
+		entityIds?: UUID[];
+		roomId?: UUID;
+		tables?: readonly string[];
+		limit?: number;
+		before?: number;
+	},
+): Promise<TaggedMemory[]> {
+	const tables = params.tables ?? MEMORY_TABLE_NAMES;
+	const perTableLimit = Math.max(
+		Math.ceil((params.limit ?? MEMORY_BROWSE_DEFAULT_LIMIT) * 2),
+		200,
+	);
+	const perTableMemories = await Promise.all(
+		tables.map(async (tableName) => {
+			const memories = await runtime.getMemories({
+				agentId: runtime.agentId as UUID,
+				roomId: params.roomId,
+				tableName,
+				limit: perTableLimit,
+				includeEmbedding: false,
+			});
+			return memories.map((m) => Object.assign(m, { _table: tableName }));
+		}),
+	);
+	const allMemories: TaggedMemory[] = perTableMemories.flat();
+
+	let filtered = allMemories;
+	const entitySet = params.entityIds;
+	if (entitySet && entitySet.length > 0) {
+		const ids = new Set<string>(entitySet);
+		filtered = allMemories.filter((m) => m.entityId && ids.has(m.entityId));
+	}
+
+	filtered = filtered.filter(hasBrowsableContent);
+
+	const beforeTs = params.before;
+	if (beforeTs) {
+		return filtered.filter((m) => memoryCreatedAt(m) < beforeTs);
+	}
+	return filtered;
+}
+
+async function handleMemoriesFeedRoute(
+	runtime: IAgentRuntime,
+	query: Record<string, string | string[]>,
+): Promise<BufferedHttpResponse> {
+	const requestedLimit = parsePositiveInteger(
+		queryParam(query, "limit"),
+		MEMORY_FEED_DEFAULT_LIMIT,
+	);
+	const limit = Math.min(Math.max(requestedLimit, 1), MEMORY_FEED_MAX_LIMIT);
+	const beforeParam = queryParam(query, "before");
+	const before = beforeParam ? Number(beforeParam) : undefined;
+	const tables = resolveMemoryTableFilter(queryParam(query, "type"));
+
+	const allMemories = await fetchMemoriesFromTables(runtime, {
+		tables,
+		limit: limit * 2,
+		before,
+	});
+
+	allMemories.sort(byNewestFirst);
+	const items = allMemories.slice(0, limit).map(memoryToBrowseItem);
+
+	return jsonResponse(200, {
+		memories: items,
+		count: items.length,
+		limit,
+		hasMore: allMemories.length > limit,
+	});
+}
+
+async function handleMemoriesBrowseRoute(
+	runtime: IAgentRuntime,
+	query: Record<string, string | string[]>,
+): Promise<BufferedHttpResponse> {
+	const requestedLimit = parsePositiveInteger(
+		queryParam(query, "limit"),
+		MEMORY_BROWSE_DEFAULT_LIMIT,
+	);
+	const limit = Math.min(Math.max(requestedLimit, 1), MEMORY_BROWSE_MAX_LIMIT);
+	const offset = parsePositiveInteger(queryParam(query, "offset"), 0);
+	const tables = resolveMemoryTableFilter(queryParam(query, "type"));
+	const entityIdParam = queryParam(query, "entityId");
+	const entityIdsParam = queryParam(query, "entityIds");
+	const roomIdParam = queryParam(query, "roomId");
+	const searchQuery = queryParam(query, "q")?.trim() ?? "";
+
+	const entityIds: UUID[] | undefined = entityIdsParam
+		? (entityIdsParam
+				.split(",")
+				.map((id) => id.trim())
+				.filter(Boolean) as UUID[])
+		: entityIdParam
+			? [entityIdParam as UUID]
+			: undefined;
+
+	const allMemories = await fetchMemoriesFromTables(runtime, {
+		tables,
+		entityIds,
+		roomId: roomIdParam ? (roomIdParam as UUID) : undefined,
+		limit: limit + offset + 100,
+	});
+
+	allMemories.sort(byNewestFirst);
+
+	let filtered = allMemories;
+	if (searchQuery) {
+		filtered = allMemories.filter((m) => {
+			const text = (m.content as { text?: string } | undefined)?.text ?? "";
+			return matchesMemoryKeyword(text, searchQuery);
+		});
+	}
+
+	const total = filtered.length;
+	const page = filtered.slice(offset, offset + limit).map(memoryToBrowseItem);
+
+	return jsonResponse(200, {
+		memories: page,
+		total,
+		limit,
+		offset,
+	});
+}
+
+async function handleMemoriesStatsRoute(
+	runtime: IAgentRuntime,
+): Promise<BufferedHttpResponse> {
+	const counts: Record<string, number> = {};
+	let total = 0;
+
+	for (const tableName of MEMORY_TABLE_NAMES) {
+		const memories = await runtime.getMemories({
+			agentId: runtime.agentId as UUID,
+			tableName,
+			limit: 10000,
+			includeEmbedding: false,
+		});
+		counts[tableName] = memories.length;
+		total += memories.length;
+	}
+
+	return jsonResponse(200, { total, byType: counts });
+}
+
+// ── Transcript routes (mirror plugin-local-inference TranscriptStore) ─────────
+// plugin-local-inference is deliberately excluded from the mobile plugin set
+// (MOBILE_CORE_PLUGINS), so its `/api/transcripts*` rawPath routes never reach
+// `runtime.routes`. Mirror the store's memory-partition CRUD here — it uses only
+// core runtime memory APIs + @elizaos/shared/transcripts helpers, so nothing
+// from the excluded plugin is imported.
+
+const TRANSCRIPTS_TABLE = "transcripts";
+const TRANSCRIPT_METADATA_TYPE = "transcript";
+
+interface CreateTranscriptRequestBody {
+	worldId?: UUID;
+	roomId?: UUID;
+	entityId?: UUID;
+	title?: string;
+	source?: TranscriptSource;
+	scope?: TranscriptScope;
+	segments?: TranscriptSegment[];
+	audioUrl?: string;
+	audioContentType?: string;
+	createdAt?: number;
+}
+
+interface UpdateTranscriptRequestBody {
+	title?: string;
+	segments?: TranscriptSegment[];
+}
+
+/** Parse the stored {@link Transcript} back out of a memory row's content blob. */
+function rowToTranscript(row: Memory): Transcript | null {
+	const raw = (row.content as { transcript?: unknown }).transcript;
+	if (typeof raw !== "string") return null;
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		return parsed && typeof parsed === "object" ? (parsed as Transcript) : null;
+	} catch {
+		return null;
+	}
+}
+
+function transcriptMemoryMetadata(transcript: Transcript): MemoryMetadata {
+	return {
+		type: "custom",
+		source: TRANSCRIPT_METADATA_TYPE,
+		timestamp: transcript.createdAt,
+		transcriptId: transcript.id,
+		durationMs: transcript.durationMs,
+		speakerCount: transcript.speakerCount,
+		status: transcript.status,
+	};
+}
+
+function buildTranscriptFromRequest(
+	body: CreateTranscriptRequestBody,
+	id: string,
+	now: number,
+): Transcript {
+	const segments = Array.isArray(body.segments) ? body.segments : [];
+	const createdAt = body.createdAt ?? now;
+	return {
+		id,
+		title:
+			body.title?.trim() || `Recording ${new Date(createdAt).toLocaleString()}`,
+		createdAt,
+		endedAt: now,
+		durationMs: transcriptDurationMs(segments),
+		audioUrl: body.audioUrl,
+		audioContentType: body.audioContentType,
+		segments,
+		source: body.source ?? "voice-session",
+		scope: body.scope ?? "owner-private",
+		status: "ready",
+		speakerCount: transcriptSpeakerCount(segments),
+	};
+}
+
+async function listTranscripts(
+	runtime: IAgentRuntime,
+	roomId?: UUID,
+	limit = 100,
+): Promise<TranscriptSummary[]> {
+	const rows = await runtime.getMemories({
+		tableName: TRANSCRIPTS_TABLE,
+		roomId,
+		count: limit,
+		orderBy: "createdAt",
+		orderDirection: "desc",
+	});
+	const summaries: TranscriptSummary[] = [];
+	for (const row of rows) {
+		const t = rowToTranscript(row);
+		if (t) summaries.push(summarizeTranscript(t));
+	}
+	return summaries;
+}
+
+async function getTranscript(
+	runtime: IAgentRuntime,
+	id: UUID,
+): Promise<Transcript | null> {
+	const row = await runtime.getMemoryById(id);
+	return row ? rowToTranscript(row) : null;
+}
+
+async function persistTranscript(
+	runtime: IAgentRuntime,
+	roomId: UUID,
+	entityId: UUID,
+	transcript: Transcript,
+): Promise<Transcript> {
+	const memory: Memory = {
+		id: transcript.id as UUID,
+		entityId,
+		roomId,
+		agentId: runtime.agentId as UUID,
+		createdAt: transcript.createdAt,
+		content: {
+			text: transcriptPreview(transcript.segments),
+			transcript: JSON.stringify(transcript),
+		},
+		metadata: transcriptMemoryMetadata(transcript),
+	};
+	await runtime.createMemory(memory, TRANSCRIPTS_TABLE);
+	return transcript;
+}
+
+async function handleTranscriptsRoute(
+	runtime: IAgentRuntime,
+	method: string,
+	pathname: string,
+	query: Record<string, string | string[]>,
+	body: Record<string, unknown>,
+): Promise<BufferedHttpResponse | null> {
+	if (method === "GET" && pathname === "/api/transcripts") {
+		const roomId = queryParam(query, "roomId") ?? undefined;
+		const transcripts = await listTranscripts(
+			runtime,
+			roomId as UUID | undefined,
+		);
+		return jsonResponse(200, { transcripts });
+	}
+
+	if (method === "POST" && pathname === "/api/transcripts") {
+		const create = body as CreateTranscriptRequestBody;
+		if (!Array.isArray(create.segments) || create.segments.length === 0) {
+			return jsonResponse(400, { error: "segments are required" });
+		}
+		const agentId = runtime.agentId as UUID;
+		const transcript = buildTranscriptFromRequest(
+			create,
+			crypto.randomUUID(),
+			Date.now(),
+		);
+		const saved = await persistTranscript(
+			runtime,
+			(create.roomId ?? agentId) as UUID,
+			(create.entityId ?? agentId) as UUID,
+			transcript,
+		);
+		return jsonResponse(201, { transcript: saved });
+	}
+
+	const idMatch = pathname.match(/^\/api\/transcripts\/([^/]+)$/);
+	if (!idMatch) return null;
+	const id = decodeURIComponent(idMatch[1] ?? "") as UUID;
+
+	if (method === "GET") {
+		const transcript = await getTranscript(runtime, id);
+		if (!transcript) return jsonResponse(404, { error: "not found" });
+		return jsonResponse(200, { transcript });
+	}
+
+	if (method === "DELETE") {
+		await runtime.deleteMemory(id);
+		return jsonResponse(200, { ok: true });
+	}
+
+	if (method === "PUT") {
+		const patch = body as UpdateTranscriptRequestBody;
+		if (patch.title === undefined && patch.segments === undefined) {
+			return jsonResponse(400, { error: "title or segments is required" });
+		}
+		if (patch.segments !== undefined && !Array.isArray(patch.segments)) {
+			return jsonResponse(400, { error: "segments must be an array" });
+		}
+		const existing = await getTranscript(runtime, id);
+		if (!existing) return jsonResponse(404, { error: "not found" });
+
+		const segments = patch.segments ?? existing.segments;
+		const next: Transcript = {
+			...existing,
+			title: patch.title?.trim() || existing.title,
+			segments,
+			durationMs: transcriptDurationMs(segments),
+			speakerCount: transcriptSpeakerCount(segments),
+			editedAt: Date.now(),
+		};
+		const ok = await runtime.updateMemory({
+			id: next.id as UUID,
+			content: {
+				text: transcriptPreview(next.segments),
+				transcript: JSON.stringify(next),
+			},
+			metadata: transcriptMemoryMetadata(next),
+		});
+		if (!ok) return jsonResponse(404, { error: "not found" });
+		return jsonResponse(200, { transcript: next });
+	}
+
+	return null;
+}
+
+// ── Browser workspace routes (mirror the WebView kernel's web workspace) ──────
+// On iOS the app itself is the browser: mode is always "web" and each tab is an
+// in-app iframe (see BrowserWorkspaceView). Mirror the kernel's in-memory tab
+// store so the "Open a website" button, navigation, show/hide, and close all
+// work — the same shapes the desktop/server browser-workspace API returns.
+
+const BROWSER_WORKSPACE_DEFAULT_PARTITION = "persist:eliza-browser-user";
+
+interface IosBrowserWorkspaceTab {
+	id: string;
+	title: string;
+	url: string;
+	partition: string;
+	kind?: "internal" | "standard";
+	visible: boolean;
+	createdAt: string;
+	updatedAt: string;
+	lastFocusedAt: string | null;
+}
+
+const iosBrowserWorkspaceTabs: IosBrowserWorkspaceTab[] = [];
+
+/** Reset the in-memory browser workspace store (test hook). */
+export function resetIosBrowserWorkspace(): void {
+	iosBrowserWorkspaceTabs.length = 0;
+}
+
+function normalizeBrowserWorkspaceUrl(rawUrl: unknown): string {
+	const value = typeof rawUrl === "string" ? rawUrl.trim() : "";
+	if (!value) return "about:blank";
+	if (value === "about:blank") return value;
+	return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(value) ? value : `https://${value}`;
+}
+
+function normalizeBrowserWorkspaceKind(
+	value: unknown,
+): "internal" | "standard" | undefined {
+	return value === "internal" || value === "standard" ? value : undefined;
+}
+
+function handleBrowserWorkspaceRoute(
+	method: string,
+	pathname: string,
+	body: Record<string, unknown>,
+): BufferedHttpResponse | null {
+	if (method === "GET" && pathname === "/api/browser-workspace") {
+		return jsonResponse(200, { mode: "web", tabs: iosBrowserWorkspaceTabs });
+	}
+
+	if (pathname === "/api/browser-workspace/tabs") {
+		if (method === "GET") {
+			return jsonResponse(200, { tabs: iosBrowserWorkspaceTabs });
+		}
+		if (method === "POST") {
+			const now = new Date().toISOString();
+			const show = body.show !== false;
+			const tab: IosBrowserWorkspaceTab = {
+				id: `btab_${crypto.randomUUID()}`,
+				title:
+					typeof body.title === "string" && body.title.trim()
+						? body.title.trim()
+						: "New tab",
+				url: normalizeBrowserWorkspaceUrl(body.url),
+				partition:
+					typeof body.partition === "string" && body.partition.trim()
+						? body.partition.trim()
+						: BROWSER_WORKSPACE_DEFAULT_PARTITION,
+				visible: show,
+				createdAt: now,
+				updatedAt: now,
+				lastFocusedAt: show ? now : null,
+			};
+			const kind = normalizeBrowserWorkspaceKind(body.kind);
+			if (kind) tab.kind = kind;
+			if (show) {
+				for (const entry of iosBrowserWorkspaceTabs) entry.visible = false;
+			}
+			iosBrowserWorkspaceTabs.push(tab);
+			return jsonResponse(200, { tab });
+		}
+		return null;
+	}
+
+	const match = pathname.match(
+		/^\/api\/browser-workspace\/tabs\/([^/]+)(?:\/(navigate|show|hide|snapshot))?$/,
+	);
+	if (!match) return null;
+
+	const tabId = decodeURIComponent(match[1] ?? "").trim();
+	const action = match[2] ?? null;
+	const index = iosBrowserWorkspaceTabs.findIndex((tab) => tab.id === tabId);
+	if (index < 0) {
+		return jsonResponse(404, { error: "Browser tab not found" });
+	}
+
+	if (!action && method === "DELETE") {
+		iosBrowserWorkspaceTabs.splice(index, 1);
+		return jsonResponse(200, { closed: true });
+	}
+
+	if (action === "snapshot" && method === "GET") {
+		return jsonResponse(200, { data: "" });
+	}
+
+	if (action === "show" && method === "POST") {
+		const now = new Date().toISOString();
+		for (const tab of iosBrowserWorkspaceTabs) {
+			if (tab.id === tabId) {
+				tab.visible = true;
+				tab.updatedAt = now;
+				tab.lastFocusedAt = now;
+			} else {
+				tab.visible = false;
+			}
+		}
+		return jsonResponse(200, { tab: iosBrowserWorkspaceTabs[index] });
+	}
+
+	if (action === "hide" && method === "POST") {
+		const now = new Date().toISOString();
+		const tab = iosBrowserWorkspaceTabs[index];
+		tab.visible = false;
+		tab.updatedAt = now;
+		return jsonResponse(200, { tab });
+	}
+
+	if (action === "navigate" && method === "POST") {
+		const now = new Date().toISOString();
+		const url = normalizeBrowserWorkspaceUrl(body.url);
+		const tab = iosBrowserWorkspaceTabs[index];
+		tab.url = url;
+		tab.title = url === "about:blank" ? "New tab" : tab.title;
+		tab.updatedAt = now;
+		tab.lastFocusedAt = now;
+		tab.visible = true;
+		for (const entry of iosBrowserWorkspaceTabs) {
+			if (entry.id !== tabId) entry.visible = false;
+		}
+		return jsonResponse(200, { tab });
+	}
+
+	return null;
 }
 
 function _buildBufferedRoutePair(args: {
@@ -1983,6 +2606,31 @@ function installKeepAwakeBridge(): void {
 		);
 		return true;
 	};
+}
+
+/**
+ * Expose the native background-download host functions on the full-Bun engine's
+ * Bun global so the in-process model downloader can route the ~5 GB weight pull
+ * through a native background `URLSession` that survives the app backgrounding
+ * or the device locking (#11841). The native handlers (`bg_download_*` in
+ * `FullBunEngineHost` → `BackgroundDownloadBridge`) start the task and report
+ * progress/terminal state; the downloader starts a job then polls status until
+ * it is terminal. Each function resolves the native host envelope's `result`
+ * object; a rejection means the host call itself failed. Only defines the
+ * functions when the engine has not already installed them.
+ */
+function installBackgroundDownloadBridge(): void {
+	const g = globalThis as typeof globalThis & {
+		__ELIZA_BRIDGE__?: Record<string, unknown>;
+	};
+	g.__ELIZA_BRIDGE__ = g.__ELIZA_BRIDGE__ ?? {};
+	if (typeof g.__ELIZA_BRIDGE__.bg_download_start === "function") return;
+	g.__ELIZA_BRIDGE__.bg_download_start = (args: unknown): Promise<unknown> =>
+		callIosHost("bg_download_start", args, 60_000);
+	g.__ELIZA_BRIDGE__.bg_download_status = (args: unknown): Promise<unknown> =>
+		callIosHost("bg_download_status", args, 60_000);
+	g.__ELIZA_BRIDGE__.bg_download_cancel = (args: unknown): Promise<unknown> =>
+		callIosHost("bg_download_cancel", args, 60_000);
 }
 
 function installIosNativeLlamaHandlers(runtime: IAgentRuntime): void {
@@ -3166,7 +3814,7 @@ function bufferedConversationStreamResponse(
 	};
 }
 
-async function handleDirectCoreRoute(
+export async function handleDirectCoreRoute(
 	backend: IosBridgeBackend,
 	method: string,
 	rawPath: string,
@@ -3372,6 +4020,45 @@ async function handleDirectCoreRoute(
 			parseRequestBody(payload),
 		);
 		return jsonResponse(200, result);
+	}
+
+	// ── Memory Viewer ──────────────────────────────────────────────────────
+	if (method === "GET" && pathname === "/api/memories/feed") {
+		const { query } = splitPathAndQuery(rawPath);
+		return handleMemoriesFeedRoute(backend.runtime, query);
+	}
+	if (method === "GET" && pathname === "/api/memories/browse") {
+		const { query } = splitPathAndQuery(rawPath);
+		return handleMemoriesBrowseRoute(backend.runtime, query);
+	}
+	if (method === "GET" && pathname === "/api/memories/stats") {
+		return handleMemoriesStatsRoute(backend.runtime);
+	}
+
+	// ── Transcripts ────────────────────────────────────────────────────────
+	if (
+		pathname === "/api/transcripts" ||
+		pathname.startsWith("/api/transcripts/")
+	) {
+		const { query } = splitPathAndQuery(rawPath);
+		const transcripts = await handleTranscriptsRoute(
+			backend.runtime,
+			method,
+			pathname,
+			query,
+			parseRequestBody(payload),
+		);
+		if (transcripts) return transcripts;
+	}
+
+	// ── Browser workspace (the app is the browser on iOS) ──────────────────
+	if (pathname.startsWith("/api/browser-workspace")) {
+		const browser = handleBrowserWorkspaceRoute(
+			method,
+			pathname,
+			parseRequestBody(payload),
+		);
+		if (browser) return browser;
 	}
 
 	return null;

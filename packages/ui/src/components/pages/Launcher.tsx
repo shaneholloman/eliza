@@ -23,6 +23,7 @@ import type { ViewEntry } from "../../hooks/view-catalog";
 import { cn } from "../../lib/utils";
 import { emitViewInteraction } from "../../view-telemetry";
 import { PagerEdgeButtons } from "../shell/PagerEdgeButtons";
+import { Button } from "../ui/button";
 import { ViewTileImage } from "../views/ViewTileImage";
 
 export interface LauncherProps {
@@ -87,8 +88,8 @@ const IconTile = memo(function IconTile({ entry, onLaunch }: IconTileProps) {
       data-testid={`launcher-tile-${entry.id}`}
     >
       <div className="relative">
-        <button
-          type="button"
+        <Button
+          variant="ghost"
           aria-label={entry.label}
           onClick={() => onLaunch(entry)}
           className={cn(
@@ -98,6 +99,11 @@ const IconTile = memo(function IconTile({ entry, onLaunch }: IconTileProps) {
             // no border; a subtle glass wash is the icon plate (neutral resting →
             // neutral-with-opacity hover).
             "h-16 w-16 overflow-hidden rounded-2xl bg-white/10 text-white transition-colors hover:bg-white/20",
+            // Neutralize Button's default-size padding (px-4 py-2 letterboxed
+            // the artwork into a 32×48 inset) and its [&_svg]:size-4 descendant
+            // rule (which would shrink the 28px glyph fallback): the artwork
+            // must fill the whole 64×64 icon plate.
+            "p-0 [&_svg]:size-7",
           )}
         >
           <ViewTileImage
@@ -107,7 +113,7 @@ const IconTile = memo(function IconTile({ entry, onLaunch }: IconTileProps) {
             glyphClassName="h-7 w-7"
             imageTestId={`launcher-image-${entry.id}`}
           />
-        </button>
+        </Button>
         {badge ? (
           <span
             data-testid={`launcher-kind-${entry.id}`}
@@ -296,15 +302,16 @@ export function Launcher({
         {showPageDots && pages.length > 1 ? (
           <div className="flex items-center justify-center gap-2 pb-3">
             {pages.map((pageIds, index) => (
-              <button
+              <Button
                 // biome-ignore lint/suspicious/noArrayIndexKey: pages have no stable id; index is the page identity.
                 key={`dot-${index}-${pageIds[0] ?? "empty"}`}
-                type="button"
+                variant="ghost"
+                size="icon-sm"
                 aria-label={`Page ${index + 1}`}
                 aria-current={index === clampedPage}
                 onClick={() => setActivePage(index)}
                 className={cn(
-                  "h-2 w-2 rounded-full transition-colors",
+                  "h-2 w-2 rounded-full p-0 transition-colors hover:bg-border",
                   index === clampedPage ? "bg-accent" : "bg-border",
                 )}
               />

@@ -73,7 +73,12 @@ const appMock = vi.hoisted(() => ({
     chatSending: false,
     chatFirstTokenReceived: false,
     sendChatText: vi.fn(),
-    agentStatus: { state: "running", canRespond: true },
+    // Mirrors the real store shape (AgentStatus | null — null before the first
+    // status broadcast lands).
+    agentStatus: { state: "running", canRespond: true } as {
+      state: string;
+      canRespond?: boolean;
+    } | null,
     // Conversation-management callbacks the controller wraps in the loading
     // flag (clear / swipe). Default to instant resolution; the watchdog tests
     // override handleNewConversation with a controllable promise.
@@ -1448,6 +1453,46 @@ describe("useShellController — no provider configured", () => {
     // Idempotent: a re-render (e.g. streamed token churn) must not re-navigate.
     appMock.value.setTab.mockClear();
     rerender();
+    expect(appMock.value.setTab).not.toHaveBeenCalled();
+  });
+
+  it("ignores a stale no_provider turn once the agent CAN respond", () => {
+    // The failure stamp is persisted in conversation history, so on a later app
+    // launch / conversation switch the latest assistant turn can still be the
+    // old no_provider gate even though a provider has since been configured.
+    // The live server truth (canRespond: true) must veto the history stamp —
+    // no flag, no Settings hijack.
+    appMock.value.agentStatus = { state: "running", canRespond: true };
+    appMock.value.conversationMessages = [
+      { id: "u1", role: "user", text: "hi", timestamp: 1 },
+      {
+        id: "a1",
+        role: "assistant",
+        text: "This agent has no LLM provider configured.",
+        timestamp: 2,
+        failureKind: "no_provider",
+      },
+    ];
+    const { result } = renderHook(() => useShellController());
+    expect(result.current.noProviderConfigured).toBe(false);
+    expect(appMock.value.setTab).not.toHaveBeenCalled();
+  });
+
+  it("does not trigger off history while the status is still unknown", () => {
+    // Before the first status broadcast there is no server verdict; only a
+    // definitive canRespond === false may confirm the persisted history stamp.
+    appMock.value.agentStatus = null;
+    appMock.value.conversationMessages = [
+      {
+        id: "a1",
+        role: "assistant",
+        text: "no provider",
+        timestamp: 2,
+        failureKind: "no_provider",
+      },
+    ];
+    const { result } = renderHook(() => useShellController());
+    expect(result.current.noProviderConfigured).toBe(false);
     expect(appMock.value.setTab).not.toHaveBeenCalled();
   });
 

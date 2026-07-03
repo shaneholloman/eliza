@@ -268,6 +268,7 @@ export * from "./lifeops-normalize/index.js";
 // Server runtime (KV cache, llama-server lifecycle, etc.) stays in @elizaos/app-core.
 export * from "./local-inference/index.js";
 export * from "./loopback-trust.js";
+export * from "./meetings.js";
 export * from "./platform/is-native-server.js";
 export * from "./process-guards.js";
 export * from "./recent-messages-state.js";

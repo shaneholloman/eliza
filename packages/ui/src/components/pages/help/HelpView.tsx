@@ -5,6 +5,7 @@ import { useAgentElement } from "../../../agent-surface";
 import { useAppSelector } from "../../../state";
 import { useRegisterViewChatBinding } from "../../../state/view-chat-binding";
 import { ChatEmptyStateWithRecommendations } from "../../composites/chat";
+import { ViewHeader } from "../../shared/ViewHeader";
 import { Button } from "../../ui/button";
 import { ShellViewAgentSurface } from "../../views/ShellViewAgentSurface";
 import { startTutorial } from "../tutorial/tutorial-controller";
@@ -40,7 +41,12 @@ function scoreEntry(entry: HelpEntry, q: string): number {
 export function HelpView(): React.ReactElement {
   return (
     <ShellViewAgentSurface viewId="help">
-      <HelpViewBody />
+      <div className="flex h-full min-h-0 w-full flex-col">
+        <ViewHeader title="Help" />
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <HelpViewBody />
+        </div>
+      </div>
     </ShellViewAgentSurface>
   );
 }
@@ -98,13 +104,13 @@ function HelpEntryItem({
 
   return (
     <li data-testid={`help-entry-${entry.id}`}>
-      <button
+      <Button
         ref={ref}
         {...agentProps}
-        type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="flex w-full items-center justify-between gap-3 rounded-lg px-4 py-3 text-left transition-colors hover:bg-txt/[0.04]"
+        variant="ghost"
+        className="flex h-auto w-full items-center justify-between gap-3 whitespace-normal rounded-lg px-4 py-3 text-left font-normal transition-colors hover:bg-txt/[0.04]"
       >
         <span className="text-[14px] font-medium text-txt-strong">
           {entry.question}
@@ -116,7 +122,7 @@ function HelpEntryItem({
         >
           ›
         </span>
-      </button>
+      </Button>
       {open && (
         <div className="px-4 pb-4">
           <p className="text-[13px] leading-relaxed text-txt/75">

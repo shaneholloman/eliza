@@ -91,6 +91,7 @@ export class GoogleCalendarClient {
         location: params.location,
         start: toEventDateTime(params.start, params.timeZone),
         end: toEventDateTime(params.end, params.timeZone),
+        recurrence: params.recurrence,
         attendees: params.attendees?.map(toCalendarAttendee),
         conferenceData: params.createMeetLink
           ? {
@@ -149,6 +150,9 @@ export class GoogleCalendarClient {
     }
     if (params.attendees !== undefined) {
       requestBody.attendees = params.attendees.map(toCalendarAttendee);
+    }
+    if (params.recurrence !== undefined) {
+      requestBody.recurrence = params.recurrence;
     }
 
     const response = await calendar.events.patch({
@@ -219,7 +223,7 @@ function mapEvent(
     isAllDay: start?.isAllDay,
     timeZone: start?.timeZone ?? end?.timeZone ?? null,
     htmlLink: event.htmlLink ?? undefined,
-    meetLink: event.hangoutLink ?? event.conferenceData?.entryPoints?.[0]?.uri ?? undefined,
+    meetLink: readConferenceLink(event),
     attendees: event.attendees?.map((attendee) => ({
       email: attendee.email ?? "",
       name: attendee.displayName ?? undefined,
@@ -233,13 +237,31 @@ function mapEvent(
           self: Boolean(event.organizer.self),
         }
       : undefined,
+    recurrence: event.recurrence ?? null,
+    recurringEventId: event.recurringEventId ?? null,
     metadata: {
       iCalUID: event.iCalUID ?? null,
       recurringEventId: event.recurringEventId ?? null,
+      ...(event.recurrence ? { recurrence: event.recurrence } : {}),
       createdAt: event.created ?? null,
       updatedAt: event.updated ?? null,
     },
   };
+}
+
+/**
+ * Extract the joinable conference URL for an event. `hangoutLink` wins (it is
+ * always the Meet video URL); otherwise prefer the `video` entry point over
+ * phone/SIP/more entries so third-party conferences (Zoom, Teams, Webex)
+ * surface their joinable URL rather than a dial-in number.
+ */
+export function readConferenceLink(event: calendar_v3.Schema$Event): string | undefined {
+  if (event.hangoutLink) {
+    return event.hangoutLink;
+  }
+  const entryPoints = event.conferenceData?.entryPoints ?? [];
+  const video = entryPoints.find((entry) => entry.entryPointType === "video");
+  return video?.uri ?? entryPoints[0]?.uri ?? undefined;
 }
 
 function eventDateValue(value: calendar_v3.Schema$EventDateTime | undefined): string | undefined {

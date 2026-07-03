@@ -118,8 +118,12 @@ body.native textarea {
    its text below the status bar — otherwise the banner content hides under the
    status bar. Only the FIRST rendered banner gets the bleed (negative margin
    cancels the column padding); stacked banners keep their normal padding so
-   they don't overlap. No-op on web/desktop where --safe-area-top is 0. */
-.mobile-top-banner:first-child {
+   they don't overlap. The reconnecting pill overlay (ConnectionFailedBanner)
+   is an out-of-flow sibling WITHOUT this class that can render before the
+   first in-flow banner, so match the first `.mobile-top-banner` among the
+   siblings instead of requiring `:first-child`. No-op on web/desktop where
+   --safe-area-top is 0. */
+.mobile-top-banner:nth-child(1 of .mobile-top-banner) {
   margin-top: calc(-1 * var(--safe-area-top, 0px));
   padding-top: calc(var(--safe-area-top, 0px) + 0.5rem);
 }

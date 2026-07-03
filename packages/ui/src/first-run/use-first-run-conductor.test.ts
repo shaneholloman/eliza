@@ -315,7 +315,7 @@ describe("useFirstRunConductor", () => {
     unmount();
   });
 
-  it("keeps BYOK reachable after the runtime chooser was trimmed to Cloud + On this device: On this device → provider:other routes to the Settings handoff banner without a model download", async () => {
+  it("keeps BYOK reachable after the runtime chooser was trimmed to Cloud + On this device: On this device → provider:other finishes the LOCAL runtime with configure-later (one POST, no model download, Settings handoff banner) instead of dead-ending to Settings", async () => {
     const spies = seedAppStore();
     const { turn, transcript, unmount } = renderConductor();
     const greeting = await waitForTurn(turn, "first-run:greeting");
@@ -333,28 +333,39 @@ describe("useFirstRunConductor", () => {
     // The provider sub-choice still offers "Other / configure in Settings" (BYOK).
     expect(provider.text).toContain("__first_run__:provider:other=");
 
-    // Selecting it must actually land the user in Settings and exit onboarding —
-    // NOT run a local finish that could fail and re-loop the questions.
+    // Selecting it finishes the LOCAL runtime with `configure-later`: the finish
+    // path starts + persists the runtime (one POST /api/first-run) and hands off
+    // provider setup to Settings via the "Open Settings" action banner. It does
+    // NOT dead-end to Settings before persisting — the old exit-to-Settings path
+    // never ran a finish, so a broken finish had no recovery turn.
     expect(tryHandleFirstRunAction("__first_run__:provider:other")).toBe(true);
-    await waitFor(() => {
-      expect(spies.setTab).toHaveBeenCalledWith("settings");
-    });
-    expect(spies.completeFirstRun).toHaveBeenCalledTimes(1);
-    expect(spies.completeFirstRun).toHaveBeenCalledWith("settings");
+    const tutorial = await waitForTurn(turn, "first-run:tutorial");
+    expect(tutorial.text).toContain("__first_run__:tutorial:start=");
 
-    // No finish flow ran: no POST, no model download, and no tutorial prompt
-    // (first-run is over — the user is in Settings).
-    expect(mocks.client.submitFirstRun).not.toHaveBeenCalled();
+    // Exactly one POST, and NO model download (configure-later ships no model —
+    // the user brings their own provider keys in Settings).
+    expect(mocks.client.submitFirstRun).toHaveBeenCalledTimes(1);
     expect(
       mocks.autoDownloadRecommendedLocalModelInBackground,
     ).not.toHaveBeenCalled();
-    expect(transcript.current.some((m) => m.id === "first-run:tutorial")).toBe(
-      false,
-    );
+    // The Settings handoff is a non-blocking action banner, NOT a gate flip:
+    // the real completion stays deferred to the tutorial pick.
+    expect(spies.showActionBanner).toHaveBeenCalledTimes(1);
+    expect(spies.completeFirstRun).not.toHaveBeenCalled();
 
-    // A confused double-tap must not flip the gate twice.
+    // After provisioning, re-taps on the leftover provider widget are consumed
+    // as no-ops — no second finish, POST stays at exactly once.
     expect(tryHandleFirstRunAction("__first_run__:provider:other")).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(mocks.client.submitFirstRun).toHaveBeenCalledTimes(1);
+
+    // The tutorial pick is the single real completion, into chat.
+    expect(tryHandleFirstRunAction("__first_run__:tutorial:skip")).toBe(true);
     expect(spies.completeFirstRun).toHaveBeenCalledTimes(1);
+    expect(spies.completeFirstRun).toHaveBeenCalledWith("chat");
+    expect(transcript.current.some((m) => m.id === "first-run:greeting")).toBe(
+      true,
+    );
     unmount();
   });
 

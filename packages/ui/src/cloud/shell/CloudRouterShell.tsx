@@ -154,9 +154,11 @@ function RouteChunkFallback(): React.JSX.Element {
 
 function CloudNotFound(): React.JSX.Element {
   return (
-    <div className="mx-auto max-w-prose p-8 text-sm text-neutral-400">
-      <h1 className="mb-3 text-lg font-semibold text-white">Not found</h1>
-      <p>The page you requested doesn&apos;t exist.</p>
+    <div className="theme-cloud min-h-dvh bg-black text-white">
+      <div className="mx-auto max-w-prose p-8 text-sm text-white/62">
+        <h1 className="mb-3 text-lg font-semibold text-white">Not found</h1>
+        <p>The page you requested doesn&apos;t exist.</p>
+      </div>
     </div>
   );
 }
@@ -196,7 +198,11 @@ function CloudRouteElement({
   if (route.public) {
     return body;
   }
-  return <StewardAuthProvider>{body}</StewardAuthProvider>;
+  return (
+    <StewardAuthProvider>
+      <div className="theme-cloud min-h-dvh bg-black text-white">{body}</div>
+    </StewardAuthProvider>
+  );
 }
 
 export interface CloudRouterShellProps {

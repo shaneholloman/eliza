@@ -68,6 +68,7 @@ import { StartupScreen } from "./components/shell/StartupScreen";
 import { SystemWarningBanner } from "./components/shell/SystemWarningBanner";
 import { useBarSurfaceWindows } from "./components/shell/useBarSurfaceWindows";
 import { useKioskViewSurfaces } from "./components/shell/useKioskViewSurfaces";
+import { Button } from "./components/ui/button";
 import { KeepAliveViewHost } from "./components/views/KeepAliveViewHost";
 import { ViewErrorBoundary } from "./components/views/ViewErrorBoundary";
 import { AppWorkspaceChrome } from "./components/workspace/AppWorkspaceChrome";
@@ -260,6 +261,18 @@ const PluginsPageView = lazyNamedView(
 const RelationshipsView = lazyNamedView(
   () => import("./components/pages/RelationshipsView"),
   "RelationshipsView",
+);
+const KnowledgeView = lazyNamedView(
+  () => import("./components/pages/KnowledgeView"),
+  "KnowledgeView",
+);
+const CharacterExperienceView = lazyNamedView(
+  () => import("./components/character/CharacterExperienceView"),
+  "CharacterExperienceView",
+);
+const CharacterSkillsView = lazyNamedView(
+  () => import("./components/character/CharacterSkillsView"),
+  "CharacterSkillsView",
 );
 const RuntimeView = lazyNamedView(
   () => import("./components/pages/RuntimeView"),
@@ -870,6 +883,8 @@ const SHELL_RESERVED_PATHS = new Set([
   "/views",
   "/apps",
   "/character/documents",
+  "/character/experience",
+  "/character/skills",
   "/apps/plugins",
   "/apps/skills",
   "/apps/trajectories",
@@ -991,8 +1006,9 @@ function ViewLayoutSurface({
               {entries.length}
             </span>
           </div>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-sm"
             aria-label="Close layout"
             title="Close layout"
             data-testid="view-layout-close"
@@ -1000,7 +1016,7 @@ function ViewLayoutSurface({
             className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-muted transition-colors hover:bg-border/35 hover:text-txt    "
           >
             <X className="h-4 w-4" aria-hidden />
-          </button>
+          </Button>
         </header>
         <div
           className={`grid min-h-0 flex-1 gap-2 overflow-auto p-2 ${viewLayoutGridClass(
@@ -1147,6 +1163,21 @@ function renderStaticViewRouterTab({
         <RelationshipsView />
       </TabContentView>
     ),
+    documents: (
+      <TabContentView>
+        <KnowledgeView />
+      </TabContentView>
+    ),
+    experience: (
+      <TabContentView>
+        <CharacterExperienceView />
+      </TabContentView>
+    ),
+    "character-skills": (
+      <TabContentView>
+        <CharacterSkillsView />
+      </TabContentView>
+    ),
     memories: (
       <TabContentView>
         <MemoryViewerView />
@@ -1201,16 +1232,10 @@ function renderStaticViewRouterTab({
     // background shows through behind the controls.
     return <BackgroundView />;
   }
-  if (
-    tab === "character" ||
-    tab === "character-select" ||
-    tab === "documents"
-  ) {
+  if (tab === "character" || tab === "character-select") {
     return (
       <TabContentView>
-        <CharacterEditor
-          initialPage={tab === "documents" ? "documents" : undefined}
-        />
+        <CharacterEditor />
       </TabContentView>
     );
   }
