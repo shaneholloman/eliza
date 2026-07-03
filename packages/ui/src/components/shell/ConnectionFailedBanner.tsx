@@ -42,8 +42,14 @@ export function ConnectionFailedBanner() {
     // height — mounting/unmounting it does not shift anything below. The
     // wrapper is click-through (pointer-events-none); the pill is a status
     // readout with nothing to interact with.
+    //
+    // Top offset: the containing column already sits below the shell root's
+    // shaved status-bar inset (`max(safe-area-top - 1.25rem, 1.25rem)` padding
+    // in App.tsx), so using the full safe-area inset here would double-count
+    // it. The clamp adds back only the shaved remainder — landing the pill at
+    // the status-bar bottom on notched devices and 0.5rem down elsewhere.
     return (
-      <div className="pointer-events-none absolute inset-x-0 top-[max(0.5rem,env(safe-area-inset-top))] z-[9999] flex justify-center">
+      <div className="pointer-events-none absolute inset-x-0 top-[clamp(0.5rem,calc(env(safe-area-inset-top,0px)-1.25rem),1.25rem)] z-[9999] flex justify-center">
         <div
           role="status"
           aria-live="polite"
