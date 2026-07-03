@@ -167,7 +167,7 @@ test("upstream response body read failure refunds before usage is recorded", asy
     text: async () => {
       throw new Error("body stream failed");
     },
-  } as Response);
+  } as unknown as Response);
   const res = await post();
   expect(res.status).toBe(502);
   expect(refundCredits).toHaveBeenCalledTimes(1);

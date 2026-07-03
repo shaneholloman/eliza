@@ -841,7 +841,8 @@ export class AppCreditsService {
     }
 
     // Use provided app to avoid N+1 query, or fetch if not provided
-    const app = providedApp ?? (await appsRepository.findById(appId));
+    const app: AppCreditAccountingApp | undefined =
+      providedApp ?? (await appsRepository.findById(appId));
     if (!app) {
       logger.error("[AppCredits] App not found during reconciliation", { appId });
       return {
@@ -1218,7 +1219,8 @@ export class AppCreditsService {
     // which repeats across every charge. Fall back to the (non-idempotent)
     // app-scoped id only when no per-charge key is present, preserving prior
     // behavior for callers without one.
-    const app = providedApp ?? (await appsRepository.findById(appId));
+    const app: AppCreditAccountingApp | undefined =
+      providedApp ?? (await appsRepository.findById(appId));
     const chargeKey =
       (typeof metadata.idempotencyKey === "string" && metadata.idempotencyKey) ||
       (typeof metadata.stripePaymentIntentId === "string" && metadata.stripePaymentIntentId) ||
@@ -1333,7 +1335,8 @@ export class AppCreditsService {
     // DIFFERENT reversals in one request (reconcile refund vs #10910
     // compensation reversal) never collide. reduceEarnings is the gate; skip
     // the shadow writes on a dedup retry.
-    const app = providedApp ?? (await appsRepository.findById(appId));
+    const app: AppCreditAccountingApp | undefined =
+      providedApp ?? (await appsRepository.findById(appId));
     const chargeKey =
       (typeof metadata.idempotencyKey === "string" && metadata.idempotencyKey) ||
       (typeof metadata.stripePaymentIntentId === "string" && metadata.stripePaymentIntentId) ||
