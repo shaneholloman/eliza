@@ -11,3 +11,5 @@
  */
 
 export * from "./core/index.ts";
+export type { ParseOptions } from "./parsers/hermes.ts";
+export { default as hermesParser, detect, parse } from "./parsers/hermes.ts";
