@@ -916,7 +916,17 @@ describe("CreditsService reservation settlement marker (#11169)", () => {
   );
 
   test(
-    "sweep covers marker-aware app-chat holds and refunds only the stale buffer",
+    // #11683: app-chat holds must settle through appCreditsService.reconcileCredits
+    // (the lane the route's late settle uses, keyed `reconcile-refund:<holdId>`),
+    // NEVER the generic lane below (keyed `recon:<holdId>:refund`) — the disjoint
+    // keys let a swept-but-still-in-flight hold be refunded twice, and the
+    // generic base-only math over-refunded the markup. This minimal fixture has
+    // no users/apps rows for the app-credits lane to resolve, so the sweep must
+    // leave the hold untouched (skipped, retried next sweep) rather than settle
+    // it generically. The full app-credits-lane sweep proof (markup math,
+    // cross-writer dedup with the real settle lane) lives in
+    // app-chat-sweep-double-refund.test.ts.
+    "sweep never settles app-chat holds through the generic lane",
     async () => {
       if (!pgliteReady) return;
       await seedOrg("8.5");
@@ -928,29 +938,14 @@ describe("CreditsService reservation settlement marker (#11169)", () => {
       });
 
       expect(stats.scanned).toBe(1);
-      expect(stats.settled).toBe(1);
-      expect(stats.refunds).toBe(1);
-      expect(await getBalance()).toBeCloseTo(9, 6);
-      expect(await getReservationSettledAt(reservationId)).toBeTruthy();
-      expect(await settlementRowsForReservation(reservationId)).toEqual([
-        {
-          amount: "0.500000",
-          type: "refund",
-          stripe_payment_intent_id: `recon:${reservationId}:refund`,
-        },
-      ]);
-
-      const late = await creditsService.reconcile({
-        organizationId: ORG_ID,
-        reservedAmount: 1.5,
-        actualCost: 0,
-        description: "late app-chat refund after sweep",
-        metadata: { user_id: USER_ID, reservation_transaction_id: reservationId },
-      });
-
-      expect(late.adjustmentType).toBe("none");
-      expect(await getBalance()).toBeCloseTo(9, 6);
-      expect(await countByType("refund")).toBe(1);
+      expect(stats.settled).toBe(0);
+      expect(stats.refunds).toBe(0);
+      expect(stats.skipped).toBe(1);
+      // No generically-keyed money row, no settle claim, balance untouched.
+      expect(await getBalance()).toBeCloseTo(8.5, 6);
+      expect(await getReservationSettledAt(reservationId)).toBeNull();
+      expect(await settlementRowsForReservation(reservationId)).toEqual([]);
+      expect(await countByType("refund")).toBe(0);
     },
     PGLITE_TIMEOUT,
   );
