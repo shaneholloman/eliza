@@ -18,19 +18,11 @@ import {
   pressReleasesRepository,
 } from "../../db/repositories/press-releases";
 
-export interface PressReleaseResult {
-  ok: boolean;
-  release?: PressRelease;
-  distribution?: PressReleaseDistribution;
-  error?: string;
-}
+export type PressReleaseResult = { ok: true; release: PressRelease } | { ok: false; error: string };
 
-export interface PressDistributionResult {
-  ok: boolean;
-  release?: PressRelease;
-  distribution?: PressReleaseDistribution;
-  error?: string;
-}
+export type PressDistributionResult =
+  | { ok: true; release: PressRelease; distribution: PressReleaseDistribution }
+  | { ok: false; error: string };
 
 function cleanText(value: string | undefined | null): string {
   return (value ?? "").trim();
@@ -87,14 +79,10 @@ export class PressReleaseService {
 
     if (input.idempotencyKey) {
       const existing = await pressReleasesRepository.findReleaseByIdempotencyKey(
+        input.organizationId,
         input.idempotencyKey,
       );
-      if (existing) {
-        if (existing.organization_id !== input.organizationId) {
-          return { ok: false, error: "Idempotency key already used" };
-        }
-        return { ok: true, release: existing };
-      }
+      if (existing) return { ok: true, release: existing };
     }
 
     const release = await pressReleasesRepository.createRelease({
@@ -203,13 +191,15 @@ export class PressReleaseService {
 
     if (input.idempotencyKey) {
       const existing = await pressReleasesRepository.findDistributionByIdempotencyKey(
+        input.organizationId,
         input.idempotencyKey,
       );
       if (existing) {
-        if (existing.organization_id !== input.organizationId) {
+        if (existing.press_release_id !== input.releaseId || existing.provider !== provider) {
           return { ok: false, error: "Idempotency key already used" };
         }
         const release = await this.getRelease(existing.press_release_id, input.organizationId);
+        if (!release) return { ok: false, error: "Press release not found" };
         return { ok: true, release, distribution: existing };
       }
     }
@@ -272,6 +262,10 @@ export class PressReleaseService {
           );
     if (!movedDistribution) return { ok: false, error: "Distribution is not submitted" };
 
+    // The distribution drives the outcome. The release status transition is
+    // best-effort: it only lands when the release is still `submitted`; if it
+    // already moved on (concurrent transition, re-run), we fall back to the
+    // current row so the caller still gets the authoritative release.
     const release =
       (await pressReleasesRepository.transitionRelease(
         distribution.press_release_id,
@@ -280,6 +274,7 @@ export class PressReleaseService {
         "distributed",
         { distributed_at: new Date() },
       )) ?? (await this.getRelease(distribution.press_release_id, input.organizationId));
+    if (!release) return { ok: false, error: "Press release not found" };
     return { ok: true, release, distribution: movedDistribution };
   }
 
@@ -308,6 +303,9 @@ export class PressReleaseService {
           );
     if (!movedDistribution) return { ok: false, error: "Distribution is not submitted" };
 
+    // Same fallback divergence as markDistributed: the failed distribution is
+    // authoritative; the release `submitted`→`failed` transition is best-effort
+    // and falls back to the current row when the release already moved on.
     const release =
       (await pressReleasesRepository.transitionRelease(
         distribution.press_release_id,
@@ -316,6 +314,7 @@ export class PressReleaseService {
         "failed",
         { failed_reason: movedDistribution.error_message ?? "Distribution failed" },
       )) ?? (await this.getRelease(distribution.press_release_id, input.organizationId));
+    if (!release) return { ok: false, error: "Press release not found" };
     return { ok: true, release, distribution: movedDistribution };
   }
 
@@ -324,7 +323,7 @@ export class PressReleaseService {
     if (!release) return { ok: false, error: "Press release not found" };
     if (release.status === "cancelled") return { ok: true, release };
     if (!["draft", "ready"].includes(release.status)) {
-      return { ok: false, error: "Submitted press releases cannot be cancelled here" };
+      return { ok: false, error: "Only draft or ready press releases can be cancelled" };
     }
     const moved =
       (await pressReleasesRepository.transitionRelease(id, organizationId, "draft", "cancelled")) ??

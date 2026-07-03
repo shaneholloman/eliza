@@ -20,12 +20,7 @@ export type PressReleaseStatus =
   | "failed"
   | "cancelled";
 
-export type PressDistributionStatus =
-  | "pending"
-  | "submitted"
-  | "distributed"
-  | "failed"
-  | "cancelled";
+export type PressDistributionStatus = "submitted" | "distributed" | "failed" | "cancelled";
 
 export type MediaContactStatus = "active" | "inactive";
 
@@ -78,7 +73,8 @@ export const pressReleases = pgTable(
     org_idx: index("press_releases_org_idx").on(table.organization_id),
     status_idx: index("press_releases_status_idx").on(table.status),
     created_idx: index("press_releases_created_idx").on(table.created_at),
-    idempotency_key_uidx: uniqueIndex("press_releases_idempotency_key_uidx").on(
+    idempotency_key_uidx: uniqueIndex("press_releases_org_idempotency_key_uidx").on(
+      table.organization_id,
       table.idempotency_key,
     ),
   }),
@@ -97,7 +93,7 @@ export const pressReleaseDistributions = pgTable(
 
     provider: text("provider").notNull(),
     external_distribution_id: text("external_distribution_id"),
-    status: text("status").$type<PressDistributionStatus>().notNull().default("pending"),
+    status: text("status").$type<PressDistributionStatus>().notNull().default("submitted"),
     idempotency_key: text("idempotency_key"),
     request_payload: jsonb("request_payload")
       .$type<Record<string, unknown>>()
@@ -118,7 +114,8 @@ export const pressReleaseDistributions = pgTable(
     org_idx: index("press_release_distributions_org_idx").on(table.organization_id),
     release_idx: index("press_release_distributions_release_idx").on(table.press_release_id),
     provider_idx: index("press_release_distributions_provider_idx").on(table.provider),
-    idempotency_key_uidx: uniqueIndex("press_release_distributions_idempotency_key_uidx").on(
+    idempotency_key_uidx: uniqueIndex("press_release_distributions_org_idempotency_key_uidx").on(
+      table.organization_id,
       table.idempotency_key,
     ),
   }),
