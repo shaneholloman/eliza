@@ -31731,7 +31731,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     ELIZA_1_VISION_TIER_IDS
   );
   var ELIZA_1_HOSTED_MTP_TIER_IDS = [
-    "eliza-1-2b"
+    "eliza-1-2b",
+    "eliza-1-4b"
   ];
   function hostedMtpDrafterAvailableForTier(id) {
     return ELIZA_1_HOSTED_MTP_TIER_IDS.some((mtpId) => mtpId === id);
@@ -70203,6 +70204,13 @@ Assistant:`;
     registerWidgetComponent(w.pluginId, w.id, w.Component);
   }
   var APP_HOME_DEFAULT_WIDGET_DECLARATIONS = [
+    {
+      pluginId: "birdclaw",
+      label: "Birdclaw",
+      icon: "Bird",
+      defaultWidget: "activity",
+      signalKinds: ["activity", "notification"]
+    },
     {
       pluginId: "blocker",
       label: "Focus",
