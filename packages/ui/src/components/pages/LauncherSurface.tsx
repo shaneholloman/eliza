@@ -1,4 +1,5 @@
 import * as React from "react";
+import { dispatchChatOpen } from "../../events";
 import { useRoutableViews } from "../../hooks/useAvailableViews";
 import { type ViewEntry, viewToEntry } from "../../hooks/view-catalog";
 import { isAospShellEnabled } from "../../navigation";
@@ -68,6 +69,9 @@ export const LauncherSurface = React.memo(
           window.history.pushState(null, "", path);
           window.dispatchEvent(new PopStateEvent("popstate"));
         }
+        // The Messages tile lands on `/chat` (the ambient home). Open the chat
+        // so the user arrives in a conversation, not on a collapsed pill.
+        if (entry.id === "chat") dispatchChatOpen();
       } catch {
         // Sandboxed navigation is best-effort.
       }

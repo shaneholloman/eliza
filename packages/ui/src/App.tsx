@@ -262,6 +262,18 @@ const RelationshipsView = lazyNamedView(
   () => import("./components/pages/RelationshipsView"),
   "RelationshipsView",
 );
+const KnowledgeView = lazyNamedView(
+  () => import("./components/pages/KnowledgeView"),
+  "KnowledgeView",
+);
+const CharacterExperienceView = lazyNamedView(
+  () => import("./components/character/CharacterExperienceView"),
+  "CharacterExperienceView",
+);
+const CharacterSkillsView = lazyNamedView(
+  () => import("./components/character/CharacterSkillsView"),
+  "CharacterSkillsView",
+);
 const RuntimeView = lazyNamedView(
   () => import("./components/pages/RuntimeView"),
   "RuntimeView",
@@ -871,6 +883,8 @@ const SHELL_RESERVED_PATHS = new Set([
   "/views",
   "/apps",
   "/character/documents",
+  "/character/experience",
+  "/character/skills",
   "/apps/plugins",
   "/apps/skills",
   "/apps/trajectories",
@@ -1149,6 +1163,21 @@ function renderStaticViewRouterTab({
         <RelationshipsView />
       </TabContentView>
     ),
+    documents: (
+      <TabContentView>
+        <KnowledgeView />
+      </TabContentView>
+    ),
+    experience: (
+      <TabContentView>
+        <CharacterExperienceView />
+      </TabContentView>
+    ),
+    "character-skills": (
+      <TabContentView>
+        <CharacterSkillsView />
+      </TabContentView>
+    ),
     memories: (
       <TabContentView>
         <MemoryViewerView />
@@ -1203,16 +1232,10 @@ function renderStaticViewRouterTab({
     // background shows through behind the controls.
     return <BackgroundView />;
   }
-  if (
-    tab === "character" ||
-    tab === "character-select" ||
-    tab === "documents"
-  ) {
+  if (tab === "character" || tab === "character-select") {
     return (
       <TabContentView>
-        <CharacterEditor
-          initialPage={tab === "documents" ? "documents" : undefined}
-        />
+        <CharacterEditor />
       </TabContentView>
     );
   }

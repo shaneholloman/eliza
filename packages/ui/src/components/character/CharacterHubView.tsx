@@ -1,5 +1,4 @@
 import type { MessageExampleGroup } from "@elizaos/core";
-import { ChevronLeft } from "lucide-react";
 import {
   type ReactNode,
   useCallback,
@@ -19,6 +18,7 @@ import { WorkspaceLayout } from "../../layouts/workspace-layout/workspace-layout
 import {
   getWindowNavigationPath,
   shouldUseHashNavigation,
+  titleForTab,
 } from "../../navigation";
 import { useAppSelectorShallow } from "../../state";
 // Direct sub-path import to avoid the widgets/index.ts ↔ WidgetHost.tsx
@@ -26,6 +26,7 @@ import { useAppSelectorShallow } from "../../state";
 import { WidgetHost } from "../../widgets/WidgetHost";
 import { DocumentsView } from "../pages/DocumentsView";
 import { RelationshipsWorkspaceView } from "../pages/relationships/RelationshipsWorkspaceView";
+import { ViewHeader } from "../shared/ViewHeader";
 import { Button } from "../ui/button";
 import { ShellViewAgentSurface } from "../views/ShellViewAgentSurface";
 import {
@@ -41,7 +42,6 @@ import {
 } from "./CharacterOverviewSection";
 import {
   type CharacterHubSection,
-  getCharacterHubSectionLabel,
   mapExperienceRecordToHubRecord,
 } from "./character-hub-helpers";
 import { useCharacterHubData } from "./useCharacterHubData";
@@ -65,7 +65,10 @@ function getSectionFromLocation(tab: string): CharacterHubSection {
   if (pathname.endsWith("/experience")) return "experience";
   if (pathname.endsWith("/relationships")) return "relationships";
   if (tab === "documents") return "documents";
-  return "overview";
+  // The character hub is now the top-level "Character" view — it renders the
+  // identity/style/examples editor (the old "personality" section). Knowledge,
+  // Relationships, Skills, and Experience are separate top-level views.
+  return "personality";
 }
 
 function updateCharacterSectionPath(
@@ -465,8 +468,6 @@ export function CharacterHubView({
     [experienceRecords],
   );
 
-  const activeSectionLabel = getCharacterHubSectionLabel(activeSection);
-
   const navigateToSection = useCallback(
     (section: CharacterHubSection) => {
       setActiveSection(section);
@@ -776,37 +777,19 @@ export function CharacterHubView({
     );
   };
 
-  const isSubPage = activeSection !== "overview";
-
   return (
     <WorkspaceLayout
       className="h-full"
       contentPadding={false}
-      contentInnerClassName="flex w-full min-h-0 flex-1 flex-col px-4 py-4 sm:px-5 sm:py-5 lg:px-6"
+      contentInnerClassName="flex w-full min-h-0 flex-1 flex-col"
       data-testid="character-editor-view"
     >
+      <ViewHeader title={titleForTab(tab)} />
       <div
         ref={contentScrollRef}
-        className="custom-scrollbar mx-auto flex min-h-0 w-full min-w-0 max-w-6xl flex-1 flex-col overflow-y-auto overflow-x-hidden pb-32"
+        className="custom-scrollbar mx-auto flex min-h-0 w-full min-w-0 max-w-6xl flex-1 flex-col overflow-y-auto overflow-x-hidden px-4 pb-32 pt-1 sm:px-5 lg:px-6"
       >
         <WidgetHost slot="character" className="mb-4" />
-        {isSubPage ? (
-          <div className="mb-5 flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => navigateToSection("overview")}
-              className="h-auto gap-1 px-0 py-0 text-sm font-normal text-muted transition-colors hover:bg-transparent hover:text-txt"
-              aria-label="Back to Character hub"
-            >
-              <ChevronLeft className="h-4 w-4" aria-hidden />
-              Character
-            </Button>
-            <span className="text-lg font-semibold text-txt">
-              {activeSectionLabel}
-            </span>
-          </div>
-        ) : null}
         {renderSection()}
       </div>
     </WorkspaceLayout>

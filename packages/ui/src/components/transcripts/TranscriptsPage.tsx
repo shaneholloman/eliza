@@ -16,6 +16,7 @@ import type { Transcript } from "@elizaos/shared/transcripts";
 import * as React from "react";
 import { client } from "../../api/client";
 import { parseMeetingStatusEvent } from "../../api/client-meetings";
+import { ViewHeader } from "../shared/ViewHeader";
 import type { MeetingAwareTranscriptSummary } from "./TranscriptsView";
 import { TranscriptsView } from "./TranscriptsView";
 
@@ -123,18 +124,23 @@ export function TranscriptsPage(): React.JSX.Element {
   );
 
   return (
-    <TranscriptsView
-      transcripts={transcripts}
-      selectedId={selectedId}
-      selected={selected}
-      onSelect={onSelect}
-      loading={loading}
-      error={error}
-      activeMeetings={activeMeetings}
-      onJoinMeeting={onJoinMeeting}
-      onStopMeeting={onStopMeeting}
-      joiningMeeting={joiningMeeting}
-      meetingError={meetingError}
-    />
+    <div className="flex h-full min-h-0 w-full flex-col">
+      <ViewHeader title="Transcripts" />
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <TranscriptsView
+          transcripts={transcripts}
+          selectedId={selectedId}
+          selected={selected}
+          onSelect={onSelect}
+          loading={loading}
+          error={error}
+          activeMeetings={activeMeetings}
+          onJoinMeeting={onJoinMeeting}
+          onStopMeeting={onStopMeeting}
+          joiningMeeting={joiningMeeting}
+          meetingError={meetingError}
+        />
+      </div>
+    </div>
   );
 }

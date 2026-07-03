@@ -138,6 +138,13 @@ export interface CloudHandoffRetryDetail {
 export const TUTORIAL_CHAT_CONTROL_EVENT =
   "eliza:tutorial:chat-control" as const;
 export const CHAT_PREFILL_EVENT = "eliza:chat:prefill" as const;
+/**
+ * Open (expand) the floating chat from anywhere — fired when the launcher's
+ * "Messages" tile is tapped so landing on `/chat` lands the user IN an open
+ * conversation, not on the wordless home with a collapsed pill. The always-
+ * mounted {@link ContinuousChatOverlay} is the one listener.
+ */
+export const CHAT_OPEN_EVENT = "eliza:chat:open" as const;
 /** Open the keyword message-search panel (fired by the chat search affordance). */
 export const CHAT_MESSAGE_SEARCH_EVENT = "eliza:chat:message-search" as const;
 /**
@@ -185,6 +192,12 @@ export function dispatchTutorialChatControl(
 export function dispatchChatPrefill(detail: ChatPrefillEventDetail): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(CHAT_PREFILL_EVENT, { detail }));
+}
+
+/** Dispatch a request to open (expand) the floating chat. See {@link CHAT_OPEN_EVENT}. */
+export function dispatchChatOpen(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(CHAT_OPEN_EVENT));
 }
 
 /** Request the notification center to open (surface-agnostic — see

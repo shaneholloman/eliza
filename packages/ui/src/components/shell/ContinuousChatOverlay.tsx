@@ -45,6 +45,7 @@ import {
 import type { SlashCommandController } from "../../chat/useSlashCommandController";
 import {
   type BackIntentEventDetail,
+  CHAT_OPEN_EVENT,
   CHAT_PREFILL_EVENT,
   type ChatPrefillEventDetail,
   ELIZA_BACK_INTENT_EVENT,
@@ -3370,6 +3371,22 @@ export function ContinuousChatOverlay({
     window.addEventListener(CHAT_PREFILL_EVENT, onPrefill);
     return () => window.removeEventListener(CHAT_PREFILL_EVENT, onPrefill);
   }, [clearPrefillFocusSchedule]);
+
+  // "Open chat" intent (the launcher's Messages tile). Land the user IN an open
+  // conversation instead of the wordless home with a collapsed pill: un-pill to
+  // the composer and reveal the thread (a no-op when there's nothing to reveal
+  // yet), then focus the input. Gated by the onboarding lock like the tour.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const onOpen = () => {
+      if (firstRunOpen) return;
+      setMode((m) => (m === "pill" ? "input" : m));
+      expand();
+      requestAnimationFrame(() => inputRef.current?.focus());
+    };
+    window.addEventListener(CHAT_OPEN_EVENT, onOpen);
+    return () => window.removeEventListener(CHAT_OPEN_EVENT, onOpen);
+  }, [firstRunOpen, expand]);
 
   // OS assistant / deep-link entry (Siri, Shortcuts, App Actions, the assistant
   // entry point) routes into `#chat?text=…&source=…&voice=1`. On desktop the
