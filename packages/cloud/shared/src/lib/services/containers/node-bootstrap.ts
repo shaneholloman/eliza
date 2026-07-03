@@ -18,6 +18,7 @@
  */
 
 import { containersEnv } from "../../config/containers-env";
+import { CLOUD_METADATA_IP } from "../app-firewall-utils";
 import { validateDockerPlatform } from "../docker-sandbox-utils";
 import { getImageRegistryHost } from "./hetzner-client/registry";
 
@@ -130,6 +131,28 @@ write_files:
     content: |
       ${sshKey}
     append: true
+  - path: /usr/local/sbin/eliza-container-egress-guard.sh
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      set -eu
+      iptables -N DOCKER-USER 2>/dev/null || true
+      iptables -C DOCKER-USER -d ${CLOUD_METADATA_IP}/32 -j DROP 2>/dev/null || iptables -I DOCKER-USER 1 -d ${CLOUD_METADATA_IP}/32 -j DROP
+  - path: /etc/systemd/system/eliza-container-egress-guard.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Block Docker container access to cloud metadata endpoint
+      Requires=docker.service
+      After=docker.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/eliza-container-egress-guard.sh
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
 
 runcmd:
   - chage -M 99999 -E -1 root || true
@@ -137,6 +160,8 @@ runcmd:
   - chmod 0700 /data/containers /data/agents
   - curl -fsSL https://get.docker.com | sh
   - systemctl enable --now docker
+  - systemctl daemon-reload
+  - systemctl enable --now eliza-container-egress-guard.service
   - docker network inspect '${sanitizeShellSingleQuoted(network)}' >/dev/null 2>&1 || docker network create --driver bridge '${sanitizeShellSingleQuoted(network)}'
 ${registryAccessCommands}
 ${prePullCommands}${registerSection}

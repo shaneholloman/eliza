@@ -17,7 +17,13 @@ import type { UseChatSendDeps } from "../../../state/useChatSend";
 import { useChatSend } from "../../../state/useChatSend";
 import { ContinuousChatOverlay } from "../ContinuousChatOverlay";
 import type { ShellMessage } from "../shell-state";
-import type { ShellController } from "../useShellController";
+import type { ConversationNav, ShellController } from "../useShellController";
+
+declare global {
+  interface Window {
+    __setModelReady?: (ready: boolean) => void;
+  }
+}
 
 // ── Scripted server (the boundary) ─────────────────────────────────────────
 // Mirrors the real agent's warm-up behavior: the runtime-ready hold expires →
@@ -25,14 +31,20 @@ import type { ShellController } from "../useShellController";
 
 const serverThread: ConversationMessage[] = [];
 let modelReady = false;
-(
-  window as unknown as { __setModelReady?: (ready: boolean) => void }
-).__setModelReady = (ready: boolean) => {
+window.__setModelReady = (ready: boolean) => {
   console.log(`[fixture] modelReady -> ${ready}`);
   modelReady = ready;
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const CONVERSATION: Conversation = {
+  id: "conv-1",
+  roomId: "room-1",
+  title: "New Chat",
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+} as Conversation;
 
 client.sendConversationMessageStream = (async (
   _convId: string,
@@ -57,19 +69,12 @@ client.sendConversationMessageStream = (async (
 }) as typeof client.sendConversationMessageStream;
 client.sendWsMessage = (() => {}) as typeof client.sendWsMessage;
 client.getBaseUrl = (() => "") as typeof client.getBaseUrl;
-client.abortConversationTurn = (async () => ({
+client.abortConversationTurn = async (roomId, reason = "ui-abort") => ({
   aborted: false,
-})) as unknown as typeof client.abortConversationTurn;
-client.renameConversation = (async () =>
-  ({})) as unknown as typeof client.renameConversation;
-
-const CONVERSATION: Conversation = {
-  id: "conv-1",
-  roomId: "room-1",
-  title: "New Chat",
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
-} as Conversation;
+  roomId,
+  reason,
+});
+client.renameConversation = async () => ({ conversation: CONVERSATION });
 
 // ── Harness ────────────────────────────────────────────────────────────────
 
@@ -167,22 +172,50 @@ function Harness(): React.JSX.Element {
     [sendChatText],
   );
 
-  const controller = {
+  const conversationNav = React.useMemo<ConversationNav>(
+    () => ({
+      hasPrev: false,
+      hasNext: false,
+      goPrev: () => {},
+      goNext: () => {},
+      activeId: "conv-1",
+      index: 0,
+    }),
+    [],
+  );
+
+  const controller: ShellController = {
     phase: "summoned",
     responding: chatSending,
     turnStatus: chatSending ? { kind: "thinking" as const } : null,
     messages,
     canSend: true,
     recording: false,
+    waveformMode: "idle",
+    analyser: null,
+    open: () => {},
+    close: () => {},
+    isOpen: true,
     handsFree: false,
     transcript: "",
     speaking: false,
+    speak: () => {},
+    stopSpeaking: () => {},
     agentVoiceMuted: false,
     needsAudioUnlock: false,
     transcriptionMode: false,
+    captureVision: () => {},
+    visionCapturing: false,
     toggleTranscriptionMode: () => {},
     stopTranscriptionAndMic: () => {},
-    modelStatus: { kind: "ready" },
+    modelStatus: {
+      kind: "ready",
+      blocksSend: false,
+      percent: null,
+      etaMs: null,
+      modelName: null,
+      errors: [],
+    },
     send,
     toggleRecording: () => {},
     toggleHandsFree: () => {},
@@ -198,7 +231,8 @@ function Harness(): React.JSX.Element {
     navigateToViews: () => {},
     clearConversation: () => {},
     stop: () => {},
-  } as unknown as ShellController;
+    conversationNav,
+  };
 
   return (
     <div

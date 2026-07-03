@@ -154,6 +154,14 @@ const STREAMING_SESSION_EVENTS = new Set(["message", "reasoning", "plan"]);
 // inject, so the coordinator stays the sole poster for stop/cancel/no-output.
 const ROUTER_OWNED_TERMINAL_EVENTS = new Set(["task_complete", "error"]);
 
+// Metadata key the sub-agent-router stamps on a session it hands off to a
+// successor (verify-retry / state-lost respawn / account failover) before
+// tearing it down. That teardown `stopped` is handoff plumbing, not a
+// user-facing terminal — the successor session posts the real completion, so
+// synthesis must not post the old one (#11711). Matching local literal (no
+// import from sub-agent-router — see the ROUTER_ORIGIN_UUID_RE note).
+const HANDED_OFF_SUCCESSOR_META_KEY = "handedOffToSuccessorSessionId";
+
 const LEGACY_TASK_EVICTION_GRACE_MS = 60_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -841,6 +849,40 @@ export class SwarmCoordinatorService extends Service {
     }
     const meta = sessionMeta.metadata;
 
+    // Handoff teardown (#11711): a session the router handed off to a successor
+    // (verify-retry, state-lost respawn, or account failover) is torn down with
+    // a `stopped` terminal that is plumbing, not a user-facing end state — the
+    // successor session posts the real completion. The router stamps the old
+    // session with `handedOffToSuccessorSessionId` before teardown; skip its
+    // terminal so one task yields ONE completion, not one per lineage
+    // generation. A genuine user stop carries no marker and still synthesizes
+    // (the #11689 invariant). Do NOT claim the dedupe slot — the successor's
+    // terminal must remain free to post.
+    //
+    // Cache-staleness re-read (#11711 residual): the enrichment cache is warmed
+    // from the store on the earlier SAME-session `task_complete` — the one that
+    // triggered the verify-retry — which lands BEFORE the router stamps the
+    // marker on that session. So the cached snapshot the `stopped` reads here
+    // can pre-date the stamp and miss the marker, and the teardown-stop would
+    // be mistaken for a user stop and synthesized. Only for `stopped`, and only
+    // when the cached snapshot lacks the marker, re-read the store once via
+    // `getFreshSessionMetadata` (which also refreshes the cache). Fail-open: an
+    // unreadable/missing session yields `{}`, so an unknown session is treated
+    // as "not superseded" and still synthesizes — a genuine stop is never
+    // silenced.
+    if (readString(meta, HANDED_OFF_SUCCESSOR_META_KEY)) {
+      return;
+    }
+    if (
+      event === "stopped" &&
+      readString(
+        await this.getFreshSessionMetadata(sessionId),
+        HANDED_OFF_SUCCESSOR_META_KEY,
+      )
+    ) {
+      return;
+    }
+
     // Ownership rule (issue elizaOS/eliza#11634): the sub-agent-router owns the
     // completion→chat post for origin-routed sessions — it is origin-aware,
     // dedupe-keyed, respawn/retry-suppressing, and feeds the planner's clean
@@ -1040,6 +1082,37 @@ export class SwarmCoordinatorService extends Service {
 
   private shouldEnrichEvent(event: string): boolean {
     return !STREAMING_SESSION_EVENTS.has(event);
+  }
+
+  /**
+   * Cache-bypassing session-metadata read used by the handoff-teardown skip
+   * (#11711 residual). The enrichment cache can hold a pre-stamp snapshot of a
+   * session the router just superseded — warmed by the earlier same-session
+   * `task_complete` that triggered the retry, before the router stamped
+   * `handedOffToSuccessorSessionId` — so the `stopped` decision must be able to
+   * see a marker written after the cache was populated. Refreshes the cache so
+   * downstream reads in this same turn observe the fresh snapshot. Returns `{}`
+   * on any miss/error so callers treat "unknown" as "not superseded" and default
+   * to synthesizing (never silences a genuine stop).
+   */
+  private async getFreshSessionMetadata(
+    sessionId: string,
+  ): Promise<Record<string, unknown>> {
+    try {
+      const session = await this.acp()?.getSession(sessionId);
+      if (session && isRecord(session.metadata)) {
+        const refreshed: EnrichmentMetadata = {
+          metadata: session.metadata,
+          ...(session.workdir ? { workdir: session.workdir } : {}),
+          ...(session.agentType ? { agentType: session.agentType } : {}),
+        };
+        this.enrichmentMetadataCache.set(sessionId, refreshed);
+        return session.metadata;
+      }
+    } catch {
+      // fall through to empty — fail open (treat unknown as not-superseded)
+    }
+    return {};
   }
 
   private async getEnrichmentMetadata(

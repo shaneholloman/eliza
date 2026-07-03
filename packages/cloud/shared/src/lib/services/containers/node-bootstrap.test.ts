@@ -28,6 +28,14 @@ const baseInput = {
 };
 
 describe("buildContainerNodeUserData — ghcr access", () => {
+  test("blocks Docker container egress to the cloud metadata endpoint on every boot", () => {
+    clearRegistryEnv();
+    const userData = buildContainerNodeUserData(baseInput);
+    expect(userData).toContain("eliza-container-egress-guard.service");
+    expect(userData).toContain("iptables -C DOCKER-USER -d 169.254.169.254/32 -j DROP");
+    expect(userData).toContain("iptables -I DOCKER-USER 1 -d 169.254.169.254/32 -j DROP");
+  });
+
   test("clears stale ghcr creds (logout) when no registry token is configured", () => {
     clearRegistryEnv();
     const userData = buildContainerNodeUserData(baseInput);
@@ -45,6 +53,16 @@ describe("buildContainerNodeUserData — ghcr access", () => {
     expect(userData).not.toContain("docker logout");
   });
 
+  test("does not treat broad GitHub tokens as node pull credentials", () => {
+    clearRegistryEnv();
+    process.env.GITHUB_TOKEN = "ghp_write_capable_token";
+    process.env.GITHUB_ACTOR = "robot";
+    const userData = buildContainerNodeUserData(baseInput);
+    expect(userData).toContain("docker logout 'ghcr.io' >/dev/null 2>&1 || true");
+    expect(userData).not.toContain("docker login");
+    expect(userData).not.toContain("ghp_write_capable_token");
+  });
+
   test("ghcr-access step runs after the bridge network and before the pre-pull", () => {
     clearRegistryEnv();
     const userData = buildContainerNodeUserData(baseInput);
@@ -54,5 +72,18 @@ describe("buildContainerNodeUserData — ghcr access", () => {
     expect(networkIdx).toBeGreaterThanOrEqual(0);
     expect(accessIdx).toBeGreaterThan(networkIdx);
     expect(pullIdx).toBeGreaterThan(accessIdx);
+  });
+
+  test("metadata egress guard is applied before tenant network setup", () => {
+    clearRegistryEnv();
+    const userData = buildContainerNodeUserData(baseInput);
+    const dockerIdx = userData.indexOf("systemctl enable --now docker");
+    const guardIdx = userData.indexOf(
+      "systemctl enable --now eliza-container-egress-guard.service",
+    );
+    const networkIdx = userData.indexOf("docker network create");
+    expect(dockerIdx).toBeGreaterThanOrEqual(0);
+    expect(guardIdx).toBeGreaterThan(dockerIdx);
+    expect(networkIdx).toBeGreaterThan(guardIdx);
   });
 });
