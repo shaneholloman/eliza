@@ -5619,6 +5619,68 @@ export const allActionsSpec = {
 			],
 		},
 		{
+			name: "DRAFT_PRESS_RELEASE",
+			description:
+				"Create a draft press release in Eliza Cloud. Use when the user asks to draft or save a PR/press release for later distribution.",
+			parameters: [
+				{
+					name: "title",
+					description: "Press release headline/title.",
+					required: true,
+					schema: {
+						type: "string",
+					},
+					descriptionCompressed: "Press release headline/title.",
+				},
+				{
+					name: "body",
+					description: "Full press release body.",
+					required: true,
+					schema: {
+						type: "string",
+					},
+					descriptionCompressed: "Full press release body.",
+				},
+				{
+					name: "summary",
+					description: "Optional short summary.",
+					required: false,
+					schema: {
+						type: "string",
+					},
+					descriptionCompressed: "Optional short summary.",
+				},
+				{
+					name: "targetRegions",
+					description: "Optional target regions such as US or EU.",
+					required: false,
+					schema: {
+						type: "array",
+						items: {
+							type: "string",
+						},
+					},
+					descriptionCompressed: "Optional target regions such as US or EU.",
+				},
+			],
+			descriptionCompressed: "Create a draft press release.",
+			similes: ["CREATE_PRESS_RELEASE", "DRAFT_PR", "WRITE_PRESS_RELEASE"],
+			exampleCalls: [
+				{
+					user: "Use DRAFT_PRESS_RELEASE with the provided parameters.",
+					actions: ["DRAFT_PRESS_RELEASE"],
+					params: {
+						DRAFT_PRESS_RELEASE: {
+							title: "example",
+							body: "example",
+							summary: "example",
+							targetRegions: "example",
+						},
+					},
+				},
+			],
+		},
+		{
 			name: "DUPLICATE_AD_CAMPAIGN",
 			description:
 				"Duplicate a Cloud advertising campaign config and creatives into a new draft. Requires structured campaignId; optional name sets the copy name.",
@@ -6929,6 +6991,14 @@ export const allActionsSpec = {
 			descriptionCompressed:
 				"Browse influencer profiles to book for promotion.",
 			similes: ["BROWSE_INFLUENCERS", "FIND_INFLUENCERS", "SEARCH_INFLUENCERS"],
+		},
+		{
+			name: "LIST_PRESS_RELEASES",
+			description:
+				"List the user's Eliza Cloud press releases and statuses. Use before choosing a draft to submit or edit.",
+			parameters: [],
+			descriptionCompressed: "List press release drafts/submissions.",
+			similes: ["LIST_PR_DRAFTS", "SHOW_PRESS_RELEASES", "MY_PRESS_RELEASES"],
 		},
 		{
 			name: "MANAGE_BROWSER_BRIDGE",
@@ -9016,6 +9086,58 @@ export const allActionsSpec = {
 			similes: ["END_TRANSCRIPTION", "STOP_RECORDING", "FINISH_TRANSCRIPT"],
 			descriptionCompressed:
 				"Stop the long-form voice transcription running on user's device.",
+		},
+		{
+			name: "SUBMIT_PRESS_RELEASE",
+			description:
+				"Submit a press release for paid/provider-backed distribution. Requires explicit confirmation before calling the Cloud submit route.",
+			parameters: [
+				{
+					name: "releaseId",
+					description: "Press release id to submit.",
+					required: false,
+					schema: {
+						type: "string",
+					},
+					descriptionCompressed: "Press release id to submit.",
+				},
+				{
+					name: "title",
+					description: "Press release title to resolve.",
+					required: false,
+					schema: {
+						type: "string",
+					},
+					descriptionCompressed: "Press release title to resolve.",
+				},
+				{
+					name: "confirm",
+					description:
+						"Follow-up: true confirms the pending submit, false cancels.",
+					required: false,
+					schema: {
+						type: "boolean",
+					},
+					descriptionCompressed:
+						"Follow-up: true confirms the pending submit, false cancels.",
+				},
+			],
+			descriptionCompressed:
+				"Submit a press release for provider-backed distribution; requires confirm.",
+			similes: ["SUBMIT_PR", "DISTRIBUTE_PRESS_RELEASE", "SEND_PRESS_RELEASE"],
+			exampleCalls: [
+				{
+					user: "Use SUBMIT_PRESS_RELEASE with the provided parameters.",
+					actions: ["SUBMIT_PRESS_RELEASE"],
+					params: {
+						SUBMIT_PRESS_RELEASE: {
+							releaseId: "example",
+							title: "example",
+							confirm: false,
+						},
+					},
+				},
+			],
 		},
 		{
 			name: "TASKS",

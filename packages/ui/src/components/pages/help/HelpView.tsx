@@ -5,6 +5,7 @@ import { useAgentElement } from "../../../agent-surface";
 import { useAppSelector } from "../../../state";
 import { useRegisterViewChatBinding } from "../../../state/view-chat-binding";
 import { ChatEmptyStateWithRecommendations } from "../../composites/chat";
+import { ViewHeader } from "../../shared/ViewHeader";
 import { Button } from "../../ui/button";
 import { ShellViewAgentSurface } from "../../views/ShellViewAgentSurface";
 import { startTutorial } from "../tutorial/tutorial-controller";
@@ -40,7 +41,12 @@ function scoreEntry(entry: HelpEntry, q: string): number {
 export function HelpView(): React.ReactElement {
   return (
     <ShellViewAgentSurface viewId="help">
-      <HelpViewBody />
+      <div className="flex h-full min-h-0 w-full flex-col">
+        <ViewHeader title="Help" />
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <HelpViewBody />
+        </div>
+      </div>
     </ShellViewAgentSurface>
   );
 }

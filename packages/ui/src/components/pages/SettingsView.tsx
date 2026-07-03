@@ -26,6 +26,7 @@ import {
   settingsSectionLabel,
   settingsSectionTitle,
 } from "../settings/settings-sections";
+import { ViewHeader } from "../shared/ViewHeader";
 import { Button } from "../ui/button";
 import { ErrorBoundary } from "../ui/error-boundary";
 import { ShellViewAgentSurface } from "../views/ShellViewAgentSurface";
@@ -332,9 +333,14 @@ function MobileHub({
 }) {
   return (
     <div className="w-full pb-32">
-      <h1 className="mb-4 min-h-10 pl-14 text-2xl font-semibold tracking-tight text-txt-strong">
-        {t("nav.settings", { defaultValue: "Settings" })}
-      </h1>
+      {/* Top-level view header: centered "Settings" title with a launcher back
+          arrow on mobile (iOS-style nav bar). Only the single-column hub renders
+          it — the desktop split already owns its own "Settings" H1 in the rail,
+          and the per-section view keeps its own SectionBackButton (section→hub). */}
+      <ViewHeader
+        title={t("nav.settings", { defaultValue: "Settings" })}
+        className="mb-2"
+      />
       <SettingsStack>
         {grouped.map(({ group, label, items }) => (
           <SettingsGroup key={group} title={label}>

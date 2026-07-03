@@ -1,7 +1,7 @@
 {
   "name": "@elizaos/import-conversations",
   "version": "2.0.4",
-  "description": "Import prior AI conversation history (ChatGPT / Claude / Hermes exports) into elizaOS as searchable, scoped knowledge. Track A: shared core (normalized types + ingestion pipeline).",
+  "description": "Import prior AI conversation history (ChatGPT / Claude / Hermes exports) into elizaOS as searchable, scoped knowledge.",
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.js",
@@ -52,6 +52,26 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./adapters/document-service": {
+      "types": "./dist/adapters/document-service.d.ts",
+      "eliza-source": {
+        "types": "./src/adapters/document-service.ts",
+        "import": "./src/adapters/document-service.ts",
+        "default": "./src/adapters/document-service.ts"
+      },
+      "import": "./dist/adapters/document-service.js",
+      "default": "./dist/adapters/document-service.js"
+    },
+    "./parsers/claude": {
+      "types": "./dist/parsers/claude.d.ts",
+      "eliza-source": {
+        "types": "./src/parsers/claude.ts",
+        "import": "./src/parsers/claude.ts",
+        "default": "./src/parsers/claude.ts"
+      },
+      "import": "./dist/parsers/claude.js",
+      "default": "./dist/parsers/claude.js"
+    },
     "./parsers/hermes": {
       "types": "./dist/parsers/hermes.d.ts",
       "eliza-source": {
@@ -61,6 +81,16 @@
       },
       "import": "./dist/parsers/hermes.js",
       "default": "./dist/parsers/hermes.js"
+    },
+    "./parsers/chatgpt": {
+      "types": "./dist/parsers/chatgpt.d.ts",
+      "eliza-source": {
+        "types": "./src/parsers/chatgpt.ts",
+        "import": "./src/parsers/chatgpt.ts",
+        "default": "./src/parsers/chatgpt.ts"
+      },
+      "import": "./dist/parsers/chatgpt.js",
+      "default": "./dist/parsers/chatgpt.js"
     }
   },
   "devDependencies": {

@@ -63,6 +63,8 @@ export type BuiltinTab =
   | "trajectories"
   | "transcripts"
   | "relationships"
+  | "experience"
+  | "character-skills"
   | "memories"
   | "rolodex"
   | "runtime"
@@ -207,7 +209,7 @@ export function getWindowNavigationPath(
 
 export const ALL_TAB_GROUPS: TabGroup[] = [
   {
-    label: "Chat",
+    label: "Messages",
     tabs: ["chat"],
     icon: MessageSquare,
     description:
@@ -228,8 +230,17 @@ export const ALL_TAB_GROUPS: TabGroup[] = [
     description: "The Launcher — agent views, integrations, and app tools",
   },
   {
+    // The character hub is split into top-level views (#character-split): the
+    // Character editor (identity/style/examples), Knowledge (documents),
+    // Relationships, Skills (learned), and Experience each get their own tile.
     label: "Character",
-    tabs: ["character", "character-select", "documents"],
+    tabs: [
+      "character",
+      "character-select",
+      "documents",
+      "experience",
+      "character-skills",
+    ],
     icon: UserRound,
     description: "Avatar identity, style, examples, and knowledge",
   },
@@ -302,6 +313,8 @@ export const TAB_PATHS: Record<BuiltinTab, string> = {
   trajectories: "/apps/trajectories",
   transcripts: "/apps/transcripts",
   relationships: "/apps/relationships",
+  experience: "/character/experience",
+  "character-skills": "/character/skills",
   memories: "/apps/memories",
   rolodex: "/rolodex",
   runtime: "/apps/runtime",
@@ -416,11 +429,16 @@ export function tabFromPath(pathname: string, basePath = ""): Tab | null {
     return "views";
   }
 
-  // /character/<sub> — resolve nested character paths
+  // /character/<sub> — resolve nested character paths. The character hub's
+  // sections are now top-level views, but their routes keep the /character/*
+  // prefix so existing deep links resolve to the promoted tab.
   if (normalized.startsWith("/character/")) {
     const sub = normalized.slice("/character/".length);
     if (sub === "documents") return "documents";
     if (sub === "select") return "character-select";
+    if (sub === "experience") return "experience";
+    if (sub === "skills") return "character-skills";
+    if (sub === "relationships") return "relationships";
     return "character";
   }
 
@@ -501,7 +519,7 @@ export function getAppSlugFromPath(
 export function titleForTab(tab: Tab): string {
   switch (tab) {
     case "chat":
-      return "Chat";
+      return "Messages";
     case "phone":
       return "Phone";
     case "messages":
@@ -542,6 +560,10 @@ export function titleForTab(tab: Tab): string {
       return "Transcripts";
     case "relationships":
       return "Relationships";
+    case "experience":
+      return "Experience";
+    case "character-skills":
+      return "Skills";
     case "memories":
       return "Memories";
     case "files":

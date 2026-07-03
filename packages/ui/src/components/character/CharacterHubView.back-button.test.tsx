@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 //
-// Guards the per-page back affordance that replaced the global corner back
-// button (removed from the app shell in App.tsx). The Character → Knowledge
-// subpage — the exact view the floating corner button used to overlap — renders
-// its OWN in-context "Back to Character hub" control, and that control must
-// survive the shell button's removal. See CharacterHubView (isSubPage branch).
+// Guards the per-view back affordance that replaced the global corner back
+// button (removed from the app shell in App.tsx). The Character view now renders
+// a shared `ViewHeader` whose chromeless "Back to launcher" control is the
+// in-context way back — it must be present so removing the shell button never
+// strands the user. See CharacterHubView (ViewHeader) + components/shared/ViewHeader.
 
 import { cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -84,14 +84,14 @@ function renderKnowledgeSubpage() {
 }
 
 describe("CharacterHubView in-context back affordance", () => {
-  it("renders its own 'Back to Character hub' control on the Knowledge subpage (the shell no longer supplies a global corner back button)", () => {
+  it("renders its own ViewHeader 'Back to launcher' control (the shell no longer supplies a global corner back button)", () => {
     renderKnowledgeSubpage();
 
-    const back = screen.getByRole("button", { name: "Back to Character hub" });
+    const back = screen.getByRole("button", { name: "Back to launcher" });
     expect(back).toBeTruthy();
-    // The breadcrumb label the corner button used to overlap.
+    // The ViewHeader shows the view's title (derived from the active tab).
     expect(screen.getByText("Knowledge")).toBeTruthy();
-    // The subpage body still mounts under the breadcrumb.
+    // The section body still mounts under the header.
     expect(screen.getByTestId("documents-view-stub")).toBeTruthy();
   });
 

@@ -17,8 +17,8 @@
  * ASR-side VAD that lives in the pipeline layer) before forwarding to the sink.
  */
 
-import type { Page } from "playwright-core";
 import { logger } from "@elizaos/core";
+import type { Page } from "playwright-core";
 import { MEETING_AUDIO_SAMPLE_RATE } from "../types.js";
 
 /** Binding name the browser script calls with (streamIndex, Float32 payload). */
@@ -32,6 +32,14 @@ const BROWSER_PEAK_GATE = 0.005;
  * job. Chunks below this RMS are dropped before hitting the sink.
  */
 const NODE_RMS_GATE = 0.004;
+
+type SpeakerAudioEmit = (streamIndex: number, payload: number[]) => void;
+type CaptureIntervalId = ReturnType<typeof setInterval>;
+
+interface CaptureWindow extends Window {
+  __elizaMeetSpeakerAudio?: SpeakerAudioEmit;
+  __elizaMeetCaptureIntervals?: CaptureIntervalId[];
+}
 
 export interface SpeakerAudioCaptureOptions {
   /** Teams-style single mixed element: use one fixed stream key. */
@@ -81,16 +89,17 @@ export async function startSpeakerAudioCapture(
   }
 
   await page.evaluate(
-    async ({ binding, bufferSize, targetRate, peakGate, rescanMs, mixed }) => {
-      interface CaptureWindow {
-        [key: string]: unknown;
-        __elizaMeetCaptureIntervals?: ReturnType<typeof setInterval>[];
-      }
-      const w = window as unknown as CaptureWindow;
-      const emit = w[binding] as (streamIndex: number, payload: number[]) => void;
+    async ({ bufferSize, targetRate, peakGate, rescanMs, mixed }) => {
+      const w = window as CaptureWindow;
+      const emit = w.__elizaMeetSpeakerAudio;
+      if (!emit) throw new Error("speaker audio binding is not registered");
 
       const liveAudioElements = (): HTMLMediaElement[] =>
-        (Array.from(document.querySelectorAll("audio, video")) as HTMLMediaElement[]).filter((el) => {
+        (
+          Array.from(
+            document.querySelectorAll("audio, video"),
+          ) as HTMLMediaElement[]
+        ).filter((el) => {
           const src = (el as HTMLMediaElement).srcObject;
           if (!(src instanceof MediaStream)) return false;
           if (el.paused) return false;
@@ -130,7 +139,9 @@ export async function startSpeakerAudioCapture(
 
         connectedStreamIds.add(stream.id);
         const track = stream.getAudioTracks()[0];
-        track.addEventListener("ended", () => connectedStreamIds.delete(stream.id));
+        track.addEventListener("ended", () =>
+          connectedStreamIds.delete(stream.id),
+        );
         return true;
       };
 
@@ -146,9 +157,10 @@ export async function startSpeakerAudioCapture(
         // Single mixed element (Teams): always stream index 0.
         if (elements.length > 0) connect(elements[0], 0);
       } else {
-        for (let i = 0; i < elements.length; i++) if (connect(elements[i], i)) {
-          // index tracked via loop position
-        }
+        for (let i = 0; i < elements.length; i++)
+          if (connect(elements[i], i)) {
+            // index tracked via loop position
+          }
         nextStreamIndex = elements.length;
       }
 
@@ -166,10 +178,12 @@ export async function startSpeakerAudioCapture(
         }
       }, rescanMs);
 
-      w.__elizaMeetCaptureIntervals = [...(w.__elizaMeetCaptureIntervals ?? []), rescan];
+      w.__elizaMeetCaptureIntervals = [
+        ...(w.__elizaMeetCaptureIntervals ?? []),
+        rescan,
+      ];
     },
     {
-      binding: AUDIO_BINDING,
       bufferSize: BUFFER_SIZE,
       targetRate: MEETING_AUDIO_SAMPLE_RATE,
       peakGate: BROWSER_PEAK_GATE,
@@ -185,10 +199,9 @@ export async function startSpeakerAudioCapture(
       if (page.isClosed()) return;
       try {
         await page.evaluate(() => {
-          const w = window as unknown as {
-            __elizaMeetCaptureIntervals?: ReturnType<typeof setInterval>[];
-          };
-          for (const id of w.__elizaMeetCaptureIntervals ?? []) clearInterval(id);
+          const w = window as CaptureWindow;
+          for (const id of w.__elizaMeetCaptureIntervals ?? [])
+            clearInterval(id);
           w.__elizaMeetCaptureIntervals = [];
         });
       } catch (err) {

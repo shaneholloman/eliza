@@ -167,8 +167,8 @@ export * from "./apps/extensions/registry";
 export * from "./apps/extensions/surface";
 export * from "./apps/extensions/surface.helpers";
 export * from "./apps/extensions/types";
-export * from "./apps/GameView";
-export * from "./apps/GameView.helpers";
+export * from "./apps/FullscreenView";
+export * from "./apps/FullscreenView.helpers";
 export * from "./apps/GameViewOverlay";
 export * from "./apps/overlay-app-api";
 export * from "./apps/overlay-app-registry";
@@ -214,7 +214,6 @@ export * from "./custom-actions/CustomActionEditor";
 export * from "./custom-actions/CustomActionsPanel";
 export * from "./custom-actions/CustomActionsView";
 export * from "./pages/AppsPageView";
-export * from "./pages/AppsView";
 // AutomationsFeed, BrowserWorkspaceView omitted — App.tsx lazy-loads them.
 export * from "./pages/ConfigPageView";
 // DatabasePageView omitted — App.tsx lazy-loads it by path and app-core imports
