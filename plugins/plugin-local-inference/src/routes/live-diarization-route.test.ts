@@ -14,7 +14,10 @@
  * which exercises the same AudioFrameConsumer with real models.
  */
 
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import type http from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildLiveDiarizationConsumerDeps } from "../services/voice/live-diarization-session.js";
@@ -409,5 +412,166 @@ describe("handleLiveDiarizationRoute", () => {
 		);
 		expect(handled).toBe(true);
 		expect(res.statusCode).toBe(400);
+	});
+
+	describe("AEC evidence capture routes (#11373)", () => {
+		it("arms, reports status, and snapshots the near/far window", async () => {
+			// Arm — like playback push, arming needs no model build.
+			const armRes = new FakeRes();
+			await handleLiveDiarizationRoute(
+				makeReq({
+					method: "POST",
+					url: "/api/voice/aec-capture",
+					body: { arm: true, maxSeconds: 5 },
+				}),
+				armRes as unknown as http.ServerResponse,
+				runtimeState(),
+			);
+			expect(armRes.statusCode).toBe(200);
+			expect(armRes.json()).toMatchObject({
+				ok: true,
+				capture: { armed: true, sampleCount: 0, maxSamples: 80_000 },
+			});
+
+			const getRes = new FakeRes();
+			const handled = await handleLiveDiarizationRoute(
+				makeReq({ method: "GET", url: "/api/voice/aec-capture" }),
+				getRes as unknown as http.ServerResponse,
+				runtimeState(),
+			);
+			expect(handled).toBe(true);
+			expect(getRes.statusCode).toBe(200);
+			const snapshot = (
+				getRes.json() as {
+					capture: {
+						armed: boolean;
+						sampleRate: number;
+						nearPcm16: string;
+						farPcm16: string;
+						echoDelaySamples: number;
+					};
+				}
+			).capture;
+			expect(snapshot.armed).toBe(true);
+			expect(snapshot.sampleRate).toBe(16_000);
+			expect(snapshot.nearPcm16).toBe("");
+			expect(snapshot.farPcm16).toBe("");
+			expect(typeof snapshot.echoDelaySamples).toBe("number");
+		});
+
+		it("disarms via { disarm: true }", async () => {
+			const armRes = new FakeRes();
+			await handleLiveDiarizationRoute(
+				makeReq({
+					method: "POST",
+					url: "/api/voice/aec-capture",
+					body: { arm: true },
+				}),
+				armRes as unknown as http.ServerResponse,
+				runtimeState(),
+			);
+			const disarmRes = new FakeRes();
+			await handleLiveDiarizationRoute(
+				makeReq({
+					method: "POST",
+					url: "/api/voice/aec-capture",
+					body: { disarm: true },
+				}),
+				disarmRes as unknown as http.ServerResponse,
+				runtimeState(),
+			);
+			expect(disarmRes.statusCode).toBe(200);
+			expect(disarmRes.json()).toMatchObject({
+				ok: true,
+				capture: { armed: false },
+			});
+		});
+
+		it("rejects a body with neither arm nor disarm with 400", async () => {
+			const res = new FakeRes();
+			const handled = await handleLiveDiarizationRoute(
+				makeReq({
+					method: "POST",
+					url: "/api/voice/aec-capture",
+					body: { maxSeconds: 5 },
+				}),
+				res as unknown as http.ServerResponse,
+				runtimeState(),
+			);
+			expect(handled).toBe(true);
+			expect(res.statusCode).toBe(400);
+		});
+
+		it("rejects a non-loopback caller with 401", async () => {
+			const res = new FakeRes();
+			await handleLiveDiarizationRoute(
+				makeReq({
+					method: "GET",
+					url: "/api/voice/aec-capture",
+					remoteAddress: "203.0.113.7",
+					host: "203.0.113.7:31337",
+				}),
+				res as unknown as http.ServerResponse,
+				runtimeState(),
+			);
+			expect(res.statusCode).toBe(401);
+		});
+
+		it("mirrors a real capture to $ELIZA_STATE_DIR for bridge-free retrieval (#11373)", async () => {
+			// The on-device iOS harness cannot land its result via the WebView
+			// Capacitor Filesystem sink; the agent instead writes the near/far PCM
+			// straight to the state dir where host tooling pulls it.
+			const stateDir = mkdtempSync(path.join(tmpdir(), "aec-state-"));
+			const prev = process.env.ELIZA_STATE_DIR;
+			process.env.ELIZA_STATE_DIR = stateDir;
+			const evidencePath = path.join(stateDir, "eliza-aec-capture.json");
+			try {
+				const state = runtimeState();
+				const arm = new FakeRes();
+				await handleLiveDiarizationRoute(
+					makeReq({
+						method: "POST",
+						url: "/api/voice/aec-capture",
+						body: { arm: true, maxSeconds: 5 },
+					}),
+					arm as unknown as http.ServerResponse,
+					state,
+				);
+				expect(arm.statusCode).toBe(200);
+
+				// Ingest a few frames while armed so the capture holds real samples
+				// (the pure-TS AEC seam runs even without the fused diarizer).
+				const frames = new FakeRes();
+				await handleLiveDiarizationRoute(
+					makeReq({
+						method: "POST",
+						url: "/api/voice/audio-frames",
+						body: { frames: [silentFrame(0), silentFrame(1)] },
+					}),
+					frames as unknown as http.ServerResponse,
+					state,
+				);
+				expect(frames.statusCode).toBe(200);
+
+				// A GET with no samples must NOT write; here samples exist, so it does.
+				expect(existsSync(evidencePath)).toBe(false);
+				const get = new FakeRes();
+				await handleLiveDiarizationRoute(
+					makeReq({ method: "GET", url: "/api/voice/aec-capture" }),
+					get as unknown as http.ServerResponse,
+					state,
+				);
+				expect(get.statusCode).toBe(200);
+				expect(existsSync(evidencePath)).toBe(true);
+				const mirrored = JSON.parse(readFileSync(evidencePath, "utf8"));
+				expect(mirrored.capture.sampleCount).toBeGreaterThan(0);
+				expect(typeof mirrored.capture.nearPcm16).toBe("string");
+				expect(typeof mirrored.writtenAt).toBe("string");
+			} finally {
+				if (prev === undefined) delete process.env.ELIZA_STATE_DIR;
+				else process.env.ELIZA_STATE_DIR = prev;
+				rmSync(stateDir, { recursive: true, force: true });
+			}
+		});
 	});
 });

@@ -20,13 +20,23 @@
  *     removes the agent's echo before VAD/attribution (#9455/#9583). Send
  *     `reset: true` when playback stops / on barge-in.
  *   GET  /api/voice/audio-frames/status → LiveDiarizationStatus (device evidence)
+ *   POST /api/voice/aec-capture         body: { arm?: boolean, disarm?: boolean,
+ *                                               maxSeconds?: number }
+ *                                       → { ok, capture: AecCaptureStatus }
+ *   GET  /api/voice/aec-capture         → { ok, capture: AecCaptureSnapshot }
+ *     Bounded on-device AEC evidence window (#11373): while armed, the session
+ *     buffers every ingested mic frame (near) plus the delay-0 far-end
+ *     reference at its timestamp, so real device ERLE / double-talk
+ *     measurements can replay the exact production canceller offline.
  *
  * Auth follows the compat pattern: trusted-loopback OR the compat API token.
  * The WebView reaches this over 127.0.0.1 (trusted local), matching the rest of
  * the on-device agent surface.
  */
 
+import { writeFileSync } from "node:fs";
 import type http from "node:http";
+import path from "node:path";
 import type {
 	AudioFrameEvent,
 	EchoReferenceProvider,
@@ -44,6 +54,33 @@ import {
 } from "./compat-helpers.js";
 
 let session: LiveDiarizationSession | null = null;
+
+/**
+ * Best-effort mirror of the agent-side AEC evidence (near/far PCM + live
+ * counters) to `$ELIZA_STATE_DIR/eliza-aec-capture.json` (#11373). This is the
+ * bridge-free retrieval path for on-device runs where the WebView's Capacitor
+ * Filesystem sink cannot land the harness result — the bun agent owns the
+ * capture, so it writes it straight to disk where host tooling pulls it. Inert
+ * with no state dir set (dev/desktop) and never throws.
+ */
+async function persistAecEvidence(
+	capture: { sampleCount?: number } | null | undefined,
+	status: unknown,
+): Promise<void> {
+	const stateDir = process.env.ELIZA_STATE_DIR?.trim();
+	// Only mirror a capture that actually holds samples — an incidental GET with
+	// nothing captured must not clobber a real prior capture or write noise.
+	if (!stateDir || !capture || (capture.sampleCount ?? 0) <= 0) return;
+	try {
+		writeFileSync(
+			path.join(stateDir, "eliza-aec-capture.json"),
+			JSON.stringify({ capture, status, writtenAt: new Date().toISOString() }),
+		);
+	} catch {
+		// Retrieval mirror is best-effort; the HTTP response already carries the
+		// capture for callers that can read it.
+	}
+}
 
 type RuntimeEchoReferenceSource = RuntimeEventSink & {
 	/**
@@ -156,6 +193,52 @@ export async function handleLiveDiarizationRoute(
 			framesDropped: status.framesDropped,
 			turnsObserved: status.turnsObserved,
 		});
+		return true;
+	}
+
+	if (url.pathname === "/api/voice/aec-capture" && method === "POST") {
+		if (!ensureCompatApiAuthorized(req, res)) return true;
+		const current = getSession(state);
+		if (!current) {
+			sendJsonError(res, 503, "Runtime not ready");
+			return true;
+		}
+		const body = await readCompatJsonBody(req, res);
+		if (!body) return true;
+		if (body.arm !== true && body.disarm !== true) {
+			sendJsonError(
+				res,
+				400,
+				"Expected { arm?: true, disarm?: true, maxSeconds?: number }",
+			);
+			return true;
+		}
+		const capture =
+			body.disarm === true
+				? current.disarmAecCapture()
+				: current.armAecCapture(
+						typeof body.maxSeconds === "number" ? body.maxSeconds : undefined,
+					);
+		sendJson(res, 200, { ok: true, capture });
+		return true;
+	}
+
+	if (url.pathname === "/api/voice/aec-capture" && method === "GET") {
+		if (!ensureCompatApiAuthorized(req, res)) return true;
+		const current = getSession(state);
+		if (!current) {
+			sendJsonError(res, 503, "Runtime not ready");
+			return true;
+		}
+		const capture = current.aecCaptureSnapshot();
+		// Persist the snapshot to the agent state dir via Node fs (#11373). On
+		// physical iOS the WebView's Capacitor Filesystem sink is the harness's
+		// only off-device channel and it is unreliable for multi-MB payloads;
+		// the bun agent can write the near/far PCM + counters straight to
+		// $ELIZA_STATE_DIR, which host tooling pulls with
+		// `devicectl device copy from` — the robust, bridge-free retrieval path.
+		await persistAecEvidence(capture, await current.status());
+		sendJson(res, 200, { ok: true, capture });
 		return true;
 	}
 
