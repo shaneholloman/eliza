@@ -189,18 +189,18 @@ function containsAsWholeWord(haystack: string, needle: string): boolean {
 }
 
 /**
- * Specificity score for how well the lowercased reference `lower` targets an
- * app's name/slug. 0 = no match; higher = more specific:
- *   - the name/slug appears in the reference as WHOLE WORDS (a sentence naming
- *     the app) — scored by the matched name length, so a longer, more specific
+ * Specificity score for how well the lowercased reference `lower` targets one
+ * of an item's `names`. 0 = no match; higher = more specific:
+ *   - the name appears in the reference as WHOLE WORDS (a sentence naming the
+ *     item) — scored by the matched name length, so a longer, more specific
  *     name ("Prod API Backup", 15) beats a prefix ("Prod API", 8).
- *   - otherwise the reference is a substring the user typed of the name/slug (a
+ *   - otherwise the reference is a substring the user typed of the name (a
  *     fragment like "acme") — always scored below any whole-word match.
  */
-function referenceScore(lower: string, app: AppDto): number {
+function referenceScore(lower: string, names: string[]): number {
   let best = 0;
-  for (const field of [app.name, app.slug]) {
-    const f = (field ?? "").toLowerCase();
+  for (const field of names) {
+    const f = field.toLowerCase();
     if (!f) continue;
     if (f.length >= 3 && containsAsWholeWord(lower, f)) {
       best = Math.max(best, 1000 + f.length);
@@ -212,48 +212,87 @@ function referenceScore(lower: string, app: AppDto): number {
 }
 
 /**
- * Resolve an app from a free-text reference against a list, ambiguity-aware.
+ * Result of {@link matchByReference}: a single confident match, or — when the
+ * reference is ambiguous (several items match equally well) — no match plus
+ * the tied `candidates`, so a destructive/money action can ask the user to
+ * disambiguate instead of silently acting on the wrong target.
+ */
+export interface ReferenceMatch<T> {
+  item: T | null;
+  candidates: T[];
+}
+
+/**
+ * Resolve an item (app, influencer profile, …) from a free-text reference
+ * against a list, ambiguity-aware. `identify` maps each item to its stable id
+ * plus the human names it answers to (name, slug, display name, …).
  *
  * Match priority:
  *   1. exact id
- *   2. exact (case-insensitive) name or slug
+ *   2. exact (case-insensitive) name
  *   3. best-scoring fuzzy match ({@link referenceScore}) — a whole-word
  *      name-in-sentence beats a typed fragment, and a longer name beats a
- *      shorter prefix. When two or more apps tie for the top score the result
- *      is AMBIGUOUS: `app` is null and `candidates` holds the tied apps.
+ *      shorter prefix. When two or more items tie for the top score the result
+ *      is AMBIGUOUS: `item` is null and `candidates` holds the tied items.
  *
  * Never silently returns the first of several equally-good matches — the old
  * raw-substring `find()` let a one-message "delete Prod API Backup" resolve to
- * (and tear down) the wrong "Prod API" app, and "delete my chatbot helper"
- * match an app named "Bot" via the "bot" inside "chatbot".
+ * (and tear down) the wrong "Prod API" app, "delete my chatbot helper" match
+ * an app named "Bot" via the "bot" inside "chatbot", and an adversarially
+ * named influencer profile capture someone else's booking.
+ */
+export function matchByReference<T>(
+  items: T[],
+  reference: string,
+  identify: (item: T) => {
+    id: string;
+    names: Array<string | null | undefined>;
+  },
+): ReferenceMatch<T> {
+  const ref = reference.trim();
+  if (!ref) return { item: null, candidates: [] };
+  const lower = ref.toLowerCase();
+
+  const namesOf = (item: T): string[] =>
+    identify(item).names.filter(
+      (n): n is string => typeof n === "string" && n.length > 0,
+    );
+
+  const byId = items.find((item) => identify(item).id === ref);
+  if (byId) return { item: byId, candidates: [byId] };
+
+  const exact = items.filter((item) =>
+    namesOf(item).some((n) => n.toLowerCase() === lower),
+  );
+  if (exact.length === 1) return { item: exact[0], candidates: exact };
+  if (exact.length > 1) return { item: null, candidates: exact };
+
+  const scored = items
+    .map((item) => ({ item, score: referenceScore(lower, namesOf(item)) }))
+    .filter((s) => s.score > 0);
+  if (scored.length === 0) return { item: null, candidates: [] };
+
+  const max = Math.max(...scored.map((s) => s.score));
+  const top = scored.filter((s) => s.score === max).map((s) => s.item);
+  return top.length === 1
+    ? { item: top[0], candidates: top }
+    : { item: null, candidates: top };
+}
+
+/**
+ * Resolve an app from a free-text reference against a list, ambiguity-aware.
+ * App-typed wrapper over {@link matchByReference} (id → exact name/slug →
+ * whole-word-in-sentence → fragment; ties = ambiguous).
  */
 export function matchAppByReference(
   apps: AppDto[],
   reference: string,
 ): AppReferenceMatch {
-  const ref = reference.trim();
-  if (!ref) return { app: null, candidates: [] };
-  const lower = ref.toLowerCase();
-
-  const byId = apps.find((a) => a.id === ref);
-  if (byId) return { app: byId, candidates: [byId] };
-
-  const exact = apps.filter(
-    (a) => a.name.toLowerCase() === lower || a.slug.toLowerCase() === lower,
-  );
-  if (exact.length === 1) return { app: exact[0], candidates: exact };
-  if (exact.length > 1) return { app: null, candidates: exact };
-
-  const scored = apps
-    .map((a) => ({ app: a, score: referenceScore(lower, a) }))
-    .filter((s) => s.score > 0);
-  if (scored.length === 0) return { app: null, candidates: [] };
-
-  const max = Math.max(...scored.map((s) => s.score));
-  const top = scored.filter((s) => s.score === max).map((s) => s.app);
-  return top.length === 1
-    ? { app: top[0], candidates: top }
-    : { app: null, candidates: top };
+  const match = matchByReference(apps, reference, (a) => ({
+    id: a.id,
+    names: [a.name, a.slug],
+  }));
+  return { app: match.item, candidates: match.candidates };
 }
 
 /**

@@ -66,11 +66,12 @@ import {
 import { invalidateAppsCache } from "../providers/cloud-apps.js";
 import {
   buildConnectorCta,
+  CONFIRM_TTL_MS,
   type ConnectorCta,
   confirmationRoomId,
   deleteCloudAppConfirmation,
   findPendingCloudAppConfirmation,
-  type PendingCloudAppConfirmation,
+  pendingExpired,
   persistCloudAppConfirmation,
   readStructuredConfirmation,
 } from "../safety.js";
@@ -87,26 +88,12 @@ const NO_PENDING_CONFIRMATION_MESSAGE =
   "I don't have a pending domain purchase to confirm for this room. Tell me which domain to buy first, and I'll quote the price and ask for confirmation.";
 const CANCELED_MESSAGE = "Canceled. No domain was purchased.";
 
-/** A quoted price is honored for this long; after that we re-quote. */
-export const CONFIRM_TTL_MS = 15 * 60 * 1000;
+// A quoted price is honored for CONFIRM_TTL_MS; after that we re-quote. The
+// TTL + expiry check now live in safety.ts so every gated action shares them.
+export { CONFIRM_TTL_MS } from "../safety.js";
 
 function usd(n: number): string {
   return `$${n.toFixed(2)}`;
-}
-
-function pendingExpired(
-  pending: PendingCloudAppConfirmation,
-  now: number = Date.now(),
-): boolean {
-  // A recovery retry completes with no new charge — there is no stale PRICE
-  // to protect, and expiring it would strand a paid, unattached domain.
-  if (pending.metadata.recovery === true) return false;
-  const at =
-    typeof pending.metadata.intentCreatedAt === "string"
-      ? Date.parse(pending.metadata.intentCreatedAt)
-      : Number.NaN;
-  if (!Number.isFinite(at)) return false;
-  return now - at > CONFIRM_TTL_MS;
 }
 
 function domainsCta(
