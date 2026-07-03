@@ -213,6 +213,60 @@ describe("/api/v1/files", () => {
     expect(body.error).toBe("Storage quota exceeded for this organization");
   });
 
+  test("rolls back earlier multipart uploads when a later file exceeds quota", async () => {
+    upload
+      .mockResolvedValueOnce(fileRecord({ id: FILE_ID }))
+      .mockRejectedValueOnce(
+        new cloudFilesActual.CloudFileQuotaExceededError(),
+      );
+    deleteFile.mockResolvedValueOnce(fileRecord({ id: FILE_ID }));
+    const form = new FormData();
+    form.append(
+      "files",
+      new File(["first"], "first.png", { type: "image/png" }),
+    );
+    form.append(
+      "files",
+      new File(["second"], "second.png", { type: "image/png" }),
+    );
+
+    const routeEnv = env();
+    const res = await filesRoute.request(
+      "/",
+      { method: "POST", body: form },
+      routeEnv as never,
+    );
+
+    expect(res.status).toBe(413);
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(deleteFile).toHaveBeenCalledWith(routeEnv, ORG, FILE_ID);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toBe("Storage quota exceeded for this organization");
+  });
+
+  test("rejects oversized multipart requests before any storage writes", async () => {
+    const form = new FormData();
+    form.append(
+      "files",
+      new File(["first"], "first.png", { type: "image/png" }),
+    );
+    form.append(
+      "files",
+      new File(["x".repeat(50 * 1024 * 1024 + 1)], "huge.png", {
+        type: "image/png",
+      }),
+    );
+
+    const res = await filesRoute.request(
+      "/",
+      { method: "POST", body: form },
+      env() as never,
+    );
+
+    expect(res.status).toBe(413);
+    expect(upload).not.toHaveBeenCalled();
+  });
+
   test("rejects malformed upload metadata as validation error", async () => {
     const form = new FormData();
     form.append("file", new File(["hello"], "hero.png", { type: "image/png" }));

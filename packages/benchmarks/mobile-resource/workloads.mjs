@@ -57,6 +57,22 @@ export const WORKLOADS = [
     maxDurationMs: 900_000,
   },
   {
+    id: "idle-reclaim",
+    title: "Idle inference-memory reclaim",
+    description:
+      "After prior workloads loaded + used the model, sit idle past the device's " +
+      "inference idle-unload window (#11760) and sample RSS. The tail RSS must drop " +
+      "below maxPostIdleUnloadRssMb — a regression here means the idle-unload policy " +
+      "stopped reclaiming the resident model weights + KV cache and the app is back " +
+      "to being lmkd's standing target. Shorten the on-device window for CI via " +
+      "`adb shell setprop debug.eliza.inference.idle_unload_ms 60000` (+ app restart).",
+    kind: "idle-watch",
+    turns: 0,
+    sampleIntervalMs: 2000,
+    // Must exceed the (debug-prop-shortened) idle-unload window + one policy tick.
+    maxDurationMs: 180_000,
+  },
+  {
     id: "voice-loop",
     title: "Full voice loop",
     description:
@@ -76,9 +92,12 @@ export function workloadById(id) {
   return WORKLOADS.find((w) => w.id === id) ?? null;
 }
 
-/** Default workload selection when --workloads is not passed (voice opt-in). */
+/** Default workload selection when --workloads is not passed (voice opt-in).
+ * `idle-reclaim` runs last on purpose: the preceding chat workloads leave the
+ * model warm, which is exactly the state the idle-unload policy must reclaim. */
 export const DEFAULT_WORKLOAD_IDS = [
   "cold-load",
   "single-turn",
   "sustained-chat",
+  "idle-reclaim",
 ];
