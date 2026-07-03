@@ -163,7 +163,12 @@ vi.mock("./hooks", () => ({
   useRenderGuard: vi.fn(),
   useIntervalWhenDocumentVisible: () => {},
 }));
-vi.mock("./state", () => {
+vi.mock("./state", async () => {
+  // Pure static constants pass through from the real leaf module (side-effect
+  // free by design) so the mock never drifts from product preset data.
+  const { ACCENT_PRESETS } = await vi.importActual<
+    typeof import("./state/ui-preferences")
+  >("./state/ui-preferences");
   const getAppValue = () => ({
     actionNotice: null,
     activeGameViewerUrl: null,
@@ -206,6 +211,7 @@ vi.mock("./state", () => {
     uiThemeMode: "system",
   });
   return {
+    ACCENT_PRESETS,
     useApp: () => getAppValue(),
     useAppSelector: <T,>(
       selector: (s: ReturnType<typeof getAppValue>) => T,
@@ -706,6 +712,12 @@ describe("App screen-background fuzz — color invariant across view switching",
   }, 120_000);
 
   it("preserves a GLSL preset wallpaper across view switching and background:apply churn", async () => {
+    // Pre-resolve the lazy programmable-shader chunk. AppBackground
+    // deliberately paints the plain ShaderBackground as the Suspense fallback
+    // while the chunk loads (same color — the seamless-swap design), so a
+    // strict `kind === "glsl"` assertion is only deterministic once the module
+    // is warm; a cold first import can outlast the act() microtask flushes.
+    await import("./backgrounds/ProgrammableShaderBackground");
     bgState.config = makeAuroraConfig("#059669");
     assertAuroraConfigClamped(bgState.config);
     await runFuzzWalk("glsl#13", 13, { churnGlsl: true });
