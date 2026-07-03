@@ -9,7 +9,7 @@ import {
   logger,
   ModelType,
   parseJsonModelRecord,
-  runWithTrajectoryContext,
+  runWithTrajectoryPurpose,
   stringToUuid,
 } from "@elizaos/core";
 import { loadLifeOpsAppState } from "../lifeops/app-state.js";
@@ -266,8 +266,8 @@ export async function classifyCalendarEventsForProactivePlanning(
   ].join("\n");
 
   try {
-    const result = await runWithTrajectoryContext(
-      { purpose: "lifeops-proactive-worker" },
+    const result = await runWithTrajectoryPurpose(
+      "lifeops-proactive-worker",
       () => runtime.useModel(ModelType.TEXT_LARGE, { prompt }),
     );
     const raw = typeof result === "string" ? result : "";
