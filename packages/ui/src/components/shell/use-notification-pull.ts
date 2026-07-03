@@ -166,10 +166,7 @@ export function useNotificationPull(options: NotificationPullOptions): {
     (event: TouchEvent) => {
       const s = start.current;
       if (!s || rejected.current) return;
-      const touch = findTouch(
-        event.changedTouches as unknown as ArrayLike<TouchLike>,
-        s.id,
-      );
+      const touch = findTouch(Array.from(event.changedTouches), s.id);
       if (!touch) return;
       const dy = touch.clientY - s.y; // downward positive
       const dx = touch.clientX - s.x;
@@ -206,11 +203,7 @@ export function useNotificationPull(options: NotificationPullOptions): {
     (event: TouchEvent, allowCommit: boolean) => {
       const s = start.current;
       if (!s) return;
-      const touch =
-        findTouch(
-          event.changedTouches as unknown as ArrayLike<TouchLike>,
-          s.id,
-        ) ?? null;
+      const touch = findTouch(Array.from(event.changedTouches), s.id) ?? null;
       // If this end/cancel is for a different finger, ignore it.
       if (event.changedTouches.length > 0 && !touch) return;
       const wasEngaged = engaged.current;

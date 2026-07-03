@@ -10,6 +10,9 @@
   from draft/rejected states, refreshes the app record after review, and keeps
   the monetization switch disabled until the app is approved.
 - `AppDto` now includes the review fields the API already returns.
+- Rebase blockers inherited from `develop` were cleared: the duplicate
+  `runWithTrajectoryPurpose` Worker shim export was removed, and small
+  type-safety ratchet reductions keep root verification passing.
 
 ## Verification
 
@@ -26,9 +29,11 @@
 | `bun run --cwd packages/cloud/api lint` | PASS |
 | `bun run --cwd packages/cloud/shared lint` | PASS |
 | `bun run --cwd packages/ui lint` | PASS |
+| `bun run --cwd plugins/plugin-slack typecheck` | PASS |
+| `bun run --cwd packages/agent typecheck` | PASS |
 | `bun run --cwd packages/app audit:app` | PASS - 349/349 Playwright audit checks passed. Summary: `broken=0`, `needs-work=0`, `needs-eyeball=39`, `good=309`; `/apps` manual-review verdicts were `good` for desktop, mobile portrait, mobile landscape, and iPad. |
 | `REQUIRE_E2E_SERVER=0 bun test packages/cloud/api/test/e2e/group-i-apps-lifecycle.test.ts` | PASS with 33 counted skips - Worker `http://localhost:8787`, `TEST_API_KEY`, and `TEST_MEMBER_API_KEY` were unavailable in this environment. |
-| `bun run verify` | FAIL after rebase - existing repo ratchet: `?? ""` in `core/agent/app-core` was `616 current > 615 baseline`; the command stopped at `audit:type-safety-ratchet` before package typecheck/lint. |
+| `bun run verify` | PASS after rebasing onto `origin/develop` and clearing inherited blockers. Ratchet summary: `as unknown as` 74/75, `?? ""` 615/615, `?? {}` 375/377; Turbo reported 483/483 typecheck/lint tasks successful and dist-path consumers checked 28 configs. |
 
 ## Manual Review
 
