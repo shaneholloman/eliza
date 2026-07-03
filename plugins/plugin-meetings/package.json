@@ -30,7 +30,6 @@
   },
   "files": [
     "dist",
-    "src",
     "auto-enable.ts",
     "NOTICE"
   ],
@@ -38,7 +37,7 @@
     "plugin": {
       "autoEnableModule": "./auto-enable.ts",
       "capabilities": [
-        "meetings"
+        "meeting-transcription"
       ]
     }
   },
