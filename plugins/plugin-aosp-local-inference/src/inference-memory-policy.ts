@@ -41,21 +41,89 @@ export const STANDARD_IDLE_UNLOAD_MS = 30 * 60_000;
 /** Cadence of the idle check. */
 export const IDLE_UNLOAD_CHECK_INTERVAL_MS = 60_000;
 
+/**
+ * MemAvailable fraction below which the resident model is released under
+ * pressure, by class. The bun agent process never receives `onTrimMemory`
+ * (it is not an Android component), so `/proc/meminfo` MemAvailable is its
+ * pressure signal. Constrained devices act early (lmkd's PSI killer moves
+ * fast on a 5.7 GB device once ambient apps are resident); standard devices
+ * only act at genuinely critical levels. Fractions mirror the low/critical
+ * watermarks of the desktop `nodeOsPressureSource`.
+ */
+export const CONSTRAINED_PRESSURE_RELEASE_FRACTION = 0.12;
+export const STANDARD_PRESSURE_RELEASE_FRACTION = 0.05;
+
 /** Parse `MemTotal` (kB) out of /proc/meminfo text. Returns MiB, or null. */
 export function parseMemTotalMb(meminfoText: string): number | null {
-  const match = /^MemTotal:\s+(\d+)\s*kB/m.exec(meminfoText);
+  return parseMeminfoFieldMb(meminfoText, "MemTotal");
+}
+
+/** Parse `MemAvailable` (kB) out of /proc/meminfo text. Returns MiB, or null. */
+export function parseMemAvailableMb(meminfoText: string): number | null {
+  return parseMeminfoFieldMb(meminfoText, "MemAvailable");
+}
+
+function parseMeminfoFieldMb(
+  meminfoText: string,
+  field: "MemTotal" | "MemAvailable",
+): number | null {
+  const match = new RegExp(`^${field}:\\s+(\\d+)\\s*kB`, "m").exec(meminfoText);
   if (!match) return null;
   const kb = Number.parseInt(match[1], 10);
   if (!Number.isFinite(kb) || kb <= 0) return null;
   return Math.round(kb / 1024);
 }
 
-function readProcMemTotalMb(): number | null {
+function readProcMeminfo(): string | null {
   try {
-    return parseMemTotalMb(readFileSync("/proc/meminfo", "utf8"));
+    return readFileSync("/proc/meminfo", "utf8");
   } catch {
-    return null; // not a Linux host — the caller falls back to standard
+    return null; // not a Linux host — callers fall back to standard/no-pressure
   }
+}
+
+function readProcMemTotalMb(): number | null {
+  const text = readProcMeminfo();
+  return text == null ? null : parseMemTotalMb(text);
+}
+
+/**
+ * Pure pressure decision: release when MemAvailable falls below the class
+ * fraction of MemTotal. Unreadable probes never release — a broken probe must
+ * not evict a healthy model.
+ */
+export function shouldReleaseForMemAvailable(
+  ramClass: InferenceRamClass,
+  availableMb: number | null,
+  totalMb: number | null,
+): boolean {
+  if (availableMb == null || totalMb == null || totalMb <= 0) return false;
+  const fraction =
+    ramClass === "constrained"
+      ? CONSTRAINED_PRESSURE_RELEASE_FRACTION
+      : STANDARD_PRESSURE_RELEASE_FRACTION;
+  return availableMb / totalMb < fraction;
+}
+
+/**
+ * Build the /proc/meminfo-backed pressure check for
+ * {@link InferenceIdleUnloader}. Returns a description string when the
+ * resident model should be released right now, else null.
+ */
+export function makeProcMeminfoPressureCheck(
+  ramClass: InferenceRamClass,
+  readMeminfo: () => string | null = readProcMeminfo,
+): () => string | null {
+  return () => {
+    const text = readMeminfo();
+    if (text == null) return null;
+    const availableMb = parseMemAvailableMb(text);
+    const totalMb = parseMemTotalMb(text);
+    if (!shouldReleaseForMemAvailable(ramClass, availableMb, totalMb)) {
+      return null;
+    }
+    return `MemAvailable=${availableMb}MB / MemTotal=${totalMb}MB (ramClass=${ramClass})`;
+  };
 }
 
 /**
@@ -103,15 +171,22 @@ export type IdleUnloadTickResult =
   | "in-use"
   | "warm"
   | "unloaded"
+  | "pressure-unloaded"
   | "unload-failed";
 
 export interface InferenceIdleUnloaderOptions {
-  /** Idle window, ms. `0` disables the unloader entirely. */
+  /** Idle window, ms. `0` disables the idle lever (pressure stays active). */
   idleUnloadMs: number;
   /** True while model weights are actually resident. */
   isLoaded: () => boolean;
   /** Free the weights (loader.unloadModel + lifecycle.markEvicted). */
   unload: () => Promise<void>;
+  /**
+   * Optional pressure check ({@link makeProcMeminfoPressureCheck}): returns a
+   * description string when the model should be released right now regardless
+   * of idle time, else null. Checked after the idle window on every tick.
+   */
+  pressureCheck?: () => string | null;
   /** Check cadence, ms. Defaults to {@link IDLE_UNLOAD_CHECK_INTERVAL_MS}. */
   checkIntervalMs?: number;
   /** Injected clock for tests. */
@@ -133,6 +208,7 @@ export class InferenceIdleUnloader {
   private readonly idleUnloadMs: number;
   private readonly isLoaded: () => boolean;
   private readonly unload: () => Promise<void>;
+  private readonly pressureCheck: (() => string | null) | null;
   private readonly checkIntervalMs: number;
   private readonly now: () => number;
   private readonly logger: InferenceIdleUnloaderOptions["logger"];
@@ -146,6 +222,7 @@ export class InferenceIdleUnloader {
     this.idleUnloadMs = opts.idleUnloadMs;
     this.isLoaded = opts.isLoaded;
     this.unload = opts.unload;
+    this.pressureCheck = opts.pressureCheck ?? null;
     this.checkIntervalMs = Math.max(
       1_000,
       opts.checkIntervalMs ?? IDLE_UNLOAD_CHECK_INTERVAL_MS,
@@ -155,9 +232,9 @@ export class InferenceIdleUnloader {
     this.lastUsedAtMs = this.now();
   }
 
-  /** Arm the periodic check. No-op when disabled (`idleUnloadMs === 0`). */
+  /** Arm the periodic check. No-op when neither lever is configured. */
   start(): void {
-    if (this.idleUnloadMs <= 0 || this.timer) return;
+    if ((this.idleUnloadMs <= 0 && !this.pressureCheck) || this.timer) return;
     const t = setInterval(() => {
       void this.tick().catch((err) => {
         this.logger?.warn(
@@ -195,23 +272,42 @@ export class InferenceIdleUnloader {
     return this.now() - this.lastUsedAtMs;
   }
 
-  /** One idle check. Exposed for tests; the armed timer calls this. */
+  /** One idle/pressure check. Exposed for tests; the armed timer calls this. */
   async tick(): Promise<IdleUnloadTickResult> {
-    if (this.idleUnloadMs <= 0) return "disabled";
+    if (this.idleUnloadMs <= 0 && !this.pressureCheck) return "disabled";
     if (this.inFlight > 0 || this.unloading) return "in-use";
     if (!this.isLoaded()) return "not-loaded";
     const idle = this.idleMs();
-    if (idle < this.idleUnloadMs) return "warm";
+    if (this.idleUnloadMs > 0 && idle >= this.idleUnloadMs) {
+      return this.runUnload(
+        `after ${idle}ms idle (>= ${this.idleUnloadMs}ms)`,
+        "unloaded",
+      );
+    }
+    const pressure = this.pressureCheck?.() ?? null;
+    if (pressure != null) {
+      return this.runUnload(
+        `under memory pressure: ${pressure}`,
+        "pressure-unloaded",
+      );
+    }
+    return "warm";
+  }
+
+  private async runUnload(
+    reason: string,
+    result: "unloaded" | "pressure-unloaded",
+  ): Promise<IdleUnloadTickResult> {
     this.unloading = true;
     try {
       await this.unload();
       this.logger?.info(
-        `[aosp-local-inference] idle-unload freed the local model after ${idle}ms idle (>= ${this.idleUnloadMs}ms); next request reloads on demand`,
+        `[aosp-local-inference] released the local model ${reason}; next request reloads on demand (#11760)`,
       );
-      return "unloaded";
+      return result;
     } catch (err) {
       this.logger?.warn(
-        `[aosp-local-inference] idle-unload failed (model stays resident): ${err instanceof Error ? err.message : String(err)}`,
+        `[aosp-local-inference] model release failed (stays resident): ${err instanceof Error ? err.message : String(err)}`,
       );
       return "unload-failed";
     } finally {

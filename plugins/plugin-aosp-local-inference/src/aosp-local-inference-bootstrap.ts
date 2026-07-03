@@ -77,6 +77,7 @@ import {
 import {
   classifyInferenceRamClass,
   InferenceIdleUnloader,
+  makeProcMeminfoPressureCheck,
   resolveInferenceIdleUnloadMs,
 } from "./inference-memory-policy.js";
 
@@ -3093,6 +3094,9 @@ export async function ensureAospLocalInferenceHandlers(
   let markLifecycleEvicted: () => void = () => {};
   const idleUnloader = new InferenceIdleUnloader({
     idleUnloadMs,
+    // The bun agent never receives onTrimMemory (it is not an Android
+    // component), so /proc/meminfo MemAvailable is its pressure signal.
+    pressureCheck: makeProcMeminfoPressureCheck(inferenceRamClass),
     isLoaded: () => fusedTextLoader.currentModelPath() !== null,
     unload: async () => {
       await fusedTextLoader.unloadModel();

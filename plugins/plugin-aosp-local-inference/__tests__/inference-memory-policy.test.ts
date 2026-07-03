@@ -12,9 +12,12 @@ import {
   CONSTRAINED_IDLE_UNLOAD_MS,
   classifyInferenceRamClass,
   InferenceIdleUnloader,
+  makeProcMeminfoPressureCheck,
+  parseMemAvailableMb,
   parseMemTotalMb,
   resolveInferenceIdleUnloadMs,
   STANDARD_IDLE_UNLOAD_MS,
+  shouldReleaseForMemAvailable,
 } from "../src/inference-memory-policy";
 
 // Real /proc/meminfo head captured from the arm64 emulator AVD (8 GB nominal).
@@ -287,5 +290,91 @@ describe("instrumentLoaderForIdleTracking", () => {
     await tracked.unloadModel();
     expect(state.loaded).toBe(false);
     expect(await unloader.tick()).toBe("not-loaded");
+  });
+});
+
+describe("memory-pressure release (in-process leg)", () => {
+  const meminfo = (totalKb: number, availKb: number) =>
+    `MemTotal:        ${totalKb} kB\nMemFree:          100000 kB\nMemAvailable:    ${availKb} kB\n`;
+
+  it("parses MemAvailable from real meminfo text", () => {
+    expect(parseMemAvailableMb(EMULATOR_MEMINFO)).toBe(3874);
+    expect(parseMemAvailableMb("MemTotal: 1 kB\n")).toBeNull();
+  });
+
+  it("releases below the class fraction and holds above it", () => {
+    // Constrained: 12% of an 8 GiB-total host is ~983 MB.
+    expect(shouldReleaseForMemAvailable("constrained", 900, 8192)).toBe(true);
+    expect(shouldReleaseForMemAvailable("constrained", 1100, 8192)).toBe(false);
+    // Standard: 5% of 8 GiB is ~410 MB.
+    expect(shouldReleaseForMemAvailable("standard", 300, 8192)).toBe(true);
+    expect(shouldReleaseForMemAvailable("standard", 900, 8192)).toBe(false);
+  });
+
+  it("never releases on unreadable probes", () => {
+    expect(shouldReleaseForMemAvailable("constrained", null, 8192)).toBe(false);
+    expect(shouldReleaseForMemAvailable("constrained", 100, null)).toBe(false);
+    expect(shouldReleaseForMemAvailable("constrained", 100, 0)).toBe(false);
+  });
+
+  it("makeProcMeminfoPressureCheck describes pressure and stays quiet otherwise", () => {
+    const pressured = makeProcMeminfoPressureCheck("constrained", () =>
+      meminfo(8_388_608, 512_000),
+    );
+    expect(pressured()).toContain("MemAvailable=500MB");
+    const calm = makeProcMeminfoPressureCheck("constrained", () =>
+      meminfo(8_388_608, 4_000_000),
+    );
+    expect(calm()).toBeNull();
+    const unreadable = makeProcMeminfoPressureCheck("constrained", () => null);
+    expect(unreadable()).toBeNull();
+  });
+
+  it("the unloader releases a warm model under pressure, but never mid-use", async () => {
+    const state = { loaded: true, unloads: 0 };
+    const clock = { t: 0 };
+    let pressured = false;
+    const unloader = new InferenceIdleUnloader({
+      idleUnloadMs: 60_000,
+      isLoaded: () => state.loaded,
+      unload: async () => {
+        state.loaded = false;
+        state.unloads += 1;
+      },
+      pressureCheck: () =>
+        pressured ? "MemAvailable=500MB / MemTotal=8192MB" : null,
+      now: () => clock.t,
+    });
+
+    // Warm + no pressure → stays.
+    expect(await unloader.tick()).toBe("warm");
+
+    // Pressure arrives while a generate is mid-flight → wait for the turn.
+    pressured = true;
+    const endUse = unloader.beginUse();
+    expect(await unloader.tick()).toBe("in-use");
+    expect(state.loaded).toBe(true);
+
+    // Turn completes (idle clock refreshed — NOT idle) → pressure still frees it.
+    endUse();
+    clock.t = 1_000;
+    expect(await unloader.tick()).toBe("pressure-unloaded");
+    expect(state.loaded).toBe(false);
+    expect(state.unloads).toBe(1);
+  });
+
+  it("pressure lever stays active when the idle lever is disabled", async () => {
+    const state = { loaded: true };
+    const unloader = new InferenceIdleUnloader({
+      idleUnloadMs: 0,
+      isLoaded: () => state.loaded,
+      unload: async () => {
+        state.loaded = false;
+      },
+      pressureCheck: () => "MemAvailable=400MB / MemTotal=8192MB",
+      now: () => 0,
+    });
+    expect(await unloader.tick()).toBe("pressure-unloaded");
+    expect(state.loaded).toBe(false);
   });
 });
