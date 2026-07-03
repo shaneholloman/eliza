@@ -265,6 +265,7 @@ async function main() {
     });
     const checks = checkBudgets(summary, tierBudget, {
       failOnMissing: args.failOnMissing,
+      workloadId: id,
     });
     const pass = checks.every((c) => c.pass);
     if (!pass) anyFail = true;
