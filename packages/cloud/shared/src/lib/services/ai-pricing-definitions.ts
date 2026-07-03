@@ -591,11 +591,11 @@ export const SFX_SNAPSHOT_PRICING: SfxSnapshotEntry[] = [
     productFamily: "sfx",
     chargeType: "generation",
     unit: "request",
-    unitPrice: 0.1,
+    unitPrice: 0.2,
     sourceUrl: "https://fal.ai/models/fal-ai/stable-audio-25/text-to-audio",
     metadata: {
       tier: "manual_override_recommended",
-      note: "Conservative per-request fallback for Stable Audio 2.5 until account-specific Fal pricing is refreshed.",
+      note: "Fallback mirrors the current Fal model page price; override if account-specific Fal pricing differs.",
     },
   },
 ] as const;
