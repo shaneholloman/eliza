@@ -89,6 +89,7 @@ async function generateElevenLabsSfx(request: AudioGenRequest): Promise<Generate
     },
     body: JSON.stringify({
       text: request.prompt,
+      model_id: "eleven_text_to_sound_v2",
       ...(request.durationSeconds ? { duration_seconds: request.durationSeconds } : {}),
       ...(request.promptInfluence !== undefined
         ? { prompt_influence: request.promptInfluence }

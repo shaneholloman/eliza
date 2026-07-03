@@ -240,8 +240,8 @@ describe("generate-sfx — validation gates (no money moves)", () => {
   });
 
   test("duration above the per-model cap → 400", async () => {
-    // ElevenLabs SFX caps at 22s.
-    const res = await post({ prompt: "x", model: MODEL, durationSeconds: 30 });
+    // ElevenLabs SFX caps at 30s.
+    const res = await post({ prompt: "x", model: MODEL, durationSeconds: 31 });
     expect(res.status).toBe(400);
     expect(reserve).not.toHaveBeenCalled();
   });

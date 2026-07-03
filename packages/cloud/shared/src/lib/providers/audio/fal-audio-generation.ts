@@ -21,6 +21,10 @@ interface AudioObject {
 }
 
 function normalizeAudioObject(value: unknown): AudioObject | null {
+  const directUrl = stringValue(value);
+  if (directUrl) {
+    return { url: directUrl };
+  }
   if (!isRecord(value)) return null;
   const url =
     stringValue(value.url) ??
