@@ -5940,6 +5940,15 @@ export const allActionsSpec = {
 				"Run a snippet of JavaScript in an isolated QuickJS sandbox (5s deadline,",
 		},
 		{
+			name: "EXPORT_AD_CAMPAIGN_REPORT",
+			description:
+				"Export a Cloud advertising campaign performance report. Requires structured campaignId; optional share=true creates a public expiring report link.",
+			parameters: [],
+			descriptionCompressed:
+				"Export or share an ad campaign performance report.",
+			similes: ["GET_AD_CAMPAIGN_REPORT", "SHARE_AD_CAMPAIGN_REPORT"],
+		},
+		{
 			name: "FACEWEAR_CONNECT",
 			description:
 				"Show connection instructions for a facewear device (Meta Quest, XReal, Even Realities, Apple Vision Pro).",
