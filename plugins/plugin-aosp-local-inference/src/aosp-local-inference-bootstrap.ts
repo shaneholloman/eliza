@@ -207,6 +207,24 @@ function clearAospActiveModelState(): void {
   }
 }
 
+/** KV-cache type names the fused lib's `eliza_kv_cache_type` map accepts. */
+type AospKvCacheTypeName =
+  | "f16"
+  | "q8_0"
+  | "tbq3_0"
+  | "tbq4_0"
+  | "qjl1_256"
+  | "q4_polar";
+
+const AOSP_KV_CACHE_TYPE_NAMES: readonly AospKvCacheTypeName[] = [
+  "f16",
+  "q8_0",
+  "tbq3_0",
+  "tbq4_0",
+  "qjl1_256",
+  "q4_polar",
+];
+
 export interface AospLoadModelArgs {
   modelPath: string;
   contextSize?: number;
@@ -219,12 +237,12 @@ export interface AospLoadModelArgs {
   draftMax?: number;
   speculativeSamples?: number;
   mobileSpeculative?: boolean;
-  cacheTypeK?: "f16" | "tbq3_0" | "tbq4_0" | "qjl1_256" | "q4_polar";
-  cacheTypeV?: "f16" | "tbq3_0" | "tbq4_0" | "qjl1_256" | "q4_polar";
+  cacheTypeK?: AospKvCacheTypeName;
+  cacheTypeV?: AospKvCacheTypeName;
   disableThinking?: boolean;
   kvCacheType?: {
-    k?: "f16" | "tbq3_0" | "tbq4_0" | "qjl1_256" | "q4_polar";
-    v?: "f16" | "tbq3_0" | "tbq4_0" | "qjl1_256" | "q4_polar";
+    k?: AospKvCacheTypeName;
+    v?: AospKvCacheTypeName;
   };
 }
 
@@ -510,27 +528,12 @@ function readPositiveIntEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-type AospKvCacheTypeName =
-  | "f16"
-  | "tbq3_0"
-  | "tbq4_0"
-  | "qjl1_256"
-  | "q4_polar";
-
-const AOSP_KV_CACHE_TYPE_NAMES: readonly AospKvCacheTypeName[] = [
-  "f16",
-  "tbq3_0",
-  "tbq4_0",
-  "qjl1_256",
-  "q4_polar",
-];
-
 /**
  * Chat KV-cache type override (`ELIZA_LLAMA_KV_TYPE_K` / `_V`). The fork
- * KV-quant defaults (qjl1_256 / q4_polar) are eliza-1's memory optimization,
- * but some fused-lib builds reject a quantized V cache without flash_attn
- * ("V cache quantization requires flash_attn" → llm_stream_open fails) — the
- * env knob lets a device profile pin f16 without a rebuild.
+ * defaults (q8_0 / f16) are eliza-1's Gemma-safe memory policy: q8_0 halves the
+ * K cache, while f16 avoids the fused-lib flash-attn requirement for V-quant.
+ * The env knob lets a device profile pin another supported type without a
+ * rebuild.
  */
 function readKvCacheTypeEnv(
   name: string,
@@ -762,9 +765,17 @@ export function buildAospLoadModelArgs(
         : undefined,
       useGpu: gpuLayers > 0,
       gpuLayers,
+      // Gemma-4 KV path (#11760): the QJL/PolarQuant kernels are retired for
+      // the shipped eliza-1 tiers (#8848/#9033 cutover — Gemma's dual head
+      // dims are incompatible), and current fused libs route the legacy names
+      // into the stock V-quant check, which hard-fails without flash-attn
+      // (disabled on Android: scalar-FA race). K=q8_0 halves the K cache and
+      // needs no FA; V stays f16 (V-quant requires FA). Matches the bionic
+      // host's KV decision (ELIZA_BIONIC_KV_QUANT=0) and the catalog's
+      // ELIZA_1_KV_QUANT=q8_0.
       kvCacheType: {
-        k: readKvCacheTypeEnv("ELIZA_LLAMA_KV_TYPE_K", "qjl1_256"),
-        v: readKvCacheTypeEnv("ELIZA_LLAMA_KV_TYPE_V", "q4_polar"),
+        k: readKvCacheTypeEnv("ELIZA_LLAMA_KV_TYPE_K", "q8_0"),
+        v: readKvCacheTypeEnv("ELIZA_LLAMA_KV_TYPE_V", "f16"),
       },
     };
   }
