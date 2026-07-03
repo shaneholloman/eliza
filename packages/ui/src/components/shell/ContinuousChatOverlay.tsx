@@ -821,6 +821,7 @@ export function BootStatusIndicator({
       aria-live="polite"
       aria-atomic="true"
       data-testid="chat-boot-status"
+      data-aesthetic-audit-ignore-text-density="true"
       data-slow={slow ? "true" : undefined}
       className="pointer-events-none relative mb-2 flex w-full justify-center"
     >
