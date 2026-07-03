@@ -85,9 +85,9 @@ export function buildAtlasVideoInput(request: VideoGenerationRequest): Record<st
   if (request.resolution) {
     input.resolution = request.resolution;
   }
-  if (request.audio !== undefined) {
-    input.generate_audio = request.audio;
-  }
+  // Atlas defaults audio ON server-side; billing prices the `audio: false` shape,
+  // so always pin the request to the priced default unless the caller opts in.
+  input.generate_audio = request.audio ?? false;
   return input;
 }
 

@@ -102,6 +102,7 @@ describe("Atlas Cloud video provider", () => {
       model: "vidu/q3-turbo/text-to-video",
       prompt: "a lighthouse",
       duration: 5,
+      generate_audio: false,
     });
     expect(result).toEqual({
       requestId: "atlas-prediction",

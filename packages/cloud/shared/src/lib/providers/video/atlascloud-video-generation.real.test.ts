@@ -1,16 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import { logger } from "../../utils/logger";
 import { generateAtlasCloudVideo } from "./atlascloud-video-generation";
 
-const liveEnabled =
-  process.env.TEST_LANE === "post-merge" || process.env.ATLASCLOUD_VIDEO_LIVE_TEST === "1";
+const hasCredentials = Boolean(process.env.ATLASCLOUD_API_KEY);
+
+if (!hasCredentials) {
+  logger.warn(
+    "[AtlasCloudVideoRealTest] SKIPPED: set ATLASCLOUD_API_KEY to run the live Atlas Cloud video generation lane",
+  );
+}
 
 describe("Atlas Cloud video provider live", () => {
-  test.skipIf(!liveEnabled)("generates a real Atlas-hosted video", async () => {
-    const apiKey = process.env.ATLASCLOUD_API_KEY;
-    if (!apiKey) {
-      throw new Error("ATLASCLOUD_API_KEY is required when Atlas video live tests are enabled");
-    }
-
+  (hasCredentials ? test : test.skip)("generates a real Atlas-hosted video", async () => {
     const result = await generateAtlasCloudVideo({
       model: process.env.ATLASCLOUD_VIDEO_MODEL ?? "vidu/q3-turbo/text-to-video",
       prompt: "A five second product-style shot of a matte orange cube rotating on a white table",
@@ -18,7 +19,7 @@ describe("Atlas Cloud video provider live", () => {
       resolution: "720p",
       audio: false,
       apiKeys: {
-        ATLASCLOUD_API_KEY: apiKey,
+        ATLASCLOUD_API_KEY: process.env.ATLASCLOUD_API_KEY as string,
         ATLASCLOUD_BASE_URL: process.env.ATLASCLOUD_BASE_URL,
       },
     });
