@@ -67,6 +67,11 @@ import {
   resolveAospElizaInferenceLibPath,
 } from "./aosp-llama-paths.js";
 import {
+  classifyInferenceRamClass,
+  InferenceIdleUnloader,
+  resolveInferenceIdleUnloadMs,
+} from "./inference-memory-policy.js";
+import {
   type AospFfiPointerHelpers,
   type AospFusedLlmSymbols,
   type AospFusedStreamingLlmBinding,
@@ -91,7 +96,7 @@ let routeActivationLoader: AospLoader | null = null;
  */
 const LOCAL_INFERENCE_PRIORITY = 0;
 
-interface AospLoader {
+export interface AospLoader {
   loadModel(args: AospLoadModelArgs): Promise<void>;
   unloadModel(): Promise<void>;
   currentModelPath(): string | null;
@@ -115,6 +120,36 @@ interface AospLoader {
     embedding: number[];
     tokens: number;
   }>;
+}
+
+/**
+ * Route every model-touching loader call through the idle unloader's
+ * in-flight tracking (#11760): a use in flight blocks the idle unload, and
+ * completion refreshes the idle clock. `unloadModel` passes through untracked
+ * — an explicit unload IS the idle path's goal, and the voice handlers'
+ * out-of-band eviction must never be counted as model use.
+ */
+export function instrumentLoaderForIdleTracking(
+  loader: AospLoader,
+  unloader: InferenceIdleUnloader,
+): AospLoader {
+  const track =
+    <A extends unknown[], R>(fn: (...args: A) => Promise<R>) =>
+    async (...args: A): Promise<R> => {
+      const endUse = unloader.beginUse();
+      try {
+        return await fn(...args);
+      } finally {
+        endUse();
+      }
+    };
+  return {
+    currentModelPath: () => loader.currentModelPath(),
+    loadModel: track(loader.loadModel.bind(loader)),
+    unloadModel: () => loader.unloadModel(),
+    generate: track(loader.generate.bind(loader)),
+    embed: track(loader.embed.bind(loader)),
+  };
 }
 
 function writeAospActiveModelState(
@@ -3034,20 +3069,56 @@ export async function ensureAospLocalInferenceHandlers(
   // cloud-fallback handler at priority -1 then routes recoverable failures to
   // a cloud provider via the local-unavailable classifier).
   console.log("[aosp-local-inference] building fused text loader…");
-  const textLoader = await tryBuildAospFusedTextLoader();
+  const fusedTextLoader = await tryBuildAospFusedTextLoader();
   console.log(
-    `[aosp-local-inference] fused text loader ${textLoader ? "ready" : "unavailable"}`,
+    `[aosp-local-inference] fused text loader ${fusedTextLoader ? "ready" : "unavailable"}`,
   );
-  if (!textLoader) {
+  if (!fusedTextLoader) {
     console.error("[aosp-local-inference] fused text loader unavailable");
     logger.error(
       "[aosp-local-inference] fused libelizainference text loader unavailable (lib absent or pre-ABI-v9); TEXT_* handlers NOT wired. Local text inference is unavailable.",
     );
     return false;
   }
+
+  // Inference memory policy (#11760): free the loaded model after a RAM-class
+  // idle window so the pinned weights don't keep this process at the top of
+  // lmkd's kill list between conversations. Every loader use routes through the
+  // instrumented wrapper so the idle clock is accurate; the unload flows
+  // through the same lifecycle plumbing the voice handlers' out-of-band
+  // eviction already uses (`unloadModel` + `markEvicted` → the next request
+  // reloads via `ensureChatLoaded`).
+  const inferenceRamClass = classifyInferenceRamClass();
+  const idleUnloadMs = resolveInferenceIdleUnloadMs(inferenceRamClass);
+  let markLifecycleEvicted: () => void = () => {};
+  const idleUnloader = new InferenceIdleUnloader({
+    idleUnloadMs,
+    isLoaded: () => fusedTextLoader.currentModelPath() !== null,
+    unload: async () => {
+      await fusedTextLoader.unloadModel();
+      markLifecycleEvicted();
+      writeAospLlamaDebugLog("bootstrap:idleUnload:released", {
+        idleUnloadMs,
+        ramClass: inferenceRamClass,
+      });
+    },
+    logger: {
+      info: (msg) => logger.info(msg),
+      warn: (msg) => logger.warn(msg),
+    },
+  });
+  const textLoader = instrumentLoaderForIdleTracking(
+    fusedTextLoader,
+    idleUnloader,
+  );
   routeActivationLoader = textLoader;
 
   const lifecycle = makeLoaderLifecycle(textLoader);
+  markLifecycleEvicted = lifecycle.markEvicted;
+  idleUnloader.start();
+  logger.info(
+    `[aosp-local-inference] inference memory policy: ramClass=${inferenceRamClass} idleUnloadMs=${idleUnloadMs} (#11760)`,
+  );
   // TEXT_EMBEDDING is wired unconditionally: chat + embedding loads share one
   // fused EliInferenceContext, and the C side resolves the text vs embedding
   // region per call (`llm_stream_*` vs `embed`), so there is no cross-mode

@@ -15,6 +15,9 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -49,11 +52,33 @@ final class ElizaBionicInferenceServer {
     /** Hard cap on a single request frame (1 MiB) — prompts, not payloads. */
     private static final int MAX_FRAME_BYTES = 1 << 20;
 
+    /**
+     * Poll-based memory-pressure probe supplied by the owning service
+     * ({@link ElizaAgentService} backs it with {@code ActivityManager.getMemoryInfo()}
+     * + {@link InferenceMemoryPolicy#shouldReleaseOnAvailMem}). Kept as an
+     * interface so this server has no Context dependency.
+     */
+    interface MemoryPressureProbe {
+        /** True when the resident inference state should be released right now. */
+        boolean shouldRelease();
+
+        /** Human-readable snapshot for the release log line. */
+        String describe();
+    }
+
+    /** Cadence of the idle/pressure policy tick (#11760). */
+    private static final long MEMORY_POLICY_TICK_MS = 30_000L;
+
     private final String socketName;
     private final String defaultBundleDir;
+    private final InferenceMemoryPolicy.RamClass ramClass;
+    /** Idle-unload timeout; {@code 0} disables the idle lever (#11760). */
+    private final long idleUnloadMs;
+    private final MemoryPressureProbe pressureProbe;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private volatile LocalServerSocket serverSocket;
     private volatile Thread acceptThread;
+    private volatile ScheduledExecutorService memoryPolicyExecutor;
 
     // Resident inference state: the model + context + stream stay loaded across
     // turns (no per-call reload). KV + sampler are reset each turn. Guarded by
@@ -70,10 +95,26 @@ final class ElizaBionicInferenceServer {
     private final Object residentLock = new Object();
     /** Hard decode ceiling for the resident stream (per-call cap is applied below). */
     private static final int RESIDENT_STREAM_MAX_TOKENS = 2048;
+    /**
+     * Lock-free mirror of {@code residentCtx != 0} so the policy tick can guard
+     * without contending with an in-flight decode (which holds residentLock for
+     * the whole turn). Written only inside residentLock.
+     */
+    private volatile boolean residentActive = false;
+    /** elapsedRealtime of the last completed inference op — drives idle unload. */
+    private volatile long lastInferenceAtMs = android.os.SystemClock.elapsedRealtime();
 
-    ElizaBionicInferenceServer(String socketName, String defaultBundleDir) {
+    ElizaBionicInferenceServer(
+            String socketName,
+            String defaultBundleDir,
+            InferenceMemoryPolicy.RamClass ramClass,
+            long idleUnloadMs,
+            MemoryPressureProbe pressureProbe) {
         this.socketName = socketName;
         this.defaultBundleDir = defaultBundleDir;
+        this.ramClass = ramClass;
+        this.idleUnloadMs = idleUnloadMs;
+        this.pressureProbe = pressureProbe;
     }
 
     /** Bind the abstract-namespace socket and start accepting. Idempotent. */
@@ -91,9 +132,16 @@ final class ElizaBionicInferenceServer {
      * Only sets a value when it is not already present, so any explicit override
      * still wins.
      */
-    private static void applyBionicInferenceMemoryDefaults() {
+    private void applyBionicInferenceMemoryDefaults() {
         setEnvIfAbsent("ELIZA_LLM_N_BATCH", "128");
-        setEnvIfAbsent("ELIZA_LLM_N_CTX", "8192");
+        // n_ctx by device RAM class (#11760): the resident stream's KV cache +
+        // non-FA compute buffers scale with n_ctx, and on a 5.7 GB-class device
+        // the pinned footprint at 8192 makes the app lmkd's first target. 4096
+        // halves the persistent KV (f16 2B: ~0.4 GB → ~0.2 GB) on CONSTRAINED
+        // devices; STANDARD keeps 8192.
+        setEnvIfAbsent(
+            "ELIZA_LLM_N_CTX",
+            String.valueOf(InferenceMemoryPolicy.llmContextTokens(ramClass)));
         // The JNI bridge can default the KV cache to a fused QJL/TBQ quant
         // (cache_type_k="qjl1_256"), but that path is a head_dim=128 sketch and
         // is RETIRED for the shipped tiers (elizaOS/eliza#8848 / #9033 Gemma-4
@@ -151,12 +199,20 @@ final class ElizaBionicInferenceServer {
         acceptThread = new Thread(this::acceptLoop, "eliza-bionic-infer-accept");
         acceptThread.setDaemon(true);
         acceptThread.start();
+        startMemoryPolicyScheduler();
         Log.i(TAG, "bionic inference host listening on abstract UDS \"" + socketName
-            + "\" (default bundle " + defaultBundleDir + ")");
+            + "\" (default bundle " + defaultBundleDir + ", ramClass=" + ramClass
+            + ", nCtx=" + InferenceMemoryPolicy.llmContextTokens(ramClass)
+            + ", idleUnloadMs=" + idleUnloadMs + ")");
     }
 
     synchronized void stop() {
         running.set(false);
+        ScheduledExecutorService exec = memoryPolicyExecutor;
+        memoryPolicyExecutor = null;
+        if (exec != null) {
+            exec.shutdownNow();
+        }
         LocalServerSocket s = serverSocket;
         serverSocket = null;
         if (s != null) {
@@ -168,6 +224,105 @@ final class ElizaBionicInferenceServer {
         }
         resetResident();
         acceptThread = null;
+    }
+
+    /**
+     * Idle/pressure policy tick (#11760). A single daemon scheduler checks every
+     * {@link #MEMORY_POLICY_TICK_MS} whether the resident inference state (model
+     * weights + KV cache + compute buffers, 2+ GB of GL mtrack on the 2B tier)
+     * should be freed: after {@link #idleUnloadMs} of inactivity, or when the
+     * pressure probe reports the device is approaching lmkd's kill line. The
+     * next request reloads via {@code ensureResidentCtx} — agent/app state is
+     * untouched, so the reclaim is lossless apart from the reload latency.
+     */
+    private void startMemoryPolicyScheduler() {
+        if (memoryPolicyExecutor != null) {
+            return;
+        }
+        if (idleUnloadMs <= 0L && pressureProbe == null) {
+            Log.i(TAG, "memory policy scheduler disabled (idleUnloadMs=0, no pressure probe)");
+            return;
+        }
+        ScheduledExecutorService exec = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "eliza-bionic-infer-memory-policy");
+            t.setDaemon(true);
+            return t;
+        });
+        exec.scheduleWithFixedDelay(
+            this::memoryPolicyTick, MEMORY_POLICY_TICK_MS, MEMORY_POLICY_TICK_MS,
+            TimeUnit.MILLISECONDS);
+        memoryPolicyExecutor = exec;
+    }
+
+    private void memoryPolicyTick() {
+        try {
+            if (!residentActive) {
+                return;
+            }
+            long idleMs = android.os.SystemClock.elapsedRealtime() - lastInferenceAtMs;
+            if (idleUnloadMs > 0L && idleMs >= idleUnloadMs) {
+                releaseIfStillIdle();
+                return;
+            }
+            if (pressureProbe != null && pressureProbe.shouldRelease()) {
+                releaseResident("memory-pressure: " + pressureProbe.describe());
+            }
+        } catch (Throwable t) {
+            // The policy tick must never kill the scheduler.
+            Log.w(TAG, "memory policy tick failed", t);
+        }
+    }
+
+    /**
+     * Idle-unload arm: acquiring residentLock may block behind an in-flight
+     * decode, which refreshes {@link #lastInferenceAtMs} when it completes — so
+     * the idle window is re-checked under the lock before freeing anything.
+     */
+    private void releaseIfStillIdle() {
+        synchronized (residentLock) {
+            long idleMs = android.os.SystemClock.elapsedRealtime() - lastInferenceAtMs;
+            if (idleUnloadMs <= 0L || idleMs < idleUnloadMs) {
+                return;
+            }
+            releaseResidentLocked("idle " + idleMs + "ms >= " + idleUnloadMs + "ms");
+        }
+    }
+
+    /**
+     * Free the resident model + context + stream (idle unload, memory pressure,
+     * or an {@code onTrimMemory} callback relayed by {@link ElizaAgentService}).
+     * Blocks on residentLock, so an in-flight decode finishes its turn first.
+     * Safe to call from any thread except the main thread (use
+     * {@link #releaseResidentAsync}).
+     */
+    void releaseResident(String reason) {
+        synchronized (residentLock) {
+            releaseResidentLocked(reason);
+        }
+    }
+
+    /** Caller must hold residentLock. */
+    private void releaseResidentLocked(String reason) {
+        if (residentCtx == 0L && residentStream == 0L) {
+            return;
+        }
+        Log.i(TAG, "releasing resident inference state (reason=" + reason
+            + ", bundle=" + residentBundle + ", ramClass=" + ramClass + ")");
+        resetResident();
+        Log.i(TAG, "resident inference state released; model weights + KV cache + compute "
+            + "buffers reclaimed (reason=" + reason + "). Next request reloads on demand.");
+    }
+
+    /** {@link #releaseResident} off-thread — for main-thread callers (onTrimMemory). */
+    void releaseResidentAsync(String reason) {
+        ScheduledExecutorService exec = memoryPolicyExecutor;
+        if (exec != null) {
+            exec.execute(() -> releaseResident(reason));
+            return;
+        }
+        Thread t = new Thread(() -> releaseResident(reason), "eliza-bionic-infer-release");
+        t.setDaemon(true);
+        t.start();
     }
 
     private void acceptLoop() {
@@ -215,11 +370,15 @@ final class ElizaBionicInferenceServer {
                 if ("generateStream".equals(opOf(requestJson))) {
                     generateStreamRequest(requestJson, out);
                     out.flush();
+                    lastInferenceAtMs = android.os.SystemClock.elapsedRealtime();
                     continue;
                 }
                 String responseJson = handleRequest(requestJson);
                 writeFrame(out, responseJson);
                 out.flush();
+                // Every op (generate/embed/tts/asr/image) touches the shared
+                // resident context — refresh the idle clock on completion (#11760).
+                lastInferenceAtMs = android.os.SystemClock.elapsedRealtime();
             }
         } catch (IOException e) {
             Log.w(TAG, "connection error", e);
@@ -434,6 +593,7 @@ final class ElizaBionicInferenceServer {
                 throw new IllegalStateException("resident contextCreate failed: " + bundleDir);
             }
             residentBundle = bundleDir;
+            residentActive = true;
         }
         return residentCtx;
     }
@@ -452,6 +612,7 @@ final class ElizaBionicInferenceServer {
             residentBundle = null;
             residentDrafterPath = "";
             residentPrevTokens = null;
+            residentActive = false;
         }
     }
 

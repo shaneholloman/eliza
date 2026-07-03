@@ -244,8 +244,17 @@ export function summarizeResourceRun(run, opts = {}) {
  * A `null` budget means "no baseline yet" — recorded but never fails the gate.
  * A `null` measured value means "not measured" — recorded, and only fails when
  * the budget requires it AND `failOnMissing` is set.
+ *
+ * `workloadId` selects workload-specific checks: the `idle-reclaim` workload
+ * (#11760) is an idle window with no generations, so it checks only the memory
+ * budgets — including `maxPostIdleUnloadRssMb` against the tail RSS, which is
+ * what proves the idle-unload policy actually reclaimed the resident model.
  */
-export function checkBudgets(summary, budget, { failOnMissing = false } = {}) {
+export function checkBudgets(
+  summary,
+  budget,
+  { failOnMissing = false, workloadId = null } = {},
+) {
   if (!budget) return [];
   const checks = [];
   const add = (name, value, target, unit, direction) => {
@@ -276,6 +285,27 @@ export function checkBudgets(summary, budget, { failOnMissing = false } = {}) {
     const pass = direction === "min" ? value >= target : value <= target;
     checks.push({ name, value, budget: target, unit, direction, pass });
   };
+
+  if (workloadId === "idle-reclaim") {
+    // An idle window has no generations; throughput/TTFT/battery checks would
+    // only ever read "not-measured" here. The one signal that matters is that
+    // the tail RSS dropped once the idle-unload policy fired (#11760).
+    add(
+      "postIdleRssMb",
+      summary.rss?.lastMb ?? null,
+      budget.maxPostIdleUnloadRssMb,
+      "MB",
+      "max",
+    );
+    add(
+      "peakRssMb",
+      summary.rss?.peakMb ?? null,
+      budget.maxPeakRssMb,
+      "MB",
+      "max",
+    );
+    return checks;
+  }
 
   add(
     "decodeTokensPerSecondP50",
