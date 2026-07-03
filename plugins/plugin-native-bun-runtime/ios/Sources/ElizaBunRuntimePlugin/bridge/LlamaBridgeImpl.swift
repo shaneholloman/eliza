@@ -3,6 +3,7 @@ import Foundation
 import JavaScriptCore
 #endif
 import Darwin.Mach
+import os
 
 #if ELIZA_IOS_INCLUDE_LLAMA
 
@@ -223,6 +224,9 @@ private func shim_batch_reset(_ batch: UnsafeMutablePointer<LlamaBatch>)
 
 @_silgen_name("eliza_llama_log_silence")
 private func shim_log_silence()
+
+@_silgen_name("eliza_llama_log_to_file")
+private func shim_log_to_file(_ path: UnsafePointer<CChar>) -> Bool
 
 @_silgen_name("eliza_llama_has_metal")
 private func shim_has_metal() -> Bool
@@ -535,6 +539,28 @@ private func ggmlTypeFromString(_ raw: String?) -> Int32? {
     }
 }
 
+/// Routes ggml/llama logs to a pullable file under the app's writable state
+/// dir (issue #11612). iOS does not forward the embedded engine's stdio to
+/// devicectl/idevicesyslog, so without this sink the GGML_LOG_ERROR line that
+/// names a failing Metal kernel is unobservable on device. The file is
+/// capturable with `xcrun devicectl device copy from`. Falls back to
+/// silencing the logger when the sink file cannot be opened.
+private func installGgmlLogSink() {
+    let env = ProcessInfo.processInfo.environment
+    let stateDir = env["ELIZA_STATE_DIR"].flatMap { $0.isEmpty ? nil : $0 }
+        ?? SandboxPaths().appSupport.path
+    let logsDir = URL(fileURLWithPath: stateDir, isDirectory: true)
+        .appendingPathComponent("logs", isDirectory: true)
+    try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+    let logPath = logsDir.appendingPathComponent("ggml.log").path
+    if logPath.withCString({ shim_log_to_file($0) }) {
+        NSLog("[LlamaBridgeImpl] ggml/llama logs -> \(logPath)")
+    } else {
+        NSLog("[LlamaBridgeImpl] ggml log sink unavailable at \(logPath); silencing llama logs")
+        shim_log_silence()
+    }
+}
+
 private final class SessionRegistry {
     static let shared = SessionRegistry()
     private let queue = DispatchQueue(label: "ai.eliza.bun.llama.sessions")
@@ -545,7 +571,7 @@ private final class SessionRegistry {
     func ensureBackend() {
         queue.sync {
             if !backendInitialized {
-                shim_log_silence()
+                installGgmlLogSink()
                 c_llama_backend_init()
                 backendInitialized = true
             }
@@ -655,6 +681,44 @@ public final class LlamaBridgeImpl {
         }
         SessionRegistry.shared.ensureBackend()
 
+        // #11612: a load that exceeds the per-process jetsam budget kills the
+        // app (and on constrained devices can wedge the OS). Estimate the
+        // footprint up front, shrink the context/KV first, and fail cleanly
+        // with a memory error when even the minimum context cannot fit.
+        var resolvedContextSize = contextSize
+        let headroom = Self.jetsamHeadroomBytes()
+        if headroom > 0 {
+            let modelBytes = Self.fileSizeBytes(path)
+            let drafterBytes = draftModelPath.map { Self.fileSizeBytes($0) } ?? 0
+            // ~64 KiB of KV cache + compute scratch per context token is a
+            // conservative envelope for the mobile (2b/4b) tiers with f16 KV
+            let perTokenBytes: UInt64 = 64 * 1024
+            // Metal heaps, tokenizer, batch buffers, and mmap page-in slack
+            let runtimeOverheadBytes: UInt64 = 512 * 1024 * 1024
+            let minContext: UInt32 = 1024
+            func requiredBytes(_ ctx: UInt32) -> UInt64 {
+                modelBytes + drafterBytes + UInt64(ctx) * perTokenBytes + runtimeOverheadBytes
+            }
+            while requiredBytes(resolvedContextSize) > headroom && resolvedContextSize / 2 >= minContext {
+                resolvedContextSize /= 2
+            }
+            if requiredBytes(resolvedContextSize) > headroom {
+                let needMB = requiredBytes(resolvedContextSize) / (1024 * 1024)
+                let haveMB = headroom / (1024 * 1024)
+                return .failure(
+                    "llama_load_model: insufficient memory: \(path) needs ~\(needMB) MB "
+                    + "(ctx \(resolvedContextSize)) but only \(haveMB) MB is available before "
+                    + "the OS memory limit. Close other apps or use a smaller model."
+                )
+            }
+            if resolvedContextSize != contextSize {
+                NSLog(
+                    "[LlamaBridgeImpl] memory budget: reduced context \(contextSize) -> \(resolvedContextSize) "
+                    + "(model \(modelBytes / 1024 / 1024) MB, headroom \(headroom / 1024 / 1024) MB)"
+                )
+            }
+        }
+
         let resolvedThreads = threads ?? min(4, Int32(ProcessInfo.processInfo.activeProcessorCount))
 
         var modelParams = c_llama_model_default_params()
@@ -673,10 +737,10 @@ public final class LlamaBridgeImpl {
             return .failure("llama_model_load_from_file failed for \(path)")
         }
 
-        let batchSizes = Self.mobileBatchSizes(contextSize: contextSize)
+        let batchSizes = Self.mobileBatchSizes(contextSize: resolvedContextSize)
         var ctxParams = c_llama_context_default_params()
         withUnsafeMutablePointer(to: &ctxParams) { ptr in
-            shim_context_params_set_n_ctx(ptr, contextSize)
+            shim_context_params_set_n_ctx(ptr, resolvedContextSize)
             shim_context_params_set_batch_sizes(ptr, batchSizes.logical, batchSizes.physical)
             shim_context_params_set_n_threads(ptr, resolvedThreads, resolvedThreads)
             Self.setContextGpuOffload(ptr, enabled: canUseGPU)
@@ -1552,6 +1616,26 @@ public final class LlamaBridgeImpl {
     }
 
     // MARK: - Private helpers
+
+    /// Per-process memory still grantable before jetsam kills the app
+    /// (`os_proc_available_memory`, iOS 13+). Returns 0 when the value is
+    /// unavailable (e.g. simulator), in which case the load-time memory
+    /// budget guard is skipped.
+    private static func jetsamHeadroomBytes() -> UInt64 {
+#if targetEnvironment(simulator)
+        return 0
+#else
+        return UInt64(max(0, os_proc_available_memory()))
+#endif
+    }
+
+    private static func fileSizeBytes(_ path: String) -> UInt64 {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = attrs[.size] as? NSNumber else {
+            return 0
+        }
+        return size.uint64Value
+    }
 
     private static func availableMemoryGB() -> Double {
         var info = task_vm_info_data_t()

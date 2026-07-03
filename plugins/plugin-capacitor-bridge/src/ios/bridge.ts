@@ -1601,6 +1601,33 @@ async function shouldUseNativeLlamaGpu(): Promise<boolean> {
 	return hardware.metal_supported === true && hardware.is_simulator !== true;
 }
 
+const NATIVE_LOAD_OVERHEAD_BYTES = 768 * 1024 * 1024;
+
+/**
+ * #11612: loading a model that exceeds the device's remaining memory gets the
+ * whole app jetsam-killed (crash-loop) instead of failing. The native bridge
+ * enforces the authoritative per-process jetsam budget at load time
+ * (`LlamaBridgeImpl.loadModel`); this pre-flight check fails fast with a clean
+ * error before a multi-minute native load is even attempted.
+ */
+async function assertModelFitsDeviceMemory(
+	model: InstalledModelEntry,
+): Promise<void> {
+	if (!model.sizeBytes || model.sizeBytes <= 0) return;
+	const hardware = await nativeHardwareInfo();
+	if (hardware.is_simulator === true) return;
+	const availableBytes = Number(hardware.available_ram_gb ?? 0) * 1024 ** 3;
+	if (!Number.isFinite(availableBytes) || availableBytes <= 0) return;
+	const requiredBytes = model.sizeBytes + NATIVE_LOAD_OVERHEAD_BYTES;
+	if (requiredBytes > availableBytes) {
+		const requiredMb = Math.round(requiredBytes / (1024 * 1024));
+		const availableMb = Math.round(availableBytes / (1024 * 1024));
+		throw new Error(
+			`[ios-native-llama] insufficient memory to load ${model.id}: needs ~${requiredMb} MB but only ~${availableMb} MB is available. Close other apps or install a smaller model.`,
+		);
+	}
+}
+
 async function loadNativeLlamaModel(
 	model: InstalledModelEntry,
 	useGpu: boolean,
@@ -1647,6 +1674,7 @@ async function ensureNativeModelLoaded(
 	nativeLlamaState.loadedAt = null;
 	delete nativeLlamaState.error;
 	try {
+		await assertModelFitsDeviceMemory(model);
 		let requestedGpu = await shouldUseNativeLlamaGpu();
 		let record: Record<string, unknown>;
 		try {

@@ -90,6 +90,17 @@ const REQUIRED_IOS_KERNEL_SYMBOLS = [
     symbolPattern: /turbo4/i,
     where: "libggml-metal.a (via embedded metallib)",
   },
+  {
+    // bf16 mul_mm family (#11612): ggml-metal.metal #if's every bf16 kernel
+    // out below __METAL_VERSION__ 310, so a GGML_METAL_STD under metal3.1
+    // silently ships a metallib that bf16-capable A-series GPUs (has_bfloat)
+    // cannot run — eliza-1 GGUFs carry bf16 tensors and decode fails with
+    // MTLLibraryError Code=5. build-llama-cpp-mtp.mjs defaults to metal3.1;
+    // this gate makes any regression fail packaging instead of the device.
+    kernel: "metal_bf16",
+    symbolPattern: /kernel_mul_mm_bf16_f32/,
+    where: "libggml-metal.a (via embedded metallib; requires -std=metal3.1+)",
+  },
 ];
 
 const REQUIRED_IOS_RUNTIME_SYMBOLS = [
