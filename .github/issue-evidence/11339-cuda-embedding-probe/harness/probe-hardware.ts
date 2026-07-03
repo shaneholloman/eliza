@@ -10,11 +10,12 @@
  * Run from the repo root:
  *   bun --conditions=eliza-source .github/issue-evidence/11339-cuda-embedding-probe/harness/probe-hardware.ts
  */
-import { probeHardware } from "@elizaos/plugin-local-inference/services";
+
 import {
-	selectEmbeddingPresetFromHardware,
-	selectEmbeddingTierFromHardware,
+  selectEmbeddingPresetFromHardware,
+  selectEmbeddingTierFromHardware,
 } from "@elizaos/plugin-local-inference/runtime/embedding-presets";
+import { probeHardware } from "@elizaos/plugin-local-inference/services";
 
 const hardware = await probeHardware();
 console.log("=== probeHardware() typed output ===");

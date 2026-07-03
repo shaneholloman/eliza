@@ -37,23 +37,23 @@ const MODEL = "gte-small_fp16.gguf";
 const POOLING_MEAN = 1;
 
 function stageEmbedBundle(): string {
-	const modelsDir = path.join(resolveStateDir(), "models");
-	const modelPath = path.join(modelsDir, MODEL);
-	if (!existsSync(modelPath)) {
-		throw new Error(`embedding GGUF missing: ${modelPath}`);
-	}
-	const root = path.join(modelsDir, ".eliza-embed-bundle");
-	const textDir = path.join(root, "text");
-	const staged = path.join(textDir, MODEL);
-	mkdirSync(textDir, { recursive: true });
-	if (!existsSync(staged)) {
-		try {
-			linkSync(modelPath, staged);
-		} catch {
-			symlinkSync(modelPath, staged);
-		}
-	}
-	return root;
+  const modelsDir = path.join(resolveStateDir(), "models");
+  const modelPath = path.join(modelsDir, MODEL);
+  if (!existsSync(modelPath)) {
+    throw new Error(`embedding GGUF missing: ${modelPath}`);
+  }
+  const root = path.join(modelsDir, ".eliza-embed-bundle");
+  const textDir = path.join(root, "text");
+  const staged = path.join(textDir, MODEL);
+  mkdirSync(textDir, { recursive: true });
+  if (!existsSync(staged)) {
+    try {
+      linkSync(modelPath, staged);
+    } catch {
+      symlinkSync(modelPath, staged);
+    }
+  }
+  return root;
 }
 
 const bundleRoot = stageEmbedBundle();
@@ -61,49 +61,59 @@ const libPath = resolveFusedLibraryPath(bundleRoot);
 if (!libPath) throw new Error("no fused libelizainference resolved");
 console.log(`[harness] lib under test: ${libPath}`);
 console.log(`[harness] embed bundle root: ${bundleRoot}`);
-console.log(`[harness] ELIZA_LLM_USE_GPU=${process.env.ELIZA_LLM_USE_GPU ?? "(unset — defaults to GPU offload, n_gpu_layers=99)"}`);
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: evidence harness records the native knob under test.
+const elizaLlmUseGpu = process.env.ELIZA_LLM_USE_GPU;
+console.log(
+  `[harness] ELIZA_LLM_USE_GPU=${elizaLlmUseGpu ?? "(unset — defaults to GPU offload, n_gpu_layers=99)"}`,
+);
 
 const ffi = loadElizaInferenceFfi(libPath);
 if (ffi.embedSupported?.() !== true || typeof ffi.embed !== "function") {
-	throw new Error("lib does not wire eliza_inference_embed (pre-v9 ABI?)");
+  throw new Error("lib does not wire eliza_inference_embed (pre-v9 ABI?)");
 }
 const ctx = ffi.create(bundleRoot);
 
 // First embed triggers the real model load (eliza_load_llm_model_locked) —
 // time it separately. llama.cpp prints device/buffer assignment to stderr.
 const loadStart = performance.now();
-const first = ffi.embed({ ctx, text: "warmup: the quick brown fox", pooling: POOLING_MEAN });
+const first = ffi.embed({
+  ctx,
+  text: "warmup: the quick brown fox",
+  pooling: POOLING_MEAN,
+});
 const loadMs = performance.now() - loadStart;
 const norm = Math.sqrt(first.reduce((s, v) => s + v * v, 0));
 console.log(
-	`[harness] first embed (includes model load): ${loadMs.toFixed(0)} ms; ` +
-		`dim=${first.length} norm=${norm.toFixed(4)} head=[${Array.from(first.slice(0, 8))
-			.map((v) => v.toFixed(4))
-			.join(", ")}]`,
+  `[harness] first embed (includes model load): ${loadMs.toFixed(0)} ms; ` +
+    `dim=${first.length} norm=${norm.toFixed(4)} head=[${Array.from(
+      first.slice(0, 8),
+    )
+      .map((v) => v.toFixed(4))
+      .join(", ")}]`,
 );
 
 const texts: string[] = [];
 for (let i = 0; i < 64; i++) {
-	texts.push(
-		`Document ${i}: elizaOS runs local embeddings through the fused libelizainference ` +
-			`FFI over a dedicated gte-small bundle; this sentence exists to give the encoder ` +
-			`a realistic mixed-length workload for throughput measurement (${"x".repeat(i % 17)}).`,
-	);
+  texts.push(
+    `Document ${i}: elizaOS runs local embeddings through the fused libelizainference ` +
+      `FFI over a dedicated gte-small bundle; this sentence exists to give the encoder ` +
+      `a realistic mixed-length workload for throughput measurement (${"x".repeat(i % 17)}).`,
+  );
 }
 const batchStart = performance.now();
 let dims = 0;
 for (const text of texts) {
-	const v = ffi.embed({ ctx, text, pooling: POOLING_MEAN });
-	dims = v.length;
+  const v = ffi.embed({ ctx, text, pooling: POOLING_MEAN });
+  dims = v.length;
 }
 const batchMs = performance.now() - batchStart;
 const perEmbed = batchMs / texts.length;
 const totalChars = texts.reduce((s, t) => s + t.length, 0);
 console.log(
-	`[harness] ${texts.length} embeds in ${batchMs.toFixed(0)} ms — ` +
-		`${((texts.length / batchMs) * 1000).toFixed(1)} embeddings/sec, ` +
-		`${perEmbed.toFixed(1)} ms/embed, dim=${dims}, ` +
-		`~${(((totalChars / 4) / batchMs) * 1000).toFixed(0)} tok/s (chars/4 estimate)`,
+  `[harness] ${texts.length} embeds in ${batchMs.toFixed(0)} ms — ` +
+    `${((texts.length / batchMs) * 1000).toFixed(1)} embeddings/sec, ` +
+    `${perEmbed.toFixed(1)} ms/embed, dim=${dims}, ` +
+    `~${((totalChars / 4 / batchMs) * 1000).toFixed(0)} tok/s (chars/4 estimate)`,
 );
 
 ffi.destroy(ctx);

@@ -11,7 +11,7 @@ Jul 02 15:08:21 BEAST kernel: NVRM: _threadNodeCheckTimeout: _threadNodeCheckTim
 Jul 02 15:08:21 BEAST kernel: NVRM: kflcnWaitForHaltRiscv_GA102: Timeout waiting for RISC-V to halt
 Jul 02 15:08:21 BEAST kernel: NVRM: gpuPowerManagementEnter: GSP unload failed at suspend (bootMode 0x1, newLevel 0x3): 0x65
 Jul 02 15:08:21 BEAST kernel: nvidia 0000:02:00.0: can't suspend (nv_pmops_runtime_suspend [nvidia] returned -5)
-Jul 02 15:11:54 BEAST kernel: NVRM: Error in service of callback 
+Jul 02 15:11:54 BEAST kernel: NVRM: Error in service of callback
 Unable to determine the device handle for GPU0: 0000:02:00.0: Unknown Error
 No devices were found
 nvidia-smi exit=6 (captured Thu Jul  2 05:13:28 PM PDT 2026)
