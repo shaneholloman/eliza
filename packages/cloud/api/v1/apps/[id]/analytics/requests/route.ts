@@ -7,6 +7,7 @@ import {
   RateLimitPresets,
   rateLimit,
 } from "@/lib/middleware/rate-limit-hono-cloudflare";
+import { appAnalyticsService } from "@/lib/services/app-analytics";
 import { appsService } from "@/lib/services/apps";
 import { logger } from "@/lib/utils/logger";
 import type { AppEnv } from "@/types/cloud-worker-env";
@@ -133,6 +134,22 @@ async function handleGET(
             start: timelineStart.toISOString(),
             end: timelineEnd.toISOString(),
           },
+        });
+      }
+      case "sessions": {
+        const funnelSteps = (searchParams.get("funnel_steps") ?? "")
+          .split(",")
+          .map((step) => step.trim())
+          .filter(Boolean);
+        const sessions = await appAnalyticsService.getSessionAnalytics(id, {
+          startDate,
+          endDate,
+          limit,
+          funnelSteps,
+        });
+        return Response.json({
+          success: true,
+          sessions,
         });
       }
       default: {

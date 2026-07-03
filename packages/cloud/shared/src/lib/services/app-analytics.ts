@@ -4,9 +4,82 @@
  * Handles tracking and aggregation of app usage analytics
  */
 
-import { appsRepository, type NewAppAnalytics } from "../../db/repositories/apps";
+import { type AppRequest, appsRepository, type NewAppAnalytics } from "../../db/repositories/apps";
 import type { App } from "../types";
 import { logger } from "../utils/logger";
+
+export interface AppSessionRow {
+  sessionId: string;
+  visitorId: string;
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  pageViews: number;
+  entryPath: string;
+  exitPath: string;
+}
+
+export interface AppFunnelStep {
+  path: string;
+  label: string;
+  sessions: number;
+  visitors: number;
+  conversionFromStartPercent: number;
+  conversionFromPreviousPercent: number;
+}
+
+export interface AppSessionAnalytics {
+  summary: {
+    totalSessions: number;
+    uniqueVisitors: number;
+    totalPageViews: number;
+    avgPagesPerSession: number;
+    avgSessionDurationMs: number;
+    bounceRatePercent: number;
+  };
+  sessions: AppSessionRow[];
+  funnel: {
+    totalEntrants: number;
+    steps: AppFunnelStep[];
+  };
+}
+
+function metadataString(
+  metadata: Record<string, unknown> | null | undefined,
+  key: string,
+): string | null {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function normalizePath(value: string | null | undefined): string {
+  if (!value) return "/";
+  try {
+    const parsed = value.startsWith("http")
+      ? new URL(value).pathname
+      : new URL(value, "https://app.local").pathname;
+    return parsed || "/";
+  } catch {
+    const path = value.split("?")[0]?.trim();
+    return path?.startsWith("/") ? path || "/" : `/${path || ""}`;
+  }
+}
+
+function labelForPath(path: string): string {
+  if (path === "/") return "Home";
+  return (
+    path
+      .split("/")
+      .filter(Boolean)
+      .slice(-1)[0]
+      ?.replace(/[-_]+/g, " ")
+      .replace(/\b\w/g, (ch) => ch.toUpperCase()) ?? path
+  );
+}
+
+function roundPercent(value: number): number {
+  return Math.round(value * 1000) / 10;
+}
 
 export class AppAnalyticsService {
   /**
@@ -87,6 +160,186 @@ export class AppAnalyticsService {
       agent_requests: 0,
       avg_response_time_ms: null,
     };
+  }
+
+  async getSessionAnalytics(
+    appId: string,
+    options: {
+      startDate?: Date;
+      endDate?: Date;
+      limit?: number;
+      scanLimit?: number;
+      funnelSteps?: string[];
+    } = {},
+  ): Promise<AppSessionAnalytics> {
+    const scanLimit = Math.min(Math.max(options.scanLimit ?? 5000, 1), 5000);
+    const sessionLimit = Math.min(Math.max(options.limit ?? 50, 1), 500);
+    const result = await appsRepository.getRecentRequests(appId, {
+      requestType: "pageview",
+      startDate: options.startDate,
+      endDate: options.endDate,
+      limit: scanLimit,
+      offset: 0,
+    });
+    const analytics = this.buildSessionAnalytics(result.requests, options.funnelSteps);
+    return {
+      ...analytics,
+      sessions: analytics.sessions.slice(0, sessionLimit),
+    };
+  }
+
+  buildSessionAnalytics(
+    requests: AppRequest[],
+    requestedFunnelSteps?: string[],
+  ): AppSessionAnalytics {
+    const ordered = requests
+      .slice()
+      .sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
+    const sessions = new Map<
+      string,
+      {
+        sessionId: string;
+        visitorId: string;
+        pages: Array<{ path: string; at: Date }>;
+      }
+    >();
+
+    for (const request of ordered) {
+      const metadata = request.metadata;
+      const visitorId =
+        metadataString(metadata, "visitor_id") ??
+        request.user_id ??
+        request.ip_address ??
+        "unknown";
+      const sessionId =
+        metadataString(metadata, "session_id") ??
+        `${visitorId}:${request.created_at.toISOString().slice(0, 13)}`;
+      const path = normalizePath(
+        metadataString(metadata, "pathname") ?? metadataString(metadata, "page_url"),
+      );
+      const existing =
+        sessions.get(sessionId) ??
+        ({
+          sessionId,
+          visitorId,
+          pages: [],
+        } satisfies {
+          sessionId: string;
+          visitorId: string;
+          pages: Array<{ path: string; at: Date }>;
+        });
+      existing.pages.push({ path, at: request.created_at });
+      sessions.set(sessionId, existing);
+    }
+
+    const sessionRows = [...sessions.values()]
+      .map((session): AppSessionRow => {
+        const first = session.pages[0];
+        const last = session.pages[session.pages.length - 1] ?? first;
+        const durationMs = Math.max(0, (last?.at.getTime() ?? 0) - (first?.at.getTime() ?? 0));
+        return {
+          sessionId: session.sessionId,
+          visitorId: session.visitorId,
+          startedAt: (first?.at ?? new Date(0)).toISOString(),
+          endedAt: (last?.at ?? first?.at ?? new Date(0)).toISOString(),
+          durationMs,
+          pageViews: session.pages.length,
+          entryPath: first?.path ?? "/",
+          exitPath: last?.path ?? first?.path ?? "/",
+        };
+      })
+      .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+
+    const uniqueVisitors = new Set(sessionRows.map((s) => s.visitorId)).size;
+    const totalPageViews = sessionRows.reduce((sum, s) => sum + s.pageViews, 0);
+    const totalDurationMs = sessionRows.reduce((sum, s) => sum + s.durationMs, 0);
+    const bounces = sessionRows.filter((s) => s.pageViews === 1).length;
+    const funnelSteps = this.resolveFunnelSteps([...sessions.values()], requestedFunnelSteps);
+    const funnel = this.buildFunnel([...sessions.values()], funnelSteps);
+
+    return {
+      summary: {
+        totalSessions: sessionRows.length,
+        uniqueVisitors,
+        totalPageViews,
+        avgPagesPerSession: sessionRows.length > 0 ? totalPageViews / sessionRows.length : 0,
+        avgSessionDurationMs:
+          sessionRows.length > 0 ? Math.round(totalDurationMs / sessionRows.length) : 0,
+        bounceRatePercent: sessionRows.length > 0 ? roundPercent(bounces / sessionRows.length) : 0,
+      },
+      sessions: sessionRows,
+      funnel,
+    };
+  }
+
+  private resolveFunnelSteps(
+    sessions: Array<{ pages: Array<{ path: string; at: Date }> }>,
+    requested?: string[],
+  ): string[] {
+    const explicit = (requested ?? []).map(normalizePath).filter(Boolean);
+    if (explicit.length > 0) return [...new Set(explicit)].slice(0, 8);
+
+    const firstSeen = new Map<string, number>();
+    const counts = new Map<string, number>();
+    for (const session of sessions) {
+      for (const page of session.pages) {
+        counts.set(page.path, (counts.get(page.path) ?? 0) + 1);
+        firstSeen.set(
+          page.path,
+          Math.min(firstSeen.get(page.path) ?? page.at.getTime(), page.at.getTime()),
+        );
+      }
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || (firstSeen.get(a[0]) ?? 0) - (firstSeen.get(b[0]) ?? 0))
+      .slice(0, 5)
+      .map(([path]) => path);
+  }
+
+  private buildFunnel(
+    sessions: Array<{
+      sessionId: string;
+      visitorId: string;
+      pages: Array<{ path: string; at: Date }>;
+    }>,
+    steps: string[],
+  ): AppSessionAnalytics["funnel"] {
+    let previousSessions: Map<string, number> = new Map(
+      sessions.map((session) => [session.sessionId, -1] as const),
+    );
+    const startCount = previousSessions.size;
+    const stepRows: AppFunnelStep[] = [];
+
+    for (const step of steps) {
+      const matchedSessions = new Map<string, number>();
+      const matchedVisitors = new Set<string>();
+      for (const session of sessions) {
+        const previousIndex = previousSessions.get(session.sessionId);
+        if (previousIndex === undefined) continue;
+        const matchedIndex = session.pages.findIndex(
+          (page, index) => index > previousIndex && page.path === step,
+        );
+        if (matchedIndex >= 0) {
+          matchedSessions.set(session.sessionId, matchedIndex);
+          matchedVisitors.add(session.visitorId);
+        }
+      }
+      stepRows.push({
+        path: step,
+        label: labelForPath(step),
+        sessions: matchedSessions.size,
+        visitors: matchedVisitors.size,
+        conversionFromStartPercent:
+          startCount > 0 ? roundPercent(matchedSessions.size / startCount) : 0,
+        conversionFromPreviousPercent:
+          previousSessions.size > 0
+            ? roundPercent(matchedSessions.size / previousSessions.size)
+            : 0,
+      });
+      previousSessions = matchedSessions;
+    }
+
+    return { totalEntrants: startCount, steps: stepRows };
   }
 
   /**

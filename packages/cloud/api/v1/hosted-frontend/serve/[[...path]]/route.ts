@@ -25,9 +25,14 @@ import { appFrontendHostingService } from "@/lib/services/app-frontend-hosting";
 import { appsService } from "@/lib/services/apps";
 import { managedDomainsService } from "@/lib/services/managed-domains";
 import { logger } from "@/lib/utils/logger";
+import { safeAnalyticsId } from "@/lib/utils/safe-analytics-id";
 import type { AppEnv } from "@/types/cloud-worker-env";
 
 const SERVE_MARKER = "/hosted-frontend/serve";
+const VISITOR_COOKIE = "eliza_visitor_id";
+const SESSION_COOKIE = "eliza_session_id";
+const VISITOR_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
+const SESSION_MAX_AGE_SECONDS = 60 * 30;
 
 function normalizeHost(host: string | undefined): string | null {
   const normalized = host
@@ -36,6 +41,32 @@ function normalizeHost(host: string | undefined): string | null {
     .replace(/\.+$/, "")
     .split(":")[0];
   return normalized && normalized.length > 0 ? normalized : null;
+}
+
+function cookieValue(
+  cookieHeader: string | undefined,
+  name: string,
+): string | null {
+  if (!cookieHeader) return null;
+  for (const part of cookieHeader.split(";")) {
+    const [rawKey, ...rawValue] = part.trim().split("=");
+    if (rawKey === name) {
+      try {
+        return decodeURIComponent(rawValue.join("="));
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function analyticsCookie(
+  name: string,
+  value: string,
+  maxAgeSeconds: number,
+): string {
+  return `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax; Secure`;
 }
 
 async function resolveAppForHost(host: string) {
@@ -80,6 +111,13 @@ app.get("*", async (c) => {
       appRow.id,
     );
     if (!deployment) return c.text("Not Found", 404);
+    const cookieHeader = c.req.header("cookie");
+    const visitorId =
+      safeAnalyticsId(cookieValue(cookieHeader, VISITOR_COOKIE)) ??
+      crypto.randomUUID();
+    const sessionId =
+      safeAnalyticsId(cookieValue(cookieHeader, SESSION_COOKIE)) ??
+      crypto.randomUUID();
 
     const markerIdx = url.pathname.indexOf(SERVE_MARKER);
     const requestPath =
@@ -105,6 +143,7 @@ app.get("*", async (c) => {
         url: `${canonicalBase}${requestPath || "/"}`,
       },
       beaconBase: canonicalBase,
+      analytics: { visitorId, sessionId },
       siteBaseUrl: canonicalBase,
     });
 
@@ -119,7 +158,12 @@ app.get("*", async (c) => {
             "unknown",
           userAgent: c.req.header("user-agent") ?? "unknown",
           source: "hosted_frontend",
-          metadata: { host, deploymentId: deployment.id },
+          metadata: {
+            host,
+            deploymentId: deployment.id,
+            visitor_id: visitorId,
+            session_id: sessionId,
+          },
         })
         .catch((error) =>
           logger.warn("[Hosted Frontend] page-view record failed", {
@@ -134,9 +178,21 @@ app.get("*", async (c) => {
       }
     }
 
+    const headers = new Headers(rendered.headers);
+    if (rendered.isDocument) {
+      headers.append(
+        "Set-Cookie",
+        analyticsCookie(VISITOR_COOKIE, visitorId, VISITOR_MAX_AGE_SECONDS),
+      );
+      headers.append(
+        "Set-Cookie",
+        analyticsCookie(SESSION_COOKIE, sessionId, SESSION_MAX_AGE_SECONDS),
+      );
+    }
+
     return new Response(rendered.body, {
       status: rendered.status,
-      headers: rendered.headers,
+      headers,
     });
   } catch (error) {
     logger.error("[Hosted Frontend] serve failed:", error);
