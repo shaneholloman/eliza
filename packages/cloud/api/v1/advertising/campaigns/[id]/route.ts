@@ -14,6 +14,25 @@ import type { AppEnv } from "@/types/cloud-worker-env";
 
 const app = new Hono<AppEnv>();
 
+type CampaignRecord = NonNullable<
+  Awaited<ReturnType<typeof advertisingService.getCampaign>>
+>;
+
+function serializeTargeting(targeting: CampaignRecord["targeting"]) {
+  return {
+    locations: targeting.locations,
+    ageMin: targeting.age_min,
+    ageMax: targeting.age_max,
+    genders: targeting.genders,
+    interests: targeting.interests,
+    behaviors: targeting.behaviors,
+    customAudiences: targeting.custom_audiences,
+    excludedAudiences: targeting.excluded_audiences,
+    placements: targeting.placements,
+    languages: targeting.languages,
+  };
+}
+
 app.get("/", async (c) => {
   try {
     const user = await requireUserOrApiKeyWithOrg(c);
@@ -36,11 +55,14 @@ app.get("/", async (c) => {
       budgetType: campaign.budget_type,
       budgetAmount: campaign.budget_amount,
       budgetCurrency: campaign.budget_currency,
+      bidStrategy: campaign.metadata.bid_strategy,
+      optimizationGoal: campaign.metadata.optimization_goal,
       creditsAllocated: campaign.credits_allocated,
       creditsSpent: campaign.credits_spent,
       startDate: campaign.start_date?.toISOString(),
       endDate: campaign.end_date?.toISOString(),
-      targeting: campaign.targeting,
+      dayparting: campaign.metadata.dayparting ?? null,
+      targeting: serializeTargeting(campaign.targeting),
       totalSpend: campaign.total_spend,
       totalImpressions: campaign.total_impressions,
       totalClicks: campaign.total_clicks,
@@ -76,6 +98,8 @@ app.patch("/", async (c) => {
       {
         name: parsed.data.name,
         budgetAmount: parsed.data.budgetAmount,
+        bidStrategy: parsed.data.bidStrategy,
+        optimizationGoal: parsed.data.optimizationGoal,
         startDate: parsed.data.startDate
           ? new Date(parsed.data.startDate)
           : undefined,
@@ -83,6 +107,8 @@ app.patch("/", async (c) => {
           ? new Date(parsed.data.endDate)
           : undefined,
         targeting: parsed.data.targeting,
+        dayparting: parsed.data.dayparting,
+        audienceSegmentId: parsed.data.audienceSegmentId,
       },
     );
 
@@ -92,6 +118,8 @@ app.patch("/", async (c) => {
       id: campaign.id,
       name: campaign.name,
       status: campaign.status,
+      dayparting: campaign.metadata.dayparting ?? null,
+      targeting: serializeTargeting(campaign.targeting),
       updatedAt: campaign.updated_at.toISOString(),
     });
   } catch (error) {

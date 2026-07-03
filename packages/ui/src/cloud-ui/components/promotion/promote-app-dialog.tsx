@@ -24,7 +24,7 @@ import {
   Send,
   Share2,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   Button,
@@ -59,6 +59,8 @@ interface PromoteAppDialogProps {
 }
 
 type PromotionChannel = "social" | "seo" | "advertising";
+type CampaignBidStrategy = "cpm" | "cpc" | "cpa";
+type CampaignOptimizationGoal = "reach" | "clicks" | "conversions";
 
 interface PromotionConfig {
   channels: PromotionChannel[];
@@ -77,8 +79,17 @@ interface PromotionConfig {
     budget: number;
     budgetType: "daily" | "lifetime";
     objective: string;
+    bidStrategy?: CampaignBidStrategy;
+    optimizationGoal?: CampaignOptimizationGoal;
     duration?: number;
+    audienceSegmentId?: string;
   };
+}
+
+interface AudienceSegmentOption {
+  id: string;
+  name: string;
+  description?: string | null;
 }
 
 const SOCIAL_PLATFORMS = [
@@ -113,6 +124,21 @@ const AD_OBJECTIVES = [
   },
 ];
 
+const BID_STRATEGIES: Array<{ id: CampaignBidStrategy; name: string }> = [
+  { id: "cpm", name: "CPM" },
+  { id: "cpc", name: "CPC" },
+  { id: "cpa", name: "CPA" },
+];
+
+const OPTIMIZATION_GOALS: Array<{
+  id: CampaignOptimizationGoal;
+  name: string;
+}> = [
+  { id: "reach", name: "Reach" },
+  { id: "clicks", name: "Clicks" },
+  { id: "conversions", name: "Conversions" },
+];
+
 export function PromoteAppDialog({
   open,
   onOpenChange,
@@ -125,6 +151,9 @@ export function PromoteAppDialog({
   const [activeTab, setActiveTab] = useState<PromotionChannel>("social");
   const [isLoading, setIsLoading] = useState(false);
   const [config, setConfig] = useState<PromotionConfig>({ channels: [] });
+  const [audienceSegments, setAudienceSegments] = useState<
+    AudienceSegmentOption[]
+  >([]);
   const [result, setResult] = useState<{
     success: boolean;
     channels: Record<string, { success: boolean; error?: string }>;
@@ -138,9 +167,38 @@ export function PromoteAppDialog({
         budget: 10,
         budgetType: "daily" as const,
         objective: "traffic",
+        bidStrategy: "cpm" as const,
+        optimizationGoal: "reach" as const,
       },
     [adAccounts],
   );
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+
+    async function loadAudienceSegments() {
+      try {
+        const response = await fetch("/api/v1/advertising/audience-segments");
+        if (!response.ok) return;
+        const data = (await response.json()) as {
+          segments?: AudienceSegmentOption[];
+        };
+        if (!cancelled) {
+          setAudienceSegments(data.segments ?? []);
+        }
+      } catch {
+        if (!cancelled) {
+          setAudienceSegments([]);
+        }
+      }
+    }
+
+    void loadAudienceSegments();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   const toggleChannel = (channel: PromotionChannel) => {
     setConfig((prev) => ({
@@ -639,6 +697,10 @@ export function PromoteAppDialog({
                                 prev.advertising?.budgetType || "daily",
                               objective:
                                 prev.advertising?.objective || "traffic",
+                              bidStrategy:
+                                prev.advertising?.bidStrategy || "cpm",
+                              optimizationGoal:
+                                prev.advertising?.optimizationGoal || "reach",
                             },
                           }));
                         }}
@@ -692,6 +754,70 @@ export function PromoteAppDialog({
                     </div>
 
                     <div>
+                      <Label className="text-white text-sm">Bid Strategy</Label>
+                      <Select
+                        value={config.advertising?.bidStrategy || "cpm"}
+                        onValueChange={(value: CampaignBidStrategy) =>
+                          setConfig((prev) => ({
+                            ...prev,
+                            advertising: {
+                              ...getAdvertisingConfig(prev),
+                              bidStrategy: value,
+                            },
+                          }))
+                        }
+                      >
+                        <SelectTrigger className="mt-1.5 bg-black/30 border-white/10 text-white rounded-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-neutral-800 border-white/10">
+                          {BID_STRATEGIES.map((strategy) => (
+                            <SelectItem
+                              key={strategy.id}
+                              value={strategy.id}
+                              className="text-white"
+                            >
+                              {strategy.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <Label className="text-white text-sm">
+                        Optimization Goal
+                      </Label>
+                      <Select
+                        value={config.advertising?.optimizationGoal || "reach"}
+                        onValueChange={(value: CampaignOptimizationGoal) =>
+                          setConfig((prev) => ({
+                            ...prev,
+                            advertising: {
+                              ...getAdvertisingConfig(prev),
+                              optimizationGoal: value,
+                            },
+                          }))
+                        }
+                      >
+                        <SelectTrigger className="mt-1.5 bg-black/30 border-white/10 text-white rounded-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-neutral-800 border-white/10">
+                          {OPTIMIZATION_GOALS.map((goal) => (
+                            <SelectItem
+                              key={goal.id}
+                              value={goal.id}
+                              className="text-white"
+                            >
+                              {goal.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
                       <Label className="text-white text-sm">Budget ($)</Label>
                       <Input
                         type="number"
@@ -735,6 +861,43 @@ export function PromoteAppDialog({
                           <SelectItem value="lifetime" className="text-white">
                             Total Budget
                           </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="col-span-2">
+                      <Label className="text-white text-sm">
+                        Audience Segment
+                      </Label>
+                      <Select
+                        value={config.advertising?.audienceSegmentId || "none"}
+                        onValueChange={(value) =>
+                          setConfig((prev) => ({
+                            ...prev,
+                            advertising: {
+                              ...getAdvertisingConfig(prev),
+                              audienceSegmentId:
+                                value === "none" ? undefined : value,
+                            },
+                          }))
+                        }
+                      >
+                        <SelectTrigger className="mt-1.5 bg-black/30 border-white/10 text-white rounded-sm">
+                          <SelectValue placeholder="Optional saved segment" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-neutral-800 border-white/10">
+                          <SelectItem value="none" className="text-white">
+                            No saved segment
+                          </SelectItem>
+                          {audienceSegments.map((segment) => (
+                            <SelectItem
+                              key={segment.id}
+                              value={segment.id}
+                              className="text-white"
+                            >
+                              {segment.name}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>
@@ -804,7 +967,11 @@ export function PromoteAppDialog({
                       <CheckCircle className="h-4 w-4 text-green-400" />
                       <span className="text-white">
                         Ad Campaign: ${config.advertising?.budget}{" "}
-                        {config.advertising?.budgetType}
+                        {config.advertising?.budgetType},{" "}
+                        {(
+                          config.advertising?.bidStrategy || "cpm"
+                        ).toUpperCase()}{" "}
+                        for {config.advertising?.optimizationGoal || "reach"}
                       </span>
                     </div>
                   )}

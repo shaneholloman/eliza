@@ -923,7 +923,7 @@
       "idx": 131,
       "version": "7",
       "when": 1779408000000,
-      "tag": "0132_legacy_eliza_cores_disable",
+      "tag": "0132_legacy_milady_cores_disable",
       "breakpoints": true
     },
     {
@@ -1148,6 +1148,27 @@
       "version": "7",
       "when": 1781223600000,
       "tag": "0165_credit_reservation_settled_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 164,
+      "version": "7",
+      "when": 1781310000000,
+      "tag": "0166_ad_audience_segments",
+      "breakpoints": true
+    },
+    {
+      "idx": 165,
+      "version": "7",
+      "when": 1781396400000,
+      "tag": "0167_ad_conversion_attribution",
+      "breakpoints": true
+    },
+    {
+      "idx": 166,
+      "version": "7",
+      "when": 1781396460000,
+      "tag": "0168_ad_accounts_pending_default",
       "breakpoints": true
     }
   ]
