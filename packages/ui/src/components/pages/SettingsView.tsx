@@ -38,6 +38,11 @@ type GroupedSections = {
 }[];
 
 function isCloudThemedSettingsSection(section: SettingsSectionDef): boolean {
+  // The id-prefix intentionally also covers cloud-owned panes registered under
+  // non-cloud groups (cloud-security / cloud-plugin-grants under "security",
+  // cloud-connectors under "agent"): their bodies hardcode light-on-dark
+  // styling (text-white, white/10 borders, bg-black/40) and need the dark
+  // theme-cloud island to stay readable.
   return (
     section.id.startsWith("cloud-") ||
     section.group === "cloud" ||

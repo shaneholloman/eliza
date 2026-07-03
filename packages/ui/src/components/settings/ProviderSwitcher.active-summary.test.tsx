@@ -49,7 +49,7 @@ describe("ActiveProviderSummary — honest active-state copy", () => {
     expect(screen.getByText("Active for coding agents")).toBeTruthy();
     expect(
       screen.getByText(
-        "Powers coding agents & workflows only — chat replies keep using the Intelligence provider above.",
+        "Powers coding agents & workflows only — chat replies keep using your selected Intelligence provider (Cloud or Local).",
       ),
     ).toBeTruthy();
     expect(screen.queryByText("Active")).toBeNull();
@@ -79,7 +79,7 @@ describe("ActiveProviderSummary — honest active-state copy", () => {
     expect(screen.getByText("Active")).toBeTruthy();
     expect(screen.queryByText("Active for coding agents")).toBeNull();
     expect(
-      screen.queryByText(/chat replies keep using the Intelligence provider/),
+      screen.queryByText(/chat replies keep using your selected Intelligence/),
     ).toBeNull();
   });
 });
