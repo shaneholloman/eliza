@@ -51,6 +51,22 @@ function makeTrajectoryRow(trajectoryId: string, stepId: string) {
 	};
 }
 
+function makeEmptyTrajectoryRow(trajectoryId: string) {
+	return {
+		id: trajectoryId,
+		agent_id: "00000000-0000-4000-8000-000000000001",
+		status: "active",
+		start_time: 1,
+		end_time: null,
+		duration_ms: null,
+		steps_json: JSON.stringify([]),
+		reward_components_json: JSON.stringify({ environmentReward: 0 }),
+		metrics_json: JSON.stringify({}),
+		metadata_json: JSON.stringify({}),
+		total_reward: 0,
+	};
+}
+
 function extractSqlStringAssignment(
 	sqlText: string,
 	column: string,
@@ -132,6 +148,53 @@ describe("TrajectoriesService", () => {
 		expect(call.tools.circular.self).toBe("[Circular]");
 		expect(call.tools.circular.fn).toBe("[Function toolHandler]");
 		expect(call.providerMetadata.self).toBe("[Circular]");
+	});
+
+	it("keeps empty step objects parseable across queued step writes", async () => {
+		const trajectoryId = "00000000-0000-4000-8000-000000000030";
+		const row = makeEmptyTrajectoryRow(trajectoryId);
+		const service = new TrajectoriesService(createRuntimeWithoutSql());
+		const serviceInternals = service as unknown as {
+			executeRawSql: (
+				sqlText: string,
+			) => Promise<{ rows: Array<Record<string, unknown>>; columns: string[] }>;
+		};
+
+		serviceInternals.executeRawSql = async (sqlText: string) => {
+			if (sqlText.includes("SELECT * FROM trajectories")) {
+				return { rows: [row], columns: Object.keys(row) };
+			}
+			if (sqlText.includes("UPDATE trajectories SET")) {
+				const stepsJson = extractSqlStringAssignment(sqlText, "steps_json");
+				if (stepsJson) {
+					row.steps_json = stepsJson;
+				}
+			}
+			return { rows: [], columns: [] };
+		};
+
+		service.startStep(trajectoryId, {
+			timestamp: 1,
+			agentBalance: 0,
+			agentPoints: 0,
+			agentPnL: 0,
+			openPositions: 0,
+		});
+		await service.flushWriteQueue(trajectoryId);
+		service.startStep(trajectoryId, {
+			timestamp: 2,
+			agentBalance: 0,
+			agentPoints: 0,
+			agentPnL: 0,
+			openPositions: 0,
+		});
+		await service.flushWriteQueue(trajectoryId);
+
+		const persisted = JSON.parse(row.steps_json);
+		expect(persisted).toHaveLength(2);
+		expect(persisted[0].observation).toEqual({});
+		expect(persisted[0].action.parameters).toEqual({});
+		expect(persisted[1].stepNumber).toBe(1);
 	});
 
 	it("does not persist internal embedding calls as trajectory LLM calls", () => {

@@ -20,6 +20,8 @@ export type FinalCheckRuntime = {
 
 const REMINDER_LIFECYCLE_METADATA_KEY = "lifecycle";
 const REMINDER_ESCALATION_INDEX_METADATA_KEY = "escalationIndex";
+const MODEL_CALL_OCCURRED_SETTLE_TIMEOUT_MS = 2500;
+const MODEL_CALL_OCCURRED_POLL_INTERVAL_MS = 50;
 
 export interface FinalCheckHandlerContext {
   runtime: FinalCheckRuntime;
@@ -191,6 +193,110 @@ async function flushListedTrajectoryWrites(
     return;
   }
   await Promise.allSettled(ids.map((id) => service.flushWriteQueue?.(id)));
+}
+
+function supportsAsyncTrajectoryFlush(service: TrajectoryServiceLike): boolean {
+  return (
+    typeof service.flushWriteQueue === "function" ||
+    service.writeQueues instanceof Map
+  );
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+type MatchingModelCallSearch = {
+  matchingCalls: TrajectoryLlmCallLike[];
+  observedPurposes: Set<string>;
+};
+
+async function collectMatchingModelCalls(
+  service: TrajectoryServiceLike,
+  options: {
+    scenarioId?: string;
+    acceptedPurposes: string[];
+    includesAny?: Array<string | RegExp>;
+    includesAll?: Array<string | RegExp>;
+    requiredCount: number;
+  },
+): Promise<MatchingModelCallSearch> {
+  await settleTrajectoryWrites(service);
+
+  const list = await service.listTrajectories({
+    limit: Math.max(25, options.requiredCount * 5),
+    ...(options.scenarioId ? { scenarioId: options.scenarioId } : {}),
+  });
+  const ids = (list.trajectories ?? [])
+    .map((entry) => entry.id ?? entry.trajectoryId)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  await flushListedTrajectoryWrites(service, ids);
+
+  const matchingCalls: TrajectoryLlmCallLike[] = [];
+  const observedPurposes = new Set<string>();
+  for (const id of ids) {
+    const detail = await service.getTrajectoryDetail(id);
+    if (
+      options.scenarioId &&
+      detail?.scenarioId &&
+      detail.scenarioId !== options.scenarioId
+    ) {
+      continue;
+    }
+    for (const call of collectTrajectoryLlmCalls(detail)) {
+      if (call.purpose) {
+        observedPurposes.add(call.purpose);
+      }
+      if (
+        options.acceptedPurposes.length > 0 &&
+        !options.acceptedPurposes.includes(String(call.purpose ?? ""))
+      ) {
+        continue;
+      }
+      const blob = modelCallBlob(call);
+      if (
+        options.includesAll?.length &&
+        options.includesAll.some((pattern) => !matchesPattern(blob, pattern))
+      ) {
+        continue;
+      }
+      if (
+        options.includesAny?.length &&
+        !options.includesAny.some((pattern) => matchesPattern(blob, pattern))
+      ) {
+        continue;
+      }
+      matchingCalls.push(call);
+    }
+  }
+
+  return { matchingCalls, observedPurposes };
+}
+
+async function waitForMatchingModelCalls(
+  service: TrajectoryServiceLike,
+  options: {
+    scenarioId?: string;
+    acceptedPurposes: string[];
+    includesAny?: Array<string | RegExp>;
+    includesAll?: Array<string | RegExp>;
+    requiredCount: number;
+  },
+): Promise<MatchingModelCallSearch> {
+  const shouldPoll = supportsAsyncTrajectoryFlush(service);
+  const deadline = Date.now() + MODEL_CALL_OCCURRED_SETTLE_TIMEOUT_MS;
+  let result = await collectMatchingModelCalls(service, options);
+
+  while (
+    shouldPoll &&
+    result.matchingCalls.length < options.requiredCount &&
+    Date.now() < deadline
+  ) {
+    await sleep(MODEL_CALL_OCCURRED_POLL_INTERVAL_MS);
+    result = await collectMatchingModelCalls(service, options);
+  }
+
+  return result;
 }
 
 function matchesActionName(
@@ -957,54 +1063,16 @@ registerFinalCheckHandler(
       };
     }
 
-    await settleTrajectoryWrites(service);
-
-    const list = await service.listTrajectories({
-      limit: Math.max(25, requiredCount * 5),
-      ...(scenarioId ? { scenarioId } : {}),
-    });
-    const ids = (list.trajectories ?? [])
-      .map((entry) => entry.id ?? entry.trajectoryId)
-      .filter((id): id is string => typeof id === "string" && id.length > 0);
-    await flushListedTrajectoryWrites(service, ids);
-
-    const matchingCalls: TrajectoryLlmCallLike[] = [];
-    const observedPurposes = new Set<string>();
-    for (const id of ids) {
-      const detail = await service.getTrajectoryDetail(id);
-      if (
-        scenarioId &&
-        detail?.scenarioId &&
-        detail.scenarioId !== scenarioId
-      ) {
-        continue;
-      }
-      for (const call of collectTrajectoryLlmCalls(detail)) {
-        if (call.purpose) {
-          observedPurposes.add(call.purpose);
-        }
-        if (
-          acceptedPurposes.length > 0 &&
-          !acceptedPurposes.includes(String(call.purpose ?? ""))
-        ) {
-          continue;
-        }
-        const blob = modelCallBlob(call);
-        if (
-          includesAll?.length &&
-          includesAll.some((pattern) => !matchesPattern(blob, pattern))
-        ) {
-          continue;
-        }
-        if (
-          includesAny?.length &&
-          !includesAny.some((pattern) => matchesPattern(blob, pattern))
-        ) {
-          continue;
-        }
-        matchingCalls.push(call);
-      }
-    }
+    const { matchingCalls, observedPurposes } = await waitForMatchingModelCalls(
+      service,
+      {
+        acceptedPurposes,
+        requiredCount,
+        ...(includesAny ? { includesAny } : {}),
+        ...(includesAll ? { includesAll } : {}),
+        ...(scenarioId ? { scenarioId } : {}),
+      },
+    );
 
     if (matchingCalls.length < requiredCount) {
       const observed =
