@@ -2266,6 +2266,13 @@
         "vite": "^8.0.0",
       },
     },
+    "packages/import-conversations": {
+      "name": "@elizaos/import-conversations",
+      "version": "2.0.4",
+      "devDependencies": {
+        "@types/node": "^24.0.0",
+      },
+    },
     "packages/logger": {
       "name": "@elizaos/logger",
       "version": "2.0.3-beta.7",
@@ -6313,6 +6320,8 @@
     "@elizaos/gateway-webhook": ["@elizaos/gateway-webhook@workspace:packages/cloud/services/gateway-webhook"],
 
     "@elizaos/gcp-examples": ["@elizaos/gcp-examples@workspace:packages/examples/gcp"],
+
+    "@elizaos/import-conversations": ["@elizaos/import-conversations@workspace:packages/import-conversations"],
 
     "@elizaos/interrupt-bench": ["@elizaos/interrupt-bench@workspace:packages/benchmarks/interrupt-bench"],
 
