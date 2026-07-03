@@ -1606,4 +1606,6 @@ export interface RestoreAppBackupResponse {
   success: boolean;
   app: { id: string; name: string; slug: string };
   apiKey: string;
+  /** e.g. monetization was disabled on restore pending review (#11834). */
+  warnings?: string[];
 }

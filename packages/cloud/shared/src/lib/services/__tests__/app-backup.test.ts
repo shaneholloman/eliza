@@ -2,7 +2,8 @@
  * App config backup/restore (#10204 "backing up") — real Drizzle schema, PGlite.
  *
  * Exports a secret-free config snapshot of an app and restores it as a NEW app
- * (new slug + new API key) with monetization reapplied. Fails loudly (via the
+ * (new slug + new API key) with monetization pricing reapplied but monetization
+ * FORCED OFF (draft apps must pass review to monetize, #11834). Fails loudly (via the
  * `pgliteReady` guard) if PGlite/pushSchema ever fails to initialize — never a
  * silent skip.
  */
@@ -171,15 +172,24 @@ describe("App config backup/restore", () => {
     expect(JSON.stringify(backup)).not.toContain("api_key");
     expect(JSON.stringify(backup)).not.toContain(source.id);
 
-    // Restore → a NEW app with the config + monetization reapplied.
-    const { app: restored, apiKey } = await appBackupService.restoreApp(orgId, userId, backup);
+    // Restore → a NEW app with the config + monetization pricing reapplied.
+    const {
+      app: restored,
+      apiKey,
+      warnings,
+    } = await appBackupService.restoreApp(orgId, userId, backup);
     expect(restored.id).not.toBe(source.id);
     expect(restored.slug).not.toBe(source.slug);
     expect(apiKey).toBeTruthy();
     expect(restored.name).toContain("My Monetized App");
 
     const restoredFresh = await appsService.getById(restored.id);
-    expect(restoredFresh?.monetization_enabled).toBe(true);
+    // Review-gate (#11834): even though the backup says enabled=true, the
+    // restored app is a fresh draft — monetization must be FORCED OFF and the
+    // caller warned. Pricing is persisted so re-enabling after review is easy.
+    expect(restoredFresh?.monetization_enabled).toBe(false);
+    expect(restoredFresh?.review_status).toBe("draft");
+    expect(warnings).toEqual([expect.stringContaining("Monetization was disabled on restore")]);
     expect(Number(restoredFresh?.inference_markup_percentage)).toBe(25);
     expect(Number(restoredFresh?.purchase_share_percentage)).toBe(40);
     expect(restoredFresh?.allowed_origins).toEqual(["https://myapp.example.com"]);
