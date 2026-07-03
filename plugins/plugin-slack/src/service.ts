@@ -3047,11 +3047,17 @@ export class SlackService extends Service implements ISlackService {
     let lastTs = "";
 
     for (const msg of messages) {
+      type SlackPostMessageArgs = Parameters<
+        typeof client.chat.postMessage
+      >[0] & {
+        attachments?: SlackAttachment[];
+        blocks?: SlackBlock[];
+      };
       const messageArgs = {
         channel: channelId,
         text: msg,
         mrkdwn: options?.mrkdwn ?? true,
-      } as Parameters<typeof client.chat.postMessage>[0];
+      } as SlackPostMessageArgs;
       if (options?.threadTs !== undefined) {
         messageArgs.thread_ts = options.threadTs;
       }
@@ -3065,12 +3071,10 @@ export class SlackService extends Service implements ISlackService {
         messageArgs.unfurl_media = options.unfurlMedia;
       }
       if (options?.attachments) {
-        (messageArgs as unknown as Record<string, unknown>).attachments =
-          options.attachments;
+        messageArgs.attachments = options.attachments;
       }
       if (options?.blocks) {
-        (messageArgs as unknown as Record<string, unknown>).blocks =
-          options.blocks;
+        messageArgs.blocks = options.blocks;
       }
 
       const result = await client.chat.postMessage(messageArgs);
