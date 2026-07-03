@@ -59,6 +59,8 @@ import {
   type CreateCreditsCheckoutResponse,
   type CreateInfluencerProfileInput,
   type CreateInfluencerProfileResponse,
+  type CreatePressReleaseInput,
+  type CreatePressReleaseResponse,
   type CreateRedemptionRequest,
   type CreateRedemptionResponse,
   type CreateX402PaymentRequest,
@@ -85,6 +87,7 @@ import {
   type GenerateImageResponse,
   type GetAppChargeResponse,
   type GetCampaignPerformanceReportOptions,
+  type GetPressReleaseResponse,
   type GetX402PaymentRequestResponse,
   type HttpMethod,
   type JobStatus,
@@ -97,6 +100,8 @@ import {
   type ListAppFrontendDeploymentsResponse,
   type ListAppsResponse,
   type ListInfluencersResponse,
+  type ListPressCoverageResponse,
+  type ListPressReleasesResponse,
   type ListRedemptionsResponse,
   type ListX402PaymentRequestsResponse,
   type ModelListResponse,
@@ -115,10 +120,14 @@ import {
   type SettleX402PaymentRequestResponse,
   type SnapshotListResponse,
   type SnapshotType,
+  type SubmitPressReleaseInput,
+  type SubmitPressReleaseResponse,
   type UpdateAppInput,
   type UpdateAppMonetizationInput,
   type UpdateCampaignDaypartingInput,
   type UpdateContainerRequest,
+  type UpdatePressReleaseInput,
+  type UpdatePressReleaseResponse,
   type UpsertAffiliateCodeRequest,
   type UserProfileResponse,
   type VerifyAppCreditsCheckoutResponse,
@@ -1108,6 +1117,73 @@ export class ElizaCloudClient {
       {
         json: input,
       },
+    );
+  }
+
+  /** `POST /api/v1/marketing/pr` — create a draft press release (#11819). */
+  createPressRelease(
+    input: CreatePressReleaseInput,
+  ): Promise<CreatePressReleaseResponse> {
+    return this.request<CreatePressReleaseResponse>(
+      "POST",
+      "/api/v1/marketing/pr",
+      { json: input },
+    );
+  }
+
+  /** `GET /api/v1/marketing/pr` — list the org's press release drafts and submissions. */
+  listPressReleases(): Promise<ListPressReleasesResponse> {
+    return this.request<ListPressReleasesResponse>(
+      "GET",
+      "/api/v1/marketing/pr",
+    );
+  }
+
+  /** `GET /api/v1/marketing/pr/:releaseId` — read one press release. */
+  getPressRelease(releaseId: string): Promise<GetPressReleaseResponse> {
+    return this.request<GetPressReleaseResponse>(
+      "GET",
+      `/api/v1/marketing/pr/${encodePathParam(releaseId)}`,
+    );
+  }
+
+  /** `PATCH /api/v1/marketing/pr/:releaseId` — update a draft press release. */
+  updatePressRelease(
+    releaseId: string,
+    input: UpdatePressReleaseInput,
+  ): Promise<UpdatePressReleaseResponse> {
+    return this.request<UpdatePressReleaseResponse>(
+      "PATCH",
+      `/api/v1/marketing/pr/${encodePathParam(releaseId)}`,
+      { json: input },
+    );
+  }
+
+  /** `POST /api/v1/marketing/pr/:releaseId/submit` — provider-backed submit; currently fails closed when no provider exists. */
+  submitPressRelease(
+    releaseId: string,
+    input: SubmitPressReleaseInput = {},
+  ): Promise<SubmitPressReleaseResponse> {
+    return this.request<SubmitPressReleaseResponse>(
+      "POST",
+      `/api/v1/marketing/pr/${encodePathParam(releaseId)}/submit`,
+      { json: input },
+    );
+  }
+
+  /** `POST /api/v1/marketing/pr/:releaseId/cancel` — cancel a draft or ready press release. */
+  cancelPressRelease(releaseId: string): Promise<UpdatePressReleaseResponse> {
+    return this.request<UpdatePressReleaseResponse>(
+      "POST",
+      `/api/v1/marketing/pr/${encodePathParam(releaseId)}/cancel`,
+    );
+  }
+
+  /** `GET /api/v1/marketing/pr/:releaseId/coverage` — list tracked coverage for a release. */
+  listPressCoverage(releaseId: string): Promise<ListPressCoverageResponse> {
+    return this.request<ListPressCoverageResponse>(
+      "GET",
+      `/api/v1/marketing/pr/${encodePathParam(releaseId)}/coverage`,
     );
   }
 

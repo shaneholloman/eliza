@@ -1592,6 +1592,151 @@ export interface CreateBookingResponse {
   error?: string;
 }
 
+// ---- Press releases / PR distribution (#11819) ----
+
+export type PressReleaseStatus =
+  | "draft"
+  | "ready"
+  | "submitted"
+  | "distributed"
+  | "failed"
+  | "cancelled";
+
+export type PressDistributionStatus =
+  | "pending"
+  | "submitted"
+  | "distributed"
+  | "failed"
+  | "cancelled";
+
+export interface PressReleaseAssetDto {
+  url: string;
+  mimeType?: string;
+  label?: string;
+}
+
+export interface PressReleaseTargetAudienceDto {
+  niches?: string[];
+  regions?: string[];
+  languages?: string[];
+  outletTypes?: string[];
+}
+
+export interface PressReleaseDto {
+  id: string;
+  organization_id: string;
+  created_by_user_id: string | null;
+  title: string;
+  summary: string | null;
+  body: string;
+  boilerplate: string | null;
+  status: PressReleaseStatus;
+  target_audience: PressReleaseTargetAudienceDto;
+  target_regions: string[];
+  assets: PressReleaseAssetDto[];
+  embargo_at: string | null;
+  submitted_at: string | null;
+  distributed_at: string | null;
+  failed_reason: string | null;
+  idempotency_key: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PressReleaseDistributionDto {
+  id: string;
+  organization_id: string;
+  press_release_id: string;
+  provider: string;
+  external_distribution_id: string | null;
+  status: PressDistributionStatus;
+  idempotency_key: string | null;
+  request_payload: Record<string, unknown>;
+  provider_response: Record<string, unknown>;
+  error_message: string | null;
+  submitted_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PressCoverageDto {
+  id: string;
+  organization_id: string;
+  press_release_id: string;
+  distribution_id: string | null;
+  url: string;
+  title: string | null;
+  outlet: string | null;
+  published_at: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CreatePressReleaseInput {
+  title: string;
+  body: string;
+  summary?: string;
+  boilerplate?: string;
+  targetAudience?: PressReleaseTargetAudienceDto;
+  targetRegions?: string[];
+  assets?: PressReleaseAssetDto[];
+  embargoAt?: string | null;
+  idempotencyKey?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UpdatePressReleaseInput {
+  title?: string;
+  body?: string;
+  summary?: string | null;
+  boilerplate?: string | null;
+  targetAudience?: PressReleaseTargetAudienceDto;
+  targetRegions?: string[];
+  assets?: PressReleaseAssetDto[];
+  embargoAt?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SubmitPressReleaseInput {
+  idempotencyKey?: string;
+}
+
+export interface CreatePressReleaseResponse {
+  success: boolean;
+  release: PressReleaseDto;
+}
+
+export interface ListPressReleasesResponse {
+  success: boolean;
+  releases: PressReleaseDto[];
+}
+
+export interface GetPressReleaseResponse {
+  success: boolean;
+  release: PressReleaseDto;
+}
+
+export interface UpdatePressReleaseResponse {
+  success: boolean;
+  release: PressReleaseDto;
+}
+
+export interface SubmitPressReleaseResponse {
+  success: boolean;
+  release?: PressReleaseDto;
+  distribution?: PressReleaseDistributionDto;
+  error?: string;
+  code?: string;
+}
+
+export interface ListPressCoverageResponse {
+  success: boolean;
+  releaseId: string;
+  coverage: PressCoverageDto[];
+}
+
 // ---- App config backup / restore (#10204) ----
 
 export interface AppBackupSnapshot {
