@@ -43,6 +43,16 @@ export type CampaignObjective =
 export type BudgetType = "daily" | "lifetime";
 
 /**
+ * Campaign bid strategy selected by the user.
+ */
+export type CampaignBidStrategy = "cpm" | "cpc" | "cpa";
+
+/**
+ * Optimization goal selected by the user.
+ */
+export type CampaignOptimizationGoal = "reach" | "clicks" | "conversions";
+
+/**
  * Ad campaigns table schema.
  *
  * Stores advertising campaigns created through the platform.
@@ -116,8 +126,8 @@ export const adCampaigns = pgTable(
       .$type<{
         external_ad_set_ids?: string[];
         external_ad_ids?: string[];
-        optimization_goal?: string;
-        bid_strategy?: string;
+        optimization_goal?: CampaignOptimizationGoal;
+        bid_strategy?: CampaignBidStrategy;
         dayparting?: {
           timezone: string;
           windows: Array<{
@@ -128,6 +138,7 @@ export const adCampaigns = pgTable(
         };
         /** Set at CREATE when the schedule went into the provider payload (Meta only). */
         dayparting_provider_synced_at?: string;
+        attribution_token_secret?: string;
         last_sync_at?: string;
         error_message?: string;
         source_campaign_id?: string;

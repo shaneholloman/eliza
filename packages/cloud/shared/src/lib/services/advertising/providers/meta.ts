@@ -65,6 +65,38 @@ interface MetaAdImagesResponse {
   >;
 }
 
+export function mapBidControlsToMetaAdSet(input: CreateCampaignInput): {
+  billing_event: string;
+  optimization_goal: string;
+} {
+  const effectiveGoal =
+    input.optimizationGoal ??
+    (input.bidStrategy === "cpa"
+      ? "conversions"
+      : input.bidStrategy === "cpc"
+        ? "clicks"
+        : "reach");
+
+  if (effectiveGoal === "conversions") {
+    return {
+      billing_event: "IMPRESSIONS",
+      optimization_goal: "OFFSITE_CONVERSIONS",
+    };
+  }
+
+  if (effectiveGoal === "clicks") {
+    return {
+      billing_event: "LINK_CLICKS",
+      optimization_goal: "LINK_CLICKS",
+    };
+  }
+
+  return {
+    billing_event: "IMPRESSIONS",
+    optimization_goal: "REACH",
+  };
+}
+
 function isRetryableError(code: number): boolean {
   // Rate limit errors (code 4, 17, 32, 613) and temporary errors (code 1, 2)
   return [1, 2, 4, 17, 32, 613].includes(code);
@@ -299,8 +331,7 @@ export const metaAdsProvider: AdProvider = {
         name: `${input.name} - Ad Set`,
         campaign_id: campaign.id,
         status: "PAUSED",
-        billing_event: "IMPRESSIONS",
-        optimization_goal: "REACH",
+        ...mapBidControlsToMetaAdSet(input),
       };
 
       if (input.budgetType === "daily") {
@@ -350,11 +381,41 @@ export const metaAdsProvider: AdProvider = {
       }
 
       if (input.targeting?.interests?.length) {
+        const flexibleSpec: Record<string, unknown> = {
+          interests: input.targeting.interests.map((i) => ({ name: i })),
+        };
+        if (input.targeting.behaviors?.length) {
+          flexibleSpec.behaviors = input.targeting.behaviors.map((behavior) => ({
+            name: behavior,
+          }));
+        }
+        targeting.flexible_spec = [flexibleSpec];
+      } else if (input.targeting?.behaviors?.length) {
         targeting.flexible_spec = [
           {
-            interests: input.targeting.interests.map((i) => ({ name: i })),
+            behaviors: input.targeting.behaviors.map((behavior) => ({
+              name: behavior,
+            })),
           },
         ];
+      }
+
+      if (input.targeting?.customAudiences?.length) {
+        targeting.custom_audiences = input.targeting.customAudiences.map((id) => ({ id }));
+      }
+
+      if (input.targeting?.excludedAudiences?.length) {
+        targeting.excluded_custom_audiences = input.targeting.excludedAudiences.map((id) => ({
+          id,
+        }));
+      }
+
+      if (input.targeting?.placements?.length) {
+        targeting.publisher_platforms = input.targeting.placements;
+      }
+
+      if (input.targeting?.languages?.length) {
+        targeting.locales = input.targeting.languages;
       }
 
       adSetParams.targeting = JSON.stringify(targeting);

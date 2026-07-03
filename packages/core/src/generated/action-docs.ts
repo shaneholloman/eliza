@@ -3328,7 +3328,7 @@ export const allActionsSpec = {
 			parameters: [],
 			similes: ["PICK_UP", "GRAB", "GRASP_OBJECT"],
 			descriptionCompressed:
-				"Run the learned `pick_up` policy. Starts a policy. start with task='pick_up'. options: target_label (default 'red ball'), max_steps.",
+				"Run the learned `pick_up` policy. Starts a policy.start with task='pick_up'. options: target_label (default 'red ball'), max_steps.",
 		},
 		{
 			name: "AINEX_PLACE_DOWN",
@@ -3337,7 +3337,7 @@ export const allActionsSpec = {
 			parameters: [],
 			similes: ["PLACE_DOWN", "PUT_DOWN", "RELEASE", "DROP"],
 			descriptionCompressed:
-				"Run the learned `place_down` policy. Starts a policy. start with task='place_down'.",
+				"Run the learned `place_down` policy. Starts a policy.start with task='place_down'.",
 		},
 		{
 			name: "AINEX_RUN_ACTION_GROUP",
@@ -3346,7 +3346,7 @@ export const allActionsSpec = {
 			parameters: [],
 			similes: ["RUN_ACTION_GROUP", "PLAY_ACTION", "PLAY_ACTION_GROUP"],
 			descriptionCompressed:
-				"Play a named Hiwonder action group (pre-recorded multi-servo motion). Options: name (required, must match a key in the profile's actions. groups).",
+				"Play a named Hiwonder action group (pre-recorded multi-servo motion). Options: name (required, must match a key in the profile's actions.groups).",
 		},
 		{
 			name: "AINEX_RUN_RL",
@@ -3371,7 +3371,7 @@ export const allActionsSpec = {
 			parameters: [],
 			similes: ["SET_SERVO", "MOVE_SERVO", "MOVE_JOINT", "SET_JOINT"],
 			descriptionCompressed:
-				"Drive one or more AiNex servos to target pulse positions over a duration. Options: positions=[{id, position}], duration (seconds, default 0. 5).",
+				"Drive one or more AiNex servos to target pulse positions over a duration. Options: positions=[{id, position}], duration (seconds, default 0.5).",
 		},
 		{
 			name: "AINEX_SIDE_STEP_LEFT",
@@ -3416,7 +3416,7 @@ export const allActionsSpec = {
 			parameters: [],
 			similes: ["STOP", "HALT", "FREEZE", "EMERGENCY_STOP"],
 			descriptionCompressed:
-				"Stop the AiNex robot immediately. Sends walk. command:stop with preempt=true so any in-flight commands or active policy are cleared.",
+				"Stop the AiNex robot immediately. Sends walk.command:stop with preempt=true so any in-flight commands or active policy are cleared.",
 		},
 		{
 			name: "AINEX_TURN_LEFT",
@@ -3443,7 +3443,7 @@ export const allActionsSpec = {
 			parameters: [],
 			similes: ["WALK_BACKWARD", "MOVE_BACKWARD", "GO_BACK", "BACK_UP"],
 			descriptionCompressed:
-				"Start walking the AiNex robot backward. Sends walk. set+walk. command:start to the bridge. robot keeps walking until AINEX_STOP. Options: speed (1-4).",
+				"Start walking the AiNex robot backward. Sends walk.set+walk.command:start to the bridge. robot keeps walking until AINEX_STOP. Options: speed (1-4).",
 		},
 		{
 			name: "AINEX_WALK_FORWARD",
@@ -3452,7 +3452,7 @@ export const allActionsSpec = {
 			parameters: [],
 			similes: ["WALK_FORWARD", "MOVE_FORWARD", "GO_FORWARD"],
 			descriptionCompressed:
-				"Start walking the AiNex robot forward. Sends walk. set+walk. command:start to the bridge. the robot keeps walking until AINEX_STOP is issued. Options: speed...",
+				"Start walking the AiNex robot forward. Sends walk.set+walk.command:start to the bridge. the robot keeps walking until AINEX_STOP is issued. Options: speed...",
 		},
 		{
 			name: "AINEX_WAVE",
@@ -4008,7 +4008,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"For action=wait_for_url: substring or /regex/ to match the tab URL (e. g. callback?code=, or /\\/done$/).",
+						"For action=wait_for_url: substring or /regex/ to match the tab URL (e.g. callback?code=, or /\\/done$/).",
 				},
 				{
 					name: "pollIntervalMs",
@@ -4040,7 +4040,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"Required for action=autofill_login: registrable hostname, e. g. github. com.",
+						"Required for action=autofill_login: registrable hostname, e.g. github.com.",
 				},
 				{
 					name: "username",
@@ -4266,7 +4266,7 @@ export const allActionsSpec = {
 					schema: {
 						type: "string",
 					},
-					descriptionCompressed: "The domain to buy, e. g. yourbrand. com.",
+					descriptionCompressed: "The domain to buy, e.g. yourbrand.com.",
 				},
 				{
 					name: "appName",
@@ -4659,7 +4659,7 @@ export const allActionsSpec = {
 					schema: {
 						type: "string",
 					},
-					descriptionCompressed: "The domain to check, e. g. yourbrand. com.",
+					descriptionCompressed: "The domain to check, e.g. yourbrand.com.",
 				},
 				{
 					name: "appName",
@@ -4845,7 +4845,7 @@ export const allActionsSpec = {
 						},
 					},
 					descriptionCompressed:
-						"Multi-point polyline [[x, y],. ] (≥2 points) for drag. traces every waypoint with the button held. Supersedes startCoordinate/coordinate when present.",
+						"Multi-point polyline [[x,y],.] (≥2 points) for drag. traces every waypoint with the button held. Supersedes startCoordinate/coordinate when present.",
 				},
 				{
 					name: "text",
@@ -4868,7 +4868,7 @@ export const allActionsSpec = {
 						},
 					},
 					descriptionCompressed:
-						"Modifier keys for click_with_modifiers, e. g. ['cmd', 'shift'] or ['ctrl'].",
+						"Modifier keys for click_with_modifiers, e.g. ['cmd','shift'] or ['ctrl'].",
 				},
 				{
 					name: "key",
@@ -4946,7 +4946,7 @@ export const allActionsSpec = {
 						enum: ["logical", "backing"],
 					},
 					descriptionCompressed:
-						"Coordinate space: logical default matches display. bounds. backing raw retina pixels macOS only.",
+						"Coordinate space: logical default matches display.bounds. backing raw retina pixels macOS only.",
 				},
 				{
 					name: "approvalId",
@@ -5082,7 +5082,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"Natural-language goal, e. g. click save button in dialog.",
+						"Natural-language goal, e.g. click save button in dialog.",
 				},
 				{
 					name: "maxSteps",
@@ -6313,7 +6313,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"Lookback window. ISO date or relative (e. g. '14d', '4w'). Default '14d'.",
+						"Lookback window. ISO date or relative (e.g. '14d', '4w'). Default '14d'.",
 				},
 				{
 					name: "budget",
@@ -6576,12 +6576,12 @@ export const allActionsSpec = {
 		{
 			name: "INBOX",
 			description:
-				"Inbox: Gmail, Slack, Discord, Telegram, Signal, iMessage, WhatsApp. Merge recency feed and operate the persisted triage queue. Subactions: list, search, summarize, triage, reply, snooze, archive, approve.",
+				"Inbox: Gmail, Slack, Discord, Telegram, Signal, iMessage, WhatsApp. Merge recency feed and operate the persisted triage queue. Subactions: list, search, summarize, triage (AI-classify new messages into urgent / needs_reply / notify / info / ignore, then return the prioritized queue), reply, snooze, archive, approve.",
 			parameters: [
 				{
 					name: "action",
 					description:
-						"Inbox op: list | search | summarize | triage | reply | snooze | archive | approve.",
+						"Inbox op: list | search | summarize | triage (classify new messages with the AI triage classifier, then return the pending queue) | reply | snooze | archive | approve.",
 					required: false,
 					schema: {
 						type: "string",
@@ -6597,7 +6597,7 @@ export const allActionsSpec = {
 						],
 					},
 					descriptionCompressed:
-						"Inbox op: list | search | summarize | triage | reply | snooze | archive | approve.",
+						"Inbox op: list | search | summarize | triage (classify new msgs with the AI triage classifier, then return the pending queue) | reply | snooze | archive |...",
 				},
 				{
 					name: "platforms",
@@ -6679,9 +6679,32 @@ export const allActionsSpec = {
 					descriptionCompressed:
 						"Explicit owner confirmation for sending reply/approve.",
 				},
+				{
+					name: "classification",
+					description:
+						"Optional triage queue filter for persisted items: ignore | info | notify | needs_reply | urgent. When set on triage, reads the queue without classifying fresh messages.",
+					required: false,
+					schema: {
+						type: "string",
+						enum: ["ignore", "info", "notify", "needs_reply", "urgent"],
+					},
+					descriptionCompressed:
+						"Optional triage queue filter for persisted items: ignore | info | notify | needs_reply | urgent. When set on triage, reads the queue without classifying...",
+				},
+				{
+					name: "includeSnoozed",
+					description:
+						"When true, include snoozed triage queue entries in triage reads.",
+					required: false,
+					schema: {
+						type: "boolean",
+					},
+					descriptionCompressed:
+						"When true, include snoozed triage queue entries in triage reads.",
+				},
 			],
 			descriptionCompressed:
-				"INBOX list|search|summarize|triage|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
+				"INBOX list|search|summarize|triage(classify urgent/needs_reply/noise)|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
 			exampleCalls: [
 				{
 					user: "Use INBOX with the provided parameters.",
@@ -6697,6 +6720,8 @@ export const allActionsSpec = {
 							body: "example",
 							until: "example",
 							confirmed: false,
+							classification: "ignore",
+							includeSnoozed: false,
 						},
 					},
 				},
@@ -7410,7 +7435,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"For key - the key or chord to press (e. g. 'enter', 'ctrl+s').",
+						"For key - the key or chord to press (e.g. 'enter', 'ctrl+s').",
 				},
 				{
 					name: "direction",
@@ -7667,7 +7692,7 @@ export const allActionsSpec = {
 		{
 			name: "OWNER_GOALS",
 			description:
-				"Manage the owner's long-horizon life goals. Actions: create, update, delete, review. Goals carry a horizon (e.g. quarter, year, life) and feed routine + reminder generation.",
+				"Manage the owner's long-horizon life goals. Actions: create, update, delete, review, checkin. Goals carry a horizon (e.g. quarter, year, life), feed routine + reminder generation, and cadenced goals get scheduled check-ins whose responses are recorded via checkin.",
 			parameters: [
 				{
 					name: "action",
@@ -7705,9 +7730,27 @@ export const allActionsSpec = {
 					},
 					descriptionCompressed: "Longer goal description (create/update).",
 				},
+				{
+					name: "note",
+					description: "Owner's check-in note (checkin).",
+					required: false,
+					schema: {
+						type: "string",
+					},
+					descriptionCompressed: "Owner's check-in note (checkin).",
+				},
+				{
+					name: "progress",
+					description: "Reported goal progress (checkin).",
+					required: false,
+					schema: {
+						type: "string",
+					},
+					descriptionCompressed: "Reported goal progress (checkin).",
+				},
 			],
 			descriptionCompressed:
-				"owner goals: create|update|delete|review; long-horizon, drives routines",
+				"owner goals: create|update|delete|review|checkin; long-horizon, drives routines",
 			similes: [
 				"GOALS",
 				"LIFE_GOALS",
@@ -7725,6 +7768,8 @@ export const allActionsSpec = {
 							id: "example",
 							title: "example",
 							description: "example",
+							note: "example",
+							progress: "example",
 						},
 					},
 				},
@@ -7867,7 +7912,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"market only: Hyperliquid coin/asset symbol (e. g. BTC).",
+						"market only: Hyperliquid coin/asset symbol (e.g. BTC).",
 				},
 				{
 					name: "side",
@@ -8316,7 +8361,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"ScheduledTaskSubject. kind: entity|relationship|thread|document|calendar_event|self.",
+						"ScheduledTaskSubject.kind: entity|relationship|thread|document|calendar_event|self.",
 				},
 				{
 					name: "subjectId",
@@ -8326,7 +8371,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"ScheduledTaskSubject. id paired with subjectKind.",
+						"ScheduledTaskSubject.id paired with subjectKind.",
 				},
 				{
 					name: "ownerVisibleOnly",
@@ -8401,7 +8446,7 @@ export const allActionsSpec = {
 						type: "object",
 					},
 					descriptionCompressed:
-						"create-only: output destination/target, e. g. channel -> in_app:<roomId>.",
+						"create-only: output destination/target, e.g. channel -> in_app:<roomId>.",
 				},
 				{
 					name: "pipeline",
@@ -9014,13 +9059,48 @@ export const allActionsSpec = {
 				{
 					name: "agentType",
 					description:
-						"Agent type (elizaos, pi-agent, opencode, codex, or claude) for create / spawn_agent / control.resume. Defaults to ELIZA_ACP_DEFAULT_AGENT, normally elizaos.",
+						"Heuristic backend guess (elizaos, pi-agent, opencode, codex, or claude) for create / spawn_agent / control.resume. This is a weak hint — it loses to the operator default/pin and to character routing. To honor an EXPLICIT user request use requestedBackend instead.",
 					required: false,
 					schema: {
 						type: "string",
 					},
 					descriptionCompressed:
-						"Agent type (elizaos, pi-agent, opencode, codex, or claude) for create/spawn_agent/control. resume. Defaults to ELIZA_ACP_DEFAULT_AGENT, normally elizaos.",
+						"Heuristic backend guess (elizaos, pi-agent, opencode, codex, or claude) for create/spawn_agent/control.resume. This is a weak hint - it loses to the operator...",
+				},
+				{
+					name: "appMonetized",
+					description:
+						"Set true when the user wants the app to EARN MONEY / charge for access — e.g. 'people pay $1 to chat with X', 'charge per message', 'a paid app', 'monetized', a paywall, or per-use pricing. Judge the user's INTENT, not specific keywords. When true the sub-agent gets the monetized Eliza Cloud contract (register for an appId, inference markup, OAuth + affiliate billing) instead of a free static page. Leave unset for a normal free app or non-app task.",
+					required: false,
+					schema: {
+						type: "boolean",
+					},
+					descriptionCompressed:
+						"Set true when user wants the app to EARN MONEY/charge for access - e.g. 'people pay $1 to chat with X', 'charge per msg', 'a paid app', 'monetized', a...",
+				},
+				{
+					name: "requestedBackend",
+					description:
+						"Set ONLY when the user EXPLICITLY named a coding backend for THIS task (e.g. 'use codex', 'have claude build it') — one of elizaos, pi-agent, opencode, codex, claude. Leave unset if the user did not name one; never guess. Unlike agentType this overrides the configured default/pin.",
+					required: false,
+					schema: {
+						type: "string",
+						enum: ["elizaos", "pi-agent", "opencode", "codex", "claude"],
+					},
+					descriptionCompressed:
+						"Set ONLY when user EXPLICITLY named a coding backend for THIS task (e.g. 'use codex', 'have claude build it') - one of elizaos, pi-agent, opencode, codex...",
+				},
+				{
+					name: "taskComplexity",
+					description:
+						"Your honest assessment of this coding task's difficulty: 'simple' (small/routine), 'moderate', or 'hard' (large, subtle, multi-file, or architectural). Used only to route to whichever backend the character configured for that difficulty (character.routing.coding.byTag). Judge the task itself — do not echo words from the user.",
+					required: false,
+					schema: {
+						type: "string",
+						enum: ["simple", "moderate", "hard"],
+					},
+					descriptionCompressed:
+						"Your honest assessment of this coding task's difficulty: 'simple' (small/routine), 'moderate', or 'hard' (large, subtle, multi-file, or architectural). Used...",
 				},
 				{
 					name: "agents",
@@ -9611,6 +9691,9 @@ export const allActionsSpec = {
 							operation: "create",
 							task: "example",
 							agentType: "example",
+							appMonetized: false,
+							requestedBackend: "elizaos",
+							taskComplexity: "simple",
 							agents: "example",
 							repo: "example",
 							workdir: "example",
@@ -9675,7 +9758,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"Name of the tau-bench tool to invoke (e. g. get_order_details, search_flights, cancel_order).",
+						"Name of the tau-bench tool to invoke (e.g. get_order_details, search_flights, cancel_order).",
 				},
 				{
 					name: "arguments",
@@ -9767,7 +9850,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"Imperative form, e. g. 'Add tests' (create/update).",
+						"Imperative form, e.g. 'Add tests' (create/update).",
 				},
 				{
 					name: "activeForm",
@@ -9778,7 +9861,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"Present-continuous form, e. g. 'Adding tests' (create/update).",
+						"Present-continuous form, e.g. 'Adding tests' (create/update).",
 				},
 				{
 					name: "status",
@@ -10020,7 +10103,7 @@ export const allActionsSpec = {
 						default: "auto",
 					},
 					descriptionCompressed:
-						"Invoke mode: script runs executable, guidance loads SKILL. md, auto picks by scripts.",
+						"Invoke mode: script runs executable, guidance loads SKILL.md, auto picks by scripts.",
 				},
 				{
 					name: "script",
@@ -10313,7 +10396,7 @@ export const allActionsSpec = {
 						enum: ["owner", "external", "e164"],
 					},
 					descriptionCompressed:
-						"owner escalation env number | external RelationshipStore lookup + allow-list | e164 raw E. 164 phoneNumber.",
+						"owner escalation env number | external RelationshipStore lookup + allow-list | e164 raw E.164 phoneNumber.",
 				},
 				{
 					name: "phoneNumber",
@@ -10323,7 +10406,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"recipientKind=e164: destination E. 164 phoneNumber.",
+						"recipientKind=e164: destination E.164 phoneNumber.",
 				},
 				{
 					name: "recipient",
@@ -10334,7 +10417,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"recipientKind=external: contact name or E. 164. names via RelationshipStore.",
+						"recipientKind=external: contact name or E.164. names via RelationshipStore.",
 				},
 				{
 					name: "bodyText",
@@ -10439,7 +10522,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"For select_option - the option name used as select_option[name, value].",
+						"For select_option - the option name used as select_option[name,value].",
 				},
 				{
 					name: "option_value",
@@ -10450,7 +10533,7 @@ export const allActionsSpec = {
 						type: "string",
 					},
 					descriptionCompressed:
-						"For select_option - the option value used as select_option[name, value].",
+						"For select_option - the option value used as select_option[name,value].",
 				},
 			],
 			descriptionCompressed:
@@ -11024,7 +11107,7 @@ export const allActionsSpec = {
 						type: "number",
 					},
 					descriptionCompressed:
-						"Panel scale multiplier - e. g. 1. 5 for bigger, 0. 6 for smaller, 1. 0 default.",
+						"Panel scale multiplier - e.g. 1.5 for bigger, 0.6 for smaller, 1.0 default.",
 				},
 				{
 					name: "distance",
@@ -11035,7 +11118,7 @@ export const allActionsSpec = {
 						type: "number",
 					},
 					descriptionCompressed:
-						"Panel distance from user in meters - e. g. 0. 8 for closer, 2. 5 for farther, 1. 5 default.",
+						"Panel distance from user in meters - e.g. 0.8 for closer, 2.5 for farther, 1.5 default.",
 				},
 				{
 					name: "fullscreen",
@@ -11079,7 +11162,7 @@ export const allActionsSpec = {
 				},
 			],
 			descriptionCompressed:
-				"Resizes or repositions the active XR view panel. Set scale (0. 5 = half, 1. 0 = default, 2. 0 = double), distance in meters (1. 5 = default, smaller =...",
+				"Resizes or repositions the active XR view panel. Set scale (0.5 = half, 1.0 = default, 2.0 = double), distance in meters (1.5 = default, smaller = closer)...",
 		},
 		{
 			name: "XR_SWITCH_VIEW",

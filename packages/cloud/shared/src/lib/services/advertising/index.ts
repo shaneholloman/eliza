@@ -1,12 +1,16 @@
 import {
   type AdAccount,
+  type AdAudienceSegment,
   type AdCampaign,
   type AdCreative,
   adAccountsRepository,
+  adAudienceSegmentsRepository,
   adCampaignsRepository,
+  adConversionsRepository,
   adCreativesRepository,
   adTransactionsRepository,
 } from "../../../db/repositories";
+import { ValidationError } from "../../api/cloud-worker-errors";
 import { logger } from "../../utils/logger";
 import { type ContentSafetyReview, contentSafetyService } from "../content-safety";
 import { creditsService } from "../credits";
@@ -23,11 +27,17 @@ import type {
   AdProviderMediaUploadResult,
   CampaignDaypartingSchedule,
   CampaignMetrics,
+  CampaignTargeting,
   ConnectAccountInput,
+  CreateAttributionLinkInput,
+  CreateAudienceSegmentInput,
   CreateCampaignInput,
   CreateCreativeInput,
   CreativeMedia,
   DuplicateCampaignInput,
+  RecordConversionInput,
+  RecordConversionResult,
+  UpdateAudienceSegmentInput,
   UpdateCampaignInput,
   UpdateCreativeInput,
   UploadMediaInput,
@@ -45,6 +55,8 @@ const providers: Record<AdPlatform, AdProvider | null> = {
 };
 
 class AdvertisingService {
+  private textEncoder = new TextEncoder();
+
   getSupportedPlatforms(): AdPlatform[] {
     return Object.entries(providers)
       .filter(([_, p]) => p !== null)
@@ -55,6 +67,8 @@ class AdvertisingService {
     const text = [
       "name" in input ? `Campaign name: ${input.name}` : undefined,
       "objective" in input && input.objective ? `Objective: ${input.objective}` : undefined,
+      input.bidStrategy ? `Bid strategy: ${input.bidStrategy}` : undefined,
+      input.optimizationGoal ? `Optimization goal: ${input.optimizationGoal}` : undefined,
     ];
     if (input.targeting) {
       text.push(`Targeting: ${JSON.stringify(input.targeting)}`);
@@ -149,6 +163,368 @@ class AdvertisingService {
       throw new Error(`Advertising platform ${platform} is not supported`);
     }
     return provider;
+  }
+
+  private assertBidControlsSupported(
+    platform: AdPlatform,
+    input: Pick<CreateCampaignInput | UpdateCampaignInput, "bidStrategy" | "optimizationGoal">,
+  ): void {
+    if ((input.bidStrategy || input.optimizationGoal) && platform === "tiktok") {
+      throw ValidationError(
+        "TikTok campaign creation does not support campaign-level bid strategy controls through this adapter",
+      );
+    }
+  }
+
+  private toDbTargeting(targeting: CampaignTargeting = {}) {
+    return {
+      locations: targeting.locations,
+      age_min: targeting.ageMin,
+      age_max: targeting.ageMax,
+      genders: targeting.genders,
+      interests: targeting.interests,
+      behaviors: targeting.behaviors,
+      custom_audiences: targeting.customAudiences,
+      excluded_audiences: targeting.excludedAudiences,
+      placements: targeting.placements,
+      languages: targeting.languages,
+    };
+  }
+
+  private fromDbTargeting(targeting: NonNullable<AdCampaign["targeting"]>): CampaignTargeting {
+    return {
+      locations: targeting.locations,
+      ageMin: targeting.age_min,
+      ageMax: targeting.age_max,
+      genders: targeting.genders,
+      interests: targeting.interests,
+      behaviors: targeting.behaviors,
+      customAudiences: targeting.custom_audiences,
+      excludedAudiences: targeting.excluded_audiences,
+      placements: targeting.placements,
+      languages: targeting.languages,
+    };
+  }
+
+  private serializeAudienceSegment(segment: AdAudienceSegment) {
+    return {
+      id: segment.id,
+      organizationId: segment.organization_id,
+      name: segment.name,
+      description: segment.description,
+      targeting: this.fromDbTargeting(segment.targeting),
+      createdAt: segment.created_at,
+      updatedAt: segment.updated_at,
+    };
+  }
+
+  private async resolveAudienceTargeting(
+    organizationId: string,
+    input: Pick<CreateCampaignInput | UpdateCampaignInput, "audienceSegmentId" | "targeting">,
+  ): Promise<CampaignTargeting | undefined> {
+    if (!input.audienceSegmentId) {
+      return input.targeting;
+    }
+    const segment = await adAudienceSegmentsRepository.findById(input.audienceSegmentId);
+    if (!segment || segment.organization_id !== organizationId) {
+      throw new Error("Audience segment not found");
+    }
+    return this.fromDbTargeting(segment.targeting);
+  }
+
+  private assertNoPostSyncTargetingUpdate(input: UpdateCampaignInput): void {
+    if (input.targeting || input.audienceSegmentId) {
+      throw ValidationError(
+        "Campaign targeting cannot be updated after platform sync; create a new campaign with the desired audience segment",
+      );
+    }
+  }
+
+  async listAudienceSegments(organizationId: string) {
+    const segments = await adAudienceSegmentsRepository.listByOrganization(organizationId);
+    return segments.map((segment) => this.serializeAudienceSegment(segment));
+  }
+
+  async getAudienceSegment(segmentId: string, organizationId: string) {
+    const segment = await adAudienceSegmentsRepository.findById(segmentId);
+    if (!segment || segment.organization_id !== organizationId) {
+      return undefined;
+    }
+    return this.serializeAudienceSegment(segment);
+  }
+
+  async createAudienceSegment(input: CreateAudienceSegmentInput) {
+    const segment = await adAudienceSegmentsRepository.create({
+      organization_id: input.organizationId,
+      created_by_user_id: input.userId,
+      name: input.name,
+      description: input.description,
+      targeting: this.toDbTargeting(input.targeting),
+    });
+    logger.info("[Advertising] Audience segment created", {
+      segmentId: segment.id,
+      organizationId: input.organizationId,
+    });
+    return this.serializeAudienceSegment(segment);
+  }
+
+  async updateAudienceSegment(
+    segmentId: string,
+    organizationId: string,
+    input: UpdateAudienceSegmentInput,
+  ) {
+    const updated = await adAudienceSegmentsRepository.update(segmentId, organizationId, {
+      name: input.name,
+      description: input.description,
+      targeting: input.targeting ? this.toDbTargeting(input.targeting) : undefined,
+    });
+    if (!updated) {
+      throw new Error("Audience segment not found");
+    }
+    logger.info("[Advertising] Audience segment updated", { segmentId, organizationId });
+    return this.serializeAudienceSegment(updated);
+  }
+
+  async deleteAudienceSegment(segmentId: string, organizationId: string): Promise<void> {
+    const segment = await adAudienceSegmentsRepository.findById(segmentId);
+    if (!segment || segment.organization_id !== organizationId) {
+      throw new Error("Audience segment not found");
+    }
+    await adAudienceSegmentsRepository.delete(segmentId, organizationId);
+    logger.info("[Advertising] Audience segment deleted", { segmentId, organizationId });
+  }
+
+  async applyAudienceSegmentToCampaign(
+    segmentId: string,
+    campaignId: string,
+    organizationId: string,
+  ): Promise<AdCampaign> {
+    return await this.updateCampaign(campaignId, organizationId, { audienceSegmentId: segmentId });
+  }
+
+  private base64UrlEncode(value: string | Uint8Array): string {
+    const bytes = typeof value === "string" ? this.textEncoder.encode(value) : value;
+    return btoa(String.fromCharCode(...bytes))
+      .replaceAll("+", "-")
+      .replaceAll("/", "_")
+      .replace(/=+$/, "");
+  }
+
+  private base64UrlDecode(value: string): string {
+    const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
+    const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
+    return atob(padded);
+  }
+
+  private async hmacSha256(secret: string, message: string): Promise<string> {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      this.textEncoder.encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const signature = await crypto.subtle.sign("HMAC", key, this.textEncoder.encode(message));
+    return this.base64UrlEncode(new Uint8Array(signature));
+  }
+
+  private constantTimeEqual(left: string, right: string): boolean {
+    if (left.length !== right.length) return false;
+    let diff = 0;
+    for (let i = 0; i < left.length; i += 1) {
+      diff |= left.charCodeAt(i) ^ right.charCodeAt(i);
+    }
+    return diff === 0;
+  }
+
+  private newAttributionSecret(): string {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    return this.base64UrlEncode(bytes);
+  }
+
+  private slugForUtm(value: string): string {
+    const slug = value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80);
+    return slug || "campaign";
+  }
+
+  private async ensureAttributionSecret(campaign: AdCampaign): Promise<{
+    campaign: AdCampaign;
+    secret: string;
+  }> {
+    const existing = campaign.metadata?.attribution_token_secret;
+    if (existing) {
+      return { campaign, secret: existing };
+    }
+
+    const secret = this.newAttributionSecret();
+    const updated = await adCampaignsRepository.update(campaign.id, {
+      metadata: {
+        ...(campaign.metadata ?? {}),
+        attribution_token_secret: secret,
+      },
+    });
+    if (!updated) {
+      throw new Error("Campaign not found");
+    }
+    return { campaign: updated, secret };
+  }
+
+  async getAttributionToken(campaignId: string, organizationId: string) {
+    const campaign = await adCampaignsRepository.findById(campaignId);
+    if (!campaign || campaign.organization_id !== organizationId) {
+      throw new Error("Campaign not found");
+    }
+    const { campaign: signedCampaign, secret } = await this.ensureAttributionSecret(campaign);
+    const payload = this.base64UrlEncode(
+      JSON.stringify({
+        v: 1,
+        c: signedCampaign.id,
+        o: signedCampaign.organization_id,
+        a: signedCampaign.app_id,
+      }),
+    );
+    const signature = await this.hmacSha256(secret, payload);
+    return {
+      campaignId: signedCampaign.id,
+      appId: signedCampaign.app_id,
+      token: `${payload}.${signature}`,
+    };
+  }
+
+  private async verifyAttributionToken(token: string): Promise<AdCampaign> {
+    const [payload, signature] = token.split(".");
+    if (!payload || !signature) {
+      throw new Error("Invalid attribution token");
+    }
+
+    let parsed: { v?: number; c?: string; o?: string; a?: string | null };
+    try {
+      parsed = JSON.parse(this.base64UrlDecode(payload));
+    } catch {
+      throw new Error("Invalid attribution token");
+    }
+    if (parsed.v !== 1 || !parsed.c || !parsed.o) {
+      throw new Error("Invalid attribution token");
+    }
+
+    const campaign = await adCampaignsRepository.findById(parsed.c);
+    if (!campaign || campaign.organization_id !== parsed.o || campaign.app_id !== parsed.a) {
+      throw new Error("Invalid attribution token");
+    }
+    const secret = campaign.metadata?.attribution_token_secret;
+    if (!secret) {
+      throw new Error("Invalid attribution token");
+    }
+    const expected = await this.hmacSha256(secret, payload);
+    if (!this.constantTimeEqual(signature, expected)) {
+      throw new Error("Invalid attribution token");
+    }
+    return campaign;
+  }
+
+  async createAttributionLink(input: CreateAttributionLinkInput) {
+    const campaign = await adCampaignsRepository.findById(input.campaignId);
+    if (!campaign || campaign.organization_id !== input.organizationId) {
+      throw new Error("Campaign not found");
+    }
+
+    if (input.creativeId) {
+      const creative = await adCreativesRepository.findById(input.creativeId);
+      if (!creative || creative.campaign_id !== campaign.id) {
+        throw new Error("Creative not found");
+      }
+    }
+
+    const utmSource = input.source ?? campaign.platform;
+    const utmMedium = input.medium ?? "paid";
+    const utmCampaign = this.slugForUtm(campaign.name);
+    const url = new URL(input.destinationUrl);
+    url.searchParams.set("utm_source", utmSource);
+    url.searchParams.set("utm_medium", utmMedium);
+    url.searchParams.set("utm_campaign", utmCampaign);
+    if (input.content) url.searchParams.set("utm_content", input.content);
+    if (input.term) url.searchParams.set("utm_term", input.term);
+
+    const existing = await adConversionsRepository.findAttributionLink({
+      campaignId: campaign.id,
+      creativeId: input.creativeId,
+      destinationUrl: input.destinationUrl,
+      utmSource,
+      utmMedium,
+      utmCampaign,
+      utmContent: input.content,
+      utmTerm: input.term,
+    });
+    const link =
+      existing ??
+      (await adConversionsRepository.createAttributionLink({
+        organization_id: campaign.organization_id,
+        campaign_id: campaign.id,
+        creative_id: input.creativeId,
+        app_id: campaign.app_id,
+        destination_url: input.destinationUrl,
+        utm_url: url.toString(),
+        utm_source: utmSource,
+        utm_medium: utmMedium,
+        utm_campaign: utmCampaign,
+        utm_content: input.content,
+        utm_term: input.term,
+      }));
+
+    return {
+      id: link.id,
+      campaignId: link.campaign_id,
+      creativeId: link.creative_id,
+      destinationUrl: link.destination_url,
+      utmUrl: link.utm_url,
+      utm: {
+        source: link.utm_source,
+        medium: link.utm_medium,
+        campaign: link.utm_campaign,
+        content: link.utm_content,
+        term: link.utm_term,
+      },
+    };
+  }
+
+  async recordConversion(input: RecordConversionInput): Promise<RecordConversionResult> {
+    const campaign = await this.verifyAttributionToken(input.token);
+    const recorded = await adConversionsRepository.recordConversion({
+      organization_id: campaign.organization_id,
+      campaign_id: campaign.id,
+      app_id: campaign.app_id,
+      event_type: input.eventType,
+      dedupe_key: input.dedupeKey,
+      value: input.value === undefined ? undefined : input.value.toFixed(2),
+      currency: input.currency ?? "USD",
+      source_url: input.sourceUrl,
+      referrer: input.referrer,
+      user_agent: input.userAgent,
+      occurred_at: input.occurredAt,
+      metadata: input.metadata ?? {},
+    });
+
+    logger.info("[Advertising] Conversion event recorded", {
+      campaignId: campaign.id,
+      organizationId: campaign.organization_id,
+      eventType: input.eventType,
+      dedupeKey: input.dedupeKey,
+      inserted: recorded.inserted,
+    });
+
+    return {
+      eventId: recorded.event.id,
+      campaignId: campaign.id,
+      organizationId: campaign.organization_id,
+      appId: campaign.app_id,
+      inserted: recorded.inserted,
+    };
   }
 
   // ============================================
@@ -559,12 +935,21 @@ class AdvertisingService {
     if (dayparting) {
       this.assertProviderCanApplyDayparting(account.platform);
     }
+    this.assertBidControlsSupported(account.platform, input);
+
+    const targeting = await this.resolveAudienceTargeting(input.organizationId, input);
+    const campaignInput: CreateCampaignInput = {
+      ...input,
+      targeting,
+      audienceSegmentId: undefined,
+      dayparting,
+    };
 
     await contentSafetyService.assertSafeForPublicUse({
       surface: "advertising_campaign",
       organizationId: input.organizationId,
       appId: input.appId,
-      text: this.campaignSafetyText(input),
+      text: this.campaignSafetyText(campaignInput),
       metadata: { platform: account.platform, adAccountId: input.adAccountId },
     });
 
@@ -626,10 +1011,11 @@ class AdvertisingService {
     const credentials = await this.getCredentials(account);
     const provider = this.getProvider(account.platform);
 
-    const result = await provider.createCampaign(credentials, account.external_account_id, {
-      ...input,
-      dayparting,
-    });
+    const result = await provider.createCampaign(
+      credentials,
+      account.external_account_id,
+      campaignInput,
+    );
 
     if (!result.success) {
       // Refund all credits
@@ -659,14 +1045,18 @@ class AdvertisingService {
         credits_allocated: String(budgetCredits),
         start_date: input.startDate,
         end_date: input.endDate,
-        targeting: input.targeting || {},
+        targeting: targeting ? this.toDbTargeting(targeting) : {},
         app_id: input.appId,
-        metadata: dayparting
-          ? {
-              dayparting,
-              dayparting_provider_synced_at: new Date().toISOString(),
-            }
-          : {},
+        metadata: {
+          ...(input.bidStrategy ? { bid_strategy: input.bidStrategy } : {}),
+          ...(input.optimizationGoal ? { optimization_goal: input.optimizationGoal } : {}),
+          ...(dayparting
+            ? {
+                dayparting,
+                dayparting_provider_synced_at: new Date().toISOString(),
+              }
+            : {}),
+        },
       });
 
       // Record budget allocation transaction
@@ -731,6 +1121,16 @@ class AdvertisingService {
     organizationId: string,
     input: UpdateCampaignInput,
   ): Promise<AdCampaign> {
+    // No ad-platform adapter applies bid-control changes to a live campaign
+    // (Meta bid controls live on the ad set created with the campaign;
+    // Google/TikTok updates only push name/budget/dates). Reject explicitly
+    // instead of persisting local metadata the platform never receives.
+    if (input.bidStrategy !== undefined || input.optimizationGoal !== undefined) {
+      throw ValidationError(
+        "Bid strategy and optimization goal can only be set at campaign creation; ad platform adapters do not apply bid-control changes to live campaigns",
+      );
+    }
+
     const campaign = await adCampaignsRepository.findById(campaignId);
     if (!campaign || campaign.organization_id !== organizationId) {
       throw new Error("Campaign not found");
@@ -780,6 +1180,15 @@ class AdvertisingService {
       return updated;
     }
 
+    this.assertNoPostSyncTargetingUpdate(input);
+
+    const targeting = await this.resolveAudienceTargeting(organizationId, input);
+    const campaignInput: UpdateCampaignInput = {
+      ...input,
+      targeting,
+      audienceSegmentId: undefined,
+    };
+
     const account = await adAccountsRepository.findById(campaign.ad_account_id);
     if (!account) {
       throw new Error("Ad account not found");
@@ -821,7 +1230,11 @@ class AdvertisingService {
 
     // Post-sync dayparting changes are rejected above, so `input` never carries
     // a schedule here — providers cannot update adset schedules in place.
-    const result = await provider.updateCampaign(credentials, campaign.external_campaign_id, input);
+    const result = await provider.updateCampaign(
+      credentials,
+      campaign.external_campaign_id,
+      campaignInput,
+    );
 
     if (!result.success) {
       // Platform rejected the change — undo any increase charge we just made.
@@ -844,7 +1257,7 @@ class AdvertisingService {
         : {}),
       start_date: input.startDate,
       end_date: input.endDate,
-      targeting: input.targeting,
+      targeting: targeting ? this.toDbTargeting(targeting) : undefined,
     };
 
     let updated: AdCampaign | undefined;
@@ -1190,12 +1603,16 @@ class AdvertisingService {
     }
 
     if (!campaign.external_campaign_id) {
+      const firstParty = await adConversionsRepository.getCampaignRollup(campaignId, dateRange);
       // Return stored metrics if not synced
       return {
         spend: parseFloat(campaign.total_spend),
         impressions: campaign.total_impressions,
         clicks: campaign.total_clicks,
-        conversions: campaign.total_conversions,
+        conversions: campaign.total_conversions + firstParty.conversions,
+        providerConversions: campaign.total_conversions,
+        firstPartyConversions: firstParty.conversions,
+        conversionValue: firstParty.value,
       };
     }
 
@@ -1225,7 +1642,15 @@ class AdvertisingService {
       totalConversions: result.metrics.conversions,
     });
 
-    return result.metrics;
+    const firstParty = await adConversionsRepository.getCampaignRollup(campaignId, dateRange);
+
+    return {
+      ...result.metrics,
+      conversions: result.metrics.conversions + firstParty.conversions,
+      providerConversions: result.metrics.conversions,
+      firstPartyConversions: firstParty.conversions,
+      conversionValue: firstParty.value,
+    };
   }
 
   // ============================================
