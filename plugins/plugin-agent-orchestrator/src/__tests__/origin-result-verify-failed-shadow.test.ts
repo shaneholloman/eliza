@@ -116,6 +116,10 @@ function makeRuntime(
   } as unknown as IAgentRuntime;
 }
 
+function mockCallCount(fn: unknown): number {
+  return (fn as { mock: { calls: unknown[] } }).mock.calls.length;
+}
+
 function sessionInfo(
   id: string,
   metadata: Record<string, unknown>,
@@ -229,7 +233,7 @@ async function runFailedThenCleanLineage(
       response: `Recreated the missing files; the game is live at ${host.url}`,
       stopReason: "end_turn",
     });
-    expect(vi.mocked(runtime.emitEvent).mock.calls.length).toBeGreaterThan(0);
+    expect(mockCallCount(runtime.emitEvent)).toBeGreaterThan(0);
 
     return { router, runtime, acp, betweenAttempts, originKey };
   } finally {

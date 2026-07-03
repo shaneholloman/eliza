@@ -84,6 +84,10 @@ function makeRuntime(
   } as unknown as IAgentRuntime;
 }
 
+function mockCallCount(fn: unknown): number {
+  return (fn as { mock: { calls: unknown[] } }).mock.calls.length;
+}
+
 function sessionInfo(
   id: string,
   metadata: Record<string, unknown>,
@@ -195,7 +199,7 @@ describe("origin-result capture on task_complete early returns", () => {
       response: "479",
       stopReason: "end_turn",
     });
-    const deliveriesAfterFirst = vi.mocked(runtime.emitEvent).mock.calls.length;
+    const deliveriesAfterFirst = mockCallCount(runtime.emitEvent);
     expect(deliveriesAfterFirst).toBeGreaterThan(0);
     const afterFirst = router.bestResultFor("disc-dedupe-1\0codex");
     expect(afterFirst?.text).toContain("479");
@@ -206,9 +210,7 @@ describe("origin-result capture on task_complete early returns", () => {
       response: "479001600 (the full answer)",
       stopReason: "end_turn",
     });
-    expect(vi.mocked(runtime.emitEvent).mock.calls.length).toBe(
-      deliveriesAfterFirst,
-    );
+    expect(mockCallCount(runtime.emitEvent)).toBe(deliveriesAfterFirst);
     const best = router.bestResultFor("disc-dedupe-1\0codex");
     expect(best?.text).toContain("479001600");
     await router.stop();
