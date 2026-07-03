@@ -250,6 +250,12 @@ export class MeetingTranscriptWriter {
     }
   }
 
+  /**
+   * Incremental store write. Invoked via `void this.flush()` (fire-and-forget)
+   * from the throttle path, so it must never reject — a DB hiccup would surface
+   * as an unhandled promise rejection. All failures are caught and logged here;
+   * the next update simply retries.
+   */
   private async flush(): Promise<void> {
     if (this.finalized || !this.transcript) return;
     this.lastWriteAt = this.now();
@@ -261,15 +267,29 @@ export class MeetingTranscriptWriter {
     };
     this.transcript = next;
     const { content, metadata } = transcriptContentAndMetadata(next);
-    const ok = await this.runtime.updateMemory({
-      id: this.transcriptId,
-      content,
-      metadata,
-    });
-    if (!ok) {
+    try {
+      const ok = await this.runtime.updateMemory({
+        id: this.transcriptId,
+        content,
+        metadata,
+      });
+      if (!ok) {
+        logger.warn(
+          {
+            transcriptId: this.transcriptId,
+            sessionId: this.input?.sessionId,
+          },
+          "[MeetingService] incremental transcript update hit a missing row",
+        );
+      }
+    } catch (err) {
       logger.warn(
-        { transcriptId: this.transcriptId },
-        "[MeetingService] incremental transcript update hit a missing row",
+        {
+          transcriptId: this.transcriptId,
+          sessionId: this.input?.sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        "[MeetingService] incremental transcript update failed",
       );
     }
   }
@@ -379,7 +399,16 @@ export class MeetingTranscriptWriter {
           speakerCount: transcript.speakerCount,
           createdAt: transcript.createdAt,
           textBacked: true,
-          ...(transcript.audioUrl ? { audioUrl: transcript.audioUrl } : {}),
+          // `mediaUrl` is the key the daily media GC scans on document rows;
+          // `audioUrl` alone would leave the retained WAV unreferenced and it
+          // would be swept. Set both: mediaUrl anchors the media store handle,
+          // audioUrl is what transcript readers look up.
+          ...(transcript.audioUrl
+            ? {
+                mediaUrl: transcript.audioUrl,
+                audioUrl: transcript.audioUrl,
+              }
+            : {}),
         },
       });
       return res.storedDocumentMemoryId;

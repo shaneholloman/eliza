@@ -311,5 +311,21 @@ describe("createMeetingTranscriptionPipeline", () => {
       expect(samples[SR + 100]).toBeCloseTo(-0.25, 2);
       await pipeline.finalize();
     });
+
+    it("releases retained PCM after the one-shot read so it does not leak (BL-4)", async () => {
+      const pipeline = createMeetingTranscriptionPipeline(
+        options({ retainAudio: true }),
+        new ScriptedBackend(),
+      );
+      pipeline.pushSpeakerAudio("a", seconds(1, 0.5));
+      await tick(1000);
+
+      // First (terminal) read returns the mix…
+      const wav = pipeline.sessionAudioWav();
+      expect(wav).not.toBeNull();
+      // …and drops the retained chunks: a second read finds nothing retained.
+      expect(pipeline.sessionAudioWav()).toBeNull();
+      await pipeline.finalize();
+    });
   });
 });

@@ -67,6 +67,12 @@ function harness(opts: {
 const NO_STATE = undefined as unknown as State;
 
 describe("JOIN_MEETING", () => {
+  it("is OWNER role-gated — a DM user cannot dispatch the notetaker (MJ-2b)", () => {
+    // Sending the bot into a live call is privileged; the runtime's role-gate
+    // enforcement blocks non-owner callers before the handler runs.
+    expect(joinMeetingAction.roleGate).toEqual({ minRole: "OWNER" });
+  });
+
   it("validate is true only for a real meeting URL", async () => {
     const v = joinMeetingAction.validate;
     expect(await v({} as IAgentRuntime, msg(`join ${MEET}`), NO_STATE)).toBe(

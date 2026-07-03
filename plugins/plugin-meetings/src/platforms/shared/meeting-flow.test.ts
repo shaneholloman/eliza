@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import type { Page } from "playwright-core";
 import type { MeetingEndReason } from "@elizaos/shared";
+import type { Page } from "playwright-core";
+import { describe, expect, it, vi } from "vitest";
 import type { MeetingBotSession, MeetingSessionStatus } from "../../types.js";
 import { runMeetingFlow } from "./meeting-flow.js";
 import type { AdmissionOutcome, PlatformStrategies } from "./strategy.js";
@@ -38,13 +38,17 @@ function makeSession(controller = new AbortController()): {
   return { session, statuses };
 }
 
-function baseStrategies(overrides: Partial<PlatformStrategies> = {}): PlatformStrategies {
+function baseStrategies(
+  overrides: Partial<PlatformStrategies> = {},
+): PlatformStrategies {
   return {
     join: vi.fn(async () => {}),
     waitForAdmission: vi.fn(async (): Promise<AdmissionOutcome> => "admitted"),
     checkAdmissionSilent: vi.fn(async () => true),
     prepare: vi.fn(async () => {}),
-    startRecording: vi.fn(async (): Promise<MeetingEndReason> => "normal_completion"),
+    startRecording: vi.fn(
+      async (): Promise<MeetingEndReason> => "normal_completion",
+    ),
     startRemovalMonitor: vi.fn(() => new Promise<MeetingEndReason>(() => {})),
     leave: vi.fn(async () => {}),
     ...overrides,
@@ -57,9 +61,19 @@ describe("runMeetingFlow", () => {
   it("happy path: join → admitted → record → leave, statuses in order", async () => {
     const { session, statuses } = makeSession();
     const strategies = baseStrategies();
-    const reason = await runMeetingFlow({ page, session, strategies, waitingRoomTimeoutMs: 1000 });
+    const reason = await runMeetingFlow({
+      page,
+      session,
+      strategies,
+      waitingRoomTimeoutMs: 1000,
+    });
     expect(reason).toBe("normal_completion");
-    expect(statuses).toEqual(["joining", "awaiting_admission", "active", "leaving"]);
+    expect(statuses).toEqual([
+      "joining",
+      "awaiting_admission",
+      "active",
+      "leaving",
+    ]);
     expect(strategies.leave).toHaveBeenCalledOnce();
   });
 
@@ -70,7 +84,12 @@ describe("runMeetingFlow", () => {
         throw new Error("navigation failed");
       }),
     });
-    const reason = await runMeetingFlow({ page, session, strategies, waitingRoomTimeoutMs: 1000 });
+    const reason = await runMeetingFlow({
+      page,
+      session,
+      strategies,
+      waitingRoomTimeoutMs: 1000,
+    });
     expect(reason).toBe("join_failed");
     expect(strategies.startRecording).not.toHaveBeenCalled();
   });
@@ -78,9 +97,16 @@ describe("runMeetingFlow", () => {
   it("rejected admission returns admission_rejected (no leave click needed)", async () => {
     const { session } = makeSession();
     const strategies = baseStrategies({
-      waitForAdmission: vi.fn(async (): Promise<AdmissionOutcome> => "rejected"),
+      waitForAdmission: vi.fn(
+        async (): Promise<AdmissionOutcome> => "rejected",
+      ),
     });
-    const reason = await runMeetingFlow({ page, session, strategies, waitingRoomTimeoutMs: 1000 });
+    const reason = await runMeetingFlow({
+      page,
+      session,
+      strategies,
+      waitingRoomTimeoutMs: 1000,
+    });
     expect(reason).toBe("admission_rejected");
     expect(strategies.startRecording).not.toHaveBeenCalled();
   });
@@ -90,7 +116,12 @@ describe("runMeetingFlow", () => {
     const strategies = baseStrategies({
       waitForAdmission: vi.fn(async (): Promise<AdmissionOutcome> => "timeout"),
     });
-    const reason = await runMeetingFlow({ page, session, strategies, waitingRoomTimeoutMs: 1000 });
+    const reason = await runMeetingFlow({
+      page,
+      session,
+      strategies,
+      waitingRoomTimeoutMs: 1000,
+    });
     expect(reason).toBe("admission_timeout");
     expect(strategies.leave).toHaveBeenCalledOnce();
   });
@@ -100,7 +131,12 @@ describe("runMeetingFlow", () => {
     const strategies = baseStrategies({
       checkAdmissionSilent: vi.fn(async () => false),
     });
-    const reason = await runMeetingFlow({ page, session, strategies, waitingRoomTimeoutMs: 1000 });
+    const reason = await runMeetingFlow({
+      page,
+      session,
+      strategies,
+      waitingRoomTimeoutMs: 1000,
+    });
     expect(reason).toBe("join_failed");
   });
 
@@ -108,9 +144,16 @@ describe("runMeetingFlow", () => {
     const { session } = makeSession();
     const strategies = baseStrategies({
       startRecording: vi.fn(() => new Promise<MeetingEndReason>(() => {})),
-      startRemovalMonitor: vi.fn(async (): Promise<MeetingEndReason> => "removed_by_admin"),
+      startRemovalMonitor: vi.fn(
+        async (): Promise<MeetingEndReason> => "removed_by_admin",
+      ),
     });
-    const reason = await runMeetingFlow({ page, session, strategies, waitingRoomTimeoutMs: 1000 });
+    const reason = await runMeetingFlow({
+      page,
+      session,
+      strategies,
+      waitingRoomTimeoutMs: 1000,
+    });
     expect(reason).toBe("removed_by_admin");
   });
 
@@ -124,13 +167,64 @@ describe("runMeetingFlow", () => {
         return new Promise<MeetingEndReason>(() => {});
       }),
     });
-    const flow = runMeetingFlow({ page, session, strategies, waitingRoomTimeoutMs: 1000 });
+    const flow = runMeetingFlow({
+      page,
+      session,
+      strategies,
+      waitingRoomTimeoutMs: 1000,
+    });
     // Let the flow reach the active race, then abort.
     await new Promise((r) => setTimeout(r, 1050));
     controller.abort();
     const reason = await flow;
     expect(reason).toBe("requested_stop");
     expect(recordingSignal?.aborted).toBe(true);
+  });
+
+  it("prepare() runs strictly AFTER admission resolves, never during the lobby wait (MJ-1)", async () => {
+    const { session } = makeSession();
+    const events: string[] = [];
+    let admissionResolved = false;
+    const strategies = baseStrategies({
+      waitForAdmission: vi.fn(async (): Promise<AdmissionOutcome> => {
+        events.push("admission:start");
+        await new Promise((r) => setTimeout(r, 20));
+        admissionResolved = true;
+        events.push("admission:end");
+        return "admitted";
+      }),
+      prepare: vi.fn(async () => {
+        // If prepare ran concurrently (old Promise.all), admission would still
+        // be pending here — the Zoom lobby race. It must only run post-admit.
+        expect(admissionResolved).toBe(true);
+        events.push("prepare");
+      }),
+    });
+    const reason = await runMeetingFlow({
+      page,
+      session,
+      strategies,
+      waitingRoomTimeoutMs: 1000,
+    });
+    expect(reason).toBe("normal_completion");
+    expect(events).toEqual(["admission:start", "admission:end", "prepare"]);
+  });
+
+  it("does not call prepare() when admission is rejected/timed out (MJ-1)", async () => {
+    const { session } = makeSession();
+    const strategies = baseStrategies({
+      waitForAdmission: vi.fn(
+        async (): Promise<AdmissionOutcome> => "rejected",
+      ),
+    });
+    const reason = await runMeetingFlow({
+      page,
+      session,
+      strategies,
+      waitingRoomTimeoutMs: 1000,
+    });
+    expect(reason).toBe("admission_rejected");
+    expect(strategies.prepare).not.toHaveBeenCalled();
   });
 
   it("aborts racers after normal completion so monitors stop polling", async () => {
@@ -142,7 +236,12 @@ describe("runMeetingFlow", () => {
         return new Promise<MeetingEndReason>(() => {});
       }),
     });
-    const reason = await runMeetingFlow({ page, session, strategies, waitingRoomTimeoutMs: 1000 });
+    const reason = await runMeetingFlow({
+      page,
+      session,
+      strategies,
+      waitingRoomTimeoutMs: 1000,
+    });
     expect(reason).toBe("normal_completion");
     expect(removalSignal?.aborted).toBe(true);
   });

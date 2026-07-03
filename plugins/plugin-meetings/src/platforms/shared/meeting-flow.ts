@@ -4,7 +4,7 @@
  * runMeetingFlow (services/vexa-bot/core/src/platforms/shared/meetingFlow.ts),
  * adapted to elizaOS's typed contract:
  *
- *   join → (waitForAdmission ∥ prepare) → active
+ *   join → waitForAdmission → prepare → active
  *        → race(startRecording, removalMonitor, abort-signal graceful leave)
  *        → leave → MeetingEndReason
  *
@@ -15,9 +15,9 @@
  * the others are aborted and stop polling.
  */
 
-import type { Page } from "playwright-core";
 import { logger } from "@elizaos/core";
 import type { MeetingEndReason } from "@elizaos/shared";
+import type { Page } from "playwright-core";
 import type { MeetingBotSession } from "../../types.js";
 import type { PlatformStrategies } from "./strategy.js";
 
@@ -29,9 +29,15 @@ const ADMISSION_SETTLE_MS = 1_000;
  * internal flow-complete abort. Returned `session` shares everything else with
  * the original.
  */
-function linkedSession(session: MeetingBotSession, controller: AbortController): MeetingBotSession {
+function linkedSession(
+  session: MeetingBotSession,
+  controller: AbortController,
+): MeetingBotSession {
   if (session.signal.aborted) controller.abort();
-  else session.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  else
+    session.signal.addEventListener("abort", () => controller.abort(), {
+      once: true,
+    });
   return new Proxy(session, {
     get(target, prop, receiver) {
       if (prop === "signal") return controller.signal;
@@ -47,7 +53,9 @@ function abortReason(signal: AbortSignal): Promise<MeetingEndReason> {
       resolve("requested_stop");
       return;
     }
-    signal.addEventListener("abort", () => resolve("requested_stop"), { once: true });
+    signal.addEventListener("abort", () => resolve("requested_stop"), {
+      once: true,
+    });
   });
 }
 
@@ -59,7 +67,9 @@ export interface RunMeetingFlowArgs {
   waitingRoomTimeoutMs: number;
 }
 
-export async function runMeetingFlow(args: RunMeetingFlowArgs): Promise<MeetingEndReason> {
+export async function runMeetingFlow(
+  args: RunMeetingFlowArgs,
+): Promise<MeetingEndReason> {
   const { page, session, strategies, waitingRoomTimeoutMs } = args;
 
   // ── Join ──────────────────────────────────────────────────────────────────
@@ -85,13 +95,15 @@ export async function runMeetingFlow(args: RunMeetingFlowArgs): Promise<MeetingE
     return "join_failed";
   }
 
-  // ── Admission ∥ prepare ─────────────────────────────────────────────────────
+  // ── Admission → prepare ─────────────────────────────────────────────────────
+  // Wait for admission FIRST, then prepare. Running prepare() concurrently with
+  // waitForAdmission (Vexa's original Promise.all) races the audio-join click
+  // loop while the bot is still stuck in the lobby: on Zoom the click retries
+  // exhaust before the host admits, so the bot lands muted/deaf. Sequencing
+  // prepare() strictly after "admitted" keeps the media join on the in-call UI.
   session.reportStatus("awaiting_admission");
   const admission = await Promise.race([
-    Promise.all([
-      strategies.waitForAdmission(page, session, waitingRoomTimeoutMs),
-      strategies.prepare(page, session),
-    ]).then(([outcome]) => outcome),
+    strategies.waitForAdmission(page, session, waitingRoomTimeoutMs),
     abortReason(session.signal).then(() => ABORTED),
   ]);
   if (admission === ABORTED) {
@@ -109,11 +121,24 @@ export async function runMeetingFlow(args: RunMeetingFlowArgs): Promise<MeetingE
     return "admission_timeout";
   }
 
+  // Admitted — now prepare the in-call media (audio/video join). Race against
+  // abort so a stop request mid-prepare short-circuits to a graceful leave.
+  const prepared = await Promise.race([
+    strategies.prepare(page, session).then(() => "prepared" as const),
+    abortReason(session.signal).then(() => ABORTED),
+  ]);
+  if (prepared === ABORTED) {
+    await strategies.leave(page);
+    return "requested_stop";
+  }
+
   // Give the state machine a beat, then re-verify we are actually in the call
   // (guards against a false-positive admission signal).
   await new Promise((r) => setTimeout(r, ADMISSION_SETTLE_MS));
   if (!(await strategies.checkAdmissionSilent(page))) {
-    logger.warn("[MeetingFlow] admission false positive — not in meeting after settle");
+    logger.warn(
+      "[MeetingFlow] admission false positive — not in meeting after settle",
+    );
     await strategies.leave(page);
     return "join_failed";
   }

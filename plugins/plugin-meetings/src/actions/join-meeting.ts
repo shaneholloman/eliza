@@ -70,6 +70,12 @@ async function handler(
 
 export const joinMeetingAction: Action = {
   name: "JOIN_MEETING",
+  // Dispatching the notetaker bot is a privileged action: it launches a browser
+  // that joins a live call under the agent's identity and records it. Without a
+  // gate, any DM user on any connector who pastes a meeting URL could send the
+  // bot into a meeting. Restrict to the agent owner (mirrors the OWNER gate on
+  // other side-effecting actions — browser, calendar, computer-use).
+  roleGate: { minRole: "OWNER" },
   similes: [
     "INVITE_TO_MEETING",
     "ATTEND_MEETING",

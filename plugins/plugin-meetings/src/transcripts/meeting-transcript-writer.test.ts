@@ -203,6 +203,22 @@ describe("MeetingTranscriptWriter — finalize edges", () => {
       expect(finalB.audioContentType).toBe("audio/wav");
       const hash = finalB.audioUrl?.slice("/api/media/".length) as string;
       expect(existsSync(join(dir, "media", hash))).toBe(true);
+
+      // BL-3: the knowledge-mirror document must reference the WAV via
+      // `metadata.mediaUrl` (the key the daily media GC scans on document rows).
+      // Without it the retained audio is unreferenced and gets swept. `audioUrl`
+      // is kept too for transcript readers.
+      const mirrorMeta = fakeB.documents[0].metadata as {
+        mediaUrl?: string;
+        audioUrl?: string;
+      };
+      expect(mirrorMeta.mediaUrl).toBe(finalB.audioUrl);
+      expect(mirrorMeta.audioUrl).toBe(finalB.audioUrl);
+      // The audio-less mirror (writerA) carries neither key.
+      const mirrorMetaA = fakeA.documents[0]?.metadata as
+        | { mediaUrl?: string }
+        | undefined;
+      expect(mirrorMetaA?.mediaUrl).toBeUndefined();
     } finally {
       if (prev === undefined) delete process.env.ELIZA_STATE_DIR;
       else process.env.ELIZA_STATE_DIR = prev;

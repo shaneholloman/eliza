@@ -58,6 +58,62 @@ describe("MeetingService.requestJoin — validation", () => {
       }),
     ).rejects.toMatchObject({ code: "already_joined" });
   });
+
+  it("reserves the meeting synchronously so concurrent same-URL joins launch ONE bot (MJ-4 TOCTOU)", async () => {
+    const { service, adapters } = makeService();
+    // Fire two joins for the SAME meeting concurrently. The reservation is
+    // taken synchronously before the first await, so exactly one wins and the
+    // other is rejected with `already_joined` — no double bot.
+    const results = await Promise.allSettled([
+      service.requestJoin({ platform: "google_meet", meetingUrl: MEET_URL }),
+      service.requestJoin({
+        platform: "google_meet",
+        meetingUrl: "https://meet.google.com/abcdefghij",
+      }),
+    ]);
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
+      code: "already_joined",
+    });
+    // Only one live session and one bot was actually launched.
+    expect(service.listSessions({ active: true })).toHaveLength(1);
+    await adapters[0].started;
+    expect(adapters[0].session).not.toBeNull();
+  });
+
+  it("releases the reservation when join setup throws, so a retry succeeds (BL-5)", async () => {
+    const { fake, service } = makeService();
+    // Make the transcript writer's initial row write (createMemory) fail once.
+    const realCreateMemory = fake.runtime.createMemory.bind(fake.runtime);
+    let calls = 0;
+    (
+      fake.runtime as {
+        createMemory: (m: unknown, t: string) => Promise<unknown>;
+      }
+    ).createMemory = async (memory, table) => {
+      calls += 1;
+      if (calls === 1) throw new Error("db write failed");
+      return realCreateMemory(memory as never, table);
+    };
+
+    await expect(
+      service.requestJoin({ platform: "google_meet", meetingUrl: MEET_URL }),
+    ).rejects.toThrow("db write failed");
+    // The failed session did NOT strand a non-terminal reservation.
+    expect(service.listSessions()).toHaveLength(0);
+
+    // A second join for the same meeting is no longer blocked by `already_joined`.
+    const dto = await service.requestJoin({
+      platform: "google_meet",
+      meetingUrl: MEET_URL,
+    });
+    expect(dto.status).toBe("requested");
+    expect(service.listSessions({ active: true })).toHaveLength(1);
+    expect(calls).toBe(2);
+  });
 });
 
 describe("MeetingService — session state machine", () => {
@@ -104,6 +160,30 @@ describe("MeetingService — session state machine", () => {
       "active",
       "ended",
     ]);
+  });
+
+  it("evicts the finished session to a lightweight terminal record but keeps it readable (BL-4)", async () => {
+    const adapter = new ScriptedAdapter("google_meet");
+    const { service, pipelines } = makeService([adapter]);
+    const dto = await service.requestJoin({
+      platform: "google_meet",
+      meetingUrl: MEET_URL,
+    });
+    await adapter.started;
+    adapter.end("normal_completion");
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Terminal status still readable (routes/actions read status + history)…
+    const session = service.getSession(dto.id as never);
+    expect(session?.status).toBe("ended");
+    expect(session?.endReason).toBe("normal_completion");
+    // …and it still appears in the full (non-active) listing.
+    expect(service.listSessions().map((s) => s.id)).toContain(dto.id);
+    expect(service.listSessions({ active: true })).toHaveLength(0);
+
+    // The heavy pipeline (which accumulates session PCM) was finalized and its
+    // audio buffers released — the pipeline is no longer referenced by the map.
+    expect(pipelines[0].finalized).toBe(true);
   });
 
   it("maps an adapter throw to failed + errorMessage (never swallowed)", async () => {

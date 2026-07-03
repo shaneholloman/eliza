@@ -23,7 +23,7 @@
  */
 
 import type { IAgentRuntime, Plugin } from "@elizaos/core";
-import { isMobilePlatform, type MeetingPlatform } from "@elizaos/shared";
+import type { MeetingPlatform } from "@elizaos/shared";
 import {
   getMeetingTranscriptAction,
   joinMeetingAction,
@@ -39,6 +39,7 @@ import { MeetingService } from "./service.js";
 import type { MeetingPlatformAdapter } from "./types.js";
 
 export { MeetingEventEmitter } from "./events.js";
+export { createMeetingTranscriptionPipeline } from "./pipeline/index.js";
 export {
   type BrowserChannel,
   type ChromiumSource,
@@ -49,7 +50,6 @@ export {
   resolveHeadlessMode,
   resolveMeetingRuntimeSupport,
 } from "./platform-support.js";
-export { createMeetingTranscriptionPipeline } from "./pipeline/index.js";
 export { meetingsRoutes } from "./routes/meetings-routes.js";
 export {
   MeetingJoinError,
@@ -83,22 +83,10 @@ export const meetingsPlugin: Plugin = {
   actions: [joinMeetingAction, leaveMeetingAction, getMeetingTranscriptAction],
   providers: [activeMeetingsProvider],
   routes: meetingsRoutes,
-  // Opt-in: the bots need a Chromium binary on the host, so the plugin is only
-  // auto-enabled when the user has flagged it (or pointed at a browser) —
-  // matching the repo pattern of env-gated connector plugins (e.g. calendly).
-  // The mobile guard makes the flag honest: browser automation cannot run in an
-  // Android / iOS app sandbox, so even a set env key must NOT auto-enable there
-  // (mobile users get meeting transcripts via a cloud-hosted agent — see
-  // docs/DEPLOYMENT.md). resolveMeetingRuntimeSupport() is the full typed probe;
-  // this predicate only needs the mobile veto over the env-key OR.
-  autoEnable: {
-    shouldEnable: (env) => {
-      if (isMobilePlatform(env)) return false;
-      return Boolean(
-        env.ELIZA_MEETINGS_ENABLED?.trim() || env.ELIZA_MEETINGS_CHROMIUM_PATH?.trim(),
-      );
-    },
-  },
+  // Opt-in auto-enable lives in the package manifest, not here: the runtime only
+  // consumes `elizaos.plugin.autoEnableModule` (./auto-enable.ts) — a bare
+  // `Plugin.autoEnable` field has no runtime consumer. See ./auto-enable.ts for
+  // the predicate (env-gated with a native-platform veto).
 };
 
 export default meetingsPlugin;

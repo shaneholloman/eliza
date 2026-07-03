@@ -117,6 +117,13 @@ export class MeetingService extends Service {
     | null = null;
 
   private readonly sessions = new Map<UUID, InternalSession>();
+  /**
+   * Lightweight terminal snapshots. Once a session finishes it is evicted from
+   * `sessions` (dropping its pipeline/writer/audio-buffer references so the
+   * accumulated PCM can be GC'd) and only its DTO is retained here for
+   * status/history reads by routes and actions.
+   */
+  private readonly terminated = new Map<UUID, MeetingSession>();
   private readonly emitter: MeetingEventEmitter;
   private readonly deps: MeetingServiceDependencies;
   private worldReady: Promise<UUID> | null = null;
@@ -197,19 +204,14 @@ export class MeetingService extends Service {
       );
     }
 
+    // Reserve the meeting SYNCHRONOUSLY before the first await. The dup-check
+    // above and this insert run in one uninterrupted turn, so two concurrent
+    // same-URL joins can no longer both slip past the check and launch two bots
+    // (TOCTOU). Every construction here (pipeline, writer, room id) is
+    // synchronous; the awaited world/room/writer setup follows with the session
+    // already claimed. Any failure rolls the reservation back (see catch).
     const sessionId = crypto.randomUUID() as UUID;
-    const worldId = await this.ensureMeetingsWorld();
     const roomId = createUniqueUuid(this.runtime, `meeting:${sessionId}`);
-    await this.runtime.ensureRoomExists({
-      id: roomId,
-      name: `${MEETING_PLATFORM_LABELS[parsed.platform]} ${parsed.nativeMeetingId}`,
-      source: parsed.platform,
-      type: ChannelType.GROUP,
-      channelId: parsed.nativeMeetingId,
-      worldId,
-      metadata: { meetingUrl: parsed.meetingUrl, sessionId },
-    });
-
     const botName =
       request.botName?.trim() ||
       this.settingString("ELIZA_MEETINGS_BOT_NAME") ||
@@ -248,16 +250,44 @@ export class MeetingService extends Service {
     };
     this.sessions.set(sessionId, session);
 
-    await writer.start({
-      sessionId,
-      worldId,
-      roomId,
-      entityId: this.runtime.agentId,
-      title: `${MEETING_PLATFORM_LABELS[parsed.platform]} meeting ${parsed.nativeMeetingId}`,
-      platform: parsed.platform,
-      meetingUrl: parsed.meetingUrl,
-      nativeMeetingId: parsed.nativeMeetingId,
-    });
+    // With the reservation held, do the awaited setup. If world/room ensure or
+    // the transcript writer's initial row write throws, release the reservation
+    // so the meeting is joinable again and future joins are not permanently
+    // rejected with `already_joined` by a stranded non-terminal session.
+    try {
+      const worldId = await this.ensureMeetingsWorld();
+      await this.runtime.ensureRoomExists({
+        id: roomId,
+        name: `${MEETING_PLATFORM_LABELS[parsed.platform]} ${parsed.nativeMeetingId}`,
+        source: parsed.platform,
+        type: ChannelType.GROUP,
+        channelId: parsed.nativeMeetingId,
+        worldId,
+        metadata: { meetingUrl: parsed.meetingUrl, sessionId },
+      });
+      await writer.start({
+        sessionId,
+        worldId,
+        roomId,
+        entityId: this.runtime.agentId,
+        title: `${MEETING_PLATFORM_LABELS[parsed.platform]} meeting ${parsed.nativeMeetingId}`,
+        platform: parsed.platform,
+        meetingUrl: parsed.meetingUrl,
+        nativeMeetingId: parsed.nativeMeetingId,
+      });
+    } catch (err) {
+      this.sessions.delete(sessionId);
+      logger.error(
+        {
+          sessionId,
+          platform: parsed.platform,
+          nativeMeetingId: parsed.nativeMeetingId,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        "[MeetingService] join setup failed — reservation released",
+      );
+      throw err;
+    }
 
     pipeline.onUpdate((update) => {
       session.confirmedSegments.push(...update.confirmed);
@@ -317,17 +347,14 @@ export class MeetingService extends Service {
 
   getSession(sessionId: UUID): MeetingSession | null {
     const session = this.sessions.get(sessionId);
-    return session ? this.toDto(session) : null;
+    if (session) return this.toDto(session);
+    return this.terminated.get(sessionId) ?? null;
   }
 
   listSessions(options?: { active?: boolean }): MeetingSession[] {
-    const all = [...this.sessions.values()].sort(
-      (a, b) => b.requestedAt - a.requestedAt,
-    );
-    const filtered = options?.active
-      ? all.filter((s) => !TERMINAL_STATUSES.has(s.status))
-      : all;
-    return filtered.map((s) => this.toDto(s));
+    const live = [...this.sessions.values()].map((s) => this.toDto(s));
+    const all = options?.active ? live : [...live, ...this.terminated.values()];
+    return all.sort((a, b) => b.requestedAt - a.requestedAt);
   }
 
   /** API/UI projection of one internal session (defensive copies). */
@@ -526,7 +553,8 @@ export class MeetingService extends Service {
     session.endedAt = Date.now();
     session.status = endReason === "error" ? "failed" : "ended";
     this.emitter.dispose(session.id);
-    this.emitter.emitStatus(this.toDto(session));
+    const dto = this.toDto(session);
+    this.emitter.emitStatus(dto);
     logger.info(
       {
         sessionId: session.id,
@@ -537,6 +565,13 @@ export class MeetingService extends Service {
       },
       "[MeetingService] session finished",
     );
+
+    // Evict the heavy session: dropping the pipeline (retained PCM),
+    // writer, and roster arrays lets them be garbage-collected. Only the DTO
+    // survives for status/history reads; the persisted transcript record holds
+    // the durable data.
+    this.sessions.delete(session.id);
+    this.terminated.set(session.id, dto);
   }
 
   private settingString(key: string): string | null {

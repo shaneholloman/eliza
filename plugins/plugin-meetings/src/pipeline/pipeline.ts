@@ -231,7 +231,15 @@ class MeetingPipeline implements MeetingTranscriptionPipeline {
         mix[at] = Math.max(-1, Math.min(1, sum)); // clipping guard
       }
     }
-    return float32ToWav(mix, MEETING_AUDIO_SAMPLE_RATE);
+    const wav = float32ToWav(mix, MEETING_AUDIO_SAMPLE_RATE);
+    // One-shot terminal read: the service consumes this once at finalize, so
+    // release every retained Float32 chunk now. Left in place they pin the full
+    // session's PCM (minutes of 16 kHz mono) for the pipeline's whole lifetime —
+    // an unbounded per-meeting leak. Reset the sample count too so the state is
+    // coherent (a repeat call returns null rather than a buffer of silence).
+    this.retained.length = 0;
+    this.retainedTotalSamples = 0;
+    return wav;
   }
 
   // ── Private ──────────────────────────────────────────────────
