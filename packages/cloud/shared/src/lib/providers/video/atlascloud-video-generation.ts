@@ -86,7 +86,7 @@ export function buildAtlasVideoInput(request: VideoGenerationRequest): Record<st
     input.resolution = request.resolution;
   }
   if (request.audio !== undefined) {
-    input.audio = request.audio;
+    input.generate_audio = request.audio;
   }
   return input;
 }

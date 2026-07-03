@@ -31,7 +31,7 @@ describe("Atlas Cloud video provider", () => {
       image: "https://example.com/source.png",
       duration: 4,
       resolution: "720p",
-      audio: false,
+      generate_audio: false,
     });
   });
 
