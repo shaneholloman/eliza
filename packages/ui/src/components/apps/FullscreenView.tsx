@@ -603,8 +603,8 @@ export function DesktopGameWindowControls({
   );
 }
 
-export function GameView() {
-  useRenderGuard("GameView");
+export function FullscreenView() {
+  useRenderGuard("FullscreenView");
   const { setTimeout } = useTimeout();
   const {
     appRuns,
@@ -1187,7 +1187,7 @@ export function GameView() {
     });
   }, [activeGameApp, logs]);
 
-  // Memoized activity-feed derivations for the logs panel. GameView re-renders on
+  // Memoized activity-feed derivations for the logs panel. FullscreenView re-renders on
   // every context change (3s polls, keystrokes, toasts); deriving these inline in
   // renderLogsPanel re-sorted/re-sliced the feeds on each render.
   const telemetryActivityFeed = useMemo(() => {
@@ -1262,7 +1262,7 @@ export function GameView() {
 
     return () => {
       cancelled = true;
-      // Close the game window when GameView unmounts or the URL changes
+      // Close the game window when FullscreenView unmounts or the URL changes
       if (gameWindowIdRef.current) {
         void invokeDesktopBridgeRequest({
           rpcMethod: "canvasDestroyWindow",

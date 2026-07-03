@@ -28,6 +28,7 @@ import {
   resolveViewKind,
 } from "@elizaos/core";
 import type { ViewEntry } from "../../hooks/view-catalog";
+import { pathForTab } from "../../navigation";
 
 /** Everyday apps, in display order. They lead the single launcher page; other
  *  loaded apps append after (alphabetically). */
@@ -35,12 +36,16 @@ export const LAUNCHER_APPS_ORDER: readonly string[] = [
   "chat",
   "settings",
   "wallet",
+  "tasks",
   "automations",
   "browser",
+  // Character family — the old single Character hub, split into top-level tiles.
   "character",
-  "documents",
-  "transcripts",
   "relationships",
+  "documents",
+  "character-skills",
+  "experience",
+  "transcripts",
   "memories",
   "feed",
   "stream",
@@ -68,7 +73,6 @@ export const LAUNCHER_DEVELOPER_ORDER: readonly string[] = [
 export const LAUNCHER_PREVIEW_IDS: ReadonlySet<string> = new Set([
   "feed",
   "stream",
-  "relationships",
 ]);
 
 /**
@@ -127,9 +131,10 @@ const CANONICAL_ID: ReadonlyMap<string, string> = new Map([
   ["wallet.inventory", "wallet"],
   ["@elizaos/plugin-wallet-ui", "wallet"],
   ["triggers", "automations"],
-  ["tasks", "automations"],
   ["todos", "automations"],
-  ["task-coordinator", "automations"],
+  // The task-coordinator plugin view + the builtin Tasks tab are the one Tasks
+  // orchestrator surface (/apps/tasks); collapse to a single tile.
+  ["task-coordinator", "tasks"],
   ["knowledge", "documents"],
   ["@elizaos/plugin-documents-routes", "documents"],
   ["plugins-page", "plugins"],
@@ -264,15 +269,16 @@ export function curateLauncherPages(
     if (!existing || preferenceScore(entry) > preferenceScore(existing)) {
       // Preserve the canonical id so navigation + telemetry stay stable even
       // when an aliased registration (e.g. `wallet.inventory`) wins the tile.
-      // When the id is REWRITTEN (an alias won), drop its alias `path` too, so
-      // handleLaunch falls back to `/apps/<canonicalId>` — the route the dedup
-      // presumes — instead of navigating to the alias route while recents +
-      // telemetry record the canonical id (a real launch/telemetry mismatch).
+      // When the id is REWRITTEN (an alias won), re-point `path` at the canonical
+      // tab's own route (`pathForTab`) — NOT the alias route and NOT `undefined`.
+      // Leaving it undefined made handleLaunch fall back to `/apps/<canonicalId>`,
+      // which for `wallet`/`tasks` is not a real route — it resolved to the apps
+      // browse surface (the old AppsView), so those tiles opened the wrong view.
       byCanonical.set(
         canonicalId,
         canonicalId === entry.id
           ? entry
-          : { ...entry, id: canonicalId, path: undefined },
+          : { ...entry, id: canonicalId, path: pathForTab(canonicalId) },
       );
     }
   }

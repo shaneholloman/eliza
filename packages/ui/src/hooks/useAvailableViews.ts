@@ -221,6 +221,8 @@ const TAB_ICON_NAMES: Partial<Record<BuiltinTab, string>> = {
   trajectories: "Activity",
   transcripts: "FileText",
   relationships: "Network",
+  experience: "GraduationCap",
+  "character-skills": "Sparkles",
   memories: "BrainCircuit",
   rolodex: "UsersRound",
   runtime: "Terminal",

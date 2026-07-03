@@ -166,7 +166,7 @@ describe("curateLauncherPages", () => {
     ).toEqual([["wallet", "cloud-apps"]]);
   });
 
-  it("collapses duplicate wallet + automations registrations to one tile", () => {
+  it("collapses duplicate wallet + automations registrations, keeping Tasks its own tile", () => {
     const pages = curateLauncherPages(
       [
         entry("inventory", { builtin: true }),
@@ -175,17 +175,22 @@ describe("curateLauncherPages", () => {
         entry("automations"),
         entry("triggers"),
         entry("tasks"),
+        entry("task-coordinator"),
         entry("todos"),
       ],
       { isAosp: false, enabledKinds: ENABLED, cloudActive: true },
     );
-    expect(ids(pages)).toEqual([["wallet", "automations"]]);
+    // `triggers`/`todos` fold into `automations`; `tasks`/`task-coordinator`
+    // collapse to the standalone Tasks orchestrator tile (no longer folded into
+    // automations). Order follows LAUNCHER_APPS_ORDER: wallet, tasks, automations.
+    expect(ids(pages)).toEqual([["wallet", "tasks", "automations"]]);
   });
 
-  it("drops the alias path when an alias wins the tile, so launch/telemetry agree", () => {
+  it("re-points an alias-winning tile at the canonical route (not the alias path)", () => {
     // Only an aliased registration (todos → automations) is present, no canonical
-    // `automations`. The tile must carry the canonical id AND no alias path, so
-    // handleLaunch falls back to /apps/automations rather than /todos.
+    // `automations`. The tile carries the canonical id AND the canonical tab's
+    // route, so handleLaunch navigates to /automations — never /todos and never
+    // the bogus /apps/automations fallback that used to open the old apps view.
     const pages = curateLauncherPages([entry("todos", { path: "/todos" })], {
       isAosp: false,
       enabledKinds: ENABLED,
@@ -193,7 +198,7 @@ describe("curateLauncherPages", () => {
     });
     const tile = pages[0][0];
     expect(tile.id).toBe("automations");
-    expect(tile.path).toBeUndefined();
+    expect(tile.path).toBe("/automations");
   });
 
   it("keeps a non-aliased winner's real path intact", () => {
@@ -342,12 +347,13 @@ describe("curateLauncherPages — full realistic view set", () => {
         "chat",
         "settings",
         "wallet",
+        "tasks",
         "automations",
         "browser",
         "character",
+        "relationships",
         "documents",
         "transcripts",
-        "relationships",
         "memories",
         "feed",
         "stream",
@@ -376,9 +382,11 @@ describe("curateLauncherPages — full realistic view set", () => {
         "chat",
         "settings",
         "wallet",
+        "tasks",
         "automations",
         "browser",
         "character",
+        "relationships",
         "documents",
         "transcripts",
         "memories",
@@ -386,9 +394,11 @@ describe("curateLauncherPages — full realistic view set", () => {
     ]);
   });
 
-  it("forces feed/stream/relationships to preview and fine-tuning to developer regardless of declared kind", () => {
+  it("forces feed/stream to preview and fine-tuning to developer regardless of declared kind", () => {
     // Preview on, developer off: the preview surfaces come back, the training
-    // UI stays hidden (it is developer, not preview).
+    // UI stays hidden (it is developer, not preview). Relationships is now an
+    // everyday tile (promoted out of the character hub), so it is present in
+    // every profile — not gated on preview.
     const previewOnly = ids(
       curateLauncherPages(REAL_VIEWS, {
         isAosp: false,
@@ -403,8 +413,8 @@ describe("curateLauncherPages — full realistic view set", () => {
     expect(previewOnly).not.toContain("trajectories");
 
     // Developer on, preview off: the training UI shows with the dev tools, the
-    // preview surfaces stay hidden — even though feed/relationships are
-    // DECLARED system in the fixture.
+    // preview surfaces (feed/stream) stay hidden. Relationships still shows — it
+    // is a normal everyday tile, not preview-gated.
     const developerOnly = ids(
       curateLauncherPages(REAL_VIEWS, {
         isAosp: false,
@@ -413,7 +423,8 @@ describe("curateLauncherPages — full realistic view set", () => {
       }),
     ).flat();
     expect(developerOnly).toContain("fine-tuning");
-    for (const id of ["feed", "stream", "relationships"]) {
+    expect(developerOnly).toContain("relationships");
+    for (const id of ["feed", "stream"]) {
       expect(developerOnly).not.toContain(id);
     }
   });
