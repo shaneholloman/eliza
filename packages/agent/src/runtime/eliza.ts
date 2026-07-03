@@ -5364,6 +5364,18 @@ export async function startEliza(
       }
     }
     await seedBundledDocumentsIfEnabled();
+    // First-boot onboarding notifications (tour / help / connect calendar) —
+    // once per agent; dismissals are permanent (guard flag, not the rows).
+    try {
+      const { seedOnboardingNotifications } = await import(
+        "./onboarding-notifications.ts"
+      );
+      await seedOnboardingNotifications(runtime);
+    } catch (err) {
+      logger.warn(
+        `[eliza] Failed to seed onboarding notifications: ${formatError(err)}`,
+      );
+    }
     await installServerSideWebSearchIfAvailable();
     await registerWebFetchActionIfEnabled();
     await registerWebSearchActionIfEnabled();
