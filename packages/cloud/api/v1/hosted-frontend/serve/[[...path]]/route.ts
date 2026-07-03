@@ -25,6 +25,7 @@ import { appFrontendHostingService } from "@/lib/services/app-frontend-hosting";
 import { appsService } from "@/lib/services/apps";
 import { managedDomainsService } from "@/lib/services/managed-domains";
 import { logger } from "@/lib/utils/logger";
+import { safeAnalyticsId } from "@/lib/utils/safe-analytics-id";
 import type { AppEnv } from "@/types/cloud-worker-env";
 
 const SERVE_MARKER = "/hosted-frontend/serve";
@@ -58,11 +59,6 @@ function cookieValue(
     }
   }
   return null;
-}
-
-function safeAnalyticsId(value: string | null): string | null {
-  if (!value) return null;
-  return /^[a-zA-Z0-9._:-]{8,128}$/.test(value) ? value : null;
 }
 
 function analyticsCookie(

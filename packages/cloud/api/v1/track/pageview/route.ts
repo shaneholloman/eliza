@@ -12,6 +12,7 @@ import {
 import { apiKeysService } from "@/lib/services/api-keys";
 import { appsService } from "@/lib/services/apps";
 import { logger } from "@/lib/utils/logger";
+import { safeAnalyticsId } from "@/lib/utils/safe-analytics-id";
 import type { AppEnv } from "@/types/cloud-worker-env";
 
 function detectSource(
@@ -112,8 +113,10 @@ app.post("/", async (c) => {
         origin,
         referer,
         pathname,
-        visitor_id,
-        session_id,
+        // Boundary-validated: same rule as the hosted-serve cookie ids. Reject
+        // wrong types / oversized / unsafe values instead of persisting them.
+        visitor_id: safeAnalyticsId(visitor_id) ?? undefined,
+        session_id: safeAnalyticsId(session_id) ?? undefined,
       },
     });
 

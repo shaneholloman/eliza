@@ -140,4 +140,47 @@ describe("AppAnalyticsService.buildSessionAnalytics", () => {
     expect(analytics.funnel.steps[2]?.visitors).toBe(1);
     expect(analytics.funnel.steps[2]?.conversionFromPreviousPercent).toBe(50);
   });
+
+  test("splits legacy fallback sessions at the hour-bucket window boundary", () => {
+    const service = new AppAnalyticsService();
+    const analytics = service.buildSessionAnalytics([
+      request("00000000-0000-4000-8000-000000000041", "2026-07-02T12:59:00Z", {
+        page_url: "/a",
+      }),
+      request("00000000-0000-4000-8000-000000000042", "2026-07-02T13:01:00Z", {
+        page_url: "/b",
+      }),
+    ]);
+
+    // Same IP two minutes apart, but the pageviews land in different hour
+    // buckets, so the fallback sessionizer produces two single-page sessions.
+    expect(analytics.summary.totalSessions).toBe(2);
+    expect(analytics.summary.uniqueVisitors).toBe(1);
+    expect(analytics.summary.bounceRatePercent).toBe(100);
+    expect(analytics.sessions.map((s) => s.pageViews)).toEqual([1, 1]);
+  });
+
+  test("keeps one session when a beacon session id spans the fallback window boundary", () => {
+    const service = new AppAnalyticsService();
+    const analytics = service.buildSessionAnalytics([
+      request("00000000-0000-4000-8000-000000000051", "2026-07-02T12:59:00Z", {
+        visitor_id: "visitor-a",
+        session_id: "session-a",
+        page_url: "/a",
+      }),
+      request("00000000-0000-4000-8000-000000000052", "2026-07-02T13:30:00Z", {
+        visitor_id: "visitor-a",
+        session_id: "session-a",
+        page_url: "/b",
+      }),
+    ]);
+
+    // Beacon-provided session ids own the session lifetime: the hour-bucket
+    // fallback never splits rows that carry an explicit session id.
+    expect(analytics.summary.totalSessions).toBe(1);
+    expect(analytics.sessions[0]?.pageViews).toBe(2);
+    expect(analytics.sessions[0]?.durationMs).toBe(31 * 60 * 1000);
+    expect(analytics.sessions[0]?.entryPath).toBe("/a");
+    expect(analytics.sessions[0]?.exitPath).toBe("/b");
+  });
 });
