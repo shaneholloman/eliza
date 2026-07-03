@@ -126,6 +126,13 @@ for (const w of [
 const APP_HOME_DEFAULT_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = (
   [
     {
+      pluginId: "birdclaw",
+      label: "Birdclaw",
+      icon: "Bird",
+      defaultWidget: "activity",
+      signalKinds: ["activity", "notification"],
+    },
+    {
       pluginId: "blocker",
       label: "Focus",
       icon: "Shield",
