@@ -100,6 +100,7 @@ public class ElizaAgentService extends Service {
     /** Serializes rotate-check + append so concurrent events can't interleave JSONL lines. */
     private static final Object DIAGNOSTICS_LOCK = new Object();
     private static final String EXIT_INFO_PREFS = "eliza-agent-exit-info";
+    private static final String DETACHED_LAUNCH_STAMP_KEY = "detachedLaunchStartedAtMs";
     private static final String EXIT_INFO_LAST_TIMESTAMP = "lastTimestamp";
 
     private static final int AGENT_PORT = 31337;
@@ -698,8 +699,13 @@ public class ElizaAgentService extends Service {
 
     @Override
     public void onDestroy() {
+        // Only an explicit stop (ACTION_STOP → shuttingDown) may tear the
+        // agent process down. The FGS-denial path also sets shuttingDown, but
+        // its contract is the opposite — "a surviving detached agent process
+        // is left untouched for [the next launch] to adopt" — so exclude it.
+        boolean requestedStop = shuttingDown && !foregroundStartDenied;
         Map<String, String> details = new LinkedHashMap<>();
-        details.put("shuttingDown", String.valueOf(shuttingDown));
+        details.put("shuttingDown", String.valueOf(requestedStop));
         details.put("currentStatus", currentStatus);
         details.put("detachedAgentMode", String.valueOf(detachedAgentMode));
         appendDiagnosticEvent("service-onDestroy", details);
@@ -712,7 +718,24 @@ public class ElizaAgentService extends Service {
             bionicInferenceServer.stop();
             bionicInferenceServer = null;
         }
-        stopAgentProcess();
+        if (requestedStop) {
+            stopAgentProcess();
+        } else {
+            // AMS tore this record down without an explicit stop request (an
+            // ANR'd duplicate record whose startForeground never got processed
+            // on a blocked main thread, LMK pressure, task removal). The
+            // detached agent outlives its launching service BY DESIGN — leave
+            // it running so the next service instance adopts it via
+            // isLoopbackAgentListening(). Calling stopAgentProcess() here
+            // pkills the agent by path: observed on the emulator e2e, an
+            // in-flight start worker (asset refresh holding processLock for
+            // ~33s) launched the agent and this destroy path then killed it
+            // 1s later; the Android-15 background FGS-start denial meant
+            // nothing ever restarted it and local mode stayed dead until the
+            // next manual app launch.
+            appendDiagnosticEvent("service-destroy-preserved-agent", details);
+            Log.i(TAG, "Service destroyed without a stop request; leaving the agent process running for adoption.");
+        }
         NotificationManager mgr = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (mgr != null) {
             mgr.cancel(NOTIFICATION_ID);
@@ -1383,7 +1406,15 @@ public class ElizaAgentService extends Service {
             // listener (not /api/health), so a bun that is alive but busy
             // mid-llama_decode — when an HTTP probe would time out — is still
             // recognised as running and left alone.
-            if (detachedAgentMode && isLoopbackAgentListening()) {
+            // Adopt on the PORT signal alone — not `detachedAgentMode &&`.
+            // detachedAgentMode is an instance field, so a service instance
+            // created after an AMS teardown / process death always sees it
+            // false and would skip adoption, fall through to launch.sh, and
+            // pkill a perfectly healthy surviving agent (the exact churn the
+            // comment above describes). Mark the instance detached on adopt so
+            // an explicit ACTION_STOP still tears the adopted agent down.
+            if (isLoopbackAgentListening()) {
+                detachedAgentMode = true;
                 if (!"running".equals(currentStatus)) {
                     currentStatus = "running";
                     updateNotification();
@@ -1405,16 +1436,25 @@ public class ElizaAgentService extends Service {
             // restart the whole boot — an endless churn that never reaches ready.
             // If we launched within the boot grace window, assume it is still
             // coming up and leave it alone rather than kill + restart it.
-            if (detachedAgentMode
-                    && detachedLaunchStartedAtMs > 0
-                    && (System.currentTimeMillis() - detachedLaunchStartedAtMs)
+            // The launch timestamp must survive service-instance churn: a new
+            // instance created while a prior instance's agent is still cold
+            // booting (port not yet bound) would otherwise see 0, skip this
+            // guard, and launch.sh-pkill the booting bun. Fall back to the
+            // persisted stamp written at launch (cleared on explicit stop).
+            long launchStartedAt = detachedLaunchStartedAtMs > 0L
+                ? detachedLaunchStartedAtMs
+                : readPersistedDetachedLaunchTimestamp();
+            if (launchStartedAt > 0L
+                    && (System.currentTimeMillis() - launchStartedAt)
                         < AGENT_BOOT_GRACE_MS) {
+                detachedAgentMode = true;
+                detachedLaunchStartedAtMs = launchStartedAt;
                 Map<String, String> details = new LinkedHashMap<>();
-                details.put("ageMs", String.valueOf(System.currentTimeMillis() - detachedLaunchStartedAtMs));
+                details.put("ageMs", String.valueOf(System.currentTimeMillis() - launchStartedAt));
                 details.put("bootGraceMs", String.valueOf(AGENT_BOOT_GRACE_MS));
                 appendDiagnosticEvent("detached-agent-cold-boot-guard", details);
                 Log.i(TAG, "Detached agent still in cold boot (launched "
-                    + (System.currentTimeMillis() - detachedLaunchStartedAtMs)
+                    + (System.currentTimeMillis() - launchStartedAt)
                     + "ms ago); not relaunching.");
                 return;
             }
@@ -2170,6 +2210,7 @@ public class ElizaAgentService extends Service {
             agentProcess = started;
             detachedAgentMode = true;
             detachedLaunchStartedAtMs = System.currentTimeMillis();
+            persistDetachedLaunchTimestamp(detachedLaunchStartedAtMs);
             // stdoutPump/stderrPump no longer needed — bun writes straight
             // to agent.log on disk via the OS-level redirect above.
             stdoutPump = null;
@@ -2254,6 +2295,7 @@ public class ElizaAgentService extends Service {
             currentLocalAgentToken = null;
             currentTerminalRunToken = null;
         }
+        persistDetachedLaunchTimestamp(0L);
         if (wasDetached) {
             appendDiagnosticEvent("stop-detached-agent", null);
             stopDetachedAgentProcess();
@@ -2306,6 +2348,25 @@ public class ElizaAgentService extends Service {
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /**
+     * Persist the detached-agent launch timestamp so the cold-boot guard in
+     * {@link #startAgentProcess()} survives service-instance churn (AMS
+     * record teardown, process restart). 0 clears the stamp; written on every
+     * launch and cleared by {@link #stopAgentProcess()} (explicit stops and
+     * restart-first restarts).
+     */
+    private void persistDetachedLaunchTimestamp(long timestampMs) {
+        getSharedPreferences(EXIT_INFO_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putLong(DETACHED_LAUNCH_STAMP_KEY, timestampMs)
+            .apply();
+    }
+
+    private long readPersistedDetachedLaunchTimestamp() {
+        return getSharedPreferences(EXIT_INFO_PREFS, Context.MODE_PRIVATE)
+            .getLong(DETACHED_LAUNCH_STAMP_KEY, 0L);
     }
 
     private static String shellQuote(String value) {
