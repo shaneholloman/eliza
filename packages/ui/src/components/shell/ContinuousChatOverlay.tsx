@@ -771,29 +771,24 @@ function TurnStatusIndicator({
   );
 }
 
-// A dedicated agent's cold boot can take 30–120s+ (a container spinning up).
-// Past this with no readiness the boot banner escalates from a plain "waking…"
-// to a "taking longer than usual" state that surfaces a settings escape — so a
-// stuck boot never reads as a silent hang.
+// After this long still booting, the banner escalates to a "taking longer than
+// usual" state with a settings escape, so a stuck boot never reads as a silent
+// hang. Exported for the unit test (see the __-seam note below).
 export const BOOT_SLOW_AFTER_MS = 90_000;
 
-// Grace window before the cold-boot banner appears. A warm agent flips out of
-// the "booting" phase within a frame; only a real cold boot stays booting past
-// this, so the banner never flashes on a first paint / warm reconnect.
+// Grace before the banner appears: a warm agent leaves the "booting" phase
+// within a frame, so only a real cold boot outlasts this and shows the banner
+// — no flash on a first paint / warm reconnect.
 const BOOT_BANNER_GRACE_MS = 600;
 
 /**
- * Cold-start boot feedback (resting, pre-send). While the agent container is
- * still warming, the composer alone gave no visible progress — just a static
- * placeholder — for the 30–120s+ a dedicated agent takes to boot. This banner
- * fills that silent window with an indeterminate spinner + a live "Waking …"
- * label, escalating after {@link BOOT_SLOW_AFTER_MS} to a "taking longer than
- * usual" state with an Open-settings escape. The post-send path is unchanged
- * (optimistic user bubble + the inline "Waking the agent" turn-status). The
- * parent gates mounting on a grace delay so a warm agent (which flips to ready
- * within a frame) never flashes it. Token-consistent with the sibling
- * model-download banner: same centered glass pill, same `text-accent` spinner,
- * same reduced-motion + aria-live semantics.
+ * Cold-start boot feedback (resting, pre-send): an indeterminate spinner + live
+ * "Waking …" label, escalating after {@link BOOT_SLOW_AFTER_MS} to a "taking
+ * longer than usual" state with an Open-settings escape. The parent gates
+ * mounting on {@link BOOT_BANNER_GRACE_MS} (see the render site).
+ *
+ * Exported (with BOOT_SLOW_AFTER_MS) only as a unit-test seam — not part of the
+ * public overlay API; cf. `__renderThreadLineForParity`.
  */
 export function BootStatusIndicator({
   agentName,
@@ -2115,12 +2110,10 @@ export function ContinuousChatOverlay({
   const hasDraft = draft.trim().length > 0;
   const hasImages = pendingImages.length > 0;
 
-  // Delay-show the cold-boot banner. `booting` is `phase === "booting"`, which
-  // is true whenever the agent isn't ready yet — including the first paint,
-  // before the status fetch resolves, even for a warm agent. A warm agent
-  // flips to ready within a frame or two, so gating the banner on `booting`
-  // holding continuously past a short grace window shows it only for a genuine
-  // cold boot (which stays booting for 30–120s+) and never flashes on mount.
+  // `booting` (= `phase === "booting"`) is true whenever the agent isn't ready
+  // YET — including first paint before the status fetch resolves, even for a
+  // warm agent. So require it to hold past BOOT_BANNER_GRACE_MS before showing
+  // the banner: a warm agent flips ready within a frame and never crosses it.
   const [showBootBanner, setShowBootBanner] = React.useState(false);
   React.useEffect(() => {
     if (!booting) {
@@ -4116,11 +4109,8 @@ export function ContinuousChatOverlay({
         </div>
       ) : null}
 
-      {/* Cold-start boot feedback. A dedicated agent's container takes 30–120s+
-          to warm; before this the composer alone showed only a static
-          placeholder for that whole window. This sibling banner explains the
-          wait and, past 90s, escalates to a settings escape. Gated on a grace
-          delay so a warm agent never flashes it. */}
+      {/* Cold-start boot feedback — sibling of the model-download banner above.
+          See BootStatusIndicator; `showBootBanner` is the grace-gated flag. */}
       {showBootBanner ? (
         <BootStatusIndicator
           agentName={agentName}
