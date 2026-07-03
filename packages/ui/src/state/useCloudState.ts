@@ -44,6 +44,7 @@ import {
 import { scrubPersistedAgentProfileTokens } from "./agent-profiles";
 import {
   hasStewardLoginLauncher,
+  hasUsableStoredStewardToken,
   launchStewardLogin,
 } from "./cloud-steward-login";
 import { scrubPersistedActiveServerToken } from "./persistence";
@@ -476,8 +477,16 @@ export function useCloudState({
       // Steward sign-in (passkey / email / OAuth / wallet) instead of the
       // legacy device-code browser window. Same identity on web (same-origin
       // cookie + localStorage JWT) and native (Bearer-from-localStorage).
-      const existingStewardToken = readStoredStewardToken()?.trim();
-      if (existingStewardToken || hasStewardLoginLauncher()) {
+      //
+      // Only take this branch when it can complete on THIS click: a still-usable
+      // stored token (launchStewardLogin short-circuits on it) or a mounted
+      // launcher. A stored-but-EXPIRED JWT with no launcher mounted used to
+      // enter the branch anyway; launchStewardLogin drained the stale token and
+      // then threw "the Steward login surface is not mounted", so the first
+      // click dead-ended on an error and only the second click (token now gone)
+      // reached the working device-code flow. Instead, drain the stale token
+      // below and fall through to the device-code flow on the same click.
+      if (hasUsableStoredStewardToken() || hasStewardLoginLauncher()) {
         closePrePoppedWindow();
         try {
           await launchStewardLogin();
@@ -512,6 +521,13 @@ export function useCloudState({
           completeLogin();
         }
         return loginCompletion;
+      }
+
+      // A stored-but-stale Steward JWT with no launcher mounted: drain it so it
+      // cannot shadow the device-code credentials in subsequent authed calls
+      // (this mirrors what launchStewardLogin would have done before throwing).
+      if (readStoredStewardToken()?.trim()) {
+        clearStoredStewardToken();
       }
 
       // Legacy device-code fallback (retired for Cloud; preserved for the
