@@ -27,6 +27,8 @@ const LAUNCH_SURFACE =
 // state has persisted this long. A boot that becomes ready first never paints
 // it. Error / pairing / bootstrap views are NOT gated — they are terminal or
 // interactive states the user is meant to see immediately, not fast-flash cases.
+// NOTE: during the ≤220ms null-render window the shell paints nothing — the
+// host's FOUC guard painting `--launch-bg` is what keeps the screen non-blank.
 export const STARTUP_SPLASH_DELAY_MS = 220;
 
 /**
@@ -66,6 +68,15 @@ export function StartupShell({ view, onRetry }: StartupShellProps) {
     view.kind === "loading",
     STARTUP_SPLASH_DELAY_MS,
   );
+
+  // Unconditional mount checkpoint: unlike the gated first-paint mark below,
+  // this fires as soon as the shell mounts (any view, including a fast boot
+  // that never paints the splash), so the boot-trace harness
+  // (capture-startup-trace.mjs) always has a reachable renderer-only mark.
+  // markStartup dedupes by name, so re-renders keep it single.
+  useEffect(() => {
+    markStartup("startup-shell:mounted", { view: view.kind });
+  }, [view.kind]);
 
   // Renderer cold-start checkpoint (#9565): "first paint" of the startup front
   // door = the moment visible startup UI actually renders. Error / pairing /
