@@ -392,8 +392,12 @@ body.platform-android * {
 
   --text: var(--brand-white);
   --text-strong: var(--brand-white);
+  --txt: var(--text);
   --muted: rgba(255, 255, 255, 0.62);
   --muted-strong: rgba(255, 255, 255, 0.82);
+  --foreground: var(--text);
+  --background: var(--bg);
+  --muted-foreground: var(--muted);
 
   --border: rgba(255, 255, 255, 0.14);
   --border-strong: rgba(255, 255, 255, 0.28);
@@ -431,8 +435,12 @@ body.platform-android * {
 
   --text: var(--brand-white);
   --text-strong: var(--brand-white);
+  --txt: var(--text);
   --muted: rgba(255, 255, 255, 0.7);
   --muted-strong: rgba(255, 255, 255, 0.88);
+  --foreground: var(--text);
+  --background: var(--bg);
+  --muted-foreground: var(--muted);
 
   --border: rgba(255, 255, 255, 0.18);
   --border-strong: rgba(255, 255, 255, 0.34);
@@ -470,8 +478,12 @@ body.platform-android * {
 
   --text: var(--brand-black);
   --text-strong: var(--brand-black);
+  --txt: var(--text);
   --muted: rgba(0, 0, 0, 0.66);
   --muted-strong: rgba(0, 0, 0, 0.82);
+  --foreground: var(--text);
+  --background: var(--bg);
+  --muted-foreground: var(--muted);
 
   --border: rgba(0, 0, 0, 0.18);
   --border-strong: rgba(0, 0, 0, 0.34);
@@ -501,7 +513,11 @@ body.platform-android * {
   --bg: var(--brand-white);
   --text: var(--brand-black);
   --text-strong: var(--brand-black);
+  --txt: var(--text);
   --muted: rgba(0, 0, 0, 0.7);
+  --foreground: var(--text);
+  --background: var(--bg);
+  --muted-foreground: var(--muted);
   --accent: var(--brand-black);
   --accent-rgb: 0, 0, 0;
   --accent-foreground: var(--brand-white);

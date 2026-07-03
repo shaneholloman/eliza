@@ -37,6 +37,14 @@ type GroupedSections = {
   items: SettingsSectionDef[];
 }[];
 
+function isCloudThemedSettingsSection(section: SettingsSectionDef): boolean {
+  return (
+    section.id.startsWith("cloud-") ||
+    section.group === "cloud" ||
+    section.group === "developer"
+  );
+}
+
 /**
  * Group sections for display. Built-in groups keep their pinned order + labels;
  * any extra group a section declares (e.g. the `cloud` group) is interleaved by
@@ -215,8 +223,15 @@ function SettingsSectionContent({
   const Component = section.Component;
   const Icon = section.icon;
   const title = settingsSectionTitle(section, t);
+  const cloudThemed = isCloudThemedSettingsSection(section);
   return (
-    <div id={section.id}>
+    <div
+      id={section.id}
+      className={cn(
+        cloudThemed &&
+          "theme-cloud min-h-[calc(100dvh-8rem)] bg-black px-3 py-4 text-white sm:px-5 sm:py-5",
+      )}
+    >
       {onBack ? (
         <div className="mb-1.5">
           <SectionBackButton onBack={onBack} />
