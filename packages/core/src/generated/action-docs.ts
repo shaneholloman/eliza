@@ -6308,6 +6308,15 @@ export const allActionsSpec = {
 			],
 		},
 		{
+			name: "GET_MEETING_TRANSCRIPT",
+			description:
+				"Retrieve the live or final transcript of a meeting the notetaker bot attended.",
+			parameters: [],
+			similes: ["MEETING_NOTES", "SHOW_MEETING_TRANSCRIPT"],
+			descriptionCompressed:
+				"Retrieve the live or final transcript of a meeting the notetaker bot attended.",
+		},
+		{
 			name: "GIT_PATHOLOGY",
 			description:
 				"Forensic git-history analysis for a path/glob surface. Returns peaks (peak quality moments), drift inflections (where rot started), and a post-mortem narrative. Use when the user asks 'when did this code get bad', 'where did rot start in X', or 'analyze git pathology for Y'. Actions: report (default), list (show cached reports).",
@@ -6757,6 +6766,32 @@ export const allActionsSpec = {
 					},
 				},
 			],
+		},
+		{
+			name: "JOIN_MEETING",
+			description:
+				"Send the agent's notetaker bot into a live Google Meet, Microsoft Teams, or Zoom meeting to attend and transcribe it in real time. Use this WHENEVER the message contains a Meet / Teams / Zoom meeting link (meet.google.com, teams.microsoft.com / teams.live.com, zoom.us / app.zoom.us) and the user wants the agent to join, attend, sit in on, cover, take notes on, record, or transcribe that meeting or call. Prefer this over calendar, reminder, scheduling, or plain reply actions when a joinable meeting URL is present — those only schedule or acknowledge, whereas this actually joins the call now. Requires a meeting URL in the message or a meetingUrl parameter.",
+			parameters: [],
+			similes: [
+				"INVITE_TO_MEETING",
+				"ATTEND_MEETING",
+				"TAKE_MEETING_NOTES",
+				"TRANSCRIBE_MEETING",
+				"RECORD_MEETING",
+				"SEND_NOTETAKER",
+				"JOIN_CALL",
+			],
+			descriptionCompressed:
+				"Send agent's notetaker bot into a live Google Meet, Microsoft Teams, or Zoom meeting to attend and transcribe it in real time. Use this WHENEVER the msg...",
+		},
+		{
+			name: "LEAVE_MEETING",
+			description:
+				"Leave a meeting the notetaker bot is currently attending and finalize its transcript.",
+			parameters: [],
+			similes: ["EXIT_MEETING", "STOP_MEETING_TRANSCRIPTION"],
+			descriptionCompressed:
+				"Leave a meeting the notetaker bot is attending and finalize its transcript.",
 		},
 		{
 			name: "LINEAR",
