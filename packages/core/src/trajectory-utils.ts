@@ -882,6 +882,16 @@ async function withChildTrajectoryStep<T>(
 	try {
 		return await runWithTrajectoryContext(childContext, () => fn());
 	} finally {
+		if (
+			trajectoryId &&
+			typeof trajectoryLogger.flushWriteQueue === "function"
+		) {
+			try {
+				await trajectoryLogger.flushWriteQueue(trajectoryId);
+			} catch {
+				// Trajectory flushing must never break the host flow.
+			}
+		}
 		try {
 			await annotateActiveTrajectoryStep(runtime, {
 				stepId: parentStepId,

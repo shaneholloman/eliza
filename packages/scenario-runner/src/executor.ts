@@ -1393,6 +1393,8 @@ async function executeMessageTurn(
   room: ScenarioRoomDefinition,
   currentNow: Date,
   turnTimeoutMs: number,
+  scenarioId: string,
+  runId?: string,
 ): Promise<{ responseText: string; durationMs: number }> {
   const text =
     typeof turn.text === "string"
@@ -1418,6 +1420,15 @@ async function executeMessageTurn(
       channelType: room.channelType,
     },
   });
+  message.metadata = {
+    ...(message.metadata &&
+    typeof message.metadata === "object" &&
+    !Array.isArray(message.metadata)
+      ? message.metadata
+      : {}),
+    scenarioId,
+    ...(runId ? { batchId: runId } : {}),
+  };
 
   const messageService = (
     runtime as {
@@ -2262,6 +2273,8 @@ export async function runScenario(
                         resolveTurnRoom(turn, rooms),
                         logicalNow,
                         opts.turnTimeoutMs || DEFAULT_TURN_TIMEOUT_MS,
+                        scenario.id,
+                        ctx.runId,
                       )),
                     };
       let actionsThisTurn = interceptor.actions.slice(actionsBefore);

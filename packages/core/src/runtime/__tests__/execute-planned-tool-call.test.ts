@@ -4,6 +4,11 @@ import {
 	InMemoryConnectorAccountStorage,
 } from "../../connectors/account-manager";
 import { runWithStreamingContext } from "../../streaming-context";
+import {
+	getTrajectoryContext,
+	runWithTrajectoryContext,
+	runWithTrajectoryPurpose,
+} from "../../trajectory-context";
 import type {
 	Action,
 	HandlerCallback,
@@ -11,6 +16,7 @@ import type {
 	Memory,
 } from "../../types";
 import { EventType } from "../../types";
+import { ModelType } from "../../types/model";
 import {
 	_resetActionRolePolicyCacheForTests,
 	dropEmptyOptionalArgs,
@@ -18,7 +24,16 @@ import {
 } from "../execute-planned-tool-call";
 
 type ExecuteToolCallTestRuntime = Pick<IAgentRuntime, "actions"> &
-	Partial<Pick<IAgentRuntime, "emitEvent">> & {
+	Partial<
+		Pick<
+			IAgentRuntime,
+			| "emitEvent"
+			| "getCurrentRunId"
+			| "getService"
+			| "getServicesByType"
+			| "useModel"
+		>
+	> & {
 		logger: Pick<IAgentRuntime["logger"], "debug" | "warn" | "error">;
 	};
 
@@ -365,6 +380,214 @@ describe("executePlannedToolCall", () => {
 			error: "handler failed",
 			data: { actionName: "BOOM" },
 		});
+	});
+
+	it("runs handlers inside an action trajectory step so nested model calls retain purpose context", async () => {
+		const observedContexts: ReturnType<typeof getTrajectoryContext>[] = [];
+		const trajectoryLogger = {
+			isEnabled: vi.fn(() => true),
+			startStep: vi.fn(() => "action-step-1"),
+			flushWriteQueue: vi.fn(async () => {}),
+			annotateStep: vi.fn(async () => {}),
+		};
+		const useModel = vi.fn(async () => {
+			observedContexts.push(getTrajectoryContext());
+			return "classified";
+		});
+		const action = makeAction({
+			name: "CLASSIFY_INBOX",
+			handler: async (rt) => {
+				await rt.useModel(ModelType.TEXT_SMALL, { prompt: "classify" });
+				return { success: true };
+			},
+		});
+		const runtime = makeRuntime([action], {
+			getService: vi.fn((serviceType: string) =>
+				serviceType === "trajectories" ? trajectoryLogger : undefined,
+			),
+			getServicesByType: vi.fn(() => []),
+			useModel,
+		});
+
+		const result = await runWithTrajectoryContext(
+			{
+				trajectoryId: "trajectory-1",
+				trajectoryStepId: "parent-step-1",
+				purpose: "planner",
+			},
+			() =>
+				executePlannedToolCall(
+					runtime,
+					{ message: makeMessage() },
+					{ name: "CLASSIFY_INBOX", params: {} },
+				),
+		);
+
+		expect(result.success).toBe(true);
+		expect(useModel).toHaveBeenCalledWith(ModelType.TEXT_SMALL, {
+			prompt: "classify",
+		});
+		expect(trajectoryLogger.startStep).toHaveBeenCalledWith(
+			"trajectory-1",
+			expect.objectContaining({
+				timestamp: expect.any(Number),
+				agentBalance: 0,
+				agentPoints: 0,
+				agentPnL: 0,
+				openPositions: 0,
+			}),
+		);
+		expect(observedContexts[0]).toMatchObject({
+			trajectoryId: "trajectory-1",
+			trajectoryStepId: "action-step-1",
+			parentStepId: "parent-step-1",
+			purpose: "action",
+		});
+		expect(trajectoryLogger.annotateStep).toHaveBeenCalledWith({
+			stepId: "parent-step-1",
+			appendChildSteps: ["action-step-1"],
+		});
+		expect(trajectoryLogger.flushWriteQueue).toHaveBeenCalledWith(
+			"trajectory-1",
+		);
+	});
+
+	it("rebuilds action trajectory context from message metadata when planner execution lost ALS", async () => {
+		const observedContexts: ReturnType<typeof getTrajectoryContext>[] = [];
+		const trajectoryLogger = {
+			isEnabled: vi.fn(() => true),
+			startStep: vi.fn(() => "action-step-1"),
+			flushWriteQueue: vi.fn(async () => {}),
+			annotateStep: vi.fn(async () => {}),
+		};
+		const useModel = vi.fn(async () => {
+			observedContexts.push(getTrajectoryContext());
+			return "classified";
+		});
+		const action = makeAction({
+			name: "INBOX_TRIAGE",
+			handler: async (rt) => {
+				await runWithTrajectoryPurpose("inbox_triage", () =>
+					rt.useModel(ModelType.TEXT_SMALL, { prompt: "classify inbox" }),
+				);
+				return { success: true };
+			},
+		});
+		const runtime = makeRuntime([action], {
+			getCurrentRunId: vi.fn(() => "run-1"),
+			getService: vi.fn((serviceType: string) =>
+				serviceType === "trajectories" ? trajectoryLogger : undefined,
+			),
+			getServicesByType: vi.fn(() => []),
+			useModel,
+		});
+		const message = makeMessage();
+		message.metadata = {
+			trajectoryId: "trajectory-1",
+			trajectoryStepId: "parent-step-1",
+		};
+
+		const result = await executePlannedToolCall(
+			runtime,
+			{ message },
+			{ name: "INBOX_TRIAGE", params: {} },
+		);
+
+		expect(result.success).toBe(true);
+		expect(useModel).toHaveBeenCalledWith(ModelType.TEXT_SMALL, {
+			prompt: "classify inbox",
+		});
+		expect(trajectoryLogger.startStep).toHaveBeenCalledWith(
+			"trajectory-1",
+			expect.objectContaining({
+				timestamp: expect.any(Number),
+				agentBalance: 0,
+				agentPoints: 0,
+				agentPnL: 0,
+				openPositions: 0,
+			}),
+		);
+		expect(observedContexts[0]).toMatchObject({
+			trajectoryId: "trajectory-1",
+			trajectoryStepId: "action-step-1",
+			parentStepId: "parent-step-1",
+			purpose: "inbox_triage",
+			runId: "run-1",
+			roomId: "room-id",
+			messageId: "message-id",
+		});
+		expect(trajectoryLogger.annotateStep).toHaveBeenCalledWith({
+			stepId: "parent-step-1",
+			appendChildSteps: ["action-step-1"],
+		});
+		expect(trajectoryLogger.flushWriteQueue).toHaveBeenCalledWith(
+			"trajectory-1",
+		);
+	});
+
+	it("fills a missing trajectory id from message metadata when ALS kept only the parent step", async () => {
+		const observedContexts: ReturnType<typeof getTrajectoryContext>[] = [];
+		const trajectoryLogger = {
+			isEnabled: vi.fn(() => true),
+			startStep: vi.fn(() => "action-step-1"),
+			flushWriteQueue: vi.fn(async () => {}),
+			annotateStep: vi.fn(async () => {}),
+		};
+		const useModel = vi.fn(async () => {
+			observedContexts.push(getTrajectoryContext());
+			return "classified";
+		});
+		const action = makeAction({
+			name: "INBOX_TRIAGE",
+			handler: async (rt) => {
+				await runWithTrajectoryPurpose("inbox_triage", () =>
+					rt.useModel(ModelType.TEXT_SMALL, { prompt: "classify inbox" }),
+				);
+				return { success: true };
+			},
+		});
+		const runtime = makeRuntime([action], {
+			getCurrentRunId: vi.fn(() => "run-1"),
+			getService: vi.fn((serviceType: string) =>
+				serviceType === "trajectories" ? trajectoryLogger : undefined,
+			),
+			getServicesByType: vi.fn(() => []),
+			useModel,
+		});
+		const message = makeMessage();
+		message.metadata = {
+			trajectoryId: "trajectory-1",
+			trajectoryStepId: "parent-step-1",
+		};
+
+		const result = await runWithTrajectoryContext(
+			{
+				trajectoryStepId: "parent-step-1",
+				purpose: "planner",
+			},
+			() =>
+				executePlannedToolCall(
+					runtime,
+					{ message },
+					{ name: "INBOX_TRIAGE", params: {} },
+				),
+		);
+
+		expect(result.success).toBe(true);
+		expect(trajectoryLogger.startStep).toHaveBeenCalledWith(
+			"trajectory-1",
+			expect.any(Object),
+		);
+		expect(observedContexts[0]).toMatchObject({
+			trajectoryId: "trajectory-1",
+			trajectoryStepId: "action-step-1",
+			parentStepId: "parent-step-1",
+			purpose: "inbox_triage",
+			runId: "run-1",
+		});
+		expect(trajectoryLogger.flushWriteQueue).toHaveBeenCalledWith(
+			"trajectory-1",
+		);
 	});
 
 	it("emits ACTION_STARTED and ACTION_COMPLETED events for successful planned tools", async () => {

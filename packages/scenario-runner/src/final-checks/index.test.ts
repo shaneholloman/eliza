@@ -122,6 +122,71 @@ describe("modelCallOccurred finalCheck", () => {
     expect(result.detail).toContain("Observed purposes: action");
   });
 
+  it("waits for async trajectory writes before deciding the model call is missing", async () => {
+    let detailReads = 0;
+    const runtimeWithDelayedTrajectory: FinalCheckRuntime = {
+      getService(name: string) {
+        if (name !== "trajectories") return null;
+        return {
+          async listTrajectories() {
+            return {
+              trajectories: [
+                {
+                  id: "traj-1",
+                  scenarioId: "inbox-triage-capability",
+                },
+              ],
+            };
+          },
+          async flushWriteQueue() {
+            return undefined;
+          },
+          async getTrajectoryDetail(id: string) {
+            detailReads += 1;
+            if (detailReads === 1) {
+              return {
+                trajectoryId: id,
+                scenarioId: "inbox-triage-capability",
+                steps: [],
+              };
+            }
+            return {
+              trajectoryId: id,
+              scenarioId: "inbox-triage-capability",
+              steps: [
+                {
+                  llmCalls: [
+                    {
+                      purpose: "inbox_triage",
+                      userPrompt: "Classify each message.",
+                    },
+                  ],
+                },
+              ],
+            };
+          },
+        };
+      },
+    };
+
+    const result = await runFinalCheck(
+      {
+        type: "modelCallOccurred",
+        purpose: "inbox_triage",
+      } as ScenarioFinalCheck,
+      {
+        runtime: runtimeWithDelayedTrajectory,
+        ctx: createContext({ scenarioId: "inbox-triage-capability" }),
+      },
+    );
+
+    expect(result).toMatchObject({
+      type: "modelCallOccurred",
+      status: "passed",
+    });
+    expect(detailReads).toBeGreaterThan(1);
+  });
+
   it("fails loudly when no trajectory service is registered", async () => {
     const result = await runFinalCheck(
       {
