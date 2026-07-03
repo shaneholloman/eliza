@@ -17,7 +17,9 @@ import XCTest
 ///     drag on the home↔launcher rail must snap back; a slow drag past the 50%
 ///     point must commit the page (velocity deliberately killed with a
 ///     hold-before-release, so this exercises the DISTANCE rule, not the flick
-///     escape hatch); the launcher's edge-swipe-right must return home.
+///     escape hatch). BOTH directions follow the same rules: the launcher's
+///     right-swipe back home is rail-owned and 1:1 (the reduced edge-swipe
+///     threshold is gone), so a sub-threshold right drag snaps back too.
 ///   - `testMessageEditAffordanceRevealsViaTouch` — tap a user message bubble →
 ///     the action row's Edit affordance appears; tap Edit → the inline editor
 ///     opens prefilled with the message text.
@@ -138,16 +140,33 @@ final class GestureSemanticsUITests: XCTestCase {
                 + "launcher, but the rail reads '\(committed ?? "nil")'"
         )
 
-        // Edge-swipe back: on the launcher a right drag commits home on the
-        // shorter edge-swipe threshold.
-        slowHorizontalDrag(in: app, fromX: 0.20, toX: 0.65, y: 0.55)
+        // Sub-threshold RIGHT drag: the back-to-home direction follows the
+        // SAME 50% distance rule as forward paging (the old reduced
+        // edge-swipe threshold is gone — the rail owns the gesture 1:1 in
+        // both directions), so a slow ~28%-width right drag must snap back.
+        slowHorizontalDrag(in: app, fromX: 0.20, toX: 0.48, y: 0.55)
+        Thread.sleep(forTimeInterval: 1.5)
+        let afterSubThresholdBack = markerValue(Self.pagePrefix, in: app)
+        attachScreenshot(named: "pager-30-after-sub-threshold-right-drag")
+        XCTAssertEqual(
+            afterSubThresholdBack, "launcher",
+            "a slow ~28%-width right drag released below the 50% threshold "
+                + "must snap back to the launcher (symmetric rules — no reduced "
+                + "edge threshold), but the rail reads "
+                + "'\(afterSubThresholdBack ?? "nil")'"
+        )
+
+        // Past-threshold RIGHT drag commits launcher → home, tracked 1:1 by
+        // the outer rail (the fix for 'swipe right only moves half way and
+        // doesn't track my thumb').
+        slowHorizontalDrag(in: app, fromX: 0.15, toX: 0.80, y: 0.55)
         let backHome = waitForMarker(
             Self.pagePrefix, toEqual: "home", timeout: 5, in: app)
-        attachScreenshot(named: "pager-30-after-edge-swipe-right")
+        attachScreenshot(named: "pager-40-after-past-threshold-right-drag")
         XCTAssertEqual(
             backHome, "home",
-            "the launcher's edge-swipe-right must return to the home page, "
-                + "but the rail reads '\(backHome ?? "nil")'"
+            "a slow right drag past the 50% point must return the rail to the "
+                + "home page, but the rail reads '\(backHome ?? "nil")'"
         )
     }
 
