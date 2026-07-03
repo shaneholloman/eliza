@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { DeployAppFrontendInput } from "@elizaos/cloud-sdk";
+import type {
+  AppFrontendDeploymentDto,
+  DeployAppFrontendInput,
+} from "@elizaos/cloud-sdk";
 import {
   captureCallback,
   FakeElizaCloudClient,
@@ -26,6 +29,25 @@ const { deployFrontendAction } = await import(
 );
 
 const APP = makeApp({ id: "app_1", name: "Acme Bot", slug: "acme-bot" });
+
+function makeFeDeployment(
+  overrides: Partial<AppFrontendDeploymentDto> = {},
+): AppFrontendDeploymentDto {
+  return {
+    id: "fe_1",
+    app_id: "app_1",
+    version: 1,
+    status: "active",
+    r2_prefix: "p/",
+    content_hash: "b".repeat(64),
+    file_count: 1,
+    total_bytes: 42,
+    error: null,
+    created_at: "2026-06-29T00:00:00.000Z",
+    activated_at: "2026-06-29T00:00:00.000Z",
+    ...overrides,
+  };
+}
 
 let tmp: string | null = null;
 
@@ -61,7 +83,7 @@ describe("DEPLOY_FRONTEND", () => {
         makeMessage("publish Acme Bot"),
         undefined,
         { directory: "/x" },
-        cb.callback,
+        cb.fn,
       );
       expect(res.success).toBe(false);
       expect(res.data).toMatchObject({ reason: "no_key" });
@@ -119,19 +141,7 @@ describe("DEPLOY_FRONTEND", () => {
         captured = input;
         return Promise.resolve({
           success: true,
-          deployment: {
-            id: "fe_1",
-            app_id: "app_1",
-            version: 1,
-            status: "active",
-            r2_prefix: "p/",
-            content_hash: "b".repeat(64),
-            file_count: 1,
-            total_bytes: 42,
-            error: null,
-            created_at: "2026-06-29T00:00:00.000Z",
-            activated_at: "2026-06-29T00:00:00.000Z",
-          },
+          deployment: makeFeDeployment(),
         });
       });
       const cb = captureCallback();
@@ -140,12 +150,45 @@ describe("DEPLOY_FRONTEND", () => {
         makeMessage("publish Acme Bot"),
         undefined,
         { files: [{ path: "index.html", content: "<html></html>" }] },
-        cb.callback,
+        cb.fn,
       );
       expect(res.success).toBe(true);
       expect(captured?.files).toHaveLength(1);
       expect(res.data).toMatchObject({
         deployment: { version: 1, status: "active" },
+      });
+      expect(res.userFacingText).toContain("is now live");
+    });
+
+    it("does not claim live when publish returns a built but non-active deployment", async () => {
+      setDeployAppFrontend(() =>
+        Promise.resolve({
+          success: true,
+          deployment: makeFeDeployment({
+            id: "fe_3",
+            version: 3,
+            status: "ready",
+            activated_at: null,
+          }),
+        }),
+      );
+
+      const cb = captureCallback();
+      const res = await deployFrontendAction.handler(
+        keyedRuntime(),
+        makeMessage("publish Acme Bot"),
+        undefined,
+        { files: [{ path: "index.html", content: "<html></html>" }] },
+        cb.fn,
+      );
+
+      expect(res.success).toBe(true);
+      expect(res.userFacingText).not.toContain("now live");
+      expect(res.userFacingText).toContain("built but NOT yet live");
+      expect(res.userFacingText).toContain("status: ready");
+      expect(cb.calls[0]?.text).toBe(res.userFacingText);
+      expect(res.data).toMatchObject({
+        deployment: { id: "fe_3", version: 3, status: "ready" },
       });
     });
 
