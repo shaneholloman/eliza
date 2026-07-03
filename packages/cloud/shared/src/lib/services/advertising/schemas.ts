@@ -43,6 +43,71 @@ export const TargetingSchema = z.object({
   languages: z.array(z.string()).optional(),
 });
 
+const LocalTimeSchema = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:mm in 24-hour local time");
+
+// End times additionally allow "24:00" (exclusive end of day) so a window can
+// cover a full local day — matches Meta's adset_schedule end_minute of 1440.
+const LocalEndTimeSchema = z
+  .string()
+  .regex(
+    /^(([01]\d|2[0-3]):[0-5]\d|24:00)$/,
+    "Use HH:mm in 24-hour local time (24:00 = end of day)",
+  );
+
+function localTimeToMinute(value: string): number {
+  const [hour, minute] = value.split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+function isSupportedTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const DaypartingWindowSchema = z
+  .object({
+    daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+    startTime: LocalTimeSchema,
+    endTime: LocalEndTimeSchema,
+  })
+  .superRefine((window, ctx) => {
+    if (new Set(window.daysOfWeek).size !== window.daysOfWeek.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["daysOfWeek"],
+        message: "daysOfWeek cannot contain duplicates",
+      });
+    }
+    if (localTimeToMinute(window.startTime) >= localTimeToMinute(window.endTime)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["endTime"],
+        message: "endTime must be after startTime within the same local day",
+      });
+    }
+  });
+
+export const DaypartingScheduleSchema = z
+  .object({
+    timezone: z.string().min(1),
+    windows: z.array(DaypartingWindowSchema).min(1).max(64),
+  })
+  .superRefine((schedule, ctx) => {
+    if (!isSupportedTimeZone(schedule.timezone)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["timezone"],
+        message: "Unsupported IANA timezone",
+      });
+    }
+  });
+
 export const CreativeMediaSchema = z.object({
   id: z.string().uuid(),
   source: MediaSourceSchema,
@@ -76,6 +141,7 @@ export const CreateCampaignSchema = z.object({
   startDate: z.string().datetime().optional(),
   endDate: z.string().datetime().optional(),
   targeting: TargetingSchema.optional(),
+  dayparting: DaypartingScheduleSchema.optional(),
   appId: z.string().uuid().optional(),
 });
 
@@ -85,6 +151,11 @@ export const UpdateCampaignSchema = z.object({
   startDate: z.string().datetime().optional(),
   endDate: z.string().datetime().optional(),
   targeting: TargetingSchema.optional(),
+  dayparting: DaypartingScheduleSchema.nullable().optional(),
+});
+
+export const DuplicateCampaignSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
 });
 
 export const CreateCreativeSchema = z.object({
