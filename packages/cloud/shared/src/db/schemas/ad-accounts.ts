@@ -50,7 +50,7 @@ export const adAccounts = pgTable(
     // Token expiration tracking
     token_expires_at: timestamp("token_expires_at"),
 
-    status: text("status").$type<AdAccountStatus>().notNull().default("active"),
+    status: text("status").$type<AdAccountStatus>().notNull().default("pending"),
 
     // Platform-specific metadata
     metadata: jsonb("metadata")
