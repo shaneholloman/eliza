@@ -191,9 +191,9 @@ if (!apkPath || !fs.existsSync(apkPath)) {
 const appId = readAppId();
 
 // Guard against installing the wrong brand/package: the APK's own package id must
-// match the appId we expect. Catches the `ai.milady.app`-built-while-expecting-
-// `ai.elizaos.app` (or vice-versa) trap, where `install -r` "succeeds" by writing
-// a different package and the app we're testing is never updated.
+// match the appId we expect. Catches the custom-package-built-while-expecting-
+// `ai.elizaos.app` trap, where `install -r` "succeeds" by writing a different
+// package and the app we're testing is never updated.
 const apkPackage = readApkPackage(apkPath);
 if (apkPackage && apkPackage !== appId) {
   fail(
