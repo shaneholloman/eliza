@@ -1050,18 +1050,12 @@ export function useShellController(): ShellController {
           ? "idle"
           : "summoned";
 
-  // AUTHORITATIVE "no LLM/model provider configured" signal. The server stamps
-  // an assistant turn with `failureKind: "no_provider"` when it tried to answer
-  // but no provider plugin is wired (server `computeCanRespond` requires a
-  // registered TEXT handler, so `canRespond` stays false FOREVER — not a
-  // transient warm-up where it flips true a beat later). Because `ready`
-  // (`deriveAgentReady`) keys off `canRespond`, the shell would otherwise sit in
-  // the `booting` phase indefinitely — the "Waking …" banner + "waking up…"
-  // composer placeholder never clear, reading as an infinite spinner even though
-  // the send already came back with the actionable no-provider gate. Derived
-  // from the LATEST assistant turn so a later successful reply (provider added
-  // in Settings) clears it automatically.
-  const noProviderConfigured = React.useMemo(() => {
+  // History half of the "no LLM/model provider configured" signal. The server
+  // stamps an assistant turn with `failureKind: "no_provider"` when it tried to
+  // answer but no provider plugin is wired. Derived from the LATEST assistant
+  // turn so a later successful reply (provider added in Settings) clears it
+  // automatically.
+  const latestAssistantNoProvider = React.useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const message = messages[i];
       if (message?.role === "assistant") {
@@ -1070,6 +1064,22 @@ export function useShellController(): ShellController {
     }
     return false;
   }, [messages]);
+
+  // AUTHORITATIVE "no provider configured" signal = history stamp AND live
+  // server truth. The stamp is persisted in conversation history, so on its own
+  // a stale no_provider turn would hijack every later app launch / conversation
+  // switch into Settings even after a provider IS configured. Require the
+  // current status to agree: `canRespond === false` exactly — the server's
+  // `computeCanRespond` requires a registered TEXT handler, so with no provider
+  // it stays false FOREVER (not a transient warm-up), while a null/undefined
+  // early status is "unknown yet" and must NOT trigger. This matters because
+  // `ready` (`deriveAgentReady`) keys off `canRespond`: without this signal the
+  // shell would sit in the `booting` phase indefinitely — the "Waking …" banner
+  // + "waking up…" composer placeholder never clear, reading as an infinite
+  // spinner even though the send already came back with the actionable
+  // no-provider gate.
+  const noProviderConfigured =
+    latestAssistantNoProvider && agentStatus?.canRespond === false;
 
   // On the false→true edge, route the user straight to Settings — where the
   // model provider is configured — instead of leaving them staring at a chat

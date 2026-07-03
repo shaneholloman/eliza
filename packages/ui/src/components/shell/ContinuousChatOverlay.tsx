@@ -4823,10 +4823,12 @@ export function ContinuousChatOverlay({
                     : "placeholder:text-white/45"
                 }`}
               />
-              <span id="cc-booting-hint" className="sr-only">
-                {agentName} is waking up — you can type now; your message sends
-                and the reply arrives in a moment.
-              </span>
+              {booting && !noProviderConfigured ? (
+                <span id="cc-booting-hint" className="sr-only">
+                  {agentName} is waking up — you can type now; your message
+                  sends and the reply arrives in a moment.
+                </span>
+              ) : null}
               {/* Trailing controls. */}
               <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
                 {/* Transcription start/stop — only in voice mode (hands-free /
