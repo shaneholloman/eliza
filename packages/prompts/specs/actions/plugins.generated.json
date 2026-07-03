@@ -2750,11 +2750,11 @@
     },
     {
       "name": "INBOX",
-      "description": "Inbox: Gmail, Slack, Discord, Telegram, Signal, iMessage, WhatsApp. Merge recency feed and operate the persisted triage queue. Subactions: list, search, summarize, triage, reply, snooze, archive, approve.",
+      "description": "Inbox: Gmail, Slack, Discord, Telegram, Signal, iMessage, WhatsApp. Merge recency feed and operate the persisted triage queue. Subactions: list, search, summarize, triage (AI-classify new messages into urgent / needs_reply / notify / info / ignore, then return the prioritized queue), reply, snooze, archive, approve.",
       "parameters": [
         {
           "name": "action",
-          "description": "Inbox op: list | search | summarize | triage | reply | snooze | archive | approve.",
+          "description": "Inbox op: list | search | summarize | triage (classify new messages with the AI triage classifier, then return the pending queue) | reply | snooze | archive | approve.",
           "required": false,
           "schema": {
             "type": "string",
@@ -2836,9 +2836,26 @@
           "schema": {
             "type": "boolean"
           }
+        },
+        {
+          "name": "classification",
+          "description": "Optional triage queue filter for persisted items: ignore | info | notify | needs_reply | urgent. When set on triage, reads the queue without classifying fresh messages.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": ["ignore", "info", "notify", "needs_reply", "urgent"]
+          }
+        },
+        {
+          "name": "includeSnoozed",
+          "description": "When true, include snoozed triage queue entries in triage reads.",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
         }
       ],
-      "descriptionCompressed": "INBOX list|search|summarize|triage|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
+      "descriptionCompressed": "INBOX list|search|summarize|triage(classify urgent/needs_reply/noise)|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
       "exampleCalls": [
         {
           "user": "Use INBOX with the provided parameters.",
@@ -2853,7 +2870,9 @@
               "entryId": "example",
               "body": "example",
               "until": "example",
-              "confirmed": false
+              "confirmed": false,
+              "classification": "ignore",
+              "includeSnoozed": false
             }
           }
         }
@@ -3687,7 +3706,7 @@
     },
     {
       "name": "OWNER_GOALS",
-      "description": "Manage the owner's long-horizon life goals. Actions: create, update, delete, review. Goals carry a horizon (e.g. quarter, year, life) and feed routine + reminder generation.",
+      "description": "Manage the owner's long-horizon life goals. Actions: create, update, delete, review, checkin. Goals carry a horizon (e.g. quarter, year, life), feed routine + reminder generation, and cadenced goals get scheduled check-ins whose responses are recorded via checkin.",
       "parameters": [
         {
           "name": "action",
@@ -3720,9 +3739,25 @@
           "schema": {
             "type": "string"
           }
+        },
+        {
+          "name": "note",
+          "description": "Owner's check-in note (checkin).",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "progress",
+          "description": "Reported goal progress (checkin).",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
         }
       ],
-      "descriptionCompressed": "owner goals: create|update|delete|review; long-horizon, drives routines",
+      "descriptionCompressed": "owner goals: create|update|delete|review|checkin; long-horizon, drives routines",
       "similes": [
         "GOALS",
         "LIFE_GOALS",
@@ -3739,7 +3774,9 @@
               "action": "example",
               "id": "example",
               "title": "example",
-              "description": "example"
+              "description": "example",
+              "note": "example",
+              "progress": "example"
             }
           }
         }
@@ -4837,10 +4874,36 @@
         },
         {
           "name": "agentType",
-          "description": "Agent type (elizaos, pi-agent, opencode, codex, or claude) for create / spawn_agent / control.resume. Defaults to ELIZA_ACP_DEFAULT_AGENT, normally elizaos.",
+          "description": "Heuristic backend guess (elizaos, pi-agent, opencode, codex, or claude) for create / spawn_agent / control.resume. This is a weak hint — it loses to the operator default/pin and to character routing. To honor an EXPLICIT user request use requestedBackend instead.",
           "required": false,
           "schema": {
             "type": "string"
+          }
+        },
+        {
+          "name": "appMonetized",
+          "description": "Set true when the user wants the app to EARN MONEY / charge for access — e.g. 'people pay $1 to chat with X', 'charge per message', 'a paid app', 'monetized', a paywall, or per-use pricing. Judge the user's INTENT, not specific keywords. When true the sub-agent gets the monetized Eliza Cloud contract (register for an appId, inference markup, OAuth + affiliate billing) instead of a free static page. Leave unset for a normal free app or non-app task.",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "requestedBackend",
+          "description": "Set ONLY when the user EXPLICITLY named a coding backend for THIS task (e.g. 'use codex', 'have claude build it') — one of elizaos, pi-agent, opencode, codex, claude. Leave unset if the user did not name one; never guess. Unlike agentType this overrides the configured default/pin.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": ["elizaos", "pi-agent", "opencode", "codex", "claude"]
+          }
+        },
+        {
+          "name": "taskComplexity",
+          "description": "Your honest assessment of this coding task's difficulty: 'simple' (small/routine), 'moderate', or 'hard' (large, subtle, multi-file, or architectural). Used only to route to whichever backend the character configured for that difficulty (character.routing.coding.byTag). Judge the task itself — do not echo words from the user.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": ["simple", "moderate", "hard"]
           }
         },
         {
@@ -5326,6 +5389,9 @@
               "operation": "create",
               "task": "example",
               "agentType": "example",
+              "appMonetized": false,
+              "requestedBackend": "elizaos",
+              "taskComplexity": "simple",
               "agents": "example",
               "repo": "example",
               "workdir": "example",
