@@ -109,6 +109,10 @@ import {
 } from "../runtime/planner-loop";
 import { privateActionAllowedOnTurn } from "../runtime/private-action-gate";
 import {
+	extractReplyTextFromTranscript,
+	looksLikeRawFieldTranscript,
+} from "../runtime/response-field-transcript";
+import {
 	buildResponseGrammar,
 	buildSpanSamplerPlan,
 	withGuidedDecodeProviderOptions,
@@ -4598,6 +4602,11 @@ function synthesizeSimpleReplyFromPlainText(
 		})();
 	if (looksLikeIncompleteStructuredOutput) return null;
 	if (containsEmbeddedJsonObject(replyText)) return null;
+	// Never treat a raw HANDLE_RESPONSE field transcript as a plain-text reply
+	// (#11712). If the structured-transcript parser upstream didn't claim it,
+	// route to the failure path rather than shipping the `shouldRespond:/
+	// replyText:/...` skeleton to the user channel.
+	if (looksLikeRawFieldTranscript(replyText)) return null;
 	return {
 		processMessage: "RESPOND",
 		thought:
@@ -6267,10 +6276,28 @@ export async function runV5MessageRuntimeStage1(args: {
 			// instead of a blank/garbled bubble, but keep a valid-but-terse answer
 			// (e.g. "144" to a math question).
 			let reply = route.reply;
+			// Fail-closed guard (#11712): never ship the raw HANDLE_RESPONSE field
+			// transcript to a user channel. If the reply still carries the
+			// `shouldRespond:/replyText:/...` skeleton (a parse fell through
+			// somewhere upstream), extract the intended replyText value; if that
+			// can't be recovered, drop it and let the unusable-reply deferral below
+			// take over. Cheap: regex check only, no full parse on the common path.
+			if (looksLikeRawFieldTranscript(reply)) {
+				const recovered = extractReplyTextFromTranscript(reply);
+				args.runtime.logger?.warn?.(
+					{
+						src: "service:message",
+						agentId: args.runtime.agentId,
+						recovered: recovered !== null,
+					},
+					"[message] Blocked raw response-handler field transcript at send boundary; extracting replyText",
+				);
+				reply = recovered ?? "";
+			}
 			if (
-				isUnusableStage1Reply(route.reply) &&
+				isUnusableStage1Reply(reply) &&
 				!isTerseReplyWorthKeeping({
-					reply: route.reply,
+					reply,
 					messageText: getUserMessageText(args.message),
 				})
 			) {
