@@ -7428,7 +7428,7 @@
   "cloud.successClient.refreshBalance": "残高を更新",
   "settings.appearance.system": "システム",
   "appwindow.Launching": "{{label}} を起動中…",
-  "desktop.tray.openChat": "チャットを開く",
+  "desktop.tray.openChat": "メッセージを開く",
   "desktop.tray.openPlugins": "プラグインを開く",
   "desktop.tray.openDesktopWorkspace": "デスクトップワークスペースを開く",
   "desktop.tray.openVoiceControls": "音声コントロールを開く",

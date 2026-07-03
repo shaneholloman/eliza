@@ -7475,7 +7475,7 @@
   "cloud.successClient.refreshBalance": "Refresh balance",
   "settings.appearance.system": "System",
   "appwindow.Launching": "Launching {{label}}…",
-  "desktop.tray.openChat": "Open Chat",
+  "desktop.tray.openChat": "Open Messages",
   "desktop.tray.openPlugins": "Open Plugins",
   "desktop.tray.openDesktopWorkspace": "Open Desktop Workspace",
   "desktop.tray.openVoiceControls": "Open Voice Controls",

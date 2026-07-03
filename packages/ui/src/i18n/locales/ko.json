@@ -7428,7 +7428,7 @@
   "cloud.successClient.refreshBalance": "잔액 새로고침",
   "settings.appearance.system": "시스템",
   "appwindow.Launching": "{{label}} 실행 중…",
-  "desktop.tray.openChat": "채팅 열기",
+  "desktop.tray.openChat": "메시지 열기",
   "desktop.tray.openPlugins": "플러그인 열기",
   "desktop.tray.openDesktopWorkspace": "데스크톱 워크스페이스 열기",
   "desktop.tray.openVoiceControls": "음성 제어 열기",
