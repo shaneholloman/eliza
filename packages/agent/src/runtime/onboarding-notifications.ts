@@ -11,12 +11,12 @@
  * user who clears their inbox is not re-onboarded on the next boot.
  */
 
-import { logger, ServiceType } from "@elizaos/core";
 import type {
   AgentNotification,
   AgentRuntime,
   NotificationInput,
 } from "@elizaos/core";
+import { logger, ServiceType } from "@elizaos/core";
 
 /** Structural view of NotificationService.notify — avoids a hard class import. */
 interface NotifierLike {
