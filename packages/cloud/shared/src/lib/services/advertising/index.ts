@@ -19,6 +19,7 @@ import { googleAdsProvider } from "./providers/google";
 import { linkedinAdsProvider } from "./providers/linkedin";
 import { metaAdsProvider } from "./providers/meta";
 import { redditAdsProvider } from "./providers/reddit";
+import { snapAdsProvider } from "./providers/snap";
 import { tiktokAdsProvider } from "./providers/tiktok";
 import { xTwitterAdsProvider } from "./providers/x-twitter";
 import { DaypartingScheduleSchema } from "./schemas";
@@ -55,6 +56,7 @@ const providers: Record<AdPlatform, AdProvider | null> = {
   meta: metaAdsProvider,
   google: googleAdsProvider,
   tiktok: tiktokAdsProvider,
+  snap: snapAdsProvider,
   "x-twitter": xTwitterAdsProvider,
   reddit: redditAdsProvider,
   linkedin: linkedinAdsProvider,

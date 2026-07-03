@@ -4,6 +4,7 @@ export const AdPlatformSchema = z.enum([
   "meta",
   "google",
   "tiktok",
+  "snap",
   "x-twitter",
   "reddit",
   "linkedin",
