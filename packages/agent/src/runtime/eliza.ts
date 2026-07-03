@@ -109,6 +109,7 @@ import {
   subAgentCredentialsPlugin,
   type TargetInfo,
   type UUID,
+  warnOnUnmatchedActionRolePolicyKeys,
 } from "@elizaos/core";
 import {
   DEFAULT_CEREBRAS_TEXT_MODEL,
@@ -4848,9 +4849,13 @@ export async function startEliza(
       // is fail-closed per provider.
       applyPluginRoleGating(runtime.plugins ?? []);
     } catch (err) {
-      // Never silently disable redaction — report loudly at ERROR.
+      // #12087 Item 1: this was logged at debug — an import/apply failure here
+      // silently disabled ALL sensitive-provider redaction (SECRETS_STATUS,
+      // walletPortfolio, …). Surface it loudly. Registration-time gating in the
+      // plugin-lifecycle wrapper is the primary enforcement; this boot pass is a
+      // defense-in-depth backstop for plugins registered before that wrapper.
       logger.error(
-        `[eliza] Plugin provider role gating sweep failed: ${formatError(err)}`,
+        `[eliza] Plugin provider role gating FAILED — sensitive providers may be ungated: ${formatError(err)}`,
       );
     }
   };
@@ -5331,6 +5336,10 @@ export async function startEliza(
     await registerRemoteSigningIfEnabled();
     await syncRemoteCapabilityPluginsIfAvailable();
     await applyPluginRoleGatingIfAvailable();
+    // #12087 Item 19: now that every plugin's actions are registered, warn about
+    // ACTION_ROLE_POLICY keys that match no action name/simile (a silently-inert
+    // policy, usually from an action rename after the operator wrote the policy).
+    warnOnUnmatchedActionRolePolicyKeys(runtime.actions ?? []);
     await registerConversationProximityProvider();
     // Probe the embedding dimension BEFORE seeding bundled documents (#8769).
     // The deferred plugin waves above register the cloud TEXT_EMBEDDING handler
