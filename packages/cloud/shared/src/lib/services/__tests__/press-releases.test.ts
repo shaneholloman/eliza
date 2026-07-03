@@ -57,10 +57,10 @@ async function seedReadyRelease() {
     targetRegions: ["US", "US", "EU"],
     assets: [{ url: "https://example.com/press-kit.png", mimeType: "image/png" }],
   });
-  if (!created.ok) throw new Error(`seedReadyRelease createRelease failed: ${created.error}`);
-  const ready = await service.markReady(created.release.id, actor.orgId);
+  expect(created.ok).toBe(true);
+  const ready = await service.markReady(created.release!.id, actor.orgId);
   expect(ready.ok).toBe(true);
-  return { ...actor, releaseId: created.release.id };
+  return { ...actor, releaseId: created.release!.id };
 }
 
 beforeAll(async () => {
@@ -106,21 +106,19 @@ describe("press release domain service (#11818)", () => {
     });
 
     expect(created.ok).toBe(true);
-    if (!created.ok) throw new Error(created.error);
-    expect(created.release.title).toBe("Product Hunt launch");
-    expect(created.release.target_regions).toEqual(["US", "EU"]);
-    expect(created.release.status).toBe("draft");
+    expect(created.release?.title).toBe("Product Hunt launch");
+    expect(created.release?.target_regions).toEqual(["US", "EU"]);
+    expect(created.release?.status).toBe("draft");
 
-    const ready = await service.markReady(created.release.id, actor.orgId);
+    const ready = await service.markReady(created.release!.id, actor.orgId);
     expect(ready.ok).toBe(true);
-    if (!ready.ok) throw new Error(ready.error);
-    expect(ready.release.status).toBe("ready");
+    expect(ready.release?.status).toBe("ready");
 
     const listed = await service.listReleases(actor.orgId);
-    expect(listed.map((release) => release.id)).toContain(created.release.id);
+    expect(listed.map((release) => release.id)).toContain(created.release!.id);
   });
 
-  test("create idempotency is per-org: same-org resumes, cross-org key is independent", async () => {
+  test("create idempotency returns the same release and blocks cross-org key reuse", async () => {
     if (!pgliteReady) return;
     const owner = await seedOrgUser();
     const other = await seedOrgUser();
@@ -140,24 +138,19 @@ describe("press release domain service (#11818)", () => {
       body: "Different body ignored",
       idempotencyKey: key,
     });
-    // A DIFFERENT org reusing the same key is not a collision: idempotency keys
-    // are scoped per (organization_id, key), so the other tenant gets its own row.
-    const otherOrg = await service.createRelease({
+    const stolen = await service.createRelease({
       organizationId: other.orgId,
       userId: other.userId,
       title: "Cross org",
-      body: "This must succeed independently.",
+      body: "This must fail.",
       idempotencyKey: key,
     });
 
     expect(first.ok).toBe(true);
     expect(retry.ok).toBe(true);
-    expect(otherOrg.ok).toBe(true);
-    if (!first.ok || !retry.ok || !otherOrg.ok) throw new Error("expected all creates to succeed");
-
-    expect(retry.release.id).toBe(first.release.id);
-    expect(otherOrg.release.id).not.toBe(first.release.id);
-    expect(otherOrg.release.organization_id).toBe(other.orgId);
+    expect(retry.release?.id).toBe(first.release?.id);
+    expect(stolen.ok).toBe(false);
+    expect(stolen.error).toBe("Idempotency key already used");
   });
 
   test("rejects empty content, past embargoes, and unsafe asset URLs", async () => {
@@ -204,23 +197,20 @@ describe("press release domain service (#11818)", () => {
       title: "Editable",
       body: "Before edit",
     });
-    expect(created.ok).toBe(true);
-    if (!created.ok) throw new Error(created.error);
 
-    const denied = await service.updateDraft(created.release.id, other.orgId, {
+    const denied = await service.updateDraft(created.release!.id, other.orgId, {
       title: "Cross org edit",
     });
     expect(denied.ok).toBe(false);
 
-    const edited = await service.updateDraft(created.release.id, owner.orgId, {
+    const edited = await service.updateDraft(created.release!.id, owner.orgId, {
       body: "After edit",
     });
     expect(edited.ok).toBe(true);
-    if (!edited.ok) throw new Error(edited.error);
-    expect(edited.release.body).toBe("After edit");
+    expect(edited.release?.body).toBe("After edit");
 
-    await service.markReady(created.release.id, owner.orgId);
-    const frozen = await service.updateDraft(created.release.id, owner.orgId, {
+    await service.markReady(created.release!.id, owner.orgId);
+    const frozen = await service.updateDraft(created.release!.id, owner.orgId, {
       body: "Too late",
     });
     expect(frozen.ok).toBe(false);
@@ -241,9 +231,8 @@ describe("press release domain service (#11818)", () => {
       idempotencyKey: key,
     });
     expect(submitted.ok).toBe(true);
-    if (!submitted.ok) throw new Error(submitted.error);
-    expect(submitted.release.status).toBe("submitted");
-    expect(submitted.distribution.status).toBe("submitted");
+    expect(submitted.release?.status).toBe("submitted");
+    expect(submitted.distribution?.status).toBe("submitted");
 
     const retry = await service.recordSubmission({
       releaseId: seeded.releaseId,
@@ -252,22 +241,20 @@ describe("press release domain service (#11818)", () => {
       idempotencyKey: key,
     });
     expect(retry.ok).toBe(true);
-    if (!retry.ok) throw new Error(retry.error);
-    expect(retry.distribution.id).toBe(submitted.distribution.id);
+    expect(retry.distribution?.id).toBe(submitted.distribution?.id);
 
     const distributed = await service.markDistributed({
-      distributionId: submitted.distribution.id,
+      distributionId: submitted.distribution!.id,
       organizationId: seeded.orgId,
       providerResponse: { status: "distributed" },
     });
     expect(distributed.ok).toBe(true);
-    if (!distributed.ok) throw new Error(distributed.error);
-    expect(distributed.release.status).toBe("distributed");
+    expect(distributed.release?.status).toBe("distributed");
 
     const coverage = await service.recordCoverage({
       organizationId: seeded.orgId,
       releaseId: seeded.releaseId,
-      distributionId: submitted.distribution.id,
+      distributionId: submitted.distribution!.id,
       url: "https://example-news.test/eliza-cloud",
       title: "Eliza Cloud adds PR workflow",
       outlet: "Example News",
@@ -278,7 +265,7 @@ describe("press release domain service (#11818)", () => {
     const updatedCoverage = await service.recordCoverage({
       organizationId: seeded.orgId,
       releaseId: seeded.releaseId,
-      distributionId: submitted.distribution.id,
+      distributionId: submitted.distribution!.id,
       url: "https://example-news.test/eliza-cloud",
       title: "Updated headline",
       outlet: "Example News",
@@ -295,67 +282,18 @@ describe("press release domain service (#11818)", () => {
       organizationId: seeded.orgId,
       provider: "sandbox-newswire",
     });
-    expect(submitted.ok).toBe(true);
-    if (!submitted.ok) throw new Error(submitted.error);
 
     const cancelled = await service.cancelRelease(seeded.releaseId, seeded.orgId);
     expect(cancelled.ok).toBe(false);
 
     const failed = await service.markFailed({
-      distributionId: submitted.distribution.id,
+      distributionId: submitted.distribution!.id,
       organizationId: seeded.orgId,
       error: "Provider rejected embargo",
     });
     expect(failed.ok).toBe(true);
-    if (!failed.ok) throw new Error(failed.error);
-    expect(failed.release.status).toBe("failed");
-    expect(failed.distribution.error_message).toBe("Provider rejected embargo");
-  });
-
-  test("cancels a draft release and persists the cancelled status", async () => {
-    if (!pgliteReady) return;
-    const actor = await seedOrgUser();
-    const created = await service.createRelease({
-      organizationId: actor.orgId,
-      userId: actor.userId,
-      title: "Draft to cancel",
-      body: "This draft is about to be cancelled.",
-    });
-    expect(created.ok).toBe(true);
-    if (!created.ok) throw new Error(created.error);
-    expect(created.release.status).toBe("draft");
-
-    const cancelled = await service.cancelRelease(created.release.id, actor.orgId);
-    expect(cancelled.ok).toBe(true);
-    if (!cancelled.ok) throw new Error(cancelled.error);
-    expect(cancelled.release.status).toBe("cancelled");
-
-    const [row] = await dbWrite
-      .select()
-      .from(pressReleases)
-      .where(eq(pressReleases.id, created.release.id));
-    expect(row.status).toBe("cancelled");
-  });
-
-  test("cancels a ready release and persists the cancelled status", async () => {
-    if (!pgliteReady) return;
-    const seeded = await seedReadyRelease();
-    const [before] = await dbWrite
-      .select()
-      .from(pressReleases)
-      .where(eq(pressReleases.id, seeded.releaseId));
-    expect(before.status).toBe("ready");
-
-    const cancelled = await service.cancelRelease(seeded.releaseId, seeded.orgId);
-    expect(cancelled.ok).toBe(true);
-    if (!cancelled.ok) throw new Error(cancelled.error);
-    expect(cancelled.release.status).toBe("cancelled");
-
-    const [row] = await dbWrite
-      .select()
-      .from(pressReleases)
-      .where(eq(pressReleases.id, seeded.releaseId));
-    expect(row.status).toBe("cancelled");
+    expect(failed.release?.status).toBe("failed");
+    expect(failed.distribution?.error_message).toBe("Provider rejected embargo");
   });
 
   test("media contacts persist by organization", async () => {

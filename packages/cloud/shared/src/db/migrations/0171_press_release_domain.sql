@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS "press_releases" (
 CREATE INDEX IF NOT EXISTS "press_releases_org_idx" ON "press_releases" ("organization_id");
 CREATE INDEX IF NOT EXISTS "press_releases_status_idx" ON "press_releases" ("status");
 CREATE INDEX IF NOT EXISTS "press_releases_created_idx" ON "press_releases" ("created_at");
-CREATE UNIQUE INDEX IF NOT EXISTS "press_releases_org_idempotency_key_uidx" ON "press_releases" ("organization_id", "idempotency_key");
+CREATE UNIQUE INDEX IF NOT EXISTS "press_releases_idempotency_key_uidx" ON "press_releases" ("idempotency_key");
 
 CREATE TABLE IF NOT EXISTS "press_release_distributions" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS "press_release_distributions" (
 	"press_release_id" uuid NOT NULL REFERENCES "press_releases"("id") ON DELETE CASCADE,
 	"provider" text NOT NULL,
 	"external_distribution_id" text,
-	"status" text DEFAULT 'submitted' NOT NULL,
+	"status" text DEFAULT 'pending' NOT NULL,
 	"idempotency_key" text,
 	"request_payload" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"provider_response" jsonb DEFAULT '{}'::jsonb NOT NULL,
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS "press_release_distributions" (
 CREATE INDEX IF NOT EXISTS "press_release_distributions_org_idx" ON "press_release_distributions" ("organization_id");
 CREATE INDEX IF NOT EXISTS "press_release_distributions_release_idx" ON "press_release_distributions" ("press_release_id");
 CREATE INDEX IF NOT EXISTS "press_release_distributions_provider_idx" ON "press_release_distributions" ("provider");
-CREATE UNIQUE INDEX IF NOT EXISTS "press_release_distributions_org_idempotency_key_uidx" ON "press_release_distributions" ("organization_id", "idempotency_key");
+CREATE UNIQUE INDEX IF NOT EXISTS "press_release_distributions_idempotency_key_uidx" ON "press_release_distributions" ("idempotency_key");
 
 CREATE TABLE IF NOT EXISTS "press_media_contacts" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,

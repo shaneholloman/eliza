@@ -43,15 +43,9 @@ export class PressReleasesRepository {
     });
   }
 
-  findReleaseByIdempotencyKey(
-    organizationId: string,
-    key: string,
-  ): Promise<PressRelease | undefined> {
+  findReleaseByIdempotencyKey(key: string): Promise<PressRelease | undefined> {
     return dbRead.query.pressReleases.findFirst({
-      where: and(
-        eq(pressReleases.organization_id, organizationId),
-        eq(pressReleases.idempotency_key, key),
-      ),
+      where: eq(pressReleases.idempotency_key, key),
     });
   }
 
@@ -64,21 +58,8 @@ export class PressReleasesRepository {
   }
 
   async createRelease(data: NewPressRelease): Promise<PressRelease> {
-    const [row] = await dbWrite
-      .insert(pressReleases)
-      .values(data)
-      .onConflictDoNothing({
-        target: [pressReleases.organization_id, pressReleases.idempotency_key],
-      })
-      .returning();
-    if (row) return row;
-    // Empty returning(): a concurrent insert won the (organization_id, idempotency_key)
-    // race — return the winner. The finder is org-scoped, so tenancy is preserved.
-    const existing = data.idempotency_key
-      ? await this.findReleaseByIdempotencyKey(data.organization_id, data.idempotency_key)
-      : undefined;
-    if (!existing) throw new Error("Press release insert conflicted without a retrievable row");
-    return existing;
+    const [row] = await dbWrite.insert(pressReleases).values(data).returning();
+    return row;
   }
 
   async updateReleaseDraft(
@@ -127,15 +108,9 @@ export class PressReleasesRepository {
     });
   }
 
-  findDistributionByIdempotencyKey(
-    organizationId: string,
-    key: string,
-  ): Promise<PressReleaseDistribution | undefined> {
+  findDistributionByIdempotencyKey(key: string): Promise<PressReleaseDistribution | undefined> {
     return dbRead.query.pressReleaseDistributions.findFirst({
-      where: and(
-        eq(pressReleaseDistributions.organization_id, organizationId),
-        eq(pressReleaseDistributions.idempotency_key, key),
-      ),
+      where: eq(pressReleaseDistributions.idempotency_key, key),
     });
   }
 
@@ -153,24 +128,8 @@ export class PressReleasesRepository {
   }
 
   async createDistribution(data: NewPressReleaseDistribution): Promise<PressReleaseDistribution> {
-    const [row] = await dbWrite
-      .insert(pressReleaseDistributions)
-      .values(data)
-      .onConflictDoNothing({
-        target: [
-          pressReleaseDistributions.organization_id,
-          pressReleaseDistributions.idempotency_key,
-        ],
-      })
-      .returning();
-    if (row) return row;
-    // Empty returning(): a concurrent insert won the (organization_id, idempotency_key)
-    // race — return the winner. The finder is org-scoped, so tenancy is preserved.
-    const existing = data.idempotency_key
-      ? await this.findDistributionByIdempotencyKey(data.organization_id, data.idempotency_key)
-      : undefined;
-    if (!existing) throw new Error("Distribution insert conflicted without a retrievable row");
-    return existing;
+    const [row] = await dbWrite.insert(pressReleaseDistributions).values(data).returning();
+    return row;
   }
 
   async transitionDistribution(
