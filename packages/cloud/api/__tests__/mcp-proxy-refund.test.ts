@@ -106,6 +106,33 @@ test("unreachable upstream (502) refunds the upfront debit (#11637)", async () =
   expect(refundCredits).toHaveBeenCalledTimes(1);
 });
 
+test("non-owner org CANNOT invoke another org's PRIVATE MCP — 404, no billing (#11838)", async () => {
+  // user is org1 (beforeEach); the MCP is private and owned by org2.
+  getById.mockResolvedValue({
+    ...EXTERNAL_MCP,
+    is_public: false,
+    organization_id: "org2",
+  });
+  const res = await post();
+  expect(res.status).toBe(404);
+  expect(reserveAndDeductCredits).not.toHaveBeenCalled();
+  expect(safeFetch).not.toHaveBeenCalled();
+});
+
+test("non-owner org CAN invoke a PUBLIC MCP — monetization model preserved (#11838)", async () => {
+  getById.mockResolvedValue({
+    ...EXTERNAL_MCP,
+    is_public: true,
+    organization_id: "org2",
+  });
+  safeFetch.mockResolvedValue(
+    new Response(JSON.stringify({ ok: true }), { status: 200 }),
+  );
+  const res = await post();
+  expect(res.status).toBe(200);
+  expect(reserveAndDeductCredits).toHaveBeenCalledTimes(1);
+});
+
 test("unsafe/blocked external endpoint (400) refunds (#11637)", async () => {
   assertSafeOutboundUrl.mockRejectedValue(new Error("SSRF blocked"));
   const res = await post();
