@@ -133,9 +133,6 @@ describe("probe3", () => {
 				sw1,
 			);
 		}
-		writeFileSync(
-			join(tmpdir(), "eliza-probe-out3.txt"),
-			out.join("\n"),
-		);
+		writeFileSync(join(tmpdir(), "eliza-probe-out3.txt"), out.join("\n"));
 	});
 });
