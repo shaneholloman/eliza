@@ -16,6 +16,7 @@ import {
   createCharacter,
   logger,
   ModelType,
+  trajectoriesPlugin,
 } from "@elizaos/core";
 import {
   type LiveProviderConfig,
@@ -403,6 +404,7 @@ export async function createScenarioRuntime(
     default: Plugin;
   };
   await runtime.registerPlugin(pluginSql);
+  await runtime.registerPlugin(trajectoriesPlugin);
   await runtime.registerPlugin(await createScenarioKnowledgeGraphPlugin());
 
   // Basic capabilities: REPLY, CHOICE, IGNORE, NONE actions, core providers

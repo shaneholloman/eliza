@@ -228,9 +228,13 @@ export const trajectoriesPlugin: Plugin = {
 						message,
 						meta,
 					);
+					const scenarioId = readNonEmptyString(trajectoryMetadata.scenarioId);
+					const batchId = readNonEmptyString(trajectoryMetadata.batchId);
 					const trajectoryId = await logger.startTrajectory(runtime.agentId, {
 						source: source ?? (meta.source as string) ?? "chat",
 						metadata: trajectoryMetadata,
+						...(scenarioId ? { scenarioId } : {}),
+						...(batchId ? { batchId } : {}),
 					});
 
 					const normalizedTrajectoryId =
