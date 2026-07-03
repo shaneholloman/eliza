@@ -187,6 +187,15 @@ beforeEach(() => {
   ensureLocalStorage().clear();
   vi.clearAllMocks();
   mocks.client.listLocalAgentBackups.mockResolvedValue([]);
+  // `clearAllMocks` resets call history but NOT implementations, so restore the
+  // default resolved implementations that individual tests override (a leaked
+  // `mockRejectedValue`/`mockResolvedValue` would otherwise poison later tests).
+  mocks.client.submitFirstRun.mockResolvedValue(undefined);
+  mocks.client.selectOrProvisionCloudAgent.mockResolvedValue({
+    apiBase: "https://agent.example.test",
+    agentId: "agent-1",
+    created: false,
+  });
   mocks.client.getCloudCompatAgents.mockResolvedValue({
     success: true,
     data: [],
@@ -259,9 +268,9 @@ describe("useFirstRunConductor", () => {
     unmount();
   });
 
-  it("keeps BYOK reachable after the runtime chooser was trimmed to Cloud + On this device: On this device → provider:other routes to the Settings handoff banner without a model download", async () => {
+  it("On this device → provider:other ('configure in Settings') opens the Settings tab and exits first-run without running a finish flow", async () => {
     const spies = seedAppStore();
-    const { turn, unmount } = renderConductor();
+    const { turn, transcript, unmount } = renderConductor();
     const greeting = await waitForTurn(turn, "first-run:greeting");
 
     // The chooser offers three locations — Cloud, On this device, Remote — but
@@ -277,19 +286,28 @@ describe("useFirstRunConductor", () => {
     // The provider sub-choice still offers "Other / configure in Settings" (BYOK).
     expect(provider.text).toContain("__first_run__:provider:other=");
 
+    // Selecting it must actually land the user in Settings and exit onboarding —
+    // NOT run a local finish that could fail and re-loop the questions.
     expect(tryHandleFirstRunAction("__first_run__:provider:other")).toBe(true);
-    await waitForTurn(turn, "first-run:tutorial");
+    await waitFor(() => {
+      expect(spies.setTab).toHaveBeenCalledWith("settings");
+    });
+    expect(spies.completeFirstRun).toHaveBeenCalledTimes(1);
+    expect(spies.completeFirstRun).toHaveBeenCalledWith("settings");
 
-    expect(mocks.client.submitFirstRun).toHaveBeenCalledTimes(1);
-    // configure-later wires NO provider: the Settings banner surfaces and no
-    // on-device model download starts.
-    expect(spies.showActionBanner).toHaveBeenCalledTimes(1);
-    expect(spies.showActionBanner.mock.calls[0][0].text).toContain(
-      "model provider in Settings",
-    );
+    // No finish flow ran: no POST, no model download, and no tutorial prompt
+    // (first-run is over — the user is in Settings).
+    expect(mocks.client.submitFirstRun).not.toHaveBeenCalled();
     expect(
       mocks.autoDownloadRecommendedLocalModelInBackground,
     ).not.toHaveBeenCalled();
+    expect(transcript.current.some((m) => m.id === "first-run:tutorial")).toBe(
+      false,
+    );
+
+    // A confused double-tap must not flip the gate twice.
+    expect(tryHandleFirstRunAction("__first_run__:provider:other")).toBe(true);
+    expect(spies.completeFirstRun).toHaveBeenCalledTimes(1);
     unmount();
   });
 
@@ -398,7 +416,7 @@ describe("useFirstRunConductor", () => {
     unmount();
   });
 
-  it("surfaces a cloud listing failure as an error turn with the runtime CHOICE again, then a LOCAL retry succeeds", async () => {
+  it("surfaces a cloud listing failure as a DISTINCT recovery turn (retry / restart / Settings), and 'restart' → LOCAL succeeds", async () => {
     mocks.client.getCloudCompatAgents.mockRejectedValue(
       new Error("cloud is down"),
     );
@@ -422,11 +440,25 @@ describe("useFirstRunConductor", () => {
     const errorTurn = transcript.current.find((message) =>
       message.id.startsWith("first-run:error:"),
     );
-    // The error turn re-offers the runtime CHOICE so the flow is recoverable.
-    expect(errorTurn?.text).toContain("__first_run__:runtime:local=");
+    // The error turn is a DISTINCT recovery surface — it does NOT silently
+    // re-offer the runtime question (the infinite-loop bug). It offers retry,
+    // restart, and an explicit Settings escape.
+    expect(errorTurn?.text).not.toContain("__first_run__:runtime:local=");
+    expect(errorTurn?.text).toContain("__first_run__:error:retry=");
+    expect(errorTurn?.text).toContain("__first_run__:error:restart=");
+    expect(errorTurn?.text).toContain("__first_run__:error:settings=");
     expect(mocks.client.submitFirstRun).not.toHaveBeenCalled();
 
-    // Retry via LOCAL still reaches the tutorial (and the single POST).
+    // "Choose a different way to run" re-offers a fresh runtime choice; picking
+    // LOCAL from it still reaches the tutorial (and the single POST).
+    expect(tryHandleFirstRunAction("__first_run__:error:restart")).toBe(true);
+    await waitFor(() => {
+      expect(
+        transcript.current.some((m) =>
+          m.id.startsWith("first-run:greeting:retry:"),
+        ),
+      ).toBe(true);
+    });
     expect(tryHandleFirstRunAction("__first_run__:runtime:local")).toBe(true);
     await waitForTurn(turn, "first-run:provider");
     expect(tryHandleFirstRunAction("__first_run__:provider:on-device")).toBe(
@@ -434,6 +466,84 @@ describe("useFirstRunConductor", () => {
     );
     await waitForTurn(turn, "first-run:tutorial");
     expect(mocks.client.submitFirstRun).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it("a persistent finish 404 does NOT re-loop the runtime question: the error turn stays distinct, offers retry, and 'Configure in Settings' escapes", async () => {
+    // Simulate the reported bug: POST /api/first-run always 404s ("Not found").
+    mocks.client.submitFirstRun.mockRejectedValue(new Error("Not found"));
+    const spies = seedAppStore();
+    const { transcript, turn, unmount } = renderConductor();
+    await waitForTurn(turn, "first-run:greeting");
+
+    // Local → on-device → finish 404s → a distinct error turn (NOT the greeting,
+    // NOT a bare runtime prompt).
+    expect(tryHandleFirstRunAction("__first_run__:runtime:local")).toBe(true);
+    await waitForTurn(turn, "first-run:provider");
+    expect(tryHandleFirstRunAction("__first_run__:provider:on-device")).toBe(
+      true,
+    );
+    const firstError = await waitFor(() => {
+      const t = transcript.current.find((m) =>
+        m.id.startsWith("first-run:error:"),
+      );
+      expect(t).toBeTruthy();
+      return t as ConversationMessage;
+    });
+    // Human message, not the raw "Not found"; distinct from the greeting; no
+    // re-looped runtime question.
+    expect(firstError.text).toContain("couldn't finish setting up your agent");
+    expect(firstError.text).not.toBe(turn("first-run:greeting")?.text);
+    expect(firstError.text).not.toContain("__first_run__:runtime:local=");
+
+    // Retry hits the SAME 404 — but each failure produces ONE bounded error
+    // turn, never an unbounded storm of runtime prompts.
+    const errorCountAfterFirst = transcript.current.filter((m) =>
+      m.id.startsWith("first-run:error:"),
+    ).length;
+    expect(errorCountAfterFirst).toBe(1);
+    expect(tryHandleFirstRunAction("__first_run__:error:retry")).toBe(true);
+    await waitFor(() => {
+      expect(
+        transcript.current.filter((m) => m.id.startsWith("first-run:error:"))
+          .length,
+      ).toBe(2);
+    });
+    expect(mocks.client.submitFirstRun).toHaveBeenCalledTimes(2);
+
+    // The guaranteed escape: "Configure in Settings" opens Settings and exits
+    // first-run even though finish never succeeded.
+    expect(tryHandleFirstRunAction("__first_run__:error:settings")).toBe(true);
+    expect(spies.setTab).toHaveBeenCalledWith("settings");
+    expect(spies.completeFirstRun).toHaveBeenCalledTimes(1);
+    expect(spies.completeFirstRun).toHaveBeenCalledWith("settings");
+    unmount();
+  });
+
+  it("error:retry after a CLOUD listing failure re-seeds the OAuth turn and re-runs cloud provisioning (0 agents → auto-provision → tutorial)", async () => {
+    // First listing throws (transport failure), the retry succeeds with 0 agents.
+    mocks.client.getCloudCompatAgents
+      .mockRejectedValueOnce(new Error("cloud is down"))
+      .mockResolvedValue({ success: true, data: [] });
+    seedAppStore();
+    const { transcript, turn, unmount } = renderConductor();
+    await waitForTurn(turn, "first-run:greeting");
+
+    expect(tryHandleFirstRunAction("__first_run__:runtime:cloud")).toBe(true);
+    await waitFor(() => {
+      expect(
+        transcript.current.some((m) => m.id.startsWith("first-run:error:")),
+      ).toBe(true);
+    });
+
+    // "Try again" re-runs the SAME (cloud) flow: it re-seeds the connecting
+    // OAuth turn and calls listing a second time, then auto-provisions.
+    expect(tryHandleFirstRunAction("__first_run__:error:retry")).toBe(true);
+    await waitForTurn(turn, "first-run:tutorial");
+    expect(mocks.client.getCloudCompatAgents).toHaveBeenCalledTimes(2);
+    expect(mocks.client.selectOrProvisionCloudAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.client.submitFirstRun).toHaveBeenCalledTimes(1);
+    expect(turn("first-run:cloud-oauth")?.secretRequest?.status).toBe("saved");
     unmount();
   });
 
@@ -605,10 +715,18 @@ describe("useFirstRunConductor", () => {
       ).toBe(true);
     });
 
-    // The user re-picks LOCAL from the error turn. The original provider turn
-    // still exists (its widget locked itself on the first pick), so the
-    // conductor must seed a FRESH provider turn — otherwise the retry is a
-    // dead end in the real UI.
+    // The user takes "Choose a different way to run" from the error turn, then
+    // re-picks LOCAL. The original provider turn still exists (its widget locked
+    // itself on the first pick), so the conductor must seed a FRESH provider
+    // turn — otherwise the retry is a dead end in the real UI.
+    expect(tryHandleFirstRunAction("__first_run__:error:restart")).toBe(true);
+    await waitFor(() => {
+      expect(
+        transcript.current.some((message) =>
+          message.id.startsWith("first-run:greeting:retry:"),
+        ),
+      ).toBe(true);
+    });
     expect(tryHandleFirstRunAction("__first_run__:runtime:local")).toBe(true);
     await waitFor(() => {
       expect(

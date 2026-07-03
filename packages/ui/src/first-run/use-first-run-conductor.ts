@@ -101,11 +101,11 @@ function newestLocalBackup(
 
 // The first-run location chooser: Cloud (managed), On this device, or Remote
 // (connect to an existing agent elsewhere). "Bring your own keys" is NOT a
-// location — it just ran the local backend and pre-highlighted the BYOK
-// inference provider, so it lived on the wrong axis; it stays reachable one step
-// later via the provider sub-choice (provider:other → localInference
-// "configure-later"). Remote picks an already-running agent by URL + token; it
-// owns its own provider, so it skips the provider sub-step.
+// location — it lives one step later on the provider sub-choice as
+// "Other / configure in Settings" (provider:other), which drops the user into
+// the full Settings UI to wire their own provider by hand. Remote picks an
+// already-running agent by URL + token; it owns its own provider, so it skips
+// the provider sub-step.
 const RUNTIME_CHOICE = [
   "[CHOICE:first-run id=runtime]",
   `${FIRST_RUN_ACTION_PREFIX}runtime:cloud=Eliza Cloud (managed)`,
@@ -138,6 +138,37 @@ const TUTORIAL_CHOICE = [
   `${FIRST_RUN_ACTION_PREFIX}tutorial:skip=Skip for now`,
   "[/CHOICE]",
 ].join("\n");
+
+// Recovery choice seeded when a finish/provision flow fails (e.g. a 404 from
+// POST /api/first-run). It replaces the old "re-append the runtime question"
+// behavior — which, on a persistent finish error, re-looped the runtime prompt
+// forever with no explanation and no escape. Every option here is a real way
+// forward: retry the same runtime, pick a different one, or bail out to Settings
+// and configure a provider by hand.
+const ERROR_CHOICE = [
+  "[CHOICE:first-run id=error]",
+  `${FIRST_RUN_ACTION_PREFIX}error:retry=Try again`,
+  `${FIRST_RUN_ACTION_PREFIX}error:restart=Choose a different way to run`,
+  `${FIRST_RUN_ACTION_PREFIX}error:settings=Configure in Settings`,
+  "[/CHOICE]",
+].join("\n");
+
+/**
+ * Turn a raw finish error into a human sentence. The underlying message can be
+ * a terse transport string ("Not found" for a 404, "Failed to fetch", …) that
+ * means nothing to a first-run user; lead with a clear framing and keep the raw
+ * detail for context.
+ */
+function finishErrorMessage(message: string): string {
+  const detail = message.trim();
+  const isTerse = /^(not found|failed to fetch|forbidden|unauthorized)$/i.test(
+    detail,
+  );
+  const lead = isTerse
+    ? `I couldn't finish setting up your agent (${detail}).`
+    : `I couldn't finish setting up your agent: ${detail}`;
+  return `${lead}\n\nYou can try again, pick a different way to run your agent, or configure a model provider yourself in Settings.`;
+}
 
 function cloudOAuthSecretRequest(
   status: ConversationSecretRequest["status"],
@@ -374,15 +405,32 @@ export function useFirstRunConductor(): void {
 
   const seedError = React.useCallback(
     (message: string) => {
+      // A DISTINCT, non-looping error surface. Previously this re-appended the
+      // runtime CHOICE, so a persistent finish error (e.g. the /api/first-run
+      // 404) re-offered the same runtime question forever with no way out. Now
+      // the error turn carries its own recovery choice (retry / restart /
+      // Settings escape) so onboarding is always recoverable.
       seedTurn(
         makeTurn(
           `first-run:error:${Date.now()}`,
-          `${message}\n\n${RUNTIME_CHOICE}`,
+          `${finishErrorMessage(message)}\n\n${ERROR_CHOICE}`,
         ),
       );
     },
     [seedTurn],
   );
+
+  // Explicit, non-finish escape hatch out of onboarding: flip the real gate and
+  // land the user in Settings so they can wire a model provider by hand. Used by
+  // the provider "Other / configure in Settings" pick AND the error-recovery
+  // "Configure in Settings" choice, so a broken finish never traps the user in
+  // the loop. Latched by completedRef so a double-tap can't flip the gate twice.
+  const exitToSettings = React.useCallback(() => {
+    if (completedRef.current) return;
+    completedRef.current = true;
+    setTab("settings");
+    completeFirstRun("settings");
+  }, [setTab, completeFirstRun]);
 
   const seedCloudAgentChoice = React.useCallback(
     (agents: { id?: string; name?: string }[]) => {
@@ -553,7 +601,7 @@ export function useFirstRunConductor(): void {
         }
         // On this device: run the local backend, then ask which model provider.
         // BYOK is the provider:other sub-choice ("Other / configure in
-        // Settings" → localInference "configure-later").
+        // Settings"), which opens Settings and exits first-run.
         draftRef.current = {
           ...draftRef.current,
           runtime: "local",
@@ -615,21 +663,20 @@ export function useFirstRunConductor(): void {
         if (id !== "on-device" && id !== "elizacloud" && id !== "other") {
           return true;
         }
+        if (id === "other") {
+          // "Other / configure in Settings" (bring your own keys): the user
+          // wants the full Settings UI to wire their own provider (Anthropic /
+          // Codex / z.ai / Kimi, …). Take them straight there and exit first-run
+          // instead of running a finish flow — the old path ran a local finish
+          // that, when it failed (e.g. the /api/first-run 404), re-looped the
+          // onboarding questions instead of ever reaching Settings.
+          exitToSettings();
+          return true;
+        }
         if (id === "elizacloud") {
           draftRef.current = {
             ...draftRef.current,
             localInference: "cloud-inference",
-          };
-        } else if (id === "other") {
-          // "Other / configure in Settings" (bring your own keys): run locally
-          // but wire NO provider, so the finish path's `needsProviderSetup`
-          // handoff surfaces the "Open Settings" banner where the user picks a
-          // subscription provider (Anthropic / Codex / z.ai / Kimi). NOT
-          // all-local — that would silently download an on-device model and
-          // suppress the banner.
-          draftRef.current = {
-            ...draftRef.current,
-            localInference: "configure-later",
           };
         } else {
           // on-device: run every model locally (kicks off the download now).
@@ -666,6 +713,43 @@ export function useFirstRunConductor(): void {
         return true;
       }
 
+      if (group === "error") {
+        if (id !== "retry" && id !== "restart" && id !== "settings") {
+          return true;
+        }
+        if (id === "settings") {
+          exitToSettings();
+          return true;
+        }
+        if (id === "restart") {
+          // Re-offer a FRESH (unlocked) runtime choice so the user can switch
+          // how their agent runs after a failed finish. seedFreshChoiceTurn
+          // seeds a retry turn when the greeting already exists (the original
+          // runtime widget locked itself on its first pick).
+          seedFreshChoiceTurn(
+            "first-run:greeting",
+            `${GREETING}\n\n${RUNTIME_CHOICE}`,
+          );
+          return true;
+        }
+        // retry: re-run the SAME finish for the runtime the user last chose.
+        // The persist guard released itself on the failed POST, so a local
+        // retry re-POSTs; a cloud retry re-runs provisioning.
+        if (draftRef.current.runtime === "cloud") {
+          const connecting = makeTurn(
+            "first-run:cloud-oauth",
+            "Connecting your Eliza Cloud account…",
+            { secretRequest: cloudOAuthSecretRequest("pending") },
+          );
+          seedTurn(connecting);
+          replaceTurn("first-run:cloud-oauth", connecting);
+          startCloudProvisionFlow();
+          return true;
+        }
+        startProviderFinish();
+        return true;
+      }
+
       if (group === "tutorial") {
         if (id !== "start" && id !== "skip") return true;
         if (completedRef.current) return true;
@@ -688,6 +772,7 @@ export function useFirstRunConductor(): void {
       replaceTurn,
       handleOutcome,
       completeFirstRun,
+      exitToSettings,
       seedError,
       startCloudProvisionFlow,
       startProviderFinish,

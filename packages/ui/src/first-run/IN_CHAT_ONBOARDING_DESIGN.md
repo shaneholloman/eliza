@@ -94,3 +94,19 @@ taps them out of order. The contract, enforced in `use-first-run-conductor.ts`
   the OAuth block, the interrupted flow resumes automatically when the store
   learns the connection landed. A fresh pick always supersedes the pending
   resume.
+- **No finish dead end (the loop fix).** When a finish/provision flow fails —
+  including a persistent `POST /api/first-run` failure such as a 404 — the
+  conductor seeds a DISTINCT recovery turn (`first-run:error:*`) carrying its own
+  `[CHOICE:first-run id=error]` with a human-readable message and three real ways
+  forward: **Try again** (`error:retry`, re-runs the last runtime's finish),
+  **Choose a different way to run** (`error:restart`, re-offers a fresh unlocked
+  runtime CHOICE), and **Configure in Settings** (`error:settings`). It never
+  re-appends the runtime question inline, so a repeating error can no longer loop
+  the greeting forever.
+- **"Other / configure in Settings" always escapes.** The `provider:other` pick
+  (BYOK) does NOT run a local finish flow that could fail and re-loop; it opens
+  the Settings tab (`setTab("settings")`) and exits first-run
+  (`completeFirstRun("settings")`), landing the user where they configure a
+  provider by hand. Both this and `error:settings` route through the same
+  `exitToSettings` helper, latched by `completedRef` so a double-tap can't flip
+  the gate twice.
