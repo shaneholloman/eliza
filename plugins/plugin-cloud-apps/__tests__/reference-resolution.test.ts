@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { findAppByReference, matchAppByReference } from "../src/client.ts";
-import { makeApp } from "./helpers";
+import {
+  extractAppReference,
+  findAppByReference,
+  matchAppByReference,
+} from "../src/client.ts";
+import { makeApp, makeMessage } from "./helpers";
 
 const app = (name: string, id?: string) =>
   makeApp({
@@ -66,5 +70,49 @@ describe("matchAppByReference / findAppByReference — ambiguity-safe resolution
 
   it("returns null for an empty reference", () => {
     expect(findAppByReference([app("Acme")], "   ")).toBeNull();
+  });
+});
+
+describe("extractAppReference — planner options (nested `parameters` first)", () => {
+  const msg = makeMessage("do something with my app");
+
+  it("REGRESSION: reads the real planner shape — args nested under options.parameters", () => {
+    // execute-planned-tool-call.ts puts validated args at options.parameters;
+    // the old top-level-only read missed them and fell back to the raw text.
+    expect(
+      extractAppReference(msg, { parameters: { appName: "Acme Bot" } }),
+    ).toBe("Acme Bot");
+    expect(extractAppReference(msg, { parameters: { app: "Acme Bot" } })).toBe(
+      "Acme Bot",
+    );
+    expect(extractAppReference(msg, { parameters: { appId: "id-acme" } })).toBe(
+      "id-acme",
+    );
+  });
+
+  it("nested planner args win over top-level keys", () => {
+    expect(
+      extractAppReference(msg, {
+        appName: "Top Level",
+        parameters: { appName: "Nested" },
+      }),
+    ).toBe("Nested");
+  });
+
+  it("still reads top-level options (direct handler calls)", () => {
+    expect(extractAppReference(msg, { appName: "Acme Bot" })).toBe("Acme Bot");
+  });
+
+  it("falls back to top-level when parameters carries no reference", () => {
+    expect(
+      extractAppReference(msg, { appName: "Acme Bot", parameters: {} }),
+    ).toBe("Acme Bot");
+  });
+
+  it("falls back to the message text when options carry no reference", () => {
+    expect(extractAppReference(msg, { parameters: {} })).toBe(
+      "do something with my app",
+    );
+    expect(extractAppReference(msg)).toBe("do something with my app");
   });
 });

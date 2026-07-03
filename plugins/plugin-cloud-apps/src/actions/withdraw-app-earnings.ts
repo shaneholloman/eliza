@@ -40,6 +40,7 @@ import { logger } from "@elizaos/core";
 import {
   extractAppReference,
   getCloudClient,
+  plannerOptionSources,
   resolveApp,
   resolveCloudApiKey,
   resolveCloudSiteBaseUrl,
@@ -77,15 +78,22 @@ function newIdempotencyKey(): string {
 
 const AMOUNT_OPTION_KEYS = ["amount", "usd", "value"] as const;
 
-/** Parse a withdrawal amount (USD) from planner options or text; null = "all". */
+/**
+ * Parse a withdrawal amount (USD) from planner options or text; null = "all".
+ *
+ * MONEY-CRITICAL: on the real planner path the validated `amount` arrives
+ * NESTED under `options.parameters` (execute-planned-tool-call.ts), so the
+ * nested object is read before the top level ({@link plannerOptionSources}).
+ * Missing it here silently upgraded "withdraw $50" to the FULL withdrawable
+ * balance at the confirm stage.
+ */
 export function parseWithdrawAmount(
   text: string,
   options?: unknown,
 ): number | null {
-  if (options && typeof options === "object") {
-    const opts = options as Record<string, unknown>;
+  for (const source of plannerOptionSources(options)) {
     for (const key of AMOUNT_OPTION_KEYS) {
-      const v = opts[key];
+      const v = source[key];
       if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
       if (typeof v === "string") {
         const n = Number(v.replace(/[$,]/g, "").trim());
@@ -94,11 +102,14 @@ export function parseWithdrawAmount(
     }
   }
   const body = text ?? "";
-  // Prefer an explicit currency amount: "$50", "50 dollars", "50 usd".
+  // Prefer an explicit currency amount: "$50", "50 dollars", "50 usd". The
+  // bare-number fallback requires a standalone whitespace-bounded token not
+  // glued to letters, so a digit inside an app name ("Acme2") never reads as
+  // a dollar amount.
   const m =
     /\$\s*(\d+(?:\.\d+)?)/.exec(body) ??
-    /(\d+(?:\.\d+)?)\s*(?:dollars?|usd)\b/i.exec(body) ??
-    /\b(?:withdraw(?:al)?|cash\s*out|pay\s*out|payout)\b[^$\d]*?(\d+(?:\.\d+)?)\b/i.exec(
+    /(?:^|\s)(\d+(?:\.\d+)?)\s*(?:dollars?|usd)\b/i.exec(body) ??
+    /\b(?:withdraw(?:al)?|cash\s*out|pay\s*out|payout)\b[^$\d]*?(?:^|\s)(\d+(?:\.\d+)?)(?![A-Za-z0-9])/i.exec(
       body,
     );
   if (m) {
