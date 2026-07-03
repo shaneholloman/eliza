@@ -63,8 +63,8 @@ const GREETING =
 function cloudFailureMessage(err: unknown): string {
   const detail = err instanceof Error ? err.message : "";
   return detail
-    ? `Couldn't connect to Eliza Cloud: ${detail}. Pick how to run your agent again.`
-    : "Couldn't connect to Eliza Cloud. Pick how to run your agent again.";
+    ? `Couldn't connect to Eliza Cloud: ${detail}.`
+    : "Couldn't connect to Eliza Cloud.";
 }
 
 const RESTORE_GREETING =
@@ -102,10 +102,10 @@ function newestLocalBackup(
 // The first-run location chooser: Cloud (managed), On this device, or Remote
 // (connect to an existing agent elsewhere). "Bring your own keys" is NOT a
 // location — it lives one step later on the provider sub-choice as
-// "Other / configure in Settings" (provider:other), which drops the user into
-// the full Settings UI to wire their own provider by hand. Remote picks an
-// already-running agent by URL + token; it owns its own provider, so it skips
-// the provider sub-step.
+// "Other / configure in Settings" (provider:other), which finishes the local
+// runtime with `configure-later` and hands off provider setup to Settings via
+// the finish path's banner. Remote picks an already-running agent by URL +
+// token; it owns its own provider, so it skips the provider sub-step.
 const RUNTIME_CHOICE = [
   "[CHOICE:first-run id=runtime]",
   `${FIRST_RUN_ACTION_PREFIX}runtime:cloud=Eliza Cloud (managed)`,
@@ -421,10 +421,10 @@ export function useFirstRunConductor(): void {
   );
 
   // Explicit, non-finish escape hatch out of onboarding: flip the real gate and
-  // land the user in Settings so they can wire a model provider by hand. Used by
-  // the provider "Other / configure in Settings" pick AND the error-recovery
-  // "Configure in Settings" choice, so a broken finish never traps the user in
-  // the loop. Latched by completedRef so a double-tap can't flip the gate twice.
+  // land the user in Settings so they can wire a model provider by hand. Used
+  // ONLY by the error-recovery "Configure in Settings" choice, so a broken
+  // finish never traps the user in the loop. Latched by completedRef so a
+  // double-tap can't flip the gate twice.
   const exitToSettings = React.useCallback(() => {
     if (completedRef.current) return;
     completedRef.current = true;
@@ -561,6 +561,9 @@ export function useFirstRunConductor(): void {
       // Once provisioning succeeded only the tutorial pick is live; taps on
       // leftover runtime/provider/cloud-agent widgets must not re-provision.
       if (provisionedRef.current && group !== "tutorial") return true;
+      // Once the real gate flipped (tutorial pick or the Settings escape),
+      // every further first-run pick is a stale-widget no-op.
+      if (completedRef.current) return true;
       // A fresh pick supersedes any armed connect-and-resume continuation.
       pendingCloudResumeRef.current = null;
 
@@ -601,7 +604,8 @@ export function useFirstRunConductor(): void {
         }
         // On this device: run the local backend, then ask which model provider.
         // BYOK is the provider:other sub-choice ("Other / configure in
-        // Settings"), which opens Settings and exits first-run.
+        // Settings"), which finishes with `configure-later` and defers provider
+        // setup to Settings.
         draftRef.current = {
           ...draftRef.current,
           runtime: "local",
@@ -664,16 +668,18 @@ export function useFirstRunConductor(): void {
           return true;
         }
         if (id === "other") {
-          // "Other / configure in Settings" (bring your own keys): the user
-          // wants the full Settings UI to wire their own provider (Anthropic /
-          // Codex / z.ai / Kimi, …). Take them straight there and exit first-run
-          // instead of running a finish flow — the old path ran a local finish
-          // that, when it failed (e.g. the /api/first-run 404), re-looped the
-          // onboarding questions instead of ever reaching Settings.
-          exitToSettings();
-          return true;
-        }
-        if (id === "elizacloud") {
+          // "Other / configure in Settings" (bring your own keys): finish the
+          // LOCAL runtime with no provider wired and no model download.
+          // `configure-later` keeps `needsProviderSetup` true, so the finish
+          // path still starts + persists the runtime (one POST /api/first-run)
+          // and hands the user the "Open Settings" banner for provider setup.
+          // If the finish fails, the ERROR_CHOICE recovery turn's
+          // error:settings pick is the Settings escape.
+          draftRef.current = {
+            ...draftRef.current,
+            localInference: "configure-later",
+          };
+        } else if (id === "elizacloud") {
           draftRef.current = {
             ...draftRef.current,
             localInference: "cloud-inference",
@@ -752,7 +758,6 @@ export function useFirstRunConductor(): void {
 
       if (group === "tutorial") {
         if (id !== "start" && id !== "skip") return true;
-        if (completedRef.current) return true;
         completedRef.current = true;
         // The single real completion: flip the gate (deactivates the conductor),
         // then optionally launch the interactive tutorial.
