@@ -92,7 +92,7 @@ final class ViewWalkthroughUITests: XCTestCase {
             XCTFail("no hittable 'Messages' tile on the launcher")
             return
         }
-        tile.tap()
+        tapTile(tile)
         // The chat sheet must open: the detent probe leaves the collapsed/pill
         // family within the poll window.
         let deadline = Date().addingTimeInterval(10)
@@ -124,7 +124,7 @@ final class ViewWalkthroughUITests: XCTestCase {
             XCTFail("no hittable '\(leg.tile)' tile on the launcher")
             return
         }
-        tile.tap()
+        tapTile(tile)
 
         // Opened proof: every promoted header view mounts the shared
         // ViewBackButton (aria-label "Back to launcher").
@@ -172,8 +172,8 @@ final class ViewWalkthroughUITests: XCTestCase {
         }
 
         // Return to the launcher for the next leg.
-        if opened, back.isHittable {
-            back.tap()
+        if opened {
+            tapTile(back)
         }
         try pageToLauncher(in: app)
     }
@@ -181,9 +181,18 @@ final class ViewWalkthroughUITests: XCTestCase {
     // MARK: - Launcher helpers
 
     /// The launcher tiles are ghost Buttons carrying the view label as their
-    /// aria-label (Launcher.tsx IconTile); AX exposure of role varies by OS
-    /// build, so match the label across element types and require hittable.
+    /// aria-label (Launcher.tsx IconTile); a same-labeled StaticText caption
+    /// sits just below each one. The interactive control is the Button — the
+    /// caption is inert, so tapping it navigates nowhere. Prefer the Button
+    /// (even when the WebView misreports its activation point as non-hittable —
+    /// `tapTile` falls back to a frame-center coordinate tap), then fall back to
+    /// any hittable label match for OS builds that fold the role differently.
     private func launcherTile(_ label: String, in app: XCUIApplication) -> XCUIElement? {
+        let buttons = app.buttons.matching(NSPredicate(format: "label == %@", label))
+        for i in 0..<min(buttons.count, 8) {
+            let element = buttons.element(boundBy: i)
+            if element.exists { return element }
+        }
         let byLabel = app.descendants(matching: .any).matching(
             NSPredicate(format: "label == %@", label))
         for i in 0..<min(byLabel.count, 8) {
@@ -193,21 +202,55 @@ final class ViewWalkthroughUITests: XCTestCase {
         return nil
     }
 
+    /// Tap a launcher tile. WebView Buttons often report `isHittable == false`
+    /// even when on-screen and tappable (the AX activation point resolves onto
+    /// a covering container), which silently drops `.tap()`. Fall back to a
+    /// coordinate tap on the element's own frame center, which fires regardless.
+    private func tapTile(_ element: XCUIElement) {
+        if element.isHittable {
+            element.tap()
+        } else {
+            element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+    }
+
     /// A boot (or a leg's back-tap) can land on a mounted header view instead
     /// of the home/launcher rail — e.g. the post-first-run character-select
     /// redirect target. The shared ViewBackButton always returns to the
     /// launcher; take it when it's on screen.
     private func exitMountedHeaderView(in app: XCUIApplication) {
         let back = backToLauncherControl(in: app)
-        guard back.waitForExistence(timeout: 5), back.isHittable else { return }
+        guard back.waitForExistence(timeout: 5) else { return }
         attachScreenshot(named: "normalize-exit-restored-view")
-        back.tap()
+        tapTile(back)
         Thread.sleep(forTimeInterval: 1.5)
     }
 
     /// Ensure the home↔launcher rail rests on the LAUNCHER page (the tile
     /// grid), paging with the same slow 65%-width drag the pager suite proves.
+    ///
+    /// A leg can strand the app on a mounted view whose header does NOT expose
+    /// the shared "Back to launcher" control (e.g. the Wallet view), so neither
+    /// the rail probe nor the back button can recover the launcher. Rather than
+    /// abort the whole tour on one such leg, fall back to a full relaunch of the
+    /// persisted (already-first-run-complete) container and retry once — every
+    /// remaining leg still gets exercised and screenshotted.
     private func pageToLauncher(in app: XCUIApplication, attempts: Int = 4) throws {
+        if attemptPageToLauncher(in: app, attempts: attempts) { return }
+        attachScreenshot(named: "normalize-relaunch-recover")
+        relaunchToInteractive(app)
+        if attemptPageToLauncher(in: app, attempts: attempts) { return }
+        attachScreenshot(named: "normalize-launcher-failed")
+        attachAccessibilitySnapshot(of: app, named: "ax-hierarchy-no-launcher")
+        throw XCTSkip(
+            "could not page the rail to the launcher even after a relaunch "
+                + "(reads '\(markerValue(Self.pagePrefix, in: app) ?? "nil")')"
+        )
+    }
+
+    private func attemptPageToLauncher(
+        in app: XCUIApplication, attempts: Int
+    ) -> Bool {
         for _ in 0..<attempts {
             guard let page = markerValue(Self.pagePrefix, in: app) else {
                 // No rail probe — a header view may still be mounted (its own
@@ -216,19 +259,40 @@ final class ViewWalkthroughUITests: XCTestCase {
                 Thread.sleep(forTimeInterval: 1.0)
                 continue
             }
-            if page == "launcher" { return }
+            if page == "launcher" { return true }
             slowHorizontalDrag(in: app, fromX: 0.85, toX: 0.20, y: 0.55)
             if waitForMarker(Self.pagePrefix, toEqual: "launcher", timeout: 5, in: app)
                 == "launcher" {
-                return
+                return true
             }
         }
-        attachScreenshot(named: "normalize-launcher-failed")
-        attachAccessibilitySnapshot(of: app, named: "ax-hierarchy-no-launcher")
-        throw XCTSkip(
-            "could not page the rail to the launcher "
-                + "(reads '\(markerValue(Self.pagePrefix, in: app) ?? "nil")')"
-        )
+        return false
+    }
+
+    /// Terminate and relaunch the app, waiting for an interactive renderer.
+    /// First-run has already completed on the initial boot (the container
+    /// persists), so this lands on the home/launcher rail; normalize any
+    /// mounted view + open sheet before returning.
+    private func relaunchToInteractive(_ app: XCUIApplication) {
+        app.terminate()
+        Thread.sleep(forTimeInterval: 1.0)
+        launchWithRetry(app)
+        let env = ProcessInfo.processInfo.environment
+        let timeout = Double(env["ELIZA_BOOT_TIMEOUT_SECONDS"] ?? "") ?? 180
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if app.state == .notRunning { break }
+            let booting = app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS[c] 'Booting'"))
+            if booting.count == 0,
+               app.webViews.firstMatch.exists,
+               app.buttons.count + app.textFields.count + app.textViews.count > 0 {
+                break
+            }
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+        exitMountedHeaderView(in: app)
+        try? settleSheetToCollapsed(in: app)
     }
 
     private func dismissKeyboardIfPresent(in app: XCUIApplication) {
