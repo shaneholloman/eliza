@@ -73,12 +73,33 @@ README): device-aware offload/ubatch admission against
 `recommendedMaxWorkingSetSize` (the desktop path has `hardware.ts assessFit`;
 iOS has nothing), and/or a phone-tier quant, plus unload-on-decode-failure.
 
-### 3. Driven user prompt (XCUITest send leg)
+### 3. Driven user prompt (XCUITest send leg) — harness shipped; run blocked by a physical unlock
 
-`testComposerSendsPromptAndWaitsForReply` (added to the committed
-BootCaptureUITests harness) drives a REAL composer send on the device — see
-`send-capture/` attachments for the filmstrip + outcome of the exchange
-attempt against this build.
+`testComposerSendsPromptAndWaitsForReply` (committed to the BootCaptureUITests
+harness, `87761c725e4`) drives a REAL composer send: warm-up wait → type →
+send-control tap (iOS Return never reaches the web textarea) → hard-assert the
+draft cleared → reply filmstrip. `build-for-testing` for the lane went green
+(`** TEST BUILD SUCCEEDED **`).
+
+The on-device run could not execute this session: the first attempt hit the
+recurring devicectl DDI-mount flake (error 12040); clearing it with
+`pymobiledevice3 mounter auto-mount` raced Xcode into a wedged
+"Device is busy (Preparing MoonCycles)" state, and the reboot that clears that
+wedge leaves the phone at its passcode screen (`PasswordProtected: true`) —
+developer services stay unavailable until a human unlocks it. Once unlocked,
+the leg is one command:
+
+```
+ELIZA_MOBILE_REPO_ROOT=<eliza root> node scripts/ios-device-capture.mjs \
+  --platform device --device 59EBB356-BC44-5AA2-91F1-E6AAE756BB86 \
+  --app-path ios/build/device-deploy-stage/App.app --skip-build \
+  --only-testing AppUITests/BootCaptureUITests/testComposerSendsPromptAndWaitsForReply
+```
+
+Expected outcome on this build (from the warmup decode already captured): the
+send lands, generation hits the same GPU OOM, and the filmstrip records the
+user-visible failure surface — the model chip stays "Loading eliza-1-2B…"
+because the load-path warmup decode fails and nothing flips the status.
 
 ### 4. TTS / vision — N/A on this device+build
 
@@ -95,4 +116,5 @@ until the memory-admission work lands.
 - `crash-baseline-pre-launch.txt` / `crash-list-post-run1.txt` — no new App
   crash reports; one new JetsamEvent.
 - `JetsamEvent-2026-07-02-212403.ips` — App killed proc-thrashing (residual).
-- `send-capture/` — XCUITest send-leg filmstrip (real composer send).
+- Send-leg filmstrip: not captured this session (device passcode-locked after
+  the DDI-wedge reboot — see section 3 for the one-command replay).
