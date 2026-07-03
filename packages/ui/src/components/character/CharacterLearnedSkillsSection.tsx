@@ -39,7 +39,13 @@ function formatDate(iso: string): string {
   return new Date(ms).toLocaleString();
 }
 
-export function CharacterLearnedSkillsSection() {
+export function CharacterLearnedSkillsSection({
+  showTitle = true,
+}: {
+  /** Hide the in-body "Skills" heading when the host view already renders a
+   *  ViewHeader with the same title (the promoted top-level view). */
+  showTitle?: boolean;
+} = {}) {
   const { t } = useTranslation();
   const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(
     null,
@@ -103,9 +109,11 @@ export function CharacterLearnedSkillsSection() {
       data-testid="character-learned-skills-panel"
     >
       <div className="min-w-0">
-        <h2 className="text-lg font-semibold text-txt">
-          {t("learnedskills.title", { defaultValue: "Skills" })}
-        </h2>
+        {showTitle ? (
+          <h2 className="text-lg font-semibold text-txt">
+            {t("learnedskills.title", { defaultValue: "Skills" })}
+          </h2>
+        ) : null}
         <div className="mt-1 text-2xs text-muted">
           {loading
             ? t("learnedskills.loading", { defaultValue: "Loading" })

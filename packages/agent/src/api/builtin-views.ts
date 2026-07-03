@@ -58,7 +58,7 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
   {
     id: "chat",
     viewKind: "system",
-    label: "Chat",
+    label: "Messages",
     description:
       "Conversations with your agent, inbound messages from every connector",
     icon: "MessageSquare",

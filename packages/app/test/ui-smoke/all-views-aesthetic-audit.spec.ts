@@ -105,6 +105,8 @@ const BUILTIN_TAB_PATHS: Record<string, string> = {
   automations: "/automations",
   inventory: "/wallet",
   documents: "/character/documents",
+  "character-skills": "/character/skills",
+  experience: "/character/experience",
   files: "/apps/files",
   plugins: "/apps/plugins",
   skills: "/apps/skills",

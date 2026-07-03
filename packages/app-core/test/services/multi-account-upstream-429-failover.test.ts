@@ -80,8 +80,16 @@ function messagesResponseBody(text: string): string {
   });
 }
 
+// Each upstream instance takes a FRESH port from the assigned range. Reusing
+// one port across sequential tests lets undici's global fetch pool hand the
+// next test a stale keep-alive connection to the previous (closed) server —
+// the first request of the next test then dies with `read ECONNRESET` before
+// it ever reaches the new upstream. A fresh origin per test gets a fresh pool.
+let nextPort = PORT_RANGE_START;
+
 async function listenInRange(server: http.Server): Promise<number> {
-  for (let port = PORT_RANGE_START; port <= PORT_RANGE_END; port++) {
+  if (nextPort > PORT_RANGE_END) nextPort = PORT_RANGE_START;
+  for (let port = nextPort; port <= PORT_RANGE_END; port++) {
     const bound = await new Promise<boolean>((resolve) => {
       const onError = () => resolve(false);
       server.once("error", onError);
@@ -90,7 +98,10 @@ async function listenInRange(server: http.Server): Promise<number> {
         resolve(true);
       });
     });
-    if (bound) return port;
+    if (bound) {
+      nextPort = port + 1;
+      return port;
+    }
   }
   throw new Error(
     `No free port in assigned range ${PORT_RANGE_START}-${PORT_RANGE_END}`,
@@ -160,7 +171,13 @@ async function startFakeAnthropicUpstream(): Promise<FakeUpstream> {
     seen,
     behavior,
     resetEpochSec,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: () =>
+      new Promise<void>((resolve) => {
+        // Tear down lingering keep-alive sockets so close() cannot hang and
+        // no half-dead connection outlives the test.
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
   };
 }
 

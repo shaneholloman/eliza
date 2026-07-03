@@ -633,6 +633,7 @@ export function CharacterExperienceWorkspace({
   onDeleteExperience,
   savingExperienceId,
   deletingExperienceId,
+  showTitle = true,
 }: {
   experiences: CharacterExperienceRecord[];
   selectedExperienceId: string | null;
@@ -644,6 +645,9 @@ export function CharacterExperienceWorkspace({
   onDeleteExperience?: (experience: CharacterExperienceRecord) => void;
   savingExperienceId?: string | null;
   deletingExperienceId?: string | null;
+  /** Hide the in-body "Experience" heading when the host view already renders
+   *  a ViewHeader with the same title (the promoted top-level view). */
+  showTitle?: boolean;
 }) {
   const { t } = useTranslation();
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
@@ -839,8 +843,10 @@ export function CharacterExperienceWorkspace({
     <section className="flex min-w-0 flex-col gap-4">
       <div>
         <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-          <h3 className="text-base font-semibold text-txt">Experience</h3>
-          <div className="text-xs font-medium text-muted">
+          {showTitle ? (
+            <h3 className="text-base font-semibold text-txt">Experience</h3>
+          ) : null}
+          <div className="ml-auto text-xs font-medium text-muted">
             {filteredExperiences.length} of {experiences.length} shown
           </div>
         </div>

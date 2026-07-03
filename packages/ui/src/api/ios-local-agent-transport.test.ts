@@ -150,7 +150,11 @@ describe("iOS local agent transport (ui copy)", () => {
     expect(call).toHaveBeenCalledWith(
       expect.objectContaining({ method: "http_request" }),
     );
-  }, 30_000);
+    // Generous ceiling: the deadlock guard above is deterministic (a regression
+    // rejects instantly via the hostile `then`), so this timeout only has to
+    // outlast the in-test `await import` transform of the transport graph,
+    // which can exceed 30s when the full parallel suite saturates the machine.
+  }, 120_000);
 
   it("records boot progress phases for the startup poll's progress-aware budget", async () => {
     const start = vi.fn(async () => ({ ok: true }));
@@ -196,5 +200,5 @@ describe("iOS local agent transport (ui copy)", () => {
     expect(start).toHaveBeenCalledTimes(1);
     expect(getIosNativeAgentBootProgress().phase).toBe("ready");
     expect(isIosNativeAgentBootInProgress()).toBe(true);
-  }, 30_000);
+  }, 120_000);
 });

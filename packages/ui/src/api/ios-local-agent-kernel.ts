@@ -8,6 +8,15 @@ import {
   type ProviderStatus,
   parseCoinGeckoMarkets,
 } from "@elizaos/shared";
+import {
+  summarizeTranscript,
+  type Transcript,
+  type TranscriptScope,
+  type TranscriptSegment,
+  type TranscriptSource,
+  transcriptDurationMs,
+  transcriptSpeakerCount,
+} from "@elizaos/shared/transcripts";
 import { getBootConfig } from "../config/boot-config-store";
 import {
   findCatalogModel,
@@ -34,10 +43,12 @@ import type {
   ModelAssignments,
 } from "../services/local-inference/types";
 import { AGENT_MODEL_SLOTS } from "../services/local-inference/types";
+import type { MemoryBrowseItem } from "./client-types-chat";
 import type { IttpAgentRequestContext } from "./ittp-agent-transport";
 
 const STORAGE_PREFIX = "eliza:ios-local-agent";
 const CONVERSATIONS_KEY = `${STORAGE_PREFIX}:conversations:v1`;
+const TRANSCRIPTS_KEY = `${STORAGE_PREFIX}:transcripts:v1`;
 const ACTIVE_MODEL_KEY = `${STORAGE_PREFIX}:active-model:v1`;
 const ASSIGNMENTS_KEY = `${STORAGE_PREFIX}:assignments:v1`;
 const BROWSER_WORKSPACE_KEY = `${STORAGE_PREFIX}:browser-workspace:v1`;
@@ -275,6 +286,7 @@ function removeStorageItem(key: string): void {
 function resetIosLocalAgentState(): void {
   for (const key of [
     CONVERSATIONS_KEY,
+    TRANSCRIPTS_KEY,
     ACTIVE_MODEL_KEY,
     ASSIGNMENTS_KEY,
     BROWSER_WORKSPACE_KEY,
@@ -449,6 +461,10 @@ function writeBundleRecord(record: IosBundleRecord): void {
   writeJson(BUNDLE_INDEX_KEY, current);
 }
 
+function stringFromUnknown(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
 function numberFromUnknown(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value !== "string" || value.trim().length === 0) return null;
@@ -475,6 +491,348 @@ function readStore(): ConversationStore {
 
 function writeStore(store: ConversationStore): void {
   writeJson(CONVERSATIONS_KEY, store);
+}
+
+// ── Transcripts (local persistence — mirrors plugin-local-inference's
+//    /api/transcripts contract; records live in the WebView storage the same
+//    way conversations do, since iOS local mode has no runtime DB) ──────────
+
+interface LocalTranscriptRecord {
+  roomId: string;
+  transcript: Transcript;
+}
+
+interface TranscriptStoreState {
+  records: LocalTranscriptRecord[];
+}
+
+function readTranscriptStore(): TranscriptStoreState {
+  const parsed = readJson<TranscriptStoreState>(TRANSCRIPTS_KEY, {
+    records: [],
+  });
+  return { records: Array.isArray(parsed.records) ? parsed.records : [] };
+}
+
+function writeTranscriptStore(state: TranscriptStoreState): void {
+  writeJson(TRANSCRIPTS_KEY, state);
+}
+
+const TRANSCRIPT_SOURCES: readonly TranscriptSource[] = [
+  "voice-session",
+  "import",
+  "call",
+  "meeting",
+  "unknown",
+];
+
+const TRANSCRIPT_SCOPES: readonly TranscriptScope[] = [
+  "owner-private",
+  "user-private",
+  "global",
+  "agent-private",
+];
+
+function transcriptSourceFromUnknown(value: unknown): TranscriptSource {
+  return typeof value === "string" &&
+    (TRANSCRIPT_SOURCES as readonly string[]).includes(value)
+    ? (value as TranscriptSource)
+    : "voice-session";
+}
+
+function transcriptScopeFromUnknown(value: unknown): TranscriptScope {
+  return typeof value === "string" &&
+    (TRANSCRIPT_SCOPES as readonly string[]).includes(value)
+    ? (value as TranscriptScope)
+    : "owner-private";
+}
+
+function defaultLocalTranscriptTitle(createdAt: number): string {
+  return `Recording ${new Date(createdAt).toLocaleString()}`;
+}
+
+/** Mirror of the server route's transcript construction (transcripts-routes.ts
+ *  buildTranscriptFromRequest) over an untyped request body. The shell sends
+ *  audio as base64 WAV; with no media store in the WebView, the bytes are kept
+ *  as a playable data: URL on the record. */
+function buildLocalTranscript(
+  body: Record<string, unknown>,
+  id: string,
+  now: number,
+): Transcript {
+  const segments = Array.isArray(body.segments)
+    ? (body.segments as TranscriptSegment[])
+    : [];
+  const createdAt = numberFromUnknown(body.createdAt) ?? now;
+  let audioUrl = stringFromUnknown(body.audioUrl) ?? undefined;
+  let audioContentType = stringFromUnknown(body.audioContentType) ?? undefined;
+  const audioBase64 = stringFromUnknown(body.audioBase64);
+  if (audioBase64 && !audioUrl) {
+    audioUrl = `data:audio/wav;base64,${audioBase64}`;
+    audioContentType = "audio/wav";
+  }
+  return {
+    id,
+    title:
+      stringFromUnknown(body.title)?.trim() ||
+      defaultLocalTranscriptTitle(createdAt),
+    createdAt,
+    endedAt: now,
+    durationMs: transcriptDurationMs(segments),
+    audioUrl,
+    audioContentType,
+    segments,
+    source: transcriptSourceFromUnknown(body.source),
+    scope: transcriptScopeFromUnknown(body.scope),
+    status: "ready",
+    speakerCount: transcriptSpeakerCount(segments),
+  };
+}
+
+async function handleLocalTranscriptsRoute(
+  request: Request,
+  method: string,
+  pathname: string,
+  url: URL,
+): Promise<Response | null> {
+  if (method === "GET" && pathname === "/api/transcripts") {
+    const roomId = url.searchParams.get("roomId");
+    const transcripts = readTranscriptStore()
+      .records.filter((record) => !roomId || record.roomId === roomId)
+      .map((record) => record.transcript)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map(summarizeTranscript);
+    return json({ transcripts });
+  }
+
+  if (method === "POST" && pathname === "/api/transcripts") {
+    const body = await requestJson(request);
+    if (!Array.isArray(body.segments) || body.segments.length === 0) {
+      return json({ error: "segments are required" }, 400);
+    }
+    const transcript = buildLocalTranscript(
+      body,
+      randomId("transcript"),
+      Date.now(),
+    );
+    const store = readTranscriptStore();
+    store.records.unshift({
+      roomId: stringFromUnknown(body.roomId) ?? AGENT_NAME,
+      transcript,
+    });
+    writeTranscriptStore(store);
+    return json({ transcript }, 201);
+  }
+
+  if (!pathname.startsWith("/api/transcripts/")) return null;
+  const id = decodeURIComponent(pathname.slice("/api/transcripts/".length));
+  if (!id || id.includes("/")) return null;
+
+  if (method === "GET") {
+    const record = readTranscriptStore().records.find(
+      (r) => r.transcript.id === id,
+    );
+    if (!record) return json({ error: "not found" }, 404);
+    return json({ transcript: record.transcript });
+  }
+
+  if (method === "PUT") {
+    const body = await requestJson(request);
+    if (body.title === undefined && body.segments === undefined) {
+      return json({ error: "title or segments is required" }, 400);
+    }
+    if (body.segments !== undefined && !Array.isArray(body.segments)) {
+      return json({ error: "segments must be an array" }, 400);
+    }
+    const store = readTranscriptStore();
+    const record = store.records.find((r) => r.transcript.id === id);
+    if (!record) return json({ error: "not found" }, 404);
+    const existing = record.transcript;
+    const segments = Array.isArray(body.segments)
+      ? (body.segments as TranscriptSegment[])
+      : existing.segments;
+    const updated: Transcript = {
+      ...existing,
+      title: stringFromUnknown(body.title)?.trim() || existing.title,
+      segments,
+      durationMs: transcriptDurationMs(segments),
+      speakerCount: transcriptSpeakerCount(segments),
+      editedAt: Date.now(),
+    };
+    record.transcript = updated;
+    writeTranscriptStore(store);
+    return json({ transcript: updated });
+  }
+
+  if (method === "DELETE") {
+    const store = readTranscriptStore();
+    store.records = store.records.filter((r) => r.transcript.id !== id);
+    writeTranscriptStore(store);
+    return json({ ok: true });
+  }
+
+  return null;
+}
+
+// ── Memory viewer (feed/browse/by-entity — mirrors packages/agent
+//    memory-routes.ts; the local message store IS the memory source on iOS) ──
+
+const LOCAL_MEMORY_TABLE_NAMES = [
+  "messages",
+  "memories",
+  "facts",
+  "documents",
+] as const;
+const MEMORY_FEED_DEFAULT_LIMIT = 50;
+const MEMORY_FEED_MAX_LIMIT = 100;
+const MEMORY_BROWSE_DEFAULT_LIMIT = 50;
+const MEMORY_BROWSE_MAX_LIMIT = 200;
+
+function positiveIntegerParam(value: string | null, fallback: number): number {
+  const parsed = integerFromUnknown(value);
+  return parsed !== null && parsed > 0 ? parsed : fallback;
+}
+
+/** Server semantics (resolveTableFilter): a known table name filters to that
+ *  table; anything else means "all tables". Locally only `messages` has rows. */
+function localMemoryTypeHasRows(typeParam: string | null): boolean {
+  if (!typeParam) return true;
+  const t = typeParam.toLowerCase();
+  return (
+    t === "messages" ||
+    !(LOCAL_MEMORY_TABLE_NAMES as readonly string[]).includes(t)
+  );
+}
+
+/** Every stored conversation message as a browse item, newest first — the same
+ *  projection memory-routes.ts memoryToBrowseItem produces from the messages
+ *  table. iOS local mode has no entity graph, so entityId is null. */
+function localMemoryFeedItems(): MemoryBrowseItem[] {
+  const items: MemoryBrowseItem[] = [];
+  for (const conversation of readStore().conversations) {
+    for (const message of conversation.messages) {
+      if (!message.text.trim()) continue;
+      items.push({
+        id: message.id,
+        type: "messages",
+        text: message.text,
+        entityId: null,
+        roomId: conversation.roomId,
+        agentId: null,
+        createdAt: message.timestamp,
+        metadata: { role: message.role, conversationId: conversation.id },
+        source: null,
+      });
+    }
+  }
+  items.sort((a, b) => b.createdAt - a.createdAt);
+  return items;
+}
+
+/** Keyword match — mirrors memory-routes.ts matchesKeyword. */
+function localMemoryMatchesKeyword(text: string, query: string): boolean {
+  const normalizedText = text.toLowerCase();
+  const normalizedQuery = query.toLowerCase().trim();
+  if (!normalizedText || !normalizedQuery) return false;
+  if (normalizedText.includes(normalizedQuery)) return true;
+  return normalizedQuery
+    .split(/\s+/)
+    .filter((term) => term.length >= 2)
+    .some((term) => normalizedText.includes(term));
+}
+
+function handleLocalMemoriesRoute(
+  method: string,
+  pathname: string,
+  url: URL,
+): Response | null {
+  if (method !== "GET") return null;
+
+  if (pathname === "/api/memories/feed") {
+    const limit = Math.min(
+      Math.max(
+        positiveIntegerParam(
+          url.searchParams.get("limit"),
+          MEMORY_FEED_DEFAULT_LIMIT,
+        ),
+        1,
+      ),
+      MEMORY_FEED_MAX_LIMIT,
+    );
+    const beforeParam = url.searchParams.get("before");
+    const before = beforeParam ? Number(beforeParam) : undefined;
+    let items = localMemoryTypeHasRows(url.searchParams.get("type"))
+      ? localMemoryFeedItems()
+      : [];
+    if (before) {
+      items = items.filter((item) => item.createdAt < before);
+    }
+    const page = items.slice(0, limit);
+    return json({
+      memories: page,
+      count: page.length,
+      limit,
+      hasMore: items.length > limit,
+    });
+  }
+
+  if (pathname === "/api/memories/browse") {
+    const limit = Math.min(
+      Math.max(
+        positiveIntegerParam(
+          url.searchParams.get("limit"),
+          MEMORY_BROWSE_DEFAULT_LIMIT,
+        ),
+        1,
+      ),
+      MEMORY_BROWSE_MAX_LIMIT,
+    );
+    const offset = positiveIntegerParam(url.searchParams.get("offset"), 0);
+    const searchQuery = url.searchParams.get("q")?.trim() ?? "";
+    const roomId = url.searchParams.get("roomId");
+    const entityIdParam = url.searchParams.get("entityId");
+    const entityIdsParam = url.searchParams.get("entityIds");
+    const hasEntityFilter = Boolean(entityIdParam || entityIdsParam);
+
+    let items = localMemoryTypeHasRows(url.searchParams.get("type"))
+      ? localMemoryFeedItems()
+      : [];
+    // Local items carry no entity ids — an entity filter matches nothing.
+    if (hasEntityFilter) items = [];
+    if (roomId) items = items.filter((item) => item.roomId === roomId);
+    if (searchQuery) {
+      items = items.filter((item) =>
+        localMemoryMatchesKeyword(item.text, searchQuery),
+      );
+    }
+    return json({
+      memories: items.slice(offset, offset + limit),
+      total: items.length,
+      limit,
+      offset,
+    });
+  }
+
+  if (pathname.startsWith("/api/memories/by-entity/")) {
+    const entityId = decodeURIComponent(
+      pathname.slice("/api/memories/by-entity/".length),
+    );
+    if (!entityId) return json({ error: "Missing entity identifier." }, 400);
+    const limit = Math.min(
+      Math.max(
+        positiveIntegerParam(
+          url.searchParams.get("limit"),
+          MEMORY_BROWSE_DEFAULT_LIMIT,
+        ),
+        1,
+      ),
+      MEMORY_BROWSE_MAX_LIMIT,
+    );
+    const offset = positiveIntegerParam(url.searchParams.get("offset"), 0);
+    // No entity graph in iOS local mode — no memory is attributed to an entity.
+    return json({ entityId, memories: [], total: 0, limit, offset });
+  }
+
+  return null;
 }
 
 function readBrowserWorkspaceStore(): BrowserWorkspaceStore {
@@ -3065,8 +3423,26 @@ export async function handleIosLocalAgentRequest(
     return unavailableLocalBackendRoute("document_store_unavailable");
   }
 
+  if (
+    pathname === "/api/transcripts" ||
+    pathname.startsWith("/api/transcripts/")
+  ) {
+    const response = await handleLocalTranscriptsRoute(
+      request,
+      method,
+      pathname,
+      url,
+    );
+    if (response) return response;
+  }
+
   if (method === "GET" && pathname === "/api/memories/stats") {
     return json({ total: 0, byType: {}, recent: [] });
+  }
+
+  if (pathname.startsWith("/api/memories/")) {
+    const response = handleLocalMemoriesRoute(method, pathname, url);
+    if (response) return response;
   }
 
   if (method === "GET" && pathname === "/api/mcp/config") {

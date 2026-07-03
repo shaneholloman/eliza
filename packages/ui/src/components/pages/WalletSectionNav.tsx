@@ -8,6 +8,7 @@
  */
 
 import { cn } from "../../lib/utils";
+import { ViewBackButton } from "../shared/ViewHeader";
 import { Button } from "../ui/button";
 
 interface WalletSectionTab {
@@ -76,6 +77,11 @@ export function WalletSectionNav({
       data-testid="wallet-section-nav"
       className="flex shrink-0 items-center gap-1 border-b border-border/45 px-3 py-2"
     >
+      {/* Back-to-launcher control — the Wallet family (wallet/perps/predictions)
+       *  renders this shared tab strip as its header instead of a ViewHeader, so
+       *  it owns the launcher back button the other top-level views get from
+       *  ViewHeader. Without it there is no way back to the launcher on mobile. */}
+      <ViewBackButton className="mr-1" />
       {WALLET_SECTION_TABS.map((tab) => {
         const isActive = tab.id === active;
         return (

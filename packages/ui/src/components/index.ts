@@ -262,6 +262,7 @@ export * from "./shared/confirm-delete-control";
 export * from "./shared/LanguageDropdown";
 export * from "./shared/LanguageDropdown.helpers";
 export * from "./shared/ThemeToggle";
+export * from "./shared/ViewHeader";
 export * from "./shell/BugReportModal";
 export * from "./shell/CommandPalette";
 export * from "./shell/ConnectionFailedBanner";
