@@ -288,18 +288,39 @@ const REFERENCE_OPTION_KEYS = [
 ] as const;
 
 /**
- * Pull an app reference from planner-supplied options or, failing that, the raw
- * message text. Mirrors the read-core's `resolveReference` so the mutating
- * actions resolve apps identically.
+ * The candidate objects that may carry planner-validated action args, most
+ * authoritative first. On the real planner path the validated args arrive
+ * NESTED under `options.parameters` (execute-planned-tool-call.ts sets
+ * `handlerOptions.parameters = validation.args`); only direct handler calls /
+ * scenario `action`-kind turns place them at the top level. Mirrors
+ * `readStructuredConfirmation` (safety.ts) and `actionParams`
+ * (domain-intent.ts) so every option read sees both shapes, nested first.
+ */
+export function plannerOptionSources(
+  options?: unknown,
+): ReadonlyArray<Record<string, unknown>> {
+  if (!options || typeof options !== "object") return [];
+  const top = options as Record<string, unknown>;
+  const nested =
+    top.parameters && typeof top.parameters === "object"
+      ? (top.parameters as Record<string, unknown>)
+      : undefined;
+  return nested ? [nested, top] : [top];
+}
+
+/**
+ * Pull an app reference from planner-supplied options (nested
+ * `options.parameters` first — the real planner path — then top-level) or,
+ * failing that, the raw message text. Mirrors the read-core's
+ * `resolveReference` so the mutating actions resolve apps identically.
  */
 export function extractAppReference(
   message: Memory,
   options?: unknown,
 ): string {
-  if (options && typeof options === "object") {
-    const opts = options as Record<string, unknown>;
+  for (const source of plannerOptionSources(options)) {
     for (const key of REFERENCE_OPTION_KEYS) {
-      const value = opts[key];
+      const value = source[key];
       if (typeof value === "string" && value.trim().length > 0) {
         return value.trim();
       }
