@@ -4,7 +4,7 @@
 
 - Added `packages/cloud/shared/src/lib/services/media-model-roster.ts` as the checked-in FAL/Google media model roster.
 - Marked currently routed families as `wired` and every non-routed candidate as `deferred` with an explicit rationale.
-- Added `media-model-roster.test.ts` to prove source/rationale completeness and ensure every wired model id remains indexed in the supported pricing definitions.
+- Added `media-model-roster.test.ts` to prove source/rationale completeness, ensure every wired model id remains indexed in the supported pricing definitions, and ensure every supported image/video/music pricing model is represented in the roster.
 
 ## Reviewed Sources
 
@@ -17,7 +17,7 @@
 
 ## Roster Decisions
 
-- Wired: FAL FLUX image, FAL Veo video, FAL Kling video, FAL Hailuo video, FAL MiniMax Music, adjacent FAL Wan/PixVerse/Seedance video, and Atlas-hosted Google Nano Banana image generation.
+- Wired: FAL FLUX image, Atlas-hosted GPT Image 2 / Seedream / Google Nano Banana / Qwen image generation, FAL Veo video, FAL Kling video, FAL Hailuo video, FAL MiniMax Music, ElevenLabs Music, Suno-compatible music, and adjacent FAL Wan/PixVerse/Seedance video.
 - Deferred: Recraft, Ideogram, Luma, Runway, Stable Audio, MMAudio, direct Google Imagen 4, direct Google Veo, and direct Gemini Omni/media routes.
 
 ## Validation
