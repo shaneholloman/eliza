@@ -114,6 +114,7 @@ describe("generateElevenLabsAudio — sfx", () => {
     expect(req.path).toBe("/v1/sound-generation");
     expect(req.body).toMatchObject({
       text: "glass shattering",
+      model_id: "eleven_text_to_sound_v2",
       duration_seconds: 3,
       prompt_influence: 0.7,
     });

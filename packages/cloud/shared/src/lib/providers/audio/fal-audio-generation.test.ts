@@ -132,6 +132,22 @@ describe("generateFalAudio — sfx", () => {
     expect(result.contentType).toBe("audio/wav");
   });
 
+  test("normalizes Stable Audio direct string audio URL output", async () => {
+    state.responseBody = {
+      audio: `${base}/media/stable-audio.wav`,
+      seed: 123,
+    };
+
+    const result = await generateFalAudio({
+      kind: "sfx",
+      model: "fal-ai/stable-audio-25/text-to-audio",
+      prompt: "x",
+      apiKeys,
+    });
+    if (result.source !== "hosted") throw new Error("expected hosted");
+    expect(result.url).toBe(`${base}/media/stable-audio.wav`);
+  });
+
   test("completed job without audio throws", async () => {
     state.responseBody = { detail: "nothing here" };
 

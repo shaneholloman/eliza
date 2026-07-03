@@ -553,7 +553,7 @@ export const SUPPORTED_SFX_MODELS: SupportedSfxModelDefinition[] = [
     pageUrl: "https://elevenlabs.io/docs/api-reference/text-to-sound-effects/convert",
     defaultParameters: {
       durationSeconds: 5,
-      maxDurationSeconds: 22,
+      maxDurationSeconds: 30,
     },
   },
   {
