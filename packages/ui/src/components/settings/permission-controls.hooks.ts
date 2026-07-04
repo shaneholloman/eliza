@@ -6,6 +6,7 @@
  * `useDesktopPermissionsState` to the settings UI.
  */
 
+import { logger } from "@elizaos/logger";
 import { PERMISSION_IDS } from "@elizaos/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -122,6 +123,8 @@ async function queryRendererPermission(
     });
     return mapRendererMediaPermissionState(result?.state);
   } catch {
+    // error-policy:J3 `null` is the explicit "cannot determine" signal of
+    // this probe; callers fall through to the next probe tier.
     return null;
   }
 }
@@ -149,6 +152,8 @@ async function inferRendererMediaPermissionFromDevices(
       ? "granted"
       : null;
   } catch {
+    // error-policy:J3 `null` is the explicit "cannot determine" signal of
+    // this probe; callers fall through to the next probe tier.
     return null;
   }
 }
@@ -190,7 +195,8 @@ async function requestRendererPermission(
         track.stop();
       }
     } catch {
-      // The follow-up probe reports denied when the browser recorded a denial.
+      // error-policy:J4 a rejected getUserMedia is the expected denial shape;
+      // the follow-up probe below reports the recorded state.
     }
     return probeRendererMediaPermission(id);
   }
@@ -416,7 +422,14 @@ export function useDesktopPermissionsState() {
         if (!cancelled) {
           applySnapshot(snapshot);
         }
-      } catch {
+      } catch (err) {
+        // error-policy:J4 the panel renders its designed "unknown platform"
+        // state (distinct from granted/denied); warn keeps a broken
+        // permission snapshot endpoint observable.
+        logger.warn(
+          { err },
+          "[permission-controls] permission snapshot load failed",
+        );
         if (!cancelled) {
           setPermissions(null);
           setPlatform("unknown");
@@ -473,7 +486,10 @@ export function useDesktopPermissionsState() {
     setRefreshing(true);
     try {
       return await replaceSnapshot(true);
-    } catch {
+    } catch (err) {
+      // error-policy:J4 a failed refresh keeps the last-rendered snapshot;
+      // warn keeps the failure observable and the user can retry.
+      logger.warn({ err }, "[permission-controls] snapshot refresh failed");
       return null;
     } finally {
       setRefreshing(false);
@@ -511,8 +527,10 @@ export function useDesktopPermissionsState() {
         if (status && status !== "granted" && status !== "not-applicable") {
           scheduleSettingsRefreshes();
         }
-      } catch {
-        // permission request failed; user can retry
+      } catch (err) {
+        // error-policy:J4 the snapshot re-render shows the unchanged state;
+        // warn keeps the failed request observable and the user can retry.
+        logger.warn({ err, id }, "[permission-controls] permission request failed");
       }
     },
     [replaceSnapshot, scheduleSettingsRefreshes],
@@ -538,8 +556,10 @@ export function useDesktopPermissionsState() {
         }
         await replaceSnapshot(true);
         scheduleSettingsRefreshes();
-      } catch {
-        // settings open failed; user can retry
+      } catch (err) {
+        // error-policy:J4 warn keeps the failed settings-open observable;
+        // the user can retry from the same button.
+        logger.warn({ err, id }, "[permission-controls] settings open failed");
       }
     },
     [replaceSnapshot, scheduleSettingsRefreshes],

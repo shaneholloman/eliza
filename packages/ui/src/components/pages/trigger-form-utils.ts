@@ -175,6 +175,8 @@ export function loadUserTemplates(): TriggerTemplate[] {
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isValidTemplate);
   } catch {
+    // error-policy:J3 corrupt saved templates start clean — a wedged store
+    // must not block the trigger form; new saves overwrite it.
     return [];
   }
 }
@@ -183,7 +185,8 @@ export function saveUserTemplates(templates: TriggerTemplate[]): void {
   try {
     localStorage.setItem(TEMPLATES_STORAGE_KEY, JSON.stringify(templates));
   } catch {
-    // localStorage full or unavailable
+    // error-policy:J4 localStorage full/unavailable — templates are a local
+    // convenience cache; the trigger itself is persisted server-side.
   }
 }
 
@@ -370,6 +373,8 @@ export function nextRunsForCron(
     }
     return results;
   } catch {
+    // error-policy:J3 an invalid cron expression previews as "no upcoming
+    // runs"; validateTriggerKind reports the parse error to the form.
     return [];
   }
 }

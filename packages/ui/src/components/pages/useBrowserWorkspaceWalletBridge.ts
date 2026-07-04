@@ -41,6 +41,8 @@ function resolveTargetOrigin(url: string): string | null {
     const origin = new URL(url).origin;
     return origin && origin !== "null" ? origin : null;
   } catch {
+    // error-policy:J3 malformed URL yields the explicit null signal — the
+    // bridge refuses to post wallet messages without a concrete origin.
     return null;
   }
 }

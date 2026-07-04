@@ -84,6 +84,8 @@ function readCache(): CachedWeather | null {
     if (typeof parsed.fetchedAt !== "number") return null;
     return parsed;
   } catch {
+    // error-policy:J3 corrupt cache reads as "no cache"; the live fetch is
+    // the source of truth.
     return null;
   }
 }
@@ -92,7 +94,8 @@ function writeCache(value: CachedWeather): void {
   try {
     localStorage.setItem(WEATHER_CACHE_KEY, JSON.stringify(value));
   } catch {
-    // Storage full / unavailable — caching is a nicety, not required.
+    // error-policy:J4 storage full/unavailable — caching is a nicety; the
+    // widget refetches on the next mount.
   }
 }
 
@@ -106,7 +109,8 @@ async function geolocationAlreadyGranted(): Promise<boolean> {
     const status = await perms.query({ name: "geolocation" });
     return status.state === "granted";
   } catch {
-    // Permissions API unsupported (older WebKit) — stay on the IP fallback.
+    // error-policy:J3 Permissions API unsupported (older WebKit) reads as
+    // "not granted" — the coarse IP lookup is the designed no-prompt default.
     return false;
   }
 }
