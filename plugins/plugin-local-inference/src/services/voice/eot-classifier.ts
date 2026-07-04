@@ -127,17 +127,10 @@ export function turnSignalFromProbability(args: {
  * Rules-of-thumb EOT classifier. Delegates to the single canonical heuristic in
  * `@elizaos/shared/voice-eot` — the SAME scorer the UI shell capture path
  * (`packages/ui/src/voice/end-of-turn.ts`) uses, so the two surfaces can never
- * drift. The rules fire in priority order; the first match wins:
- *
- * Priority  Signal                                       P(done)
- * --------  -------------------------------------------  -------
- *   1       Trailing ellipsis ("…" / "..")               0.20
- *   2       Sentence-final punctuation (. ! ?)            0.95
- *   3       Question-tag words ("right?", "yeah", …)      0.85
- *   4       Trailing conjunction (and/but/or/because/…)   0.15
- *   5       Last word is a preposition or article         0.20
- *   6       Short utterance (< 3 words, no trail-off)     0.70
- *   7       No signal                                     0.50
+ * drift. The priority-ordered rule table (ellipsis, punctuation, question-tags,
+ * conjunctions, fillers, prepositions, dangling modals, short-utterance) lives
+ * with that scorer — `scoreEndOfTurnHeuristic` — as the single source of truth;
+ * this class only adapts its probability to the `EotClassifier` interface.
  */
 export class HeuristicEotClassifier implements EotClassifier {
 	score(partialTranscript: string): Promise<number> {

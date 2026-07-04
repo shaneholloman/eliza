@@ -94,7 +94,6 @@ const TRAILING_FILLERS = new Set([
   "hmm",
   "hm",
   "ah",
-  "like",
   "maybe",
 ]);
 
