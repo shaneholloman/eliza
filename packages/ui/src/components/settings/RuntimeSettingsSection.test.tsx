@@ -1,21 +1,16 @@
 // @vitest-environment jsdom
 /**
- * Covers the Settings > Runtime cloud/local rows: when a matching saved
- * profile exists, switching must use the non-destructive runtime switch instead
- * of re-entering first-run and clearing the active runtime state.
+ * RuntimeSettingsSection is now a status/entry-point surface. My Runtimes owns
+ * saved local/cloud/remote switching and remote host add, so this section must
+ * not keep its own duplicate remote-connect form or coarse switcher.
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentProfile } from "../../state/agent-profile-types";
 
 const mocks = vi.hoisted(() => ({
-  loadAgentProfileRegistry: vi.fn(),
-  switchRuntimeNonDestructive: vi.fn(() => ({ ok: true })),
-  reloadIntoFirstRunRuntime: vi.fn(),
-  refetchRuntimeMode: vi.fn(),
-  loadPersistedActiveServer: vi.fn(),
   isStoreBuild: vi.fn(() => false),
-  isAndroidCloudBuild: vi.fn(() => false),
+  isElectrobunRuntime: vi.fn(() => false),
+  loadPersistedActiveServer: vi.fn(),
 }));
 
 vi.mock("../../agent-surface", () => ({
@@ -29,15 +24,11 @@ vi.mock("../../bridge/electrobun-rpc", () => ({
 }));
 
 vi.mock("../../bridge/electrobun-runtime", () => ({
-  isElectrobunRuntime: () => false,
+  isElectrobunRuntime: mocks.isElectrobunRuntime,
 }));
 
 vi.mock("../../build-variant", () => ({
   isStoreBuild: mocks.isStoreBuild,
-}));
-
-vi.mock("../../platform/android-runtime", () => ({
-  isAndroidCloudBuild: mocks.isAndroidCloudBuild,
 }));
 
 vi.mock("../../hooks/useRuntimeMode", () => ({
@@ -47,20 +38,24 @@ vi.mock("../../hooks/useRuntimeMode", () => ({
     isLocalOnly: false,
     isCloudMode: false,
     isRemoteMode: false,
-    refetch: mocks.refetchRuntimeMode,
+    refetch: vi.fn(),
   }),
 }));
 
 vi.mock("../../state", () => ({
-  loadAgentProfileRegistry: mocks.loadAgentProfileRegistry,
-  switchRuntimeNonDestructive: mocks.switchRuntimeNonDestructive,
   useAppSelector: (
     selector: (state: {
-      t: (key: string, options?: { defaultValue?: string }) => string;
+      t: (
+        key: string,
+        options?: { defaultValue?: string; mode?: string },
+      ) => string;
     }) => unknown,
   ) =>
     selector({
-      t: (_key, options) => options?.defaultValue ?? _key,
+      t: (key, options) => {
+        const value = options?.defaultValue ?? key;
+        return options?.mode ? value.replace("{{mode}}", options.mode) : value;
+      },
     }),
 }));
 
@@ -68,140 +63,54 @@ vi.mock("../../state/persistence", () => ({
   loadPersistedActiveServer: mocks.loadPersistedActiveServer,
 }));
 
-vi.mock("../../first-run/reload-into-first-run-runtime", () => ({
-  reloadIntoFirstRunRuntime: mocks.reloadIntoFirstRunRuntime,
-}));
-
 import { RuntimeSettingsSection } from "./RuntimeSettingsSection";
 
-const LOCAL_PROFILE: AgentProfile = {
-  id: "local-1",
-  label: "This device",
-  kind: "local",
-  createdAt: "2026-06-01T00:00:00.000Z",
-};
-
-const CLOUD_PROFILE: AgentProfile = {
-  id: "cloud-1",
-  label: "Cloud agent",
-  kind: "cloud",
-  apiBase: "https://x.agent.elizacloud.ai",
-  accessToken: "cloud-token",
-  createdAt: "2026-06-02T00:00:00.000Z",
-};
-
-const MOBILE_LOCAL_PROFILE: AgentProfile = {
-  id: "mobile-local-1",
-  label: "On-device agent",
-  kind: "remote",
-  apiBase: "eliza-local-agent://ipc",
-  createdAt: "2026-06-03T00:00:00.000Z",
-};
-
-function seedRegistry(
-  profiles: AgentProfile[],
-  activeProfileId: string | null,
-) {
-  mocks.loadAgentProfileRegistry.mockReturnValue({
-    version: 1,
-    activeProfileId,
-    profiles,
-  });
-}
-
-function clickRuntimeRow(name: string) {
-  fireEvent.click(screen.getByRole("button", { name }));
-}
-
-describe("RuntimeSettingsSection runtime switching", () => {
+describe("RuntimeSettingsSection IA", () => {
   beforeEach(() => {
-    mocks.loadAgentProfileRegistry.mockReset();
-    mocks.switchRuntimeNonDestructive.mockReset();
-    mocks.switchRuntimeNonDestructive.mockReturnValue({ ok: true });
-    mocks.reloadIntoFirstRunRuntime.mockReset();
-    mocks.refetchRuntimeMode.mockReset();
-    mocks.loadPersistedActiveServer.mockReset();
-    mocks.loadPersistedActiveServer.mockReturnValue(null);
+    window.history.replaceState(null, "", "#runtime");
     mocks.isStoreBuild.mockReturnValue(false);
-    mocks.isAndroidCloudBuild.mockReturnValue(false);
+    mocks.isElectrobunRuntime.mockReturnValue(false);
+    mocks.loadPersistedActiveServer.mockReset();
+    mocks.loadPersistedActiveServer.mockReturnValue({
+      id: "cloud:agent-1",
+      label: "Trading bot",
+      kind: "cloud",
+      apiBase: "https://x.agent.elizacloud.ai",
+    });
   });
 
   afterEach(() => {
     cleanup();
+    window.history.replaceState(null, "", "#");
   });
 
-  it("switches to a saved cloud profile without re-entering first-run", () => {
-    seedRegistry([LOCAL_PROFILE, CLOUD_PROFILE], "local-1");
-
+  it("shows current runtime status and a single My Runtimes entry point", () => {
     render(<RuntimeSettingsSection />);
-    clickRuntimeRow("Cloud agent");
 
-    expect(mocks.switchRuntimeNonDestructive).toHaveBeenCalledWith("cloud-1");
-    expect(mocks.reloadIntoFirstRunRuntime).not.toHaveBeenCalled();
-    expect(mocks.refetchRuntimeMode).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Current mode: Trading bot")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /My Runtimes/ })).toBeTruthy();
   });
 
-  it("switches to a saved desktop local profile without re-entering first-run", () => {
-    seedRegistry([CLOUD_PROFILE, LOCAL_PROFILE], "cloud-1");
+  it("opens the canonical My Runtimes section through settings hash navigation", () => {
+    const onHashChange = vi.fn();
+    window.addEventListener("hashchange", onHashChange);
+    try {
+      render(<RuntimeSettingsSection />);
 
-    render(<RuntimeSettingsSection />);
-    clickRuntimeRow("Local");
+      fireEvent.click(screen.getByRole("button", { name: /My Runtimes/ }));
 
-    expect(mocks.switchRuntimeNonDestructive).toHaveBeenCalledWith("local-1");
-    expect(mocks.reloadIntoFirstRunRuntime).not.toHaveBeenCalled();
-    expect(mocks.refetchRuntimeMode).toHaveBeenCalledTimes(1);
+      expect(window.location.hash).toBe("#my-runtimes");
+      expect(onHashChange).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("hashchange", onHashChange);
+    }
   });
 
-  it("treats a mobile IPC profile as the saved local runtime", () => {
-    seedRegistry([CLOUD_PROFILE, MOBILE_LOCAL_PROFILE], "cloud-1");
-
+  it("does not expose the old standalone remote-connect controls", () => {
     render(<RuntimeSettingsSection />);
-    clickRuntimeRow("Local");
 
-    expect(mocks.switchRuntimeNonDestructive).toHaveBeenCalledWith(
-      "mobile-local-1",
-    );
-    expect(mocks.reloadIntoFirstRunRuntime).not.toHaveBeenCalled();
-    expect(mocks.refetchRuntimeMode).toHaveBeenCalledTimes(1);
-  });
-
-  it("does nothing when the user clicks the already-active cloud row", () => {
-    seedRegistry([LOCAL_PROFILE, CLOUD_PROFILE], "cloud-1");
-    mocks.loadPersistedActiveServer.mockReturnValue({
-      id: "cloud:agent-1",
-      label: "Cloud agent",
-      kind: "cloud",
-      apiBase: "https://x.agent.elizacloud.ai",
-      accessToken: "cloud-token",
-    });
-
-    render(<RuntimeSettingsSection />);
-    clickRuntimeRow("Cloud agent");
-
-    expect(mocks.switchRuntimeNonDestructive).not.toHaveBeenCalled();
-    expect(mocks.reloadIntoFirstRunRuntime).not.toHaveBeenCalled();
-    expect(mocks.refetchRuntimeMode).not.toHaveBeenCalled();
-  });
-
-  it("falls back to first-run when no saved cloud profile exists", () => {
-    seedRegistry([LOCAL_PROFILE], "local-1");
-
-    render(<RuntimeSettingsSection />);
-    clickRuntimeRow("Cloud agent");
-
-    expect(mocks.switchRuntimeNonDestructive).not.toHaveBeenCalled();
-    expect(mocks.reloadIntoFirstRunRuntime).toHaveBeenCalledWith("cloud");
-    expect(mocks.refetchRuntimeMode).not.toHaveBeenCalled();
-  });
-
-  it("falls back to first-run when no saved local profile exists", () => {
-    seedRegistry([CLOUD_PROFILE], "cloud-1");
-
-    render(<RuntimeSettingsSection />);
-    clickRuntimeRow("Local");
-
-    expect(mocks.switchRuntimeNonDestructive).not.toHaveBeenCalled();
-    expect(mocks.reloadIntoFirstRunRuntime).toHaveBeenCalledWith("local");
-    expect(mocks.refetchRuntimeMode).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Remote" })).toBeNull();
+    expect(screen.queryByTestId("settings-remote-address")).toBeNull();
+    expect(screen.queryByTestId("settings-remote-connect")).toBeNull();
   });
 });
