@@ -3,7 +3,7 @@
  * `FARCASTER_ACCOUNTS` JSON path, and default-account selection — against a
  * fake runtime (vi mocks, no network).
  */
-import type { IAgentRuntime } from "@elizaos/core";
+import { ElizaError, type IAgentRuntime } from "@elizaos/core";
 import { describe, expect, it, vi } from "vitest";
 import { FarcasterService } from "../services/FarcasterService";
 import {
@@ -57,13 +57,24 @@ describe("Farcaster account config", () => {
     expect(config.FARCASTER_FID).toBe(456);
   });
 
-  it("ignores malformed FARCASTER_ACCOUNTS JSON instead of crashing account discovery", () => {
+  it("fails closed for malformed FARCASTER_ACCOUNTS JSON", () => {
     const rt = runtime({
       FARCASTER_ACCOUNTS: "{not json",
     });
 
-    expect(listFarcasterAccountIds(rt)).toEqual(["default"]);
-    expect(resolveDefaultFarcasterAccountId(rt)).toBe("default");
+    expect(() => listFarcasterAccountIds(rt)).toThrow(ElizaError);
+    try {
+      resolveDefaultFarcasterAccountId(rt);
+      throw new Error("expected malformed FARCASTER_ACCOUNTS to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElizaError);
+      expect((error as ElizaError).code).toBe("FARCASTER_CONFIG_INVALID");
+      expect((error as ElizaError).context).toEqual({
+        setting: "FARCASTER_ACCOUNTS",
+      });
+      expect((error as ElizaError).severity).toBe("fatal");
+      expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+    }
   });
 
   it("does not leak legacy env credentials into named account validation", () => {

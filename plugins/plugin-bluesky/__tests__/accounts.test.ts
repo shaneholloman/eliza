@@ -2,7 +2,7 @@
  * Unit tests for multi-account config resolution and the connector-account
  * provider, driven by an in-memory fake runtime (no network, no real SDK).
  */
-import type { IAgentRuntime } from "@elizaos/core";
+import { ElizaError, type IAgentRuntime } from "@elizaos/core";
 import { describe, expect, it, vi } from "vitest";
 import { createBlueSkyConnectorAccountProvider } from "../connector-account-provider";
 import { BlueSkyService } from "../services/bluesky";
@@ -52,15 +52,26 @@ describe("BlueSky account config", () => {
 		expect(config.handle).toBe("support.example.com");
 	});
 
-	it("ignores malformed BLUESKY_ACCOUNTS and falls back to legacy default", () => {
+	it("fails closed for malformed BLUESKY_ACCOUNTS", () => {
 		const rt = runtime({
 			BLUESKY_ACCOUNTS: "{not json",
 			BLUESKY_HANDLE: "agent.example.com",
 			BLUESKY_PASSWORD: "app-password",
 		});
 
-		expect(listBlueSkyAccountIds(rt)).toEqual(["default"]);
-		expect(resolveDefaultBlueSkyAccountId(rt)).toBe("default");
+		expect(() => listBlueSkyAccountIds(rt)).toThrow(ElizaError);
+		try {
+			resolveDefaultBlueSkyAccountId(rt);
+			throw new Error("expected malformed BLUESKY_ACCOUNTS to throw");
+		} catch (error) {
+			expect(error).toBeInstanceOf(ElizaError);
+			expect((error as ElizaError).code).toBe("BLUESKY_CONFIG_INVALID");
+			expect((error as ElizaError).context).toEqual({
+				setting: "BLUESKY_ACCOUNTS",
+			});
+			expect((error as ElizaError).severity).toBe("fatal");
+			expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+		}
 	});
 
 	it("does not leak default env credentials into explicitly requested named accounts", () => {

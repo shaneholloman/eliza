@@ -42,6 +42,10 @@ export class AsyncQueue {
     try {
       await work();
     } catch {
+      // error-policy:J5 the queued closure built by `submit` already routes any
+      // rejection to the caller's promise via `reject(err)` and never re-throws,
+      // so this catch cannot fire in practice; it only guards the drain loop from
+      // a defensive standpoint. The real failure surfaces at the `submit()` caller.
     } finally {
       this.running--;
       void this.doNextWork();

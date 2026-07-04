@@ -976,7 +976,14 @@ export class MatrixService extends Service implements IMatrixService {
       logger.info(
         `Matrix cross-signing bootstrapped for ${state.settings.userId}; senders should now share megolm keys to this device.`
       );
-      await crypto.checkKeyBackupAndEnable().catch(() => {});
+      // Key-backup enable is a distinct best-effort step AFTER bootstrap already
+      // succeeded; a throw here must not reach the outer catch and mislabel the
+      // whole bootstrap as "skipped", but its failure must still be visible.
+      await crypto.checkKeyBackupAndEnable().catch((backupErr) => {
+        logger.warn(
+          `Matrix cross-signing bootstrapped for ${state.settings.userId} but key-backup enable failed (${backupErr instanceof Error ? backupErr.message : String(backupErr)}); megolm history backup is unavailable until this device re-runs backup setup.`
+        );
+      });
     } catch (err) {
       logger.warn(
         `Matrix cross-signing bootstrap skipped (${err instanceof Error ? err.message : String(err)}); cohort senders in exclude-insecure-devices mode may withhold keys until this device is verified once from an operator's Matrix client.`
@@ -1174,6 +1181,9 @@ export class MatrixService extends Service implements IMatrixService {
       }
       verifier.on(VerifierEvent.ShowSas, (callbacks: ShowSasCallbacks) => {
         logger.info(`Matrix auto-confirming SAS with ${other}`);
+        // error-policy:J5 confirm() rejection is observed by the awaited
+        // verifier.verify() below, whose failure is logged in the outer catch;
+        // this no-op guard only suppresses the unhandled-rejection warning.
         void callbacks.confirm().catch(() => {});
       });
       await verifier.verify();
