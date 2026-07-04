@@ -9,7 +9,7 @@
  * section gets it from `CloudSettingsSectionShell`.
  */
 
-import { PageHeaderProvider } from "../../cloud-ui";
+import { PageHeaderProvider } from "../../cloud-ui/components/layout";
 import { DashboardLoadingState } from "../../cloud-ui/components/dashboard/route-placeholders";
 import { useSessionAuth } from "../lib/use-session-auth";
 import { useCloudT } from "../shell/CloudI18nProvider";
