@@ -3,6 +3,12 @@
   "name": "Coding Tools",
   "description": "Native coding tools (FILE, SHELL, WORKTREE) running directly in the agent. AST-validated commands, mtime-gated writes, sealed workspace roots, optional per-OS process sandboxing (sandbox-exec on macOS, bwrap on Linux).",
   "npmName": "@elizaos/plugin-coding-tools",
+  "shortIds": [
+    "coding-agent",
+    "codingAgent",
+    "coding-tools",
+    "codingTools"
+  ],
   "version": "0.1.0",
   "source": "bundled",
   "tags": ["coding", "filesystem", "shell", "git", "code", "claude-code"],
