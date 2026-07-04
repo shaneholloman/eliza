@@ -162,6 +162,16 @@ export function startupReducer(
             };
           }
           return { phase: "first-run-required", serverReachable: false };
+        case "AGENT_ERROR":
+          // An unexpected crash inside the restore phase must reach the
+          // visible error state — a swallowed rejection here wedges boot in
+          // "restoring-session" forever with no user-facing signal.
+          return {
+            phase: "error",
+            reason: "agent-error",
+            message: event.message,
+            timedOut: false,
+          };
         default:
           return state;
       }

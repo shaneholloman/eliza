@@ -486,11 +486,18 @@ export function usePluginsSkillsState({
       setSkillCreateFormOpen(false);
       setActionNotice(`Skill "${name}" created.`, "success");
       await refreshSkills();
+      // error-policy:J4 the skill was already created (success notice above);
+      // a failed editor-open must not be mislabeled by the outer catch as a
+      // failed create — surface it as its own notice instead.
       if (result.path)
-        // error-policy:J6 best-effort post-success open of the just-created skill;
-        // creation already surfaced its own success notice, so a failed open must
-        // not be rethrown into the outer catch and flip it to a failure notice.
-        await client.openSkill(result.skill?.id ?? name).catch(() => undefined);
+        await client.openSkill(result.skill?.id ?? name).catch((err: unknown) => {
+          logger.warn({ err, name }, "[usePluginsSkillsState] openSkill failed");
+          setActionNotice(
+            `Skill "${name}" created, but opening it failed.`,
+            "error",
+            4200,
+          );
+        });
     } catch (err) {
       setActionNotice(
         `Failed to create skill: ${err instanceof Error ? err.message : "error"}`,
