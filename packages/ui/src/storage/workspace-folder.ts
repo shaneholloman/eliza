@@ -59,6 +59,8 @@ export function readStoredWorkspaceFolder(): StoredWorkspaceFolder | null {
   try {
     parsed = JSON.parse(raw);
   } catch {
+    // error-policy:J3 corrupt persisted folder entry — start with no stored
+    // workspace folder instead of wedging the picker.
     return null;
   }
   return isStoredWorkspaceFolder(parsed) ? parsed : null;

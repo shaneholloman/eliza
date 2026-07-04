@@ -175,6 +175,8 @@ export function normalizeGeneratedMessageExamples(
     try {
       parsed = JSON.parse(candidate);
     } catch {
+      // error-policy:J3 model output that is not parseable JSON yields no
+      // example groups; the editor keeps its current examples.
       return [];
     }
   }

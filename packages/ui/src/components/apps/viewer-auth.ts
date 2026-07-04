@@ -50,6 +50,8 @@ export function resolvePostMessageTargetOrigin(
     }
     return parsed.origin === "null" ? null : parsed.origin;
   } catch {
+    // error-policy:J3 unparseable viewer URL yields no trusted origin —
+    // fail closed so no auth handshake is offered to it.
     return null;
   }
 }

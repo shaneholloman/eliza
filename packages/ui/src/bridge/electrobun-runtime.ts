@@ -70,6 +70,8 @@ function isCapacitorNativePlatform(): boolean {
     }
     return false;
   } catch {
+    // error-policy:J4 capability probe — an unanswerable Capacitor check
+    // means "not a native mobile shell".
     return false;
   }
 }

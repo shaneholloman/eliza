@@ -38,6 +38,8 @@ export function readAppsCache(): RegistryAppInfo[] | null {
     const apps = (parsed as CacheEnvelope).apps.filter(isRegistryAppInfo);
     return apps.length > 0 ? apps : null;
   } catch {
+    // error-policy:J3 corrupt cache envelope — null forces a live registry
+    // fetch; the cache is a warm-start optimization only.
     return null;
   }
 }

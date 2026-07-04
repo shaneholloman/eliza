@@ -249,6 +249,8 @@ export const pendingPaymentStore = {
       }
       return parsed;
     } catch {
+      // error-policy:J3 corrupt/unavailable persisted payment marker — treat
+      // as no pending payment; the server remains the source of truth.
       return null;
     }
   },

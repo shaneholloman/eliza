@@ -312,6 +312,8 @@ export function readPendingFocusConnector(): string | null {
     const value = window.sessionStorage.getItem(FOCUS_CONNECTOR_STORAGE_KEY);
     return value && value.trim().length > 0 ? value : null;
   } catch {
+    // error-policy:J3 storage unavailable — no pending focus hint; the
+    // connectors page opens without a pre-focused entry.
     return null;
   }
 }
