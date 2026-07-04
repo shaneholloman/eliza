@@ -17,6 +17,16 @@ export interface SettingsSectionMeta {
   /** English display label (the i18n default value). */
   defaultLabel: string;
   group: SettingsSectionGroup;
+  /**
+   * Extra friendly tokens a user can type to jump here via `/settings <token>`,
+   * beyond the `id` itself (which is always a token). This is the single source
+   * of truth for a section's aliases; `settings-section-tokens.ts` derives the
+   * token map from this field so the two never drift. Owner-declared, so a
+   * plugin-registered section carries its own aliases (see the `aliases` field
+   * on {@link SettingsSectionDef}) instead of needing a host edit to a central
+   * literal.
+   */
+  aliases?: readonly string[];
 }
 
 export const SETTINGS_GROUP_ORDER: SettingsSectionGroup[] = [
@@ -36,21 +46,81 @@ export const SETTINGS_GROUP_LABEL: Record<SettingsSectionGroup, string> = {
  * with their peers so the nav reads top-to-bottom the way it renders.
  */
 export const SETTINGS_SECTION_META: SettingsSectionMeta[] = [
-  { id: "identity", defaultLabel: "Basics", group: "agent" },
-  { id: "ai-model", defaultLabel: "Models & Providers", group: "agent" },
-  { id: "voice", defaultLabel: "Voice", group: "agent" },
-  { id: "capabilities", defaultLabel: "Capabilities", group: "agent" },
-  { id: "apps", defaultLabel: "Apps", group: "agent" },
-  { id: "connectors", defaultLabel: "Connectors", group: "agent" },
+  {
+    id: "identity",
+    defaultLabel: "Basics",
+    group: "agent",
+    aliases: ["basics", "profile"],
+  },
+  {
+    id: "ai-model",
+    defaultLabel: "Models & Providers",
+    group: "agent",
+    aliases: ["model", "models", "provider", "providers", "ai", "cloud"],
+  },
+  {
+    id: "voice",
+    defaultLabel: "Voice",
+    group: "agent",
+    aliases: ["tts", "speech"],
+  },
+  {
+    id: "capabilities",
+    defaultLabel: "Capabilities",
+    group: "agent",
+    aliases: ["abilities"],
+  },
+  { id: "apps", defaultLabel: "Apps", group: "agent", aliases: ["views"] },
+  {
+    id: "connectors",
+    defaultLabel: "Connectors",
+    group: "agent",
+    aliases: ["connections", "integrations"],
+  },
   { id: "runtime", defaultLabel: "Runtime", group: "system" },
-  { id: "appearance", defaultLabel: "Appearance", group: "system" },
+  {
+    id: "appearance",
+    defaultLabel: "Appearance",
+    group: "system",
+    aliases: ["theme", "look"],
+  },
   { id: "background", defaultLabel: "Background", group: "system" },
-  { id: "remote-plugins", defaultLabel: "Remote Plugins", group: "system" },
-  { id: "wallet-rpc", defaultLabel: "Wallet & RPC", group: "system" },
-  { id: "updates", defaultLabel: "Updates", group: "system" },
-  { id: "advanced", defaultLabel: "Backup & Reset", group: "system" },
+  {
+    id: "remote-plugins",
+    defaultLabel: "Remote Plugins",
+    group: "system",
+    aliases: ["remote"],
+  },
+  {
+    id: "wallet-rpc",
+    defaultLabel: "Wallet & RPC",
+    group: "system",
+    aliases: ["wallet", "rpc"],
+  },
+  {
+    id: "updates",
+    defaultLabel: "Updates",
+    group: "system",
+    aliases: ["update"],
+  },
+  {
+    id: "advanced",
+    defaultLabel: "Backup & Reset",
+    group: "system",
+    aliases: ["fine-tuning"],
+  },
   { id: "app-permissions", defaultLabel: "App Permissions", group: "security" },
-  { id: "permissions", defaultLabel: "Permissions", group: "security" },
-  { id: "secrets", defaultLabel: "Vault", group: "security" },
+  {
+    id: "permissions",
+    defaultLabel: "Permissions",
+    group: "security",
+    aliases: ["perms"],
+  },
+  {
+    id: "secrets",
+    defaultLabel: "Vault",
+    group: "security",
+    aliases: ["vault", "keys"],
+  },
   { id: "security", defaultLabel: "Security", group: "security" },
 ];

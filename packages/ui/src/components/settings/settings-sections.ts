@@ -342,6 +342,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] =
     }
     return {
       id: meta.id,
+      aliases: meta.aliases,
       label: visual.labelKey,
       defaultLabel: meta.defaultLabel,
       icon: visual.icon,
