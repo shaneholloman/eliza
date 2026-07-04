@@ -575,6 +575,54 @@ export const VOICE_WORKBENCH_SCENARIOS: VoiceScenario[] = [
 		assertions: { maxEotFalseTriggerRate: 0 },
 	},
 	{
+		id: "tail-off-filler-pause",
+		description:
+			"The owner holds the floor with a filler before a long pause; EOT must extend/hold rather than commit on silence (#12889).",
+		classes: ["tail-off", "eot", "pauses"],
+		knownSpeakerEntityIds: ["entity-owner"],
+		participants: [{ label: "owner", entityId: "entity-owner", isOwner: true }],
+		turns: [
+			{
+				speaker: "owner",
+				text: "Eliza let me think um",
+				expectRespond: false,
+				expectEndOfTurn: false,
+				pausesMs: [900],
+			},
+			{
+				speaker: "owner",
+				text: "remind me to renew the passport tomorrow",
+				expectRespond: true,
+				expectEndOfTurn: true,
+			},
+		],
+		assertions: { maxEotFalseTriggerRate: 0 },
+	},
+	{
+		id: "tail-off-midclause-long-pause",
+		description:
+			"A dangling modal before a >=700 ms pause is still mid-clause; genuine completion follows in the next segment (#12889).",
+		classes: ["tail-off", "eot", "pauses"],
+		knownSpeakerEntityIds: ["entity-owner"],
+		participants: [{ label: "owner", entityId: "entity-owner", isOwner: true }],
+		turns: [
+			{
+				speaker: "owner",
+				text: "Eliza I was thinking we could",
+				expectRespond: false,
+				expectEndOfTurn: false,
+				pausesMs: [700],
+			},
+			{
+				speaker: "owner",
+				text: "move the dentist appointment to friday",
+				expectRespond: true,
+				expectEndOfTurn: true,
+			},
+		],
+		assertions: { maxEotFalseTriggerRate: 0 },
+	},
+	{
 		id: "streaming-partials-monotonic",
 		description:
 			"Streaming ASR emits growing partial hypotheses; the committed prefix must never retract as later audio arrives (#12254). Scored only where a streaming-ASR partial feed exists; batch lanes skip it honestly.",

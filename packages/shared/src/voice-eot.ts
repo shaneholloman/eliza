@@ -83,6 +83,48 @@ const TRAILING_INCOMPLETE = new Set([
   "via",
 ]);
 
+/** Spoken fillers / hedges that usually mean the user is holding the floor. */
+const TRAILING_FILLERS = new Set([
+  "um",
+  "uh",
+  "uhh",
+  "umm",
+  "erm",
+  "er",
+  "hmm",
+  "hm",
+  "ah",
+  "like",
+  "maybe",
+]);
+
+/** Dangling auxiliaries/modals that need another clause or phrase to land. */
+const TRAILING_CONTINUATIONS = new Set([
+  "am",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "being",
+  "been",
+  "do",
+  "does",
+  "did",
+  "have",
+  "has",
+  "had",
+  "can",
+  "could",
+  "will",
+  "would",
+  "shall",
+  "should",
+  "may",
+  "might",
+  "must",
+]);
+
 /**
  * Question-tag suffixes that end an utterance (matched case-insensitively).
  * The union of both prior surfaces: punctuated forms (the UI set) plus the
@@ -114,13 +156,15 @@ const QUESTION_TAGS = [
  *   2  Sentence-final punctuation (. ! ?)                   0.95
  *   3  Question-tag suffix ("right?", "yeah", "correct")    0.85
  *   4  Trailing conjunction (and / but / because / …)       0.15  (mid-clause)
- *   5  Trailing preposition / article (to / the / with …)   0.20  (incomplete NP)
- *   6  Short utterance (< 3 words, no trail-off)            0.70  (command/ack)
- *   7  No signal                                            0.50
+ *   5  Trailing filler / hedge (um / uh / maybe / …)        0.20  (holding floor)
+ *   6  Trailing preposition / article (to / the / with …)   0.20  (incomplete NP)
+ *   7  Dangling modal/auxiliary (could / would / is / …)    0.20  (incomplete clause)
+ *   8  Short utterance (< 3 words, no trail-off)            0.70  (command/ack)
+ *   9  No signal                                            0.50
  *
- * Note the conjunction/preposition checks precede the short-utterance rule so a
- * 2-word trail-off ("and so", "going to") is NOT misread as a complete short
- * command.
+ * Note the continuation checks precede the short-utterance rule so a 2-word
+ * trail-off ("and so", "going to", "we could") is NOT misread as a complete
+ * short command.
  */
 export function scoreEndOfTurnHeuristic(transcript: string): number {
   const text = transcript.trim();
@@ -144,11 +188,13 @@ export function scoreEndOfTurnHeuristic(transcript: string): number {
   if (words.length === 0) return 0.5;
 
   const lastWord = words[words.length - 1].replace(/[',;:-]+$/, "");
-  // Trailing conjunction / preposition / article → mid-clause, the speaker is
-  // continuing. Checked BEFORE the short-utterance rule so a 2-word trail-off
-  // ("going to", "and so") is NOT misread as a complete short command.
+  // Trailing conjunction / filler / incomplete phrase → mid-clause, the speaker
+  // is continuing. Checked BEFORE the short-utterance rule so a 2-word trail-off
+  // ("going to", "and so", "we could") is NOT misread as a complete command.
   if (TRAILING_CONJUNCTIONS.has(lastWord)) return 0.15;
+  if (TRAILING_FILLERS.has(lastWord)) return 0.2;
   if (TRAILING_INCOMPLETE.has(lastWord)) return 0.2;
+  if (TRAILING_CONTINUATIONS.has(lastWord)) return 0.2;
 
   // Short utterance that doesn't trail off (a command / acknowledgement) →
   // likely complete ("go home", "yes", "stop").

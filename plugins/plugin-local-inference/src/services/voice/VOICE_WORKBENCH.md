@@ -74,8 +74,9 @@ The sibling-behavior classes (#12258) each pin a settled ceiling:
 
 - **`endpoint-latency`** — a clean, sentence-final command commits at the
   endpoint; `maxFirstAudioMs: 800` on the real lane (#12254).
-- **`tail-off`** — a filler / trailing-conjunction pause must NOT commit
-  (`maxEotFalseTriggerRate`); the fused semantic-EOT gate holds (#12255).
+- **`tail-off`** — a filler, dangling-modal, or trailing-conjunction pause must
+  NOT commit (`maxEotFalseTriggerRate`); the fused semantic-EOT gate holds
+  (#12255 / #12889).
 - **`streaming-partials`** — a streaming-ASR partial stream's committed prefix
   never retracts (`scorePartialMonotonicity`); scored only where a partial feed
   exists, skipped honestly in batch-only lanes (#12254).
@@ -88,7 +89,7 @@ The sibling-behavior classes (#12258) each pin a settled ceiling:
 - **`long-turn-diarization`** — a ~30 s three-voice exchange, windowed
   incrementally, within the AMI meeting DER budget (#12257).
 
-The 24 built-in scenarios in `workbench-scenarios.ts` span every class.
+The 26 built-in scenarios in `workbench-scenarios.ts` span every class.
 
 ### Assertion ceilings (parent decision #10)
 
