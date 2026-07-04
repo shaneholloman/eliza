@@ -1,3 +1,4 @@
+// Renders a reusable UI component for the Code example.
 import type { AgentRuntime } from "@elizaos/core";
 import { Editor, type Focusable, type TUI } from "@elizaos/tui";
 import chalk from "chalk";

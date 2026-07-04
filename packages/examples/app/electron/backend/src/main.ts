@@ -1,3 +1,4 @@
+// Supports the Electron app example described in this package README.
 import { join } from "node:path";
 import { app, BrowserWindow } from "electron";
 import { registerChatIpc } from "./ipc";

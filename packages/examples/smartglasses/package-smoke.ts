@@ -1,3 +1,4 @@
+// Supports the Smartglasses example described in this package README.
 import {
   G1Command,
   MockSmartglassesTransport,

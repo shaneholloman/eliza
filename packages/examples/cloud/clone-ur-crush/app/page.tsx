@@ -1,3 +1,4 @@
+// Renders a Next.js page for the Clone Ur Crush cloud example.
 "use client";
 
 import { Dices, RefreshCw, Sparkles } from "lucide-react";

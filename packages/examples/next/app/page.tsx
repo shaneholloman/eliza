@@ -1,3 +1,4 @@
+// Renders a Next.js page for the Next example.
 "use client";
 
 import {

@@ -1,3 +1,4 @@
+// Supports the Smartglasses example described in this package README.
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {

@@ -1,3 +1,4 @@
+// Drives end-to-end coverage for the Code example.
 import { execFile } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as path from "node:path";
@@ -66,7 +67,7 @@ async function createDetachedWorktree(repoRoot: string): Promise<string> {
 }
 
 async function removeWorktree(repoRoot: string, dir: string): Promise<void> {
-  // Use --force because tasks might have created untracked files; we want cleanup.
+  // Use --force so task-created untracked files do not survive teardown.
   await git(["worktree", "remove", "--force", dir], { cwd: repoRoot });
   await git(["worktree", "prune"], { cwd: repoRoot });
 }

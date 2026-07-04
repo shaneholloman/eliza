@@ -1,3 +1,4 @@
+// Configures package bundling for the Chrome browser extension example.
 import path from "node:path";
 import { defineConfig } from "tsup";
 

@@ -1,3 +1,4 @@
+// Handles webhook cloud API eliza app webhook forward route traffic with signature or internal auth checks.
 import { timingSafeEqualSecret } from "@/lib/auth/cron";
 import { logger } from "@/lib/utils/logger";
 import type { AppContext } from "@/types/cloud-worker-env";

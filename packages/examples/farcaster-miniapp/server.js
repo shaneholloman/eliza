@@ -1,3 +1,4 @@
+// Starts the HTTP server surface for the Farcaster Miniapp example.
 import { randomBytes } from "node:crypto";
 import cors from "cors";
 import express from "express";

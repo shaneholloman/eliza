@@ -1,3 +1,4 @@
+// Configures Next.js runtime behavior for the Next example.
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";

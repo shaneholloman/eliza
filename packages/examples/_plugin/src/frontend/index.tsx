@@ -1,3 +1,4 @@
+// Exposes the entrypoint for the Plugin example.
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { createRoot } from "react-dom/client";
 import "./index.css";

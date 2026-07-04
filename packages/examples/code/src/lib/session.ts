@@ -1,3 +1,4 @@
+// Provides shared support logic for the Code example.
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { stringToUuid, type UUID } from "@elizaos/core";

@@ -1,3 +1,4 @@
+// Configures Vite bundling for the React example.
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";

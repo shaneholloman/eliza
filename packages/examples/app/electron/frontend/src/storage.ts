@@ -1,3 +1,4 @@
+// Persists browser-side state for the Electron app example.
 import { type AppConfig, DEFAULT_CONFIG } from "./types";
 
 const CONFIG_KEY = "eliza:electron-config";

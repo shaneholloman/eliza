@@ -1,3 +1,4 @@
+// Renders the error boundary view for the Next example.
 "use client";
 
 export default function GlobalError({

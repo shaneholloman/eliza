@@ -1,3 +1,4 @@
+// Supports the Smartglasses example described in this package README.
 export const logger = {
   debug: console.debug.bind(console),
   error: console.error.bind(console),

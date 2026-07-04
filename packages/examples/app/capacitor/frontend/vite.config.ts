@@ -1,3 +1,4 @@
+// Configures Vite bundling for the Capacitor app example.
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 

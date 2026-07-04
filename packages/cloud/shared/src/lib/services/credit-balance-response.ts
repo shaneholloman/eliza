@@ -1,3 +1,4 @@
+// Coordinates cloud service credit balance response behavior behind route handlers.
 import { ApiError, NotFoundError } from "../api/cloud-worker-errors";
 import type { CreditBalanceResponse } from "../types/cloud-api";
 import { organizationsService } from "./organizations";
