@@ -108,6 +108,15 @@ test.describe("in-chat onboarding → home → launcher", () => {
     ).not.toHaveAttribute("data-open", "true");
     await expect(page.getByTestId("chat-composer-textarea")).toBeEnabled();
 
+    // Post-login permission priming (#12331) opens over the home right after
+    // onboarding completes on the desktop platform (the injected electrobun
+    // host). Drive its soft-ask dismissal for real — it must appear, and
+    // skipping it must clear the way for the swipe below.
+    const primingSkip = page.getByRole("button", { name: "Skip for now" });
+    await expect(primingSkip).toBeVisible({ timeout: 15_000 });
+    await primingSkip.click();
+    await expect(primingSkip).toBeHidden({ timeout: 10_000 });
+
     // Capture the populated home.
     await settleHomeEntrance(page);
     await screenshot(page, "home");
