@@ -19,6 +19,9 @@ pytest tests/ -v
 
 # Run a single module
 pytest tests/test_diarization.py -v
+
+# Run the #12493 single-stream artifact gate without WAV fixtures/model downloads
+pytest tests/test_single_stream_gate.py -v
 ```
 
 See [AGENTS.md](AGENTS.md) for the full layout, per-module commands, and notes on
