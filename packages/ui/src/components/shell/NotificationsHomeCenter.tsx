@@ -18,7 +18,7 @@
  */
 import type { AgentNotification } from "@elizaos/core";
 import { Bell, CheckCheck, Trash2, X } from "lucide-react";
-import { memo, useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useNow } from "../../hooks/useNow";
 import { cn } from "../../lib/utils";
 import { categoryIcon } from "../../state/notifications/category-icon";
@@ -136,10 +136,12 @@ export function orderDashboardNotifications(
 /**
  * One notification row: a whole-row open button (mark read + scheme-checked
  * deep link) plus an always-visible dismiss X sized to the touch token on
- * coarse pointers. Memoized — the shared 60s recency tick re-renders the list
- * for timestamps, and unchanged rows skip.
+ * coarse pointers. Deliberately NOT memoized: the parent re-renders on the
+ * shared 60s clock tick precisely so each row's relative timestamp refreshes —
+ * a memo with stable props would pin "just now" forever. Rows are cheap and
+ * capped, so the once-a-minute re-render is negligible.
  */
-const NotificationRow = memo(function NotificationRow({
+function NotificationRow({
   notification,
   onOpen,
   onDismiss,
@@ -234,7 +236,7 @@ const NotificationRow = memo(function NotificationRow({
       </div>
     </li>
   );
-});
+}
 
 /**
  * The dashboard notification center card. Self-hiding: renders nothing until
@@ -289,7 +291,9 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
           : "Notifications"
       }
       data-testid="home-notification-center"
-      className="flex flex-col overflow-hidden rounded-2xl border border-border bg-card"
+      // The card owns its gap from the editorial header above (mt-4) so a
+      // hidden widget (null render) leaves no dead spacer in the column.
+      className="mt-4 flex flex-col overflow-hidden rounded-2xl border border-border bg-card"
     >
       <style>{NOTIF_SCROLL_CSS}</style>
       {/* Pinned header: eyebrow label + unread badge, mark-all-read + clear. */}

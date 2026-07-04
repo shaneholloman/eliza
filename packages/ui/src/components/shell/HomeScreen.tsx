@@ -221,10 +221,7 @@ export function HomeScreen({
             time/weather base — THE notification surface (the pull-down sheet it
             replaced is gone). Self-hides when the inbox is empty; when present
             it height-caps and scrolls internally. */}
-        <div
-          className={cn(enterClass, "pt-4")}
-          style={{ animationDelay: "90ms" }}
-        >
+        <div className={enterClass} style={{ animationDelay: "90ms" }}>
           <NotificationsHomeCenter />
         </div>
 
