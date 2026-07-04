@@ -589,6 +589,26 @@ export interface PluginWidgetDeclaration {
 	signalKinds?: readonly string[];
 	/** Home-grid footprint (4-col grid). Default 2x1. */
 	size?: { cols: number; rows: number };
+	/**
+	 * Visibility class for the built-in resolver (#12090 item 9). Drives
+	 * `resolveWidgetsForSlot` visibility from the declaration instead of
+	 * hardcoded plugin-id string sets, so a widget cannot drift out of the
+	 * allow set (e.g. `todo` vs `todos`) when its plugin id changes.
+	 *
+	 * - `"always"` — a core surface with NO loadable plugin package
+	 *   (notifications, welcome, needs-attention, feed, …). Renders regardless
+	 *   of the runtime plugin snapshot; still hidden if an explicit
+	 *   `present + disabled` snapshot entry exists for its plugin id.
+	 * - `"fallback"` — backed by a store/compat data source, so it renders when
+	 *   the snapshot is missing OR omits the plugin, but a `present + disabled`
+	 *   entry hides it (agent-orchestrator, wallet, browser-workspace, todo).
+	 * - `"snapshot"` / omitted — standard gate: visible only when the plugin is
+	 *   enabled+active in the snapshot.
+	 *
+	 * Only honored for built-in declarations; server-provided declarations are
+	 * always snapshot-gated regardless of this field.
+	 */
+	visibility?: "always" | "fallback" | "snapshot";
 }
 
 export interface PluginAppUiExtension {
