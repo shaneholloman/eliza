@@ -1,3 +1,4 @@
+// Renders a reusable UI component for the Trader example.
 import { useState } from "react";
 
 interface TradingPanelProps {

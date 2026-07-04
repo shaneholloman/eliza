@@ -1,3 +1,4 @@
+// Wraps API calls used by the Farcaster Miniapp example UI.
 const API_BASE = "/api";
 
 async function apiRequest<T>(

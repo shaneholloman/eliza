@@ -1,3 +1,4 @@
+// Supports the Smartglasses example described in this package README.
 import { execFileSync } from "node:child_process";
 import type { GlassSide } from "@elizaos/plugin-facewear";
 

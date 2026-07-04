@@ -1,3 +1,4 @@
+// Manages runtime lifecycle for the Electron app example host.
 import {
   AgentRuntime,
   ChannelType,

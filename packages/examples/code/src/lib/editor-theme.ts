@@ -1,3 +1,4 @@
+// Provides shared support logic for the Code example.
 import type { EditorTheme } from "@elizaos/tui";
 import { ansi, darkTheme } from "@elizaos/tui";
 

@@ -1,3 +1,4 @@
+// Mounts the Trader example UI into the browser runtime.
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";

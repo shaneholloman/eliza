@@ -1,3 +1,4 @@
+// Provides shared support logic for the Code example.
 type ModelProvider = "anthropic" | "openai";
 
 /**

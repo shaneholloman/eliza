@@ -1,3 +1,4 @@
+// Provides shared support logic for the Code example.
 import type { Terminal } from "@elizaos/tui";
 import { ProcessTerminal } from "@elizaos/tui";
 

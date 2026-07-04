@@ -1,3 +1,4 @@
+// Renders the primary UI shell for the Capacitor app example.
 import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { fetchGreeting, fetchHistory, resetChat, sendChat } from "./api";

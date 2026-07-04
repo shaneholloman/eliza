@@ -1,3 +1,4 @@
+// Handles a Next.js route for the Clone Ur Crush cloud example.
 import { type NextRequest, NextResponse } from "next/server";
 import { getAIProvider } from "@/lib/ai-provider";
 

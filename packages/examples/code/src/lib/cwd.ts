@@ -1,3 +1,4 @@
+// Provides shared support logic for the Code example.
 import * as path from "node:path";
 
 let currentWorkingDirectory = process.cwd();

@@ -1,3 +1,4 @@
+// Renders the primary UI shell for the React example.
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 

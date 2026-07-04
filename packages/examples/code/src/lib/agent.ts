@@ -1,3 +1,4 @@
+// Provides shared support logic for the Code example.
 import "dotenv/config";
 import { AgentRuntime, type Character, type Plugin } from "@elizaos/core";
 import {

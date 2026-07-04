@@ -1,3 +1,4 @@
+// Renders a reusable UI component for the Farcaster Miniapp example.
 interface HeaderProps {
   title?: string;
   subtitle?: string;

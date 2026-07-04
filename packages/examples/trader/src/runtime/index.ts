@@ -1,3 +1,4 @@
+// Exposes the entrypoint for the Trader example.
 import { AgentRuntime, type Plugin } from "@elizaos/core";
 import { traderCharacter } from "./character";
 

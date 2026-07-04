@@ -1,3 +1,4 @@
+// Supports the Smartglasses example described in this package README.
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import {

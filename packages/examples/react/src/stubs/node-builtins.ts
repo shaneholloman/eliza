@@ -1,3 +1,4 @@
+// Provides browser-safe Node built-in stubs for the React example.
 type NodeCallback = (error: Error | null, result?: unknown) => void;
 
 const encoder = new TextEncoder();

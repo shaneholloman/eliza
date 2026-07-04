@@ -740,7 +740,7 @@ async function handleSendMessage(text: string): Promise<void> {
 
       if (resp?.ok && typeof resp.messageId === "string") {
         assistantDivByMessageId.set(resp.messageId, assistantMsg);
-        // Background will stream updates; keep placeholder for now.
+        // Background streaming owns assistant updates after the initial placeholder render.
         return;
       }
     }
