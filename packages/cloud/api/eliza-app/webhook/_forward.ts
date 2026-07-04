@@ -27,7 +27,7 @@ const WEBHOOK_GATEWAY_SECRET_ENV_KEYS = [
 ] as const;
 
 // The header the gateway validates for BFF-forwarded webhooks
-// (`validateWebhookForwarderSecret` in
+// (`enforceForwarderSecret` in
 // packages/cloud/services/gateway-webhook/src/internal-auth.ts). Any inbound
 // copy of this header from the original caller MUST be stripped before we
 // (re)stamp our own value — a client that could inject it would forge the

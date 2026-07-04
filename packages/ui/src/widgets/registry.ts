@@ -725,13 +725,15 @@ function isWidgetEnabled(
     return snapshotPlugin.isActive === true || snapshotPlugin.enabled !== false;
   }
 
-  // Server-provided declarations pre-date the `visibility` flag: they ship
-  // WITH the plugin snapshot, so an empty/omitting snapshot historically left
-  // them enabled (they are only present because their plugin sent them). Keep
-  // that behavior so a server declaration isn't hidden by a race where the
-  // declaration arrives before the snapshot entry.
+  // Server-provided declarations pre-date the `visibility` flag. Preserve the
+  // pre-refactor semantics exactly: an EMPTY snapshot leaves them enabled (the
+  // declaration only exists because its plugin sent it, and may have arrived
+  // before the snapshot entry — a race we don't want to hide it), but a
+  // NON-empty snapshot that OMITS the plugin means the plugin is genuinely
+  // absent, so hide it (the old `!plugin -> false` branch).
   if (source === "server") {
-    if (plugins.length === 0 || snapshotPlugin == null) return true;
+    if (plugins.length === 0) return true;
+    if (snapshotPlugin == null) return false;
     return snapshotPlugin.isActive === true || snapshotPlugin.enabled !== false;
   }
 

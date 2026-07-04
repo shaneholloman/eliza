@@ -1,5 +1,5 @@
 /**
- * Server-authoritative catalog of per-connector account defaults
+ * Shared catalog of per-connector account defaults
  * (`defaultRole` / `defaultPurpose` / `supportsOAuth`) for the plugin-managed
  * account inventory (#12087 Item 10, arch-audit roles-permissions).
  *
@@ -9,13 +9,13 @@
  * in the UI. This module is that single declaration site.
  *
  * It lives in `@elizaos/shared` — the package both the agent server and the UI
- * already depend on — so the same catalog values are used by:
- *   - the server connector-account layer (`@elizaos/core` connectors,
- *     `packages/agent/src/api/connector-*-routes.ts`) when projecting defaults,
- *     and
- *   - the connector setup UI (`packages/ui/src/components/connectors/
- *     connector-account-options.ts`) when rendering plugin-managed account
- *     options.
+ * already depend on — so it can be the one catalog both consult. Today the
+ * connector setup UI (`packages/ui/src/components/connectors/
+ * connector-account-options.ts`) reads role / purpose / OAuth from here when
+ * rendering plugin-managed account options. The server connector-account layer
+ * (`@elizaos/core` connectors, `packages/agent/src/api/connector-*-routes.ts`)
+ * is the intended next consumer so these defaults project from one place rather
+ * than being re-declared; it does not import this catalog yet.
  *
  * The UI previously hardcoded these three fields per connector in its own map
  * (the `@deprecated CONNECTOR_PLUGIN_MANAGED_ACCOUNT_OPTIONS` literal). That

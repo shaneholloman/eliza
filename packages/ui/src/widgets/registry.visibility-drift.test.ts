@@ -24,6 +24,7 @@ import {
   resolveWidgetsForSlot,
   widgetVisibilityClass,
 } from "./registry";
+import type { PluginWidgetDeclaration } from "./types";
 
 const registrySource = readFileSync(
   path.join(path.dirname(fileURLToPath(import.meta.url)), "registry.ts"),
@@ -187,5 +188,49 @@ describe("widget visibility drift guard (#12090 item 9)", () => {
     } finally {
       BUILTIN_WIDGET_DECLARATIONS.splice(originalLength);
     }
+  });
+
+  it("keeps a server widget on an empty snapshot but hides it when a non-empty snapshot omits its plugin", () => {
+    // Server declarations are snapshot-gated, and the refactor must preserve the
+    // exact pre-#12637 semantics:
+    //   - empty snapshot        -> shown (the declaration may have arrived before
+    //                              its snapshot entry; don't hide on that race)
+    //   - non-empty, omits it   -> hidden (the plugin is genuinely absent)
+    //   - present + active      -> shown
+    registerWidgetComponent("srv-omit-test", "srv-omit-test.card", () => null);
+    const serverDecls: PluginWidgetDeclaration[] = [
+      {
+        id: "srv-omit-test.card",
+        pluginId: "srv-omit-test",
+        slot: "home",
+        label: "Server omit test",
+      },
+    ];
+
+    // Empty snapshot: race exemption — shown.
+    expect(
+      resolveWidgetsForSlot("home", [], serverDecls).find(
+        (r) => r.declaration.id === "srv-omit-test.card",
+      ),
+    ).toBeTruthy();
+
+    // Non-empty snapshot that OMITS the plugin: hidden (this is the case the
+    // refactor silently flipped to "shown"; it is restored here).
+    expect(
+      resolveWidgetsForSlot(
+        "home",
+        [{ id: "some-other-plugin", enabled: true, isActive: true }],
+        serverDecls,
+      ).find((r) => r.declaration.id === "srv-omit-test.card"),
+    ).toBeUndefined();
+
+    // Present + active: shown.
+    expect(
+      resolveWidgetsForSlot(
+        "home",
+        [{ id: "srv-omit-test", enabled: true, isActive: true }],
+        serverDecls,
+      ).find((r) => r.declaration.id === "srv-omit-test.card"),
+    ).toBeTruthy();
   });
 });
