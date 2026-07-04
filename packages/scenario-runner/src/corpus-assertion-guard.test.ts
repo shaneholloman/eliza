@@ -278,6 +278,14 @@ const EXPECTED_PR_DETERMINISTIC_SCENARIO_IDS = [
   "lowact-morning-single-priority-fires-once",
   "lowact-quiet-streak-softens-next-nudge",
   "lowact-values-anchored-activity-fires-in-window",
+  // LifeOps persona pack F1 (neurotypical-control-adversarial, #12776). Same G1
+  // convention: keyless api+tick canaries proving the D1/E1/B1/C1 persona
+  // accommodations do NOT leak into a plain/neutral owner (literal cadence,
+  // standard quiet hours, literal zoned time, fail-closed approvals).
+  "f1-adversarial-highstakes-confirmation-fail-closed",
+  "f1-cross-persona-quiet-hours-respected-baseline",
+  "f1-multiday-recurrence-control-baseline",
+  "f1-timezone-boundary-edge-generic",
   "agent-orchestrator.list-agents",
   // LifeOps persona pack B1 (night-owl-anchored-day, #12771). Same G1
   // convention as A1: authored under the SCANNED root
