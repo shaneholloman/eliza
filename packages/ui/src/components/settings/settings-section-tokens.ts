@@ -16,8 +16,8 @@
  * not silently lost a built-in id.
  */
 
-import { getAllSettingsSections } from "./settings-section-registry";
 import { SETTINGS_SECTION_META } from "./settings-section-meta";
+import { getAllSettingsSections } from "./settings-section-registry";
 
 function normalizeToken(token: string): string {
   return token.trim().toLowerCase();
