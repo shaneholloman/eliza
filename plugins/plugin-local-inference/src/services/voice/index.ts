@@ -190,6 +190,25 @@ export {
 	type VoiceLifecycleState,
 } from "./lifecycle";
 export {
+	buildMeetingAcousticStressMatrix,
+	MEETING_ACOUSTIC_STRESS_SOURCE_MANIFESTS,
+	MEETING_STRESS_BACKGROUNDS,
+	MEETING_STRESS_NEGATIVE_BEHAVIORS,
+	MEETING_STRESS_QUALITIES,
+	MEETING_STRESS_ROOMS,
+	MEETING_STRESS_SNRS_DB,
+	MEETING_STRESS_SPEAKER_COUNTS,
+	MEETING_STRESS_SPEECH_STRUCTURES,
+	type MeetingAcousticStressCase,
+	type MeetingAcousticStressMatrix,
+	type MeetingAcousticStressSourceManifest,
+	type MeetingStressBackground,
+	type MeetingStressNegativeBehavior,
+	type MeetingStressQuality,
+	type MeetingStressRoom,
+	type MeetingStressSpeechStructure,
+} from "./meeting-acoustic-stress-matrix";
+export {
 	DesktopMicSource,
 	type DesktopMicSourceOptions,
 	PushMicSource,
