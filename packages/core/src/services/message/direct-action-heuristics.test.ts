@@ -113,9 +113,7 @@ describe("findShellDirectActionName", () => {
 				similes: [],
 				tags: ["domain:system", "resource:shell", "capability:execute"],
 			},
-		] as unknown as ReadonlyArray<
-			Pick<Action, "name" | "similes" | "tags">
-		>;
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 
 		expect(findShellDirectActionName(actions)).toBe("RUN_OS_COMMAND");
 	});
@@ -123,19 +121,24 @@ describe("findShellDirectActionName", () => {
 	it("falls back to the legacy name/simile set while plugins migrate", () => {
 		const actions = [
 			{ name: "SHELL", similes: ["RUN_IN_TERMINAL", "EXEC"], tags: [] },
-		] as unknown as ReadonlyArray<
-			Pick<Action, "name" | "similes" | "tags">
-		>;
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 
 		expect(findShellDirectActionName(actions)).toBe("SHELL");
+	});
+
+	it("keeps legacy simile fallback aligned with shell-direct classification", () => {
+		const actions = [
+			{ name: "LOCAL_COMMAND", similes: ["RUN_IN_TERMINAL"], tags: [] },
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
+
+		expect(findShellDirectActionName(actions)).toBe("LOCAL_COMMAND");
+		expect(isShellDirectActionName("LOCAL_COMMAND", actions)).toBe(true);
 	});
 
 	it("returns undefined when no shell-direct action is exposed", () => {
 		const actions = [
 			{ name: "REPLY", similes: [], tags: [] },
-		] as unknown as ReadonlyArray<
-			Pick<Action, "name" | "similes" | "tags">
-		>;
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 
 		expect(findShellDirectActionName(actions)).toBeUndefined();
 	});
@@ -149,9 +152,7 @@ describe("isShellDirectActionName", () => {
 				similes: [],
 				tags: ["domain:system", "resource:shell", "capability:execute"],
 			},
-		] as unknown as ReadonlyArray<
-			Pick<Action, "name" | "similes" | "tags">
-		>;
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 
 		expect(isShellDirectActionName("RUN_OS_COMMAND", actions)).toBe(true);
 		expect(isShellDirectActionName("REPLY", actions)).toBe(false);
@@ -169,9 +170,7 @@ describe("isShellDirectActionName", () => {
 		// must NOT be treated as shell-direct — the coupling is gone by design.
 		const actions = [
 			{ name: "RUN_OS_COMMAND", similes: [], tags: [] },
-		] as unknown as ReadonlyArray<
-			Pick<Action, "name" | "similes" | "tags">
-		>;
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 
 		expect(isShellDirectActionName("RUN_OS_COMMAND", actions)).toBe(false);
 	});
@@ -186,9 +185,7 @@ describe("inferDirectCurrentRequestCandidateActions shell routing", () => {
 				similes: [],
 				tags: ["domain:system", "resource:shell", "capability:execute"],
 			},
-		] as unknown as ReadonlyArray<
-			Pick<Action, "name" | "similes" | "tags">
-		>;
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 
 		expect(
 			inferDirectCurrentRequestCandidateActions(

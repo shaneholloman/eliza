@@ -260,15 +260,9 @@ export function isShellDirectActionName(
 	const normalized = normalizeActionIdentifier(actionName);
 	if (!normalized) return false;
 	if (actions && actions.length > 0) {
-		const match = actions.find(
-			(action) => normalizeActionIdentifier(action.name) === normalized,
-		);
-		if (match) {
-			if (hasActionTags(match, SHELL_DIRECT_ACTION_TAGS)) return true;
-			return LEGACY_SHELL_DIRECT_ACTION_NAMES.some(
-				(name) => normalizeActionIdentifier(name) === normalized,
-			);
-		}
+		const shellActionName = findShellDirectActionName(actions);
+		if (!shellActionName) return false;
+		return normalizeActionIdentifier(shellActionName) === normalized;
 	}
 	return LEGACY_SHELL_DIRECT_ACTION_NAMES.some(
 		(name) => normalizeActionIdentifier(name) === normalized,
