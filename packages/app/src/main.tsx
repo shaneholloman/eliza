@@ -150,6 +150,7 @@ import {
   type IosRuntimeConfig,
   resolveIosRuntimeConfig,
 } from "./ios-runtime";
+import { startKeyboardDictationSession } from "./keyboard-dictation";
 import {
   createMobileLifecycle,
   type MobileLifecycle,
@@ -1764,6 +1765,12 @@ function handleDeepLink(url: string): void {
       // On-device AEC acoustic-loop evidence harness (#11373): the hash route
       // is consumed by installAecLoopHarness's hashchange watcher.
       setHashRoute("aec-loop", parsed.searchParams);
+      break;
+    case "keyboard-dictation":
+      // iOS keyboard app-handoff dictation (#12185): extensions have no mic,
+      // so the ElizaKeyboard extension opens the app; record + transcribe
+      // here, publish the transcript to the App Group, keyboard inserts it.
+      startKeyboardDictationSession(parsed.searchParams);
       break;
     case "connect": {
       const gatewayUrl = parsed.searchParams.get("url");
