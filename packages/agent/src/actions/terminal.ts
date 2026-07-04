@@ -268,6 +268,13 @@ export const terminalAction: Action = {
   contexts: ["terminal", "code", "files", "admin"],
   roleGate: { minRole: "OWNER" },
 
+  // Declared shell-direct behavior class (see SHELL_DIRECT_ACTION_TAGS in
+  // core/services/message/direct-action-heuristics). The core message pipeline
+  // resolves shell-direct routing/termination off these tags first, so this
+  // action can rename itself without breaking the pipeline; the legacy name/
+  // simile list remains only as a covered compatibility fallback.
+  tags: ["domain:system", "resource:shell", "capability:execute"],
+
   similes: ["RUN_IN_TERMINAL", "EXECUTE_COMMAND", "TERMINAL", "RUN_SHELL"],
 
   description:

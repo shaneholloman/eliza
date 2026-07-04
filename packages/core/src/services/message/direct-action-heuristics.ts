@@ -188,6 +188,33 @@ export const LEGACY_CODING_DELEGATION_ACTION_NAMES = [
 	"SPAWN_CODING_AGENT",
 ] as const;
 
+// Declared-tag contract for the shell-direct behavior class: an action an owner
+// plugin exposes to run a single explicit user-provided shell command directly
+// (the SHELL/terminal action). Owner plugins should migrate to declaring these
+// tags so the core message pipeline stops duck-typing shell-direct routing off
+// a brittle hardcoded name list. Resolved tags-first, then the legacy name set
+// below as a covered compatibility fallback — mirrors CODING_DELEGATION.
+export const SHELL_DIRECT_ACTION_TAGS = [
+	"domain:system",
+	"resource:shell",
+	"capability:execute",
+] as const;
+
+// Legacy name/simile fallback for shell-direct resolution. Kept ONLY as a
+// covered compatibility path for owner actions that have not yet declared
+// SHELL_DIRECT_ACTION_TAGS. Do not extend — add the tags to the owning action
+// instead. Priority order: the canonical action name first, then similes.
+export const LEGACY_SHELL_DIRECT_ACTION_NAMES = [
+	"SHELL",
+	"TERMINAL_SHELL",
+	"RUN_IN_TERMINAL",
+	"RUN_COMMAND",
+	"EXECUTE_COMMAND",
+	"TERMINAL",
+	"RUN_SHELL",
+	"EXEC",
+] as const;
+
 export function hasActionTags(
 	action: Pick<Action, "tags">,
 	requiredTags: readonly string[],
@@ -207,22 +234,48 @@ export function findCodingDelegationActionName(
 	);
 }
 
+// Resolve the registered shell-direct action, tags-first then legacy names — the
+// single source of truth for shell-direct routing decisions in the message
+// pipeline. Returns the resolved action's canonical name so callers can compare
+// candidate lists against a live action rather than a hardcoded literal set.
+export function findShellDirectActionName(
+	actions: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>,
+): string | undefined {
+	return (
+		actions.find((action) => hasActionTags(action, SHELL_DIRECT_ACTION_TAGS))
+			?.name ??
+		findAvailableActionName(actions, LEGACY_SHELL_DIRECT_ACTION_NAMES)
+	);
+}
+
+// True when `actionName` is the shell-direct behavior class, resolved against the
+// live action set: an action declaring SHELL_DIRECT_ACTION_TAGS, or (legacy
+// fallback) one whose name/simile is in LEGACY_SHELL_DIRECT_ACTION_NAMES. When
+// no action set is available, falls back to the legacy name membership so pure
+// name-list call sites keep working during migration.
+export function isShellDirectActionName(
+	actionName: string,
+	actions?: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>,
+): boolean {
+	const normalized = normalizeActionIdentifier(actionName);
+	if (!normalized) return false;
+	if (actions && actions.length > 0) {
+		const shellActionName = findShellDirectActionName(actions);
+		if (!shellActionName) return false;
+		return normalizeActionIdentifier(shellActionName) === normalized;
+	}
+	return LEGACY_SHELL_DIRECT_ACTION_NAMES.some(
+		(name) => normalizeActionIdentifier(name) === normalized,
+	);
+}
+
 export function inferDirectCurrentRequestCandidateActions(
 	actions: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>,
 	messageText: string,
 	hooks: DirectActionInferenceHooks = {},
 ): string[] {
 	if (looksLikeLocalShellRequest(messageText)) {
-		const shellAction = findAvailableActionName(actions, [
-			"SHELL",
-			"TERMINAL_SHELL",
-			"RUN_IN_TERMINAL",
-			"RUN_COMMAND",
-			"EXECUTE_COMMAND",
-			"TERMINAL",
-			"RUN_SHELL",
-			"EXEC",
-		]);
+		const shellAction = findShellDirectActionName(actions);
 		if (shellAction) return [shellAction];
 	}
 	if (hooks.looksLikeCodingWorkRequest?.(messageText)) {
