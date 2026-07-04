@@ -24,23 +24,27 @@ Human evidence follow-up: #13158
 ## Verification
 
 ```bash
-/opt/miniconda3/bin/python -m pytest tests/test_voice_profile_lifecycle.py -q
+python -m pytest tests/test_voice_profile_lifecycle.py -q
 ```
 
 Result:
 
 ```text
-4 passed, 1 warning in 0.02s
+4 passed, 1 warning in 0.14s
 ```
 
+The `/opt/miniconda3/bin/python` interpreter referenced in the original PR body
+is not present in this environment, so verification used the available
+`python` interpreter.
+
 ```bash
-/opt/miniconda3/bin/python -m compileall -q voice_profile_lifecycle.py tests/test_voice_profile_lifecycle.py
+python -m compileall -q voice_profile_lifecycle.py tests/test_voice_profile_lifecycle.py
 ```
 
 Result: passed.
 
 ```bash
-/opt/miniconda3/bin/python voice_profile_lifecycle.py
+python voice_profile_lifecycle.py
 ```
 
 Manual artifact inspection:
@@ -56,20 +60,43 @@ top3: 1.0
 eer: 0.025641
 far: 0.051282
 frr: 0.0
+det_points: 7
 impostor_accept: meetingLabel 0.666667, sensitiveAction 0.0
 all gates: true
+store_snapshots: 3
+artifact_bytes: 21228
 ```
 
 Broader package check:
 
 ```bash
-/opt/miniconda3/bin/python -m pytest tests -q
+python -m pytest tests -q
 ```
 
 Result: new lifecycle tests passed; production-stack tests skipped; existing
 audio-dependent tests errored before execution because `speechbrain` is not
-installed in this interpreter. The default Homebrew Python pip path could not
-install dependencies because its `pyexpat` extension fails to load.
+installed in this interpreter. Summary: `6 passed, 7 skipped, 1 warning, 31
+errors`.
+
+## Repo-Level Checks
+
+```bash
+bun run audit:type-safety-ratchet
+bun run audit:error-policy-ratchet
+git diff --check
+```
+
+Result: passed. The error-policy ratchet reported `0 changed production source
+file(s)` for this Python benchmark slice.
+
+```bash
+bun run verify
+```
+
+Result: blocked after the CLAUDE/AGENTS check and both ratchets passed. Turbo
+stopped on unrelated current-baseline `@elizaos/electrobun#lint` diagnostics.
+The same run replayed unrelated `@elizaos/tui#lint` diagnostics around Node
+protocol imports, non-null assertions, and control-character regexes.
 
 ## Evidence Rows
 
