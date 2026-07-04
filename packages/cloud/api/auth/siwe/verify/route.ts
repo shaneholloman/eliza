@@ -56,7 +56,15 @@ app.post("/", async (c) => {
     return c.json({ error: "SIWE verification failed" }, 401);
   }
 
-  const { user, isNewAccount } = await findOrCreateUserByWalletAddress(address);
+  const {
+    user,
+    isNewAccount,
+    initialCreditsGranted,
+    initialFreeCreditsUsd,
+    welcomeBonusWithheld,
+    welcomeBonusWithheldReason,
+    welcomeBonusWithheldMessage,
+  } = await findOrCreateUserByWalletAddress(address);
   if (!user.organization_id) {
     return c.json(
       { error: "Organization creation failed - please try again" },
@@ -77,6 +85,11 @@ app.post("/", async (c) => {
     apiKey: plainKey,
     address: getAddress(address),
     isNewAccount,
+    initialCreditsGranted,
+    initialFreeCreditsUsd,
+    welcomeBonusWithheld: welcomeBonusWithheld === true,
+    welcomeBonusWithheldReason,
+    welcomeBonusWithheldMessage,
     user: {
       id: user.id,
       wallet_address: user.wallet_address,

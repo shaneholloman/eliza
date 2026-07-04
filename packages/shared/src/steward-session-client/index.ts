@@ -70,6 +70,11 @@ export interface StewardSessionResponse {
   ok: true;
   userId: string;
   stewardUserId: string;
+  initialCreditsGranted?: boolean;
+  initialFreeCreditsUsd?: number;
+  welcomeBonusWithheld?: boolean;
+  welcomeBonusWithheldReason?: "ip_daily_cap";
+  welcomeBonusWithheldMessage?: string;
 }
 
 /**

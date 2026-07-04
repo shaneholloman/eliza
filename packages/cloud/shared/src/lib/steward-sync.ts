@@ -18,7 +18,10 @@ import { discordService } from "./services/discord";
 import { emailService } from "./services/email";
 import { invitesService } from "./services/invites";
 import { organizationsService } from "./services/organizations";
-import { runWithSignupGrantIpCap } from "./services/signup-grant-guard";
+import {
+  runWithSignupGrantIpCapDetailed,
+  type SignupGrantWithheldReason,
+} from "./services/signup-grant-guard";
 import { usersService } from "./services/users";
 import { getInitialCredits } from "./signup-credits";
 import type { UserWithOrganization } from "./types";
@@ -27,6 +30,16 @@ import { getRandomUserAvatar } from "./utils/default-user-avatar";
 import { logger } from "./utils/logger";
 
 export { DEFAULT_INITIAL_CREDITS, getInitialCredits } from "./signup-credits";
+
+export interface SignupWelcomeBonusMetadata {
+  initialCreditsGranted?: boolean;
+  initialFreeCreditsUsd?: number;
+  welcomeBonusWithheld?: boolean;
+  welcomeBonusWithheldReason?: SignupGrantWithheldReason;
+  welcomeBonusWithheldMessage?: string;
+}
+
+export type StewardSyncedUser = UserWithOrganization & SignupWelcomeBonusMetadata;
 
 const STEWARD_IDENTITY_UNIQUE_CONSTRAINT = "user_identities_steward_user_id_unique";
 
@@ -214,9 +227,7 @@ export interface StewardSyncParams {
  * 4. Check for wallet-only Steward session -> link to existing wallet user if possible
  * 5. Create new user + organization
  */
-export async function syncUserFromSteward(
-  params: StewardSyncParams,
-): Promise<UserWithOrganization> {
+export async function syncUserFromSteward(params: StewardSyncParams): Promise<StewardSyncedUser> {
   const { stewardUserId, walletChainType } = params;
   const email = params.email?.toLowerCase().trim();
   const walletAddress = params.walletAddress?.toLowerCase();
@@ -479,12 +490,15 @@ export async function syncUserFromSteward(
   // created (at $0) and the signup proceeds.
   const initialCredits = getInitialCredits();
   const signupIp = getClientIp();
+  let initialCreditsGranted = false;
+  let initialFreeCreditsUsd = 0;
+  let welcomeBonusWithheld: SignupWelcomeBonusMetadata | null = null;
 
   if (initialCredits > 0) {
     try {
       // The cap check and the grant run under a per-IP advisory lock so
       // concurrent same-IP signups cannot each pass the cap before any commits.
-      await runWithSignupGrantIpCap(signupIp, async (tx) => {
+      const grantDecision = await runWithSignupGrantIpCapDetailed(signupIp, async (tx) => {
         await creditsService.addCredits({
           organizationId: organization.id,
           amount: initialCredits,
@@ -497,6 +511,15 @@ export async function syncUserFromSteward(
           db: tx,
         });
       });
+      initialCreditsGranted = grantDecision.granted;
+      initialFreeCreditsUsd = grantDecision.granted ? initialCredits : 0;
+      if (grantDecision.withheldReason) {
+        welcomeBonusWithheld = {
+          welcomeBonusWithheld: true,
+          welcomeBonusWithheldReason: grantDecision.withheldReason,
+          welcomeBonusWithheldMessage: grantDecision.withheldMessage,
+        };
+      }
     } catch (error) {
       logger.error(
         `[StewardSync] addCredits failed for new org ${organization.id} (initialCredits=${initialCredits}); rolling back signup organization: ${describeSyncError(error)}`,
@@ -646,7 +669,7 @@ export async function syncUserFromSteward(
       email: recipientEmail,
       userName: name || "there",
       organizationName: userWithOrg.organization?.name || "",
-      creditBalance: initialCredits,
+      creditBalance: initialFreeCreditsUsd,
     }).catch((error) => {
       logger.error("[StewardSync] Failed to send welcome email:", { error });
     });
@@ -685,7 +708,12 @@ export async function syncUserFromSteward(
   await ensureUserHasApiKey(userWithOrg.id, userWithOrg.organization?.id || "");
   await ensureDefaultCharacter(userWithOrg.id, userWithOrg.organization?.id || "");
 
-  return userWithOrg;
+  return {
+    ...userWithOrg,
+    initialCreditsGranted,
+    initialFreeCreditsUsd,
+    ...(welcomeBonusWithheld ?? {}),
+  };
 }
 
 /**

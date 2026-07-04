@@ -26,10 +26,41 @@ import type { DbTransaction } from "../../db/client";
 import { dbWrite } from "../../db/client";
 import { logger } from "../utils/logger";
 
-export const FREE_GRANT_IP_LIMITS = {
-  /** Max free welcome-bonus grants per source IP per rolling 24h. */
-  MAX_FREE_GRANTS_PER_IP_DAILY: 3,
-} as const;
+type SignupGrantIpLimitEnv = {
+  [key: string]: string | undefined;
+  MAX_FREE_GRANTS_PER_IP_DAILY?: string;
+  FREE_GRANT_IP_WINDOW_HOURS?: string;
+};
+
+export function resolveSignupGrantIpLimits(env: SignupGrantIpLimitEnv = process.env): {
+  MAX_FREE_GRANTS_PER_IP_DAILY: number;
+  WINDOW_HOURS: number;
+} {
+  return {
+    /** Max free welcome-bonus grants per source IP per rolling 24h. */
+    MAX_FREE_GRANTS_PER_IP_DAILY: readPositiveIntEnv(env.MAX_FREE_GRANTS_PER_IP_DAILY, 3),
+    /** Rolling cap window in hours. */
+    WINDOW_HOURS: readPositiveIntEnv(env.FREE_GRANT_IP_WINDOW_HOURS, 24),
+  };
+}
+
+export const FREE_GRANT_IP_LIMITS = resolveSignupGrantIpLimits();
+
+export type SignupGrantWithheldReason = "ip_daily_cap";
+
+export interface SignupGrantDecision {
+  granted: boolean;
+  withheldReason?: SignupGrantWithheldReason;
+  withheldMessage?: string;
+  cap?: number;
+  windowHours?: number;
+}
+
+function readPositiveIntEnv(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 function maskIp(ip: string): string {
   // IPv4: keep the first two octets; otherwise just the prefix.
@@ -55,12 +86,26 @@ export async function runWithSignupGrantIpCap(
   ip: string | undefined,
   grant: (tx?: DbTransaction) => Promise<void>,
 ): Promise<boolean> {
+  return (await runWithSignupGrantIpCapDetailed(ip, grant)).granted;
+}
+
+/**
+ * Detailed variant of `runWithSignupGrantIpCap` for signup routes that must
+ * tell the caller whether a $0 new org means "empty balance" or "welcome
+ * bonus withheld by anti-sybil policy".
+ */
+export async function runWithSignupGrantIpCapDetailed(
+  ip: string | undefined,
+  grant: (tx?: DbTransaction) => Promise<void>,
+): Promise<SignupGrantDecision> {
   if (!ip) {
     await grant();
-    return true;
+    return { granted: true };
   }
 
-  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const windowHours = FREE_GRANT_IP_LIMITS.WINDOW_HOURS;
+  const cap = FREE_GRANT_IP_LIMITS.MAX_FREE_GRANTS_PER_IP_DAILY;
+  const dayAgo = new Date(Date.now() - windowHours * 60 * 60 * 1000);
 
   return await dbWrite.transaction(async (tx) => {
     // Serialize same-IP grant attempts: the lock is held for the whole
@@ -77,19 +122,27 @@ export async function runWithSignupGrantIpCap(
     `);
 
     const granted = Number((result.rows[0] as { count: string } | undefined)?.count ?? 0);
-    if (granted >= FREE_GRANT_IP_LIMITS.MAX_FREE_GRANTS_PER_IP_DAILY) {
+    if (granted >= cap) {
       logger.warn(
         "[SignupGrantGuard] Per-IP daily free-grant cap reached; withholding welcome bonus",
         {
           ip: maskIp(ip),
           granted,
-          cap: FREE_GRANT_IP_LIMITS.MAX_FREE_GRANTS_PER_IP_DAILY,
+          cap,
+          windowHours,
         },
       );
-      return false;
+      return {
+        granted: false,
+        withheldReason: "ip_daily_cap",
+        withheldMessage:
+          "Welcome credit unavailable because this network reached the daily free-credit limit. Add funds to start an agent.",
+        cap,
+        windowHours,
+      };
     }
 
     await grant(tx);
-    return true;
+    return { granted: true };
   });
 }

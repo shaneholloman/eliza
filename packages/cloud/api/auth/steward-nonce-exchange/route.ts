@@ -496,6 +496,11 @@ app.post("/", async (c) => {
     stewardUserId: claims.userId,
     expiresAt: exchange.data.expiresAt,
     expiresIn: exchange.data.expiresIn,
+    initialCreditsGranted: cloudUser.initialCreditsGranted,
+    initialFreeCreditsUsd: cloudUser.initialFreeCreditsUsd,
+    welcomeBonusWithheld: cloudUser.welcomeBonusWithheld === true,
+    welcomeBonusWithheldReason: cloudUser.welcomeBonusWithheldReason,
+    welcomeBonusWithheldMessage: cloudUser.welcomeBonusWithheldMessage,
     ...(shouldReturnClientToken(c, isProduction)
       ? { token, refreshToken }
       : {}),

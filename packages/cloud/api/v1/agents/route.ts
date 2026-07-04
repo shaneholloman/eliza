@@ -309,6 +309,9 @@ app.post("/", async (c) => {
 
     let initialCreditsGranted = false;
     let initialFreeCreditsUsd = 0;
+    let welcomeBonusWithheld = false;
+    let welcomeBonusWithheldReason: "ip_daily_cap" | undefined;
+    let welcomeBonusWithheldMessage: string | undefined;
     let agent: Awaited<
       ReturnType<typeof elizaSandboxService.createAgent>
     >["agent"];
@@ -321,6 +324,9 @@ app.post("/", async (c) => {
         });
         initialCreditsGranted = creditGrant.initialCreditsGranted;
         initialFreeCreditsUsd = creditGrant.initialFreeCreditsUsd;
+        welcomeBonusWithheld = creditGrant.welcomeBonusWithheld === true;
+        welcomeBonusWithheldReason = creditGrant.welcomeBonusWithheldReason;
+        welcomeBonusWithheldMessage = creditGrant.welcomeBonusWithheldMessage;
       }
 
       const creditCheck = await checkAgentCreditGate(ownerOrganizationId);
@@ -334,6 +340,12 @@ app.post("/", async (c) => {
               orgId: ownerOrganizationId,
               serviceOrgId: identity.organizationId,
               walletOwned: Boolean(walletAccount),
+            },
+            {
+              welcomeBonusWithheldReason: welcomeBonusWithheld
+                ? welcomeBonusWithheldReason
+                : undefined,
+              welcomeBonusWithheldMessage,
             },
           ),
           402,
@@ -506,6 +518,9 @@ app.post("/", async (c) => {
                 isNewAccount: walletAccount.isNewAccount,
                 initialCreditsGranted,
                 initialFreeCreditsUsd,
+                welcomeBonusWithheld,
+                welcomeBonusWithheldReason,
+                welcomeBonusWithheldMessage,
               }
             : null,
         },
@@ -579,6 +594,9 @@ app.post("/", async (c) => {
               isNewAccount: walletAccount.isNewAccount,
               initialCreditsGranted,
               initialFreeCreditsUsd,
+              welcomeBonusWithheld,
+              welcomeBonusWithheldReason,
+              welcomeBonusWithheldMessage,
             }
           : null,
       },

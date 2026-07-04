@@ -174,7 +174,11 @@ describe("syncUserFromSteward — initial-credits grant fallback", () => {
     ).toHaveLength(0);
     // No grant failure surfaced.
     expect(loggerErrorCalls.some((c) => c.message.includes("addCredits failed"))).toBe(false);
-    expect(result).toBe(finalUserWithOrg as never);
+    expect(result).toMatchObject({
+      ...finalUserWithOrg,
+      initialCreditsGranted: true,
+      initialFreeCreditsUsd: 5,
+    });
   });
 
   test("ledger failure: rolls back the org and does not write an unledgered balance", async () => {

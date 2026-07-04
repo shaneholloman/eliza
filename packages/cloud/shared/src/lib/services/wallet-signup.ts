@@ -13,7 +13,10 @@ import { getClientIp } from "../runtime/request-context";
 import { logger } from "../utils/logger";
 import { creditsService } from "./credits";
 import { organizationsService } from "./organizations";
-import { runWithSignupGrantIpCap } from "./signup-grant-guard";
+import {
+  runWithSignupGrantIpCapDetailed,
+  type SignupGrantWithheldReason,
+} from "./signup-grant-guard";
 import { usersService } from "./users";
 
 export const INITIAL_FREE_CREDITS = ((): number => {
@@ -30,21 +33,31 @@ export interface FindOrCreateWalletOptions {
   requireInitialCredits?: boolean;
 }
 
+export interface InitialCreditGrantMetadata {
+  initialCreditsGranted: boolean;
+  initialFreeCreditsUsd: number;
+  welcomeBonusWithheld?: boolean;
+  welcomeBonusWithheldReason?: SignupGrantWithheldReason;
+  welcomeBonusWithheldMessage?: string;
+}
+
 async function grantWalletSignupCredits(params: {
   organizationId: string;
   amount: number;
   chain: "evm" | "solana";
   idempotencyKey: string;
   requireInitialCredits: boolean;
-}): Promise<boolean> {
-  if (params.amount <= 0) return false;
+}): Promise<InitialCreditGrantMetadata> {
+  if (params.amount <= 0) {
+    return { initialCreditsGranted: false, initialFreeCreditsUsd: 0 };
+  }
 
   // Anti-sybil: withhold the bonus when this IP has hit the daily free-grant
   // cap. The cap check and the grant run under a per-IP advisory lock so
   // concurrent same-IP signups cannot each pass the cap before any commits.
   const signupIp = getClientIp();
   try {
-    return await runWithSignupGrantIpCap(signupIp, async (tx) => {
+    const decision = await runWithSignupGrantIpCapDetailed(signupIp, async (tx) => {
       await creditsService.addCredits({
         organizationId: params.organizationId,
         amount: params.amount,
@@ -54,12 +67,23 @@ async function grantWalletSignupCredits(params: {
         db: tx,
       });
     });
+    return {
+      initialCreditsGranted: decision.granted,
+      initialFreeCreditsUsd: decision.granted ? params.amount : 0,
+      ...(decision.withheldReason
+        ? {
+            welcomeBonusWithheld: true,
+            welcomeBonusWithheldReason: decision.withheldReason,
+            welcomeBonusWithheldMessage: decision.withheldMessage,
+          }
+        : {}),
+    };
   } catch (err) {
     logger.error("[WalletSignup] Failed to grant initial credits:", err);
     if (params.requireInitialCredits) {
       throw err;
     }
-    return false;
+    return { initialCreditsGranted: false, initialFreeCreditsUsd: 0 };
   }
 }
 
@@ -71,10 +95,13 @@ export async function grantInitialCreditsToWalletAccount(params: {
 }): Promise<{
   initialCreditsGranted: boolean;
   initialFreeCreditsUsd: number;
+  welcomeBonusWithheld?: boolean;
+  welcomeBonusWithheldReason?: SignupGrantWithheldReason;
+  welcomeBonusWithheldMessage?: string;
 }> {
   const address = getAddress(params.walletAddress);
   const normalized = address.toLowerCase();
-  const granted =
+  const grantResult =
     INITIAL_FREE_CREDITS > 0
       ? await grantWalletSignupCredits({
           organizationId: params.organizationId,
@@ -83,12 +110,9 @@ export async function grantInitialCreditsToWalletAccount(params: {
           idempotencyKey: `wallet-signup:evm:${normalized}`,
           requireInitialCredits: params.requireInitialCredits === true,
         })
-      : false;
+      : { initialCreditsGranted: false, initialFreeCreditsUsd: 0 };
 
-  return {
-    initialCreditsGranted: granted,
-    initialFreeCreditsUsd: granted ? INITIAL_FREE_CREDITS : 0,
-  };
+  return grantResult;
 }
 
 /**
@@ -104,6 +128,9 @@ export async function findOrCreateUserByWalletAddress(
   isNewAccount: boolean;
   initialCreditsGranted?: boolean;
   initialFreeCreditsUsd?: number;
+  welcomeBonusWithheld?: boolean;
+  welcomeBonusWithheldReason?: SignupGrantWithheldReason;
+  welcomeBonusWithheldMessage?: string;
 }> {
   const address = getAddress(walletAddress);
   const normalized = address.toLowerCase();
@@ -140,7 +167,7 @@ export async function findOrCreateUserByWalletAddress(
       // Note: Skip initial credits for raced org - first creator already granted them
     }
   }
-  const initialCreditsGranted =
+  const initialCreditGrant =
     grantInitialCredits && INITIAL_FREE_CREDITS > 0
       ? await grantWalletSignupCredits({
           organizationId: org.id,
@@ -149,7 +176,7 @@ export async function findOrCreateUserByWalletAddress(
           idempotencyKey: `wallet-signup:evm:${normalized}`,
           requireInitialCredits,
         })
-      : false;
+      : { initialCreditsGranted: false, initialFreeCreditsUsd: 0 };
 
   try {
     const created = await usersRepository.create({
@@ -168,8 +195,7 @@ export async function findOrCreateUserByWalletAddress(
     return {
       user,
       isNewAccount: true,
-      initialCreditsGranted,
-      initialFreeCreditsUsd: initialCreditsGranted ? INITIAL_FREE_CREDITS : 0,
+      ...initialCreditGrant,
     };
   } catch (e) {
     /* WHY handle unique violation: two concurrent signups for same wallet; second should see the first's user. */
@@ -195,6 +221,9 @@ export async function findOrCreateSolanaUserByWalletAddress(
   isNewAccount: boolean;
   initialCreditsGranted?: boolean;
   initialFreeCreditsUsd?: number;
+  welcomeBonusWithheld?: boolean;
+  welcomeBonusWithheldReason?: SignupGrantWithheldReason;
+  welcomeBonusWithheldMessage?: string;
 }> {
   const address = walletAddress.trim();
   if (!address) {
@@ -228,7 +257,7 @@ export async function findOrCreateSolanaUserByWalletAddress(
       }
     }
   }
-  const initialCreditsGranted =
+  const initialCreditGrant =
     grantInitialCredits && INITIAL_FREE_CREDITS > 0
       ? await grantWalletSignupCredits({
           organizationId: org.id,
@@ -237,7 +266,7 @@ export async function findOrCreateSolanaUserByWalletAddress(
           idempotencyKey: `wallet-signup:solana:${address}`,
           requireInitialCredits,
         })
-      : false;
+      : { initialCreditsGranted: false, initialFreeCreditsUsd: 0 };
 
   try {
     const created = await usersRepository.create({
@@ -253,8 +282,7 @@ export async function findOrCreateSolanaUserByWalletAddress(
     return {
       user,
       isNewAccount: true,
-      initialCreditsGranted,
-      initialFreeCreditsUsd: initialCreditsGranted ? INITIAL_FREE_CREDITS : 0,
+      ...initialCreditGrant,
     };
   } catch (e) {
     const isUniqueViolation =
