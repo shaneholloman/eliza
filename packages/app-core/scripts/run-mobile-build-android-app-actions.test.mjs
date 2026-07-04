@@ -1,3 +1,4 @@
+/** Exercises run mobile build android app actions behavior with deterministic app-core test fixtures. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -16,6 +17,7 @@ import {
   injectCopyForkLlamaLibTask,
   patchAndroidAppActionsXmlResource,
   removeInactiveAndroidJavaSourceRoots,
+  syncAndroidVoiceStringResources,
   validateAndroidAppActionsXmlResource,
 } from "./run-mobile-build.mjs";
 
@@ -116,6 +118,58 @@ test("Android cloud strip removes voice capture plugin with its service", () => 
   assert.ok(
     ANDROID_CLOUD_STRIPPED_JAVA_FILES.includes("VoiceCapturePlugin.java"),
   );
+});
+
+test("Android voice string resource sync backfills white-label targets without replacing identity strings", () => {
+  const tmp = fs.mkdtempSync(path.join(process.cwd(), ".tmp-android-voice-"));
+  try {
+    const templateResDir = path.join(tmp, "template", "res");
+    const targetResDir = path.join(tmp, "target", "res");
+    fs.mkdirSync(path.join(templateResDir, "values"), { recursive: true });
+    fs.mkdirSync(path.join(targetResDir, "values"), { recursive: true });
+    fs.writeFileSync(
+      path.join(templateResDir, "values", "strings.xml"),
+      `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Eliza</string>
+    <string name="eliza_ime_label">Eliza Voice</string>
+    <string name="eliza_ime_prompt">Ask Eliza</string>
+</resources>
+`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(targetResDir, "values", "strings.xml"),
+      `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Milady</string>
+    <string name="title_activity_main">Milady</string>
+    <string name="custom_url_scheme">milady</string>
+</resources>
+`,
+      "utf8",
+    );
+
+    syncAndroidVoiceStringResources(templateResDir, targetResDir);
+    const once = fs.readFileSync(
+      path.join(targetResDir, "values", "strings.xml"),
+      "utf8",
+    );
+    syncAndroidVoiceStringResources(templateResDir, targetResDir);
+    const twice = fs.readFileSync(
+      path.join(targetResDir, "values", "strings.xml"),
+      "utf8",
+    );
+
+    assert.match(once, /<string name="app_name">Milady<\/string>/);
+    assert.match(once, /<string name="title_activity_main">Milady<\/string>/);
+    assert.match(once, /<string name="custom_url_scheme">milady<\/string>/);
+    assert.match(once, /<string name="eliza_ime_label">/);
+    assert.match(once, /<string name="eliza_ime_prompt">/);
+    assert.equal(twice, once);
+  } finally {
+    removePathRecursive(tmp);
+  }
 });
 
 test("Android fork llama copy task honors the CI smoke opt-out", () => {

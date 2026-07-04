@@ -1,3 +1,4 @@
+// Exercises the AOSP setup flasher backend and dependency gates.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getServerUrl } from "../server-url";
 

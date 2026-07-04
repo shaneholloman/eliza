@@ -20,7 +20,7 @@ on:
     - cron: "17 9 * * *"
 
 concurrency:
-  group: test-${{ github.ref }}
+  group: test-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -61,6 +61,9 @@ jobs:
 
       - name: Validate CI workflow dedup contract
         run: node packages/scripts/ci-workflow-dedup-contract.mjs
+
+      - name: Validate GitHub-native turbo cache contract
+        run: node packages/scripts/ci-turbo-cache-contract.mjs
 
       - name: Determine affected test lanes
         id: filter
@@ -1285,7 +1288,7 @@ jobs:
           echo "provider-live-e2e:${{ needs.provider-live-e2e.result }}"
           echo "github-live-artifact-validate:${{ needs.github-live-artifact-validate.result }}"
           echo "==================================="
-          strict_results="${{ github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}"
+          strict_results="${{ github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}"
           bad=0
           for pair in \
             "changes:${{ needs.changes.result }}" \

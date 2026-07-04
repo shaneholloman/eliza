@@ -257,6 +257,19 @@ describe("chatgpt parser: detect() + registry", () => {
     expect(await detect(path.join(here, "does-not-exist"))).toBe(false);
   });
 
+  it("throws on a resolved-but-corrupt conversations.json instead of reporting 'not a ChatGPT export'", async () => {
+    // Directory resolves to a conversations.json whose body is a truncated JSON
+    // array. Corrupt required input for a resolved export must surface, not be
+    // swallowed by detect() as a plain false.
+    const tmp = await mkdtemp(path.join(tmpdir(), "chatgpt-corrupt-"));
+    await writeFile(
+      path.join(tmp, "conversations.json"),
+      '[{"mapping":{"a":',
+      "utf8",
+    );
+    await expect(detect(tmp)).rejects.toThrow();
+  });
+
   it("resolves via the registry by detect()", async () => {
     const registry = new ConversationImporterRegistry();
     registry.register(chatgptParser);

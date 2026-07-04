@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Supports OS release manifests, checksums, and TEE evidence automation.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {

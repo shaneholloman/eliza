@@ -1,3 +1,4 @@
+// Drives repo automation cloud eliza1 dashboard alerts with explicit CLI and CI behavior.
 import crypto from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
@@ -266,6 +267,8 @@ async function verifyDashboardRender(dashboardUrl?: string) {
       waitUntil: "networkidle",
       timeout: 60_000,
     });
+    // error-policy:J4 best-effort UI navigation; the actual render state is measured
+    // by the .count() assertions below, so a missing tab/alert is observed there.
     await page
       .locator(
         'button[value="projections"], [role="tab"]:has-text("Projections")',

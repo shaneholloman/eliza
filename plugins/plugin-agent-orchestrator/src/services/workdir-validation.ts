@@ -48,6 +48,8 @@ export async function resolveAllowedWorkdir(
   rawWorkdir: string,
 ): Promise<string> {
   const resolved = path.resolve(rawWorkdir);
+  // error-policy:J3 existence probe — a non-resolvable path is an explicit
+  // "absent" (null); the failure is surfaced by the throw immediately below.
   const resolvedReal = await realpath(resolved).catch(() => null);
   if (!resolvedReal) {
     throw new Error("workdir must exist");
@@ -56,9 +58,13 @@ export async function resolveAllowedWorkdir(
   const workspaceBaseDir = path.join(os.homedir(), ".eliza", "workspaces");
   const workspaceBaseDirResolved = path.resolve(workspaceBaseDir);
   const cwdResolved = path.resolve(process.cwd());
+  // error-policy:J3 canonicalize the base root; a not-yet-created root degrades
+  // to its lexical resolved form for the prefix comparison below.
   const workspaceBaseDirReal = await realpath(workspaceBaseDirResolved).catch(
     () => workspaceBaseDirResolved,
   );
+  // error-policy:J3 canonicalize cwd; falls back to its lexical resolved form if
+  // realpath can't resolve it.
   const cwdReal = await realpath(cwdResolved).catch(() => cwdResolved);
 
   // Also allow any explicitly-configured workspace root. This keeps the HTTP
@@ -71,6 +77,8 @@ export async function resolveAllowedWorkdir(
     const raw = process.env[key]?.trim();
     if (!raw) continue;
     const rootResolved = path.resolve(raw);
+    // error-policy:J3 canonicalize a configured root; a not-yet-created root
+    // degrades to its lexical resolved form for the prefix comparison.
     const rootReal = await realpath(rootResolved).catch(() => rootResolved);
     configuredRoots.push(rootReal);
   }

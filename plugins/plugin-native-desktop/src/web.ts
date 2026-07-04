@@ -49,6 +49,7 @@ function assertSafeExternalUrl(url: unknown): string {
   try {
     parsed = new URL(url);
   } catch {
+    // error-policy:J3 untrusted url failed to parse; throw an explicit validation error
     throw new Error("url must be a valid external URL");
   }
   if (!SAFE_EXTERNAL_PROTOCOLS.has(parsed.protocol)) {
@@ -152,6 +153,7 @@ async function queryBrowserPermission(
     const status = mapBrowserPermissionState(result.state);
     return status ? stateFromStatus(id, status) : null;
   } catch {
+    // error-policy:J4 Permissions API cannot query this permission here; return null (unknown state)
     return null;
   }
 }
@@ -173,6 +175,7 @@ async function requestBrowserPermission(
         track.stop();
       }
     } catch {
+      // error-policy:J4 getUserMedia rejection is expected on denial; the real state is re-read below
       // Query below returns denied when the browser recorded a denial.
     }
     const checked = await queryBrowserPermission(id);
@@ -355,6 +358,11 @@ export class DesktopWeb extends WebPlugin {
           idleTime: 0,
         };
       } catch (err) {
+        // error-policy:J4 the Battery API is an optional web capability; when a
+        // present getBattery() rejects we degrade to the honest "unknown" power
+        // state below rather than fail the call. No elizaOS logger is reachable
+        // in this dependency-free Capacitor web plugin; console is the webview
+        // surface.
         console.debug("[Desktop] Battery API access failed:", err);
       }
     }

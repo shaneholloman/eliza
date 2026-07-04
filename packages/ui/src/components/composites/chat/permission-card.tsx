@@ -134,6 +134,9 @@ export function PermissionCard({
       .then((next) => {
         if (!cancelled) setState(next);
       })
+      // error-policy:J5 unhandled-rejection guard; the live permission state is
+      // ALSO delivered by registry.subscribe below, so a transient initial-check
+      // failure resolves as soon as the next subscription event arrives.
       .catch(() => {});
     const unsubscribe = registry.subscribe((states) => {
       const next = states.find((s) => s.id === permission);

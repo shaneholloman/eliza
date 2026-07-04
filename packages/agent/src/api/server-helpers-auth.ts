@@ -19,6 +19,7 @@ import {
   setApiToken,
   stripOptionalHostPort,
 } from "@elizaos/shared";
+import { isRegisteredTokenRoleAuthorized } from "./boundary-role-resolver.ts";
 import { sweepExpiredEntries } from "./memory-bounds.ts";
 
 // ---------------------------------------------------------------------------
@@ -299,189 +300,6 @@ export function extractAuthToken(req: http.IncomingMessage): string | null {
   return null;
 }
 
-export type WaifuChatRole = "admin" | "user" | "guest";
-export type WaifuChatWorldRole = "OWNER" | "USER" | "GUEST";
-
-export function waifuChatRoleToWorldRole(
-  role: WaifuChatRole,
-): WaifuChatWorldRole {
-  if (role === "admin") return "OWNER";
-  if (role === "user") return "USER";
-  return "GUEST";
-}
-
-export interface WaifuChatAccess {
-  role: WaifuChatRole;
-  walletAddress: string;
-  tokenAddress?: string;
-  chainId?: number;
-  cloudAgentId?: string;
-  balanceTokens?: number | null;
-}
-
-function base64UrlDecode(input: string): Buffer | null {
-  try {
-    const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
-    const padding = "=".repeat((4 - (normalized.length % 4)) % 4);
-    return Buffer.from(normalized + padding, "base64");
-  } catch {
-    return null;
-  }
-}
-
-function readJsonSegment(segment: string): Record<string, unknown> | null {
-  const decoded = base64UrlDecode(segment);
-  if (!decoded) return null;
-  try {
-    const parsed = JSON.parse(decoded.toString("utf8"));
-    return parsed && typeof parsed === "object"
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function timingSafeJwtSignatureMatches(
-  signingInput: string,
-  signatureSegment: string,
-  secret: string,
-): boolean {
-  const expected = crypto
-    .createHmac("sha256", secret)
-    .update(signingInput)
-    .digest("base64url");
-  const expectedBytes = Buffer.from(expected, "utf8");
-  const actualBytes = Buffer.from(signatureSegment, "utf8");
-  return (
-    expectedBytes.length === actualBytes.length &&
-    crypto.timingSafeEqual(expectedBytes, actualBytes)
-  );
-}
-
-export function resolveWaifuChatAccessToken(
-  token: string | null | undefined,
-  nowSeconds = Math.floor(Date.now() / 1000),
-): WaifuChatAccess | null {
-  const secret = process.env.WAIFU_CHAT_ACCESS_JWT_SECRET?.trim();
-  if (!secret || !token) return null;
-
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
-  const [headerSegment, payloadSegment, signatureSegment] = parts;
-  if (!headerSegment || !payloadSegment || !signatureSegment) return null;
-
-  const header = readJsonSegment(headerSegment);
-  if (header?.alg !== "HS256") return null;
-  const signingInput = `${headerSegment}.${payloadSegment}`;
-  if (!timingSafeJwtSignatureMatches(signingInput, signatureSegment, secret)) {
-    return null;
-  }
-
-  const payload = readJsonSegment(payloadSegment);
-  if (!payload) return null;
-  if (payload.iss !== "waifu.fun") return null;
-  const aud = payload.aud;
-  if (
-    aud !== "eliza-cloud-chat" &&
-    !(Array.isArray(aud) && aud.includes("eliza-cloud-chat"))
-  ) {
-    return null;
-  }
-  if (typeof payload.exp !== "number" || payload.exp <= nowSeconds) {
-    return null;
-  }
-  if (typeof payload.nbf === "number" && payload.nbf > nowSeconds) {
-    return null;
-  }
-
-  const role = typeof payload.role === "string" ? payload.role : "";
-  if (role !== "admin" && role !== "user" && role !== "guest") {
-    return null;
-  }
-  const walletAddress =
-    typeof payload.walletAddress === "string" && payload.walletAddress.trim()
-      ? payload.walletAddress.trim()
-      : typeof payload.sub === "string" && payload.sub.trim()
-        ? payload.sub.trim()
-        : "";
-  if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) return null;
-  const tokenAddress =
-    typeof payload.tokenAddress === "string" ? payload.tokenAddress : undefined;
-  const expectedTokenAddress = process.env.TOKEN_CONTRACT_ADDRESS?.trim();
-  if (
-    expectedTokenAddress &&
-    tokenAddress?.toLowerCase() !== expectedTokenAddress.toLowerCase()
-  ) {
-    return null;
-  }
-  const chainId =
-    typeof payload.chainId === "number" ? payload.chainId : undefined;
-  const expectedChainId = process.env.TOKEN_CHAIN_ID?.trim();
-  if (expectedChainId && String(chainId ?? "") !== expectedChainId) {
-    return null;
-  }
-  const cloudAgentId =
-    typeof payload.cloudAgentId === "string" ? payload.cloudAgentId : undefined;
-  const expectedCloudAgentId = (
-    process.env.WAIFU_ELIZA_CLOUD_AGENT_ID ??
-    process.env.ELIZA_CLOUD_AGENT_ID ??
-    ""
-  ).trim();
-  if (expectedCloudAgentId && cloudAgentId !== expectedCloudAgentId) {
-    return null;
-  }
-
-  return {
-    role,
-    walletAddress,
-    ...(tokenAddress ? { tokenAddress } : {}),
-    ...(chainId !== undefined ? { chainId } : {}),
-    ...(cloudAgentId ? { cloudAgentId } : {}),
-    ...(typeof payload.balanceTokens === "number" ||
-    payload.balanceTokens === null
-      ? { balanceTokens: payload.balanceTokens as number | null }
-      : {}),
-  };
-}
-
-export function resolveWaifuChatAccess(
-  req: http.IncomingMessage,
-): WaifuChatAccess | null {
-  return resolveWaifuChatAccessToken(extractAuthToken(req));
-}
-
-function isWaifuChatScopedRoute(method: string, pathname: string): boolean {
-  if (pathname === "/api/health") return method === "GET";
-  if (pathname === "/api/agents") return method === "GET";
-  if (pathname === "/api/auth/status") return method === "GET";
-  if (pathname === "/api/runtime-mode") return method === "GET";
-  if (pathname === "/api/conversations") {
-    return method === "GET" || method === "POST";
-  }
-  if (/^\/api\/conversations\/[^/]+\/messages$/.test(pathname)) {
-    return method === "GET" || method === "POST";
-  }
-  if (/^\/api\/conversations\/[^/]+\/messages\/stream$/.test(pathname)) {
-    return method === "POST";
-  }
-  if (/^\/api\/conversations\/[^/]+\/greeting$/.test(pathname)) {
-    return method === "POST";
-  }
-  return false;
-}
-
-export function isWaifuChatAuthorized(
-  req: http.IncomingMessage,
-  method: string,
-  pathname: string,
-): boolean {
-  const access = resolveWaifuChatAccess(req);
-  if (!access) return false;
-  if (access.role === "admin") return true;
-  return isWaifuChatScopedRoute(method.toUpperCase(), pathname);
-}
-
 function firstHeaderValue(value: string | string[] | undefined): string | null {
   if (typeof value === "string") return value;
   if (Array.isArray(value) && typeof value[0] === "string") return value[0];
@@ -566,6 +384,21 @@ export function isAuthorized(req: http.IncomingMessage): boolean {
   const provided = extractAuthToken(req);
   if (!provided) return false;
   return tokenMatches(expected, provided);
+}
+
+/**
+ * Whether a request is authorized by a registered product boundary-role
+ * resolver (#12087 item 12). The trunk holds no product token vocabulary; each
+ * product (e.g. WaifuChat) registers a resolver that owns its own token parsing
+ * and route allowlist. Returns false when no resolver recognises the request,
+ * so the caller falls through to the trunk's own token/loopback auth.
+ */
+export function isBoundaryRoleAuthorized(
+  req: http.IncomingMessage,
+  method: string,
+  pathname: string,
+): boolean {
+  return isRegisteredTokenRoleAuthorized(req, method, pathname);
 }
 
 /** The canonical role at the agent HTTP boundary (#9948 / #12087 Item 13). */

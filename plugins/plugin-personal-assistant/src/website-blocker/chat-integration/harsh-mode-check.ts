@@ -1,3 +1,8 @@
+/**
+ * Guard for the website-block unblock flow: reports whether any active
+ * `harsh_no_bypass` block rule exists for the agent, so the unblock path can
+ * refuse a soft hosts-file restore the reconciler would immediately re-apply.
+ */
 import type { IAgentRuntime } from "@elizaos/core";
 import { executeRawSql, sqlQuote } from "../../lifeops/sql.js";
 import { BLOCK_RULES_TABLE } from "./block-rule-schema.js";

@@ -28,12 +28,12 @@ export * from "./cloud-auth-service";
 export * from "./cloud-routing";
 // Connection management (ensureConnection/ensureConnections) - standalone batch helpers
 export * from "./connection";
-export * from "./connectors";
 export * from "./connectors/account-manager";
 export * from "./connectors/attachments";
 export * from "./connectors/connector-config";
 export * from "./connectors/oauth-role";
 export * from "./connectors/privacy";
+export * from "./connectors.ts";
 // Export additional constants not re-exported by character-utils
 export {
 	CANONICAL_SECRET_KEYS,
@@ -53,6 +53,7 @@ export {
 	getDirectAccountProviderForFirstRunProvider,
 	getFirstRunProviderOption,
 	getStoredFirstRunProviderId,
+	getStoredSubscriptionProviderForRequest,
 	isCloudInferenceSelectedInConfig,
 	migrateLegacyRuntimeConfig,
 	normalizeFirstRunProviderId,

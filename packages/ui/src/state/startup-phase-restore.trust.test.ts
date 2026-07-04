@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { isTrustedRestoreApiBaseUrl } from "./startup-phase-restore";
+import { isTrustedRestoreApiBaseUrl } from "./runtime-url-trust";
 
 /**
  * The persisted active-server / agent-profile record is localStorage-backed and

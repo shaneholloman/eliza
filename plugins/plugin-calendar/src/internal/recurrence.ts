@@ -306,6 +306,7 @@ export function firstRecurrenceRule(
     try {
       return parseRecurrenceRule(line);
     } catch {
+      // error-policy:J3 unparseable RRULE line -> "no usable rule" (null).
       return null;
     }
   }
@@ -507,6 +508,7 @@ export function describeRecurrence(
   try {
     rule = parseRecurrenceRule(firstLine);
   } catch {
+    // error-policy:J3 unparseable RRULE line -> "no usable rule" (null).
     return null;
   }
   if (rule.beyondExpansionSubset) {

@@ -1,3 +1,4 @@
+/** Covers the llm proxy plugin mock fixture using deterministic local services rather than live external APIs. */
 import { ModelType } from "@elizaos/core";
 import { describe, expect, it } from "vitest";
 import { createDeterministicLlmProxyPlugin } from "../helpers/llm-proxy-plugin.ts";

@@ -1,3 +1,7 @@
+/**
+ * Storybook states for the Chat Message chat composite used by shared
+ * conversation and composer surfaces.
+ */
 import type { Meta, StoryObj } from "@storybook/react";
 import { ChatMessage } from "./chat-message";
 
@@ -76,5 +80,45 @@ export const Editable: Story = {
     },
     onEdit: () => true,
     onDelete: () => {},
+  },
+};
+
+/** The overlay's floating dark-glass chrome (the continuous-chat row) on a dark
+ * substrate — the same ChatMessage, `appearance="glass"`. */
+export const GlassAssistant: Story = {
+  decorators: [
+    (Story) => (
+      <div className="rounded-2xl bg-black/70 p-4">
+        <Story />
+      </div>
+    ),
+  ],
+  args: {
+    appearance: "glass",
+    onSpeak: () => {},
+    message: {
+      id: "msg-glass-assistant",
+      role: "assistant",
+      text: "Pulled the metrics — engagement is up 12% week over week.",
+    },
+  },
+};
+
+export const GlassUser: Story = {
+  decorators: [
+    (Story) => (
+      <div className="rounded-2xl bg-black/70 p-4">
+        <Story />
+      </div>
+    ),
+  ],
+  args: {
+    appearance: "glass",
+    onEdit: () => true,
+    message: {
+      id: "msg-glass-user",
+      role: "user",
+      text: "Nice — break it down by channel next.",
+    },
   },
 };

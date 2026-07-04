@@ -1,3 +1,4 @@
+/** Exercises health route can-respond WebSocket behavior with deterministic server test doubles. */
 import type { AgentRuntime } from "@elizaos/core";
 import { ModelType } from "@elizaos/core";
 import { describe, expect, it } from "vitest";

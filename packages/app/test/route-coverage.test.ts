@@ -1,3 +1,6 @@
+/**
+ * Unit tests for the Route Coverage app shell contract and coverage guardrail.
+ */
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -137,7 +140,6 @@ const NOT_APP_BOOT_LOADED_VIEW_MANIFESTS: Readonly<Record<string, string>> = {
 };
 
 const BOOT_PLUGIN_VIEW_MANIFEST_BY_MODULE: Record<string, string | null> = {
-  "@elizaos/app-core": null,
   "@elizaos/plugin-contacts": "plugins/plugin-contacts/src/plugin.ts",
   "@elizaos/plugin-native-settings": null,
   "@elizaos/plugin-facewear": "plugins/plugin-facewear/src/index.ts",

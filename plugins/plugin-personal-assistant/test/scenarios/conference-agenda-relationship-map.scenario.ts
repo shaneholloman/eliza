@@ -1,6 +1,3 @@
-import { scenario } from "@elizaos/scenario-runner/schema";
-import { expectNoExternalSendDispatch } from "./_helpers/approval-outcome.ts";
-
 /**
  * Live-model conference agenda + relationship-map flow. Seeds real meeting
  * requests — a high-value ask from "Vantorre
@@ -10,6 +7,9 @@ import { expectNoExternalSendDispatch } from "./_helpers/approval-outcome.ts";
  * parroted (#9310). Declines stay held
  * for approval and nothing may be dispatched.
  */
+import { scenario } from "@elizaos/scenario-runner/schema";
+import { expectNoExternalSendDispatch } from "./_helpers/approval-outcome.ts";
+
 export default scenario({
   lane: "live-only",
   id: "conference-agenda-relationship-map",

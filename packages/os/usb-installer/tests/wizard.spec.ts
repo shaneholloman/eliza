@@ -1,3 +1,4 @@
+// Exercises USB installer browser flows and screenshot quality gates.
 import { expect, test } from "@playwright/test";
 import { mockDrive, mockInstallerApi } from "./mock-installer-api";
 

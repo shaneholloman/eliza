@@ -1,3 +1,4 @@
+/** Configures the unit shared Vitest lane used by workspace package tests. */
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { getElizaCoreEntry } from "../eliza-package-paths";

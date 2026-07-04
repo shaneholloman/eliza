@@ -11,6 +11,7 @@ import {
   type NotificationPriority,
   type UUID,
 } from "@elizaos/core";
+import { logger } from "@elizaos/logger";
 import { useSyncExternalStore } from "react";
 import { client } from "../../api/client";
 import { invokeDesktopBridgeRequest } from "../../bridge/electrobun-rpc";
@@ -100,7 +101,8 @@ async function fireDesktopNotification(
       silent: notification.priority === "low",
     },
   }).catch(() => {
-    /* desktop bridge absent (web/mobile) — handled by other sinks */
+    // error-policy:J6 best-effort OS-interrupt sink; desktop bridge absent on
+    // web/mobile — the inbox + other sinks still deliver.
   });
 }
 
@@ -117,6 +119,9 @@ function deliver(notification: AgentNotification): void {
   // interruptive priorities even when focused.
   if (!focused || interruptive) {
     void fireDesktopNotification(notification);
+    // error-policy:J6 best-effort OS-interrupt sink; the inbox (set separately
+    // in ingest) is the source of truth, so a failed native alert must not
+    // disturb delivery. Absent on web/desktop-without-bridge.
     void showNativeNotification({
       id: notification.id,
       title: notification.title,
@@ -270,33 +275,72 @@ export function registerNotificationToastSink(sink: ToastSink | null): void {
 
 // ── Mutations (optimistic; backed by the HTTP API) ──────────────────────────
 
+/**
+ * Roll the optimistic state back to `previous` and log at error level when a
+ * mutation's HTTP write fails. Reverting is the user-visible surfacing: a
+ * failed "mark read" returns the item to unread and a failed delete makes it
+ * reappear, so the inbox never silently diverges from server truth. Callers
+ * fire-and-forget (`void`), so this never rethrows.
+ */
+function revertMutation(
+  previous: NotificationState,
+  op: string,
+  err: unknown,
+): void {
+  setState({
+    notifications: previous.notifications,
+    unreadCount: previous.unreadCount,
+  });
+  logger.error({ err }, `[notification-store] ${op} failed; reverted`);
+}
+
 export async function markNotificationRead(id: string): Promise<void> {
+  const previous = state;
   const now = Date.now();
   const notifications = state.notifications.map((n) =>
     n.id === id && !n.readAt ? { ...n, readAt: now } : n,
   );
   setState({ notifications, unreadCount: countUnread(notifications) });
-  await client.markNotificationRead(id).catch(() => {});
+  try {
+    await client.markNotificationRead(id);
+  } catch (err) {
+    revertMutation(previous, "markNotificationRead", err);
+  }
 }
 
 export async function markAllNotificationsRead(): Promise<void> {
+  const previous = state;
   const now = Date.now();
   const notifications = state.notifications.map((n) =>
     n.readAt ? n : { ...n, readAt: now },
   );
   setState({ notifications, unreadCount: 0 });
-  await client.markAllNotificationsRead().catch(() => {});
+  try {
+    await client.markAllNotificationsRead();
+  } catch (err) {
+    revertMutation(previous, "markAllNotificationsRead", err);
+  }
 }
 
 export async function removeNotification(id: string): Promise<void> {
+  const previous = state;
   const notifications = state.notifications.filter((n) => n.id !== id);
   setState({ notifications, unreadCount: countUnread(notifications) });
-  await client.removeNotification(id).catch(() => {});
+  try {
+    await client.removeNotification(id);
+  } catch (err) {
+    revertMutation(previous, "removeNotification", err);
+  }
 }
 
 export async function clearNotifications(): Promise<void> {
+  const previous = state;
   setState({ notifications: [], unreadCount: 0 });
-  await client.clearNotifications().catch(() => {});
+  try {
+    await client.clearNotifications();
+  } catch (err) {
+    revertMutation(previous, "clearNotifications", err);
+  }
 }
 
 // ── React binding ───────────────────────────────────────────────────────────

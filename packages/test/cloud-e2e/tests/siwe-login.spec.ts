@@ -1,3 +1,4 @@
+/** Covers the siwe login cloud E2E flow using Playwright against the real local stack with mock-backed external services. */
 import { expect, test } from "../src/helpers/test-fixtures";
 import { loginWithTestWallet } from "../src/helpers/wallet-login";
 

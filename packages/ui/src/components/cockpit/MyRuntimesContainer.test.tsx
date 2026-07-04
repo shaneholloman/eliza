@@ -28,7 +28,7 @@ vi.mock("../../state", () => ({
   addAgentProfile: mocks.addAgentProfile,
   switchRuntimeNonDestructive: mocks.switchRuntimeNonDestructive,
 }));
-vi.mock("../../state/startup-phase-restore", () => ({
+vi.mock("../../state/runtime-url-trust", () => ({
   isTrustedRestoreApiBaseUrl: mocks.isTrustedRestoreApiBaseUrl,
 }));
 vi.mock("../../build-variant", () => ({
@@ -163,7 +163,7 @@ describe("MyRuntimesContainer", () => {
         apiBase: "http://100.72.1.9:3000",
       }),
     );
-    // and it switches to the new one so the client repoints + the Active badge is true
+    // The added profile becomes active so the client repoints and the badge reflects it.
     expect(mocks.switchRuntimeNonDestructive).toHaveBeenCalledWith("new-1");
   });
 

@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { InMemoryDatabaseAdapter } from "../../database/inMemoryAdapter";
 import { factsProvider } from "../../features/advanced-capabilities/providers/facts";
 import { AgentRuntime } from "../../runtime";
-import { type Character, ModelType } from "../../types";
+import { ChannelType, type Character, ModelType } from "../../types";
 import type { Memory } from "../../types/memory";
 import type { UUID } from "../../types/primitives";
 import type { State } from "../../types/state";
@@ -36,6 +36,27 @@ function makeRuntime(modelResponse?: string): AgentRuntime {
 		);
 	}
 	return runtime;
+}
+
+// The facts stage now sources room entities directly via getEntityDetails
+// (getRoom + getEntitiesForRoom) instead of scraping the Stage-1 provider
+// state (#13196). Seed the room + its participant entities so name->UUID
+// grounding (nubs, Jake) resolves through the real adapter, matching how it
+// works in production.
+async function seedRoomEntities(runtime: AgentRuntime): Promise<void> {
+	await runtime.createRooms([
+		{
+			id: ROOM,
+			agentId: runtime.agentId,
+			source: "test",
+			type: ChannelType.GROUP,
+		},
+	]);
+	await runtime.createEntities([
+		{ id: USER, agentId: runtime.agentId, names: ["nubs"], metadata: {} },
+		{ id: JAKE, agentId: runtime.agentId, names: ["Jake"], metadata: {} },
+	]);
+	await runtime.createRoomParticipants([USER, JAKE], ROOM);
 }
 
 function makeMessage(runtime: AgentRuntime, text: string): Memory {
@@ -68,7 +89,11 @@ function makeState(): State {
 	};
 }
 
-function makeFact(text: string, entityId: UUID = USER): Memory {
+function makeFact(
+	text: string,
+	entityId: UUID = USER,
+	metadata?: Memory["metadata"],
+): Memory {
 	return {
 		id: crypto.randomUUID() as UUID,
 		entityId,
@@ -76,6 +101,7 @@ function makeFact(text: string, entityId: UUID = USER): Memory {
 		roomId: ROOM,
 		content: { text, type: "fact" },
 		createdAt: Date.now(),
+		...(metadata ? { metadata } : {}),
 	};
 }
 
@@ -123,6 +149,87 @@ describe("fact write-time dedupe (runtime.createMemory)", () => {
 		await runtime.createMemory(makeFact("???"), "facts", true);
 		expect(await readFactRows(runtime)).toHaveLength(2);
 	});
+
+	it("a duplicate with stronger metadata upgrades the kept row", async () => {
+		const runtime = makeRuntime();
+		const firstId = await runtime.createMemory(
+			makeFact("nubs plays guitar", USER, {
+				type: "custom",
+				source: "facts_and_relationships_stage",
+				kind: "current",
+				confidence: 0.4,
+				validAt: "2026-07-01T00:00:00.000Z",
+			}),
+			"facts",
+			true,
+		);
+		const secondId = await runtime.createMemory(
+			makeFact("Nubs plays guitar.", USER, {
+				type: "custom",
+				confidence: 0.9,
+				validAt: "2026-07-04T00:00:00.000Z",
+			}),
+			"facts",
+			true,
+		);
+		expect(secondId).toBe(firstId);
+		const rows = await readFactRows(runtime);
+		expect(rows).toHaveLength(1);
+		const meta = rows[0].metadata as Record<string, unknown>;
+		expect(meta.confidence).toBe(0.9);
+		expect(meta.validAt).toBe("2026-07-04T00:00:00.000Z");
+		// Untouched kept-row fields survive the upgrade.
+		expect(meta.kind).toBe("current");
+		expect(meta.source).toBe("facts_and_relationships_stage");
+	});
+
+	it("a duplicate with weaker metadata is a plain skip", async () => {
+		const runtime = makeRuntime();
+		await runtime.createMemory(
+			makeFact("nubs plays guitar", USER, {
+				type: "custom",
+				kind: "durable",
+				confidence: 0.9,
+				validAt: "2026-07-04T00:00:00.000Z",
+			}),
+			"facts",
+			true,
+		);
+		await runtime.createMemory(
+			makeFact("nubs plays guitar", USER, {
+				type: "custom",
+				kind: "current",
+				confidence: 0.4,
+				validAt: "2026-07-01T00:00:00.000Z",
+			}),
+			"facts",
+			true,
+		);
+		const rows = await readFactRows(runtime);
+		expect(rows).toHaveLength(1);
+		const meta = rows[0].metadata as Record<string, unknown>;
+		expect(meta.confidence).toBe(0.9);
+		// An already-set kind is never flipped by a duplicate.
+		expect(meta.kind).toBe("durable");
+		expect(meta.validAt).toBe("2026-07-04T00:00:00.000Z");
+	});
+
+	it("an explicit kind fills a kept row that has none", async () => {
+		const runtime = makeRuntime();
+		await runtime.createMemory(
+			makeFact("nubs plays guitar", USER, { type: "custom" }),
+			"facts",
+			true,
+		);
+		await runtime.createMemory(
+			makeFact("nubs plays guitar", USER, { type: "custom", kind: "current" }),
+			"facts",
+			true,
+		);
+		const rows = await readFactRows(runtime);
+		expect(rows).toHaveLength(1);
+		expect((rows[0].metadata as Record<string, unknown>).kind).toBe("current");
+	});
 });
 
 describe("facts_and_relationships stage — no duplicate durable echo", () => {
@@ -136,6 +243,7 @@ describe("facts_and_relationships stage — no duplicate durable echo", () => {
 		// Live symptom: the fact row and the relationship-echo row landed 5ms
 		// apart with identical text — the echo must be structurally skipped.
 		const runtime = makeRuntime(GUITAR_OUTPUT);
+		await seedRoomEntities(runtime);
 		await runFactsAndRelationshipsStage({
 			runtime,
 			message: makeMessage(runtime, "i play guitar btw"),
@@ -155,6 +263,7 @@ describe("facts_and_relationships stage — no duplicate durable echo", () => {
 		// The per-turn LLM dedupe pool is advisory (the model can miss); the
 		// structural write guard must hold even when it does.
 		const runtime = makeRuntime(GUITAR_OUTPUT);
+		await seedRoomEntities(runtime);
 		for (let turn = 0; turn < 2; turn += 1) {
 			await runFactsAndRelationshipsStage({
 				runtime,
@@ -176,6 +285,7 @@ describe("facts_and_relationships stage — no duplicate durable echo", () => {
 				thought: "new rel",
 			}),
 		);
+		await seedRoomEntities(runtime);
 		await runFactsAndRelationshipsStage({
 			runtime,
 			message: makeMessage(runtime, "Jake is my brother"),

@@ -288,6 +288,14 @@ function looksLikeClaudeConversation(value: unknown): boolean {
   return isRecord(value) && Array.isArray(value.chat_messages);
 }
 
+function isNotFound(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: string }).code === "ENOENT"
+  );
+}
+
 async function resolveInput(
   input: string,
 ): Promise<
@@ -296,8 +304,12 @@ async function resolveInput(
   let st: Awaited<ReturnType<typeof stat>>;
   try {
     st = await stat(input);
-  } catch {
-    return undefined;
+  } catch (error) {
+    // error-policy:J3 a genuinely-absent path is "not a Claude export" (probe
+    // returns undefined); any other stat failure (EACCES, EIO, ...) is a real
+    // I/O error on required input and must surface, not masquerade as absent.
+    if (isNotFound(error)) return undefined;
+    throw error;
   }
 
   if (st.isDirectory()) {
@@ -331,24 +343,25 @@ async function openConversationsStream(input: string): Promise<Readable> {
 }
 
 async function detect(input: string): Promise<boolean> {
-  try {
-    const resolved = await resolveInput(input);
-    if (!resolved) return false;
-    if (resolved.kind === "zip") {
-      const metadata = await findZipEntryMetadata(
-        resolved.path,
-        CONVERSATIONS_JSON,
-      );
-      if (!metadata) return false;
-    }
-
-    const first = await readFirstJsonArrayObject(
-      await openConversationsStream(input),
+  // Shape resolution decides recognition: an input that does not resolve to a
+  // Claude `conversations.json` (or a zip carrying one) is simply not a Claude
+  // export and returns false. Once it DOES resolve, the payload is required
+  // input — a corrupt/truncated/unreadable body throws so the caller sees a
+  // "corrupt Claude export" failure instead of a silent "unrecognized format".
+  const resolved = await resolveInput(input);
+  if (!resolved) return false;
+  if (resolved.kind === "zip") {
+    const metadata = await findZipEntryMetadata(
+      resolved.path,
+      CONVERSATIONS_JSON,
     );
-    return looksLikeClaudeConversation(first);
-  } catch {
-    return false;
+    if (!metadata) return false;
   }
+
+  const first = await readFirstJsonArrayObject(
+    await openConversationsStream(input),
+  );
+  return looksLikeClaudeConversation(first);
 }
 
 async function* parse(

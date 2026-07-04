@@ -7,7 +7,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { createMockRuntime } from "../../testing/mock-runtime";
 import type { Task } from "../../types/task";
-import { TaskDrain } from "./task-drain";
+import { TaskDrain } from "./task-drain.ts";
 
 const AGENT_ID = "00000000-0000-0000-0000-000000000001";
 
@@ -95,6 +95,43 @@ describe("TaskDrain", () => {
 			affinityKey: "autonomy",
 			updateInterval: 30_000,
 			baseInterval: 30_000,
+		});
+	});
+
+	test("dispose surfaces a failed deleteTask via reportError instead of swallowing it", async () => {
+		const createdId = "00000000-0000-0000-0000-0000000000aa";
+		const deleteError = new Error("db handle closed");
+		const reportError = vi.fn();
+		const runtime = createMockRuntime({
+			agentId: AGENT_ID,
+			reportError,
+			getTasksByName: async () => [],
+			createTask: vi.fn(async () => createdId),
+			deleteTask: vi.fn().mockRejectedValue(deleteError),
+		});
+
+		const drain = new TaskDrain(
+			{
+				taskName: "BATCHER_DRAIN",
+				intervalMs: 30_000,
+				taskMetadata: { affinityKey: "autonomy" },
+				skipRegisterWorker: true,
+			},
+			30_000,
+		);
+
+		await drain.start(runtime);
+		expect(drain.id).toBe(createdId);
+		expect(runtime.deleteTask).not.toHaveBeenCalled();
+
+		// dispose must complete (not reject) even though deleteTask fails, and the
+		// failure must be reported rather than silently swallowed.
+		await expect(drain.dispose(runtime)).resolves.toBeUndefined();
+		expect(runtime.deleteTask).toHaveBeenCalledTimes(1);
+		expect(runtime.deleteTask).toHaveBeenCalledWith(createdId);
+		expect(reportError).toHaveBeenCalledTimes(1);
+		expect(reportError).toHaveBeenCalledWith("TaskDrain.dispose", deleteError, {
+			taskId: createdId,
 		});
 	});
 });

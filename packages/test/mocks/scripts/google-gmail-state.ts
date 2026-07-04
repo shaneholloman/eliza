@@ -1,3 +1,4 @@
+/** Runs the google gmail state mock-service support script for deterministic local test fixtures. */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import type http from "node:http";

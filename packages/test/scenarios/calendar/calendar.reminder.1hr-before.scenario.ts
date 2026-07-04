@@ -1,3 +1,4 @@
+/** Scenario fixture for calendar reminder 1hr before; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import { scenario } from "@elizaos/scenario-runner/schema";
 import { expectCalendarResultData } from "../_helpers/calendar-assertions.ts";
 

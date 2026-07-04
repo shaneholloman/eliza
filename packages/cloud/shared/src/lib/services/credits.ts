@@ -427,10 +427,18 @@ export class CreditsService {
    * cached one. Called only on the gate's COLD path (the gate caches its own
    * short-lived hint), so it is not on the per-request hot path. Returns 0 for a
    * missing org so the gate fails safe (slow path).
+   *
+   * A PRESENT org with a null/non-numeric `credit_balance` is a corrupt read,
+   * not a $0 balance: `parseNumeric` throws rather than coercing it to `NaN`.
+   * A silent `NaN` here would be written as a poisoned gate hint and, in
+   * `getCreditBalanceResponse`, serialized to the client as `balance: null`
+   * (#12268 fallback-slop: failed data must not become a success-shaped value).
    */
   async getOrganizationBalanceUsd(organizationId: string): Promise<number> {
     const org = await organizationsRepository.findById(organizationId);
-    return org ? Number(org.credit_balance) : 0;
+    // error-policy:J6 missing org → 0 is the documented fail-safe (gate slow-paths).
+    if (!org) return 0;
+    return parseNumeric(org.credit_balance, "credit_balance");
   }
 
   async getTransactionByStripePaymentIntent(

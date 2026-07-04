@@ -589,6 +589,26 @@ export interface PluginWidgetDeclaration {
 	signalKinds?: readonly string[];
 	/** Home-grid footprint (4-col grid). Default 2x1. */
 	size?: { cols: number; rows: number };
+	/**
+	 * Visibility class for the built-in resolver (#12090 item 9). Drives
+	 * `resolveWidgetsForSlot` visibility from the declaration instead of
+	 * hardcoded plugin-id string sets, so a widget cannot drift out of the
+	 * allow set (e.g. `todo` vs `todos`) when its plugin id changes.
+	 *
+	 * - `"always"` — a core surface with NO loadable plugin package
+	 *   (notifications, welcome, needs-attention, feed, …). Renders regardless
+	 *   of the runtime plugin snapshot; still hidden if an explicit
+	 *   `present + disabled` snapshot entry exists for its plugin id.
+	 * - `"fallback"` — backed by a store/compat data source, so it renders when
+	 *   the snapshot is missing OR omits the plugin, but a `present + disabled`
+	 *   entry hides it (agent-orchestrator, browser-workspace, todo).
+	 * - `"snapshot"` / omitted — standard gate: visible only when the plugin is
+	 *   enabled+active in the snapshot.
+	 *
+	 * Only honored for built-in declarations; server-provided declarations are
+	 * always snapshot-gated regardless of this field.
+	 */
+	visibility?: "always" | "fallback" | "snapshot";
 }
 
 export interface PluginAppUiExtension {
@@ -1182,6 +1202,21 @@ export interface Plugin {
 
 	/** Remote-mode configuration. Required when {@link Plugin.mode} is `"remote"`. */
 	remote?: RemotePluginConfig;
+
+	/**
+	 * Optional pre-initialization hook invoked by the plugin resolver once the
+	 * plugin module has loaded, before `init` runs. Use it to prepare a
+	 * plugin-owned load-time dependency that must exist before the plugin's
+	 * services start — for example linking or building a companion binary the
+	 * plugin's own service spawns lazily later.
+	 *
+	 * The resolver calls this generically for every plugin that declares it, so
+	 * package-specific preparation lives with the plugin instead of a name-keyed
+	 * branch in the resolver. A missing optional dependency should degrade (log
+	 * and return) rather than throw: `preflight` prepares, it does not gate the
+	 * load. Reserve throwing for a genuinely fatal precondition.
+	 */
+	preflight?: () => Promise<void> | void;
 
 	// Initialize plugin with runtime services
 	init?: (

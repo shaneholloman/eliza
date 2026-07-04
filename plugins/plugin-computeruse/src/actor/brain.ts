@@ -273,7 +273,8 @@ export class Brain {
     sceneSignature: string,
   ): BrainOutput | null {
     for (let i = this.dhashCache.length - 1; i >= 0; i--) {
-      const entry = this.dhashCache[i]!;
+      const entry = this.dhashCache[i];
+      if (!entry) continue;
       if (
         entry.goal === goal &&
         entry.sceneSignature === sceneSignature &&
@@ -341,6 +342,9 @@ export class Brain {
       try {
         return parseBrainOutput(raw);
       } catch {
+        // error-policy:J3 untrusted model output; null is the explicit
+        // invalid signal that drives the escalation ladder (imageless →
+        // pixels → strict prompt). Total failure throws BrainParseError.
         return null;
       }
     };
@@ -370,8 +374,10 @@ export class Brain {
       } catch (err) {
         // "never" has no pixels to fall back to — surface the failure.
         if (this.imagePolicy === "never") throw err;
-        // Otherwise degrade to the escalation (pixels) path rather than crash
-        // the whole CUA loop if the text model is unavailable.
+        // error-policy:J4 designed degrade — the imageless pass is a
+        // token-saving optimization tier; when the text model is unavailable
+        // the loop escalates to the pixels pass below instead of crashing,
+        // and a failure there still throws to the caller.
         logger.debug(
           `[computeruse/brain] imageless planning pass failed (${
             err instanceof Error ? err.message : String(err)

@@ -20,6 +20,11 @@
  * unresolvable sender is treated as USER, never a higher tier. Owner and role
  * grants are recorded explicitly with their source so they stay auditable.
  */
+import {
+	getConnectorIdentityMetadataMapping,
+	getConnectorWorldIdMetadataKeys,
+	normalizeConnectorSource,
+} from "./connectors.ts";
 import { createUniqueUuid } from "./entities";
 import { logger } from "./logger";
 import type { IAgentRuntime, Memory, UUID, World } from "./types";
@@ -223,27 +228,35 @@ function getConnectorMetadataFromMemory(
 		return { [source]: sourceMetadata };
 	}
 
-	if (source === "discord") {
-		const fromId = memoryMetadata?.fromId;
-		if (typeof fromId !== "string" || fromId.trim().length === 0) {
-			return undefined;
-		}
-
-		const entityName =
-			typeof memoryMetadata?.entityName === "string"
-				? memoryMetadata.entityName
-				: undefined;
-
-		return {
-			discord: {
-				userId: fromId,
-				id: fromId,
-				...(entityName ? { name: entityName, username: entityName } : {}),
-			},
-		};
+	// No nested `metadata[source]` object present. Fall back to the connector's
+	// DECLARED flat-field -> identity projection from the connector-source
+	// registry (owner metadata), instead of a connector-specific literal branch
+	// baked into core (#12090 item 22 / #12087). The Discord legacy mapping
+	// (fromId/entityName) is registered as connector-owned metadata in
+	// connectors.ts, so this path is generic across connectors.
+	const mapping = getConnectorIdentityMetadataMapping(source);
+	if (!mapping) {
+		return undefined;
 	}
 
-	return undefined;
+	const userId = memoryMetadata?.[mapping.userIdField];
+	if (typeof userId !== "string" || userId.trim().length === 0) {
+		return undefined;
+	}
+
+	const canonicalSource = normalizeConnectorSource(source) || source;
+	const displayName =
+		mapping.nameField && typeof memoryMetadata?.[mapping.nameField] === "string"
+			? (memoryMetadata[mapping.nameField] as string)
+			: undefined;
+
+	return {
+		[canonicalSource]: {
+			userId,
+			id: userId,
+			...(displayName ? { name: displayName, username: displayName } : {}),
+		},
+	};
 }
 
 async function getEntityMetadata(
@@ -477,20 +490,22 @@ function resolveWorldIdFromMessageMetadata(
 	message: Memory,
 ): UUID | null {
 	const source = getMessageSource(message);
+	if (!source) {
+		return null;
+	}
 	const metadata = getMemoryMetadata(message);
-	if (source === "discord") {
-		const serverId =
-			typeof metadata?.discordServerId === "string"
-				? metadata.discordServerId
-				: typeof metadata?.discordChannelId === "string"
-					? metadata.discordChannelId
-					: null;
 
-		if (!serverId) {
-			return null;
+	// Derive the world id from the connector's DECLARED flat world-id keys
+	// (registry, owner metadata) instead of a connector-specific literal that
+	// hardcodes per-connector world-id fields in core (#12090 item 22 / #12087).
+	// The Discord legacy keys are registered as connector-owned metadata in
+	// connectors.ts; first present, non-empty string wins.
+	const worldIdKeys = getConnectorWorldIdMetadataKeys(source);
+	for (const key of worldIdKeys) {
+		const value = metadata?.[key];
+		if (typeof value === "string" && value.trim().length > 0) {
+			return createUniqueUuid(runtime, value) as UUID;
 		}
-
-		return createUniqueUuid(runtime, serverId) as UUID;
 	}
 
 	return null;

@@ -108,6 +108,7 @@ async function parseOptionalBody(
   try {
     return await parseBody(req);
   } catch {
+    // error-policy:J3 unparseable request body → null; callers emit an explicit 400.
     return null;
   }
 }
@@ -123,6 +124,9 @@ async function resolveService(
   if (ctx.runtime.hasService(OrchestratorTaskService.serviceType)) {
     await ctx.runtime
       .getServiceLoadPromise(OrchestratorTaskService.serviceType)
+      // error-policy:J5 a rejected load is observed at the service-load site;
+      // here we only wait for the settle before re-reading, and a failed load
+      // surfaces as the getService() below returning undefined.
       .catch(() => {});
     return ctx.runtime.getService<OrchestratorTaskService>(
       OrchestratorTaskService.serviceType,
@@ -150,6 +154,8 @@ export async function handleOrchestratorRoutes(
   try {
     return await dispatchOrchestratorRoutes(req, res, pathname, ctx);
   } catch (error) {
+    // error-policy:J1 single route boundary — any thrown service call becomes a
+    // 500 response instead of an unhandled rejection.
     if (!res.headersSent) {
       sendError(
         res,
@@ -254,6 +260,7 @@ async function dispatchOrchestratorRoutes(
 
   // POST /api/orchestrator/tasks
   if (method === "POST" && pathname === `${PREFIX}/tasks`) {
+    // error-policy:J3 unparseable request body → null → explicit 400 below.
     const body = await parseBody(req).catch(() => null);
     if (!body) {
       sendError(res, "Invalid JSON body", 400);
@@ -347,6 +354,7 @@ async function dispatchOrchestratorRoutes(
 
     // PATCH /tasks/:taskId
     if (method === "PATCH" && segments.length === 1) {
+      // error-policy:J3 unparseable request body → null → explicit 400 below.
       const body = await parseBody(req).catch(() => null);
       if (!body) {
         sendError(res, "Invalid JSON body", 400);
@@ -376,6 +384,7 @@ async function dispatchOrchestratorRoutes(
       try {
         deleted = await service.deleteTask(taskId);
       } catch (error) {
+        // error-policy:J1 route boundary — service failure becomes a 500 response.
         sendError(
           res,
           error instanceof Error ? error.message : "Failed to delete task",
@@ -397,6 +406,7 @@ async function dispatchOrchestratorRoutes(
       try {
         task = await service.pauseTask(taskId);
       } catch (error) {
+        // error-policy:J1 route boundary — service failure becomes a 500 response.
         sendError(
           res,
           error instanceof Error ? error.message : "Failed to pause task",
@@ -429,6 +439,7 @@ async function dispatchOrchestratorRoutes(
       try {
         task = await service.archiveTask(taskId);
       } catch (error) {
+        // error-policy:J1 route boundary — service failure becomes a 500 response.
         sendError(
           res,
           error instanceof Error ? error.message : "Failed to archive task",
@@ -487,6 +498,7 @@ async function dispatchOrchestratorRoutes(
     //
     // Refs: elizaOS/eliza#8124
     if (method === "POST" && sub === "auto-validate" && segments.length === 2) {
+      // error-policy:J3 unparseable request body → null → explicit 400 below.
       const body = await parseBody(req).catch(() => null);
       if (!body) {
         sendError(res, "Invalid JSON body", 400);
@@ -536,6 +548,8 @@ async function dispatchOrchestratorRoutes(
           verifier: LLM_GOAL_VERIFIER_NAME,
         })
         .catch((error: unknown) => {
+          // error-policy:J1 route boundary — validation failure becomes a 409 response;
+          // the undefined sentinel is checked below to end the request.
           sendError(
             res,
             error instanceof Error ? error.message : "Validation failed",
@@ -554,6 +568,7 @@ async function dispatchOrchestratorRoutes(
 
     // POST /tasks/:taskId/validate  { passed, summary }
     if (method === "POST" && sub === "validate" && segments.length === 2) {
+      // error-policy:J3 unparseable request body → null → explicit 400 below.
       const body = await parseBody(req).catch(() => null);
       if (!body || typeof body.passed !== "boolean") {
         sendError(res, "passed (boolean) is required", 400);
@@ -568,6 +583,8 @@ async function dispatchOrchestratorRoutes(
           humanOverride: body.humanOverride === true,
         })
         .catch((error: unknown) => {
+          // error-policy:J1 route boundary — validation failure becomes a 409 response;
+          // the undefined sentinel is checked below to end the request.
           sendError(
             res,
             error instanceof Error ? error.message : "Validation failed",
@@ -599,6 +616,7 @@ async function dispatchOrchestratorRoutes(
         return true;
       }
       if (method === "POST") {
+        // error-policy:J3 unparseable request body → null → explicit 400 below.
         const body = await parseBody(req).catch(() => null);
         if (!body) {
           sendError(res, "Invalid JSON body", 400);
@@ -618,6 +636,7 @@ async function dispatchOrchestratorRoutes(
             metadata: isRecord(body.metadata) ? body.metadata : undefined,
           });
         } catch (error) {
+          // error-policy:J1 route boundary — failure becomes a 409/500 response.
           sendError(
             res,
             error instanceof Error
@@ -638,6 +657,7 @@ async function dispatchOrchestratorRoutes(
 
     // POST /tasks/:taskId/retry-turn
     if (method === "POST" && sub === "retry-turn" && segments.length === 2) {
+      // error-policy:J3 unparseable request body → null → explicit 400 below.
       const body = await parseBody(req).catch(() => null);
       if (!body) {
         sendError(res, "Invalid JSON body", 400);
@@ -664,6 +684,7 @@ async function dispatchOrchestratorRoutes(
           agent: asAgentOptions(body.agent),
         });
       } catch (error) {
+        // error-policy:J1 route boundary — failure becomes a 409/500 response.
         sendError(
           res,
           error instanceof Error ? error.message : "Failed to retry turn",
@@ -685,6 +706,7 @@ async function dispatchOrchestratorRoutes(
       sub === "rerun-from-event" &&
       segments.length === 2
     ) {
+      // error-policy:J3 unparseable request body → null → explicit 400 below.
       const body = await parseBody(req).catch(() => null);
       const eventId = body ? asString(body.eventId) : undefined;
       if (!body) {
@@ -714,6 +736,7 @@ async function dispatchOrchestratorRoutes(
           agent: asAgentOptions(body.agent),
         });
       } catch (error) {
+        // error-policy:J1 route boundary — failure becomes a 409/500 response.
         sendError(
           res,
           error instanceof Error ? error.message : "Failed to rerun from event",
@@ -731,6 +754,7 @@ async function dispatchOrchestratorRoutes(
 
     // POST /tasks/:taskId/restart
     if (method === "POST" && sub === "restart" && segments.length === 2) {
+      // error-policy:J3 unparseable request body → null → explicit 400 below.
       const body = await parseBody(req).catch(() => null);
       if (!body) {
         sendError(res, "Invalid JSON body", 400);
@@ -745,6 +769,7 @@ async function dispatchOrchestratorRoutes(
           agent: asAgentOptions(body.agent),
         });
       } catch (error) {
+        // error-policy:J1 route boundary — failure becomes a 409/500 response.
         sendError(
           res,
           error instanceof Error ? error.message : "Failed to restart task",
@@ -766,6 +791,7 @@ async function dispatchOrchestratorRoutes(
       sub === "restart-with-edited-plan" &&
       segments.length === 2
     ) {
+      // error-policy:J3 unparseable request body → null → explicit 400 below.
       const body = await parseBody(req).catch(() => null);
       if (!body) {
         sendError(res, "Invalid JSON body", 400);
@@ -786,6 +812,7 @@ async function dispatchOrchestratorRoutes(
           agent: asAgentOptions(body.agent),
         });
       } catch (error) {
+        // error-policy:J1 route boundary — failure becomes a 409/500 response.
         sendError(
           res,
           error instanceof Error
@@ -818,6 +845,7 @@ async function dispatchOrchestratorRoutes(
         return true;
       }
       if (method === "POST") {
+        // error-policy:J3 unparseable request body → null → explicit 400 below.
         const body = await parseBody(req).catch(() => null);
         const content = body ? asString(body.content) : undefined;
         if (!content) {
@@ -894,6 +922,7 @@ async function dispatchOrchestratorRoutes(
             task: asString(body.task),
           });
         } catch (error) {
+          // error-policy:J1 route boundary — spawn failure becomes a 500 response.
           sendError(
             res,
             error instanceof Error ? error.message : "Failed to spawn agent",
@@ -919,6 +948,7 @@ async function dispatchOrchestratorRoutes(
         try {
           stopped = await service.stopTaskAgent(taskId, sessionId);
         } catch (error) {
+          // error-policy:J1 route boundary — stop failure becomes a 500 response.
           sendError(
             res,
             error instanceof Error ? error.message : "Failed to stop agent",

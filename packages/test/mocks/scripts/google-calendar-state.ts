@@ -1,3 +1,4 @@
+/** Runs the google calendar state mock-service support script for deterministic local test fixtures. */
 import crypto from "node:crypto";
 import {
   getLifeOpsSimulatorPerson,

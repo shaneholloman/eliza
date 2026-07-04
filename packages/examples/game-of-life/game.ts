@@ -1174,7 +1174,7 @@ async function main(): Promise<void> {
     await new Promise((r) => setTimeout(r, tickDelay));
   }
 
-  // Cleanup
+  // Stop every live agent runtime before printing the final simulation summary.
   console.log("\n  Shutting down agent runtimes...");
   for (const [, liveAgent] of liveAgents) {
     await liveAgent.runtime.stop();

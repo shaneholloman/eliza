@@ -1,3 +1,4 @@
+/** Configures the workspace aliases shared Vitest lane used by workspace package tests. */
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {

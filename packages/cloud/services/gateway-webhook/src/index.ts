@@ -6,6 +6,7 @@ import { twilioAdapter } from "./adapters/twilio";
 import type { Platform, PlatformAdapter } from "./adapters/types";
 import { whatsappAdapter } from "./adapters/whatsapp";
 import { getAuthHeader, initAuth, shutdownAuth } from "./auth";
+import { enforceForwarderSecret } from "./internal-auth";
 import { handleInternalEvent } from "./internal-event-handler";
 import { logger } from "./logger";
 import { initProjectConfig, shutdownProjectConfig } from "./project-config";
@@ -114,6 +115,13 @@ app.post("/webhook/:project/:platform", async (c) => {
     return c.json({ error: "unsupported platform" }, 400);
   }
 
+  // L3: when ELIZA_APP_WEBHOOK_GATEWAY_SECRET is set, only accept requests for
+  // the forwarded project that carry the BFF forwarder's dedicated header.
+  // No-op when the secret is unset, and never gates other projects/tenants.
+  if (!enforceForwarderSecret(c.req.raw, c.req.param("project"))) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
   const adapter = adapters[platform as Platform];
   return handleWebhook(
     c.req.raw,
@@ -132,6 +140,10 @@ app.post("/webhook/:project/:platform/:agentId", async (c) => {
 
   if (!SUPPORTED_PLATFORMS.has(platform)) {
     return c.json({ error: "unsupported platform" }, 400);
+  }
+
+  if (!enforceForwarderSecret(c.req.raw, c.req.param("project"))) {
+    return c.json({ error: "unauthorized" }, 401);
   }
 
   const adapter = adapters[platform as Platform];

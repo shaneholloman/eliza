@@ -1,3 +1,4 @@
+// Exercises the Code example behavior that this module protects.
 import { beforeEach, describe, expect, it } from "bun:test";
 import {
   type HandlerCallback,

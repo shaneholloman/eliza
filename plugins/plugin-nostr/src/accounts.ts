@@ -6,7 +6,7 @@
  * start one relay pool and subscription set per configured account; the
  * normalized account id also keys connector target resolution.
  */
-import type { IAgentRuntime } from "@elizaos/core";
+import { ElizaError, type IAgentRuntime } from "@elizaos/core";
 import { DEFAULT_NOSTR_RELAYS, type NostrDmPolicy, type NostrSettings } from "./types.js";
 
 export const DEFAULT_NOSTR_ACCOUNT_ID = "default";
@@ -52,11 +52,13 @@ function parseAccountsJson(runtime: IAgentRuntime): Record<string, NostrAccountC
     return parsed && typeof parsed === "object"
       ? (parsed as Record<string, NostrAccountConfig>)
       : {};
-  } catch {
-    // error-policy:J3 malformed NOSTR_ACCOUNTS JSON is untrusted config input; the
-    // multi-account blob contributes no entries while single-account env settings
-    // still govern — a corrupt blob must not crash account discovery (accounts.test.ts).
-    return {};
+  } catch (error) {
+    throw new ElizaError("Nostr accounts config is not valid JSON.", {
+      code: "NOSTR_CONFIG_INVALID",
+      cause: error,
+      context: { setting: "NOSTR_ACCOUNTS" },
+      severity: "fatal",
+    });
   }
 }
 

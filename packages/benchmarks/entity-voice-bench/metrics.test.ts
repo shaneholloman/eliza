@@ -1,3 +1,4 @@
+// Exercises entity-voice-bench benchmark entity voice bench metrics.test behavior against deterministic harness fixtures.
 import { describe, expect, it } from "vitest";
 import { sessionById } from "./corpus.ts";
 import {
@@ -6,9 +7,9 @@ import {
   isGrounded,
   nameHitRate,
   nameMatches,
+  type SessionObservation,
   scoreBindings,
   scoreCreation,
-  type SessionObservation,
   wordErrorRate,
 } from "./metrics.ts";
 
@@ -72,12 +73,37 @@ describe("scoreBindings", () => {
     const observation = emptyObservation("household");
     observation.speakerEntities = { jill: "e-jill", bob: "e-bob" };
     observation.turns = [
-      { utteranceId: "household-04", transcript: "", boundEntityId: "e-jill", wasCreated: false },
-      { utteranceId: "household-05", transcript: "", boundEntityId: "e-bob", wasCreated: false },
+      {
+        utteranceId: "household-04",
+        transcript: "",
+        boundEntityId: "e-jill",
+        wasCreated: false,
+      },
+      {
+        utteranceId: "household-05",
+        transcript: "",
+        boundEntityId: "e-bob",
+        wasCreated: false,
+      },
       // profile-reset turn creates a duplicate instead of re-binding
-      { utteranceId: "household-08", transcript: "", boundEntityId: "e-dupe", wasCreated: true },
-      { utteranceId: "household-11", transcript: "", boundEntityId: "e-jill", wasCreated: false },
-      { utteranceId: "household-12", transcript: "", boundEntityId: "e-bob", wasCreated: false },
+      {
+        utteranceId: "household-08",
+        transcript: "",
+        boundEntityId: "e-dupe",
+        wasCreated: true,
+      },
+      {
+        utteranceId: "household-11",
+        transcript: "",
+        boundEntityId: "e-jill",
+        wasCreated: false,
+      },
+      {
+        utteranceId: "household-12",
+        transcript: "",
+        boundEntityId: "e-bob",
+        wasCreated: false,
+      },
     ];
     const details: string[] = [];
     const cell = scoreBindings(session, observation, "recognition", details);
@@ -107,8 +133,12 @@ describe("countFalseMerges", () => {
 describe("isGrounded", () => {
   it("accepts facts traceable to an utterance and rejects fabrications", () => {
     const session = sessionById("household");
-    expect(isGrounded("Jill's birthday is on June twelfth", session)).toBe(true);
-    expect(isGrounded("Jill owns a red sailboat in Miami", session)).toBe(false);
+    expect(isGrounded("Jill's birthday is on June twelfth", session)).toBe(
+      true,
+    );
+    expect(isGrounded("Jill owns a red sailboat in Miami", session)).toBe(
+      false,
+    );
   });
 });
 

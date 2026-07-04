@@ -1,3 +1,7 @@
+/**
+ * Connects the runtime switcher to the persisted agent-profile registry and
+ * enforces trust gates before adding or activating remote runtimes.
+ */
 import { useCallback, useState } from "react";
 
 import { isStoreBuild } from "../../build-variant";
@@ -8,7 +12,7 @@ import {
   loadAgentProfileRegistry,
   switchRuntimeNonDestructive,
 } from "../../state";
-import { isTrustedRestoreApiBaseUrl } from "../../state/startup-phase-restore";
+import { isTrustedRestoreApiBaseUrl } from "../../state/runtime-url-trust";
 import { MyRuntimesSection } from "./MyRuntimesSection";
 
 export interface MyRuntimesContainerProps {
@@ -33,7 +37,7 @@ export function MyRuntimesContainer({ className }: MyRuntimesContainerProps) {
   const hideLocal = isAndroidCloudBuild() || isStoreBuild();
   const visibleProfiles = hideLocal
     ? // Hide local runtimes — but keep the one that's CURRENTLY active visible,
-      // else the Active badge would vanish on a store build whose persisted
+      // otherwise the Active badge vanishes on a store build whose persisted
       // active profile is local (onSwitch still refuses switching TO a local).
       registry.profiles.filter(
         (p) => p.kind !== "local" || p.id === registry.activeProfileId,

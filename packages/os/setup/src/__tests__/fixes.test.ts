@@ -1,3 +1,4 @@
+// Exercises the AOSP setup flasher backend and dependency gates.
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

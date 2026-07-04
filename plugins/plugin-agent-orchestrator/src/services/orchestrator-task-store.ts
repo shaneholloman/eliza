@@ -94,7 +94,7 @@ const FILE_LOCK_ACQUIRE_TIMEOUT_MS = 30_000;
 // A lock is only reclaimed as "stale" once it is older than this. It MUST be
 // shorter than the acquire timeout (so a waiter can reclaim a dead lock within
 // its own wait window) yet far longer than a legitimate hold — the guarded work
-// is a single atomic temp-file write + rename, sub-second even for large task
+// is a single atomic scratch-file write + rename, sub-second even for large task
 // histories, so a lock older than 10s means the holder died mid-write. Setting
 // this equal to the acquire timeout (the previous value) let a waiter give up at
 // the exact moment a lock became reclaimable, and risked reclaiming a lock still
@@ -599,6 +599,8 @@ export class FileTaskStore extends InMemoryTaskStore {
           this.hydrate([]);
         }
       } catch (error) {
+        // error-policy:J3 persisted-store load: ENOENT = no file yet, any other
+        // read/parse error warns and starts empty (observable recovery).
         const code =
           isRecord(error) && typeof error.code === "string" ? error.code : "";
         if (code !== "ENOENT") {
@@ -707,6 +709,8 @@ export class FileTaskStore extends InMemoryTaskStore {
           }
         }
       } catch (error) {
+        // error-policy:J3 persisted-merge read: ENOENT skipped, corrupt/unreadable
+        // file warns and re-seeds the merge from in-memory state (observable).
         const code =
           isRecord(error) && typeof error.code === "string" ? error.code : "";
         if (code !== "ENOENT") {
@@ -755,7 +759,12 @@ export class FileTaskStore extends InMemoryTaskStore {
         await pending.writeFile(`${process.pid}\n${Date.now()}\n`, "utf8");
         handle = pending;
       } catch (error) {
+        // error-policy:J3 lock-acquire: EEXIST (lock held) is retried until the
+        // deadline; every other error is rethrown below (fail-fast).
         if (pending) {
+          // error-policy:J6 best-effort teardown — unwind a partial lock
+          // acquire; the original acquire error below is authoritative and is
+          // rethrown once retries are exhausted.
           await pending.close().catch(() => {});
           await rm(this.lockFile, { force: true }).catch(() => {});
         }
@@ -780,6 +789,8 @@ export class FileTaskStore extends InMemoryTaskStore {
       if (Date.now() - info.mtimeMs < FILE_LOCK_STALE_MS) return;
       await rm(this.lockFile, { force: true });
     } catch (error) {
+      // error-policy:J3 stale-lock stat: ENOENT = lock already gone (fine); any
+      // other stat error is rethrown (fail-fast).
       const code =
         isRecord(error) && typeof error.code === "string" ? error.code : "";
       if (code !== "ENOENT") throw error;
@@ -857,6 +868,9 @@ export class RuntimeDbTaskStore {
       const parsed: unknown = JSON.parse(row.document);
       return normalizeTaskDocument(parsed);
     } catch {
+      // error-policy:J3 parse of a persisted task-document row; a corrupt row
+      // yields an explicit "not a document" (null) so one bad row cannot crash
+      // a list/scan, never a fabricated empty document.
       return null;
     }
   }
@@ -1059,6 +1073,10 @@ export class RuntimeDbTaskStore {
       );
       return this.matchSession(fallbackRows, sessionId);
     } catch {
+      // error-policy:J4 designed degrade — see the rationale above (#11778): on
+      // the session-event hot path a fallback-query failure must degrade to
+      // "session not found yet" (null), never poison the caller and silently
+      // drop all further telemetry for the session.
       return null;
     }
   }

@@ -1,7 +1,9 @@
+/**
+ * Renders the continuous chat overlay that keeps the composer and transcript
+ * available across views.
+ */
 import { transcriptPlainText } from "@elizaos/shared/transcripts";
 import {
-  Check,
-  Copy,
   FileText,
   Film,
   LayoutGrid,
@@ -10,13 +12,8 @@ import {
   Mic,
   Minimize2,
   Music,
-  Pencil,
   RotateCcw,
   SendHorizontal,
-  Sparkles,
-  Square,
-  Volume2,
-  X,
 } from "lucide-react";
 import {
   AnimatePresence,
@@ -35,6 +32,7 @@ import type {
   ChatTurnStatus,
   ImageAttachment,
 } from "../../api/client-types-chat";
+import { useComposerKeydown, useComposerPaste } from "../../chat/composer-core";
 import {
   parseSlashDraft,
   resolveClientShortcutExecution,
@@ -53,11 +51,9 @@ import {
   type TutorialChatControlDetail,
 } from "../../events";
 import {
-  COPY_HOLD_MS,
   TOUCH_TAP_MOVE_SLOP as OUTSIDE_SHEET_TAP_SLOP,
   SHEET_DETENT_OVERSHOOT_SCALE,
   sqrtRubberBand,
-  usePointerPressAndHold,
   useRafCoalescer,
 } from "../../gestures";
 import { useConversationSwipeJank } from "../../hooks/useConversationSwipeJank";
@@ -66,15 +62,14 @@ import {
   LAYOUT_SHIFT_INTENT_TRANSIENT,
 } from "../../hooks/useLayoutShiftMonitor";
 import { usePushToTalk } from "../../hooks/usePushToTalk";
+import { useThreadAutoScroll } from "../../hooks/useThreadAutoScroll";
 import { Z_SHELL_OVERLAY } from "../../lib/floating-layers";
 import { cn } from "../../lib/utils";
 import { claimAssistantLaunchPayloadFromHash } from "../../platform/assistant-launch-payload";
 import { useAppSelectorShallow } from "../../state";
 import {
   clearChatDraft,
-  readChatDraft,
-  useChatComposerDraftPersistence,
-  writeChatDraft,
+  useChatComposerOrLocal,
 } from "../../state/ChatComposerContext.hooks";
 import { useConversationMessages } from "../../state/ConversationMessagesContext.hooks";
 import { goHome, goLauncher } from "../../state/shell-surface-store";
@@ -83,7 +78,6 @@ import { copyTextToClipboard } from "../../utils/clipboard";
 import {
   CHAT_UPLOAD_ACCEPT,
   chatUploadKind,
-  classifyComposerPaste,
   intakeAttachmentFiles,
   MAX_CHAT_IMAGES,
   summarizeDroppedAttachments,
@@ -92,10 +86,14 @@ import { InlineWidgetText } from "../chat/InlineWidgetText";
 import { MessageAttachments } from "../chat/MessageAttachments";
 import { SensitiveRequestBlock } from "../chat/MessageContent";
 import { findChoiceRegions } from "../chat/message-choice-parser";
-import { findFollowupsRegions } from "../chat/message-followups-parser";
-import { findFormRegions } from "../chat/message-form-parser";
 import { ThinkingBlock } from "../chat/ThinkingBlock";
 import { withTranscriptMarker } from "../chat/TranscriptViewerOverlay";
+import { ChatMessage } from "../composites/chat/chat-message";
+import type {
+  ChatMessageData,
+  ChatMessageRenderContext,
+} from "../composites/chat/chat-types";
+import { TurnStatus } from "../composites/chat/chat-typing-indicator";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
@@ -111,12 +109,6 @@ import { deriveChannelTopics, groupMessagesByTopic } from "./topic-grouping";
 import { type PullGestureBinding, usePullGesture } from "./use-pull-gesture";
 import { usePromptSuggestions } from "./usePromptSuggestions";
 import type { ConversationNav, ShellController } from "./useShellController";
-
-/**
- * Server source tag for decider-pushed proactive suggestions (#8792) — mirrors
- * PROACTIVE_INTERACTION_SOURCE in the agent's proactive-interaction decider.
- */
-const PROACTIVE_SUGGESTION_SOURCE = "proactive-interaction";
 
 /** No-op slash controller so the overlay renders without a provider (stories). */
 const EMPTY_SLASH_CONTROLLER: SlashCommandController = {
@@ -620,151 +612,10 @@ function PillHandle({
   );
 }
 
-/** Humanize an action/tool symbol ("SEND_MESSAGE" → "Send message") for the
- *  status label so it reads as prose, not a constant. */
-function humanizeStatusName(name: string): string {
-  const cleaned = name.trim().replace(/[_-]+/g, " ").toLowerCase();
-  if (!cleaned) return "";
-  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
-}
-
-/** The phase label shown beside the breathing dots. Server-provided `label`
- *  always wins; otherwise derive a concise phrase from the kind (+ action/tool
- *  name when present). */
-function turnStatusLabel(status: ChatTurnStatus): string {
-  if (status.label?.trim()) return status.label.trim();
-  switch (status.kind) {
-    case "thinking":
-      return "Thinking";
-    case "streaming":
-      return "Replying";
-    case "running_action":
-      return status.actionName
-        ? `Running ${humanizeStatusName(status.actionName)}`
-        : "Working";
-    case "running_tool":
-      return status.toolName
-        ? `Using ${humanizeStatusName(status.toolName)}`
-        : "Using a tool";
-    case "evaluating":
-      return "Reflecting";
-    case "waking":
-      return "Waking the agent";
-    case "speaking":
-      return "Speaking";
-  }
-}
-
-// Min time (ms) a phase label must stay on screen before the next one replaces
-// it. Without this, a fast thinking→action→streaming sequence flickers through
-// labels faster than the eye can read. The text content the user sees is
-// debounced; the dots animate continuously throughout.
-const STATUS_MIN_DWELL_MS = 320;
-
-/** Debounce a fast-changing status to a min on-screen dwell so a rapid
- *  thinking→action→streaming sequence doesn't strobe the label. The dots animate
- *  continuously; only the words wait their turn. Returns null when status is
- *  null (between turns). */
-function useDebouncedTurnStatus(
-  status: ChatTurnStatus | null,
-): ChatTurnStatus | null {
-  const [shown, setShown] = React.useState<ChatTurnStatus | null>(status);
-  const lastChangeRef = React.useRef(0);
-  const timerRef = React.useRef<number | null>(null);
-  React.useEffect(() => {
-    if (!status) {
-      setShown(null);
-      return;
-    }
-    const now = Date.now();
-    const elapsed = now - lastChangeRef.current;
-    if (elapsed >= STATUS_MIN_DWELL_MS) {
-      lastChangeRef.current = now;
-      setShown(status);
-      return;
-    }
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(() => {
-      lastChangeRef.current = Date.now();
-      setShown(status);
-      timerRef.current = null;
-    }, STATUS_MIN_DWELL_MS - elapsed);
-    return () => {
-      if (timerRef.current !== null) {
-        window.clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-    };
-  }, [status]);
-  return shown;
-}
-
-/**
- * The breathing dots + phase label content of the status indicator, WITHOUT a
- * bubble/motion wrapper — used both standalone (wrapped by TurnStatusIndicator)
- * and inline inside the in-flight assistant bubble.
- *
- * Mirrors ChatVoiceStatusBar's a11y (`role="status"` + `aria-live="polite"`).
- * Honors reduced motion (no pulse). Brand-safe: orange (the accent) ONLY for
- * `speaking`; every other phase is neutral white. No blue anywhere. Degrades to
- * plain dots when no status has arrived.
- */
-function TurnStatusInner({
-  status,
-  showLabel = true,
-}: {
-  status: ChatTurnStatus | null;
-  showLabel?: boolean;
-}): React.JSX.Element {
-  const shown = useDebouncedTurnStatus(status);
-  const speaking = shown?.kind === "speaking";
-  const label =
-    showLabel && shown && shown.kind !== "thinking"
-      ? turnStatusLabel(shown)
-      : null;
-  return (
-    <span
-      className="inline-flex items-center gap-2"
-      data-testid="turn-status-indicator"
-      data-status-kind={shown?.kind ?? "none"}
-      role="status"
-      aria-live="polite"
-    >
-      <span
-        className="flex gap-1.5"
-        data-testid="typing-dots"
-        aria-hidden="true"
-      >
-        {[0, 1, 2].map((i) => (
-          <span
-            key={i}
-            className={cn(
-              "h-1.5 w-1.5 animate-pulse rounded-full motion-reduce:animate-none",
-              speaking ? "bg-[rgba(255,190,140,0.9)]" : "bg-white/70",
-            )}
-            style={{ animationDelay: `${i * 180}ms` }}
-          />
-        ))}
-      </span>
-      {label ? (
-        <span
-          className={cn(
-            "text-[13px] font-medium",
-            speaking ? "text-[rgba(255,200,150,0.95)]" : "text-white/90",
-          )}
-          data-testid="turn-status-label"
-        >
-          {label}
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
 /**
  * The rich, phase-aware status row shown while the assistant works (#8813),
- * replacing the bare typing dots in the pre-placeholder gap. Wraps
- * TurnStatusInner in its own glass bubble + fade so it reads as a turn.
+ * replacing the bare typing dots in the pre-placeholder gap. Wraps the
+ * canonical TurnStatus in its own glass bubble + fade so it reads as a turn.
  */
 function TurnStatusIndicator({
   status,
@@ -794,7 +645,7 @@ function TurnStatusIndicator({
           speaking ? "border-[rgba(255,180,120,0.45)]" : "border-white/10",
         )}
       >
-        <TurnStatusInner status={status} />
+        <TurnStatus status={status} />
       </div>
     </motion.div>
   );
@@ -892,12 +743,6 @@ export function BootStatusIndicator({
 }
 
 /**
- * One turn of the transcript as a chat bubble — assistant on the left, user on
- * the right. Memoized so a live drag (which re-renders the overlay on every
- * pointer-move frame) doesn't re-render every message in a long thread.
- */
-
-/**
  * Render a user turn's text, bolding a leading slash command so a sent
  * `/command` reads as a command in the transcript (mirroring the composer's
  * inline autocomplete). Plain prose renders unchanged.
@@ -912,35 +757,6 @@ function ThreadLineText({ content }: { content: string }): React.ReactNode {
       </span>
       {slash.rest}
     </>
-  );
-}
-
-function isNestedInteractiveTarget(
-  currentTarget: HTMLElement,
-  target: EventTarget | null,
-): boolean {
-  if (!(target instanceof Element)) return false;
-  const interactive = target.closest(
-    'button,a,input,textarea,select,[role="button"]',
-  );
-  return !!interactive && interactive !== currentTarget;
-}
-
-/**
- * True when an assistant turn's content carries an inline interactive widget
- * (a `[CHOICE:…]` / `[FORM:…]` / `[FOLLOWUPS:…]` block — e.g. every first-run
- * onboarding turn). Such a bubble must NOT be wrapped in the tap-to-reveal
- * `role="button"` container: WebKit exposes an ARIA button as an ATOMIC AX leaf
- * (its aria-label becomes the node's name and all descendants are dropped), so
- * the wrapper silently removes the choice buttons + text from the native
- * accessibility tree — invisible to VoiceOver AND to XCUITest. The parser
- * helpers reset their own regex lastIndex, so repeated calls are safe.
- */
-function messageHasInteractiveWidget(content: string): boolean {
-  return (
-    findChoiceRegions(content).length > 0 ||
-    findFormRegions(content).length > 0 ||
-    findFollowupsRegions(content).length > 0
   );
 }
 
@@ -960,640 +776,131 @@ function hasLiveTextSelection(): boolean {
 }
 
 /**
- * One icon-only control in a message's click-to-reveal action row (#10713).
- * Overlay glass styling: no card fill, neutral resting → neutral-opacity hover;
- * an active (e.g. playing) control tints with the orange accent. `stopPropagation`
- * keeps a tap on the button from re-toggling the row or ending text selection.
+ * The overlay's message BODY — everything rendered inside the canonical
+ * ChatMessage glass row: the no-provider recovery gate, the in-flight breathing
+ * dots (TurnStatus), a user turn's slash-bolded text, and a settled assistant
+ * turn's inline widgets + attachments + secret request + reasoning. Kept
+ * structurally identical to the ChatView (MessageContent) paths for the
+ * affordances the render-parity contract pins; the row chrome (bubble,
+ * tap-reveal actions, copy-hold, retry, suggestion) lives in ChatMessage.
+ * `onOpenSettings` reaches only the no-provider gate.
  */
-function ThreadLineActionButton({
-  label,
-  icon,
-  onClick,
-  active,
-  testId,
-}: {
-  label: string;
-  icon: React.ReactNode;
-  onClick: () => void;
-  active?: boolean;
-  testId?: string;
-}): React.JSX.Element {
-  return (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      aria-label={label}
-      title={label}
-      data-testid={testId}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      className={cn(
-        "h-7 w-7 rounded-full p-0 transition-colors",
-        active
-          ? "bg-[rgb(255,88,0)]/25 text-white"
-          : "bg-white/10 text-white/80 hover:bg-white/20",
-      )}
-    >
-      {icon}
-    </Button>
-  );
-}
+function renderOverlayMessageBody(
+  message: ChatMessageData,
+  ctx: ChatMessageRenderContext | undefined,
+  onOpenSettings: (() => void) | undefined,
+): React.ReactNode {
+  const isUser = message.role === "user";
+  const attachmentsNode = message.attachments?.length ? (
+    <MessageAttachments attachments={message.attachments} />
+  ) : null;
 
-/**
- * Inline editor for a user message (#10713). Prefilled with the message text;
- * ⌘/Ctrl+Enter resends the edit, Escape cancels. The parent reveal handler
- * ignores events while editing.
- */
-function ThreadLineEditor({
-  value,
-  onChange,
-  onSave,
-  onCancel,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  onSave: () => void;
-  onCancel: () => void;
-}): React.JSX.Element {
-  const ref = React.useRef<HTMLTextAreaElement | null>(null);
-  React.useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.focus();
-    el.setSelectionRange(el.value.length, el.value.length);
-  }, []);
-  return (
-    <div className="flex flex-col gap-2">
-      <Textarea
-        ref={ref}
-        aria-label="Edit message"
-        data-testid="thread-line-edit-input"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            onSave();
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            // Escape closes THIS editor only — stop it from bubbling to the
-            // overlay's document-level Escape handler, which would otherwise
-            // also collapse the whole chat sheet and discard the edit (#9148).
-            e.stopPropagation();
-            onCancel();
-          }
-        }}
-        rows={Math.min(6, Math.max(1, value.split("\n").length))}
-        className="min-h-0 w-full resize-none rounded-lg border-0 bg-white/10 px-2.5 py-1.5 text-[14px] text-white outline-none [overflow-wrap:anywhere]"
-      />
-      <div className="flex items-center justify-end gap-1.5">
+  if (!isUser && message.failureKind === "no_provider") {
+    // A failure the user can't recover from without wiring a provider: a
+    // structured gate (not the raw error text) with a one-tap jump to Settings.
+    // #10698: minimize the own scrim now the shared glass carries contrast, but
+    // keep a fill so this critical CTA stays prominent over any wallpaper.
+    return (
+      <div
+        className={cn(
+          "max-w-[85%] rounded-2xl rounded-bl-md border border-amber-300/30 bg-black/35 px-3.5 py-3 text-white",
+          FLOAT_SHADOW,
+        )}
+      >
+        <div className="mb-1 text-[14px] font-medium">
+          Connect a provider to chat
+        </div>
+        <div className="mb-2.5 whitespace-pre-wrap text-[13px] leading-relaxed text-white/80 [overflow-wrap:anywhere]">
+          {message.text}
+        </div>
         <Button
           variant="ghost"
           size="sm"
-          data-testid="thread-line-edit-cancel"
-          onClick={onCancel}
-          className="h-auto rounded-full bg-white/10 px-3 py-1 text-[13px] font-medium text-white/80 transition-colors hover:bg-white/20"
+          data-testid="chat-no-provider-settings"
+          onClick={() => onOpenSettings?.()}
+          className="h-auto rounded-full border border-white/20 bg-white/15 px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-white/25   "
         >
-          Cancel
-        </Button>
-        <Button
-          type="button"
-          variant="default"
-          size="sm"
-          data-testid="thread-line-edit-save"
-          onClick={onSave}
-          className="h-auto rounded-full bg-[rgb(255,88,0)] px-3 py-1 text-[13px] font-medium text-white transition-colors hover:bg-[rgb(214,74,0)]"
-        >
-          Send
+          Open Settings
         </Button>
       </div>
-    </div>
-  );
-}
-
-const ThreadLine = React.memo(function ThreadLine({
-  message,
-  floating,
-  reduce,
-  onCopy,
-  onSpeak,
-  onEdit,
-  onRetry,
-  speaking,
-  onOpenSettings,
-  turnStatus,
-  suppressReasoning,
-  onAcceptSuggestion,
-  onDismissSuggestion,
-}: {
-  message: ShellMessage;
-  floating?: boolean;
-  reduce?: boolean;
-  /** Copy this message's text. Used by both the press-and-hold shortcut
-   *  (assistant) and the reveal-row Copy control (both roles). Stable identity. */
-  onCopy?: (text: string) => void;
-  /** Speak an assistant message aloud (reveal-row Play). Receives the message
-   *  id so the parent can track which bubble is playing. Stable identity. */
-  onSpeak?: (id: string, text: string) => void;
-  /** Save an edited user message and resend it (reveal-row Edit). Stable id. */
-  onEdit?: (text: string) => void;
-  /** Retry a failed/interrupted assistant turn — re-sends the preceding user
-   *  turn. Receives the assistant turn's id so the parent can walk back to the
-   *  user turn that produced it. Stable identity. */
-  onRetry?: (assistantId: string) => void;
-  /** True while assistant voice output is playing — drives Play↔Stop. */
-  speaking?: boolean;
-  /** Jump to Settings from the no_provider gate. Stable identity. */
-  onOpenSettings?: () => void;
-  /** Rich status for the in-flight (empty) assistant bubble (#8813). Only the
-   *  last, content-less assistant turn reads this; settled turns ignore it. */
-  turnStatus?: ChatTurnStatus | null;
-  /** Hide reasoning while the assistant turn is still streaming. */
-  suppressReasoning?: boolean;
-  /** Accept ("Do it") a proactive suggestion (#8792) — sends the implied
-   *  action as a real turn and clears the bubble. Stable identity. */
-  onAcceptSuggestion?: (message: ShellMessage) => void;
-  /** Dismiss a proactive suggestion (#8792) — removes the bubble locally; the
-   *  server-side per-surface cooldown guards immediate re-noise. Stable id. */
-  onDismissSuggestion?: (messageId: string) => void;
-}): React.JSX.Element {
-  const isUser = message.role === "user";
-  const isAssistant = message.role === "assistant";
-  // Proactive suggestion bubbles (#8792): distinct affordance (Suggestion chip
-  // + "Do it" + dismiss) on assistant turns pushed by the interaction decider.
-  const isSuggestion =
-    isAssistant && message.source === PROACTIVE_SUGGESTION_SOURCE;
-
-  // Press-and-hold to copy an assistant answer — the only extraction affordance
-  // on touch (no hover row). A still hold past COPY_HOLD_MS copies + flashes
-  // "Copied" + a light haptic; real finger travel cancels so it never fights the
-  // thread's touch-pan-y scroll (shared usePointerPressAndHold recognizer).
-  const [copied, setCopied] = React.useState(false);
-  const copiedTimer = React.useRef<number | null>(null);
-  React.useEffect(
-    () => () => {
-      if (copiedTimer.current !== null)
-        window.clearTimeout(copiedTimer.current);
-    },
-    [],
-  );
-  const canCopy = isAssistant && !!onCopy && message.content.trim().length > 0;
-  const holdBinding = usePointerPressAndHold<HTMLDivElement>({
-    enabled: canCopy,
-    durationMs: COPY_HOLD_MS,
-    canBegin: (e) => !isNestedInteractiveTarget(e.currentTarget, e.target),
-    onHold: () => {
-      onCopy?.(message.content);
-      detentHaptic();
-      setCopied(true);
-      if (copiedTimer.current !== null)
-        window.clearTimeout(copiedTimer.current);
-      copiedTimer.current = window.setTimeout(() => setCopied(false), 1100);
-    },
-  });
-  const copyHandlers = canCopy ? holdBinding : null;
-
-  // Click-to-reveal per-message action row (#10713): tapping a bubble reveals
-  // Copy + Play (assistant) or Copy + Edit (user) beneath it; an outside tap
-  // dismisses. This is the primary extraction affordance on pointer devices; the
-  // press-and-hold copy above stays as a secondary touch shortcut.
-  const trimmed = message.content.trim();
-  const lineRef = React.useRef<HTMLDivElement | null>(null);
-  const [revealed, setRevealed] = React.useState(false);
-  const [editing, setEditing] = React.useState(false);
-  const [editDraft, setEditDraft] = React.useState("");
-  const [rowCopied, setRowCopied] = React.useState(false);
-  const rowCopiedTimer = React.useRef<number | null>(null);
-  React.useEffect(
-    () => () => {
-      if (rowCopiedTimer.current !== null)
-        window.clearTimeout(rowCopiedTimer.current);
-    },
-    [],
-  );
-
-  const canRowCopy = !!onCopy && trimmed.length > 0;
-  const canSpeak = isAssistant && !!onSpeak && trimmed.length > 0;
-  // A user turn is editable unless it's an optimistic (temp-) turn not yet
-  // acknowledged by the server — mirrors the composite ChatMessage's canEdit.
-  const canEdit =
-    isUser && !!onEdit && trimmed.length > 0 && !message.id.startsWith("temp-");
-  const hasActions = canRowCopy || canSpeak || canEdit;
-  // An assistant turn that carries an inline choice/form/followups widget (every
-  // first-run onboarding turn) must stay a plain container — never the
-  // tap-to-reveal `role="button"` bubble, which WebKit collapses into a single
-  // atomic AX node and thereby hides the choice buttons from VoiceOver + XCUITest.
-  const hasInteractiveWidget = React.useMemo(
-    () => isAssistant && messageHasInteractiveWidget(message.content),
-    [isAssistant, message.content],
-  );
-
-  // A recoverable assistant failure (the agent was rate-limited or the provider
-  // stalled / the stream was interrupted) gets a one-tap Retry that re-sends the
-  // preceding user turn — mirroring ChatView's MessageContent gate. `no_provider`
-  // (its own Settings gate above) and `insufficient_credits` are excluded: a
-  // retry can't fix those.
-  const canRetry =
-    isAssistant &&
-    !!onRetry &&
-    (message.failureKind === "rate_limited" ||
-      message.failureKind === "provider_issue");
-
-  const toggleRevealed = React.useCallback(() => {
-    if (!hasActions || editing) return;
-    // Never hijack a text-selection drag: a click that finishes a highlight must
-    // not also toggle the row (the bubble text stays selectable to copy).
-    const sel = typeof window !== "undefined" ? window.getSelection() : null;
-    if (sel && sel.toString().trim().length > 0) return;
-    setRevealed((v) => !v);
-  }, [hasActions, editing]);
-  const bubbleInteractive = hasActions && !editing && !hasInteractiveWidget;
-  const handleBubbleClick = React.useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      if (!bubbleInteractive) return;
-      if (isNestedInteractiveTarget(e.currentTarget, e.target)) return;
-      toggleRevealed();
-    },
-    [bubbleInteractive, toggleRevealed],
-  );
-  const handleBubbleKeyDown = React.useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (!bubbleInteractive) return;
-      if (e.key !== "Enter" && e.key !== " ") return;
-      e.preventDefault();
-      toggleRevealed();
-    },
-    [bubbleInteractive, toggleRevealed],
-  );
-
-  React.useEffect(() => {
-    if (!revealed) return;
-    const onDocPointerDown = (e: PointerEvent) => {
-      if (lineRef.current && !lineRef.current.contains(e.target as Node)) {
-        setRevealed(false);
-        setEditing(false);
-      }
-    };
-    document.addEventListener("pointerdown", onDocPointerDown);
-    return () => document.removeEventListener("pointerdown", onDocPointerDown);
-  }, [revealed]);
-
-  const handleRowCopy = React.useCallback(() => {
-    onCopy?.(message.content);
-    setRowCopied(true);
-    if (rowCopiedTimer.current !== null)
-      window.clearTimeout(rowCopiedTimer.current);
-    rowCopiedTimer.current = window.setTimeout(() => setRowCopied(false), 1100);
-  }, [onCopy, message.content]);
-
-  const handleSpeak = React.useCallback(() => {
-    onSpeak?.(message.id, message.content);
-  }, [onSpeak, message.id, message.content]);
-
-  const openEditor = React.useCallback(() => {
-    setEditDraft(message.content);
-    setEditing(true);
-  }, [message.content]);
-
-  const saveEdit = React.useCallback(() => {
-    const next = editDraft.trim();
-    setEditing(false);
-    setRevealed(false);
-    if (next && next !== message.content.trim()) onEdit?.(next);
-  }, [editDraft, message.content, onEdit]);
-
-  const cancelEdit = React.useCallback(() => {
-    setEditing(false);
-    setRevealed(false);
-  }, []);
-
-  // A failed turn the user can't recover from without wiring a provider: render
-  // a structured gate (not the raw error text) with a one-tap jump to Settings.
-  if (isAssistant && message.failureKind === "no_provider") {
-    return (
-      <motion.div
-        data-testid="thread-line"
-        data-role={message.role}
-        data-failure="no_provider"
-        initial={reduce ? { opacity: 0 } : { opacity: 0, y: 14 }}
-        animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0 }}
-        exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
-        transition={{ duration: reduce ? 0.15 : 0.52, ease: OVERLAY_EASE }}
-        className={cn(
-          "flex w-full justify-start",
-          floating ? "mb-1.5" : "mb-2.5",
-        )}
-      >
-        <div
-          className={cn(
-            // #10698: minimize the own scrim (0.60 → 0.35) now the shared glass
-            // carries contrast, but keep a fill so this critical no-provider CTA
-            // stays prominent over any wallpaper; structure/amber border kept.
-            "max-w-[85%] rounded-2xl rounded-bl-md border border-amber-300/30 bg-black/35 px-3.5 py-3 text-white",
-            FLOAT_SHADOW,
-          )}
-        >
-          <div className="mb-1 text-[14px] font-medium">
-            Connect a provider to chat
-          </div>
-          <div className="mb-2.5 whitespace-pre-wrap text-[13px] leading-relaxed text-white/80 [overflow-wrap:anywhere]">
-            {message.content}
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            data-testid="chat-no-provider-settings"
-            onClick={() => onOpenSettings?.()}
-            className="h-auto rounded-full border border-white/20 bg-white/15 px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-white/25   "
-          >
-            Open Settings
-          </Button>
-        </div>
-      </motion.div>
     );
   }
 
-  const bubbleClassName = cn(
-    // whitespace-pre-wrap keeps newlines; overflow-wrap breaks long URLs /
-    // hashes / paths so they can't blow out the bubble width on a phone.
-    "relative w-fit max-w-full whitespace-pre-wrap rounded-2xl px-3.5 py-2 text-[14px] leading-relaxed [overflow-wrap:anywhere]",
-    // The chrome-free transcript renders floating: each bubble carries its
-    // own dark glass so it stays legible directly over whatever view is
-    // behind. The light tone is for any embedding that supplies its own
-    // surrounding scrim.
-    isUser ? "rounded-br-md" : "rounded-bl-md",
-    // Message text must remain selectable for normal highlight/copy.
-    // Assistant bubbles still keep the press-and-hold copy shortcut.
-    "select-text [-webkit-touch-callout:default]",
-    // Tapping a bubble with actions reveals its row (pointer affordance).
-    bubbleInteractive && "cursor-pointer",
-    // #10698: no per-message fill — text floats transparently on the one
-    // shared panel glass. FLOAT_SHADOW + light text keep it legible; a
-    // hairline edge remains to define the item boundary.
-    floating
-      ? cn("border border-white/15 text-white", FLOAT_SHADOW)
-      : isUser
-        ? "text-white"
-        : "text-white/90",
-    // Suggestion treatment (#8792): dashed accent edge + faint accent tint so
-    // a proactive offer reads as a suggestion, not a normal reply — mirrors
-    // the composite ChatMessage's affordance. Placed last so it wins over the
-    // floating hairline.
-    isSuggestion &&
-      "border border-dashed border-[rgb(255,88,0)]/45 bg-[rgb(255,88,0)]/[0.06]",
-  );
-  const bubbleContent =
-    isUser && editing ? (
-      <ThreadLineEditor
-        value={editDraft}
-        onChange={setEditDraft}
-        onSave={saveEdit}
-        onCancel={cancelEdit}
-      />
-    ) : (
+  if (!isUser && !message.text.trim() && !message.attachments?.length) {
+    // The in-flight assistant turn: dots INSIDE the bubble, anchored where the
+    // streamed text fills in — then the text replaces them. Labels stay in the
+    // standalone status row so the bubble never flashes "Running …" text.
+    return (
       <>
-        {isSuggestion ? (
-          // Proactive suggestion affordance (#8792): Suggestion chip + accept
-          // ("Do it") + dismiss. stopPropagation keeps these taps from
-          // toggling the bubble's click-to-reveal action row.
-          <div className="mb-1.5 flex items-center justify-between gap-2">
-            <span className="inline-flex items-center gap-1 text-[12px] font-medium text-[rgb(255,148,84)]">
-              <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-              Suggestion
-            </span>
-            <div className="flex items-center gap-1">
-              {onAcceptSuggestion ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  data-testid="thread-line-suggestion-accept"
-                  title="Do it"
-                  aria-label="Do it"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAcceptSuggestion(message);
-                  }}
-                  className="h-auto rounded-full bg-white/10 px-2.5 py-0.5 text-[12px] font-medium text-[rgb(255,148,84)] transition-colors hover:bg-white/20"
-                >
-                  Do it
-                </Button>
-              ) : null}
-              {onDismissSuggestion ? (
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  data-testid="thread-line-suggestion-dismiss"
-                  title="Dismiss suggestion"
-                  aria-label="Dismiss suggestion"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDismissSuggestion(message.id);
-                  }}
-                  className="h-6 w-6 rounded-full bg-white/10 text-white/70 transition-colors hover:bg-white/20"
-                >
-                  <X className="h-3.5 w-3.5" aria-hidden="true" />
-                </Button>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-        <div data-chat-selectable="true">
-          {isAssistant &&
-          !message.content.trim() &&
-          !message.attachments?.length ? (
-            // The in-flight assistant turn (kept by visibleMessages only while
-            // responding): show dots INSIDE the bubble, anchored where the
-            // streamed text fills in — then the text replaces them. Labels stay
-            // in the standalone status row so the bubble never flashes
-            // "Running …" text in place of the answer.
-            <>
-              <TurnStatusInner status={turnStatus ?? null} showLabel={false} />
-              {message.attachments?.length ? (
-                <MessageAttachments attachments={message.attachments} />
-              ) : null}
-            </>
-          ) : isUser ? (
-            // User turns stay raw text (slash command bolded); user uploads render
-            // through the standalone attachment renderer.
-            <>
-              <ThreadLineText content={message.content} />
-              {message.attachments?.length ? (
-                <MessageAttachments attachments={message.attachments} />
-              ) : null}
-            </>
-          ) : (
-            // Settled assistant turn: render inline widgets (task/choice/form/
-            // followups) instead of leaking raw `[TASK:…]`/`[CHOICE]`/… markers as
-            // text (#8997); plain replies fall through the fast path unchanged.
-            // Attachments, the secret/OAuth request, and the reasoning block render
-            // alongside. The secret block is `pointer-events-auto` so it stays
-            // clickable inside the open thread's scroll surface.
-            <>
-              <InlineWidgetText content={message.content} />
-              {message.attachments?.length ? (
-                <MessageAttachments attachments={message.attachments} />
-              ) : null}
-              {message.secretRequest ? (
-                <div className="pointer-events-auto">
-                  <SensitiveRequestBlock request={message.secretRequest} />
-                </div>
-              ) : null}
-              {!suppressReasoning && message.reasoning?.trim() ? (
-                <ThinkingBlock reasoning={message.reasoning} />
-              ) : null}
-            </>
-          )}
-        </div>
-        <AnimatePresence>
-          {copied ? (
-            <motion.span
-              key="copied"
-              data-testid="thread-line-copied"
-              initial={reduce ? { opacity: 0 } : { opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: reduce ? 0 : 0.18 }}
-              className="pointer-events-none absolute -top-2 right-2 rounded-full bg-white/90 px-2 py-0.5 text-[11px] font-medium text-black"
-            >
-              Copied
-            </motion.span>
-          ) : null}
-        </AnimatePresence>
+        <TurnStatus status={ctx?.turnStatus ?? null} showLabel={false} />
+        {attachmentsNode}
       </>
     );
+  }
+
+  if (isUser) {
+    // User turns stay raw text (leading slash command bolded).
+    return (
+      <>
+        <ThreadLineText content={message.text} />
+        {attachmentsNode}
+      </>
+    );
+  }
+
+  // Settled assistant turn: render inline widgets (task/choice/form/followups)
+  // instead of leaking raw markers as text (#8997); plain replies fall through
+  // the fast path unchanged. Attachments, the secret/OAuth request, and the
+  // reasoning block render alongside. The secret block is pointer-events-auto so
+  // it stays clickable inside the open thread's scroll surface.
   return (
-    <motion.div
-      ref={lineRef}
-      data-testid="thread-line"
-      data-role={message.role}
-      // New turns rise+fade in. Transform/opacity only; reduced motion collapses
-      // it to a quick fade with no positional movement.
-      initial={reduce ? { opacity: 0 } : { opacity: 0, y: 14 }}
-      animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0 }}
-      exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
-      transition={{ duration: reduce ? 0.15 : 0.52, ease: OVERLAY_EASE }}
-      className={cn(
-        "flex w-full",
-        floating ? "mb-1.5" : "mb-2.5",
-        isUser ? "justify-end" : "justify-start",
-      )}
-    >
-      {/* Bubble + its click-to-reveal action row stack vertically, aligned to the
-          turn's side (#10713). */}
-      <div
-        className={cn(
-          "flex max-w-[80%] flex-col gap-1",
-          isUser ? "items-end" : "items-start",
-        )}
-      >
-        {bubbleInteractive ? (
-          // biome-ignore lint/a11y/useSemanticElements: The message bubble can contain rich assistant content with nested controls; a native button wrapper would be invalid HTML.
-          <div
-            {...(copyHandlers ?? {})}
-            role="button"
-            tabIndex={0}
-            aria-label={
-              revealed ? "Hide message actions" : "Show message actions"
-            }
-            aria-expanded={revealed}
-            onClick={handleBubbleClick}
-            onKeyDown={handleBubbleKeyDown}
-            className={bubbleClassName}
-            data-proactive-suggestion={isSuggestion ? "true" : undefined}
-          >
-            {bubbleContent}
-          </div>
-        ) : (
-          <div
-            {...(copyHandlers ?? {})}
-            className={bubbleClassName}
-            data-proactive-suggestion={isSuggestion ? "true" : undefined}
-          >
-            {bubbleContent}
-          </div>
-        )}
-        {revealed && !editing && hasActions ? (
-          <div
-            data-testid="thread-line-actions"
-            className={cn(
-              "flex items-center gap-1.5",
-              isUser ? "pr-1" : "pl-1",
-            )}
-          >
-            {canRowCopy ? (
-              <ThreadLineActionButton
-                label={rowCopied ? "Copied" : "Copy"}
-                testId="thread-line-copy"
-                icon={
-                  rowCopied ? (
-                    <Check className="h-3.5 w-3.5" />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5" />
-                  )
-                }
-                onClick={handleRowCopy}
-                active={rowCopied}
-              />
-            ) : null}
-            {canSpeak ? (
-              <ThreadLineActionButton
-                label={speaking ? "Stop" : "Play audio"}
-                testId="thread-line-speak"
-                icon={
-                  speaking ? (
-                    <Square className="h-3.5 w-3.5" />
-                  ) : (
-                    <Volume2 className="h-3.5 w-3.5" />
-                  )
-                }
-                onClick={handleSpeak}
-                active={speaking}
-              />
-            ) : null}
-            {canEdit ? (
-              <ThreadLineActionButton
-                label="Edit"
-                testId="thread-line-edit"
-                icon={<Pencil className="h-3.5 w-3.5" />}
-                onClick={openEditor}
-              />
-            ) : null}
-          </div>
-        ) : null}
-        {/* Retry a recoverable failure by re-sending the preceding user turn.
-            Always visible on the failed turn (not gated behind the reveal row)
-            so a stalled turn isn't a dead end the user has to retype. */}
-        {canRetry ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            data-testid="thread-line-retry"
-            aria-label="Retry"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRetry?.(message.id);
-            }}
-            className="h-auto gap-1.5 rounded-full bg-white/10 px-3 py-1 text-[13px] font-medium text-white/80 transition-colors hover:bg-white/20"
-          >
-            <RotateCcw className="h-3.5 w-3.5" aria-hidden />
-            Retry
-          </Button>
-        ) : null}
-      </div>
-    </motion.div>
+    <>
+      <InlineWidgetText content={message.text} />
+      {attachmentsNode}
+      {message.secretRequest ? (
+        <div className="pointer-events-auto">
+          <SensitiveRequestBlock request={message.secretRequest} />
+        </div>
+      ) : null}
+      {!ctx?.suppressReasoning && message.reasoning?.trim() ? (
+        <ThinkingBlock reasoning={message.reasoning} />
+      ) : null}
+    </>
   );
-});
+}
+
+/** Project a shell transcript turn onto the canonical row's data shape. The
+ *  body renderer reads the passthrough fields (reasoning/secretRequest/
+ *  attachments/failureKind) straight off it, so the row stays presentation-only.
+ *  Cached per ShellMessage identity so a live drag (which re-renders the overlay
+ *  every pointer-move frame) reuses the same object — keeping ChatMessage's memo
+ *  on its `prev.message === next.message` fast path. Shell turns are immutable
+ *  (a streamed update replaces the object), so a changed turn misses the cache. */
+const shellMessageDataCache = new WeakMap<ShellMessage, ChatMessageData>();
+function shellToChatMessageData(m: ShellMessage): ChatMessageData {
+  const cached = shellMessageDataCache.get(m);
+  if (cached) return cached;
+  const data: ChatMessageData = {
+    id: m.id,
+    role: m.role,
+    text: m.content,
+    ...(m.source ? { source: m.source } : {}),
+    ...(m.failureKind ? { failureKind: m.failureKind } : {}),
+    ...(m.reasoning ? { reasoning: m.reasoning } : {}),
+    ...(m.attachments ? { attachments: m.attachments } : {}),
+    ...(m.secretRequest ? { secretRequest: m.secretRequest } : {}),
+  };
+  shellMessageDataCache.set(m, data);
+  return data;
+}
 
 /**
- * Render a settled `ThreadLine` exactly as the overlay does (floating, with copy
- * + settings handlers, reasoning shown). Test-only seam for the component-tree
- * render-parity contract (render-parity.contract.test.tsx, #9954), which diffs
- * this surface's structure against ChatView's MessageContent over a shared
- * corpus, and for the proactive-suggestion affordance unit test (#8792 —
- * optional accept/dismiss handlers). Not part of the public overlay API — keep
- * usage to those tests.
+ * Render a settled transcript row exactly as the overlay does (glass chrome,
+ * settled body). Test-only seam for the component-tree render-parity contract
+ * (render-parity.contract.test.tsx, #9954), which diffs this surface's
+ * structure against ChatView's MessageContent over a shared corpus, and for the
+ * proactive-suggestion affordance unit test (#8792 — optional accept/dismiss
+ * handlers). Not part of the public overlay API — keep usage to those tests.
  */
 export function __renderThreadLineForParity(
   message: ShellMessage,
@@ -1603,12 +910,17 @@ export function __renderThreadLineForParity(
   },
 ): React.JSX.Element {
   return (
-    <ThreadLine
-      message={message}
-      floating
+    <ChatMessage
+      appearance="glass"
+      message={shellToChatMessageData(message)}
       onCopy={() => {}}
-      onOpenSettings={() => {}}
-      onAcceptSuggestion={handlers?.onAcceptSuggestion}
+      onLongPressCopy={() => {}}
+      renderContent={(m, ctx) => renderOverlayMessageBody(m, ctx, () => {})}
+      onAcceptSuggestion={
+        handlers?.onAcceptSuggestion
+          ? () => handlers.onAcceptSuggestion?.(message)
+          : undefined
+      }
       onDismissSuggestion={handlers?.onDismissSuggestion}
     />
   );
@@ -1735,10 +1047,16 @@ export function ContinuousChatOverlay({
     },
   });
 
-  // Copy a message (press-and-hold shortcut + reveal-row Copy). Stable identity
-  // so the memoized ThreadLine isn't re-rendered every parent tick.
+  // Copy a message (reveal-row Copy). Stable identity so the memoized row isn't
+  // re-rendered every parent tick.
   const handleCopyMessage = React.useCallback((text: string) => {
     void copyTextToClipboard(text);
+  }, []);
+  // Press-and-hold copy adds a light haptic on top of the copy (the only
+  // extraction affordance on touch, where there is no hover row).
+  const handleLongPressCopy = React.useCallback((text: string) => {
+    void copyTextToClipboard(text);
+    detentHaptic();
   }, []);
 
   // Which message initiated the current voice playback, so ONLY that bubble
@@ -1772,10 +1090,13 @@ export function ContinuousChatOverlay({
   );
 
   // Save an edited user message and resend it as a new turn (#10713) — the same
-  // send path a typed turn uses, so the agent sees the corrected text.
+  // send path a typed turn uses, so the agent sees the corrected text. Adapts
+  // the row's (id, text) → bool save contract onto the overlay's text-only
+  // send; returning true tells the row the edit committed.
   const handleEditResend = React.useCallback(
-    (text: string) => {
+    (_id: string, text: string): boolean => {
       send(text);
+      return true;
     },
     [send],
   );
@@ -1819,7 +1140,7 @@ export function ContinuousChatOverlay({
     [removeConversationMessage],
   );
   const handleAcceptSuggestion = React.useCallback(
-    (m: ShellMessage) => {
+    (m: ChatMessageData) => {
       send("Yes, let's do it.");
       removeConversationMessage(m.id);
     },
@@ -1832,63 +1153,29 @@ export function ContinuousChatOverlay({
   // a near-instant cross-fade with no positional movement when this is true.
   const reduce = useReducedMotion() ?? false;
 
-  const [draft, setDraft] = React.useState("");
-  // Per-conversation composer draft persistence — the SAME localStorage-backed
-  // store the desktop ChatView surface uses (readChatDraft/writeChatDraft via
-  // useChatComposerDraftPersistence), keyed by the active conversation id. This
-  // closes the platform gap where only ChatView restored a draft: on the ambient
-  // overlay (mobile/web/default-desktop) a draft typed here now survives a reload
-  // / navigation and follows the conversation across surfaces. Restore fires on
-  // mount and on a conversation-id change; the persist is debounced. It coexists
-  // with the prefill (CHAT_PREFILL / assistant-launch) and dictation paths: those
-  // setDraft() edits are persisted like any keystroke, and restore only fires on a
-  // conversation-id change — so a just-prefilled composer is never clobbered. The
-  // successful-send path clears it (below).
-  const activeConversationId = conversationNav.activeId;
-  // Draft HANDOFF on conversation switch (mirrors ChatView's
-  // handleSelectConversation fix in useChatCallbacks): swiping A→B must repaint
-  // the composer for the TARGET. Flush the LEAVING conversation's in-progress
-  // text under ITS OWN key first (the debounced persister's pending timer is
-  // cancelled by the id change, so a fast edit would otherwise be lost), then
-  // restore the target's own saved draft — or CLEAR the composer when it has
-  // none. The explicit `?? ""` clear is load-bearing: the persistence hook's
-  // restore only sets when a saved draft EXISTS, so without the clear a
-  // draftless target inherits the previous conversation's composer text, which
-  // the debounced persister then saves under the TARGET's key — the half-typed
-  // message silently re-homes to (and would send to) the wrong conversation.
-  //
-  // The persistence hook is keyed by `persistedConversationId`, which trails
-  // `activeConversationId` by exactly this handoff commit — so the hook never
-  // observes the (new id, old conversation's draft) combination and never even
-  // schedules a write of the old text under the new key. Exactly one
-  // steady-state persistence path (the hook) remains; this effect only adds
-  // the one-shot switch-time flush + repaint the hook cannot do.
-  //
-  // Both null transitions are deliberate no-repaints: on boot (null → id) the
-  // composer may already hold a prefill (CHAT_PREFILL / assistant-launch) that
-  // must NOT be clobbered, and on id → null there is no target to paint.
-  const [persistedConversationId, setPersistedConversationId] = React.useState<
-    string | null
-  >(activeConversationId);
-  // Live handle to the draft so the handoff effect keys off the id change
-  // alone (a keystroke never re-runs it), same pattern as messagesRef above.
-  const draftRef = React.useRef(draft);
-  draftRef.current = draft;
-  React.useLayoutEffect(() => {
-    if (persistedConversationId === activeConversationId) return;
-    if (persistedConversationId !== null) {
-      writeChatDraft(persistedConversationId, draftRef.current);
-      if (activeConversationId !== null) {
-        setDraft(readChatDraft(activeConversationId) ?? "");
-      }
-    }
-    setPersistedConversationId(activeConversationId);
-  }, [activeConversationId, persistedConversationId]);
-  useChatComposerDraftPersistence({
-    activeConversationId: persistedConversationId,
+  // The composer draft + pending attachments are the SHARED ChatComposerContext
+  // slot (one draft per active conversation, edited by every surface): under
+  // the app provider, AppContext owns the debounced per-conversation
+  // persistence and useChatCallbacks.handleSelectConversation owns the
+  // switch-time flush/restore handoff — a swipe here routes through
+  // conversationNav → selectConversation → that same handoff, which repaints
+  // this composer because it reads the context. The overlay keeps NO private
+  // draft copy (#12188 Phase 3); stories/e2e fixtures without a provider fall
+  // back to live local state inside useChatComposerOrLocal. Prefill
+  // (CHAT_PREFILL / assistant-launch) and dictation setDraft() writes are
+  // persisted upstream like any keystroke; the successful-send path clears the
+  // stored draft immediately (below).
+  const {
     chatInput: draft,
     setChatInput: setDraft,
-  });
+    chatPendingImages: pendingImages,
+    setChatPendingImages: setPendingImages,
+  } = useChatComposerOrLocal();
+  const activeConversationId = conversationNav.activeId;
+  // Live handle to the draft for callbacks that must read the current text
+  // without subscribing (dictation append), same pattern as messagesRef above.
+  const draftRef = React.useRef(draft);
+  draftRef.current = draft;
   // Live handle to the active conversation id for the send path's draft clear,
   // so submitText / pickSuggestion keep their stable identities.
   const activeConversationIdRef = React.useRef(activeConversationId);
@@ -2058,16 +1345,11 @@ export function ContinuousChatOverlay({
   }, []);
   // Push-to-talk is a label-only mirror of the shared hold hook's holding phase.
   const [pttHolding, setPttHolding] = React.useState(false);
-  const [pendingImages, setPendingImages] = React.useState<ImageAttachment[]>(
-    [],
-  );
   const [imageError, setImageError] = React.useState<string | null>(null);
-  const endRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const overlayRef = React.useRef<HTMLDivElement>(null);
   const panelRef = React.useRef<HTMLFieldSetElement>(null);
-  const threadRef = React.useRef<HTMLDivElement>(null);
   // The transcript's inner content wrapper — measured to size the onboarding
   // sheet to its content (grow-from-the-bottom) instead of a tall empty panel.
   const threadContentRef = React.useRef<HTMLDivElement>(null);
@@ -2146,6 +1428,28 @@ export function ContinuousChatOverlay({
   );
   const lastId = visibleMessages.at(-1)?.id ?? null;
   const lastContent = visibleMessages.at(-1)?.content ?? "";
+  // The thread body is mounted while the sheet is open OR during an upward
+  // drag's inert preview; the auto-scroll engine runs exactly then.
+  const threadPresented = sheetOpen || dragPreviewVisible;
+  // Keep the transcript pinned to the latest line via the one shared
+  // thread-scroll engine (useThreadAutoScroll): first reveal pins instantly
+  // (pre-paint — the thread never flashes at the top), a NEW line re-pins with
+  // a smooth glide while the reader rests at the bottom, streaming growth
+  // follows in a single rAF, and a reader who scrolled up is never yanked.
+  const { scrollRef: threadRef } = useThreadAutoScroll<HTMLDivElement>({
+    growthKey: `${visibleMessages.length}:${lastId ?? ""}:${lastContent.length}`,
+    lineKey: lastId ?? "",
+    enabled: threadPresented,
+    reduceMotion: reduce,
+  });
+  // Focus the thread for keyboard scrolling when an opener requested it —
+  // consumed on the reveal edge, separate from the scroll engine above.
+  React.useLayoutEffect(() => {
+    if (sheetOpen && focusThreadRef.current) {
+      threadRef.current?.focus();
+      focusThreadRef.current = false;
+    }
+  }, [sheetOpen, threadRef]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: these values are the event keys for transient layout-motion intent.
   React.useEffect(() => {
     markLayoutShiftIntent();
@@ -2160,11 +1464,6 @@ export function ContinuousChatOverlay({
     turnStatus?.toolName,
     markLayoutShiftIntent,
   ]);
-
-  // The last line id the scroll effect pinned to — lets it tell a NEW line
-  // (always pin to bottom) from streaming growth of the current line (follow
-  // only when the reader is already at the bottom).
-  const scrollPinnedIdRef = React.useRef(lastId);
 
   // Topic grouping + chips bar (#8928). Derived from the per-message Stage-1
   // topic tags; when no message is tagged the transcript renders flat (the
@@ -2194,6 +1493,7 @@ export function ContinuousChatOverlay({
     [],
   );
   // Tapping a chip expands its group and scrolls its header into view.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: threadRef is the stable ref object returned by useThreadAutoScroll (a useRef); reading .current in the rAF is not a dependency.
   const scrollToTopic = React.useCallback((topic: string) => {
     setCollapsedTopics((prev) => {
       if (!prev.has(topic)) return prev;
@@ -2211,27 +1511,45 @@ export function ContinuousChatOverlay({
       el?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }, []);
-  // Render one transcript line; shared by the flat and topic-grouped paths so
-  // the in-flight-turn detection stays identical.
+  // The single, stable body renderer handed to every row (see
+  // renderOverlayMessageBody). Stable identity keeps ChatMessage's memo intact;
+  // per-row volatile values (turnStatus/suppressReasoning) flow via renderContext.
+  const renderRowBody = React.useCallback(
+    (m: ChatMessageData, ctx: ChatMessageRenderContext | undefined) =>
+      renderOverlayMessageBody(m, ctx, openSettings),
+    [openSettings],
+  );
+  // Render one transcript line as the canonical ChatMessage (glass chrome);
+  // shared by the flat and topic-grouped paths so the in-flight-turn detection
+  // stays identical.
   const renderThreadLine = React.useCallback(
     (m: ShellMessage, index: number) => {
       const isLastAssistant =
         index === visibleMessages.length - 1 && m.role === "assistant";
       const isInFlight = isLastAssistant && !m.content.trim();
+      // Only the last assistant turn reads volatile status; every settled row
+      // gets no renderContext so its memo identity is unchanged.
+      const renderContext: ChatMessageRenderContext | undefined =
+        isLastAssistant
+          ? {
+              turnStatus: isInFlight ? turnStatus : null,
+              suppressReasoning: responding,
+            }
+          : undefined;
       return (
-        <ThreadLine
+        <ChatMessage
           key={m.id}
-          message={m}
-          floating
-          reduce={reduce}
+          appearance="glass"
+          message={shellToChatMessageData(m)}
+          reduceMotion={reduce}
           onCopy={handleCopyMessage}
+          onLongPressCopy={handleLongPressCopy}
           onSpeak={handleSpeakMessage}
           onEdit={handleEditResend}
           onRetry={handleRetry}
-          speaking={speaking && playingMessageId === m.id}
-          onOpenSettings={openSettings}
-          turnStatus={isInFlight ? turnStatus : undefined}
-          suppressReasoning={responding && isLastAssistant}
+          playing={speaking && playingMessageId === m.id}
+          renderContent={renderRowBody}
+          renderContext={renderContext}
           onAcceptSuggestion={handleAcceptSuggestion}
           onDismissSuggestion={handleDismissSuggestion}
         />
@@ -2241,14 +1559,15 @@ export function ContinuousChatOverlay({
       visibleMessages.length,
       reduce,
       handleCopyMessage,
+      handleLongPressCopy,
       handleSpeakMessage,
       handleEditResend,
       handleRetry,
       speaking,
       playingMessageId,
-      openSettings,
       responding,
       turnStatus,
+      renderRowBody,
       handleAcceptSuggestion,
       handleDismissSuggestion,
     ],
@@ -2295,83 +1614,6 @@ export function ContinuousChatOverlay({
   const suggestions = usePromptSuggestions(messages, {
     enabled: suggestionsVisible,
   });
-
-  // Keep the transcript pinned to the latest line. On first open jump INSTANTLY
-  // to the bottom — a layout effect runs before paint, so the thread never
-  // flashes at the top. A NEW line (the user's own send, or a fresh reply)
-  // always re-pins to the bottom; streaming growth of the current line follows
-  // only when the reader is already resting at the bottom, so scrolling up to
-  // read history is never yanked down.
-  const wasOpenRef = React.useRef(false);
-  // Coalesces the per-token streaming-follow scroll into one rAF so a burst of
-  // tokens landing within a frame triggers at most one measure+write instead of
-  // a forced reflow per token. New-line / first-open pins stay synchronous below.
-  const followRafRef = React.useRef<number | null>(null);
-  React.useEffect(
-    () => () => {
-      if (followRafRef.current != null)
-        cancelAnimationFrame(followRafRef.current);
-    },
-    [],
-  );
-  const threadPresented = sheetOpen || dragPreviewVisible;
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: lastId/lastContent/sheetOpen/dragPreviewVisible are the triggers; the body reads refs
-  React.useLayoutEffect(() => {
-    const el = threadRef.current;
-    if (!el) return;
-    const isNewLine = lastId !== scrollPinnedIdRef.current;
-    scrollPinnedIdRef.current = lastId;
-
-    if (!sheetOpen) {
-      wasOpenRef.current = false;
-      if (dragPreviewVisible) el.scrollTop = el.scrollHeight;
-      return;
-    }
-
-    // OPEN: jump to the bottom on first open; a NEW line re-pins (smooth); while
-    // already resting at the bottom, follow streaming growth — but never yank a
-    // reader who has scrolled up to read history. Direct scrollTop assignment is
-    // more reliable than scrollIntoView inside this clipped flex column.
-    const justOpened = !wasOpenRef.current;
-    wasOpenRef.current = true;
-
-    // New line or first open: pin synchronously (pre-paint) so the thread never
-    // flashes at the top. Infrequent — once per turn, not per token.
-    if (isNewLine || justOpened) {
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-      // Pin to the latest line ONLY on first open, or when the reader is already
-      // resting at the bottom. If they have scrolled UP to read history, a new
-      // line must NOT yank them down — the previous code force-pinned on every
-      // new line (the `else` ran whenever !atBottom), which is exactly the
-      // "scroll up to the first message and get snapped back to the bottom" bug.
-      if (justOpened || atBottom) {
-        if (isNewLine && !justOpened && !reduce) {
-          endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-        } else {
-          el.scrollTop = el.scrollHeight;
-        }
-      }
-      if (justOpened && focusThreadRef.current) {
-        el.focus();
-        focusThreadRef.current = false;
-      }
-      return;
-    }
-
-    // Streaming growth of the current line: coalesce the bottom-follow into a
-    // single rAF (measure atBottom + write scrollTop at most once per frame).
-    // Same semantics as before — only follows when the reader is at the bottom.
-    if (followRafRef.current != null) return;
-    followRafRef.current = requestAnimationFrame(() => {
-      followRafRef.current = null;
-      const node = threadRef.current;
-      if (!node) return;
-      const atBottom =
-        node.scrollHeight - node.scrollTop - node.clientHeight < 80;
-      if (atBottom) node.scrollTop = node.scrollHeight;
-    });
-  }, [lastId, lastContent, sheetOpen, dragPreviewVisible]);
 
   // Send `text` (and optional images) through the normal chat pipeline, clearing
   // the composer. Shared by the send button, the slash menu (agent commands),
@@ -2444,7 +1686,15 @@ export function ContinuousChatOverlay({
       detentHaptic();
       inputRef.current?.focus();
     },
-    [canSend, firstRunOpen, sendActionMessage, send, viewChatBinding],
+    [
+      canSend,
+      firstRunOpen,
+      sendActionMessage,
+      send,
+      setDraft,
+      setPendingImages,
+      viewChatBinding,
+    ],
   );
 
   // Tapping a suggestion sends it immediately (same path as submit), so the
@@ -2461,43 +1711,49 @@ export function ContinuousChatOverlay({
       detentHaptic();
       inputRef.current?.focus();
     },
-    [canSend, send],
+    [canSend, send, setDraft],
   );
 
-  const addImageFiles = React.useCallback((files: FileList | File[]) => {
-    void intakeAttachmentFiles(files)
-      .then(({ attachments, droppedTooLarge }) => {
-        // The overlay is a pure component without an i18n translator, so it
-        // surfaces the "kept N, dropped M" notice inline in English (matching
-        // its other hardcoded strings) via the existing imageError channel.
-        const summary = summarizeDroppedAttachments({
-          acceptedCount: attachments.length,
-          droppedTooLarge,
-          droppedOverCount: [],
-        });
-        setImageError(
-          summary
-            ? `Kept ${summary.kept}, dropped ${summary.dropped} (too large — max ${summary.maxMb}MB)`
-            : null,
-        );
-        if (attachments.length) {
-          setPendingImages((prev) =>
-            [...prev, ...attachments].slice(0, MAX_CHAT_IMAGES),
+  const addImageFiles = React.useCallback(
+    (files: FileList | File[]) => {
+      void intakeAttachmentFiles(files)
+        .then(({ attachments, droppedTooLarge }) => {
+          // The overlay is a pure component without an i18n translator, so it
+          // surfaces the "kept N, dropped M" notice inline in English (matching
+          // its other hardcoded strings) via the existing imageError channel.
+          const summary = summarizeDroppedAttachments({
+            acceptedCount: attachments.length,
+            droppedTooLarge,
+            droppedOverCount: [],
+          });
+          setImageError(
+            summary
+              ? `Kept ${summary.kept}, dropped ${summary.dropped} (too large — max ${summary.maxMb}MB)`
+              : null,
           );
-        }
-      })
-      .catch((err: unknown) => {
-        // Surface the failure inline rather than silently dropping the image —
-        // the overlay is pure, so it can't reach the global notice channel.
-        setImageError(
-          err instanceof Error ? err.message : "Couldn't read image",
-        );
-      });
-  }, []);
+          if (attachments.length) {
+            setPendingImages((prev) =>
+              [...prev, ...attachments].slice(0, MAX_CHAT_IMAGES),
+            );
+          }
+        })
+        .catch((err: unknown) => {
+          // Surface the failure inline rather than silently dropping the image —
+          // the overlay is pure, so it can't reach the global notice channel.
+          setImageError(
+            err instanceof Error ? err.message : "Couldn't read image",
+          );
+        });
+    },
+    [setPendingImages],
+  );
 
-  const removeImage = React.useCallback((index: number) => {
-    setPendingImages((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  const removeImage = React.useCallback(
+    (index: number) => {
+      setPendingImages((prev) => prev.filter((_, i) => i !== index));
+    },
+    [setPendingImages],
+  );
 
   // ── Push-to-talk ────────────────────────────────────────────────────────────
   // Press-and-hold on the mic dictates into the composer draft (no send); a
@@ -2671,6 +1927,8 @@ export function ContinuousChatOverlay({
             if (cancelled) handle.remove();
             else handles.push(handle);
           })
+          // error-policy:J6 best-effort native listener registration; the
+          // visualViewport path (outer catch) covers keyboard insets otherwise.
           .catch(() => {});
         void Keyboard.addListener("keyboardWillHide", () => {
           setNativeKeyboardHeight(0);
@@ -2679,6 +1937,8 @@ export function ContinuousChatOverlay({
             if (cancelled) handle.remove();
             else handles.push(handle);
           })
+          // error-policy:J6 best-effort native listener registration; the
+          // visualViewport path (outer catch) covers keyboard insets otherwise.
           .catch(() => {});
       })
       .catch(() => {
@@ -3147,6 +2407,7 @@ export function ContinuousChatOverlay({
   // moment the chat is dismissed (pull-down, Escape, or click-out) — the chat is
   // no longer "focused". Blurring (rather than the old refocus dance) also means
   // there's no focus→expand bounce to guard against, so the model stays simple.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: threadRef is the stable ref object returned by useThreadAutoScroll (a useRef); reading .current is not a dependency.
   const collapse = React.useCallback(() => {
     // Undismissable during onboarding: Escape (document, thread, composer),
     // outside taps, the grabber close, and the sheet-open grabber tap all
@@ -3299,7 +2560,7 @@ export function ContinuousChatOverlay({
     window.addEventListener(TUTORIAL_CHAT_CONTROL_EVENT, onControl);
     return () =>
       window.removeEventListener(TUTORIAL_CHAT_CONTROL_EVENT, onControl);
-  }, [goToDetent, firstRunOpen]);
+  }, [goToDetent, firstRunOpen, setDraft]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -3328,7 +2589,7 @@ export function ContinuousChatOverlay({
     };
     window.addEventListener(CHAT_PREFILL_EVENT, onPrefill);
     return () => window.removeEventListener(CHAT_PREFILL_EVENT, onPrefill);
-  }, [clearPrefillFocusSchedule]);
+  }, [clearPrefillFocusSchedule, setDraft]);
 
   // "Open chat" intent (the launcher's Messages tile). Land the user IN an open
   // conversation instead of the wordless home with a collapsed pill: un-pill to
@@ -3397,6 +2658,7 @@ export function ContinuousChatOverlay({
     expand,
     handsFree,
     recording,
+    setDraft,
     toggleHandsFree,
   ]);
 
@@ -3405,12 +2667,15 @@ export function ContinuousChatOverlay({
   // mounted, appending to whatever the user has already typed.
   React.useEffect(() => {
     setDictationSink((text) => {
-      setDraft((current) => (current ? `${current} ${text}` : text));
+      // Append through the live draft ref — the shared context setter takes a
+      // plain string (no functional-update form).
+      const current = draftRef.current;
+      setDraft(current ? `${current} ${text}` : text);
       inputRef.current?.focus();
       expand();
     });
     return () => setDictationSink(null);
-  }, [setDictationSink, expand]);
+  }, [setDictationSink, setDraft, expand]);
 
   // A completed transcription SESSION drops its transcript into the composer as
   // an ATTACHMENT — it does NOT auto-send as a message. The user sends it (with
@@ -3477,7 +2742,7 @@ export function ContinuousChatOverlay({
         });
     });
     return () => setTranscriptSessionSink(null);
-  }, [setTranscriptSessionSink, expand]);
+  }, [setTranscriptSessionSink, setPendingImages, expand]);
 
   // Tell the controller whether a draft is pending so the hands-free always-on
   // loop pauses while the user is typing (or editing a PTT dictation) and
@@ -3560,6 +2825,7 @@ export function ContinuousChatOverlay({
       slash,
       controller,
       submitText,
+      setDraft,
       toggleMaximize,
       toggleTranscriptionMode,
       collapse,
@@ -3604,6 +2870,45 @@ export function ContinuousChatOverlay({
     },
     [slashMenu, runExecution],
   );
+
+  // The shared composer-core keydown: IME-commit guard (#9148) → slash-menu
+  // interception → Enter sends → Escape collapses the open sheet. The slash
+  // binding adapts the overlay's menu/executor onto the core's key contract.
+  const handleComposerKeyDown = useComposerKeydown<HTMLTextAreaElement>({
+    onSend: submit,
+    slash: {
+      open: slashOpen,
+      move: (delta) => slashMenu.move(delta),
+      complete: () => {
+        const completed = slashMenu.complete();
+        if (completed == null) return false;
+        setDraft(completed);
+        return true;
+      },
+      submit: () => {
+        const exec = slashMenu.resolve();
+        if (!exec) return false;
+        runExecution(exec);
+        return true;
+      },
+      dismiss: () => setSlashDismissed(true),
+    },
+    onEscape: () => {
+      if (!sheetOpen) return false;
+      collapse();
+      return true;
+    },
+  });
+  // The shared composer-core paste routing: an image/file paste attaches, an
+  // oversized text paste becomes a collapsed text-attachment chip, small text
+  // falls through to the textarea.
+  const handleComposerPaste = useComposerPaste<HTMLTextAreaElement>({
+    addFiles: addImageFiles,
+    attachText: (attachment) =>
+      setPendingImages((prev) =>
+        [...prev, attachment].slice(0, MAX_CHAT_IMAGES),
+      ),
+  });
 
   // Whether a document-level pointer landed on one of the overlay's OWN
   // surfaces. CONTRACT: EVERY child of the overlay root counts as INSIDE the
@@ -4748,7 +4053,6 @@ export function ContinuousChatOverlay({
                         />
                       ) : null}
                     </AnimatePresence>
-                    <div ref={endRef} />
                   </div>
                 </motion.div>
               </motion.div>
@@ -4901,86 +4205,8 @@ export function ContinuousChatOverlay({
                     expand();
                   }
                 }}
-                onPaste={(e) => {
-                  // Shared with the desktop composer: a pasted image/file
-                  // attaches, a large plain-text paste becomes a collapsed
-                  // text-attachment chip, and small text falls through to the
-                  // textarea as normal.
-                  const intent = classifyComposerPaste({
-                    files: Array.from(e.clipboardData?.files ?? []),
-                    text: e.clipboardData?.getData("text") ?? "",
-                  });
-                  if (intent.kind === "files") {
-                    e.preventDefault();
-                    addImageFiles(intent.files);
-                    return;
-                  }
-                  if (intent.kind === "text-attachment") {
-                    e.preventDefault();
-                    setPendingImages((prev) =>
-                      [...prev, intent.attachment].slice(0, MAX_CHAT_IMAGES),
-                    );
-                  }
-                }}
-                onKeyDown={(e) => {
-                  // Never treat the Enter that COMMITS an IME composition as a
-                  // command/send key: while a CJK/other IME is composing, the
-                  // browser fires this keydown with `isComposing` true (legacy
-                  // engines report keyCode 229) and the Enter only accepts the
-                  // candidate. Guard BOTH the slash-resolve and the submit below
-                  // so committing a candidate never fires either (#9148). Let it
-                  // fall through to the textarea/IME as its default.
-                  if (
-                    e.key === "Enter" &&
-                    (e.nativeEvent.isComposing || e.keyCode === 229)
-                  ) {
-                    return;
-                  }
-                  // The slash menu intercepts navigation/commit keys when open.
-                  if (slashOpen) {
-                    if (e.key === "ArrowDown") {
-                      e.preventDefault();
-                      slashMenu.move(1);
-                      return;
-                    }
-                    if (e.key === "ArrowUp") {
-                      e.preventDefault();
-                      slashMenu.move(-1);
-                      return;
-                    }
-                    if (e.key === "Tab") {
-                      const completed = slashMenu.complete();
-                      if (completed != null) {
-                        e.preventDefault();
-                        setDraft(completed);
-                        return;
-                      }
-                    }
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      const exec = slashMenu.resolve();
-                      if (exec) {
-                        e.preventDefault();
-                        runExecution(exec);
-                        return;
-                      }
-                    }
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setSlashDismissed(true);
-                      return;
-                    }
-                  }
-                  // Enter sends; Shift+Enter inserts a newline (multi-line compose).
-                  // (An IME-composition Enter was already filtered out above.)
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    submit();
-                  } else if (e.key === "Escape" && sheetOpen) {
-                    e.preventDefault();
-                    collapse();
-                  }
-                }}
+                onPaste={handleComposerPaste}
+                onKeyDown={handleComposerKeyDown}
                 // The composer is unlocked during onboarding (#12178): typing is
                 // always allowed. Free text is answered locally by the in-chat
                 // conductor and never reaches the server (submitText routes it).

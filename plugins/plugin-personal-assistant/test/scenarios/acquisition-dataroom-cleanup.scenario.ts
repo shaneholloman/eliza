@@ -1,6 +1,3 @@
-import { scenario } from "@elizaos/scenario-runner/schema";
-import { expectNoExternalSendDispatch } from "./_helpers/approval-outcome.ts";
-
 /**
  * Live-model diligence-closeout audit for an acquisition dataroom. Seeds real
  * closeout tasks through the LifeOps definition API — the advisor firm
@@ -11,6 +8,9 @@ import { expectNoExternalSendDispatch } from "./_helpers/approval-outcome.ts";
  * dispatched externally before legal confirms. Seeds re-verified via
  * definitionCountDelta.
  */
+import { scenario } from "@elizaos/scenario-runner/schema";
+import { expectNoExternalSendDispatch } from "./_helpers/approval-outcome.ts";
+
 export default scenario({
   lane: "live-only",
   id: "acquisition-dataroom-cleanup",

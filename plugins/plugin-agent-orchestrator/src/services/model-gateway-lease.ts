@@ -149,11 +149,14 @@ export class HttpModelGatewayLeaseBroker implements ModelGatewayLeaseBroker {
       body: JSON.stringify(request),
     });
     if (!res.ok) {
+      // error-policy:J3 best-effort read of untrusted error body for context; failure → empty detail, error still thrown below
       const detail = (await res.text().catch(() => "")).slice(0, 200);
       throw new Error(
         `lease mint failed: HTTP ${res.status}${detail ? ` ${detail}` : ""}`,
       );
     }
+    // error-policy:J3 unparseable lease body → null → the explicit `if (!lease)
+    // throw` below turns it into a structured "lease mint failed" failure.
     const lease = coerceLease(await res.json().catch(() => null));
     if (!lease) {
       throw new Error(
@@ -175,6 +178,7 @@ export class HttpModelGatewayLeaseBroker implements ModelGatewayLeaseBroker {
     // A 404 means the lease is already gone (expired/revoked) — the desired
     // end state, so treat it as success.
     if (!res.ok && res.status !== 404) {
+      // error-policy:J3 best-effort read of untrusted error body for context; failure → empty detail, error still thrown below
       const detail = (await res.text().catch(() => "")).slice(0, 200);
       throw new Error(
         `lease revoke failed: HTTP ${res.status}${detail ? ` ${detail}` : ""}`,
@@ -299,6 +303,7 @@ export async function mintSpawnLease(input: {
     });
     return { kind: "leased", lease };
   } catch (err) {
+    // error-policy:J4 broker mint failed → strict rethrows; non-strict warns + degrades to the documented static gateway token (unchanged E2 behavior)
     const message = err instanceof Error ? err.message : String(err);
     if (strict) {
       throw new Error(

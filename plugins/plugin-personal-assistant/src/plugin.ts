@@ -928,7 +928,7 @@ const rawPersonalAssistantPlugin: Plugin = {
     // Deterministic completion for fired scheduled tasks awaiting an owner
     // reply — no LLM verb required. Two passes with distinct coverage:
     // `handleScheduledTaskInboundMessage` walks the pending-prompts store for
-    // the room (user_replied_within + stale-prompt cleanup);
+    // the room (user_replied_within + stale-prompt teardown);
     // `completeFiredTasksOnOwnerReply` matches fired tasks by their own
     // pending-prompt room and re-evaluates every check kind (incl.
     // subject_updated). Both are owner-gated and idempotent. Boundary catch:
@@ -1099,6 +1099,16 @@ const rawPersonalAssistantPlugin: Plugin = {
 
     const activitySignalBus = createActivitySignalBus({ familyRegistry });
     registerActivitySignalBus(runtime, activitySignalBus);
+    // Structural runtime property (same pattern as anchorRegistry /
+    // busFamilyRegistry above): plugin-health's observed-anchor resolvers
+    // read wake/sleep transition envelopes back through
+    // `runtime.activitySignalBus` (its `ActivitySignalReader` contract)
+    // without importing this plugin.
+    (
+      runtime as IAgentRuntime & {
+        activitySignalBus?: typeof activitySignalBus;
+      }
+    ).activitySignalBus = activitySignalBus;
 
     await ensureLifeOpsHealthPluginRegistered(runtime);
 
@@ -1419,11 +1429,13 @@ export {
 export {
   type EscalationRule,
   getOwnerFactStore,
+  type OwnerChronotype,
   type OwnerFactEntry,
   type OwnerFactProvenance,
   type OwnerFactProvenanceSource,
   type OwnerFactWindow,
   type OwnerQuietHours,
+  type OwnerScheduleStyle,
   ownerFactsToView,
   type PolicyPatchEscalationRule,
   type PolicyPatchReminderIntensity,

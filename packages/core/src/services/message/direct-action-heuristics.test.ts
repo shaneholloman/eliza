@@ -5,12 +5,17 @@
  * "don't browse the web"), since a false positive runs an unwanted
  * side-effecting action.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { Action } from "../../types/components";
 import {
 	findAvailableActionName,
 	findCodingDelegationActionName,
+	findShellDirectActionName,
 	hasActionTags,
+	inferDirectCurrentRequestCandidateActions,
+	isShellDirectActionName,
 	looksLikeLocalShellRequest,
 	looksLikeWebSearchRequest,
 } from "./direct-action-heuristics.ts";
@@ -94,5 +99,117 @@ describe("hasActionTags", () => {
 				"capability:delegate",
 			]),
 		).toBe(true);
+	});
+});
+
+describe("findShellDirectActionName", () => {
+	it("prefers a declared shell-direct tag over the legacy name list", () => {
+		// The owner renamed SHELL -> RUN_OS_COMMAND but kept the declared tags, so
+		// the pipeline must still resolve it even though the new name is not in the
+		// legacy fallback set. This is the whole point of the tag contract.
+		const actions = [
+			{
+				name: "RUN_OS_COMMAND",
+				similes: [],
+				tags: ["domain:system", "resource:shell", "capability:execute"],
+			},
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
+
+		expect(findShellDirectActionName(actions)).toBe("RUN_OS_COMMAND");
+	});
+
+	it("falls back to the legacy name/simile set while plugins migrate", () => {
+		const actions = [
+			{ name: "SHELL", similes: ["RUN_IN_TERMINAL", "EXEC"], tags: [] },
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
+
+		expect(findShellDirectActionName(actions)).toBe("SHELL");
+	});
+
+	it("keeps legacy simile fallback aligned with shell-direct classification", () => {
+		const actions = [
+			{ name: "LOCAL_COMMAND", similes: ["RUN_IN_TERMINAL"], tags: [] },
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
+
+		expect(findShellDirectActionName(actions)).toBe("LOCAL_COMMAND");
+		expect(isShellDirectActionName("LOCAL_COMMAND", actions)).toBe(true);
+	});
+
+	it("returns undefined when no shell-direct action is exposed", () => {
+		const actions = [
+			{ name: "REPLY", similes: [], tags: [] },
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
+
+		expect(findShellDirectActionName(actions)).toBeUndefined();
+	});
+});
+
+describe("isShellDirectActionName", () => {
+	it("classifies a declared shell-direct action by tag, not by name", () => {
+		const actions = [
+			{
+				name: "RUN_OS_COMMAND",
+				similes: [],
+				tags: ["domain:system", "resource:shell", "capability:execute"],
+			},
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
+
+		expect(isShellDirectActionName("RUN_OS_COMMAND", actions)).toBe(true);
+		expect(isShellDirectActionName("REPLY", actions)).toBe(false);
+	});
+
+	it("honors the legacy name membership when no action set is supplied", () => {
+		expect(isShellDirectActionName("SHELL")).toBe(true);
+		expect(isShellDirectActionName("terminal_shell")).toBe(true);
+		expect(isShellDirectActionName("REPLY")).toBe(false);
+		expect(isShellDirectActionName("")).toBe(false);
+	});
+
+	it("does not classify a tagless renamed action off its new name alone", () => {
+		// A renamed action that dropped both the legacy name AND the declared tags
+		// must NOT be treated as shell-direct — the coupling is gone by design.
+		const actions = [
+			{ name: "RUN_OS_COMMAND", similes: [], tags: [] },
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
+
+		expect(isShellDirectActionName("RUN_OS_COMMAND", actions)).toBe(false);
+	});
+});
+
+describe("inferDirectCurrentRequestCandidateActions shell routing", () => {
+	it("routes a local shell ask to a tag-declared shell action", () => {
+		const actions = [
+			{ name: "REPLY", similes: [], tags: [] },
+			{
+				name: "RUN_OS_COMMAND",
+				similes: [],
+				tags: ["domain:system", "resource:shell", "capability:execute"],
+			},
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
+
+		expect(
+			inferDirectCurrentRequestCandidateActions(
+				actions,
+				"check git status locally",
+			),
+		).toEqual(["RUN_OS_COMMAND"]);
+	});
+});
+
+describe("shell-direct coupling grep guard (#12636)", () => {
+	it("message.ts no longer duck-types shell-direct routing off a hardcoded name Set", () => {
+		// The audit item's brittle literal was a `SHELL_DIRECT_ACTIONS = new Set([...])`
+		// hardcoded in the core pipeline. Prove it is gone from the executable path
+		// and that routing resolves through the declared-tag helpers instead. If a
+		// future edit reintroduces the literal set, this fails loudly.
+		const messagePath = fileURLToPath(
+			new URL("../message.ts", import.meta.url),
+		);
+		const src = readFileSync(messagePath, "utf8");
+		expect(src).not.toContain("const SHELL_DIRECT_ACTIONS");
+		expect(src).not.toContain("SHELL_DIRECT_ACTIONS.has(");
+		// And it routes through the tag-aware resolver/classifier.
+		expect(src).toContain("findShellDirectActionName");
+		expect(src).toContain("isShellDirectActionName");
 	});
 });

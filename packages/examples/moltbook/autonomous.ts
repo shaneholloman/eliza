@@ -441,7 +441,7 @@ export async function main(): Promise<void> {
     void shutdown("unhandledRejection");
   });
 
-  // Keep process alive with proper cleanup capability
+  // Keep the process alive while preserving a shutdown hook.
   // The moltbook service handles the autonomy loop via setTimeout
   // We use setInterval instead of eternal promise so the event loop stays responsive
   const keepAliveInterval = setInterval(() => {
@@ -449,7 +449,7 @@ export async function main(): Promise<void> {
     // The interval will be cleared on shutdown
   }, 60000); // Check every minute
 
-  // Store reference for cleanup
+  // Clear the keepalive interval during process shutdown.
   process.on("exit", () => {
     clearInterval(keepAliveInterval);
   });

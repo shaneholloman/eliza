@@ -1,3 +1,4 @@
+// Configures Tailwind theme scanning for the Clone Ur Crush cloud example.
 import type { Config } from "tailwindcss";
 
 const config: Config = {

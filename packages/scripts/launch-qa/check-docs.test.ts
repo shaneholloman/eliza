@@ -1,3 +1,4 @@
+// Exercises launch qa check docs.test automation behavior with deterministic script fixtures.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -147,6 +148,24 @@ describe("docs gate", () => {
     const result = checkDocs({ repoRoot, scope: "docs" });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("limits docs scope to site docs, repo docs, and root docs", async () => {
+    const repoRoot = await makeRepo();
+    await fs.writeFile(
+      path.join(repoRoot, "README.md"),
+      "# Root\n\nRun `bun run dev`.\n",
+    );
+    await fs.writeFile(
+      path.join(repoRoot, "packages", "demo", "README.md"),
+      "# Demo\n\nRun `bun run absent`.\n",
+    );
+
+    const result = checkDocs({ repoRoot, scope: "docs" });
+
+    expect(result.ok).toBe(true);
+    expect(result.checkedFiles).toContain("README.md");
+    expect(result.checkedFiles).not.toContain("packages/demo/README.md");
   });
 
   it("resolves moved relative docs links under packages/docs", async () => {

@@ -2,10 +2,8 @@
  * Fires the shared navigate-view event to open a registered view, the imperative
  * entry the agent's view actions and the shell use to switch views.
  */
-import {
-  dispatchNavigateViewEvent,
-  type NavigateViewDetail,
-} from "@elizaos/shared/events";
+import { logger } from "@elizaos/logger";
+import type { NavigateViewDetail } from "@elizaos/shared/events";
 import type { ViewRegistryEntry } from "./hooks/useAvailableViews";
 import { type Tab, tabFromPath } from "./navigation";
 
@@ -18,29 +16,17 @@ export type ActiveViewLayout = {
   placement?: string;
 };
 
-const pendingNavigateViewPayloads = new Map<string, unknown>();
-
-// Cross-view phone-number handoff.
+// Cross-view navigation payload channel.
 //
-// `NavigateViewDetail` (and `createNavigateViewHandler`) route only by view
-// id/path — there is no payload channel that reaches a *mounted* target view.
-// So when one in-app surface wants to open the Phone or Messages view
-// pre-seeded with a number (e.g. a Contacts "Call"/"Message" control, or a
-// phone-recent row), we stash the number here before dispatching the navigate
-// event, and the target view consumes it on mount/focus. The handoff is
-// single-shot: each `consume*` clears the value so a later plain navigation to
-// that view does not re-seed a stale number.
-
-/** Strip whitespace/separators, keeping a leading + and digits. */
-function normalizePhoneNumber(input: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) return "";
-  const leadingPlus = trimmed.startsWith("+") ? "+" : "";
-  return `${leadingPlus}${trimmed.replace(/[^0-9]/g, "")}`;
-}
-
-let pendingPhoneNumber: string | null = null;
-let pendingMessageRecipient: string | null = null;
+// `NavigateViewDetail.payload` is an opaque, view-owned deep-link value:
+// `createNavigateViewHandler` stashes it here keyed by target `viewId` before
+// switching views, and the target view claims it on mount/focus via
+// `consumeNavigateViewPayload<T>()`, narrowing the value at that boundary. The
+// handoff is single-shot — `consume` deletes the entry so a later plain
+// navigation to the same view does not re-seed a stale payload. The channel is
+// generic: no view id is special-cased here, and the plugin that owns a view
+// ships its own navigate helper that constructs the payload shape it expects.
+const pendingNavigateViewPayloads = new Map<string, unknown>();
 
 export function consumeNavigateViewPayload<T = unknown>(
   viewId: string,
@@ -61,39 +47,6 @@ export function __setNavigateViewPayloadForTests(
 function storeNavigateViewPayload(detail: NavigateViewDetail): void {
   if (!detail.viewId || detail.payload === undefined) return;
   pendingNavigateViewPayloads.set(detail.viewId, detail.payload);
-}
-
-export function consumePendingPhoneNumber(): string | null {
-  const number = pendingPhoneNumber;
-  pendingPhoneNumber = null;
-  return number;
-}
-
-export function consumePendingMessageRecipient(): string | null {
-  const address = pendingMessageRecipient;
-  pendingMessageRecipient = null;
-  return address;
-}
-
-/**
- * Open the Phone view via the navigation bus, pre-seeding the dialer with
- * `number`. Used by Contacts "Call" controls and phone-recent rows.
- */
-export function navigateToPhoneWithNumber(number: string): void {
-  if (typeof window === "undefined") return;
-  pendingPhoneNumber = normalizePhoneNumber(number) || null;
-  dispatchNavigateViewEvent({ viewId: "phone", viewPath: "/phone" });
-}
-
-/**
- * Open the Messages view via the navigation bus, pre-seeding the composer "To"
- * field with `address`. Used by Contacts "Message" controls.
- */
-export function navigateToMessagesWithNumber(address: string): void {
-  if (typeof window === "undefined") return;
-  const trimmed = address.trim();
-  pendingMessageRecipient = trimmed || null;
-  dispatchNavigateViewEvent({ viewId: "messages", viewPath: "/messages" });
 }
 
 export type DesktopTabOpen = (
@@ -136,8 +89,11 @@ export function navigateBrowserPath(path: string): void {
     }
     window.history.pushState(null, "", path);
     window.dispatchEvent(new PopStateEvent("popstate"));
-  } catch {
-    return;
+  } catch (err) {
+    // error-policy:J4 sandboxed webviews can reject history navigation with a
+    // SecurityError; navigation degrades to a no-op there. Logged so silent
+    // dead navigation is diagnosable.
+    logger.warn({ err, path }, "[app-navigate-view] browser navigation failed");
   }
 }
 
@@ -260,7 +216,15 @@ export function createNavigateViewHandler({
             navigatePath(viewPath);
           }
         })
-        .catch(() => {
+        .catch((err: unknown) => {
+          // error-policy:J4 designed degrade: when the desktop bridge cannot
+          // open a separate window, the view opens as an in-shell tab instead —
+          // the user still lands on the view. Logged so a broken bridge is
+          // observable.
+          logger.warn(
+            { err, viewPath },
+            "[app-navigate-view] desktop openAppWindow failed; opening in-shell",
+          );
           activateTabForPath(viewPath);
           navigatePath(viewPath);
         });

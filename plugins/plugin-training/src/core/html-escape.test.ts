@@ -1,3 +1,4 @@
+// Exercises the escapeHtml/escapeScriptJson escapers that guard XSS boundaries in training output.
 import { describe, expect, it } from "vitest";
 import { escapeHtml, escapeScriptJson } from "./html-escape";
 

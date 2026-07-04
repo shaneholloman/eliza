@@ -6,7 +6,12 @@
  * hand-roll account discovery; use `listFarcasterAccountIds`,
  * `normalizeFarcasterAccountId`, and `resolveDefaultFarcasterAccountId` here.
  */
-import { type IAgentRuntime, type ProcessEnvLike, parseBooleanFromText } from "@elizaos/core";
+import {
+  ElizaError,
+  type IAgentRuntime,
+  type ProcessEnvLike,
+  parseBooleanFromText,
+} from "@elizaos/core";
 import { z } from "zod";
 import {
   DEFAULT_CAST_INTERVAL_MAX,
@@ -72,11 +77,13 @@ function parseAccountsJson(runtime: IAgentRuntime): Record<string, RawFarcasterA
     return parsed && typeof parsed === "object"
       ? (parsed as Record<string, RawFarcasterAccountConfig>)
       : {};
-  } catch {
-    // error-policy:J3 malformed FARCASTER_ACCOUNTS JSON is untrusted config input; the
-    // multi-account blob contributes no entries while single-account env settings
-    // still govern — a corrupt blob must not crash account discovery (accounts.test.ts).
-    return {};
+  } catch (error) {
+    throw new ElizaError("Farcaster accounts config is not valid JSON.", {
+      code: "FARCASTER_CONFIG_INVALID",
+      cause: error,
+      context: { setting: "FARCASTER_ACCOUNTS" },
+      severity: "fatal",
+    });
   }
 }
 

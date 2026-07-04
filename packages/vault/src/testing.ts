@@ -70,6 +70,8 @@ export async function createTestVault(
       try {
         raw = await fs.readFile(auditLogPath, "utf8");
       } catch (err) {
+        // error-policy:J3 untrusted-input sanitizing (test harness) — no audit
+        // file yet is the explicit empty state; any other read error rethrows.
         if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
         throw err;
       }
@@ -82,6 +84,9 @@ export async function createTestVault(
       try {
         await fs.writeFile(auditLogPath, "", { mode: 0o600 });
       } catch (err) {
+        // error-policy:J6 best-effort teardown (test harness) — truncating the
+        // audit log between assertion phases; a missing file is already the
+        // desired state, anything else rethrows.
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       }
     },

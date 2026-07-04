@@ -279,6 +279,9 @@ export async function withAccountRotation(
         ...(ctx.strategy ? { strategy: ctx.strategy } : {}),
       });
     } catch (selectErr) {
+      // error-policy:J4 explicit degrade — the account POOL is optional; if its
+      // select() fails we fall back to the ambient credential (documented degrade),
+      // the CLI still runs. Not a swallowed inference failure.
       logger.warn(
         {
           src: "cli-inference:rotation",
@@ -300,7 +303,7 @@ export async function withAccountRotation(
       try {
         await ctx.onRotate();
       } catch {
-        // Session teardown is best-effort; the fresh start will re-init anyway.
+        // error-policy:J6 best-effort teardown — the fresh start re-inits anyway.
       }
       logger.info(
         {
@@ -324,6 +327,8 @@ export async function withAccountRotation(
       // quota-aware selection reflects real usage (best-effort; never throws).
       if (state) {
         void bridge
+          // error-policy:J7 usage accounting is telemetry — a recordUsage failure
+          // must not fail the successful inference result being returned.
           .recordUsage(state.selection.providerId, state.selection.accountId, { ok: true })
           .catch(() => undefined);
       }
@@ -340,6 +345,8 @@ export async function withAccountRotation(
       // Only for an account WE selected (the ambient credential is untracked).
       if (state) {
         void bridge
+          // error-policy:J7 marking the limit is best-effort bookkeeping; failure
+          // to persist it must not stop the rotation-to-next-account below.
           .markRateLimited(
             state.selection.providerId,
             state.selection.accountId,
@@ -361,7 +368,9 @@ export async function withAccountRotation(
           exclude: [...tried],
         });
       } catch (selectErr) {
-        // Pool selection itself failed — treat as pool-exhausted and fail over.
+        // error-policy:J2 context-adding — pool selection itself failed; treat as
+        // pool-exhausted and rethrow the ORIGINAL limit error so the caller's
+        // provider-failover chain runs (does not fabricate a success).
         logger.warn(
           {
             src: "cli-inference:rotation",
@@ -399,7 +408,7 @@ export async function withAccountRotation(
       try {
         await ctx.onRotate();
       } catch {
-        // Session teardown is best-effort; the fresh start will re-init anyway.
+        // error-policy:J6 best-effort teardown — the fresh start re-inits anyway.
       }
       logger.warn(
         {

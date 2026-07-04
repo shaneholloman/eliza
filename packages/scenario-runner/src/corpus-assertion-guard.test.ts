@@ -251,11 +251,43 @@ const facts: ScenarioFacts[] =
   SCENARIO_ROOTS.flatMap(walkScenarioFiles).map(analyze);
 const rel = (f: ScenarioFacts) => relative(repoRoot, f.file);
 const EXPECTED_PR_DETERMINISTIC_SCENARIO_IDS = [
+  // LifeOps persona pack A1 (adhd-capture-and-start, #12769). Convention (G1):
+  // pr-deterministic persona scenarios live in
+  // plugins/plugin-personal-assistant/test/scenarios — the one root scanned by
+  // BOTH this guard AND check-lifeops-persona-catalog-coverage.mjs — and are
+  // added here in the same commit so this toEqual stays green while the coverage
+  // ledger can still resolve their ids.
+  "adhd-distractor-storm-mid-capture",
+  "adhd-hyperfocus-guardrail-protects-standup",
+  // LifeOps persona pack C1 (traveler-timezone-truth, #12773). Same G1
+  // convention: keyless `tick`-driven timezone journeys authored under
+  // plugins/plugin-personal-assistant/test/scenarios and pinned here in the same
+  // commit. They prove the travel/tz spine — owner_local cron re-anchoring to
+  // the active-travel destination while a fixed absolute instant stays
+  // invariant, a wall-clock morning window re-anchoring, DST local-time
+  // integrity across a fall-back, and a disruption re-time — through the real
+  // scheduler under the deterministic proxy.
+  "traveler-absolute-vs-wallclock-disambiguation-flight",
+  "traveler-disruption-recovery-missed-connection",
+  "traveler-dst-boundary-reminder-integrity",
+  "traveler-reanchor-on-timezone-change-signal",
   "agent-orchestrator.list-agents",
+  // LifeOps persona pack B1 (night-owl-anchored-day, #12771). Same G1
+  // convention as A1: authored under the SCANNED root
+  // packages/test/scenarios/lifeops.personas and added here in the same commit.
+  "persona.night-owl-anchored-day",
+  "persona.night-owl-quiet-hours-sleep-protection",
   "ainex.stand",
   "anthropic-proxy.proxy-status",
   "benchmarks.osworld-action",
   "commands.help-command",
+  // LifeOps persona pack D1 (comms-flood-triage, #12774). Convention (G1):
+  // pr-deterministic persona scenarios live in
+  // plugins/plugin-personal-assistant/test/scenarios — the one root scanned by
+  // BOTH this guard AND check-lifeops-persona-catalog-coverage.mjs — and are
+  // added here in the same commit so this toEqual stays green while the coverage
+  // ledger can still resolve their ids.
+  "comms-flood-quiet-hours-vip-exception",
   "computeruse.get-cursor-position",
   "convo.echo-self-test",
   "convo.greeting-dynamic",
@@ -284,6 +316,15 @@ const EXPECTED_PR_DETERMINISTIC_SCENARIO_IDS = [
   "reminder.escalation.intensity-up",
   "reminder.escalation.silent-dismiss",
   "remote-desktop.list-sessions",
+  // LifeOps persona pack B2 (shift-rotation, marcus_shift, #12772). Convention
+  // (G1): pr-deterministic persona scenarios live in
+  // plugins/plugin-personal-assistant/test/scenarios — the one root scanned by
+  // BOTH this guard AND check-lifeops-persona-catalog-coverage.mjs — and are
+  // added here in the same commit so this toEqual stays green while the coverage
+  // ledger can still resolve their ids.
+  "shift-rotation-reanchor-protects-new-sleep-window",
+  "shift-rotation-sleep-protection-holds-low-priority-nudge",
+  "shift-rotation-wake-anchor-follows-shifted-window",
   "shopify.list-products",
   "suno.generate-music",
   "task-coordinator.orchestrator-status",

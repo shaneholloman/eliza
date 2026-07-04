@@ -84,6 +84,7 @@ function assertGatewayUrl(url: unknown): string {
   try {
     parsed = new URL(url);
   } catch {
+    // error-policy:J3 untrusted url failed to parse; throw an explicit validation error
     throw new Error("url must be a valid WebSocket URL");
   }
   if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
@@ -328,23 +329,38 @@ export class GatewayWeb extends WebPlugin {
     let parsedValue: JsonValue;
     try {
       parsedValue = JSON.parse(raw) as JsonValue;
-    } catch {
+    } catch (err) {
+      // error-policy:J3 untrusted gateway frame failed to parse; drop it with an observable warn
+      // A frame the gateway sent us failed to parse. Dropping it silently would
+      // masquerade a protocol/transport fault as an idle connection, so surface
+      // it the same way the sequence-gap and socket-error paths do.
+      console.warn(
+        "[Gateway] Dropped unparseable frame:",
+        err instanceof Error ? err.message : String(err),
+      );
       return;
     }
 
     if (!isJsonObject(parsedValue)) {
+      console.warn(
+        "[Gateway] Dropped non-object frame (expected a JSON object)",
+      );
       return;
     }
 
     const frameType = getString(parsedValue.type);
     if (!frameType) {
+      console.warn("[Gateway] Dropped frame with missing/invalid `type` field");
       return;
     }
 
     // Handle response frames
     if (frameType === "res") {
       const id = getString(parsedValue.id);
-      if (!id) return;
+      if (!id) {
+        console.warn("[Gateway] Dropped `res` frame with missing/invalid `id`");
+        return;
+      }
       const pending = this.pending.get(id);
       if (pending) {
         this.pending.delete(id);
@@ -354,6 +370,12 @@ export class GatewayWeb extends WebPlugin {
           payload: parsedValue.payload,
           error: parseGatewayError(parsedValue.error),
         });
+      } else {
+        // No caller is waiting on this id (late/duplicate/unknown response).
+        // Note it rather than dropping in silence.
+        console.warn(
+          `[Gateway] Dropped res frame for unknown request id: ${id}`,
+        );
       }
       return;
     }
@@ -361,7 +383,12 @@ export class GatewayWeb extends WebPlugin {
     // Handle event frames
     if (frameType === "event") {
       const event = getString(parsedValue.event);
-      if (!event) return;
+      if (!event) {
+        console.warn(
+          "[Gateway] Dropped `event` frame with missing/invalid `event` name",
+        );
+        return;
+      }
       const payload = parsedValue.payload;
       const seq = getNumber(parsedValue.seq);
 
@@ -387,6 +414,10 @@ export class GatewayWeb extends WebPlugin {
       } as GatewayEvent);
       return;
     }
+
+    // A well-formed frame with a `type` we don't handle. Log it so an evolving
+    // gateway protocol (new frame types) is observable instead of vanishing.
+    console.warn(`[Gateway] Dropped frame with unhandled type: ${frameType}`);
   }
 
   /**

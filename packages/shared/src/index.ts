@@ -201,6 +201,7 @@ export * from "./config/ui-spec.js";
 export * from "./config/wechat-config.js";
 export * from "./config/zod-schema.agent-runtime.js";
 export * from "./config/zod-schema.core.js";
+export * from "./connector-account-catalog.js";
 export * from "./connector-cred-types.js";
 export * from "./connectors.js";
 export {
@@ -209,6 +210,7 @@ export {
   getFirstRunProviderOption,
   getFirstRunProviderSignalEnvKeys,
   getStoredFirstRunProviderId,
+  getStoredSubscriptionProviderForRequest,
   normalizeFirstRunProviderId,
   sortFirstRunProviders,
 } from "./contracts/first-run-options.js";
@@ -273,6 +275,7 @@ export * from "./lifeops-normalize/index.js";
 // Server runtime (KV cache, llama-server lifecycle, etc.) stays in @elizaos/app-core.
 export * from "./local-inference/index.js";
 export * from "./loopback-trust.js";
+export * from "./meeting-artifacts.js";
 export * from "./meetings.js";
 export * from "./platform/eliza-os.js";
 export * from "./platform/is-native-server.js";

@@ -562,6 +562,52 @@ describe("live routing regressions", () => {
 		).toBe(true);
 	});
 
+	it("resolves shell-direct routing off declared tags when the owner renamed the action (#12636)", () => {
+		// The crux of #12636: an owner plugin renames its shell action away from
+		// every legacy name/simile (SHELL, TERMINAL_SHELL, EXEC, …) but keeps the
+		// declared SHELL_DIRECT_ACTION_TAGS. Before the fix the core pipeline
+		// duck-typed shell-direct routing off a hardcoded name set, so this action
+		// silently stopped being recognised. With the tag contract it still routes.
+		const renamedShellActions: Array<
+			Pick<Action, "name" | "similes" | "tags">
+		> = [
+			{
+				name: "RUN_OS_COMMAND",
+				similes: [],
+				tags: ["domain:system", "resource:shell", "capability:execute"],
+			},
+			{ name: "REPLY", similes: ["RESPOND"] },
+		];
+		const shellText = "run df -h on this VPS";
+
+		const directCandidateActions = inferDirectCurrentRequestCandidateActions(
+			renamedShellActions,
+			shellText,
+		);
+		expect(directCandidateActions).toEqual(["RUN_OS_COMMAND"]);
+
+		// The preference gate must promote it too — but ONLY when it can see the
+		// live action registry (so it can resolve the tag). Passing the same
+		// renamed candidate WITHOUT the registry falls back to legacy membership
+		// and correctly does not recognise the new name, proving the gate is
+		// registry-driven rather than hardcoding RUN_OS_COMMAND.
+		expect(
+			shouldPreferDirectCurrentCandidateActions({
+				candidateActions: ["REPLY", "RUN_OS_COMMAND"],
+				currentMessageText: shellText,
+				directCandidateActions,
+				actions: renamedShellActions,
+			}),
+		).toBe(true);
+		expect(
+			shouldPreferDirectCurrentCandidateActions({
+				candidateActions: ["REPLY", "RUN_OS_COMMAND"],
+				currentMessageText: shellText,
+				directCandidateActions,
+			}),
+		).toBe(false);
+	});
+
 	it("promotes explicit reply to direct shell/search action aliases", () => {
 		expect(
 			shouldPromoteExplicitReplyToOwnedAction(

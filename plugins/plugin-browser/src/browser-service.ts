@@ -233,8 +233,16 @@ export class BrowserService extends Service {
             target,
           });
         }
-      } catch {
-        // Ignore unhealthy targets during target resolution.
+      } catch (err) {
+        // error-policy:J4 failover scan — a candidate whose availability check
+        // throws is excluded so the other registered targets can still be
+        // selected (unlike the pinned-`preferredId` path, which throws). Log so
+        // a systemically broken target is observable instead of silently gone.
+        logger.debug(
+          `[BrowserService] target "${id}" excluded from resolution; availability check failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
       }
     }
 

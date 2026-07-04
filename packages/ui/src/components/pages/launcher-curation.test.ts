@@ -3,8 +3,11 @@
  * launcher-page composition (system + release always, developer + preview gated
  * by their toggles) that `LauncherSurface` feeds into `Launcher`.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ViewEntry } from "../../hooks/view-catalog";
+import { getInternalToolAppTargetTab } from "../apps/internal-tool-apps";
 import { canonicalLauncherId, curateLauncherPages } from "./launcher-curation";
 
 const ENABLED = { developer: true, preview: true } as const;
@@ -483,5 +486,81 @@ describe("canonicalLauncherId", () => {
     expect(canonicalLauncherId("plugins-page")).toBe("plugins");
     expect(canonicalLauncherId("trajectory-logger")).toBe("trajectories");
     expect(canonicalLauncherId("browser")).toBe("browser");
+  });
+});
+
+describe("canonicalLauncherId derives package-name mapping from owner declarations", () => {
+  // #12641: the `@elizaos/...` package-name -> canonical switch used to be a
+  // hand-kept literal map inside launcher-curation that silently drifted from
+  // the internal-tool app declarations. It now derives from each declaration's
+  // own `targetTab`, so a package rename/add flows through with no edit here.
+  it("canonicalizes an internal-tool app package name to its declared targetTab", () => {
+    // Live case: the fine-tuning surface used to require a literal
+    // `["@elizaos/plugin-training", "fine-tuning"]` row in launcher-curation.
+    expect(getInternalToolAppTargetTab("@elizaos/plugin-training")).toBe(
+      "fine-tuning",
+    );
+    expect(canonicalLauncherId("@elizaos/plugin-training")).toBe("fine-tuning");
+
+    // The task-coordinator PACKAGE NAME collapses onto the tasks tile via its
+    // declaration (the short `task-coordinator` alias keeps its legacy row).
+    expect(canonicalLauncherId("@elizaos/plugin-task-coordinator")).toBe(
+      "tasks",
+    );
+    expect(canonicalLauncherId("task-coordinator")).toBe("tasks");
+  });
+
+  it("collapses an internal-tool app catalog card onto its canonical tile without a curation edit", () => {
+    // An internal-tool app surfaces in the launcher as a catalog card whose id
+    // IS the package name (appToEntry uses `id: app.name`). Curation must fold
+    // it onto the owning tab tile from the declaration alone.
+    const targetTab = getInternalToolAppTargetTab("@elizaos/plugin-training");
+    expect(targetTab).toBe("fine-tuning");
+    const page = curateLauncherPages(
+      [
+        entry("chat"),
+        entry("fine-tuning", { viewKind: "developer" }),
+        // Catalog card for the same surface, keyed by package name.
+        entry("@elizaos/plugin-training", {
+          kind: "app",
+          state: "available",
+          viewKind: "developer",
+        }),
+      ],
+      { isAosp: false, enabledKinds: ENABLED, cloudActive: true },
+    );
+    // One "fine-tuning" tile, no stray `@elizaos/...` package-name tile.
+    expect(ids(page).filter((id) => id === "fine-tuning")).toHaveLength(1);
+    expect(ids(page)).not.toContain("@elizaos/plugin-training");
+  });
+});
+
+describe("launcher-curation brittle-package-name grep guard (#12641)", () => {
+  const sourcePath = fileURLToPath(
+    new URL("./launcher-curation.ts", import.meta.url),
+  );
+  const source = readFileSync(sourcePath, "utf8");
+
+  it("no plugin/app package-name literal survives as a curation switch", () => {
+    // The audit finding: launcher curation hardcodes plugin package names. Any
+    // `@elizaos/plugin-*` / `@elizaos/app-*` literal reintroduced into this
+    // module is a regression — the package-name -> canonical mapping must come
+    // from owner declarations. (Strip line/block comments so the doc references
+    // above don't false-fail; the `@elizaos/core` runtime import is not a
+    // package-name SWITCH so the guard targets plugin/app package literals.)
+    const executable = source
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // The `@elizaos/core` framework import is a dependency, not a curation
+    // switch. The regression the audit flagged is plugin/app PACKAGE-NAME
+    // literals (`@elizaos/plugin-*`, `@elizaos/app-*`) being hand-mapped to a
+    // canonical id here; those must come from the owner declarations instead.
+    expect(executable).not.toMatch(/@elizaos\/(?:plugin|app)-/);
+  });
+
+  it("reads package-name canonicalization from the internal-tool declarations", () => {
+    // Proves the coupling is inverted: curation imports the owner metadata
+    // helper instead of re-listing package names.
+    expect(source).toContain("getInternalToolAppTargetTab");
   });
 });

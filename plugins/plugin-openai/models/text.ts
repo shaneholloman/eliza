@@ -134,6 +134,18 @@ interface NativeGenerateTextResult {
 }
 
 type NativeTextModelResult = string & NativeGenerateTextResult;
+type RecordArgValueMode = "json-string" | "schema";
+
+interface RecordArgTransform {
+  path: string;
+  entriesKey: string;
+  valueMode: RecordArgValueMode;
+}
+
+interface NormalizedNativeToolsResult {
+  tools?: ToolSet;
+  recordArgTransformsByTool: Record<string, RecordArgTransform[]>;
+}
 
 const TEXT_NANO_MODEL_TYPE = ModelType.TEXT_NANO as ModelTypeName;
 const TEXT_MEDIUM_MODEL_TYPE = ModelType.TEXT_MEDIUM as ModelTypeName;
@@ -405,43 +417,28 @@ function buildStructuredOutput(responseSchema: unknown): NativeOutput {
 }
 
 /**
- * Surface free-form record/map tool args that the strict-safe schema policy
- * closes on the wire. `sanitizeJsonSchema` forces `additionalProperties: false`
- * unconditionally — strict-grammar backends (Cerebras/Eliza Cloud) 400 on open
- * maps and provider strictness is proxy-blind (#11123/#11156) — so a tool
- * parameter that declared an open map (`additionalProperties: true` or a value
- * schema) can no longer emit keys and the arg arrives empty. That degradation is
- * real and unavoidable under the current policy (#12150 options A/B are the full
- * fix); warn once per tool with the offending locations so it is observable
- * instead of lost silently (#12150 option C). Scoped to TOOL parameters only;
- * response_format is intentionally excluded, per #12150.
+ * Native tool normalization plus the strict-safe record/map transform selected
+ * for #13111. Tool schemas still close every object with additionalProperties:
+ * false for strict-grammar providers (#11123/#11156), but a DECLARED open map
+ * gets a model-facing `__eliza_record_entries` key/value array. Returned tool
+ * calls are reverse-mapped before the runtime validates against the original
+ * schema, so tool authors still receive the object shape they declared.
  */
-function warnDroppedRecordArgs(toolName: string, drops: DroppedRecordArg[]): void {
-  logger.warn(
-    {
-      tool: toolName,
-      droppedRecordArgs: drops.map(({ path, kind }) => ({
-        path,
-        additionalProperties: kind,
-      })),
-    },
-    `[OpenAI] Tool "${toolName}" declares ${drops.length} free-form record/map argument(s) (additionalProperties) that the strict-safe schema policy forces to additionalProperties:false; the model cannot emit map keys, so these args degrade to empty. See #12150 (options A/B) for the full fix.`
-  );
-}
-
-function normalizeNativeTools(
+function normalizeNativeToolsForCall(
   tools: unknown,
   options: { cerebrasMode?: boolean } = {}
-): ToolSet | undefined {
+): NormalizedNativeToolsResult {
+  const recordArgTransformsByTool: Record<string, RecordArgTransform[]> = {};
+
   if (!tools) {
-    return undefined;
+    return { recordArgTransformsByTool };
   }
 
   // Existing AI SDK callers already pass a ToolSet keyed by tool name. Keep it
   // intact so custom tool instances, execute hooks, and dynamic tool metadata
   // are preserved.
   if (!Array.isArray(tools)) {
-    return tools as ToolSet;
+    return { tools: tools as ToolSet, recordArgTransformsByTool };
   }
 
   const toolSet: Record<string, unknown> = {};
@@ -463,11 +460,8 @@ function normalizeNativeTools(
     // 'anyOf' with a list of possible properties`.
     const rawSchema =
       tool.parameters ?? functionTool.parameters ?? ({ type: "object" } satisfies JSONSchema7);
-    const droppedRecordArgs: DroppedRecordArg[] = [];
-    let inputSchema = sanitizeJsonSchema(rawSchema, true, droppedRecordArgs);
-    if (droppedRecordArgs.length > 0) {
-      warnDroppedRecordArgs(name, droppedRecordArgs);
-    }
+    const recordArgTransforms: RecordArgTransform[] = [];
+    let inputSchema = sanitizeJsonSchema(rawSchema, true, "$", recordArgTransforms);
     if (options.cerebrasMode) {
       // User-supplied schemas may still contain empty-properties subobjects
       // even after sanitizeJsonSchema. Apply Cerebras-specific normalization
@@ -484,6 +478,9 @@ function normalizeNativeTools(
     // sanitized name, which the runtime resolves through its action registry —
     // any caller relying on dotted action names should pre-sanitize.
     const registeredName = options.cerebrasMode ? sanitizeFunctionNameForCerebras(name) : name;
+    if (recordArgTransforms.length > 0) {
+      recordArgTransformsByTool[registeredName] = recordArgTransforms;
+    }
 
     toolSet[registeredName] = {
       ...(description ? { description } : {}),
@@ -491,7 +488,17 @@ function normalizeNativeTools(
     };
   }
 
-  return Object.keys(toolSet).length > 0 ? (toolSet as ToolSet) : undefined;
+  return {
+    tools: Object.keys(toolSet).length > 0 ? (toolSet as ToolSet) : undefined,
+    recordArgTransformsByTool,
+  };
+}
+
+function normalizeNativeTools(
+  tools: unknown,
+  options: { cerebrasMode?: boolean } = {}
+): ToolSet | undefined {
+  return normalizeNativeToolsForCall(tools, options).tools;
 }
 
 function normalizeNativeMessages(messages: unknown): ModelMessage[] | undefined {
@@ -660,8 +667,130 @@ function parseJsonIfPossible(value: unknown): unknown {
   try {
     return JSON.parse(value);
   } catch {
+    // error-policy:J3 untrusted-input sanitizing — tool-call `arguments` may be a
+    // plain (non-JSON) string; returning the raw value is the correct parse of a
+    // non-JSON argument, not a swallowed failure.
     return value;
   }
+}
+
+function parseRecordArgPath(path: string): string[] {
+  if (path === "$") return [];
+  if (!path.startsWith("$.")) return [];
+  return path.slice(2).split(".");
+}
+
+function restoreStrictSafeRecordValue(value: unknown, transform: RecordArgTransform): unknown {
+  const record = asOptionalRecord(value);
+  if (!record) return value;
+  const entries = record[transform.entriesKey];
+  if (!Array.isArray(entries)) return value;
+
+  const restored: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(record)) {
+    if (key !== transform.entriesKey) {
+      restored[key] = nested;
+    }
+  }
+
+  for (const entry of entries) {
+    const row = asOptionalRecord(entry);
+    if (!row) continue;
+    const key = typeof row.key === "string" ? row.key : undefined;
+    if (!key) continue;
+    const rawValue = row.value;
+    restored[key] =
+      transform.valueMode === "json-string" && typeof rawValue === "string"
+        ? parseJsonIfPossible(rawValue)
+        : rawValue;
+  }
+
+  return restored;
+}
+
+function restoreRecordArgAtPath(
+  value: unknown,
+  tokens: string[],
+  transform: RecordArgTransform
+): unknown {
+  if (tokens.length === 0) {
+    return restoreStrictSafeRecordValue(value, transform);
+  }
+
+  const [token, ...rest] = tokens;
+  if (token === "items" && Array.isArray(value)) {
+    return value.map((item) => restoreRecordArgAtPath(item, rest, transform));
+  }
+  if (/^items\[\d+\]$/.test(token)) {
+    return Array.isArray(value)
+      ? value.map((item) => restoreRecordArgAtPath(item, rest, transform))
+      : value;
+  }
+
+  const record = asOptionalRecord(value);
+  if (!record || !(token in record)) {
+    return value;
+  }
+  return {
+    ...record,
+    [token]: restoreRecordArgAtPath(record[token], rest, transform),
+  };
+}
+
+function restoreRecordArgInput(input: unknown, transforms: RecordArgTransform[]): unknown {
+  return [...transforms]
+    .sort((a, b) => parseRecordArgPath(a.path).length - parseRecordArgPath(b.path).length)
+    .reduce(
+      (current, transform) =>
+        restoreRecordArgAtPath(current, parseRecordArgPath(transform.path), transform),
+      input
+    );
+}
+
+function restoreRecordArgToolCalls(
+  toolCalls: unknown,
+  transformsByTool: Record<string, RecordArgTransform[]>
+): unknown[] | undefined {
+  if (!Array.isArray(toolCalls)) {
+    return undefined;
+  }
+
+  return toolCalls.map((toolCall) => {
+    const call = asOptionalRecord(toolCall);
+    if (!call) return toolCall;
+    const rawFunction = asRecord(call.function);
+    const toolName = firstString(call.toolName, call.name, rawFunction.name);
+    const transforms = toolName ? transformsByTool[toolName] : undefined;
+    if (!transforms?.length) return toolCall;
+
+    if ("input" in call) {
+      return {
+        ...call,
+        input: restoreRecordArgInput(call.input, transforms),
+      };
+    }
+
+    if (typeof call.arguments === "string") {
+      const parsed = parseJsonIfPossible(call.arguments);
+      return {
+        ...call,
+        arguments: JSON.stringify(restoreRecordArgInput(parsed, transforms)),
+      };
+    }
+
+    if (typeof rawFunction.arguments === "string") {
+      const parsed = parseJsonIfPossible(rawFunction.arguments);
+      return {
+        ...call,
+        function: {
+          ...rawFunction,
+          arguments: JSON.stringify(restoreRecordArgInput(parsed, transforms)),
+        },
+      };
+    }
+
+    return toolCall;
+  });
 }
 
 function normalizeToolChoice(toolChoice: unknown): ToolChoice<ToolSet> | undefined {
@@ -779,33 +908,68 @@ function additionalPropertiesHint(additionalProperties: unknown): string | null 
   return null;
 }
 
-/**
- * A DECLARED free-form/open map arg (`additionalProperties: true` or a value
- * schema) that the strict-safe policy closes to `additionalProperties: false`
- * on the wire. The intent still survives in `description`, but the model can no
- * longer emit map keys, so the arg degrades to empty — see #12150 (options A/B)
- * for the full fix. `sanitizeJsonSchema` records one entry per clobbered node so
- * the tool layer can surface the degradation with its location instead of
- * dropping it without a trace.
- */
-interface DroppedRecordArg {
-  /** Dotted location of the offending object within the schema (root is `$`). */
-  path: string;
-  /** Whether the author declared `additionalProperties: true` or a value schema. */
-  kind: "true" | "schema";
+const STRICT_SAFE_RECORD_ENTRIES_KEY = "__eliza_record_entries";
+
+function chooseRecordEntriesKey(properties: Record<string, unknown>): string {
+  if (!(STRICT_SAFE_RECORD_ENTRIES_KEY in properties)) {
+    return STRICT_SAFE_RECORD_ENTRIES_KEY;
+  }
+  let index = 2;
+  while (`${STRICT_SAFE_RECORD_ENTRIES_KEY}_${index}` in properties) {
+    index++;
+  }
+  return `${STRICT_SAFE_RECORD_ENTRIES_KEY}_${index}`;
+}
+
+function strictSafeRecordValueSchema(additionalProperties: unknown): {
+  schema: JSONSchema7;
+  mode: RecordArgValueMode;
+} {
+  if (additionalProperties === true) {
+    return {
+      mode: "json-string",
+      schema: {
+        type: "string",
+        description:
+          "JSON-encoded value for this arbitrary key. Use plain text for string values and JSON text for objects, arrays, numbers, booleans, or null.",
+      },
+    };
+  }
+  return {
+    mode: "schema",
+    schema: sanitizeJsonSchema(additionalProperties),
+  };
+}
+
+function strictSafeRecordEntriesSchema(valueSchema: JSONSchema7): JSONSchema7 {
+  return {
+    type: "array",
+    description:
+      "Additional arbitrary key/value entries for this record/map. Each entry becomes a property on the original tool argument object before validation.",
+    items: {
+      type: "object",
+      properties: {
+        key: {
+          type: "string",
+          description: "Property key to add to the original record/map argument.",
+        },
+        value: valueSchema,
+      },
+      required: ["key", "value"],
+      additionalProperties: false,
+    },
+  };
 }
 
 /**
- * @param drops - optional collector; when provided, every clobbered free-form
- *   record node is appended (used by the TOOL path only — response_format
- *   intentionally passes no collector, per #12150).
- * @param path - dotted location threaded through the recursion for the collector.
+ * @param path - dotted location threaded through recursion for reverse-mapping
+ *   returned tool-call args.
  */
 function sanitizeJsonSchema(
   schema: unknown,
   isRoot = false,
-  drops?: DroppedRecordArg[],
-  path = "$"
+  path = "$",
+  transforms?: RecordArgTransform[]
 ): JSONSchema7 {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
     // Permissive fallback: no `properties: {}`/`additionalProperties: false`
@@ -853,7 +1017,7 @@ function sanitizeJsonSchema(
   ) {
     const properties: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(sanitized.properties as Record<string, unknown>)) {
-      properties[key] = sanitizeJsonSchema(value, false, drops, `${path}.${key}`);
+      properties[key] = sanitizeJsonSchema(value, false, `${path}.${key}`, transforms);
     }
     sanitized.properties = properties;
 
@@ -878,17 +1042,38 @@ function sanitizeJsonSchema(
     // re-checks the caller's ORIGINAL schema and accepts them), and strict
     // providers surface the intent instead of losing it without a trace.
     const hint = additionalPropertiesHint(sanitized.additionalProperties);
-    if (hint) {
-      // A DECLARED free-form map is being closed — a real degradation, not a
-      // plain object. Record it (with location + kind) so the tool layer can
-      // warn once with context instead of losing it silently (#12150 option C).
-      drops?.push({
-        path,
-        kind: sanitized.additionalProperties === true ? "true" : "schema",
-      });
+    if (hint && transforms) {
+      const properties =
+        sanitized.properties &&
+        typeof sanitized.properties === "object" &&
+        !Array.isArray(sanitized.properties)
+          ? ({ ...(sanitized.properties as Record<string, unknown>) } as Record<string, unknown>)
+          : {};
+      const entriesKey = chooseRecordEntriesKey(properties);
+      const { schema: valueSchema, mode } = strictSafeRecordValueSchema(
+        sanitized.additionalProperties
+      );
+      properties[entriesKey] = strictSafeRecordEntriesSchema(valueSchema);
+      sanitized.properties = properties;
+      sanitized.required = [
+        ...new Set([
+          ...(Array.isArray(sanitized.required)
+            ? sanitized.required.filter((key): key is string => typeof key === "string")
+            : []),
+          ...Object.keys(properties),
+        ]),
+      ];
+      transforms.push({ path, entriesKey, valueMode: mode });
+      const existing =
+        typeof sanitized.description === "string" ? sanitized.description.trim() : "";
+      const suffix = `${hint}; provide arbitrary entries in ${entriesKey} as key/value pairs`;
+      sanitized.description = existing ? `${existing} (${suffix})` : `(${suffix})`;
+    } else if (hint) {
+      // response_format schemas have no returned tool args to reverse-map, so
+      // they keep the old strict-safe close-and-describe behavior.
     }
     sanitized.additionalProperties = false;
-    if (hint) {
+    if (hint && !transforms) {
       const existing =
         typeof sanitized.description === "string" ? sanitized.description.trim() : "";
       sanitized.description = existing ? `${existing} (${hint})` : `(${hint})`;
@@ -898,16 +1083,16 @@ function sanitizeJsonSchema(
   if (sanitized.items) {
     sanitized.items = Array.isArray(sanitized.items)
       ? sanitized.items.map((item, i) =>
-          sanitizeJsonSchema(item, false, drops, `${path}.items[${i}]`)
+          sanitizeJsonSchema(item, false, `${path}.items[${i}]`, transforms)
         )
-      : sanitizeJsonSchema(sanitized.items, false, drops, `${path}.items`);
+      : sanitizeJsonSchema(sanitized.items, false, `${path}.items`, transforms);
   }
 
   for (const unionKey of ["anyOf", "oneOf", "allOf"] as const) {
     const value = sanitized[unionKey];
     if (Array.isArray(value)) {
       sanitized[unionKey] = value.map((item, i) =>
-        sanitizeJsonSchema(item, false, drops, `${path}.${unionKey}[${i}]`)
+        sanitizeJsonSchema(item, false, `${path}.${unionKey}[${i}]`, transforms)
       );
     }
   }
@@ -922,7 +1107,7 @@ function sanitizeJsonSchema(
   for (const singleKey of ["contains", "propertyNames", "not", "if", "then", "else"] as const) {
     const value = sanitized[singleKey];
     if (value && typeof value === "object" && !Array.isArray(value)) {
-      sanitized[singleKey] = sanitizeJsonSchema(value, false, drops, `${path}.${singleKey}`);
+      sanitized[singleKey] = sanitizeJsonSchema(value, false, `${path}.${singleKey}`, transforms);
     }
   }
   for (const mapKey of ["patternProperties", "$defs", "definitions"] as const) {
@@ -930,7 +1115,7 @@ function sanitizeJsonSchema(
     if (value && typeof value === "object" && !Array.isArray(value)) {
       const walked: Record<string, unknown> = {};
       for (const [key, sub] of Object.entries(value as Record<string, unknown>)) {
-        walked[key] = sanitizeJsonSchema(sub, false, drops, `${path}.${mapKey}.${key}`);
+        walked[key] = sanitizeJsonSchema(sub, false, `${path}.${mapKey}.${key}`, transforms);
       }
       sanitized[mapKey] = walked;
     }
@@ -1010,9 +1195,10 @@ function buildNativeTextResult(
 function handledPromise<T>(value: T | PromiseLike<T>): Promise<T> {
   const promise = Promise.resolve(value);
   promise.catch(() => {
-    // The streaming path primarily consumes `textStream`. AI SDK companion
-    // promises such as `text` can reject later on empty streams even when no
-    // caller requested them, which otherwise surfaces as an unhandled rejection.
+    // error-policy:J5 unhandled-rejection suppression — the streaming path
+    // primarily consumes `textStream`. AI SDK companion promises such as `text`
+    // can reject later on empty streams even when no caller requested them; the
+    // real error is still observed by whoever awaits `textStream`.
   });
   return promise;
 }
@@ -1120,6 +1306,9 @@ function toTrajectoryJsonSafe(value: unknown): unknown {
       })
     ) as unknown;
   } catch {
+    // error-policy:J7 diagnostics-must-not-kill-the-loop — trajectory JSON
+    // serialization is a telemetry artifact; on a non-serializable value fall
+    // back to a string repr rather than failing the model call being logged.
     return String(value);
   }
 }
@@ -1205,6 +1394,8 @@ async function generateTextWithTransientRetry(
         // biome-ignore lint/suspicious/noExplicitAny: see above.
       )) as any;
     } catch (error) {
+      // error-policy:J2 context-adding rethrow — terminal or retry-exhausted
+      // errors rethrow unchanged; only bounded transient provider errors retry.
       if (attempt >= maxRetries || !isTransientProviderError(error)) throw error;
       attempt++;
       const backoffMs = Math.min(3000, 300 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 200);
@@ -1269,6 +1460,8 @@ async function consumeStreamWithTransientRetry(
       if (capturedError) throw capturedError;
       return { text, toolCalls, usage, finishReason };
     } catch (error) {
+      // error-policy:J2 context-adding rethrow — terminal or retry-exhausted
+      // errors rethrow unchanged; only bounded transient provider errors retry.
       if (attempt >= maxRetries || !isTransientProviderError(error)) throw error;
       attempt++;
       const backoffMs = Math.min(3000, 300 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 200);
@@ -1324,9 +1517,10 @@ async function generateTextByModelType(
   //
   const model = openai.chat(modelName);
   const cerebrasMode = isCerebrasMode(runtime);
-  const normalizedTools = normalizeNativeTools(paramsWithAttachments.tools, {
+  const normalizedToolResult = normalizeNativeToolsForCall(paramsWithAttachments.tools, {
     cerebrasMode,
   });
+  const normalizedTools = normalizedToolResult.tools;
   const normalizedToolChoice = normalizeToolChoice(paramsWithAttachments.toolChoice);
   const normalizedMessages = normalizeNativeMessages(paramsWithAttachments.messages);
   const wireMessages = dropDuplicateLeadingSystemMessage(normalizedMessages, systemPrompt);
@@ -1416,8 +1610,12 @@ async function generateTextByModelType(
       const buffered = await recordLlmCall(runtime, details, () =>
         consumeStreamWithTransientRetry(generateParams, params.onStreamChunk)
       );
+      const restoredToolCalls = restoreRecordArgToolCalls(
+        buffered.toolCalls,
+        normalizedToolResult.recordArgTransformsByTool
+      );
       details.response = buffered.text;
-      details.toolCalls = buffered.toolCalls;
+      details.toolCalls = restoredToolCalls;
       details.finishReason = buffered.finishReason;
       if (buffered.usage) {
         applyUsageToDetails(details, buffered.usage);
@@ -1428,7 +1626,7 @@ async function generateTextByModelType(
           if (buffered.text) yield buffered.text;
         })(),
         text: Promise.resolve(buffered.text),
-        ...(shouldReturnNativeResult ? { toolCalls: Promise.resolve(buffered.toolCalls) } : {}),
+        ...(shouldReturnNativeResult ? { toolCalls: Promise.resolve(restoredToolCalls) } : {}),
         usage: Promise.resolve(convertUsage(buffered.usage)),
         finishReason: Promise.resolve(buffered.finishReason),
       };
@@ -1467,6 +1665,9 @@ async function generateTextByModelType(
     const rawUsagePromise = handledPromise(result.usage);
     const rawFinishReasonPromise = handledPromise(result.finishReason);
     const rawToolCallsPromise = handledPromise(result.toolCalls);
+    const restoredToolCallsPromise = handledMappedPromise(rawToolCallsPromise, (toolCalls) =>
+      restoreRecordArgToolCalls(toolCalls, normalizedToolResult.recordArgTransformsByTool)
+    );
     const usagePromise = handledMappedPromise(rawUsagePromise, convertUsage);
     const finishReasonPromise = handledMappedPromise(
       rawFinishReasonPromise,
@@ -1480,7 +1681,7 @@ async function generateTextByModelType(
       const [usageResult, finishReasonResult, toolCallsResult] = await Promise.allSettled([
         rawUsagePromise,
         rawFinishReasonPromise,
-        rawToolCallsPromise,
+        restoredToolCallsPromise,
       ]);
 
       details.response = responseChunks.join("");
@@ -1522,6 +1723,8 @@ async function generateTextByModelType(
             yield chunk;
           }
         } catch (error) {
+          // error-policy:J2 context-adding rethrow — capture the stream-iteration
+          // error so `finally` can finalize telemetry, then rethrow it below.
           streamIterationError = error;
         } finally {
           await finalizeStreamingTelemetry();
@@ -1537,7 +1740,7 @@ async function generateTextByModelType(
         }
       })(),
       text: textPromise,
-      ...(shouldReturnNativeResult ? { toolCalls: rawToolCallsPromise } : {}),
+      ...(shouldReturnNativeResult ? { toolCalls: restoredToolCallsPromise } : {}),
       usage: usagePromise,
       finishReason: finishReasonPromise,
     };
@@ -1555,12 +1758,22 @@ async function generateTextByModelType(
   );
   const result = await recordLlmCall(runtime, details, async () => {
     const result = await generateTextWithTransientRetry(generateParams);
+    const restoredToolCalls = restoreRecordArgToolCalls(
+      result.toolCalls,
+      normalizedToolResult.recordArgTransformsByTool
+    );
     details.response = result.text;
-    details.toolCalls = result.toolCalls;
+    details.toolCalls = restoredToolCalls;
     details.finishReason = result.finishReason as string | undefined;
     details.providerMetadata = result.providerMetadata;
     applyUsageToDetails(details, result.usage);
-    return result;
+    return {
+      text: result.text,
+      toolCalls: restoredToolCalls as typeof result.toolCalls,
+      finishReason: result.finishReason,
+      usage: result.usage,
+      providerMetadata: result.providerMetadata,
+    };
   });
 
   if (result.usage) {
@@ -1664,3 +1877,7 @@ export const __INTERNAL_stripReasoningParts = stripReasoningParts;
 export const __INTERNAL_sanitizeJsonSchema = sanitizeJsonSchema;
 /** @internal — exported for unit tests only. */
 export const __INTERNAL_normalizeNativeTools = normalizeNativeTools;
+/** @internal — exported for unit tests only. */
+export const __INTERNAL_normalizeNativeToolsForCall = normalizeNativeToolsForCall;
+/** @internal — exported for unit tests only. */
+export const __INTERNAL_restoreRecordArgToolCalls = restoreRecordArgToolCalls;

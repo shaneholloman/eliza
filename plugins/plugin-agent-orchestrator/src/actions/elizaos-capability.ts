@@ -75,6 +75,8 @@ async function isExecutable(path: string): Promise<boolean> {
     await access(path, constants.X_OK);
     return true;
   } catch {
+    // error-policy:J3 existence/permission probe; not-executable is exactly the
+    // false result the caller wants, not a swallowed failure.
     return false;
   }
 }
@@ -211,6 +213,8 @@ export const elizaOsCapabilityAction: Action = {
         },
       };
     } catch (error) {
+      // error-policy:J1 boundary — a broker exec failure becomes a structured
+      // action failure ({success:false}) surfaced to the user, not swallowed.
       const text = failureText(error);
       await emit(callback, text);
       return { success: false, error: text, text };

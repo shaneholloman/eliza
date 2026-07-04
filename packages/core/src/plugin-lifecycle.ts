@@ -41,6 +41,7 @@ import type { IAgentRuntime } from "./types/runtime";
 import type { Service, ServiceTypeName } from "./types/service";
 import type { ShortcutDefinition } from "./types/shortcut";
 import {
+	lookupProviderCatalogContexts,
 	resolveActionContexts,
 	resolveProviderContexts,
 } from "./utils/context-catalog";
@@ -267,6 +268,32 @@ function pushUniqueRef<T extends object>(items: T[], item: T): void {
 	}
 }
 
+/**
+ * Neutralizes a declared `override: true` on a component being registered
+ * through the plugin lifecycle (#12658).
+ *
+ * The explicit override contract lets a LATER registrant intentionally supersede
+ * an already-registered component of the same name. On the direct host/core
+ * registration path that is safe. Across `registerPlugin` boundaries it is NOT:
+ * an override replaces the incumbent in place, but hot plugin teardown
+ * (unloadPlugin / reloadPlugin / failed-registration rollback) removes owned
+ * components by reference and does not restore a displaced incumbent. So a
+ * plugin overriding another plugin's component and then unloading would leave
+ * the still-loaded original plugin without its action/provider/evaluator.
+ *
+ * Until incumbent save/restore is implemented, plugin-boundary overrides are
+ * downgraded to the safe deterministic first-wins policy (the incumbent is kept
+ * and the register method WARNs). Direct (non-plugin) registration keeps
+ * override.
+ */
+function withoutPluginOverride<T extends { override?: boolean }>(
+	component: T,
+): T {
+	return component.override === true
+		? { ...component, override: false }
+		: component;
+}
+
 function pushUniqueString(items: string[], value: string): void {
 	if (!items.includes(value)) {
 		items.push(value);
@@ -367,9 +394,65 @@ function applyEffectiveActionAccess(
 	};
 }
 
+// One-time-per-name guard for the silent-default registration warning below —
+// re-registration (plugin reload, multi-agent processes) must not spam logs.
+const generalFallbackWarnedProviders = new Set<string>();
+
+/** Test hook: reset the one-time registration-warning guard. */
+export function _resetProviderContextWarningsForTests(): void {
+	generalFallbackWarnedProviders.clear();
+}
+
+/**
+ * Materialize `contexts` for a provider that declares none. A gate-only
+ * declaration (`contextGate` with context terms but no `contexts`) materializes
+ * from the gate's anyOf surface — falling back to allOf when the gate is
+ * allOf-only — instead of the `["general"]` default, which would invert the
+ * declared routing (ride ordinary chat turns, miss its own gated turns,
+ * #13203). Everything else resolves declared → catalog → `["general"]`; the
+ * uncataloged general fallback logs a one-time nudge so plugin authors declare
+ * `contexts`/`contextGate` or opt into `alwaysInResponseState`.
+ */
+function materializeProviderContexts(
+	provider: RuntimeProvider,
+	runtime: RuntimeWithPluginLifecycle,
+): AgentContext[] {
+	const gate = provider.contextGate;
+	const gateAnyOfSurface = [
+		...new Set([...(gate?.contexts ?? []), ...(gate?.anyOf ?? [])]),
+	];
+	if (gateAnyOfSurface.length > 0) {
+		return gateAnyOfSurface;
+	}
+	if ((gate?.allOf?.length ?? 0) > 0) {
+		return [...new Set(gate?.allOf)];
+	}
+
+	const resolved = resolveProviderContexts(provider);
+	if (
+		lookupProviderCatalogContexts(provider.name) === undefined &&
+		!provider.contextGate &&
+		!provider.dynamic &&
+		!provider.alwaysInResponseState &&
+		!generalFallbackWarnedProviders.has(provider.name)
+	) {
+		generalFallbackWarnedProviders.add(provider.name);
+		runtime.logger.warn(
+			{
+				src: "agent",
+				agentId: runtime.agentId,
+				provider: provider.name,
+			},
+			`[PluginLifecycle] Provider "${provider.name}" declares no contexts/contextGate and has no catalog entry; defaulting to ["general"]. Declare contexts or a contextGate to route it, or set alwaysInResponseState for an always-on signal.`,
+		);
+	}
+	return [...resolved];
+}
+
 function applyEffectiveProviderContexts(
 	provider: RuntimeProvider,
 	pluginContexts: Plugin["contexts"] | undefined,
+	runtime: RuntimeWithPluginLifecycle,
 ): RuntimeProvider {
 	const inherited = inheritPluginContexts(provider, pluginContexts);
 	if ((inherited.contexts?.length ?? 0) > 0) {
@@ -377,13 +460,13 @@ function applyEffectiveProviderContexts(
 	}
 
 	if (inherited === provider) {
-		provider.contexts = [...resolveProviderContexts(inherited)];
+		provider.contexts = materializeProviderContexts(inherited, runtime);
 		return provider;
 	}
 
 	return {
 		...inherited,
-		contexts: [...resolveProviderContexts(inherited)],
+		contexts: materializeProviderContexts(inherited, runtime),
 	};
 }
 
@@ -487,6 +570,8 @@ async function stopOwnedServices(
 		const key = serviceType as ServiceTypeName;
 		const inFlightStart = privateState.startingServices.get(key);
 		if (inFlightStart) {
+			// error-policy:J6 best-effort teardown — wait for an in-flight start to
+			// settle before stopping it; a failed start is irrelevant to the stop path.
 			await inFlightStart.catch(() => null);
 		}
 
@@ -808,9 +893,12 @@ export function installRuntimePluginLifecycle(runtime: IAgentRuntime): void {
 	runtimeWithLifecycle.registerAction = ((action: RuntimeAction) => {
 		const capture = pluginRegistrationContext.getStore();
 		const actionsBefore = runtimeWithLifecycle.actions.length;
+		// Plugin-boundary overrides are unsafe for hot teardown (#12658); downgrade
+		// to first-wins so a plugin never destructively displaces another's action.
+		// Direct (non-plugin, no capture) registration keeps the override contract.
 		originalRegisterAction(
 			applyEffectiveActionAccess(
-				action,
+				capture ? withoutPluginOverride(action) : action,
 				capture?.ownership.plugin.contexts,
 				runtimeWithLifecycle.contexts,
 			),
@@ -829,8 +917,9 @@ export function installRuntimePluginLifecycle(runtime: IAgentRuntime): void {
 		const providersBefore = runtimeWithLifecycle.providers.length;
 		originalRegisterProvider(
 			applyEffectiveProviderContexts(
-				provider,
+				capture ? withoutPluginOverride(provider) : provider,
 				capture?.ownership.plugin.contexts,
+				runtimeWithLifecycle,
 			),
 		);
 		if (!capture || runtimeWithLifecycle.providers.length <= providersBefore)
@@ -845,7 +934,9 @@ export function installRuntimePluginLifecycle(runtime: IAgentRuntime): void {
 	runtimeWithLifecycle.registerEvaluator = ((evaluator: RuntimeEvaluator) => {
 		const capture = pluginRegistrationContext.getStore();
 		const evaluatorsBefore = runtimeWithLifecycle.evaluators.length;
-		originalRegisterEvaluator(evaluator);
+		originalRegisterEvaluator(
+			capture ? withoutPluginOverride(evaluator) : evaluator,
+		);
 		if (!capture || runtimeWithLifecycle.evaluators.length <= evaluatorsBefore)
 			return;
 		for (const registeredEvaluator of runtimeWithLifecycle.evaluators.slice(

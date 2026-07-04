@@ -1,3 +1,4 @@
+// Exercises USB installer backend safety and platform behavior.
 import { describe, expect, it } from "vitest";
 import type { ElizaOsImage, RemovableDrive, WritePlan } from "../types";
 import {

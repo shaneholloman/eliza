@@ -1,3 +1,4 @@
+/** In-memory state store (servers, volumes, known locations) backing the Hetzner Cloud mock. */
 import type { MockAction, MockLocation, MockServer, MockVolume } from "./types";
 
 const FALKENSTEIN: MockLocation = {

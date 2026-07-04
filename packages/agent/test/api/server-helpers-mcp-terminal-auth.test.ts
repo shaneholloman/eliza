@@ -1,3 +1,4 @@
+/** Exercises MCP terminal auth helper boundaries with deterministic request fixtures. */
 import * as http from "node:http";
 import { Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";

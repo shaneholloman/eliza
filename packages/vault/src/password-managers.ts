@@ -52,6 +52,10 @@ async function resolve1Password(path: string): Promise<string> {
     }
     return value;
   } catch (err) {
+    // error-policy:J1 boundary translation — every failure path (CLI missing,
+    // not signed in, empty value, generic) is translated into a typed
+    // PasswordManagerError and RETHROWN; a reference resolve NEVER degrades to
+    // an empty/fabricated secret value.
     const e = err as NodeJS.ErrnoException;
     if (e.code === "ENOENT") {
       throw new PasswordManagerError(
@@ -84,6 +88,9 @@ async function resolveProtonPass(path: string): Promise<string> {
     }
     return value;
   } catch (err) {
+    // error-policy:J1 boundary translation — as with 1Password: all failures
+    // become a typed PasswordManagerError and rethrow; never a fabricated
+    // secret.
     const e = err as NodeJS.ErrnoException;
     if (e.code === "ENOENT") {
       throw new PasswordManagerError(

@@ -1,3 +1,4 @@
+// Renders a reusable OS homepage download component.
 import { Download, ExternalLink, HardDrive, Info } from "lucide-react";
 import { useT } from "../providers/I18nProvider";
 

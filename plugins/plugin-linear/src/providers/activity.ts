@@ -74,7 +74,13 @@ export const linearActivityProvider: Provider = {
           })) as Array<Record<string, string | boolean | undefined>>,
         },
       };
-    } catch (_error) {
+    } catch (error) {
+      // error-policy:J4 explicit user-facing degrade — a failure reading the
+      // in-memory activity log renders the distinguishable "error" prompt state
+      // (never a fabricated "no recent activity"), and reportError makes the
+      // underlying failure observable in RECENT_ERRORS + owner-escalation instead
+      // of being silently swallowed.
+      runtime.reportError?.("LINEAR_ACTIVITY.provider", error);
       return {
         text: "Error retrieving Linear activity",
       };

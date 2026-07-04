@@ -152,6 +152,11 @@ export interface Bindings {
   WEBHOOK_GATEWAY_URL?: string;
   GATEWAY_WEBHOOK_URL?: string;
   ELIZA_APP_WEBHOOK_PROJECT?: string;
+  // Dedicated shared secret stamped onto forwarded webhook calls so the internal
+  // gateway can reject traffic that didn't transit the BFF forwarder (finding
+  // L3). Deliberately separate from GATEWAY_INTERNAL_SECRET (internal-event
+  // path) so enabling this gate never affects direct provider webhooks.
+  ELIZA_APP_WEBHOOK_GATEWAY_SECRET?: string;
   ELIZA_APP_DISCORD_WEBHOOK_HANDLER_URL?: string;
   DISCORD_WEBHOOK_HANDLER_URL?: string;
   CONTAINER_CONTROL_PLANE_URL?: string;

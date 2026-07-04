@@ -331,6 +331,40 @@ export const containersEnv = {
   },
 
   /**
+   * SECURITY (H4, #12882): extra trusted FULL DATABASE_URLs permitted for the
+   * forwarded `x-eliza-cloud-database-url` header, on TOP of the sidecar's own
+   * configured `DATABASE_URL` (which is always trusted).
+   *
+   * The control-plane forward path lets the Cloud Worker pin a per-request
+   * database. The sidecar must NOT connect to an arbitrary caller-named DB, so
+   * `evaluateForwardedDatabaseUrl` fail-closes against this pinned set. The
+   * match pins the WHOLE identity (scheme, credentials, host, port, database,
+   * query), so entries here must be complete DATABASE_URLs, not bare hosts. A
+   * bare host has no database/credentials identity and will never match. Most
+   * deployments never need this (the forwarded URL == the sidecar's own
+   * `DATABASE_URL`); it exists only for multi-DB topologies where the Worker
+   * legitimately forwards a different-but-known database.
+   *
+   * Format: whitespace/comma-separated full DATABASE_URLs. Unparseable entries
+   * are dropped and never widen the allowlist.
+   */
+  containerControlPlaneDatabaseUrlAllowlist(): string[] {
+    const env = getCloudAwareEnv();
+    const raw = pick(env.CONTAINER_CONTROL_PLANE_DATABASE_URL_ALLOWLIST);
+    if (raw === undefined) return [];
+    return raw
+      .split(/[\s,]+/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  },
+
+  /** The sidecar's own configured control-plane database URL, if any. */
+  containerControlPlaneDatabaseUrl(): string | undefined {
+    const env = getCloudAwareEnv();
+    return pick(env.DATABASE_URL);
+  },
+
+  /**
    * Cloud deployment environment (`staging`, `production`, `local`, …).
    *
    * Stamped onto provisioned Hetzner servers via the `environment` label so

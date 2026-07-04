@@ -224,6 +224,10 @@ class ManagerImpl implements SecretsManager {
       const parsed = JSON.parse(raw) as ManagerPreferences;
       return normalizePreferences(parsed);
     } catch (err) {
+      // error-policy:J3 untrusted-input sanitizing — a missing preferences key is
+      // the expected first-run state (explicit defaults); ANY other error
+      // (decrypt failure, corrupt JSON) is rethrown, never masked as defaults.
+      // Preferences are non-secret UI config, not a credential.
       if (err instanceof VaultMissError) {
         return DEFAULT_PREFERENCES;
       }
@@ -505,6 +509,9 @@ async function readStoredSession(
     const value = await vault.get(`pm.${backend}.session`);
     return value.trim() || null;
   } catch {
+    // error-policy:J3 untrusted-input sanitizing — no stored session (miss or
+    // unreadable) resolves to `null` = "not authenticated", the fail-closed
+    // direction: absence of a valid session must never read as signed-in.
     return null;
   }
 }
@@ -570,6 +577,9 @@ async function detectOnePassword(vault: Vault): Promise<BackendStatus> {
       authMode: "session-token",
     };
   } catch {
+    // error-policy:J4 availability probe — a failed `op` validation call means
+    // the stored session is no longer usable; report signedIn:false (deny),
+    // never optimistically report signed-in.
     return {
       id: "1password",
       label: "1Password",
@@ -603,6 +613,9 @@ async function readDefaultOpAccount(): Promise<string | null> {
     }
     return null;
   } catch {
+    // error-policy:J4 availability probe — no readable `op account list` means no
+    // known account; `null` disables the desktop-integration probe rather than
+    // guessing one.
     return null;
   }
 }
@@ -660,6 +673,8 @@ async function detectProtonPass(): Promise<BackendStatus> {
       detail: "Detected and signed in via Proton Pass CLI.",
     };
   } catch (err) {
+    // error-policy:J4 availability probe — a `pass-cli` failure classifies the
+    // backend as not-signed-in/unavailable (deny); it never reports signed-in.
     const msg = err instanceof Error ? err.message : String(err);
     if (
       /not signed in|not authenticated|not logged in|login required/i.test(msg)
@@ -730,6 +745,8 @@ async function detectBitwarden(vault: Vault): Promise<BackendStatus> {
           : "`bw` is installed but not signed in. Use the Sign-in button.",
     };
   } catch {
+    // error-policy:J4 availability probe — an unparseable/failed `bw status`
+    // reports signedIn:false (deny), never optimistically signed-in.
     return {
       id: "bitwarden",
       label: "Bitwarden",
@@ -768,6 +785,9 @@ async function safeListExternal(
     const entries = await fn();
     return { ok: true, entries };
   } catch (err) {
+    // error-policy:J1 boundary translation — converts a listing failure into an
+    // explicit typed { ok:false, message } result (not a fabricated empty list
+    // that would look like "no logins"); the caller renders the error state.
     const message = err instanceof Error ? err.message : String(err);
     return { ok: false, message };
   }

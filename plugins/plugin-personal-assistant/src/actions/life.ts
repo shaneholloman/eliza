@@ -2409,7 +2409,7 @@ async function isForeignPageScope(
 
 // Metadata reused by the owner-* umbrella actions in owner-surfaces.ts.
 // The old umbrella is no longer planner-visible — owner-surfaces publishes the
-// individual reminder/alarm/goal/todo/routine umbrellas that delegate into
+// individual reminder/alarm/goal/task-list/routine umbrellas that delegate into
 // `runLifeOperationHandler` below.
 export const OWNER_OPERATION_TAGS: string[] = [
   "domain:reminders",
@@ -3073,8 +3073,14 @@ export async function runLifeOperationHandler(
         })
       ) {
         const fallback = `I can save this as a ${definitionDraft.request.kind} named "${definitionDraft.request.title}" that happens ${summarizeCadence(definitionDraft.request.cadence)}. Confirm and I'll save it, or tell me what to change.`;
+        // A preview is NOT a save: nothing is persisted here, only a draft is
+        // parked for the confirm turn. Reporting success:true made the model
+        // render "I've set it" for a recurring create that never persisted
+        // (task_611a9f0b — a no-fabricate violation). success:false +
+        // requiresConfirmation makes the deferred state honest; the draft still
+        // survives on `data.lifeDraft` for the next-turn confirmation.
         return {
-          success: true as const,
+          success: false as const,
           text: await renderLifeActionReply({
             runtime,
             message,
@@ -3090,6 +3096,8 @@ export async function runLifeOperationHandler(
           data: {
             actionName: ownerSurfaceActionName,
             deferred: true,
+            saved: false,
+            requiresConfirmation: true,
             lifeDraft: definitionDraft,
             preview: {
               cadence: definitionDraft.request.cadence,
@@ -3330,8 +3338,11 @@ export async function runLifeOperationHandler(
         if (experienceSummary) {
           fallbackParts.push(experienceSummary);
         }
+        // Preview only — the goal is not persisted until the confirm turn.
+        // success:false keeps the "not saved yet" state honest (no-fabricate,
+        // task_611a9f0b); the draft survives on `data.lifeDraft` for confirm.
         return {
-          success: true,
+          success: false,
           text: await renderLifeActionReply({
             runtime,
             message,
@@ -3348,6 +3359,8 @@ export async function runLifeOperationHandler(
           data: {
             actionName: ownerSurfaceActionName,
             deferred: true,
+            saved: false,
+            requiresConfirmation: true,
             lifeDraft: goalDraft,
             experienceLoop,
             preview: {
@@ -3876,8 +3889,8 @@ export async function runLifeOperationHandler(
       if (!target) {
         const weeklyReview = await service.reviewGoalsForWeek();
         if (weeklyReview.summary.totalGoals === 0) {
-          // No goals to review — fall through to overview so todo-list-style
-          // queries like "what's on my todo list today?" still resolve.
+          // No goals to review — fall through to overview so task-list-style
+          // queries like "what's on my task item list today?" still resolve.
           const overview = await service.getOverview();
           const userQuery = messageText(message) || intent || "overview";
           const fallback = formatOverviewForQuery(overview, userQuery);

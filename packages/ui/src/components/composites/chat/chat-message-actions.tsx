@@ -1,15 +1,22 @@
 /**
- * Hover action rail for a chat message (copy / play / edit / delete), rendered
- * as a `PagePanel.ActionRail` overlay on the bubble. Each control is opt-in via
- * its `can*` flag; copy shows a transient confirmed state. Wired by ChatMessage.
+ * Per-message action controls (copy / play / edit / delete), in the two chromes
+ * the chat surfaces use: `rail` — the hover `PagePanel.ActionRail` overlaying a
+ * panel bubble (ChatView / detached windows) — and `glass-row` — the continuous
+ * overlay's tap-revealed row of round icon buttons beneath a glass bubble
+ * (#10713). Each control is opt-in via its `can*` flag; copy shows a transient
+ * confirmed state; play toggles to stop on the bubble that is speaking
+ * (`playing`, glass-row only). Wired by ChatMessage.
  */
-import { Check, Copy, Pencil, Trash2, Volume2 } from "lucide-react";
+import { Check, Copy, Pencil, Square, Trash2, Volume2 } from "lucide-react";
+import type * as React from "react";
 
+import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
 import { PagePanel } from "../page-panel";
 import type { ChatMessageLabels } from "./chat-types";
 
 export interface ChatMessageActionsProps {
+  appearance?: "rail" | "glass-row";
   canDelete?: boolean;
   canEdit?: boolean;
   canPlay?: boolean;
@@ -19,9 +26,54 @@ export interface ChatMessageActionsProps {
   onDelete?: () => void;
   onEdit?: () => void;
   onPlay?: () => void;
+  /** True while THIS message's audio is playing — flips play → stop (glass-row). */
+  playing?: boolean;
+}
+
+/**
+ * One icon-only control in the glass action row: no card fill, neutral resting
+ * → neutral-opacity hover; an active (e.g. playing) control tints with the
+ * orange accent. `stopPropagation` keeps a tap on the button from re-toggling
+ * the row or ending text selection.
+ */
+function GlassActionButton({
+  label,
+  icon,
+  onClick,
+  active,
+  testId,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+  active?: boolean;
+  testId?: string;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      aria-label={label}
+      title={label}
+      data-testid={testId}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={cn(
+        "h-7 w-7 rounded-full p-0 transition-colors",
+        active
+          ? "bg-[rgb(255,88,0)]/25 text-white"
+          : "bg-white/10 text-white/80 hover:bg-white/20",
+      )}
+    >
+      {icon}
+    </Button>
+  );
 }
 
 export function ChatMessageActions({
+  appearance = "rail",
   canDelete = false,
   canEdit = false,
   canPlay = false,
@@ -31,10 +83,56 @@ export function ChatMessageActions({
   onDelete,
   onEdit,
   onPlay,
+  playing = false,
 }: ChatMessageActionsProps) {
   const copyLabel = labels.copy ?? "Copy message";
   const copiedLabel = labels.copied ?? "Copied!";
   const copiedAriaLabel = labels.copiedAria ?? "Copied to clipboard";
+
+  if (appearance === "glass-row") {
+    return (
+      <>
+        {onCopy ? (
+          <GlassActionButton
+            label={copied ? "Copied" : "Copy"}
+            testId="thread-line-copy"
+            icon={
+              copied ? (
+                <Check className="h-3.5 w-3.5" />
+              ) : (
+                <Copy className="h-3.5 w-3.5" />
+              )
+            }
+            onClick={onCopy}
+            active={copied}
+          />
+        ) : null}
+        {canPlay && onPlay ? (
+          <GlassActionButton
+            label={playing ? "Stop" : "Play audio"}
+            testId="thread-line-speak"
+            icon={
+              playing ? (
+                <Square className="h-3.5 w-3.5" />
+              ) : (
+                <Volume2 className="h-3.5 w-3.5" />
+              )
+            }
+            onClick={onPlay}
+            active={playing}
+          />
+        ) : null}
+        {canEdit && onEdit ? (
+          <GlassActionButton
+            label="Edit"
+            testId="thread-line-edit"
+            icon={<Pencil className="h-3.5 w-3.5" />}
+            onClick={onEdit}
+          />
+        ) : null}
+      </>
+    );
+  }
 
   return (
     <PagePanel.ActionRail className="top-1 rounded-sm p-1">

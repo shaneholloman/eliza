@@ -12,6 +12,7 @@ import type {
 	RoleGate,
 	RoleGateRole,
 } from "../types/contexts";
+import { lookupProviderCatalogContexts } from "../utils/context-catalog.ts";
 import { normalizeContextList } from "./context-normalization";
 
 // #9948: single source of truth for role ranking — delegates to CANONICAL_ROLE_RANK.
@@ -129,4 +130,83 @@ export function filterByContextGate<T extends ContextGateCandidate>(
 		};
 		return satisfiesContextGate(activeContexts, gate, userRoles);
 	});
+}
+
+/** A provider-shaped gate candidate: the name enables the catalog fallback. */
+export interface ProviderContextGateCandidate extends ContextGateCandidate {
+	name: string;
+}
+
+/**
+ * The effective context gate a provider declared, in full (#13203). A declared
+ * `contextGate` with any context terms (contexts/anyOf/allOf/noneOf) is honored
+ * verbatim — `filterByContextGate`'s `{contexts, roleGate}` reduction silently
+ * dropped anyOf/allOf/noneOf, so a world-style `contextGate: { anyOf: [...] }`
+ * provider lost its gate on the v5 planner selection path. Providers declaring
+ * no gate terms resolve declared `contexts` → catalog (PROVIDER_CONTEXT_MAP);
+ * a provider with neither declares no routing at all, and stays UNGATED
+ * (#13204 follow-up): the pre-#13203 selection filter included that class on
+ * every turn, and an injected `["general"]` here would silently drop
+ * undeclared plugin providers (TWITTER_IDENTITY-shaped) from the narrow turns
+ * they rode before. Only an explicit declaration or catalog entry may gate a
+ * provider out; the wrapped registration path still materializes the
+ * `["general"]` lean onto `contexts` (plugin-lifecycle), which this resolver
+ * honors as declared.
+ *
+ * #12087 Item 14 preserved: a contextGate adds context requirements; it does
+ * not waive the provider's top-level roleGate unless it declares its own.
+ */
+export function resolveProviderContextGate(
+	provider: ProviderContextGateCandidate,
+): ContextGate {
+	const explicit = provider.contextGate;
+	const roleGate = explicit?.roleGate ?? provider.roleGate;
+	const declaresContextTerms =
+		(explicit?.contexts?.length ?? 0) > 0 ||
+		(explicit?.anyOf?.length ?? 0) > 0 ||
+		(explicit?.allOf?.length ?? 0) > 0 ||
+		(explicit?.noneOf?.length ?? 0) > 0;
+
+	if (explicit && declaresContextTerms) {
+		return {
+			contexts: explicit.contexts,
+			anyOf: explicit.anyOf,
+			allOf: explicit.allOf,
+			noneOf: explicit.noneOf,
+			roleGate,
+		};
+	}
+
+	const declared = (provider.contexts ?? []).filter((context) =>
+		Boolean(context),
+	);
+	return {
+		contexts:
+			declared.length > 0
+				? declared
+				: lookupProviderCatalogContexts(provider.name),
+		roleGate,
+	};
+}
+
+/**
+ * Filter providers by their FULL effective context gate (see
+ * {@link resolveProviderContextGate}). The v5 planner selection uses this
+ * instead of {@link filterByContextGate} so declared anyOf/allOf/noneOf terms
+ * and the catalog fallback for undeclared providers are honored.
+ */
+export function filterProvidersByContextGate<
+	T extends ProviderContextGateCandidate,
+>(
+	providers: readonly T[],
+	activeContexts: readonly AgentContext[] | undefined,
+	userRoles?: readonly RoleGateRole[],
+): T[] {
+	return providers.filter((provider) =>
+		satisfiesContextGate(
+			activeContexts,
+			resolveProviderContextGate(provider),
+			userRoles,
+		),
+	);
 }

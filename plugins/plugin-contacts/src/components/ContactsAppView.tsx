@@ -43,6 +43,10 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  navigateToMessagesWithNumber,
+  navigateToPhoneWithNumber,
+} from "./contacts-navigate.ts";
 
 type Mode = "list" | "detail" | "new";
 
@@ -57,32 +61,6 @@ const EMPTY_FORM: NewContactForm = {
   phoneNumber: "",
   emailAddress: "",
 };
-
-function navigateToPhoneWithNumber(number: string): void {
-  if (typeof window === "undefined") return;
-  window.dispatchEvent(
-    new CustomEvent("eliza:navigate:view", {
-      detail: {
-        viewId: "phone",
-        viewPath: "/phone",
-        payload: { number },
-      },
-    }),
-  );
-}
-
-function navigateToMessagesWithNumber(recipient: string): void {
-  if (typeof window === "undefined") return;
-  window.dispatchEvent(
-    new CustomEvent("eliza:navigate:view", {
-      detail: {
-        viewId: "messages",
-        viewPath: "/messages",
-        payload: { recipient },
-      },
-    }),
-  );
-}
 
 function getInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -142,6 +120,7 @@ export function ContactsAppView({ exitToApps, t }: OverlayAppContext) {
       // Contacts view opens (idempotent — already-granted returns granted with
       // no prompt). Nothing requests this at app launch. Tolerates older bridges
       // without the request path by falling through to listContacts.
+      // error-policy:J4 older-bridge compat degrade; null -> fall through to listContacts (which surfaces a real error)
       const status = await Contacts.requestPermissions().catch(() => null);
       if (status && status.contacts !== "granted") {
         setContacts([]);

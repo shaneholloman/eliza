@@ -1,3 +1,4 @@
+/** Provides browser executable helper utilities shared by package tests and scenario harnesses. */
 import { existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";

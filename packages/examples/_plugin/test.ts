@@ -1,3 +1,4 @@
+// Supports the Plugin example described in this package README.
 import assert from "node:assert/strict";
 import { ModelType, type Content, type HandlerCallback } from "@elizaos/core";
 import { starterPlugin } from "./src/plugin";

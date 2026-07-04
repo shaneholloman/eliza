@@ -5,10 +5,11 @@
  *
  * The store holds `LifeOpsOwnerProfile` plus the facts
  * (`travelBookingPreferences`, `quietHours`, `morningWindow`,
- * `eveningWindow`, `preferredNotificationChannel`, `locale`). Each entry
- * carries a provenance record so call sites can distinguish a value the user
- * typed in first-run customize from one the agent inferred from a connector
- * — and so audits can trace the origin.
+ * `eveningWindow`, `preferredNotificationChannel`, `locale`, and the learned
+ * `scheduleStyle`/`chronotype` classifications). Each entry carries a
+ * provenance record so call sites can distinguish a value the user typed in
+ * first-run customize from one the agent inferred from a connector — and so
+ * audits can trace the origin.
  *
  * Reminder intensity and escalation policy flows write into the store's policy
  * entries.
@@ -47,6 +48,25 @@ export interface OwnerQuietHours {
 }
 
 /**
+ * A booked or declared travel window. The record is first-class — the
+ * `travelActive` boolean the `during_travel` gate reads is DERIVED from it
+ * against the current instant (see `ownerFactsToView`), never persisted on its
+ * own. A bare boolean has no natural clear point and drifts to a permanent-true
+ * state once set; a window with a start/end self-clears the moment `now` leaves
+ * `[startIso, endIso]`. `endIso` is optimistically bounded by every writer (a
+ * booking's arrival, a parsed return date, or a `MAX_TRAVEL_HORIZON` cap) so an
+ * open-ended relocation can never read as perpetual travel.
+ */
+export interface OwnerActiveTravel {
+  /** ISO-8601 instant the travel window opens. */
+  startIso: string;
+  /** ISO-8601 instant the window closes. Absent = still open (bounded by writers). */
+  endIso?: string;
+  /** IANA timezone of the destination; overrides the owner's home zone while active. */
+  destinationTimezone?: string;
+}
+
+/**
  * Source of truth for a stored fact. `first_run` distinguishes answers
  * captured by the first-run capability from answers captured by the
  * owner-profile extraction evaluator. `connector_inferred` covers values an
@@ -80,6 +100,20 @@ export type ReminderIntensity =
   | "persistent"
   | "high_priority_only";
 
+/**
+ * Learned classification of the owner's day-to-day schedule shape, derived
+ * from observed sleep regularity (`owner/schedule-style.ts`). `rotating`
+ * means the wake times cluster into two distinct, internally-tight bands
+ * (shift-work pattern) rather than being merely noisy.
+ */
+export type OwnerScheduleStyle = "regular" | "irregular" | "rotating";
+
+/**
+ * Learned chronotype label derived from the owner's mid-sleep point
+ * (`owner/schedule-style.ts`). Thresholds approximate MCTQ terciles.
+ */
+export type OwnerChronotype = "early" | "intermediate" | "late";
+
 export interface EscalationRule {
   /** Optional definition id this rule scopes to; null = global default. */
   definitionId: string | null;
@@ -106,12 +140,17 @@ export interface OwnerFacts {
 
   // Preferences
   travelBookingPreferences?: OwnerFactEntry<string>;
+  activeTravel?: OwnerFactEntry<OwnerActiveTravel>;
   morningWindow?: OwnerFactEntry<OwnerFactWindow>;
   eveningWindow?: OwnerFactEntry<OwnerFactWindow>;
   quietHours?: OwnerFactEntry<OwnerQuietHours>;
   preferredNotificationChannel?: OwnerFactEntry<string>;
   locale?: OwnerFactEntry<string>;
   timezone?: OwnerFactEntry<string>;
+
+  // Learned rhythm classification (written by owner/schedule-style-writer.ts)
+  scheduleStyle?: OwnerFactEntry<OwnerScheduleStyle>;
+  chronotype?: OwnerFactEntry<OwnerChronotype>;
 
   // Policies (writable via the policy-aware setters; read-only here)
   reminderIntensity?: OwnerFactEntry<ReminderIntensity>;
@@ -133,6 +172,8 @@ export interface OwnerFactsPatch {
   preferredNotificationChannel?: string;
   locale?: string;
   timezone?: string;
+  scheduleStyle?: OwnerScheduleStyle;
+  chronotype?: OwnerChronotype;
 }
 
 export interface PolicyPatchReminderIntensity {
@@ -157,6 +198,15 @@ export interface OwnerFactStore {
   /** Set the reminder-intensity policy. */
   setReminderIntensity(
     patch: PolicyPatchReminderIntensity,
+    provenance: OwnerFactProvenance,
+  ): Promise<OwnerFacts>;
+  /**
+   * Set (non-null value) or clear (null) the owner's active-travel record. A
+   * dedicated setter — not routed through the string-only patch path — because
+   * the value is a structured window whose clear must actually remove the fact.
+   */
+  setActiveTravel(
+    value: OwnerActiveTravel | null,
     provenance: OwnerFactProvenance,
   ): Promise<OwnerFacts>;
   /**
@@ -210,6 +260,30 @@ function isQuietHours(value: unknown): value is OwnerQuietHours {
   );
 }
 
+function isActiveTravel(value: unknown): value is OwnerActiveTravel {
+  if (!isPlainRecord(value)) return false;
+  if (
+    typeof value.startIso !== "string" ||
+    Number.isNaN(Date.parse(value.startIso))
+  ) {
+    return false;
+  }
+  if (
+    value.endIso !== undefined &&
+    (typeof value.endIso !== "string" || Number.isNaN(Date.parse(value.endIso)))
+  ) {
+    return false;
+  }
+  if (
+    value.destinationTimezone !== undefined &&
+    (typeof value.destinationTimezone !== "string" ||
+      value.destinationTimezone.length === 0)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function isReminderIntensity(value: unknown): value is ReminderIntensity {
   return (
     value === "minimal" ||
@@ -217,6 +291,14 @@ function isReminderIntensity(value: unknown): value is ReminderIntensity {
     value === "persistent" ||
     value === "high_priority_only"
   );
+}
+
+function isScheduleStyle(value: unknown): value is OwnerScheduleStyle {
+  return value === "regular" || value === "irregular" || value === "rotating";
+}
+
+function isChronotype(value: unknown): value is OwnerChronotype {
+  return value === "early" || value === "intermediate" || value === "late";
 }
 
 function isProvenanceSource(
@@ -290,11 +372,37 @@ function normalizeQuietHoursEntry(
   };
 }
 
+function normalizeActiveTravelEntry(
+  value: unknown,
+): OwnerFactEntry<OwnerActiveTravel> | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  if (!isActiveTravel(value.value)) return undefined;
+  const provenance = normalizeProvenance(value.provenance);
+  if (!provenance) return undefined;
+  const travel: OwnerActiveTravel = { startIso: value.value.startIso };
+  if (value.value.endIso !== undefined) travel.endIso = value.value.endIso;
+  if (value.value.destinationTimezone !== undefined) {
+    travel.destinationTimezone = value.value.destinationTimezone;
+  }
+  return { value: travel, provenance };
+}
+
 function normalizeReminderIntensityEntry(
   value: unknown,
 ): OwnerFactEntry<ReminderIntensity> | undefined {
   if (!isPlainRecord(value)) return undefined;
   if (!isReminderIntensity(value.value)) return undefined;
+  const provenance = normalizeProvenance(value.provenance);
+  if (!provenance) return undefined;
+  return { value: value.value, provenance };
+}
+
+function normalizeEnumEntry<T>(
+  value: unknown,
+  guard: (candidate: unknown) => candidate is T,
+): OwnerFactEntry<T> | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  if (!guard(value.value)) return undefined;
   const provenance = normalizeProvenance(value.provenance);
   if (!provenance) return undefined;
   return { value: value.value, provenance };
@@ -366,6 +474,15 @@ function normalizeRecord(value: unknown): PersistedRecord {
   if (evening) facts.eveningWindow = evening;
   const quiet = normalizeQuietHoursEntry(stored.quietHours);
   if (quiet) facts.quietHours = quiet;
+  const activeTravel = normalizeActiveTravelEntry(stored.activeTravel);
+  if (activeTravel) facts.activeTravel = activeTravel;
+  const scheduleStyle = normalizeEnumEntry(
+    stored.scheduleStyle,
+    isScheduleStyle,
+  );
+  if (scheduleStyle) facts.scheduleStyle = scheduleStyle;
+  const chronotype = normalizeEnumEntry(stored.chronotype, isChronotype);
+  if (chronotype) facts.chronotype = chronotype;
   const intensity = normalizeReminderIntensityEntry(stored.reminderIntensity);
   if (intensity) facts.reminderIntensity = intensity;
   const escalation = normalizeEscalationRulesEntry(stored.escalationRules);
@@ -408,6 +525,8 @@ interface NormalizedPatch {
   morningWindow?: OwnerFactWindow;
   eveningWindow?: OwnerFactWindow;
   quietHours?: OwnerQuietHours;
+  scheduleStyle?: OwnerScheduleStyle;
+  chronotype?: OwnerChronotype;
 }
 
 function normalizePatch(patch: OwnerFactsPatch): NormalizedPatch {
@@ -453,6 +572,12 @@ function normalizePatch(patch: OwnerFactsPatch): NormalizedPatch {
       endLocal: patch.quietHours.endLocal,
       timezone: patch.quietHours.timezone,
     };
+  }
+  if (isScheduleStyle(patch.scheduleStyle)) {
+    result.scheduleStyle = patch.scheduleStyle;
+  }
+  if (isChronotype(patch.chronotype)) {
+    result.chronotype = patch.chronotype;
   }
   return result;
 }
@@ -507,7 +632,9 @@ class CacheBackedOwnerFactStore implements OwnerFactStore {
       !hasStringPatch &&
       !normalized.morningWindow &&
       !normalized.eveningWindow &&
-      !normalized.quietHours
+      !normalized.quietHours &&
+      !normalized.scheduleStyle &&
+      !normalized.chronotype
     ) {
       const current = await this.read();
       return current;
@@ -553,6 +680,18 @@ class CacheBackedOwnerFactStore implements OwnerFactStore {
         provenance: { ...provenance },
       };
     }
+    if (normalized.scheduleStyle) {
+      next.scheduleStyle = {
+        value: normalized.scheduleStyle,
+        provenance: { ...provenance },
+      };
+    }
+    if (normalized.chronotype) {
+      next.chronotype = {
+        value: normalized.chronotype,
+        provenance: { ...provenance },
+      };
+    }
 
     await this.writeRecord({ schemaVersion: 1, facts: next });
 
@@ -592,6 +731,29 @@ class CacheBackedOwnerFactStore implements OwnerFactStore {
       value: patch.intensity,
       provenance: policyProvenance,
     };
+    await this.writeRecord({ schemaVersion: 1, facts: next });
+    return cloneFacts(next);
+  }
+
+  async setActiveTravel(
+    value: OwnerActiveTravel | null,
+    provenance: OwnerFactProvenance,
+  ): Promise<OwnerFacts> {
+    const record = await this.readRecord();
+    const next = cloneFacts(record.facts);
+    if (value === null) {
+      delete next.activeTravel;
+    } else {
+      if (!isActiveTravel(value)) {
+        throw new Error("Active-travel record requires a valid startIso");
+      }
+      const travel: OwnerActiveTravel = { startIso: value.startIso };
+      if (value.endIso !== undefined) travel.endIso = value.endIso;
+      if (value.destinationTimezone !== undefined) {
+        travel.destinationTimezone = value.destinationTimezone;
+      }
+      next.activeTravel = { value: travel, provenance: { ...provenance } };
+    }
     await this.writeRecord({ schemaVersion: 1, facts: next });
     return cloneFacts(next);
   }
@@ -658,6 +820,12 @@ function cloneFacts(facts: OwnerFacts): OwnerFacts {
       facts.travelBookingPreferences,
     );
   }
+  if (facts.activeTravel) {
+    next.activeTravel = {
+      value: { ...facts.activeTravel.value },
+      provenance: { ...facts.activeTravel.provenance },
+    };
+  }
   if (facts.morningWindow) {
     next.morningWindow = cloneWindowEntry(facts.morningWindow);
   }
@@ -674,6 +842,18 @@ function cloneFacts(facts: OwnerFacts): OwnerFacts {
   }
   if (facts.locale) next.locale = cloneStringEntry(facts.locale);
   if (facts.timezone) next.timezone = cloneStringEntry(facts.timezone);
+  if (facts.scheduleStyle) {
+    next.scheduleStyle = {
+      value: facts.scheduleStyle.value,
+      provenance: { ...facts.scheduleStyle.provenance },
+    };
+  }
+  if (facts.chronotype) {
+    next.chronotype = {
+      value: facts.chronotype.value,
+      provenance: { ...facts.chronotype.provenance },
+    };
+  }
   if (facts.reminderIntensity) {
     next.reminderIntensity = {
       value: facts.reminderIntensity.value,
@@ -758,14 +938,33 @@ export function resolveOwnerFactStore(runtime: IAgentRuntime): OwnerFactStore {
  * Reduces a typed `OwnerFacts` record to the minimal `OwnerFactsView`
  * surface consumed by the `ScheduledTask` runner (gates and completion
  * checks). Provenance is intentionally dropped — readers want the value.
+ *
+ * `now` is required because `travelActive` is DERIVED, not stored: it is true
+ * only when `now` falls inside the `activeTravel` window. Absence of an
+ * `activeTravel` record leaves `travelActive` undefined — "not traveling" is
+ * distinguishable from "no data", so the `during_travel` gate correctly denies
+ * (its allow branch tests `=== true`). While travel is active the destination
+ * timezone, when known, overrides the owner's home zone for the view.
  */
 export function ownerFactsToView(
   facts: OwnerFacts,
+  now: Date,
 ): import("@elizaos/plugin-scheduling").OwnerFactsView {
   const view: import("@elizaos/plugin-scheduling").OwnerFactsView = {};
   if (facts.preferredName) view.preferredName = facts.preferredName.value;
   if (facts.timezone) view.timezone = facts.timezone.value;
   if (facts.locale) view.locale = facts.locale.value;
+  if (facts.activeTravel) {
+    const travel = facts.activeTravel.value;
+    const nowMs = now.getTime();
+    const started = nowMs >= Date.parse(travel.startIso);
+    const notEnded =
+      travel.endIso === undefined || nowMs <= Date.parse(travel.endIso);
+    view.travelActive = started && notEnded;
+    if (view.travelActive && travel.destinationTimezone) {
+      view.timezone = travel.destinationTimezone;
+    }
+  }
   if (facts.morningWindow) {
     view.morningWindow = {
       start: facts.morningWindow.value.startLocal,
@@ -785,5 +984,12 @@ export function ownerFactsToView(
       tz: facts.quietHours.value.timezone,
     };
   }
+  // Learned schedule-shape facts (#12778): surface the queryable structural
+  // classifications onto the spine view so gates/routing (via
+  // `defaultOwnerFactsProvider`) can read them. Provenance is dropped — readers
+  // want the value — but the store guarantees these are `agent_inferred` and
+  // never clobber a user-set fact.
+  if (facts.scheduleStyle) view.scheduleStyle = facts.scheduleStyle.value;
+  if (facts.chronotype) view.chronotype = facts.chronotype.value;
   return view;
 }

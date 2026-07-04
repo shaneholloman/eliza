@@ -298,6 +298,9 @@ export async function handleCloudCompatRoute(
     );
     return true;
   } catch (error) {
+    // error-policy:J1 boundary translation — handleUpstreamError classifies the
+    // transport failure (redirect/timeout/too-large/generic) into an explicit
+    // 502/504/413 status; no fabricated success.
     handleUpstreamError(error, res);
     return true;
   }

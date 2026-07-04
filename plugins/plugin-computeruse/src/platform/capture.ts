@@ -111,7 +111,8 @@ export async function captureDisplay(
     try {
       unlinkSync(tmpFile);
     } catch {
-      /* best effort */
+      // error-policy:J6 best-effort temp-file teardown; capture success or
+      // failure has already been decided above.
     }
   }
 }
@@ -149,7 +150,8 @@ export async function captureDisplayRegion(
     try {
       unlinkSync(tmpFile);
     } catch {
-      /* best effort */
+      // error-policy:J6 best-effort temp-file teardown; capture success or
+      // failure has already been decided above.
     }
   }
 }
@@ -304,7 +306,13 @@ function tryCaptureWaylandPortal(tmpFile: string): boolean {
     captureWaylandPortalScreenshot(tmpFile);
     return true;
   } catch (error) {
+    // Permission denial is terminal — no other tier can succeed, and the
+    // classified error is what the caller surfaces.
     if (isPermissionDeniedError(error)) throw error;
+    // error-policy:J4 capture-tier failover — a non-permission portal failure
+    // (helper missing, DBus timeout) advances the chain to the X11 tools
+    // tier; when every tier fails the caller throws "No screenshot tool
+    // available", so the miss never fabricates a capture.
     return false;
   }
 }
@@ -377,7 +385,9 @@ async function captureRegionWindows(
       await runPsHost(psCmd, psSpawnTimeoutMs(15000));
       return;
     } catch {
-      /* warm host unavailable/errored — fall back to one-shot spawn */
+      // error-policy:J4 designed two-tier execution — the one-shot spawn
+      // below runs the SAME script, and its failure throws to the caller;
+      // nothing is masked, only the warm-path speedup is lost.
     }
   }
   execSync(`powershell -NoProfile -Command "${psCmd}"`, {

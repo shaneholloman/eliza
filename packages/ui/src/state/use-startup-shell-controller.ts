@@ -70,6 +70,9 @@ function needsBootstrapSession(): boolean {
   try {
     return !sessionStorage.getItem("eliza_session");
   } catch {
+    // error-policy:J3 sessionStorage may be unavailable (privacy mode / disabled
+    // storage); assume a bootstrap session is needed — the safe branch that runs
+    // setup rather than skipping it on an unreadable store.
     return true;
   }
 }
@@ -163,7 +166,6 @@ export function useStartupShellController(): StartupShellController {
           kind: "remote",
           apiBase: payload.gatewayUrl,
           token: typeof payload.token === "string" ? payload.token : null,
-          allowPublicHttps: true,
         });
         persistMobileRuntimeModeForServerTarget("remote");
         setState("firstRunRuntimeTarget", "remote");

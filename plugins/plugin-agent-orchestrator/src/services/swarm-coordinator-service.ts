@@ -259,7 +259,7 @@ export class SwarmCoordinatorService
   // seconds after the router's real completion post (#11689 residual), and
   // leaked a terminal stop mid-respawn on error paths the router deliberately
   // suppresses (before the #11711 handoff stamp lands). Cleared when the
-  // session resumes (a genuine stop on a later turn must still post), on
+  // session resumes (a genuine stop on a subsequent turn must still post), on
   // legacy-task eviction, and on stop().
   private readonly routerCededTerminalSessions = new Set<string>();
   // Per-session serialization chain for terminal-event synthesis. AcpService
@@ -354,6 +354,7 @@ export class SwarmCoordinatorService
       try {
         unsub();
       } catch (err) {
+        // error-policy:J6 teardown — an unsubscribe fault during stop() is warned and must not block the rest of stop() cleanup.
         logger.warn(
           `[SwarmCoordinator] AcpService unsubscribe threw during stop(): ${
             err instanceof Error ? err.message : String(err)
@@ -468,6 +469,7 @@ export class SwarmCoordinatorService
       const origin = await taskService.getTaskOriginTarget(threadId);
       return origin ? { roomId: origin.roomId } : null;
     } catch {
+      // error-policy:J4 degrade — null is this reader's designed "no origin" signal; the connector-route caller falls back to its own per-task room.
       return null;
     }
   }
@@ -807,6 +809,9 @@ export class SwarmCoordinatorService
     const prior =
       this.terminalCompletionChains.get(sessionId) ?? Promise.resolve();
     const next = prior
+      // error-policy:J5 the prior link's rejection is observed by whoever
+      // awaited it; this catch only keeps the per-session completion chain alive
+      // so one failed completion cannot wedge later ones.
       .catch(() => {})
       .then(() => this.runSwarmComplete(sessionId, event, data));
     this.terminalCompletionChains.set(sessionId, next);
@@ -833,6 +838,7 @@ export class SwarmCoordinatorService
     try {
       sessionMeta = await this.getEnrichmentMetadata(sessionId);
     } catch {
+      // error-policy:J4 fail-open degrade — empty metadata reads as "not router-owned / not handed-off", so a terminal still synthesizes rather than silencing a genuine stop.
       sessionMeta = { metadata: {} };
     }
     const meta = sessionMeta.metadata;
@@ -916,7 +922,7 @@ export class SwarmCoordinatorService
     // dedupe guard, and a router-owned skip does NOT consume the slot: ACP
     // sessions are reused across follow-up turns, so a router-owned turn must
     // not claim the session's synthesis slot — otherwise a `stopped` on a
-    // LATER turn of the SAME session (which the router does not post) would be
+    // SUBSEQUENT turn of the SAME session (which the router does not post) would be
     // swallowed. Instead the skip records the cession in
     // `routerCededTerminalSessions`, so THIS turn's teardown `stopped` — which
     // the one-shot runners emit unconditionally right after the terminal — is
@@ -1094,6 +1100,7 @@ export class SwarmCoordinatorService
       try {
         listener(swarmEvent);
       } catch (err) {
+        // error-policy:J7 fan-out isolation — one throwing subscriber is warned and must not stop delivery to the remaining listeners.
         logger.warn(
           `[SwarmCoordinator] subscriber threw: ${
             err instanceof Error ? err.message : String(err)
@@ -1107,6 +1114,7 @@ export class SwarmCoordinatorService
       try {
         this.wsBroadcast(swarmEvent);
       } catch (err) {
+        // error-policy:J7 fan-out isolation — a ws-broadcast fault is warned and must not stop in-process subscriber delivery of the same event.
         logger.warn(
           `[SwarmCoordinator] wsBroadcast threw: ${
             err instanceof Error ? err.message : String(err)
@@ -1146,6 +1154,7 @@ export class SwarmCoordinatorService
         return session.metadata;
       }
     } catch {
+      // error-policy:J4 fail-open degrade — an unreadable session yields {}, treated as not-superseded so a genuine stop is never silenced.
       // fall through to empty — fail open (treat unknown as not-superseded)
     }
     return {};
@@ -1159,7 +1168,7 @@ export class SwarmCoordinatorService
 
     const session = await this.acp()?.getSession(sessionId);
     // Do NOT cache a miss: an event can race session-store persistence, and
-    // pinning `{}` would strip routing metadata from every later event of the
+    // pinning `{}` would strip routing metadata from every subsequent event of the
     // session. A miss stays uncached so the next event retries the lookup.
     if (!session) return { metadata: {} };
 
@@ -1211,6 +1220,7 @@ export class SwarmCoordinatorService
         record.agentType = sessionMeta.agentType;
       }
     } catch {
+      // error-policy:J4 additive degrade — on failure the real raw record is returned un-enriched, never a fabricated empty.
       // Best-effort enrichment only; raw data is still useful to consumers.
     }
     return record;
@@ -1301,6 +1311,7 @@ export class SwarmCoordinatorService
         },
       );
     } catch (err) {
+      // error-policy:J1 boundary — translates a validator fault into a structured escalation result (verdict fail) dispatched below.
       logger.warn(
         `[SwarmCoordinator] custom validator failed: ${
           err instanceof Error ? err.message : String(err)
@@ -1387,6 +1398,7 @@ export class SwarmCoordinatorService
         await acp
           .sendPrompt(sessionId, decision.response.trim())
           .catch((err: unknown) => {
+            // error-policy:J7 a failed decision-response send is warned/observable and must not wedge the decision-routing loop.
             logger.warn(
               `[SwarmCoordinator] failed to send decision response: ${
                 err instanceof Error ? err.message : String(err)
@@ -1395,6 +1407,7 @@ export class SwarmCoordinatorService
           });
       }
     } catch (err) {
+      // error-policy:J7 event-handler boundary — a decision-callback fault is warned (in-flight cleared in finally) so the event stream keeps flowing.
       logger.warn(
         `[SwarmCoordinator] agent decision callback failed: ${
           err instanceof Error ? err.message : String(err)

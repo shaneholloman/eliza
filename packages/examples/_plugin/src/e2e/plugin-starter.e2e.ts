@@ -1,3 +1,4 @@
+// Drives end-to-end coverage for the Plugin example.
 import type { Content, HandlerCallback, IAgentRuntime, State, TestSuite } from "@elizaos/core";
 
 /**

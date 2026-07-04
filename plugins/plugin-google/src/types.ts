@@ -323,6 +323,16 @@ export interface GoogleMeetParticipant {
   userType?: "signed_in" | "anonymous" | "phone" | "unknown";
 }
 
+export interface GoogleMeetParticipantSession {
+  id: string;
+  name: string;
+  participantId: string;
+  participantName: string;
+  startTime?: string;
+  endTime?: string;
+  isActive: boolean;
+}
+
 export interface GoogleMeetTranscript {
   id: string;
   speakerName?: string;
@@ -362,6 +372,152 @@ export interface GoogleMeetActionItem {
   priority: "low" | "medium" | "high";
 }
 
+export type GoogleMeetCanonicalStreamKind =
+  | "google_transcript_entries"
+  | "google_docs_transcript"
+  | "google_recording"
+  | "bot_free_system_audio"
+  | "bot_free_microphone"
+  | "bot_free_screen_video";
+
+export interface GoogleMeetCanonicalStream {
+  id: string;
+  kind: GoogleMeetCanonicalStreamKind;
+  artifactId?: string;
+  uri?: string;
+  fileId?: string;
+  startedAt?: string;
+  endedAt?: string;
+  state?: string;
+}
+
+export interface GoogleMeetCanonicalParticipant {
+  id: string;
+  displayName: string;
+  userType?: GoogleMeetParticipant["userType"];
+  nameProvenance: "google_signed_in" | "google_anonymous" | "phone" | "unknown";
+}
+
+export interface GoogleMeetCanonicalParticipantSession {
+  id: string;
+  participantId: string;
+  startedAt?: string;
+  endedAt?: string;
+  isActive: boolean;
+}
+
+export interface GoogleMeetCanonicalTranscriptSpan {
+  id: string;
+  streamId: string;
+  source: "google_meet_transcript_entry" | "bot_free_capture";
+  text: string;
+  participantId?: string;
+  speakerLabel?: string;
+  startedAt?: string;
+  endedAt?: string;
+  languageCode?: string;
+  provenance: {
+    transcriptName?: string;
+    entryName?: string;
+    participantName?: string;
+  };
+}
+
+export interface GoogleMeetCanonicalGeneratedNote {
+  id: string;
+  kind: "summary" | "key_point" | "action_item";
+  text: string;
+  sourceSpanIds: string[];
+  assignee?: string;
+  dueDate?: string;
+  priority?: GoogleMeetActionItem["priority"];
+}
+
+export type GoogleMeetMissingArtifactReason =
+  | "no_transcript"
+  | "transcript_delayed"
+  | "missing_recording"
+  | "revoked_access"
+  | "permission_denied"
+  | "meeting_not_found"
+  | "organizer_only_artifact"
+  | "expired_media_url";
+
+export interface GoogleMeetMissingArtifact {
+  artifactType: "conference" | "transcript" | "recording" | "participant_sessions";
+  reason: GoogleMeetMissingArtifactReason;
+  message: string;
+  sourceName?: string;
+}
+
+export interface GoogleMeetCanonicalWarning {
+  code:
+    | "docs_transcript_mismatch"
+    | "speaker_reference_missing"
+    | "transcript_entry_empty"
+    | "organizer_only_artifact"
+    | "expired_media_url";
+  message: string;
+  sourceName?: string;
+}
+
+export interface GoogleMeetBotFreeCaptureArtifact {
+  id: string;
+  systemAudioUri?: string;
+  microphoneAudioUri?: string;
+  screenVideoUri?: string;
+  startedAt?: string;
+  endedAt?: string;
+  transcriptSpans?: GoogleMeetTranscript[];
+}
+
+export interface GoogleMeetCanonicalArtifact {
+  schemaVersion: "elizaos.meeting_artifact.v1";
+  source: "google_meet";
+  meeting: {
+    id: string;
+    conferenceRecordName: string;
+    spaceName?: string;
+    startedAt?: string;
+    endedAt?: string;
+    expireTime?: string;
+    durationMinutes: number;
+  };
+  streams: GoogleMeetCanonicalStream[];
+  participants: GoogleMeetCanonicalParticipant[];
+  participantSessions: GoogleMeetCanonicalParticipantSession[];
+  transcriptSpans: GoogleMeetCanonicalTranscriptSpan[];
+  generatedNotes: GoogleMeetCanonicalGeneratedNote[];
+  recordings: GoogleMeetRecording[];
+  warnings: GoogleMeetCanonicalWarning[];
+  missingArtifacts: GoogleMeetMissingArtifact[];
+  metrics: {
+    transcriptWordCount: number;
+    participantCount: number;
+    participantSessionCount: number;
+    transcriptSpanCount: number;
+    recordingCount: number;
+    missingArtifactCount: number;
+    warningCount: number;
+  };
+}
+
+export interface GoogleMeetCanonicalArtifactInput {
+  meetingId: string;
+  conferenceRecordName: string;
+  conference: GoogleMeetConferenceRecord;
+  participants: readonly GoogleMeetParticipant[];
+  participantSessions?: readonly GoogleMeetParticipantSession[];
+  transcriptArtifacts: readonly GoogleMeetTranscriptArtifact[];
+  transcriptEntries: readonly GoogleMeetTranscript[];
+  recordings: readonly GoogleMeetRecording[];
+  summary: string;
+  keyPoints: readonly string[];
+  actionItems: readonly GoogleMeetActionItem[];
+  googleDocsTranscriptText?: string;
+  botFreeCapture?: GoogleMeetBotFreeCaptureArtifact;
+}
+
 export interface GoogleMeetReport {
   meetingId: string;
   conferenceRecordName: string;
@@ -374,6 +530,8 @@ export interface GoogleMeetReport {
   actionItems: GoogleMeetActionItem[];
   fullTranscript: GoogleMeetTranscript[];
   recordings: GoogleMeetRecording[];
+  participantSessions: GoogleMeetParticipantSession[];
+  canonicalArtifact: GoogleMeetCanonicalArtifact;
 }
 
 export interface GoogleMeetCreateMeetingInput extends GoogleAccountRef {
@@ -387,6 +545,10 @@ export interface GoogleMeetGetMeetingInput extends GoogleAccountRef {
 
 export interface GoogleMeetConferenceRecordInput extends GoogleAccountRef {
   conferenceRecordName: string;
+}
+
+export interface GoogleMeetParticipantSessionInput extends GoogleAccountRef {
+  participantName: string;
 }
 
 export interface GoogleMeetTranscriptInput extends GoogleAccountRef {
@@ -405,6 +567,8 @@ export interface GoogleMeetGenerateReportInput extends GoogleAccountRef {
   includeActionItems?: boolean;
   includeTranscript?: boolean;
   includeRecordings?: boolean;
+  googleDocsTranscriptText?: string;
+  botFreeCapture?: GoogleMeetBotFreeCaptureArtifact;
 }
 
 export interface IGoogleGmailService extends Service {
@@ -537,6 +701,9 @@ export interface IGoogleMeetService extends Service {
   listMeetingParticipants(
     params: GoogleMeetConferenceRecordInput & { limit?: number }
   ): Promise<GoogleMeetParticipant[]>;
+  listMeetingParticipantSessions(
+    params: GoogleMeetParticipantSessionInput & { limit?: number }
+  ): Promise<GoogleMeetParticipantSession[]>;
   listMeetingTranscripts(
     params: GoogleMeetConferenceRecordInput
   ): Promise<GoogleMeetTranscriptArtifact[]>;

@@ -54,12 +54,12 @@ type StewardProviderClient = ComponentProps<typeof StewardProvider>["client"];
 // dashboards) otherwise renders with the SDK's default gold accent
 // (DEFAULT_THEME.primaryColor = #D4A054). Override just the accent colors to
 // Eliza's brand orange so the sign-in matches the rest of the product (the main
-// /login page + the app shell are #FF5800). The SDK's dark surface/text defaults
+// /login page + the app shell use the --accent brand orange). The SDK's dark surface/text defaults
 // already match our surfaces, so no other fields need theming. Passed as the
 // provider `theme` (Partial<TenantTheme>) → mapped to the scoped `.stwd-*` vars.
 const ELIZA_STEWARD_THEME: ComponentProps<typeof StewardProvider>["theme"] = {
-  primaryColor: "#FF5800",
-  accentColor: "#FF5800",
+  primaryColor: "var(--accent)",
+  accentColor: "var(--accent)",
 };
 
 function AuthTokenSync({ children }: { children: ReactNode }) {
@@ -103,6 +103,8 @@ function AuthTokenSync({ children }: { children: ReactNode }) {
             return;
           }
 
+          // error-policy:J3 parse-sanitize — non-JSON/empty body becomes null;
+          // res.status drives the branches below, the code field is advisory.
           const body = (await res.json().catch(() => null)) as {
             code?: string;
           } | null;
@@ -168,6 +170,8 @@ function AuthTokenSync({ children }: { children: ReactNode }) {
             credentials: "include",
           });
           if (res.ok) {
+            // error-policy:J3 parse-sanitize — non-JSON/empty body becomes null;
+            // only a well-formed { token } is written, else the refresh no-ops.
             const body = (await res.json().catch(() => null)) as {
               token?: string;
             } | null;

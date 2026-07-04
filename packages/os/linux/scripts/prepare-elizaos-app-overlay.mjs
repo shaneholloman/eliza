@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Supports Linux live-image build and release evidence automation.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";

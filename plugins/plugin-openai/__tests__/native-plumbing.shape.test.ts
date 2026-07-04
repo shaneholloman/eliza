@@ -628,6 +628,70 @@ describe("OpenAI native text plumbing", () => {
     });
   }, 60_000);
 
+  it("restores strict-safe record/map tool-call args before returning native results", async () => {
+    aiMocks.generateText.mockResolvedValue({
+      text: "",
+      toolCalls: [
+        {
+          toolName: "SAVE_CONTACT",
+          input: {
+            customFields: {
+              __eliza_record_entries: [
+                { key: "favoriteColor", value: "blue" },
+                { key: "score", value: "7" },
+              ],
+            },
+          },
+        },
+      ],
+      finishReason: "tool-calls",
+      usage: { inputTokens: 13, outputTokens: 4 },
+    });
+
+    const { handleTextSmall } = await import("../models/text");
+    const result = (await handleTextSmall(createRuntime(), {
+      prompt: "save contact",
+      messages: [{ role: "user", content: "save this" }],
+      tools: [
+        {
+          name: "SAVE_CONTACT",
+          description: "Save contact",
+          parameters: {
+            type: "object",
+            properties: {
+              customFields: {
+                type: "object",
+                additionalProperties: true,
+              },
+            },
+            required: ["customFields"],
+          },
+        },
+      ],
+      toolChoice: { type: "tool", name: "SAVE_CONTACT" },
+    } as never)) as { toolCalls: unknown[] };
+
+    expect(result.toolCalls).toEqual([
+      {
+        toolName: "SAVE_CONTACT",
+        input: {
+          customFields: {
+            favoriteColor: "blue",
+            score: 7,
+          },
+        },
+      },
+    ]);
+
+    const call = aiMocks.generateText.mock.calls[0][0] as Record<string, unknown>;
+    const saveContact = (call.tools as Record<string, { inputSchema: { jsonSchema: unknown } }>)
+      .SAVE_CONTACT;
+    const schema = saveContact.inputSchema.jsonSchema as {
+      properties: Record<string, { properties: Record<string, unknown> }>;
+    };
+    expect(schema.properties.customFields.properties.__eliza_record_entries).toBeDefined();
+  }, 60_000);
+
   it("normalizes core assistant/tool history into AI SDK model messages", async () => {
     aiMocks.generateText.mockResolvedValue({
       text: JSON.stringify({ decision: "FINISH", success: true }),

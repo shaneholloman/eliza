@@ -44,7 +44,7 @@ vi.mock("./persistence", () => ({
   createPersistedActiveServer: mocks.createPersistedActiveServer,
   savePersistedActiveServer: mocks.savePersistedActiveServer,
 }));
-vi.mock("./startup-phase-restore", () => ({
+vi.mock("./runtime-url-trust", () => ({
   isTrustedRestoreApiBaseUrl: mocks.isTrustedRestoreApiBaseUrl,
 }));
 vi.mock("./ChatComposerContext.hooks", () => ({

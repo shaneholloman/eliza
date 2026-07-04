@@ -6,6 +6,13 @@
  * attribution, removal monitoring, and leave. Ported from Vexa
  * (services/vexa-bot/core/src/platforms/zoom/web/*, Apache-2.0). No native
  * Zoom SDK.
+ *
+ * error-policy:J4 — the many `.catch(() => {})` / `.catch(() => null)` guards on
+ * `page.locator(...).click()`/`waitFor()`/`getAttribute()` are designed
+ * best-effort UI automation against a page whose exact controls vary per Zoom
+ * build/AB-test. A missing optional control is an expected degrade, not a
+ * failure; the join outcome is decided by the presence checks and the
+ * `MeetingEndReason` the strategy returns, not by any single click succeeding.
  */
 
 import { logger } from "@elizaos/core";
@@ -591,7 +598,13 @@ export function createZoomStrategies(
             speakerName.toLowerCase().includes(botName.toLowerCase());
           attributor.onActiveSpeakerPoll(isBotTile ? null : speakerName);
 
-          // Roster from visible tile names (excluding the bot).
+          // Roster from visible tile names (excluding the bot). A transient DOM
+          // read failure (page navigating, execution context destroyed) yields
+          // null — NOT an empty roster. Treating a failed read as `[]` would
+          // spuriously fire participantLeft for everyone and trip the alone
+          // auto-leave timeout; skip this poll tick and re-read on the next one
+          // (removal is owned by startRemovalMonitor). Mirrors the msteams
+          // roster guard.
           const tileNames = await page
             .evaluate((footerSelector: string) => {
               return Array.from(
@@ -600,7 +613,8 @@ export function createZoomStrategies(
                 .map((s) => s.textContent?.trim())
                 .filter((n): n is string => !!n);
             }, zoomParticipantNameSelector)
-            .catch(() => [] as string[]);
+            .catch(() => null);
+          if (tileNames === null) continue;
           const nowMs = Date.now();
           const current = new Set(
             tileNames.filter(

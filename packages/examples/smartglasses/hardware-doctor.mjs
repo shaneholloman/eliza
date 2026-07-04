@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Supports the Smartglasses example described in this package README.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";

@@ -16,6 +16,7 @@
  * plugin just provides the backend capabilities it consumes.
  */
 
+import { logger } from "@elizaos/logger";
 import {
   Activity,
   AlertTriangle,
@@ -437,7 +438,13 @@ function AppRunsWidget({
           setCatalogApps(apps);
         }
       })
-      .catch(() => undefined);
+      .catch((err: unknown) => {
+        // error-policy:J4 the catalog only enriches run rows with app
+        // names/icons; runs render from their own load (which surfaces errors
+        // via the widget's error state). Logged so a broken catalog is
+        // observable.
+        logger.warn({ err }, "[agent-orchestrator] app catalog load failed");
+      });
 
     return () => {
       cancelled = true;
@@ -480,6 +487,7 @@ function AppRunsWidget({
           if (changed) setState("appRuns", nextRunsSafe);
         });
       } catch (refreshError) {
+        // error-policy:J4 load failure renders the widget's error state
         if (cancelled) return;
         setError(
           getClientErrorMessage(
@@ -822,7 +830,8 @@ function OrchestratorRoomWidget(_props: ChatSidebarWidgetProps) {
       const next = await client.getOrchestratorRooms();
       setRooms(next);
     } catch {
-      // Leave the last good roster in place on a transient poll failure.
+      // error-policy:J4 poll — leave the last good roster in place on a
+      // transient failure; the next tick refreshes.
     } finally {
       setLoading(false);
     }

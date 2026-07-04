@@ -1,3 +1,4 @@
+// Persists browser-side state for the Capacitor app example.
 import { type AppConfig, DEFAULT_CONFIG } from "./types";
 
 const CONFIG_KEY = "eliza:cap-config";

@@ -1,3 +1,4 @@
+// Configures Vite bundling for the Smartglasses example.
 import { defineConfig } from "vite";
 
 export default defineConfig({

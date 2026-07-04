@@ -1,3 +1,4 @@
+// Configures or exports the Android SystemUI TypeScript package.
 export type {
   AndroidBridgeChannelMap,
   AndroidBridgeClient,

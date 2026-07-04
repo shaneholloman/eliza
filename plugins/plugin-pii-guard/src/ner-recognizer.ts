@@ -411,8 +411,10 @@ const realClassifierFactory: ClassifierFactory = async (modelId) => {
   try {
     env.cacheDir = path.join(resolveStateDir(), "local-inference", "models");
   } catch {
-    // Fall back to transformers.js' default HF cache if the state dir is
-    // unavailable; this is a cache-location convenience, not a correctness gate.
+    // error-policy:J6 best-effort configuration — this only sets the model
+    // cache LOCATION; failing to resolve the state dir falls back to
+    // transformers.js' default HF cache. It does not gate correctness or the
+    // PII decision (the model still loads), so it is safe to leave the default.
   }
   const pipe = await pipeline("token-classification", modelId, {
     dtype: "fp32",
@@ -473,6 +475,12 @@ export class NerEntityRecognizer implements PiiEntityRecognizer {
         logger.info(`[PiiGuard] NER model ready: ${this.modelId}`);
         return classifier;
       })
+      // error-policy:J4 explicit degrade — a model-load failure is recorded
+      // (hasFailed() + logger.error) so the seam degrades to core's regex
+      // recognizer (email/phone/address still redacted) rather than throwing at
+      // boot. This does NOT fabricate a "clean" result silently: the failure is
+      // observable via hasFailed()/getRecognizer()===null, and every
+      // recognize() call while failed re-surfaces it (see recognize()).
       .catch((error) => {
         this.loadFailed = true;
         logger.error(
@@ -487,10 +495,25 @@ export class NerEntityRecognizer implements PiiEntityRecognizer {
   async recognize(text: string): Promise<EntitySpan[]> {
     if (!text) return [];
     const classifier = await this.load();
-    if (!classifier) return [];
+    if (!classifier) {
+      // error-policy:J4 explicit degrade — the NER model is unavailable, so this
+      // recognizer contributes no person/org/location spans and the layer runs
+      // regex-only. Empty here means "this recognizer is down", NOT "no PII":
+      // the composing CompositeEntityRecognizer in core still applies its regex
+      // recognizer. We warn (not silent) so a persistently-down model that
+      // silently narrows PII coverage is visible in logs.
+      logger.warn(
+        `[PiiGuard] NER model unavailable (${this.modelId}); contributing no NER spans this call — layer runs regex-only`,
+      );
+      return [];
+    }
 
     const spans: EntitySpan[] = [];
     for (const chunk of chunkText(text)) {
+      // NOTE: a classify failure AFTER a successful load is deliberately NOT
+      // caught here — it rejects recognize(), failing CLOSED. Swallowing it and
+      // returning the partial spans would silently under-redact PII, so we let
+      // the error propagate to the caller.
       const results = await classifier(chunk.text);
       const chunkSpans = relocateEntities(chunk.text, results, {
         scoreThreshold: this.scoreThreshold,

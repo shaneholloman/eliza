@@ -1,3 +1,7 @@
+/**
+ * Builds context-aware prompt suggestions for the home and chat shell
+ * surfaces.
+ */
 import * as React from "react";
 
 import { client } from "../../api/client";
@@ -252,6 +256,9 @@ function requestModelSet(
       rememberModelSet(key, set);
       return set;
     })
+    // error-policy:J4 designed degrade — null signals "no model suggestions",
+    // identical to the heuristic-tier branch above; the caller then renders the
+    // deterministic heuristic set instead of an error.
     .catch(() => null)
     .finally(() => {
       inFlightModelSets.delete(key);

@@ -38,7 +38,9 @@ import { InMemoryDatabaseAdapter } from "./database/inMemoryAdapter";
 import { type ReportedError, toElizaError } from "./errors";
 import {
 	type CapabilityConfig,
+	type CapabilitySettingFlags,
 	createBasicCapabilitiesPlugin,
+	resolveCapabilityConfig,
 } from "./features/basic-capabilities/index";
 import {
 	INFERENCE_MARKS,
@@ -61,7 +63,7 @@ import {
 } from "./plugins/native-features";
 import {
 	executeChainWithFallback,
-	isLocalProvider,
+	isLocalHandler,
 	maybeReroute,
 	resolveChain,
 } from "./runtime/action-model-routing";
@@ -75,7 +77,10 @@ import { BUILTIN_RESPONSE_HANDLER_FIELD_EVALUATORS } from "./runtime/builtin-fie
 import { ChatPreHandlerRegistry } from "./runtime/chat-pre-handler-registry";
 import { ContextRegistry } from "./runtime/context-registry";
 import { DEFAULT_CONTEXT_DEFINITIONS } from "./runtime/default-contexts";
-import { findEquivalentFactId } from "./runtime/fact-write-dedupe";
+import {
+	findEquivalentFact,
+	mergeStrongerFactMetadata,
+} from "./runtime/fact-write-dedupe";
 import type { ResponseHandlerEvaluator } from "./runtime/response-handler-evaluators";
 import type { ResponseHandlerFieldEvaluator } from "./runtime/response-handler-field-evaluator";
 import { ResponseHandlerFieldRegistry } from "./runtime/response-handler-field-registry";
@@ -1057,19 +1062,25 @@ export class AgentRuntime implements IAgentRuntime {
 			this.isAnonymousCharacter = true;
 		}
 
-		// Store capability options for use in initialize()
-		// When character is anonymous, also signal to skip the character provider
-		// Support both enableExtendedCapabilities and advancedCapabilities as aliases
-		this.capabilityOptions = {
-			disableBasic: opts.disableBasicCapabilities,
-			enableExtended: opts.enableExtendedCapabilities,
-			advancedCapabilities: opts.advancedCapabilities,
-			skipCharacterProvider: this.isAnonymousCharacter,
-			enableAutonomy: opts.enableAutonomy,
-			enableTrust: opts.enableTrust,
-			enableSecretsManager: opts.enableSecretsManager,
-			enablePluginManager: opts.enablePluginManager,
-		};
+		// Resolve the full capability config once, at construction: explicit
+		// constructor options win, and any option left unspecified falls back to
+		// the matching character setting. initialize() then builds the
+		// basic-capabilities plugin from this config, so registerPlugin needs no
+		// name-keyed branch to re-derive it. Anonymous characters have no character
+		// provider to inject, so skipCharacterProvider is forced on.
+		this.capabilityOptions = resolveCapabilityConfig(
+			{
+				disableBasic: opts.disableBasicCapabilities,
+				enableExtended: opts.enableExtendedCapabilities,
+				advancedCapabilities: opts.advancedCapabilities,
+				skipCharacterProvider: this.isAnonymousCharacter,
+				enableAutonomy: opts.enableAutonomy,
+				enableTrust: opts.enableTrust,
+				enableSecretsManager: opts.enableSecretsManager,
+				enablePluginManager: opts.enablePluginManager,
+			},
+			character.settings as CapabilitySettingFlags | undefined,
+		);
 		this.nativeFeatureOptions = {
 			documents: opts.enableDocuments,
 			relationships: opts.enableRelationships,
@@ -1846,67 +1857,13 @@ export class AgentRuntime implements IAgentRuntime {
 			return;
 		}
 
-		// Handle capability-aware registration for basic-capabilities plugin
-		let pluginToRegister = plugin;
-		if (plugin.name === "basic-capabilities") {
-			const settings = this.character.settings;
-			// Constructor options take precedence over character settings
-			const disableBasic =
-				this.capabilityOptions.disableBasic ??
-				(settings?.DISABLE_BASIC_CAPABILITIES === true ||
-					settings?.DISABLE_BASIC_CAPABILITIES === "true");
-			// Support both enableExtended/enableExtendedCapabilities and advancedCapabilities as aliases
-			const enableExtended =
-				this.capabilityOptions.enableExtended ??
-				this.capabilityOptions.advancedCapabilities ??
-				(settings?.ENABLE_EXTENDED_CAPABILITIES === true ||
-					settings?.ENABLE_EXTENDED_CAPABILITIES === "true" ||
-					settings?.ADVANCED_CAPABILITIES === true ||
-					settings?.ADVANCED_CAPABILITIES === "true");
-			const skipCharacterProvider =
-				this.capabilityOptions.skipCharacterProvider ?? false;
-			const enableAutonomy =
-				this.capabilityOptions.enableAutonomy ??
-				(settings?.ENABLE_AUTONOMY === true ||
-					settings?.ENABLE_AUTONOMY === "true");
-			const enableTrust =
-				this.capabilityOptions.enableTrust ??
-				(settings?.ENABLE_TRUST === true || settings?.ENABLE_TRUST === "true");
-			const enableSecretsManager =
-				this.capabilityOptions.enableSecretsManager ??
-				(settings?.ENABLE_SECRETS_MANAGER === true ||
-					settings?.ENABLE_SECRETS_MANAGER === "true");
-			const enablePluginManager =
-				this.capabilityOptions.enablePluginManager ??
-				(settings?.ENABLE_PLUGIN_MANAGER === true ||
-					settings?.ENABLE_PLUGIN_MANAGER === "true");
-
-			if (
-				disableBasic ||
-				enableExtended ||
-				skipCharacterProvider ||
-				enableAutonomy ||
-				enableTrust ||
-				enableSecretsManager ||
-				enablePluginManager
-			) {
-				const config: CapabilityConfig = {
-					disableBasic,
-					enableExtended,
-					skipCharacterProvider,
-					enableAutonomy,
-					enableTrust,
-					enableSecretsManager,
-					enablePluginManager,
-				};
-				const configuredPlugin = createBasicCapabilitiesPlugin(config);
-				pluginToRegister = {
-					...configuredPlugin,
-					events: plugin.events ?? configuredPlugin.events,
-				};
-			}
-		}
-
+		// Registration is purely structural: whatever plugin the caller declares —
+		// including basic-capabilities, already built from the resolved capability
+		// config by initialize() — is registered as-is. No name-keyed branch
+		// re-derives or rebuilds a specific plugin; capability configuration is
+		// owned by the declaring plugin (via resolveCapabilityConfig +
+		// createBasicCapabilitiesPlugin), not by this method.
+		const pluginToRegister = plugin;
 		(this.plugins as Plugin[]).push(pluginToRegister);
 		this.logger.debug(
 			{ src: "agent", agentId: this.agentId, plugin: pluginToRegister.name },
@@ -1935,30 +1892,15 @@ export class AgentRuntime implements IAgentRuntime {
 			);
 		}
 		if (pluginToRegister.actions) {
-			const existingActionNames = new Set(
-				this.actions.map((action) => action.name),
-			);
+			// Delegate collision/override policy to registerAction() so a single
+			// authority (resolveComponentCollision) decides first-wins vs declared
+			// override and emits the observable WARN. Pre-filtering here would
+			// silently swallow duplicates before that policy could see them.
 			for (const action of pluginToRegister.actions) {
-				if (existingActionNames.has(action.name)) {
-					this.logger.debug(
-						{
-							src: "agent",
-							agentId: this.agentId,
-							action: action.name,
-							plugin: pluginToRegister.name,
-						},
-						"Skipping duplicate plugin action",
-					);
-					continue;
-				}
 				this.registerAction(action);
-				existingActionNames.add(action.name);
 			}
 		}
 		if (pluginToRegister.providers) {
-			const existingProviderNames = new Set(
-				this.providers.map((provider) => provider.name),
-			);
 			for (const provider of pluginToRegister.providers) {
 				if (provider.registerByDefault === false) {
 					this.logger.debug(
@@ -1972,41 +1914,14 @@ export class AgentRuntime implements IAgentRuntime {
 					);
 					continue;
 				}
-				if (existingProviderNames.has(provider.name)) {
-					this.logger.debug(
-						{
-							src: "agent",
-							agentId: this.agentId,
-							provider: provider.name,
-							plugin: pluginToRegister.name,
-						},
-						"Skipping duplicate plugin provider",
-					);
-					continue;
-				}
+				// Collision/override policy owned by registerProvider().
 				this.registerProvider(provider);
-				existingProviderNames.add(provider.name);
 			}
 		}
 		if (pluginToRegister.evaluators) {
-			const existingEvaluatorNames = new Set(
-				this.evaluators.map((evaluator) => evaluator.name),
-			);
+			// Collision/override policy owned by registerEvaluator().
 			for (const evaluator of pluginToRegister.evaluators) {
-				if (existingEvaluatorNames.has(evaluator.name)) {
-					this.logger.debug(
-						{
-							src: "agent",
-							agentId: this.agentId,
-							evaluator: evaluator.name,
-							plugin: pluginToRegister.name,
-						},
-						"Skipping duplicate plugin evaluator",
-					);
-					continue;
-				}
 				this.registerEvaluator(evaluator);
-				existingEvaluatorNames.add(evaluator.name);
 			}
 		}
 		if (pluginToRegister.shortcuts) {
@@ -3232,13 +3147,58 @@ export class AgentRuntime implements IAgentRuntime {
 		return null;
 	}
 
+	/**
+	 * Shared collision policy for the three primary component registries
+	 * (actions, providers, evaluators). Registration is deterministic first-wins:
+	 * the earliest-registered component of a given name is authoritative and the
+	 * order in which plugins register is stable across a boot.
+	 *
+	 * A later registrant of the same name is either:
+	 *  - a DECLARED override (`override: true`) — an intentional supersede. We log
+	 *    the takeover at INFO and instruct the caller to replace the incumbent.
+	 *  - an UNDECLARED collision — two plugins claimed the same name without one
+	 *    declaring precedence. This is the unsafe, order-sensitive case the
+	 *    arch-audit flagged: which component wins used to be decided by a silent
+	 *    first-wins dedupe. We now keep the incumbent (still deterministic) but
+	 *    surface a WARN so the drift is observable instead of silent.
+	 *
+	 * @returns `true` if the caller should REPLACE the incumbent (declared
+	 *   override), `false` if it should keep the incumbent and skip the newcomer.
+	 */
+	private resolveComponentCollision(
+		kind: "action" | "provider" | "evaluator",
+		name: string,
+		override: boolean | undefined,
+	): boolean {
+		if (override === true) {
+			this.logger.info(
+				{ src: "agent", agentId: this.agentId, [kind]: name },
+				`[AgentRuntime] ${kind} "${name}" declares override:true — superseding the already-registered ${kind} of the same name.`,
+			);
+			return true;
+		}
+		this.logger.warn(
+			{ src: "agent", agentId: this.agentId, [kind]: name },
+			`[AgentRuntime] ${kind} name collision: a ${kind} named "${name}" is already registered; keeping the first and skipping this one. Which one wins is load-order-dependent — give the two distinct names, or set override:true on the ${kind} that should intentionally supersede.`,
+		);
+		return false;
+	}
+
 	registerProvider(provider: Provider) {
 		const canonical = withCanonicalProviderDocs(provider);
-		if (this.providers.find((p) => p.name === canonical.name)) {
-			this.logger.warn(
-				{ src: "agent", agentId: this.agentId, provider: canonical.name },
-				"[AgentRuntime] Provider name collision: a provider with this name is already registered; keeping the first and skipping this one. The context the agent sees for this name is load-order-dependent — give the two providers distinct names.",
-			);
+		const existingIndex = this.providers.findIndex(
+			(p) => p.name === canonical.name,
+		);
+		if (existingIndex !== -1) {
+			if (
+				this.resolveComponentCollision(
+					"provider",
+					canonical.name,
+					canonical.override,
+				)
+			) {
+				this.providers[existingIndex] = canonical;
+			}
 			return;
 		}
 		this.providers.push(canonical);
@@ -3251,11 +3211,13 @@ export class AgentRuntime implements IAgentRuntime {
 	registerAction(action: Action) {
 		const canonical = withCanonicalActionDocs(action);
 		Object.assign(action, canonical);
-		if (this.actions.find((a) => a.name === action.name)) {
-			this.logger.warn(
-				{ src: "agent", agentId: this.agentId, action: action.name },
-				"[AgentRuntime] Action name collision: an action with this name is already registered; keeping the first and skipping this one. Which handler/role-gate wins is load-order-dependent — rename one of the colliding actions to disambiguate.",
-			);
+		const existingIndex = this.actions.findIndex((a) => a.name === action.name);
+		if (existingIndex !== -1) {
+			if (
+				this.resolveComponentCollision("action", action.name, action.override)
+			) {
+				this.actions[existingIndex] = action;
+			}
 		} else {
 			this.actions.push(action);
 			this.logger.debug(
@@ -3318,11 +3280,19 @@ export class AgentRuntime implements IAgentRuntime {
 	}
 
 	registerEvaluator(evaluator: RegisteredEvaluator) {
-		if (this.evaluators.find((item) => item.name === evaluator.name)) {
-			this.logger.debug(
-				{ src: "agent", agentId: this.agentId, evaluator: evaluator.name },
-				"Evaluator already registered, skipping",
-			);
+		const existingIndex = this.evaluators.findIndex(
+			(item) => item.name === evaluator.name,
+		);
+		if (existingIndex !== -1) {
+			if (
+				this.resolveComponentCollision(
+					"evaluator",
+					evaluator.name,
+					evaluator.override,
+				)
+			) {
+				this.evaluators[existingIndex] = evaluator;
+			}
 			return;
 		}
 		this.evaluators.push(evaluator);
@@ -4066,12 +4036,14 @@ export class AgentRuntime implements IAgentRuntime {
 				? trajectoryStepIdFromMessage
 				: getTrajectoryContext()?.trajectoryStepId;
 
-		// When composing state for a recorded trajectory step, execute providers
-		// instead of serving a stale cached state so provider accesses are logged.
-		if (trajectoryStepId) {
-			skipCache = true;
-		}
-
+		// When composing state for a recorded trajectory step, every requested
+		// provider re-executes (see providersToRun below) so provider accesses
+		// are logged. Recording must not change what providers OBSERVE: the
+		// turn's cached state still flows to them — and into the merged result —
+		// exactly as it would without the recorder. Blanking it here made
+		// providers that read prior-pass state (e.g. RECENT_MESSAGES' turn-
+		// recompose gate on cross-room interactions) behave differently whenever
+		// trajectories were active.
 		const filterList = onlyInclude ? includeList : null;
 		const emptyObj = {
 			values: {},
@@ -4088,6 +4060,14 @@ export class AgentRuntime implements IAgentRuntime {
 		);
 		const providerNames = new Set<string>();
 		if (filterList && filterList.length > 0) {
+			// The onlyInclude path honors the explicit name list without enforcing
+			// provider roleGates: the Stage-1 response state deliberately
+			// force-includes recall providers like FACTS for every sender, and
+			// unassigned senders (ordinary humans AND relay/webhook bridges
+			// carrying human conversation) resolve to GUEST by default (roles.ts
+			// getEntityRole), so gate enforcement here would silently strip
+			// cross-turn recall from exactly the turns that need it. Callers that
+			// name a provider explicitly own that inclusion decision.
 			for (const name of filterList) {
 				providerNames.add(name);
 			}
@@ -4159,9 +4139,13 @@ export class AgentRuntime implements IAgentRuntime {
 		// already ran for this message.id. The full requested set still drives the
 		// rendered text/order below (pulled from `currentProviderResults`, which
 		// merges cache + fresh); only the run-set shrinks. No-op (run everything)
-		// when `refreshProviders` is null or there is no cached state.
+		// when `refreshProviders` is null or there is no cached state. Also a
+		// no-op while a trajectory step is recording: reusing a cached result
+		// would leave that provider's access out of the step's log, so every
+		// requested provider re-executes (against the same cached state a
+		// non-recording compose would hand it).
 		const refreshSet =
-			refreshProviders && refreshProviders.length > 0
+			refreshProviders && refreshProviders.length > 0 && !trajectoryStepId
 				? new Set(refreshProviders)
 				: null;
 		const cachedProviderNames = refreshSet
@@ -5540,21 +5524,24 @@ export class AgentRuntime implements IAgentRuntime {
 						await emitModelStreamChunk(safeText, visibleText);
 					}
 				};
-				// Wire the handler-facing stream callback for local providers AND for the
-				// prefer-local router ("eliza-router"): the router resolves to itself as
-				// the top-priority handler but invokes the underlying provider's handler
-				// directly and forwards `onStreamChunk` transparently, so on mobile (where
-				// the router is always the resolved provider, dispatching to the on-device
-				// capacitor-llama / bionic host) streaming is only wired if we recognize
-				// it here. Scoped to the streaming gate only — it intentionally does NOT
-				// change validation/pricing semantics keyed on isLocalProvider().
-				const resolvedIsStreamableLocal =
-					!!resolvedProviderName &&
-					(isLocalProvider(resolvedProviderName) ||
-						resolvedProviderName === "eliza-router");
+				// Wire the handler-facing stream callback for registrations that declare
+				// handler streaming support, with local-provider recognition retained as
+				// the legacy fallback. The prefer-local router ("eliza-router") still opts
+				// in by name because it forwards `onStreamChunk` to the underlying
+				// on-device handler after routing.
+				const declaredStreamable = resolvedModel.metadata?.streamable;
+				const resolvedAcceptsHandlerStream =
+					resolvedProviderName === "eliza-router" ||
+					(typeof declaredStreamable === "boolean"
+						? declaredStreamable
+						: !!resolvedProviderName &&
+							isLocalHandler({
+								provider: resolvedProviderName,
+								metadata: resolvedModel.metadata,
+							}));
 				const handlerStreamChunk: StreamChunkCallback | undefined =
 					shouldStream &&
-					resolvedIsStreamableLocal &&
+					resolvedAcceptsHandlerStream &&
 					(paramsChunk || ctxChunk || structuredExtractor)
 						? async (chunk) => {
 								handlerDeliveredStream = true;
@@ -9752,9 +9739,18 @@ ${section_end}`;
 		// similarity check needs an embedding (absent inline on fact writes) and
 		// is bypassed whenever callers pass `unique` — so without this guard the
 		// same claim lands as multiple rows (see runtime/fact-write-dedupe.ts).
+		// A dedupe hit may still carry new information: stronger metadata on the
+		// incoming occurrence (higher confidence, an explicit kind, a fresher
+		// validity timestamp) upgrades the kept row instead of being dropped.
 		if (tableName === "facts") {
-			const equivalentId = await findEquivalentFactId(this, memory);
-			if (equivalentId) return equivalentId;
+			const equivalent = await findEquivalentFact(this, memory);
+			if (equivalent?.id) {
+				const upgraded = mergeStrongerFactMetadata(equivalent, memory);
+				if (upgraded) {
+					await this.updateMemory({ id: equivalent.id, metadata: upgraded });
+				}
+				return equivalent.id;
+			}
 		}
 
 		const ids = await this.adapter.createMemories([

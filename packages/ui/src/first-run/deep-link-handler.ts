@@ -88,6 +88,7 @@ export function parseFirstRunRemoteConnectDeepLink(
   try {
     parsed = new URL(url);
   } catch {
+    // error-policy:J3 untrusted deep-link URL — unparseable means "not ours"
     return null;
   }
 
@@ -129,6 +130,7 @@ export function routeFirstRunDeepLink(url: string, urlScheme: string): boolean {
   try {
     parsed = new URL(url);
   } catch {
+    // error-policy:J3 untrusted deep-link URL — unparseable means "not routed"
     return false;
   }
 
@@ -211,6 +213,8 @@ export async function installFirstRunDeepLinkListener(options: {
     )) as { App: CapacitorAppShape };
     capacitorApp = mod.App;
   } catch (error) {
+    // error-policy:J1 optional native module missing/broken — deliver the
+    // failure to the caller's onError and disable deep links
     onError?.(error);
     return () => {};
   }
@@ -224,6 +228,7 @@ export async function installFirstRunDeepLinkListener(options: {
   try {
     listenerHandle = await capacitorApp.addListener("appUrlOpen", handler);
   } catch (error) {
+    // error-policy:J1 listener registration failed — deliver to onError
     onError?.(error);
     return () => {};
   }
@@ -234,11 +239,14 @@ export async function installFirstRunDeepLinkListener(options: {
     const launch = await capacitorApp.getLaunchUrl();
     if (launch?.url) handler({ url: launch.url });
   } catch (error) {
+    // error-policy:J1 cold-launch URL read failed — deliver to onError;
+    // live appUrlOpen links still work
     onError?.(error);
   }
 
   return () => {
     if (!listenerHandle) return;
+    // error-policy:J6 teardown — removal failure is still reported
     void listenerHandle.remove().catch((error) => {
       onError?.(error);
     });

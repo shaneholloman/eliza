@@ -33,6 +33,22 @@ import { logger } from "@elizaos/core";
 import { commandExists, currentPlatform } from "../platform/helpers.js";
 import type { SceneAxNode } from "./scene-types.js";
 
+/**
+ * Outcome accounting for the most recent `snapshot()` call (#12273). A scan
+ * that silently drops windows (macOS a11y permission revoked mid-session, a
+ * UIA element that stopped responding) yields an ever-thinner scene the agent
+ * trusts as complete — so per-window misses are counted here and the
+ * scene-builder reports them once per scan via `runtime.reportError`.
+ */
+export interface A11yScanStats {
+  /** Windows/processes the scan attempted but could not read. */
+  failedWindows: number;
+  /** Windows/processes the scan attempted in total. */
+  totalWindows: number;
+  /** Set when the whole scan failed (binary missing, permission revoked). */
+  error?: string;
+}
+
 export interface AccessibilityProvider {
   readonly name: string;
   /**
@@ -46,6 +62,12 @@ export interface AccessibilityProvider {
    * scene-builder always produces a Scene.
    */
   snapshot(): Promise<SceneAxNode[]>;
+  /**
+   * Failure accounting for the most recent `snapshot()` call, or null when
+   * the provider cannot count (Null provider, compositor IPC tiers). Optional
+   * so externally-registered providers (Android WS8) keep working unchanged.
+   */
+  lastScanStats?(): A11yScanStats | null;
 }
 
 class NullAccessibilityProvider implements AccessibilityProvider {
@@ -98,6 +120,7 @@ export function assignAxId(state: IdAssignerState, displayId: number): string {
 
 export class LinuxAccessibilityProvider implements AccessibilityProvider {
   readonly name = "linux";
+  private lastStats: A11yScanStats | null = null;
 
   available(): boolean {
     // AT-SPI requires python3 + python3-atspi/gi. Wayland fallback requires
@@ -109,9 +132,19 @@ export class LinuxAccessibilityProvider implements AccessibilityProvider {
     );
   }
 
+  lastScanStats(): A11yScanStats | null {
+    return this.lastStats;
+  }
+
   async snapshot(): Promise<SceneAxNode[]> {
     // Try AT-SPI first (richest data on X11 / GNOME-Wayland), then fall
-    // back to compositor-specific IPC.
+    // back to compositor-specific IPC. Scan stats come from the AT-SPI tier
+    // (the only tier that can count per-window misses); the compositor tiers
+    // report null (unknown) rather than a fabricated clean count. An AT-SPI
+    // failure recorded in the stats deliberately survives a compositor-tier
+    // success: the compositor fallback only yields window shells, so a broken
+    // AT-SPI stack still degrades the scene and is reported once per scan.
+    this.lastStats = null;
     const atspiNodes = this.tryAtspi();
     if (atspiNodes.length > 0) return atspiNodes;
     const wayland = this.tryWaylandCompositor();
@@ -120,13 +153,26 @@ export class LinuxAccessibilityProvider implements AccessibilityProvider {
 
   private tryAtspi(): SceneAxNode[] {
     if (!commandExists("python3")) return [];
+    // Per-window failures inside the AT-SPI walk are COUNTED (not silently
+    // degraded) so a scan that drops or half-reads windows is reported once
+    // per scan by the scene-builder instead of read as an emptier desktop
+    // (#12273). The Python side distinguishes the designed failover (gi/Atspi
+    // bindings absent -> {"unavailable": true} -> compositor tier, no error)
+    // from a mid-scan crash, which ships the counts accumulated before the
+    // crash plus the message so it cannot read as a clean empty payload.
     const py = `
 import json, sys
 try:
     import gi
     gi.require_version('Atspi', '2.0')
     from gi.repository import Atspi
-    out = []
+except Exception:
+    print(json.dumps({"nodes": [], "unavailable": True}))
+    sys.exit(0)
+out = []
+failed = 0
+total = 0
+try:
     desktop = Atspi.get_desktop(0)
     for i in range(desktop.get_child_count()):
         app = desktop.get_child_at_index(i)
@@ -135,30 +181,35 @@ try:
         for j in range(min(app.get_child_count(), 30)):
             win = app.get_child_at_index(j)
             if not win: continue
+            total += 1
             try:
-                ext = win.get_extents(Atspi.CoordType.SCREEN)
-                bbox = [ext.x, ext.y, ext.width, ext.height]
+                try:
+                    ext = win.get_extents(Atspi.CoordType.SCREEN)
+                    bbox = [ext.x, ext.y, ext.width, ext.height]
+                except Exception:
+                    failed += 1
+                    bbox = [0,0,0,0]
+                try:
+                    action_iface = win.get_action_iface()
+                    actions = []
+                    if action_iface:
+                        n = action_iface.get_n_actions()
+                        for k in range(n):
+                            try: actions.append(action_iface.get_name(k))
+                            except Exception: pass
+                except Exception:
+                    actions = []
+                out.append({
+                    "role": win.get_role_name() or "unknown",
+                    "label": win.get_name() or appname,
+                    "bbox": bbox,
+                    "actions": actions,
+                })
             except Exception:
-                bbox = [0,0,0,0]
-            try:
-                action_iface = win.get_action_iface()
-                actions = []
-                if action_iface:
-                    n = action_iface.get_n_actions()
-                    for k in range(n):
-                        try: actions.append(action_iface.get_name(k))
-                        except Exception: pass
-            except Exception:
-                actions = []
-            out.append({
-                "role": win.get_role_name() or "unknown",
-                "label": win.get_name() or appname,
-                "bbox": bbox,
-                "actions": actions,
-            })
-    print(json.dumps(out))
+                failed += 1
+    print(json.dumps({"nodes": out, "failed": failed, "total": total}))
 except Exception as e:
-    print("[]")
+    print(json.dumps({"nodes": out, "failed": failed, "total": total, "error": str(e)}))
 `;
     try {
       const text = execFileSync("python3", ["-c", py], {
@@ -166,14 +217,27 @@ except Exception as e:
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
       });
-      const parsed = JSON.parse(text || "[]");
-      if (!Array.isArray(parsed)) return [];
-      return parsed
-        .filter((n) => n && typeof n === "object")
-        .map((n, i) => mapAtspiNode(n as Record<string, unknown>, i));
-    } catch {
-      // error-policy:J4 AT-SPI probe; empty result advances the failover chain
-      // to the Wayland compositor tier (see snapshot()).
+      const payload = parseLinuxAtspiPayload(text);
+      if (payload.unavailable) return [];
+      this.lastStats = {
+        failedWindows: payload.failedWindows,
+        totalWindows: payload.totalWindows,
+        ...(payload.error !== undefined
+          ? { error: `AT-SPI scan crashed mid-walk: ${payload.error}` }
+          : {}),
+      };
+      return payload.nodes;
+    } catch (err) {
+      // error-policy:J4 empty result advances the failover chain to the
+      // Wayland compositor tier (see snapshot()), but python3 dying (timeout,
+      // non-zero exit, unparseable output) is a failure, not an AT-SPI-less
+      // host — record it in the scan stats (the scene-builder reports it once
+      // per scan) and warn, instead of reading as an empty desktop.
+      const message = err instanceof Error ? err.message : String(err);
+      this.lastStats = { failedWindows: 0, totalWindows: 0, error: message };
+      logger.warn(
+        `[LinuxAccessibilityProvider] AT-SPI snapshot failed; falling back to compositor tier: ${message}`,
+      );
       return [];
     }
   }
@@ -330,6 +394,57 @@ export function parseSwayTree(text: string): SceneAxNode[] {
   return out;
 }
 
+/**
+ * Parse the AT-SPI scan payload into nodes + scan stats. Exported so the
+ * untrusted-output seam is testable without python3/AT-SPI. `unavailable`
+ * marks the designed failover (gi/Atspi bindings absent → compositor tier,
+ * not an error); a mid-scan crash instead carries `error` plus the counts
+ * accumulated before the crash, so it can never read as a clean empty scan.
+ * Throws on an unrecognizable payload — the caller's catch treats that as a
+ * whole-scan failure rather than fabricating an empty-but-healthy result.
+ */
+export function parseLinuxAtspiPayload(text: string): {
+  nodes: SceneAxNode[];
+  failedWindows: number;
+  totalWindows: number;
+  unavailable: boolean;
+  error?: string;
+} {
+  const parsed: unknown = JSON.parse(text);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("AT-SPI payload is not a {nodes,failed,total} object");
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (obj.unavailable === true) {
+    return { nodes: [], failedWindows: 0, totalWindows: 0, unavailable: true };
+  }
+  if (!Array.isArray(obj.nodes)) {
+    throw new Error("AT-SPI payload is missing a nodes array");
+  }
+  const failedWindows = Number(obj.failed);
+  const totalWindows = Number(obj.total);
+  if (
+    !Number.isFinite(failedWindows) ||
+    !Number.isFinite(totalWindows) ||
+    failedWindows < 0 ||
+    totalWindows < 0
+  ) {
+    throw new Error("AT-SPI payload is missing valid failed/total counts");
+  }
+  const nodes = obj.nodes
+    .filter((n) => n && typeof n === "object")
+    .map((n, i) => mapAtspiNode(n as Record<string, unknown>, i));
+  return {
+    nodes,
+    failedWindows,
+    totalWindows,
+    unavailable: false,
+    ...(typeof obj.error === "string" && obj.error !== ""
+      ? { error: obj.error }
+      : {}),
+  };
+}
+
 function mapAtspiNode(raw: Record<string, unknown>, idx: number): SceneAxNode {
   const bbox = Array.isArray(raw.bbox)
     ? (raw.bbox as unknown[]).map((v) => Number(v))
@@ -351,23 +466,83 @@ function mapAtspiNode(raw: Record<string, unknown>, idx: number): SceneAxNode {
 
 // ── macOS ───────────────────────────────────────────────────────────────────
 
+/**
+ * Parse the JXA scan payload `{windows, failed, total}` into nodes + scan
+ * stats. Exported so the untrusted-output seam is testable without osascript.
+ * Throws on an unrecognizable payload — the caller's catch treats that as a
+ * whole-scan failure rather than fabricating an empty-but-healthy result.
+ */
+export function parseDarwinA11yPayload(text: string): {
+  nodes: SceneAxNode[];
+  failedWindows: number;
+  totalWindows: number;
+} {
+  const parsed: unknown = JSON.parse(text);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(
+      "osascript a11y payload is not a {windows,failed,total} object",
+    );
+  }
+  const obj = parsed as Record<string, unknown>;
+  const windows = Array.isArray(obj.windows) ? obj.windows : [];
+  const nodes = windows.map((n, i) => {
+    const rec = (n ?? {}) as Record<string, unknown>;
+    const bbox = Array.isArray(rec.bbox) ? rec.bbox : [0, 0, 0, 0];
+    return {
+      id: `a0-${i + 1}`,
+      role: "window",
+      label:
+        typeof rec.title === "string"
+          ? rec.title
+          : typeof rec.app === "string"
+            ? rec.app
+            : undefined,
+      bbox: [
+        Number(bbox[0]) || 0,
+        Number(bbox[1]) || 0,
+        Number(bbox[2]) || 0,
+        Number(bbox[3]) || 0,
+      ],
+      actions: ["focus", "close"],
+      displayId: 0,
+    } as SceneAxNode;
+  });
+  return {
+    nodes,
+    failedWindows: Number(obj.failed) || 0,
+    totalWindows: Number(obj.total) || 0,
+  };
+}
+
 export class DarwinAccessibilityProvider implements AccessibilityProvider {
   readonly name = "darwin";
+  private lastStats: A11yScanStats | null = null;
 
   available(): boolean {
     return true; // osascript always present; user permission needed at runtime.
   }
 
+  lastScanStats(): A11yScanStats | null {
+    return this.lastStats;
+  }
+
   async snapshot(): Promise<SceneAxNode[]> {
     try {
+      // The per-window/per-process catches inside the JXA script keep one
+      // unreadable window from aborting the whole scan, but every miss is
+      // COUNTED — a11y permission revocation must not read as an emptier
+      // desktop (#12273 exemplar 2).
       const script = `
         const SE = Application("System Events");
         const procs = SE.processes.whose({visible: true})();
         const out = [];
+        let failed = 0;
+        let total = 0;
         for (let p of procs) {
           try {
             const appName = p.name();
             for (let w of p.windows()) {
+              total += 1;
               try {
                 const pos = w.position();
                 const sz = w.size();
@@ -376,11 +551,11 @@ export class DarwinAccessibilityProvider implements AccessibilityProvider {
                   title: w.name(),
                   bbox: [pos[0], pos[1], sz[0], sz[1]],
                 });
-              } catch (e) {}
+              } catch (e) { failed += 1; }
             }
-          } catch (e) {}
+          } catch (e) { failed += 1; total += 1; }
         }
-        JSON.stringify(out);
+        JSON.stringify({windows: out, failed: failed, total: total});
       `;
       const text = execFileSync(
         "osascript",
@@ -391,34 +566,21 @@ export class DarwinAccessibilityProvider implements AccessibilityProvider {
           stdio: ["ignore", "pipe", "ignore"],
         },
       );
-      const parsed = JSON.parse(text || "[]");
-      if (!Array.isArray(parsed)) return [];
-      return parsed.map((n, i) => {
-        const bbox = Array.isArray(n?.bbox) ? n.bbox : [0, 0, 0, 0];
-        return {
-          id: `a0-${i + 1}`,
-          role: "window",
-          label: typeof n?.title === "string" ? n.title : n?.app,
-          bbox: [
-            Number(bbox[0]) || 0,
-            Number(bbox[1]) || 0,
-            Number(bbox[2]) || 0,
-            Number(bbox[3]) || 0,
-          ],
-          actions: ["focus", "close"],
-          displayId: 0,
-        } as SceneAxNode;
-      });
+      const { nodes, failedWindows, totalWindows } =
+        parseDarwinA11yPayload(text);
+      this.lastStats = { failedWindows, totalWindows };
+      return nodes;
     } catch (err) {
       // error-policy:J4 the interface contract is [] = "no reachable nodes" so
       // the scene-builder always produces a Scene; but osascript failing
       // (a11y permission revoked, binary missing) is a failure, not an empty
-      // desktop — surface it so revocation is visible instead of silently
-      // shrinking the scene the agent trusts as complete.
+      // desktop — record it in the scan stats (the scene-builder reports it
+      // via runtime.reportError) and warn, instead of silently shrinking the
+      // scene the agent trusts as complete.
+      const message = err instanceof Error ? err.message : String(err);
+      this.lastStats = { failedWindows: 0, totalWindows: 0, error: message };
       logger.warn(
-        `[DarwinAccessibilityProvider] a11y snapshot failed; returning no nodes: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        `[DarwinAccessibilityProvider] a11y snapshot failed; returning no nodes: ${message}`,
       );
       return [];
     }
@@ -427,20 +589,78 @@ export class DarwinAccessibilityProvider implements AccessibilityProvider {
 
 // ── Windows ─────────────────────────────────────────────────────────────────
 
+/**
+ * Parse the UIA scan payload `{windows, failed, total}` into nodes + scan
+ * stats. Exported so the untrusted-output seam is testable without PowerShell.
+ * ConvertTo-Json collapses one-element arrays to a bare object, so `windows`
+ * is re-wrapped. Throws on an unrecognizable payload — the caller's catch
+ * treats that as a whole-scan failure.
+ */
+export function parseWindowsUiaPayload(text: string): {
+  nodes: SceneAxNode[];
+  failedWindows: number;
+  totalWindows: number;
+} {
+  const parsed: unknown = JSON.parse(text);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(
+      "PowerShell UIA payload is not a {windows,failed,total} object",
+    );
+  }
+  const obj = parsed as Record<string, unknown>;
+  const windows = Array.isArray(obj.windows)
+    ? obj.windows
+    : obj.windows
+      ? [obj.windows]
+      : [];
+  const nodes = windows
+    .filter((n): n is Record<string, unknown> => !!n && typeof n === "object")
+    .map((n, i) => {
+      const bbox = Array.isArray(n.bbox) ? n.bbox : [0, 0, 0, 0];
+      return {
+        id: `a0-${i + 1}`,
+        role: typeof n.role === "string" ? n.role : "unknown",
+        label: typeof n.label === "string" ? n.label : undefined,
+        bbox: [
+          Number(bbox[0]) || 0,
+          Number(bbox[1]) || 0,
+          Number(bbox[2]) || 0,
+          Number(bbox[3]) || 0,
+        ],
+        actions: [],
+        displayId: 0,
+      } as SceneAxNode;
+    });
+  return {
+    nodes,
+    failedWindows: Number(obj.failed) || 0,
+    totalWindows: Number(obj.total) || 0,
+  };
+}
+
 export class WindowsAccessibilityProvider implements AccessibilityProvider {
   readonly name = "win32";
+  private lastStats: A11yScanStats | null = null;
 
   available(): boolean {
     return true; // PowerShell UIA always available on supported Windows.
   }
 
+  lastScanStats(): A11yScanStats | null {
+    return this.lastStats;
+  }
+
   async snapshot(): Promise<SceneAxNode[]> {
+    // The per-element catch inside the UIA walk keeps one stale element from
+    // aborting the whole scan, but every miss is COUNTED so a scan that drops
+    // windows is reported instead of read as an emptier desktop (#12273).
     const ps = `
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 $root = [System.Windows.Automation.AutomationElement]::RootElement
 $walker = [System.Windows.Automation.TreeWalker]::ContentViewWalker
 $child = $walker.GetFirstChild($root)
 $out = @()
+$failed = 0
 $count = 0
 while ($child -and $count -lt 50) {
   try {
@@ -451,11 +671,11 @@ while ($child -and $count -lt 50) {
       bbox = @($rect.X, $rect.Y, $rect.Width, $rect.Height)
     }
     $out += $row
-  } catch {}
+  } catch { $failed++ }
   $child = $walker.GetNextSibling($child)
   $count++
 }
-$out | ConvertTo-Json -Depth 4 -Compress
+[PSCustomObject]@{ windows = $out; failed = $failed; total = $count } | ConvertTo-Json -Depth 5 -Compress
 `;
     try {
       const text = execFileSync("powershell", ["-NoProfile", "-Command", ps], {
@@ -463,35 +683,20 @@ $out | ConvertTo-Json -Depth 4 -Compress
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
       });
-      const parsed = JSON.parse(text || "[]");
-      const list = Array.isArray(parsed) ? parsed : [parsed];
-      return list
-        .filter((n) => n && typeof n === "object")
-        .map((n, i) => {
-          const bbox = Array.isArray(n.bbox) ? n.bbox : [0, 0, 0, 0];
-          return {
-            id: `a0-${i + 1}`,
-            role: typeof n.role === "string" ? n.role : "unknown",
-            label: typeof n.label === "string" ? n.label : undefined,
-            bbox: [
-              Number(bbox[0]) || 0,
-              Number(bbox[1]) || 0,
-              Number(bbox[2]) || 0,
-              Number(bbox[3]) || 0,
-            ],
-            actions: [],
-            displayId: 0,
-          } as SceneAxNode;
-        });
+      const { nodes, failedWindows, totalWindows } =
+        parseWindowsUiaPayload(text);
+      this.lastStats = { failedWindows, totalWindows };
+      return nodes;
     } catch (err) {
       // error-policy:J4 the interface contract is [] = "no reachable nodes" so
       // the scene-builder always produces a Scene; but PowerShell/UIA failing
-      // is a failure, not an empty desktop — surface it so the shrunken scene
-      // is visible instead of silently trusted as complete.
+      // is a failure, not an empty desktop — record it in the scan stats (the
+      // scene-builder reports it via runtime.reportError) and warn, so the
+      // shrunken scene is visible instead of silently trusted as complete.
+      const message = err instanceof Error ? err.message : String(err);
+      this.lastStats = { failedWindows: 0, totalWindows: 0, error: message };
       logger.warn(
-        `[WindowsAccessibilityProvider] a11y snapshot failed; returning no nodes: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        `[WindowsAccessibilityProvider] a11y snapshot failed; returning no nodes: ${message}`,
       );
       return [];
     }

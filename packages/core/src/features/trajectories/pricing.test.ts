@@ -224,6 +224,30 @@ describe("computeCallCostUsd", () => {
 		expect(warn).not.toHaveBeenCalled();
 	});
 
+	it("suppresses the missing-price warning when local capability is declared, even for a cloud-looking provider name", () => {
+		const warn = vi.fn();
+		expect(
+			computeCallCostUsd(
+				"my-unpriced-model",
+				{ promptTokens: 100, completionTokens: 100, totalTokens: 200 },
+				{ provider: "acme-edge", local: true, logger: { warn } },
+			),
+		).toBe(0);
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it("still warns for a local-looking name when local capability is explicitly false and price is missing", () => {
+		const warn = vi.fn();
+		expect(
+			computeCallCostUsd(
+				"unknown-model",
+				{ promptTokens: 100, completionTokens: 100, totalTokens: 200 },
+				{ provider: "ollama", local: false, logger: { warn } },
+			),
+		).toBe(0);
+		expect(warn).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not warn when logger is omitted (no noise in hot paths)", () => {
 		// Should not throw even when logger is undefined.
 		expect(() =>
@@ -484,5 +508,20 @@ describe("isLocalProvider", () => {
 	it("normalizes case and whitespace", () => {
 		expect(isLocalProvider("  Ollama  ")).toBe(true);
 		expect(isLocalProvider("LM-Studio")).toBe(true);
+	});
+
+	it("honors an explicit local capability flag over the provider name", () => {
+		// Cloud-looking name declared local → local.
+		expect(isLocalProvider("openai", true)).toBe(true);
+		// Local-looking name declared non-local → not local.
+		expect(isLocalProvider("ollama", false)).toBe(false);
+	});
+
+	it("delegates to the shared name heuristic (no drifting local list)", () => {
+		// Providers that the routing heuristic recognizes but were NOT in the old
+		// pricing-local list must now also be treated as local here — proving the
+		// two lists no longer drift.
+		expect(isLocalProvider("mlx-lm")).toBe(true);
+		expect(isLocalProvider("capacitor-llama")).toBe(true);
 	});
 });

@@ -5,6 +5,7 @@
  * that are not currently running. Clicking an app launches / focuses it.
  */
 
+import { logger } from "@elizaos/logger";
 import { LayoutGrid, MoreHorizontal } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -74,7 +75,12 @@ export function AppsSection({ headerAction }: AppsSectionProps = {}) {
           setCatalogApps(apps);
         }
       })
-      .catch(() => undefined);
+      .catch((err: unknown) => {
+        // error-policy:J4 a failed catalog load hides the sidebar app
+        // launchers only (chat itself is unaffected) — logged so a broken
+        // catalog endpoint is distinguishable from "no apps installed".
+        logger.warn({ err }, "[AppsSection] app catalog load failed");
+      });
     return () => {
       cancelled = true;
     };
@@ -128,6 +134,7 @@ export function AppsSection({ headerAction }: AppsSectionProps = {}) {
           3000,
         );
       } catch (err) {
+        // error-policy:J4 failure surfaces as an action notice
         setActionNotice(
           err instanceof Error
             ? err.message
@@ -156,6 +163,7 @@ export function AppsSection({ headerAction }: AppsSectionProps = {}) {
           3500,
         );
       } catch (err) {
+        // error-policy:J4 failure surfaces as an action notice
         setActionNotice(
           err instanceof Error
             ? err.message
@@ -178,6 +186,7 @@ export function AppsSection({ headerAction }: AppsSectionProps = {}) {
           3000,
         );
       } catch (err) {
+        // error-policy:J4 failure surfaces as an action notice
         setActionNotice(
           err instanceof Error
             ? err.message
@@ -226,6 +235,7 @@ export function AppsSection({ headerAction }: AppsSectionProps = {}) {
               2600,
             );
           } catch {
+            // error-policy:J4 popup blocked — surfaced as an action notice
             setActionNotice(
               t("appsview.PopupBlockedOpen", {
                 name: app.displayName ?? app.name,
@@ -249,6 +259,7 @@ export function AppsSection({ headerAction }: AppsSectionProps = {}) {
           4000,
         );
       } catch (err) {
+        // error-policy:J4 failure surfaces as an action notice
         setActionNotice(
           t("appsview.LaunchFailed", {
             name: app.displayName ?? app.name,

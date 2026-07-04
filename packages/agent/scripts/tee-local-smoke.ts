@@ -1,3 +1,4 @@
+/** Runs a local TEE smoke harness for agent boot and key-release plumbing. */
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";

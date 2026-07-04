@@ -1,3 +1,4 @@
+// Renders a reusable UI component for the Trader example.
 interface Position {
   id: string;
   tokenAddress: string;

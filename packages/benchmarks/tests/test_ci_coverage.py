@@ -77,6 +77,31 @@ def test_at_least_one_benchmark_per_lane() -> None:
     assert lanes_in_use == set(CI_LANES)
 
 
+def test_meeting_voice_registry_contract_for_issue_12502() -> None:
+    registry_ids = registry_benchmark_ids(_workspace_root())
+
+    assert {
+        "meeting_voice",
+        "meeting_voice_real",
+        "meeting_voice_stress",
+        "meeting_voice_av",
+        "meeting_transcription_proof",
+        "voicebench",
+        "voicebench_quality",
+        "voiceagentbench",
+        "mmau",
+    } <= registry_ids
+    assert ci_lane_for("meeting_voice") == "smoke"
+    assert ci_lane_for("meeting_voice_real") == "manual"
+    assert ci_lane_for("meeting_voice_stress") == "manual"
+    assert ci_lane_for("meeting_voice_av") == "manual"
+
+    rationale = (ROOT / "docs" / "MEETING_VOICE_REGISTRY.md").read_text(encoding="utf-8")
+    assert "`voice`" in rationale
+    assert "`voice-emotion`" in rationale
+    assert "non-orchestrator rationale" in rationale
+
+
 def test_classified_count_equals_public_benchmark_count() -> None:
     # #10193: the classified set is the count of record for "how many public
     # benchmarks exist". Assert it equals the live registry|adapter set so a

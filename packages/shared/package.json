@@ -53,6 +53,16 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./connector-account-catalog": {
+      "types": "./dist/connector-account-catalog.d.ts",
+      "eliza-source": {
+        "types": "./src/connector-account-catalog.ts",
+        "import": "./src/connector-account-catalog.ts",
+        "default": "./src/connector-account-catalog.ts"
+      },
+      "import": "./dist/connector-account-catalog.js",
+      "default": "./dist/connector-account-catalog.js"
+    },
     "./types": {
       "types": "./dist/types/index.d.ts",
       "import": "./dist/types/index.js",

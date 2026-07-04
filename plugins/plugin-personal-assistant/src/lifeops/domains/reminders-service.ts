@@ -107,12 +107,14 @@ import {
 } from "../contact-route-policy.js";
 import {
   computeAdaptiveWindowPolicy,
+  isValidTimeZone,
   resolveDefaultTimeZone,
   windowPolicyMatchesDefaults,
 } from "../defaults.js";
 import { materializeDefinitionOccurrences } from "../engine.js";
 import type { LifeOpsContext } from "../lifeops-context.js";
 import { REMINDER_DISPATCH_INSTRUCTIONS } from "../optimized-prompt-instructions.js";
+import { resolveOwnerFactStore } from "../owner/fact-store.js";
 import { refreshLifeOpsRelativeTime } from "../relative-time.js";
 import {
   createLifeOpsActivitySignal,
@@ -221,6 +223,8 @@ import {
   requireNonEmptyString,
 } from "../service-normalize.js";
 import type { ReminderActivityProfileSnapshot } from "../service-types.js";
+import { getActivitySignalBus } from "../signals/bus.js";
+import { publishDerivedHealthSignals } from "../signals/health-signal-publisher.js";
 import {
   DEFAULT_TELEMETRY_RETENTION_DAYS,
   runTelemetryRetention,
@@ -240,6 +244,18 @@ const LIFEOPS_SCHEDULE_DEVICE_KINDS = [
 ] as const;
 
 const DEFAULT_SCHEDULED_TASK_PROCESS_LIMIT = 25;
+
+// Upper bound on a device-timezone-inferred travel window. A device-zone shift
+// is a weak signal (a laptop crossing a border, a VPN, a mislabeled home zone),
+// so the provisional record it opens is always bounded — never open-ended — and
+// clears the moment the device returns to the home zone or the window lapses.
+const MAX_TRAVEL_HORIZON_MS = 30 * 24 * 60 * 60 * 1000;
+
+// Provenance note tagging a travel record the reconciler opened from a device-
+// timezone divergence. The reconciler only clears/refreshes records it owns —
+// it never touches a booking (`connector_inferred`) or a spoken statement
+// (`agent_inferred` with a different note) on a coincidental home-zone match.
+const TZ_PROVISIONAL_TRAVEL_NOTE = "device-timezone divergence";
 
 type AdaptiveWindowProfile = Pick<
   ActivityProfile,
@@ -620,19 +636,38 @@ function readLatestPendingReminderReviewAttempt(
   );
 }
 
-function buildReminderBody(args: {
+// A laddered progression rule materializes its current rung into the
+// occurrence's `derivedTarget`; when present, the reminder leads with the small
+// rung step ("Read one page") instead of the raw definition title ("Read the
+// book"). That is the owner-facing surface of the shrink-to-one-small-step
+// transform — the only place the ladder reaches the owner.
+export function readLadderRungTitle(
+  derivedTarget: Record<string, unknown> | null | undefined,
+): string | null {
+  if (derivedTarget?.kind !== "laddered") {
+    return null;
+  }
+  const rungTitle = derivedTarget.rungTitle;
+  return typeof rungTitle === "string" && rungTitle.trim().length > 0
+    ? rungTitle.trim()
+    : null;
+}
+
+export function buildReminderBody(args: {
   title: string;
   scheduledFor: string;
   dueAt: string | null;
   channel: LifeOpsReminderStep["channel"];
   lifecycle: ReminderAttemptLifecycle;
   nearbyReminderTitles?: string[];
+  derivedTarget?: Record<string, unknown> | null;
 }): string {
+  const focus = readLadderRungTitle(args.derivedTarget) ?? args.title;
   const parts: string[] = [];
   if (args.lifecycle === "escalation") {
-    parts.push(`Follow-up reminder: ${args.title}`);
+    parts.push(`Follow-up reminder: ${focus}`);
   } else {
-    parts.push(`Reminder: ${args.title}`);
+    parts.push(`Reminder: ${focus}`);
   }
   if (args.dueAt) {
     parts.push(`Due: ${new Date(args.dueAt).toLocaleString()}`);
@@ -1063,7 +1098,7 @@ export class RemindersDomain {
       body: args.text,
       category: "reminder",
       // Tier calendar reminders by lead time (#10697): "starting soon" → high,
-      // "tomorrow / further" → low, later-today → normal (non-calendar stays
+      // "tomorrow / further" → low, subsequent-today → normal (non-calendar stays
       // normal). dueAt is the event start for a calendar_event.
       priority: resolveReminderNotificationPriority({
         ownerType: args.ownerType,
@@ -1382,7 +1417,13 @@ export class RemindersDomain {
     urgency: LifeOpsReminderUrgency;
     subjectType: LifeOpsSubjectType;
     nearbyReminderTitles?: string[];
+    derivedTarget?: Record<string, unknown> | null;
   }): Promise<string> {
+    // The laddered rung, when present, is the small step the reminder should be
+    // about — both the deterministic fallback and the model prompt lead with it
+    // instead of the raw task title.
+    const rungTitle = readLadderRungTitle(args.derivedTarget);
+    const reminderFocusTitle = rungTitle ?? args.title;
     const fallback = buildReminderBody({
       title: args.title,
       scheduledFor: args.scheduledFor,
@@ -1390,6 +1431,7 @@ export class RemindersDomain {
       channel: args.channel,
       lifecycle: args.lifecycle,
       nearbyReminderTitles: args.nearbyReminderTitles,
+      derivedTarget: args.derivedTarget,
     });
     if (typeof this.ctx.runtime.useModel !== "function") {
       return fallback;
@@ -1402,7 +1444,7 @@ export class RemindersDomain {
     const reminderAt = args.dueAt ?? args.scheduledFor;
     const prompt = buildReminderDispatchPrompt({
       runtime: this.ctx.runtime,
-      title: args.title,
+      title: reminderFocusTitle,
       reminderAt,
       channel: args.channel,
       lifecycle: args.lifecycle,
@@ -3404,7 +3446,11 @@ export class RemindersDomain {
     activityProfile: ReminderActivityProfileSnapshot | null;
     occurrence?: Pick<
       LifeOpsOccurrenceView,
-      "relevanceStartAt" | "snoozedUntil" | "metadata" | "state"
+      | "relevanceStartAt"
+      | "snoozedUntil"
+      | "metadata"
+      | "state"
+      | "derivedTarget"
     > | null;
     eventStartAt?: string | null;
     acknowledged: boolean;
@@ -3692,6 +3738,7 @@ export class RemindersDomain {
       nearbyReminderTitles: args.nearbyReminderTitles,
       timezone: args.timezone,
       definition: args.definition,
+      derivedTarget: args.occurrence?.derivedTarget ?? null,
     });
 
     if (
@@ -3923,6 +3970,7 @@ export class RemindersDomain {
     nearbyReminderTitles?: string[];
     timezone: string;
     definition: Pick<LifeOpsTaskDefinition, "kind" | "metadata"> | null;
+    derivedTarget?: Record<string, unknown> | null;
     bodyOverride?: string;
   }): Promise<LifeOpsReminderAttempt> {
     const attemptedAt = args.attemptedAt;
@@ -3939,6 +3987,7 @@ export class RemindersDomain {
         urgency: args.urgency,
         subjectType: args.subjectType,
         nearbyReminderTitles: args.nearbyReminderTitles,
+        derivedTarget: args.derivedTarget,
       }));
     let outcome: LifeOpsReminderAttemptOutcome = "delivered";
     let connectorRef: string | null = null;
@@ -4866,6 +4915,7 @@ export class RemindersDomain {
         }),
         timezone: ownerTimezone,
         definition,
+        derivedTarget: occurrence.derivedTarget,
       });
       dueAttempts.push(attempt);
       if (isDeliveredReminderOutcome(attempt.outcome)) {
@@ -5282,6 +5332,29 @@ export class RemindersDomain {
             await this.ctx.runtime.emitEvent(event.kind, eventPayload);
           }
         }
+        // Mirror the newly inserted transitions onto the ActivitySignalBus
+        // under their `health.*` families (#12284 WI-4) so the ScheduledTask
+        // spine sees them: `health_signal_observed` completion checks and the
+        // plugin-health observed-anchor resolvers read these envelopes. Only
+        // inserted events publish — the audit dedup above already filtered
+        // restart replays. The emitEvent dispatch above stays: event
+        // workflows (`runDueEventWorkflows`) and the scheduled-task event
+        // bridge consume it.
+        if (insertedEvents.length > 0) {
+          const activityBus = getActivitySignalBus(this.ctx.runtime);
+          if (activityBus) {
+            publishDerivedHealthSignals(activityBus, insertedEvents);
+          } else {
+            logger.warn(
+              {
+                src: "lifeops:reminders-service",
+                agentId: this.ctx.agentId(),
+                eventKinds: insertedEvents.map((event) => event.kind),
+              },
+              "ActivitySignalBus not registered; circadian transitions were not published to the bus (health_signal_observed checks and observed anchors will fall back)",
+            );
+          }
+        }
         return {
           currentSchedule: refreshedSchedule,
           lifeOpsEvents: insertedEvents,
@@ -5318,6 +5391,14 @@ export class RemindersDomain {
           lifeOpsEvents,
         }),
     );
+    // Reconcile the active-travel fact BEFORE the scheduled-tasks pass so the
+    // `during_travel` gate reads an up-to-date `travelActive` this same tick:
+    // an expired window is cleared, so tasks resume, and a returned-home device
+    // zone clears a stale record.
+    await runSubsystem("travel_reconcile", undefined, () =>
+      this.reconcileTravelActive(now),
+    );
+
     const scheduledTaskFallback: ProcessDueScheduledTasksResult = {
       completions: [],
       fires: [],
@@ -5356,6 +5437,95 @@ export class RemindersDomain {
         })),
       subsystemFailures,
     };
+  }
+
+  /**
+   * Keeps the owner's `activeTravel` fact honest each tick so the derived
+   * `travelActive` gate cannot get stuck. Two clear signals:
+   *
+   *  1. A lapsed window — `endIso` is in the past — is cleared, so tasks the
+   *     `during_travel` gate suppressed resume without waiting for a booking or
+   *     an "I'm back" message.
+   *  2. Device-timezone divergence: when the owner's home-zone fact is known and
+   *     the device reports a different valid zone, we open a bounded provisional
+   *     travel record (destination = device zone); when the device returns to
+   *     the home zone we clear the record WE opened. We only ever clear our own
+   *     provisional record (tagged via `TZ_PROVISIONAL_TRAVEL_NOTE`) so a real
+   *     booking or spoken statement is never dropped on a coincidental match.
+   *
+   * On shared-server topology `resolveDefaultTimeZone()` returns the SERVER's
+   * zone, not the owner's device — so leg (2) is effectively a no-op there
+   * (device zone == home zone, or the home-zone fact is absent). That is the
+   * intended graceful degradation: we never fabricate a home zone or infer
+   * travel from the server's own zone.
+   */
+  private async reconcileTravelActive(now: Date): Promise<void> {
+    const store = resolveOwnerFactStore(this.ctx.runtime);
+    const facts = await store.read();
+    const active = facts.activeTravel;
+    const nowMs = now.getTime();
+
+    if (active?.value.endIso !== undefined) {
+      const endMs = Date.parse(active.value.endIso);
+      if (!Number.isNaN(endMs) && nowMs > endMs) {
+        await store.setActiveTravel(null, {
+          source: "policy_action",
+          recordedAt: now.toISOString(),
+          note: "travel window lapsed",
+        });
+        logger.info(
+          { endedAt: active.value.endIso },
+          "[RemindersDomain] cleared lapsed active-travel window",
+        );
+        return;
+      }
+    }
+
+    const homeTz = facts.timezone?.value;
+    const deviceTz = resolveDefaultTimeZone();
+    if (!homeTz || !isValidTimeZone(deviceTz)) {
+      return;
+    }
+
+    const isTzProvisional =
+      active?.provenance.note === TZ_PROVISIONAL_TRAVEL_NOTE;
+
+    if (deviceTz !== homeTz) {
+      // Only open a provisional record when nothing else already asserts
+      // travel — a booking or statement is a stronger signal we defer to.
+      if (!active) {
+        await store.setActiveTravel(
+          {
+            startIso: now.toISOString(),
+            endIso: new Date(nowMs + MAX_TRAVEL_HORIZON_MS).toISOString(),
+            destinationTimezone: deviceTz,
+          },
+          {
+            source: "connector_inferred",
+            recordedAt: now.toISOString(),
+            note: TZ_PROVISIONAL_TRAVEL_NOTE,
+          },
+        );
+        logger.info(
+          { homeTz, deviceTz },
+          "[RemindersDomain] opened provisional travel from device-timezone divergence",
+        );
+      }
+      return;
+    }
+
+    // Device is back on the home zone: clear only the record we opened.
+    if (isTzProvisional) {
+      await store.setActiveTravel(null, {
+        source: "policy_action",
+        recordedAt: now.toISOString(),
+        note: "device returned to home timezone",
+      });
+      logger.info(
+        { homeTz },
+        "[RemindersDomain] cleared provisional travel on return to home timezone",
+      );
+    }
   }
 
   private async processSleepCycleCheckins(args: {

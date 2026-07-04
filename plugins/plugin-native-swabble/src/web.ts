@@ -255,9 +255,20 @@ export class SwabbleWeb extends WebPlugin {
 
   private async startNativeAudioCapture(sampleRate = 16000): Promise<void> {
     const rpcRequest = this.getRendererRpc()?.request?.swabbleAudioChunk;
-    const stream = await navigator.mediaDevices
-      .getUserMedia({ audio: true })
-      .catch(() => null);
+    let stream: MediaStream | null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      // error-policy:J1 microphone is the sole audio source feeding native
+      // (Whisper) transcription; a denied/failed capture must surface to the
+      // app's error listener, not silently leave the bridge with no audio.
+      this.notifyListeners("error", {
+        code: "mic-permission",
+        message: `Microphone capture failed: ${err instanceof Error ? err.message : String(err)}`,
+        recoverable: false,
+      });
+      return;
+    }
     if (!stream) return;
     this.captureStream = stream;
     this.captureContext = new AudioContext();
@@ -290,6 +301,10 @@ export class SwabbleWeb extends WebPlugin {
         binary += String.fromCharCode(bytes[i]);
       }
       if (rpcRequest) {
+        // error-policy:J5 fire-and-forget per-frame audio stream to the native
+        // bridge; a persistent backend failure surfaces via the "swabbleError"
+        // bridge event wired in setupNativeListeners(), so a per-frame reject
+        // here must not tear down the audio-processing loop.
         void rpcRequest({ data: btoa(binary) }).catch(() => {});
       }
     };
@@ -351,6 +366,7 @@ export class SwabbleWeb extends WebPlugin {
           return result;
         }
       } catch {
+        // error-policy:J4 native desktop bridge failed; degrade to the Web Speech API path below
         // Fall through to Web Speech API
       }
     }
@@ -453,6 +469,10 @@ export class SwabbleWeb extends WebPlugin {
   }
 
   private async startAudioLevelMonitoring(): Promise<void> {
+    // error-policy:J5 the level meter is a non-essential visual augmentation to
+    // the Web Speech path; a denied mic is already surfaced through
+    // recognition.onerror ("not-allowed"), so a failure here degrades the meter
+    // without needing a second error event.
     const stream = await navigator.mediaDevices
       .getUserMedia({ audio: true })
       .catch(() => null);
@@ -557,6 +577,7 @@ export class SwabbleWeb extends WebPlugin {
         microphone = result.state;
       }
     } catch {
+      // error-policy:J4 Permissions API cannot query microphone here; keep the "prompt" default
       /* permissions.query not supported for microphone in some browsers */
     }
     let speechRecognition: SwabblePermissionStatus["speechRecognition"] =
@@ -588,6 +609,7 @@ export class SwabbleWeb extends WebPlugin {
       });
       return this.checkPermissions();
     } catch {
+      // error-policy:J4 mic prompt denied/unavailable; report the denied permission status
       return {
         microphone: "denied",
         speechRecognition: "denied",
@@ -610,6 +632,7 @@ export class SwabbleWeb extends WebPlugin {
         }));
       return { devices: audioInputs };
     } catch {
+      // error-policy:J4 enumerateDevices unavailable; same designed empty-list state as the no-API path
       return { devices: [] };
     }
   }

@@ -98,7 +98,13 @@ async function handlePOST(c: AppContext): Promise<Response> {
         request_id: c.get("requestId"),
         metadata: { provider: "stripe-connect", reason },
       })
-      .catch(() => undefined);
+      // error-policy:J7 audit write must not block the 400; a dropped security audit is logged.
+      .catch((err) =>
+        logger.error("[StripeConnect] audit emit for denied signature failed", {
+          reason,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
     return c.json(
       { success: false, error: "Webhook signature verification failed" },
       400,

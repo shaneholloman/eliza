@@ -1,3 +1,4 @@
+// Exercises the Android SystemUI bridge contract and transport behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { type BridgeTransport, getBridgeTransport } from "../transport";
 

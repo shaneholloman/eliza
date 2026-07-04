@@ -1,3 +1,4 @@
+// Provides shared support logic for the Code example.
 import type { AgentRuntime, Service } from "@elizaos/core";
 import type { CodeTaskService } from "../types.js";
 

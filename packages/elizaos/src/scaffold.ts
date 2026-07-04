@@ -97,6 +97,9 @@ function isShallowGitRepo(repoRoot: string): boolean {
     );
     return result.trim() === "true";
   } catch {
+    // error-policy:J4 optional reference-repo probe; a failed `git rev-parse`
+    // (no git, not a repo, permission) means "treat as non-shallow" for the
+    // clone optimization, not a fabricated result on a required path.
     return false;
   }
 }

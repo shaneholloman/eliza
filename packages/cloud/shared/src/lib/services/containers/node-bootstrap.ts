@@ -111,7 +111,15 @@ export function buildContainerNodeUserData(input: NodeBootstrapInput): string {
   - |
     HOSTNAME=$(hostname -f 2>/dev/null || hostname)
     PUBLIC_IP=$(curl -fsS ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
-    PAYLOAD=$(printf '{"nodeId":"%s","hostname":"%s","capacity":%d}' '${nodeId}' "$PUBLIC_IP" ${capacity})
+    HOST_KEY_FINGERPRINT=$(ssh-keygen -l -E sha256 -f /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null | awk '{print $2}')
+    if [ -z "$HOST_KEY_FINGERPRINT" ]; then
+      HOST_KEY_FINGERPRINT=$(ssh-keygen -l -E sha256 -f /etc/ssh/ssh_host_rsa_key.pub 2>/dev/null | awk '{print $2}')
+    fi
+    if [ -z "$HOST_KEY_FINGERPRINT" ]; then
+      echo '[bootstrap] host key fingerprint unavailable; refusing self-registration'
+      exit 1
+    fi
+    PAYLOAD=$(printf '{"nodeId":"%s","hostname":"%s","capacity":%d,"sshPort":22,"sshUser":"root","hostKeyFingerprint":"%s"}' '${nodeId}' "$PUBLIC_IP" ${capacity} "$HOST_KEY_FINGERPRINT")
     curl -fsS -X POST '${registerUrl}' \\
       -H 'Content-Type: application/json' \\
       ${registerSecret ? `-H 'X-Bootstrap-Secret: ${registerSecret}'` : ""} \\

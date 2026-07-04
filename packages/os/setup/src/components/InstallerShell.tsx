@@ -1,3 +1,4 @@
+// Renders AOSP setup flasher UI controls and installer state.
 import { useState } from "react";
 import { HttpAospFlasherBackend } from "../backend/http-backend";
 import { FlasherApp } from "./FlasherApp";

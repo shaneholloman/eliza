@@ -1,3 +1,4 @@
+/** Configures the cloud E2E Playwright project to boot a serial mock-backed local cloud stack. */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

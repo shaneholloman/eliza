@@ -32,8 +32,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: training-stack-${{ github.ref }}
-  cancel-in-progress: true
+  group: training-stack-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -97,21 +97,23 @@ jobs:
         # All pytest files in scripts/ that don't need GPU. test_reward_fn
         # may be a no-op in some branches; we still surface its result.
         #
-        # We ALSO mount the local-inference plugin's kernel-reference tree at
-        # /workspace/kernel-refs and point ELIZA_KERNEL_REF_DIR at it, so
-        # test_recipes_smoke.py's C-reference byte-exact parity tests actually
-        # COMPILE-AND-RUN in CI instead of silently skipping (they used to skip
-        # against a nonexistent path — a false green). The CPU image ships a C
-        # compiler (cc) for exactly this.
+        # Mount the whole workspace at /workspace/repo and run from
+        # packages/training inside it. The quant recipe gate anchors its kernel
+        # sources at the repo root (_kernel_manifest.py resolves parents[4];
+        # test_recipes_smoke.py resolves _HERE.parents[3]) to hash/compile
+        # plugins/plugin-local-inference/native/{reference,verify} and
+        # packages/native/plugins/*. A packages/training-only mount left that
+        # anchor at the container root, so the manifest hash checks hard-failed
+        # ("kernel hash source missing") and the C-reference parity tests
+        # silently skipped — a false green. The CPU image ships a C compiler
+        # (cc) so the parity tests compile-and-run for real.
         run: |
           docker run --rm \
-            -v "${{ github.workspace }}/packages/training:/workspace/live" \
-            -v "${{ github.workspace }}/plugins/plugin-local-inference/native:/workspace/kernel-refs:ro" \
-            -e PYTHONPATH=/workspace/live/scripts \
-            -e ELIZA_KERNEL_REF_DIR=/workspace/kernel-refs \
+            -v "${{ github.workspace }}:/workspace/repo" \
+            -e PYTHONPATH=/workspace/repo/packages/training/scripts \
             eliza-training-cpu:ci \
             -c "set -e; \
-                cd /workspace/live; \
+                cd /workspace/repo/packages/training; \
                 pytest -xvs \
                   scripts/test_default_thought_leak.py \
                   scripts/test_eliza_record.py \

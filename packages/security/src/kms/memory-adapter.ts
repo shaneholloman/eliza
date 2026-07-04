@@ -202,10 +202,14 @@ export class MemoryKmsAdapter implements KmsClient {
         try {
           if (timingSafeEqual(expected, Buffer.from(tag))) return true;
         } catch {
-          // length mismatch
+          // error-policy:J3 untrusted-input sanitizing — timingSafeEqual throws
+          // on a length mismatch (attacker-supplied `tag`); that is a non-match,
+          // so we fall through to the deny answer (`false`). Never treat a
+          // comparison error as a successful verification.
         }
       }
     }
+    // No key version produced a matching HMAC — verification fails closed.
     return false;
   }
 

@@ -60,7 +60,7 @@ import {
 	type CandidateActionBackstopRule,
 	getCandidateActionBackstopRules,
 } from "../runtime/candidate-action-backstop";
-import { filterByContextGate } from "../runtime/context-gates";
+import { filterProvidersByContextGate } from "../runtime/context-gates.ts";
 import { computePrefixHashes, hashString } from "../runtime/context-hash";
 import {
 	appendContextEvent,
@@ -252,13 +252,14 @@ import { ChannelTopicsService } from "./channel-topics";
 import { runPostTurnEvaluators } from "./evaluator";
 import { runBotNoiseTriage } from "./message/bot-noise-triage";
 import {
-	findAvailableActionName,
 	findCodingDelegationActionName,
+	findShellDirectActionName,
 	findWebLookupActionName,
 	findWebLookupActionNames,
 	inferDirectCurrentRequestCandidateActions as inferDirectCurrentRequestCandidateActionsFromHeuristics,
 	inferLocalShellCommandFromMessageText,
 	inferWebSearchQueryFromMessageText,
+	isShellDirectActionName,
 	LEGACY_CODING_DELEGATION_ACTION_NAMES,
 	looksLikeLocalShellRequest,
 	looksLikeWebSearchRequest,
@@ -903,9 +904,19 @@ const MODEL_CONTEXT_PROVIDER_EXCLUSION_SET = new Set<string>(
  * (no per-call CURRENT_TIME drift) so the provider's prefix cache
  * grows with the conversation rather than resetting every turn.
  *
- * Note: we still keep FACTS rendered if present — Stage 1 may need a
- * grounded fact to discriminate ambiguous routing, and FACTS are stable
- * across calls (only refreshed when the underlying store changes).
+ * These exclusions apply to COMPOSITION as well as rendering:
+ * `composeResponseState` subtracts them from the include list it hands
+ * `composeState`, so the providers never execute for a Stage-1-only turn
+ * (ENTITIES is a room-participant DB fetch per inbound message — pure
+ * waste on group noise that ends in IGNORE, since nothing on the Stage-1
+ * or simple-reply path reads its output). Planner turns still get them:
+ * `selectV5PlannerStateProviderNames` re-adds the core set and the
+ * planner recompose runs any provider missing from the turn's cached
+ * state (see composeState's refreshProviders contract in runtime.ts).
+ *
+ * Note: we still keep FACTS composed and rendered — Stage 1 may need a
+ * grounded fact to discriminate ambiguous routing, and stored facts must
+ * be recallable on the simple path (see CORE_RESPONSE_STATE_PROVIDERS).
  */
 const STAGE1_EXTRA_PROVIDER_EXCLUSIONS = [
 	"CURRENT_TIME",
@@ -1097,16 +1108,30 @@ function withMessageHistoryCompactionProviderOptions<
 	} as T;
 }
 
+/**
+ * The provider include list for Stage-1 response-state composition: the core
+ * response providers plus always-on plugin providers, minus the Stage-1
+ * exclusions (which are execution exclusions, not just render exclusions —
+ * see STAGE1_EXTRA_PROVIDER_EXCLUSIONS). Exported for tests.
+ */
+export function stage1ResponseStateProviderNames(
+	runtime: IAgentRuntime,
+	message: Memory,
+): string[] {
+	const exclusions = new Set(stage1ProviderExclusionsForMessage(message));
+	return [
+		...CORE_RESPONSE_STATE_PROVIDERS,
+		...alwaysOnResponseStateProviderNames(runtime),
+		...(hasInboundBenchmarkContext(message) ? ["CONTEXT_BENCH"] : []),
+	].filter((name) => !exclusions.has(name));
+}
+
 async function composeResponseState(
 	runtime: IAgentRuntime,
 	message: Memory,
 	skipCache = false,
 ): Promise<State> {
-	const providers = [
-		...CORE_RESPONSE_STATE_PROVIDERS,
-		...alwaysOnResponseStateProviderNames(runtime),
-		...(hasInboundBenchmarkContext(message) ? ["CONTEXT_BENCH"] : []),
-	];
+	const providers = stage1ResponseStateProviderNames(runtime, message);
 	if (hasPageScopedRoutingMetadata(message)) {
 		const state = await runtime.composeState(
 			message,
@@ -1167,7 +1192,7 @@ async function composeProviderGroundedResponseState(
 	);
 }
 
-function selectV5PlannerStateProviderNames(args: {
+export function selectV5PlannerStateProviderNames(args: {
 	runtime: IAgentRuntime;
 	message: Memory;
 	selectedContexts: readonly AgentContext[];
@@ -1188,7 +1213,10 @@ function selectV5PlannerStateProviderNames(args: {
 	for (const name of alwaysOnResponseStateProviderNames(args.runtime)) {
 		providerNames.add(name);
 	}
-	for (const provider of filterByContextGate(
+	// filterProvidersByContextGate honors the FULL declared contextGate
+	// (anyOf/allOf/noneOf) plus the catalog fallback for undeclared providers —
+	// the plain {contexts, roleGate} reduction dropped world-style gates (#13203).
+	for (const provider of filterProvidersByContextGate(
 		providers,
 		args.selectedContexts,
 		args.userRoles,
@@ -1905,7 +1933,9 @@ function appendPriorDialogueEvents(
 	runtime: IAgentRuntime,
 	state: State,
 	currentMessage: Memory,
+	options?: { includeOwnReplies?: boolean },
 ): void {
+	const includeOwnReplies = options?.includeOwnReplies ?? false;
 	const providers = state.data?.providers;
 	if (!providers || typeof providers !== "object") {
 		return;
@@ -1927,7 +1957,15 @@ function appendPriorDialogueEvents(
 			if (!memory || typeof memory !== "object") return false;
 			const m = memory as Memory;
 			if (m.id && currentMessage.id && m.id === currentMessage.id) return false;
-			if (m.entityId === runtime.agentId) {
+			// The agent's own prior replies stay in the chat-recall window
+			// (role-tagged prior_message:agent below): the current_turn_boundary
+			// contract tells the model these blocks are its only chat-recall
+			// source, so dropping its own turns made it confabulate about what it
+			// previously said. The tool planner opts out (includeOwnReplies=false)
+			// because a planner that sees its own stale tool-derived answer
+			// parrots it instead of running the fresh check. The artifact guards
+			// below still strip non-dialogue agent output for every sender.
+			if (!includeOwnReplies && m.entityId === runtime.agentId) {
 				return false;
 			}
 			if (
@@ -1958,7 +1996,10 @@ function appendPriorDialogueEvents(
 	for (const memory of dialogue) {
 		const text = getUserMessageText(memory);
 		if (!text) continue;
-		const speakerName = priorDialogueSpeakerName(memory);
+		const isOwnReply = memory.entityId === runtime.agentId;
+		const speakerName = isOwnReply
+			? (runtime.character?.name ?? priorDialogueSpeakerName(memory))
+			: priorDialogueSpeakerName(memory);
 		events.push({
 			id: `history:${memory.id}`,
 			type: "segment",
@@ -1966,7 +2007,7 @@ function appendPriorDialogueEvents(
 			createdAt: memory.createdAt,
 			segment: {
 				id: `history:${memory.id}`,
-				label: "prior_message:user",
+				label: isOwnReply ? "prior_message:agent" : "prior_message:user",
 				content: priorDialogueContent(text, speakerName),
 				stable: false,
 				metadata: {
@@ -2819,7 +2860,13 @@ async function createV5MessageContextObject(args: {
 		});
 	}
 
-	appendPriorDialogueEvents(events, args.runtime, args.state, args.message);
+	appendPriorDialogueEvents(events, args.runtime, args.state, args.message, {
+		// The response handler needs the agent's own prior turns for grounded
+		// chat recall ("did you tell me X?"); the tool planner must not see its
+		// own stale tool-derived answers or it answers from them instead of
+		// executing the fresh check the user asked for.
+		includeOwnReplies: !args.includeTools,
+	});
 
 	events.push({
 		id: "current-turn-boundary",
@@ -2827,7 +2874,14 @@ async function createV5MessageContextObject(args: {
 		source: "message-service",
 		stable: false,
 		content:
-			'current_turn_boundary: The prior_message blocks above are context only. If a reply_reference block follows, it is the platform message that the final message:user is replying to; use it only to resolve references such as this/that/it. Execute and answer only the final message:user below. Do not merge separate prior requests into the current task unless the final message explicitly references them. Exception for visible-context recall: when the final message asks a recall question about what was said in this conversation (who mentioned X, did anyone bring up Y, what did I say about Z, what was the last message), you may scan the prior_message blocks above and answer from what is literally visible there. Before saying you cannot find something, read the final message:user itself: if the asker states a fact and asks about it in the same message ("my favorite color is teal, what is my favorite color?"), answer from the current message directly. Only when the asked-about token appears neither in the current message nor in any visible prior_message block, say so plainly ("I don\'t see X in the recent messages I can see") rather than claiming you searched beyond the visible window or fabricating an action — the prior_message blocks are the only window you have, and there is no separate chat-history search tool. This "no chat-history search" limit is about CHAT recall ONLY. It does NOT apply to what a task, build, deploy, or sub-agent YOU ran actually did: that run status IS verifiable with the task/sub-agent tools. So when the final message asks "what happened with [the build/app/task]" or disputes whether something you ran actually worked, treat it as a live verification request (set requiresTool) and CHECK the current task/sub-agent status with a tool before reporting, disclaiming, or conceding — never say you cannot verify a run you can look up.',
+			"current_turn_boundary: The prior_message blocks above are context only. If a reply_reference block follows, it is the platform message that the final message:user is replying to; use it only to resolve references such as this/that/it. Execute and answer only the final message:user below. Do not merge separate prior requests into the current task unless the final message explicitly references them. Exception for visible-context recall: when the final message asks a recall question about what was said in this conversation (who mentioned X, did anyone bring up Y, what did I say about Z, what was the last message, did you yourself say W), you may scan the prior_message blocks above and answer from what is literally visible there." +
+			// Only the chat-recall context renders the agent's own prior turns;
+			// the tool-planner context deliberately omits them (stale-answer
+			// hazard), so this grounding sentence would be false there.
+			(args.includeTools
+				? ""
+				: " Your own prior replies are the prior_message:agent blocks: when asked what YOU said, told, or promised earlier, answer only from those blocks — never assert you said something that does not appear in them, and never deny saying something that does.") +
+			' Before saying you cannot find something, read the final message:user itself: if the asker states a fact and asks about it in the same message ("my favorite color is teal, what is my favorite color?"), answer from the current message directly. Only when the asked-about token appears neither in the current message nor in any visible prior_message block, say so plainly ("I don\'t see X in the recent messages I can see") rather than claiming you searched beyond the visible window or fabricating an action — the prior_message blocks are the only window you have, and there is no separate chat-history search tool. This "no chat-history search" limit is about CHAT recall ONLY. It does NOT apply to what a task, build, deploy, or sub-agent YOU ran actually did: that run status IS verifiable with the task/sub-agent tools. So when the final message asks "what happened with [the build/app/task]" or disputes whether something you ran actually worked, treat it as a live verification request (set requiresTool) and CHECK the current task/sub-agent status with a tool before reporting, disclaiming, or conceding — never say you cannot verify a run you can look up.',
 	});
 
 	const replyReferenceEvent = replyReferenceEventForContext(args.message);
@@ -3806,6 +3860,7 @@ export function messageHandlerFromFieldResult(
 		actions: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 		messageText?: string;
 		candidateBackstopRules?: readonly CandidateActionBackstopRule[];
+		subAgentCompletionRelay?: boolean;
 	},
 ): MessageHandlerResult {
 	const rawContexts = Array.isArray(result.contexts)
@@ -3817,12 +3872,27 @@ export function messageHandlerFromFieldResult(
 				.filter(Boolean)
 		: [];
 	const currentMessageText = runtimeContext?.messageText ?? "";
-	const candidateBackstop = applyCodingCandidateBackstop({
-		candidateActions: rawCandidateActions,
-		actions: runtimeContext?.actions ?? [],
-		messageText: currentMessageText,
-		backstopRules: runtimeContext?.candidateBackstopRules ?? [],
-	});
+	// A sub-agent completion relay's envelope echoes the original task text
+	// ("[sub-agent: Build and deploy…]"), so every text-intent inference over
+	// the CURRENT message reads a FINISHED task as fresh task intent. Disable
+	// the text-derived candidate injections (coding backstop, ack-intent
+	// inference, direct-current inference) on relay turns — the relay's only
+	// job is to deliver the result, and forcing a tool over it rejects REPLY up
+	// to the required-tool miss cap or re-spawns completed work. Structural:
+	// the flag comes from the relay's own markers (metadata.subAgent / router
+	// source / envelope prefix), not from classifying LLM text. The model's OWN
+	// explicit routing (contexts + candidateActionNames it emitted) is
+	// untouched, so genuine user task-intent turns keep the full backstop.
+	const subAgentCompletionRelay =
+		runtimeContext?.subAgentCompletionRelay === true;
+	const candidateBackstop = subAgentCompletionRelay
+		? { candidateActions: [...rawCandidateActions], forceCodeContext: false }
+		: applyCodingCandidateBackstop({
+				candidateActions: rawCandidateActions,
+				actions: runtimeContext?.actions ?? [],
+				messageText: currentMessageText,
+				backstopRules: runtimeContext?.candidateBackstopRules ?? [],
+			});
 	const candidateActions = candidateBackstop.candidateActions;
 	const contexts =
 		candidateBackstop.forceCodeContext &&
@@ -3837,6 +3907,7 @@ export function messageHandlerFromFieldResult(
 		runtimeContext,
 	);
 	const inferredAckCandidateActions =
+		!subAgentCompletionRelay &&
 		!hasRunnableCandidateAction &&
 		hasAckOnlyActionableIntent(result, replyTextRaw, currentMessageText)
 			? inferAckIntentCandidateActions(
@@ -3856,7 +3927,7 @@ export function messageHandlerFromFieldResult(
 				})
 			: candidateActions.length > 0;
 	const directCurrentCandidateActions =
-		currentMessageText.trim().length > 0
+		!subAgentCompletionRelay && currentMessageText.trim().length > 0
 			? inferDirectCurrentRequestCandidateActions(
 					runtimeContext?.actions ?? [],
 					currentMessageText,
@@ -3867,6 +3938,7 @@ export function messageHandlerFromFieldResult(
 			candidateActions,
 			currentMessageText,
 			directCandidateActions: directCurrentCandidateActions,
+			actions: runtimeContext?.actions,
 		});
 	const inferredDirectCandidateActions =
 		!preferDirectCurrentCandidateActions &&
@@ -4204,13 +4276,24 @@ export function applyDirectCurrentCandidateBackstopToMessageHandler(
 		| {
 				actions: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 				messageText?: string;
+				subAgentCompletionRelay?: boolean;
 		  }
 		| undefined,
 ): MessageHandlerResult {
 	const currentMessageText = runtimeContext?.messageText ?? "";
+	// A sub-agent completion relay is not a user request — its envelope ECHOES
+	// the original task text ("[sub-agent: Build and deploy…]"), so the intent
+	// inference below reads a FINISHED task as fresh task intent, promotes the
+	// turn to requiresTool, and the planner rejects REPLY up to the
+	// required-tool miss cap (or re-runs the injected delegation candidate,
+	// re-spawning completed work). The flag is derived from the relay's
+	// structural markers (metadata.subAgent / router source / envelope
+	// prefix), never from classifying LLM text, so genuine user task-intent
+	// turns keep the backstop.
 	if (
 		messageHandler.processMessage !== "RESPOND" ||
 		!runtimeContext ||
+		runtimeContext.subAgentCompletionRelay === true ||
 		currentMessageText.trim().length === 0
 	) {
 		return messageHandler;
@@ -4422,30 +4505,23 @@ const WEAK_DIRECT_REPLY_OVERRIDE_ACTIONS = new Set(
 	].map(normalizeActionIdentifier),
 );
 
-const SHELL_DIRECT_ACTIONS = new Set(
-	[
-		"SHELL",
-		"TERMINAL_SHELL",
-		"RUN_IN_TERMINAL",
-		"RUN_COMMAND",
-		"EXECUTE_COMMAND",
-		"TERMINAL",
-		"RUN_SHELL",
-		"EXEC",
-	].map(normalizeActionIdentifier),
-);
-
 export function shouldPreferDirectCurrentCandidateActions(args: {
 	candidateActions: readonly string[];
 	currentMessageText: string;
 	directCandidateActions: readonly string[];
+	// Optional live action registry. When supplied, shell-direct membership is
+	// resolved through the declared SHELL_DIRECT_ACTION_TAGS contract (with the
+	// legacy name set as a covered fallback) instead of a hardcoded literal set;
+	// when omitted (e.g. pure unit call sites), the legacy name membership still
+	// applies so behavior is unchanged for owner actions that predate the tags.
+	actions?: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 }): boolean {
 	if (args.candidateActions.length === 0) return false;
 	if (!looksLikeLocalShellRequest(args.currentMessageText)) return false;
 	if (looksLikeCodingWorkRequest(args.currentMessageText)) return false;
 	if (
 		!args.directCandidateActions.some((name) =>
-			SHELL_DIRECT_ACTIONS.has(normalizeActionIdentifier(name)),
+			isShellDirectActionName(name, args.actions),
 		)
 	) {
 		return false;
@@ -4454,7 +4530,13 @@ export function shouldPreferDirectCurrentCandidateActions(args: {
 		const normalized = normalizeActionIdentifier(name);
 		return (
 			WEAK_DIRECT_REPLY_OVERRIDE_ACTIONS.has(normalized) ||
-			canonicalPlannerControlActionName(normalized) !== null
+			canonicalPlannerControlActionName(normalized) !== null ||
+			// A shell-direct action resolved through the declared tag contract counts
+			// as a weak/overridable signal too — same class as the shell names
+			// enumerated in WEAK_DIRECT_REPLY_OVERRIDE_ACTIONS — so an owner that
+			// renamed its shell action but kept SHELL_DIRECT_ACTION_TAGS still
+			// promotes the direct shell turn instead of falling through to planning.
+			isShellDirectActionName(normalized, args.actions)
 		);
 	});
 }
@@ -4515,16 +4597,7 @@ function inferAckIntentCandidateActions(
 	const actionText = [intentText, fallbackText].filter(Boolean).join("\n");
 	if (!actionText.trim()) return [];
 	if (looksLikeLocalShellRequest(actionText)) {
-		const shellAction = findAvailableActionName(actions, [
-			"SHELL",
-			"TERMINAL_SHELL",
-			"RUN_IN_TERMINAL",
-			"RUN_COMMAND",
-			"EXECUTE_COMMAND",
-			"TERMINAL",
-			"RUN_SHELL",
-			"EXEC",
-		]);
+		const shellAction = findShellDirectActionName(actions);
 		if (shellAction) return [shellAction];
 	}
 	// Coding-work precedes web-search: "build an app that shows the bitcoin price"
@@ -4677,6 +4750,8 @@ function synthesizeSimpleReplyFromPlainText(
 				JSON.parse(replyText);
 				return false;
 			} catch {
+				// error-policy:J3 untrusted-input parse probe — a parse failure IS the
+				// signal (text looks like incomplete structured output, not valid JSON).
 				return true;
 			}
 		})();
@@ -4818,6 +4893,7 @@ function parseMessageHandlerModelOutput(
 	runtimeContext?: {
 		actions: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 		messageText?: string;
+		subAgentCompletionRelay?: boolean;
 	},
 ): MessageHandlerResult | null {
 	const applyBackstops = (result: MessageHandlerResult | null) =>
@@ -6016,11 +6092,16 @@ export async function runV5MessageRuntimeStage1(args: {
 		);
 
 		// RESPONSE_HANDLER_DURING (non-blocking): fire-and-forget alongside the model
-		// call. We don't await — the user contract is "during". Errors are
-		// logged inside `runActionsByMode`.
+		// call. We don't await — the user contract is "during".
+		// error-policy:J7 diagnostics-must-not-kill-the-loop — a rejection escaping
+		// runActionsByMode must not abort the turn, but it must surface.
 		void args.runtime
 			.runActionsByMode("RESPONSE_HANDLER_DURING", args.message, args.state)
-			.catch(() => {});
+			.catch((err) =>
+				args.runtime.reportError("MessageService.runActionsByMode", err, {
+					mode: "RESPONSE_HANDLER_DURING",
+				}),
+			);
 
 		// Per-turn structure forcing. `buildResponseGrammar` composes the
 		// HANDLE_RESPONSE envelope skeleton (fixed key order + the `contexts`
@@ -6153,6 +6234,7 @@ export async function runV5MessageRuntimeStage1(args: {
 					actions: args.runtime.actions,
 					messageText: getUserMessageText(args.message),
 					candidateBackstopRules: getCandidateActionBackstopRules(args.runtime),
+					subAgentCompletionRelay: isSubAgentCompletionArtifact(args.message),
 				},
 			);
 		}
@@ -6160,6 +6242,7 @@ export async function runV5MessageRuntimeStage1(args: {
 			messageHandler = parseMessageHandlerModelOutput(rawMessageHandler, {
 				actions: args.runtime.actions,
 				messageText: getUserMessageText(args.message),
+				subAgentCompletionRelay: isSubAgentCompletionArtifact(args.message),
 			});
 		}
 		const stage1CompletionLimitHit = stage1HitCompletionLimit(
@@ -6761,11 +6844,17 @@ export async function runV5MessageRuntimeStage1(args: {
 			{ selectedContexts },
 		);
 		// CONTEXT_DURING (non-blocking): runs in parallel with the planner.
+		// error-policy:J7 diagnostics-must-not-kill-the-loop — a rejection escaping
+		// runActionsByMode must not abort the planner, but it must surface.
 		void args.runtime
 			.runActionsByMode("CONTEXT_DURING", args.message, plannerState, {
 				selectedContexts,
 			})
-			.catch(() => {});
+			.catch((err) =>
+				args.runtime.reportError("MessageService.runActionsByMode", err, {
+					mode: "CONTEXT_DURING",
+				}),
+			);
 
 		let plannerResult: PlannerLoopResult;
 		try {
@@ -8314,7 +8403,13 @@ export class DefaultMessageService implements IMessageService {
 				await runtime.runActionsByMode("ALWAYS_BEFORE", message);
 				// ALWAYS_DURING (non-blocking): fire-and-forget alongside the
 				// rest of the pipeline. Telemetry, logging, side effects.
-				void runtime.runActionsByMode("ALWAYS_DURING", message).catch(() => {});
+				// error-policy:J7 diagnostics-must-not-kill-the-loop — a rejection
+				// escaping runActionsByMode must not abort the turn, but it must surface.
+				void runtime.runActionsByMode("ALWAYS_DURING", message).catch((err) =>
+					runtime.reportError("MessageService.runActionsByMode", err, {
+						mode: "ALWAYS_DURING",
+					}),
+				);
 			} catch (error) {
 				runtime.logger.warn(
 					{

@@ -159,7 +159,14 @@ async function resolveRestoredConversationWithMessages(
     restoredMessages = filterRenderableConversationMessages(
       (await api.getConversationMessages(restoredConversation.id)).messages,
     );
-  } catch {
+  } catch (err) {
+    // error-policy:J4 explicit not-loaded signal — messagesLoaded:false is the
+    // distinguishable "load failed" state (not healthy-empty); the caller renders
+    // it differently from a genuinely empty conversation.
+    logger.warn(
+      { err, conversationId: restoredConversation.id },
+      "[useChatCallbacks] failed to load restored conversation messages",
+    );
     return {
       conversation: restoredConversation,
       messages: [],

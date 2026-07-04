@@ -1,3 +1,4 @@
+/** Implements Electrobun runtime remote stream manager ts boundaries for desktop app-core. */
 import { createApiBridgeError, isApiBridgeError } from "./errors.ts";
 import type {
   AgentMessageStreamCancelParams,
@@ -604,6 +605,8 @@ export class AgentStreamManager {
       const events = parser.push(decoder.decode(value, { stream: true }));
       this.consumeSseEvents(record, events);
       if (record.finished) {
+        // error-policy:J6 best-effort reader teardown after a terminal event;
+        // the stream is already consumed, a cancel rejection is non-actionable.
         await reader.cancel("stream terminal event").catch(() => {});
         return;
       }

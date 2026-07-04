@@ -1,3 +1,4 @@
+/** Builds the Hetzner Cloud mock HTTP app: route handlers over the in-memory mock store. */
 import { type Context, Hono } from "hono";
 import { injectLatency } from "./latency";
 import {

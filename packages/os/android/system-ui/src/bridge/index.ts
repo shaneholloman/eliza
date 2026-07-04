@@ -1,3 +1,4 @@
+// Bridges Android system state between the native host and the TypeScript SystemUI shell.
 export {
   ANDROID_BRIDGE_CHANNELS,
   type AndroidBridgeChannelMap,

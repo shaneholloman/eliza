@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+/** Starts the control-plane cloud mock as a standalone local HTTP fixture for tests and manual probes. */
 import { startControlPlaneMock } from "../src/control-plane";
 
 const port = Number(

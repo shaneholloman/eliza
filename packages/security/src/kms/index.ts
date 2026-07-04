@@ -66,6 +66,9 @@ function decodeRootKey(b64: string, source: string): Uint8Array {
   try {
     buf = Buffer.from(normalized, "base64");
   } catch (cause) {
+    // error-policy:J3 untrusted-input sanitizing — a root key that will not
+    // base64-decode is rejected loudly; we never substitute a random/default
+    // key (that would silently lose every ciphertext on next cold start).
     throw new KmsError(
       `${source} failed base64 decode: ${(cause as Error).message}`,
     );
@@ -123,6 +126,13 @@ export function createKmsClient(opts: KmsFactoryOptions = {}): KmsClient {
   if (backend === "steward" && !opts.steward) {
     const localKey = env.ELIZA_LOCAL_ROOT_KEY;
     if (localKey && localKey.length > 0) {
+      // error-policy:J6 best-effort operator diagnostic — @elizaos/security is a
+      // leaf package (only `zod` as a dep) with no logger available, and this
+      // factory can run before any logger is initialized, so `console.warn` is
+      // the only diagnostic channel. This is not a swallowed failure: the
+      // fallback is an explicit, narrower-than-requested backend selection that
+      // still uses a provisioned key, and it is announced so a misconfigured
+      // deploy is visible.
       // eslint-disable-next-line no-console
       console.warn(
         "[kms] ELIZA_KMS_BACKEND=steward selected but steward.{baseUrl,tokenProvider} " +

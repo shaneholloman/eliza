@@ -34,6 +34,7 @@ function formatPrice(priceUsd: number): string {
       maximumFractionDigits: digits,
     }).format(priceUsd);
   } catch {
+    // error-policy:J3 Intl rejected the locale/currency — plain formatting
     return `$${priceUsd.toFixed(digits)}`;
   }
 }
@@ -67,12 +68,16 @@ export function WalletBalanceWidget(
         // shows prices only, so a balances failure means "nothing to show".
         const [balances, overview] = await Promise.all([
           client.getWalletBalances() as Promise<WalletBalancesResponse>,
+          // error-policy:J4 prices are the widget's optional decoration; the
+          // hide-on-failure degrade below covers a missing overview too
           client.getWalletMarketOverview().catch(() => null),
         ]);
         if (cancelled) return;
         setHoldings(selectPricedHoldings(balances, overview?.prices));
       } catch {
-        // Wallet endpoint unreachable/errored: nothing to surface → empty state.
+        // error-policy:J4 home-grid tiles self-hide rather than surface error
+        // chrome (designed home-surface degrade); the wallet page itself owns
+        // the visible error state for a broken balances endpoint.
         if (!cancelled) setHoldings(null);
       } finally {
         if (!cancelled) setLoading(false);
@@ -107,7 +112,7 @@ export function WalletBalanceWidget(
       variant="ghost"
       className={`${spanClassName} group flex h-auto w-full flex-col items-stretch gap-1 whitespace-normal px-3 py-2.5 text-left font-normal transition-opacity hover:opacity-80`}
     >
-      <span className="flex items-center gap-2 text-xs text-white/70 [&>svg]:h-3.5 [&>svg]:w-3.5">
+      <span className="flex items-center gap-2 text-xs text-muted [&>svg]:h-3.5 [&>svg]:w-3.5">
         <Wallet />
         Wallet
       </span>
@@ -119,9 +124,11 @@ export function WalletBalanceWidget(
             data-testid={`wallet-price-row-${h.symbol}`}
             className="flex items-baseline justify-between gap-2 text-sm"
           >
-            <span className="truncate font-medium text-white">{h.symbol}</span>
+            <span className="truncate font-medium text-txt-strong">
+              {h.symbol}
+            </span>
             <span className="flex shrink-0 items-baseline gap-1.5">
-              <span className="tabular-nums text-white">
+              <span className="tabular-nums text-txt-strong">
                 {formatPrice(h.priceUsd)}
               </span>
               {change ? (

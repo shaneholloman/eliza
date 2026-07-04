@@ -110,7 +110,7 @@ async function cleanup(runtime: AgentRuntime): Promise<void> {
     }
     resetAgentClient();
   } catch {
-    // Ignore cleanup errors
+    // Shutdown helper errors do not affect the primary exit path.
   }
 
   process.exit(0);

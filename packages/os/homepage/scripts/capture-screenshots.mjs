@@ -1,3 +1,4 @@
+// Captures homepage screenshots for OS site review and release evidence.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright/test";

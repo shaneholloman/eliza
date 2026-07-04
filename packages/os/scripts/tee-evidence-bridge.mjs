@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Supports OS release manifests, checksums, and TEE evidence automation.
 import { pathToFileURL } from "node:url";
 // OS-side runtime-evidence exposure bridge (plan OS-2, contract "Runtime
 // Evidence Bridge"). Transforms a platform quote into the normalized TeeEvidence

@@ -1,3 +1,4 @@
+// Exercises the Android SystemUI bridge contract and transport behavior.
 import { describe, expect, it, vi } from "vitest";
 import type {
   AudioState,

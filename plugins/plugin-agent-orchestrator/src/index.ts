@@ -260,6 +260,8 @@ export function createAgentOrchestratorPlugin(): Plugin {
         // Strip the runtime reference before persisting — it's a live object,
         // not serialisable data, and not useful in a flat audit log.
         const { runtime: _runtime, ...persisted } = payload;
+        // error-policy:J7 best-effort audit-log write; a failed append warns and
+        // does not fabricate the handler's result.
         await appendAuditLine(auditLogPath, persisted).catch((err) =>
           runtime.logger?.warn?.(
             {
@@ -311,6 +313,8 @@ export function createAgentOrchestratorPlugin(): Plugin {
       setTimeout(() => {
         void (async () => {
           for (const sType of types) {
+            // error-policy:J7 eager-start is an optimization; a failed load warns
+            // and the service still lazily starts on first getService.
             await runtime.getServiceLoadPromise(sType).catch((err: unknown) =>
               runtime.logger?.warn?.(
                 {
@@ -353,6 +357,9 @@ export function createAgentOrchestratorPlugin(): Plugin {
                   const svc = runtime.getService<AcpService>(
                     AcpService.serviceType,
                   );
+                  // error-policy:J3 session lookup on a deferred flush timer; a
+                  // missing/failed lookup degrades to null and the guard below
+                  // treats it as "terminal", cancelling the flush cleanly.
                   const session = svc
                     ? await svc.getSession(sessionId).catch(() => null)
                     : null;
@@ -381,6 +388,8 @@ export function createAgentOrchestratorPlugin(): Plugin {
                   try {
                     await svc?.sendPrompt(sessionId, queued);
                   } catch (err) {
+                    // error-policy:J7 inbox-flush loop must survive a transient
+                    // send failure; the message is requeued (never dropped) + warned.
                     // Lost the race back to busy — requeue and re-arm rather
                     // than drop the user's message.
                     subAgentInbox.enqueue(sessionId, queued);
@@ -409,6 +418,8 @@ export function createAgentOrchestratorPlugin(): Plugin {
               }
             });
           }
+          // error-policy:J7 best-effort orphan-session recovery at boot; a failure
+          // warns and does not abort the init chain.
           void acp?.resumeOrphanedBusySessions?.().catch((err: unknown) =>
             runtime.logger?.warn?.(
               {
@@ -439,6 +450,8 @@ export function createAgentOrchestratorPlugin(): Plugin {
         try {
           disposeProgressHook();
         } catch (err) {
+          // error-policy:J6 best-effort teardown; a throwing disposer warns and
+          // does not block the rest of dispose.
           runtime.logger?.warn?.(
             {
               src: "@elizaos/plugin-agent-orchestrator",
@@ -453,7 +466,7 @@ export function createAgentOrchestratorPlugin(): Plugin {
         try {
           disposeInboxFlush();
         } catch {
-          // listener already detached
+          // error-policy:J6 best-effort teardown; listener already detached.
         }
         disposeInboxFlush = undefined;
       }
@@ -486,7 +499,7 @@ export function createAgentOrchestratorPlugin(): Plugin {
 // messages, even though the provider rule says self-healing is automatic.
 // This is a recency-bias hallucination from the conversation memory. Until
 // memory rewriting lands upstream, intercept user-facing text and replace
-// the cleanup-cleanup phrases with the canonical self-heal recovery line so
+// the teardown-retry phrases with the canonical self-heal recovery line so
 // the user never sees instructions to do something the runtime already does.
 const FORBIDDEN_CLEANUP_PATTERNS: RegExp[] = [
   /[^.!?\n]*\b(restart|kick(?:[\s-]?off)?|bounce)[^.!?\n]*\bacpx[^.!?\n]*[.!?]?/gi,
@@ -670,6 +683,8 @@ function withSpawnAckTimeout<T>(promise: Promise<T>, fallback: T): Promise<T> {
     timer = setTimeout(() => resolve(fallback), SPAWN_ACK_TIMEOUT_MS);
     (timer as { unref?: () => void }).unref?.();
   });
+  // error-policy:J4 spawn-ack model rejection/timeout degrades to the neutral
+  // literal ack; a cosmetic UX line, never fabricated data.
   return Promise.race([promise.catch(() => fallback), timeout]).finally(() => {
     if (timer) clearTimeout(timer);
   });
@@ -983,7 +998,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
   // mechanism: when supported, ALL narration + heartbeat live in the
   // thread, so the main channel's recentMessages provider never sees them
   // and the planner LLM cannot paraphrase past status into hallucinations
-  // on later turns.
+  // on subsequent turns.
   type ProgressState = {
     mainMessageId: string;
     canEdit: boolean;
@@ -1005,7 +1020,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
   // Sessions whose single "ack"-mode spawn ACK has been posted. This is the
   // canonical "ack done" marker for ack mode — set synchronously the moment we
   // commit to sending the ACK (before any await) and cleared only on terminal
-  // cleanup. It does NOT depend on the post succeeding or on progressBySession
+  // teardown. It does NOT depend on the post succeeding or on progressBySession
   // being recorded: when sendMessageToTarget returns an empty platformId (or a
   // post-send throw releases firstPostInFlight), `state.mainMessageId` never
   // gets set, so a `state?.mainMessageId`-keyed guard would let the 10s
@@ -1157,6 +1172,8 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
         );
         return result ?? undefined;
       } catch {
+        // error-policy:J4 thread redirect failed; the message still delivers via
+        // the original main-channel send below.
         return originalSend(target, content);
       }
     };
@@ -1164,7 +1181,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
     taggedRuntime.__orchestratorSendWrapped = true;
     taggedRuntime.__orchestratorOriginalSend = originalSend;
     restoreSend = () => {
-      // Only restore if we're still the active wrap. If a later wrapper
+      // Only restore if we're still the active wrap. If a subsequent wrapper
       // chained over ours, leave it alone — yanking the middle of a chain
       // would break downstream consumers.
       if (runtime.sendMessageToTarget === wrapped) {
@@ -1224,7 +1241,9 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
         // TASKS_LIST_AGENTS to ask "where are you?" on demand.
         const raw =
           typeof acp.getSessionOutput === "function"
-            ? await acp.getSessionOutput(sessionId, 200).catch(() => "")
+            ? // error-policy:J7 best-effort heartbeat read; a failed read degrades
+              // to "" so the tick is skipped rather than posting a false status.
+              await acp.getSessionOutput(sessionId, 200).catch(() => "")
             : "";
         const cleaned = stripToolTranscripts(raw);
         const tools = toolHistory.get(sessionId) ?? [];
@@ -1246,6 +1265,8 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
             prompt: filledPrompt,
             maxTokens: 80,
           })
+          // error-policy:J7 best-effort heartbeat summary; a failed model call
+          // degrades to "" and the tick is skipped, never a fabricated status.
           .catch(() => "");
         const trimmedSummary = summary.trim().replace(/\s+/g, " ");
         if (trimmedSummary.length === 0) return;
@@ -1264,7 +1285,8 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
         lastHeartbeatPostAt.set(sessionId, now);
         await emitProgress(sessionId, { source, roomId }, text, label);
       } catch {
-        // best-effort heartbeat — never crash
+        // error-policy:J7 heartbeat interval must not crash the loop; the tick is
+        // a cosmetic status post — best-effort, never fabricated.
       }
     }, intervalMs);
     heartbeatTimers.set(sessionId, timer);
@@ -1291,6 +1313,8 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
     label: string,
   ): Promise<string> => {
     try {
+      // error-policy:J3 session lookup for a best-effort ack label; an
+      // unavailable session degrades to the passed `label`, never a fake ack.
       const session = await acp.getSession(sessionId).catch(() => null);
       const meta = (session?.metadata ?? {}) as Record<string, unknown>;
       const task =
@@ -1313,6 +1337,8 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
         SPAWN_ACK_FALLBACK,
       );
     } catch {
+      // error-policy:J4 ack generation failure degrades to the neutral literal;
+      // a cosmetic UX line, never data.
       return SPAWN_ACK_FALLBACK;
     }
   };
@@ -1325,7 +1351,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
   // recentMessages provider skips Memory entries with metadata.transient
   // when building the planner's conversation window, so past 🚀/💬/⏳/✅/❌
   // status posts cannot resurface as text the planner LLM paraphrases on
-  // later turns. Cross-platform: the flag rides on the persisted Memory
+  // subsequent turns. Cross-platform: the flag rides on the persisted Memory
   // regardless of which connector surface delivered the post (thread,
   // edit-in-place, or fresh send).
   function transientContent(
@@ -1361,7 +1387,8 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
     try {
       await runtime.addReactionOnTarget(target, messageId, emoji);
     } catch {
-      // best-effort: reactions are visual sugar, never block the flow
+      // error-policy:J4 reactions are non-essential visual sugar; a failed add
+      // degrades silently and must not block the flow.
     }
   }
 
@@ -1419,7 +1446,8 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
         }
       }
     } catch {
-      // best-effort resolution — fall back to the bare target below
+      // error-policy:J4 room lookup unavailable degrades to the bare
+      // { source, roomId } target below — no worse than before.
     }
     emitTargetCacheByKey.set(key, resolved);
     if (emitTargetCacheByKey.size > 512) {
@@ -1434,7 +1462,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
   //   1. THREAD exists (or can be created) → all narration goes in thread.
   //      This is the ANTI-POLLUTION key: thread messages never enter the
   //      main channel's recentMessages window, so the planner LLM cannot
-  //      paraphrase past status updates into hallucinations on later turns.
+  //      paraphrase past status updates into hallucinations on subsequent turns.
   //   2. canEdit → edit a single main-channel message in place.
   //   3. Fallback → send a new main-channel message each time.
   // First call lazily initializes state: creates the thread when supported
@@ -1452,7 +1480,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
     const text = sanitizePlannerText(rawText);
     const state = progressBySession.get(sessionId);
     // "ack" mode: the spawn ACK posts once (first emit); never edit it
-    // afterward. Once the main message exists, suppress every later progress
+    // afterward. Once the main message exists, suppress every subsequent progress
     // emit so the ACK stays untouched and the completion-evaluator synthesis is
     // the separate final message — no in-place editing of the channel message.
     if (progressPolicy.mode === "ack" && ackedSessions.has(sessionId)) {
@@ -1660,7 +1688,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
           lastText: initialText,
         };
         progressBySession.set(sessionId, newState);
-        // State is recorded — later emits now take the edit/ack-guard branch.
+        // State is recorded — subsequent emits now take the edit/ack-guard branch.
         // Release the first-post claim so a genuine respawn can post again.
         firstPostInFlight.delete(sessionId);
         // A spawning/running reaction marks progress without polluting the
@@ -1690,6 +1718,8 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
               threadCacheByKey.set(cacheKey, thread);
               evictOldest(threadCacheByKey);
             } catch (err: unknown) {
+              // error-policy:J4 thread creation unavailable degrades to
+              // main-channel edits; the failure is warned.
               runtime.logger?.warn?.(
                 {
                   src: "@elizaos/plugin-agent-orchestrator",
@@ -1708,6 +1738,8 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
             const threadRoomId = createUniqueUuid(runtime, thread.threadId);
             await acp
               ?.updateSessionMetadata(sessionId, { threadRoomId })
+              // error-policy:J7 best-effort thread-binding write; a failed update
+              // warns (observable) and does not abort thread setup.
               .catch((err: unknown) =>
                 runtime.logger?.warn?.(
                   {
@@ -1730,14 +1762,16 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
                 );
                 newState.lastText = displayText;
               } catch {
-                // best-effort: cached thread may have been archived; on next
-                // call we'll attempt re-create lazily via the same path.
+                // error-policy:J4 cached thread may be archived; the post degrades
+                // and the next call lazily re-creates via the same path.
               }
             }
           }
         }
       }
     } catch (err: unknown) {
+      // error-policy:J7 progress narration must not kill the event loop; the
+      // failure is warned once (then debug) and the first-post claim released.
       // Release the first-post claim on failure so a retry can post the ACK
       // (on success it was already released once state was recorded).
       firstPostInFlight.delete(sessionId);
@@ -1802,7 +1836,8 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
             transientContent(completionText, "sub_agent_complete"),
           );
         } catch {
-          // ignore: reaction below is the secondary signal
+          // error-policy:J4 completion edit failed; the ✅ reaction below is the
+          // secondary completion signal.
         }
       } else {
         // Capability-poor surface (no edit): emitProgress was silenced
@@ -1814,7 +1849,8 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
             transientContent(completionText, "sub_agent_complete"),
           );
         } catch {
-          // best-effort
+          // error-policy:J4 best-effort completion notice on a no-edit surface;
+          // the synthesis evaluator remains the canonical outcome message.
         }
       }
     }
@@ -1856,7 +1892,8 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
           ),
         );
       } catch {
-        // best-effort
+        // error-policy:J4 best-effort terminal-failure notice on a no-edit
+        // surface; a failed post degrades silently.
       }
     }
   }
@@ -1939,7 +1976,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
         // mainMessageId guards keep it to exactly one ack.
         // A verification-retry re-dispatch (buildVerifyRetryCount > 0, set by
         // SubAgentRouter.retryIncompleteBuild) is an INTERNAL continuation of the
-        // same user request, spawned under a fresh sessionId minutes later. The
+        // same user request, spawned under a fresh sessionId minutes subsequent. The
         // per-session ackedSessions/firstPostInFlight guards never see it, and the
         // per-room ack dedup window (60s) has long expired — so without this gate
         // each retry posts another spawn ack (the triple-ack users reported).
@@ -2007,7 +2044,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
                 : "";
             const summary = extractCompletionSummary(rawResponse);
             // await so the state lookup happens BEFORE progressBySession.delete
-            // below — otherwise the helper races against the cleanup and finds
+            // below — otherwise the helper races against the teardown and finds
             // no state to attach the ✅ to.
             await markTaskComplete(sessionId, { source, roomId }, summary);
           } else if (evName === "error" || evName === "cancelled") {
@@ -2054,7 +2091,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
           }
           // Drop dedupe keys scoped to this session so the map doesn't grow
           // unbounded across the runtime's lifetime (one entry per
-          // session*event*text triplet). Without this cleanup a long-lived
+          // session*event*text triplet). Without this teardown a long-lived
           // orchestrator process leaks memory proportional to historical
           // session count.
           for (const key of lastPostByKey.keys()) {
@@ -2147,7 +2184,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
             // the provider surfaces the live state to the planner; a Discord
             // post would only pollute conversation memory with phrasings the
             // LLM paraphrases as obsolete "restart / reconnect" advice on
-            // later turns.
+            // subsequent turns.
             const failureKind = (data as { failureKind?: string })?.failureKind;
             const USER_ACTION_KINDS = new Set([
               "auth",
@@ -2196,6 +2233,8 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
         );
         await emitProgress(sessionId, { source, roomId }, text, label);
       } catch (err) {
+        // error-policy:J7 background session-event handler must not kill the ACP
+        // event stream; the failure is warned (observable).
         runtime.logger?.warn?.(
           {
             src: "@elizaos/plugin-agent-orchestrator",
@@ -2210,7 +2249,7 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
     try {
       unsubscribeSessionEvents();
     } catch {
-      // best-effort: AcpService may already be torn down
+      // error-policy:J6 best-effort teardown; AcpService may already be torn down.
     }
     // Drain pending timers so they don't fire after the hook is dead —
     // those callbacks reference state we're about to drop and would call
@@ -2235,7 +2274,8 @@ function registerProgressHook(runtime: IAgentRuntime): () => void {
       try {
         restoreSend();
       } catch {
-        // best-effort: another wrapper may have chained over ours
+        // error-policy:J6 best-effort teardown; another wrapper may have chained
+        // over ours.
       }
     }
   };

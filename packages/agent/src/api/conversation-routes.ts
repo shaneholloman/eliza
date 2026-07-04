@@ -81,13 +81,13 @@ import {
   resolveConversationGreetingText,
   resolveWalletModeGuidanceReply,
 } from "./server-helpers.ts";
+import type { ConversationMeta } from "./server-types.ts";
 import {
   resolveWaifuChatAccess,
   type WaifuChatAccess,
   type WaifuChatWorldRole,
   waifuChatRoleToWorldRole,
-} from "./server-helpers-auth.ts";
-import type { ConversationMeta } from "./server-types.ts";
+} from "./waifu-chat-role-resolver.ts";
 
 interface DiscordProfileLike {
   avatarUrl?: string;

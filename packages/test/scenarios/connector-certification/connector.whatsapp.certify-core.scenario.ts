@@ -1,3 +1,4 @@
+/** Scenario fixture for connector whatsapp certify core; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import { buildConnectorCertificationScenario } from "./_factory.ts";
 
 export default buildConnectorCertificationScenario({

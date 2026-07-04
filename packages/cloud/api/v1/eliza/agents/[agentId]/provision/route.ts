@@ -360,7 +360,19 @@ async function __hono_POST(
       if (typeof executionCtx?.waitUntil === "function") {
         executionCtx.waitUntil(triggerPromise);
       } else {
-        triggerPromise.catch(() => undefined);
+        // No Worker execution context to hand the promise to (non-Worker runtime):
+        // the provisioning job is already persisted, so a failed immediate nudge only
+        // defers execution to the next poll. Log it rather than swallow so a stuck
+        // orchestrator surfaces.
+        // error-policy:J7 nudge failure only delays an already-enqueued job; logged, not fatal.
+        triggerPromise.catch((err) =>
+          logger.warn(
+            "[provision] provisioning triggerImmediate nudge failed",
+            {
+              error: err instanceof Error ? err.message : String(err),
+            },
+          ),
+        );
       }
     }
 

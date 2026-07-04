@@ -42,6 +42,8 @@ import {
   type GoogleMeetGetMeetingInput,
   type GoogleMeetMeeting,
   type GoogleMeetParticipant,
+  type GoogleMeetParticipantSession,
+  type GoogleMeetParticipantSessionInput,
   type GoogleMeetRecording,
   type GoogleMeetRecordingInput,
   type GoogleMeetReport,
@@ -336,6 +338,12 @@ export class GoogleWorkspaceService extends Service implements IGoogleWorkspaceS
     params: GoogleMeetConferenceRecordInput & { limit?: number }
   ): Promise<GoogleMeetParticipant[]> {
     return this.meetClient.listMeetingParticipants(params);
+  }
+
+  listMeetingParticipantSessions(
+    params: GoogleMeetParticipantSessionInput & { limit?: number }
+  ): Promise<GoogleMeetParticipantSession[]> {
+    return this.meetClient.listMeetingParticipantSessions(params);
   }
 
   listMeetingTranscripts(

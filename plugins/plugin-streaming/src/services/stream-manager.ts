@@ -74,6 +74,8 @@ class StreamManager {
   private _running = false;
   private startedAt: number | null = null;
   private _frameCount = 0;
+  /** Consecutive FFmpeg stdin write failures — used to throttle warn logs. */
+  private _frameWriteErrorCount = 0;
   /** Current stream config — stored for restart on volume/audio changes. */
   private _config: StreamConfig | null = null;
   /** Current volume level (0–100). */
@@ -216,11 +218,28 @@ class StreamManager {
     try {
       this.ffmpeg.stdin.write(jpegData);
       this._frameCount++;
+      this._frameWriteErrorCount = 0;
       if (this._frameCount % 150 === 0) {
         logger.info(`${TAG} Piped ${this._frameCount} frames to FFmpeg`);
       }
       return true;
-    } catch {
+    } catch (error) {
+      // A write failure means the FFmpeg encode pipe is broken (e.g. FFmpeg
+      // died mid-stream). Returning a bare `false` here silently drops every
+      // subsequent frame and makes a dead pipe look like an idle stream. Surface
+      // it as an observable warning, throttled so a persistently broken pipe
+      // does not emit one line per dropped frame.
+      this._frameWriteErrorCount++;
+      if (
+        this._frameWriteErrorCount === 1 ||
+        this._frameWriteErrorCount % 150 === 0
+      ) {
+        logger.warn(
+          `${TAG} Failed to write frame to FFmpeg stdin (${this._frameWriteErrorCount} consecutive): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
       return false;
     }
   }
@@ -256,6 +275,10 @@ class StreamManager {
 
     this._config = config;
     this._frameCount = 0;
+    // Reset the frame-write throttle per FFmpeg process so the first broken-pipe
+    // failure of a fresh/restarted stream is always surfaced, never carried over
+    // and mis-throttled from a prior process.
+    this._frameWriteErrorCount = 0;
     this._volume = config.volume ?? this._volume;
     this._muted = config.muted ?? this._muted;
 
@@ -462,6 +485,7 @@ class StreamManager {
     this._running = false;
     this.startedAt = null;
     this._frameCount = 0;
+    this._frameWriteErrorCount = 0;
     this._restartAttempts = 0;
     this._config = null;
     logger.info(

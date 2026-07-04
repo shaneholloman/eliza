@@ -87,6 +87,9 @@ const createRoute: Route = {
       const session = await svc.requestJoin(request);
       return { status: 201, body: { session } };
     } catch (err) {
+      // error-policy:J1 boundary translation — a typed MeetingJoinError maps to
+      // its declared status/code; any other failure rethrows to the outer
+      // server handler as a 5xx rather than being masked as a join result.
       if (err instanceof MeetingJoinError) {
         return {
           status: joinErrorStatus[err.code],

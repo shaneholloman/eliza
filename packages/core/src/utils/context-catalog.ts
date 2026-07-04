@@ -1,15 +1,40 @@
 /**
- * Static catalog mapping built-in action and provider names to the agent
- * contexts they belong to, and the resolvers that pick a component's contexts —
- * its own declared `contexts` when present, otherwise this catalog's entry,
- * defaulting to "general". The source of routing context for components that do
- * not declare their own.
+ * Context resolvers that pick a component's contexts: its own declared `contexts`
+ * when present, otherwise a legacy fallback table, defaulting to "general".
+ *
+ * Actions are the source of truth for their own contexts and should declare
+ * `contexts` on the action definition. LEGACY_ACTION_CONTEXT_FALLBACK is retained
+ * only for plugin-owned / third-party action names that have not yet migrated (see its
+ * doc comment). PROVIDER_CONTEXT_MAP still maps built-in provider names.
  */
 
 import { FIRST_PARTY_CONTEXT_IDS } from "../runtime/context-normalization";
 import type { Action, AgentContext, Provider } from "../types/components";
 
-export const ACTION_CONTEXT_MAP: Record<string, AgentContext[]> = {
+/**
+ * LEGACY_ACTION_CONTEXT_FALLBACK is a legacy, host-owned fallback map from action
+ * NAME to domain contexts, consulted ONLY when an action does not declare its own
+ * `contexts` array (see {@link resolveActionContexts}).
+ *
+ * The contexts contract now lives on the owner action: every action should declare
+ * `contexts` on its own definition, and `resolveActionContexts` always prefers a
+ * declared array over this table (declared wins, proven by the guard test in
+ * `context-catalog.test.ts`).
+ *
+ * This table is retained ONLY for plugin-owned / third-party action NAMES whose
+ * definitions live outside this repo (wallet, cron, browser, media, connector, and
+ * other loadable plugins) and have not yet migrated their contexts onto the action.
+ * It is NOT the source of truth and must not be extended with in-repo core actions.
+ *
+ * Invariant (enforced by `context-catalog.test.ts`): no core-owned action that
+ * declares its own `contexts` may appear as a key here. Core owners that previously
+ * relied on this table (ATTACHMENT, DOCUMENT, GENERATE_MEDIA, MESSAGE, POST,
+ * MANAGE_PLUGINS, PAYMENT) now declare `contexts` on the action itself and were
+ * removed from here. Several had drifted: the ATTACHMENT, GENERATE_MEDIA, and
+ * MESSAGE map entries were narrower than the owner declaration, so the static entry
+ * was silently wrong for those actions.
+ */
+export const LEGACY_ACTION_CONTEXT_FALLBACK: Record<string, AgentContext[]> = {
 	NONE: ["general"],
 	IGNORE: ["general"],
 	CONTINUE: ["general"],
@@ -61,7 +86,9 @@ export const ACTION_CONTEXT_MAP: Record<string, AgentContext[]> = {
 	GET_PORTFOLIO: ["wallet"],
 	CREATE_WALLET: ["wallet"],
 	IMPORT_WALLET: ["wallet"],
-	DOCUMENT: ["documents"],
+	// DOCUMENT, GENERATE_MEDIA, MESSAGE, POST, ATTACHMENT, PAYMENT, MANAGE_PLUGINS
+	// were core-owned entries here; they now declare `contexts` on their own action
+	// (#12090 item 35) and were removed from this fallback (drift-guarded by test).
 	SEARCH: ["documents", "browser"],
 	REMEMBER: ["documents"],
 	RECALL: ["documents"],
@@ -97,7 +124,6 @@ export const ACTION_CONTEXT_MAP: Record<string, AgentContext[]> = {
 	CREATE_SUBTASK: ["code", "automation"],
 	COMPLETE_TASK: ["code", "automation"],
 	CANCEL_TASK: ["code", "automation"],
-	GENERATE_MEDIA: ["media"],
 	DESCRIBE_IMAGE: ["media", "documents"],
 	DESCRIBE_VIDEO: ["media", "documents"],
 	DESCRIBE_AUDIO: ["media", "documents"],
@@ -114,8 +140,6 @@ export const ACTION_CONTEXT_MAP: Record<string, AgentContext[]> = {
 	TASK: ["tasks", "automation"],
 	TRIGGER: ["automation", "tasks"],
 	TRIGGER_WEBHOOK: ["automation"],
-	MESSAGE: ["messaging", "connectors", "documents", "automation"],
-	POST: ["social_posting", "connectors"],
 	CONTACT: ["contacts", "messaging", "documents"],
 	ENTITY: ["contacts", "messaging", "documents"],
 	CALENDAR: ["calendar", "automation"],
@@ -125,7 +149,6 @@ export const ACTION_CONTEXT_MAP: Record<string, AgentContext[]> = {
 	SEARCH_CONTACTS: ["contacts"],
 	SUMMARIZE_CONVERSATION: ["messaging", "documents"],
 	CHAT_WITH_ATTACHMENTS: ["messaging", "documents", "media"],
-	ATTACHMENT: ["documents", "media"],
 	DOWNLOAD_MEDIA: ["messaging", "media"],
 	TRANSCRIBE_MEDIA: ["messaging", "documents", "media"],
 	SERVER_INFO: ["messaging"],
@@ -145,14 +168,12 @@ export const ACTION_CONTEXT_MAP: Record<string, AgentContext[]> = {
 	RESOLVE_REQUEST: ["tasks", "automation", "admin", "general"],
 	CREDENTIALS: ["browser", "settings", "secrets"],
 	CHAT_THREAD: ["messaging"],
-	PAYMENT: ["payments"],
 	X: ["social_posting", "messaging"],
 	CONNECTOR: ["connectors"],
 	ELEVATE_TRUST: ["contacts", "admin"],
 	REVOKE_TRUST: ["contacts", "admin"],
 	BLOCK_USER: ["messaging", "admin"],
 	UNBLOCK_USER: ["messaging", "admin"],
-	MANAGE_PLUGINS: ["connectors", "admin"],
 	MANAGE_SECRETS: ["secrets", "admin"],
 	SHELL_EXEC: ["terminal", "code", "admin"],
 	RESTART: ["admin"],
@@ -201,6 +222,11 @@ export const PROVIDER_CONTEXT_MAP: Record<string, AgentContext[]> = {
 	"solana-wallet": ["wallet"],
 	CODING_AGENT_EXAMPLES: ["code", "automation"],
 	ACTIVE_WORKSPACE_CONTEXT: ["code", "automation"],
+	// Orchestrator inventory (plugin-agent-orchestrator): the coding-backend /
+	// sub-agent listings belong on code/automation planner turns, matching
+	// ACTIVE_WORKSPACE_CONTEXT — not on ordinary "general" chat turns (#13203).
+	AVAILABLE_AGENTS: ["code", "automation"],
+	ACTIVE_SUB_AGENTS: ["code", "automation"],
 	contacts: ["contacts"],
 	trustScores: ["contacts"],
 	platformIdentity: ["messaging"],
@@ -240,18 +266,34 @@ export function resolveActionContexts(action: Action): AgentContext[] {
 		return declared;
 	}
 
-	return ACTION_CONTEXT_MAP[action.name.toUpperCase()] ?? ["general"];
+	return (
+		LEGACY_ACTION_CONTEXT_FALLBACK[action.name.toUpperCase()] ?? ["general"]
+	);
 }
 
-export function resolveProviderContexts(provider: Provider): AgentContext[] {
+/**
+ * Catalog lookup for a provider name (exact, lower, upper), or `undefined` when
+ * the provider is uncataloged. Split out so registration can distinguish a
+ * deliberate catalog entry of `["general"]` from the uncataloged default and
+ * warn only on the latter (#13203).
+ */
+export function lookupProviderCatalogContexts(
+	name: string,
+): AgentContext[] | undefined {
+	return (
+		PROVIDER_CONTEXT_MAP[name] ??
+		PROVIDER_CONTEXT_MAP[name.toLowerCase()] ??
+		PROVIDER_CONTEXT_MAP[name.toUpperCase()]
+	);
+}
+
+export function resolveProviderContexts(
+	provider: Pick<Provider, "name" | "contexts">,
+): AgentContext[] {
 	const declared = normalizeContexts(provider.contexts);
 	if (declared.length > 0) {
 		return declared;
 	}
 
-	return (
-		PROVIDER_CONTEXT_MAP[provider.name] ??
-		PROVIDER_CONTEXT_MAP[provider.name.toLowerCase()] ??
-		PROVIDER_CONTEXT_MAP[provider.name.toUpperCase()] ?? ["general"]
-	);
+	return lookupProviderCatalogContexts(provider.name) ?? ["general"];
 }

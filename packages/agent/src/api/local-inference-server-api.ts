@@ -1,3 +1,4 @@
+/** Routes local inference server API requests between the agent backend and local model service. */
 import type http from "node:http";
 import type { AgentRuntime } from "@elizaos/core";
 

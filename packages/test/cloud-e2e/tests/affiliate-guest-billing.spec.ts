@@ -1,3 +1,4 @@
+/** Covers the affiliate guest billing cloud E2E flow using Playwright against the real local stack with mock-backed external services. */
 import { randomUUID } from "node:crypto";
 import { expect, test } from "../src/helpers/test-fixtures";
 

@@ -3,7 +3,20 @@
  * levels, purposes/roles, and plugin-managed mode metadata rendered by the
  * account selectors, plus the single source of truth for when a privacy
  * escalation or owner-role promotion requires typed/explicit confirmation.
+ *
+ * Per-connector account defaults (`defaultRole` / `defaultPurpose` /
+ * `supportsOAuth`) are NOT declared here. They live in the server-authoritative
+ * `CONNECTOR_ACCOUNT_CATALOG` in `@elizaos/shared` (#12087 Item 10, arch-audit
+ * roles-permissions); this module reads them from that catalog and only owns
+ * the connector's presentation strings.
  */
+
+import {
+  CONNECTOR_ACCOUNT_CATALOG,
+  type ConnectorAccountCatalogEntry,
+  getConnectorAccountCatalogEntry,
+  normalizeConnectorCatalogId as normalizeConnectorCatalogIdShared,
+} from "@elizaos/shared/connector-account-catalog";
 
 import type {
   ConnectorAccountCreateInput,
@@ -94,100 +107,86 @@ export const CONNECTOR_PRIVACY_PUBLIC_CONFIRMATION = "PUBLIC";
 export const CONNECTOR_OWNER_ROLE_CONFIRMATION = "OWNER";
 
 /**
- * Static fallback catalog of plugin-managed connector account options (#12087
- * Item 10).
+ * UI presentation strings (title/description) for each plugin-managed
+ * connector, keyed by canonical connector id. This is the ONLY connector
+ * metadata the UI still owns — it is purely cosmetic.
  *
- * @deprecated This hardcodes each connector's `defaultRole` / `defaultPurpose` /
- * `supportsOAuth` in the client. The authoritative home for that metadata is the
- * server connector catalog, but `GET /api/connectors` currently returns only the
- * configured-connector records (`listVisibleConnectors` in
- * `packages/agent/src/api/connector-routes.ts`) — it does NOT yet expose
- * `defaultRole` / `defaultPurpose` / `supportsOAuth`. Until the catalog carries
- * those fields, this typed constant is the documented single fallback the UI
- * reads through {@link getConnectorPluginManagedAccountOption}.
- *
- * TODO(#12087 Item 10): extend the server connector catalog to project
- * `defaultRole` / `defaultPurpose` / `supportsOAuth` per connector, have the UI
- * read that catalog, and collapse this map to a last-resort default for
- * connectors the catalog has not yet described.
+ * The authorization-relevant defaults (`defaultRole` / `defaultPurpose` /
+ * `supportsOAuth`) are NOT here: they live in the server-authoritative
+ * `CONNECTOR_ACCOUNT_CATALOG` in `@elizaos/shared` (#12087 Item 10). This UI
+ * map used to hardcode those three fields too; they were removed so the truth
+ * lives in one place. `connector-account-catalog.test.ts` grep-guards that the
+ * literals do not reappear here.
+ */
+const CONNECTOR_PLUGIN_MANAGED_PRESENTATION: Readonly<
+  Record<string, { title: string; description: string }>
+> = {
+  telegram: {
+    title: "Telegram accounts",
+    description:
+      "Manage Telegram bot accounts through @elizaos/plugin-telegram account inventory.",
+  },
+  signal: {
+    title: "Signal accounts",
+    description:
+      "Manage Signal account records and device pairing through @elizaos/plugin-signal.",
+  },
+  google: {
+    title: "Google accounts",
+    description:
+      "Manage Google Workspace accounts through @elizaos/plugin-google OAuth account inventory.",
+  },
+  x: {
+    title: "X accounts",
+    description:
+      "Manage X/Twitter accounts through @elizaos/plugin-x account inventory.",
+  },
+  slack: {
+    title: "Slack accounts",
+    description:
+      "Manage Slack workspace accounts through @elizaos/plugin-slack OAuth account inventory.",
+  },
+  whatsapp: {
+    title: "WhatsApp accounts",
+    description:
+      "Manage WhatsApp account records through @elizaos/plugin-whatsapp account inventory.",
+  },
+};
+
+/**
+ * Projects a server-catalog entry (`@elizaos/shared`) plus the UI's own
+ * presentation strings into the `ConnectorPluginManagedAccountOption` shape the
+ * account selectors render. `defaultRole` / `defaultPurpose` / `supportsOAuth`
+ * come straight from the catalog — the UI does not re-declare them.
+ */
+function toPluginManagedAccountOption(
+  entry: ConnectorAccountCatalogEntry,
+): ConnectorPluginManagedAccountOption {
+  const presentation = CONNECTOR_PLUGIN_MANAGED_PRESENTATION[entry.connectorId];
+  return {
+    value: CONNECTOR_PLUGIN_MANAGED_MODE_ID,
+    connectorId: entry.connectorId,
+    provider: entry.provider,
+    label: "Plugin-managed",
+    title: presentation?.title ?? `${entry.connectorId} accounts`,
+    description:
+      presentation?.description ??
+      `Manage ${entry.connectorId} accounts through its connector plugin.`,
+    defaultRole: entry.defaultRole,
+    defaultPurpose: entry.defaultPurpose,
+    supportsOAuth: entry.supportsOAuth,
+    ...(entry.aliases ? { aliases: entry.aliases } : {}),
+  };
+}
+
+/**
+ * Plugin-managed connector account options, projected from the
+ * server-authoritative {@link CONNECTOR_ACCOUNT_CATALOG}. The UI reads its
+ * role/purpose/OAuth defaults from the shared catalog; only the presentation
+ * strings are UI-owned (#12087 Item 10).
  */
 export const CONNECTOR_PLUGIN_MANAGED_ACCOUNT_OPTIONS: readonly ConnectorPluginManagedAccountOption[] =
-  [
-    {
-      value: CONNECTOR_PLUGIN_MANAGED_MODE_ID,
-      connectorId: "telegram",
-      provider: "telegram",
-      label: "Plugin-managed",
-      title: "Telegram accounts",
-      description:
-        "Manage Telegram bot accounts through @elizaos/plugin-telegram account inventory.",
-      defaultRole: "AGENT",
-      defaultPurpose: ["messaging"],
-      supportsOAuth: false,
-    },
-    {
-      value: CONNECTOR_PLUGIN_MANAGED_MODE_ID,
-      connectorId: "signal",
-      provider: "signal",
-      label: "Plugin-managed",
-      title: "Signal accounts",
-      description:
-        "Manage Signal account records and device pairing through @elizaos/plugin-signal.",
-      defaultRole: "OWNER",
-      defaultPurpose: ["messaging"],
-      supportsOAuth: false,
-    },
-    {
-      value: CONNECTOR_PLUGIN_MANAGED_MODE_ID,
-      connectorId: "google",
-      provider: "google",
-      label: "Plugin-managed",
-      title: "Google accounts",
-      description:
-        "Manage Google Workspace accounts through @elizaos/plugin-google OAuth account inventory.",
-      defaultRole: "OWNER",
-      defaultPurpose: ["messaging", "calendar", "drive", "meet"],
-      supportsOAuth: true,
-      aliases: ["gmail", "google-workspace"],
-    },
-    {
-      value: CONNECTOR_PLUGIN_MANAGED_MODE_ID,
-      connectorId: "x",
-      provider: "x",
-      label: "Plugin-managed",
-      title: "X accounts",
-      description:
-        "Manage X/Twitter accounts through @elizaos/plugin-x account inventory.",
-      defaultRole: "OWNER",
-      defaultPurpose: ["posting", "reading", "messaging"],
-      supportsOAuth: true,
-      aliases: ["twitter"],
-    },
-    {
-      value: CONNECTOR_PLUGIN_MANAGED_MODE_ID,
-      connectorId: "slack",
-      provider: "slack",
-      label: "Plugin-managed",
-      title: "Slack accounts",
-      description:
-        "Manage Slack workspace accounts through @elizaos/plugin-slack OAuth account inventory.",
-      defaultRole: "OWNER",
-      defaultPurpose: ["messaging", "posting", "reading"],
-      supportsOAuth: true,
-    },
-    {
-      value: CONNECTOR_PLUGIN_MANAGED_MODE_ID,
-      connectorId: "whatsapp",
-      provider: "whatsapp",
-      label: "Plugin-managed",
-      title: "WhatsApp accounts",
-      description:
-        "Manage WhatsApp account records through @elizaos/plugin-whatsapp account inventory.",
-      defaultRole: "AGENT",
-      defaultPurpose: ["messaging"],
-      supportsOAuth: false,
-    },
-  ];
+  CONNECTOR_ACCOUNT_CATALOG.map(toPluginManagedAccountOption);
 
 const CONNECTOR_PLUGIN_MANAGED_ACCOUNT_OPTIONS_BY_ID = new Map(
   CONNECTOR_PLUGIN_MANAGED_ACCOUNT_OPTIONS.flatMap((option) => [
@@ -204,23 +203,24 @@ const CONNECTOR_PRIVACY_RANK: Record<ConnectorAccountPrivacy, number> = {
   public: 3,
 };
 
-export function normalizeConnectorCatalogId(connectorId: string): string {
-  const normalized = connectorId
-    .trim()
-    .toLowerCase()
-    .replace(/^@elizaos\/plugin-/, "")
-    .replace(/^plugin-/, "");
-  return normalized === "twitter" ? "x" : normalized;
-}
+/**
+ * Re-exported from `@elizaos/shared` so the UI and server normalize connector
+ * ids identically (single source of truth). Kept as a named export for the
+ * existing UI consumers that import it from this module.
+ */
+export const normalizeConnectorCatalogId = normalizeConnectorCatalogIdShared;
 
 export function getConnectorPluginManagedAccountOption(
   connectorId: string | undefined,
 ): ConnectorPluginManagedAccountOption | null {
   if (!connectorId) return null;
+  // Resolve through the shared catalog first; the local by-id map (built from
+  // the same catalog) provides the projected UI option.
+  const entry = getConnectorAccountCatalogEntry(connectorId);
+  if (!entry) return null;
   return (
-    CONNECTOR_PLUGIN_MANAGED_ACCOUNT_OPTIONS_BY_ID.get(
-      normalizeConnectorCatalogId(connectorId),
-    ) ?? null
+    CONNECTOR_PLUGIN_MANAGED_ACCOUNT_OPTIONS_BY_ID.get(entry.connectorId) ??
+    null
   );
 }
 

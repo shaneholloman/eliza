@@ -37,21 +37,21 @@ function isAgentSkillsServiceLike(
 }
 
 /**
- * Load persisted skill preferences from the agent's database.
- * Returns an empty map when the runtime or database isn't available.
+ * Load persisted skill preferences from the agent's database. Returns an empty
+ * map when no runtime is available or nothing has been persisted yet; a cache
+ * read *failure* is reported and rethrown, never masked as "no preferences".
+ * Callers read-modify-write this map (`prefs[id] = x; save(prefs)`), so a
+ * fabricated empty map on a transient DB error would overwrite every other
+ * skill's saved preference — the failure must surface, not read as empty.
  */
 export async function loadSkillPreferences(
   runtime: AgentRuntime | null,
 ): Promise<SkillPreferencesMap> {
   if (!runtime) return {};
-  try {
-    const prefs = await runtime.getCache<SkillPreferencesMap>(
-      SKILL_PREFS_CACHE_KEY,
-    );
-    return prefs ?? {};
-  } catch {
-    return {};
-  }
+  const prefs = await runtime.getCache<SkillPreferencesMap>(
+    SKILL_PREFS_CACHE_KEY,
+  );
+  return prefs ?? {};
 }
 
 /**
@@ -81,17 +81,19 @@ type SkillAcknowledgmentMap = Record<
   { acknowledgedAt: string; findingCount: number }
 >;
 
+/**
+ * Load persisted skill scan acknowledgments. Same contract as
+ * {@link loadSkillPreferences}: an empty map means "none persisted yet"; a cache
+ * read failure propagates so a broken DB read is never merged over and saved
+ * back as an acknowledgment wipe.
+ */
 export async function loadSkillAcknowledgments(
   runtime: AgentRuntime | null,
 ): Promise<SkillAcknowledgmentMap> {
   if (!runtime) return {};
-  try {
-    const acks =
-      await runtime.getCache<SkillAcknowledgmentMap>(SKILL_ACK_CACHE_KEY);
-    return acks ?? {};
-  } catch {
-    return {};
-  }
+  const acks =
+    await runtime.getCache<SkillAcknowledgmentMap>(SKILL_ACK_CACHE_KEY);
+  return acks ?? {};
 }
 
 export async function saveSkillAcknowledgments(

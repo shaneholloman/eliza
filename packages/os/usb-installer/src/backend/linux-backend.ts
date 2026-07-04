@@ -1,3 +1,4 @@
+// Implements platform-specific USB installer backend safety behavior.
 import type { ChildProcess } from "node:child_process";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";

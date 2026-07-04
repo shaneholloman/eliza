@@ -1,3 +1,4 @@
+/** Scenario fixture for todo list today; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import { scenario } from "@elizaos/scenario-runner/schema";
 
 const EXPECTED_TODAY_TITLES = ["Reply to Jane", "Workout"] as const;

@@ -36,7 +36,7 @@ const callbackSchema = z.object({
   capacity: z.number().int().min(1).max(64).optional().default(8),
   sshPort: z.number().int().min(1).max(65535).optional().default(22),
   sshUser: z.string().min(1).max(32).optional().default("root"),
-  hostKeyFingerprint: z.string().min(1).max(128).optional(),
+  hostKeyFingerprint: z.string().min(1).max(128),
 });
 
 async function __hono_POST(request: Request) {
@@ -104,13 +104,11 @@ async function __hono_POST(request: Request) {
         sshUser !== existing.ssh_user ||
         sshPort !== existing.ssh_port;
       const pinned = existing.host_key_fingerprint;
+      const hasPinnedFingerprint = pinned !== null;
       const fingerprintMatches =
-        pinned !== null &&
-        hostKeyFingerprint !== undefined &&
-        timingSafeEquals(hostKeyFingerprint, pinned);
+        hasPinnedFingerprint && timingSafeEquals(hostKeyFingerprint, pinned);
       const fingerprintChanged =
-        hostKeyFingerprint !== undefined &&
-        (pinned === null || !timingSafeEquals(hostKeyFingerprint, pinned));
+        hasPinnedFingerprint && !timingSafeEquals(hostKeyFingerprint, pinned);
 
       if (identityChanged) {
         if (!fingerprintMatches) {
@@ -137,7 +135,7 @@ async function __hono_POST(request: Request) {
           {
             success: false,
             error:
-              "Host key fingerprint cannot be changed through re-bootstrap; rotate it through an authenticated control-plane operation.",
+              "Host key fingerprint is required and must match the existing node pin; rotate it through an authenticated control-plane operation.",
           },
           { status: 409 },
         );
@@ -152,7 +150,9 @@ async function __hono_POST(request: Request) {
         ssh_port: identityChanged ? sshPort : existing.ssh_port,
         ssh_user: identityChanged ? sshUser : existing.ssh_user,
         capacity,
-        host_key_fingerprint: existing.host_key_fingerprint,
+        host_key_fingerprint: hasPinnedFingerprint
+          ? existing.host_key_fingerprint
+          : hostKeyFingerprint,
         status: "unknown",
         metadata: {
           ...((existing.metadata as Record<string, unknown>) ?? {}),

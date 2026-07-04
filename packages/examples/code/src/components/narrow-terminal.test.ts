@@ -1,3 +1,4 @@
+// Exercises the Code example behavior that this module protects.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { type AgentRuntime, stringToUuid } from "@elizaos/core";

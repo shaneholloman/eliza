@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Supports OS release manifests, checksums, and TEE evidence automation.
 import {
   defaultManifestPath,
   parseArgs,

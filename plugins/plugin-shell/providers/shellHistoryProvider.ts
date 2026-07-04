@@ -146,15 +146,44 @@ ${addHeader("# Shell History (Last 10)", historyText)}${fileOpsText}`;
           allowedDir,
         },
       };
-    } catch {
+    } catch (error) {
+      // error-policy:J4 designed unavailable render; the provider emits a
+      // distinguishable "Shell history is unavailable: <msg>" status AND reports
+      // the failure via reportError — never a healthy-looking empty history.
+      //
+      // Surface the failure through the runtime diagnostic boundary AND as a
+      // model-visible status line. A bare `catch {}` that returned an empty
+      // string here hid real ShellService failures from both the operator logs
+      // and the planner loop, presenting success-shaped empty output instead of
+      // an error the model could react to (#12273/#12799).
+      //
+      // `runtime.reportError` (#12263) is the diagnostic boundary for provider
+      // failures: it logs with a `[scope]` prefix, emits ERROR_REPORTED, feeds
+      // the RECENT_ERRORS provider (so repeated shell-history backend failures
+      // become observable to the agent), and drives owner escalation. It never
+      // throws. Fall back to logger.error on runtimes/test doubles that predate
+      // it so the failure is never silently swallowed.
+      const errMsg = error instanceof Error ? error.message : String(error);
+      if (typeof runtime?.reportError === "function") {
+        runtime.reportError("shellHistoryProvider", error, {
+          roomId: message.roomId,
+          agentId: message.agentId,
+        });
+      } else {
+        logger.error(
+          { src: "shellHistoryProvider", error },
+          `[shellHistoryProvider] Failed to build shell history context: ${errMsg}`
+        );
+      }
+      const statusText = `Shell history is unavailable: ${errMsg}`;
       return {
         values: {
-          shellHistory: "",
+          shellHistory: statusText,
           currentWorkingDirectory: "N/A",
           allowedDirectory: "N/A",
         },
-        text: "",
-        data: { historyCount: 0, cwd: "N/A", allowedDir: "N/A" },
+        text: addHeader("# Shell Status", statusText),
+        data: { historyCount: 0, cwd: "N/A", allowedDir: "N/A", error: errMsg },
       };
     }
   },

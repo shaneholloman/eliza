@@ -1,3 +1,4 @@
+/** Scenario fixture for payments agent charge five dollar; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import type { AgentRuntime, Plugin } from "@elizaos/core";
 import {
   type ScenarioContext,

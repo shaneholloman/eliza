@@ -1,3 +1,4 @@
+// Implements platform-specific USB installer backend safety behavior.
 export {
   DEFAULT_ELIZAOS_IMAGES,
   DryRunUsbInstallerBackend,

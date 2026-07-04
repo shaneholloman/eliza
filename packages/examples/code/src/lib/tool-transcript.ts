@@ -1,3 +1,4 @@
+// Provides shared support logic for the Code example.
 import path from "node:path";
 import type { ActionEventPayload } from "@elizaos/core";
 

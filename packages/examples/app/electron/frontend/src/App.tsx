@@ -1,3 +1,4 @@
+// Renders the primary UI shell for the Electron app example.
 import type React from "react";
 import { useEffect, useState } from "react";
 import { loadConfig, saveConfig } from "./storage";

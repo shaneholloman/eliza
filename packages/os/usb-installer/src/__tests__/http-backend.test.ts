@@ -1,3 +1,4 @@
+// Exercises USB installer server and dry-run application behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpUsbInstallerBackend } from "../backend/http-backend";
 import type { WritePlan } from "../backend/types";

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/** Validates deployed TEE agent configuration and attestation endpoints from operator inputs. */
 import { readFileSync } from "node:fs";
 
 const input =

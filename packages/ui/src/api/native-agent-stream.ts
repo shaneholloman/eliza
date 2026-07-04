@@ -132,6 +132,9 @@ export async function createNativeStreamingResponse(
     resolveHead = resolve;
     rejectHead = reject;
   });
+  // error-policy:J5 unhandled-rejection guard; the rejection IS observed by the
+  // caller that consumes the returned `head` promise (line 207) — this keepalive
+  // catch only prevents a spurious unhandledrejection if head settles first.
   void head.catch(() => {});
   let headSettled = false;
 

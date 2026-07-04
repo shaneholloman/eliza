@@ -291,6 +291,7 @@ export class TaskWatchdogService extends Service {
           )}s) — prodding`,
         );
       } catch (error) {
+        // error-policy:J7 watchdog loop must survive a single failed prod; the failure is warned and retried next tick
         // Prod failed; un-mark so the next tick retries.
         this.prodded.delete(s.id);
         logger.warn(
@@ -323,7 +324,7 @@ export class TaskWatchdogService extends Service {
     const spendCapUsd = readSpendCapUsd();
     if (!router && !(spendCapUsd > 0)) {
       // No cap signal available this tick — nothing to evaluate. Drop any stale
-      // warned entries so a later signal re-warns cleanly.
+      // warned entries so a subsequent signal re-warns cleanly.
       this.warned.clear();
       return;
     }
@@ -343,7 +344,7 @@ export class TaskWatchdogService extends Service {
     const activeKeys = new Set(warnings.map((w) => `${w.kind}:${w.id}`));
 
     // Recover-then-rewarn: drop a (session,kind) that fell back under threshold
-    // so a later climb re-warns (mirrors the idle `prodded` dedup).
+    // so a subsequent climb re-warns (mirrors the idle `prodded` dedup).
     for (const key of [...this.warned]) {
       if (!activeKeys.has(key)) this.warned.delete(key);
     }
@@ -356,6 +357,7 @@ export class TaskWatchdogService extends Service {
       try {
         await this.postCapWarning(warning, metaById.get(warning.id));
       } catch (error) {
+        // error-policy:J7 watchdog loop must survive a single failed warning delivery; the failure is warned and retried next tick
         // Delivery failed; un-mark so the next tick retries.
         this.warned.delete(key);
         logger.warn(

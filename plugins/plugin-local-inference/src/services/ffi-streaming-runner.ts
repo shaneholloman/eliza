@@ -159,23 +159,38 @@ export class FfiStreamingRunner {
 	async generateWithUsage(
 		args: FfiStreamingGenerateArgs,
 	): Promise<FfiStreamingGenerateResult> {
-		if (args.slotId < 0) {
-			return this.runGenerate(args);
+		return this.withSlotLock(args.slotId, () => this.runGenerate(args));
+	}
+
+	/**
+	 * Serialize `fn` behind any in-flight generation on the same pinned slot.
+	 * Slot id `-1` (unpinned) runs immediately. Both `generateWithUsage` and
+	 * `generateStream` route through here — two concurrent generations against
+	 * the same pinned slot would interleave the slot's KV cache state.
+	 */
+	private async withSlotLock<T>(
+		slotId: number,
+		fn: () => Promise<T>,
+	): Promise<T> {
+		if (slotId < 0) {
+			return fn();
 		}
-		const prior = this.slotInFlight.get(args.slotId);
-		const run = (prior ?? Promise.resolve())
-			.catch(() => {})
-			.then(() => this.runGenerate(args));
+		const prior = this.slotInFlight.get(slotId);
+		// error-policy:J5 unhandled-rejection suppression — the prior slot user's
+		// failure was already observed by that caller (it awaited its own `run`).
+		// Here we only serialize behind its completion; swallowing its rejection
+		// keeps one generation's failure from blocking the next on the same slot.
+		const run = (prior ?? Promise.resolve()).catch(() => {}).then(fn);
 		const tail = run.then(
 			() => {},
 			() => {},
 		);
-		this.slotInFlight.set(args.slotId, tail);
+		this.slotInFlight.set(slotId, tail);
 		try {
 			return await run;
 		} finally {
-			if (this.slotInFlight.get(args.slotId) === tail) {
-				this.slotInFlight.delete(args.slotId);
+			if (this.slotInFlight.get(slotId) === tail) {
+				this.slotInFlight.delete(slotId);
 			}
 		}
 	}
@@ -184,8 +199,8 @@ export class FfiStreamingRunner {
 	 * Async-iterable variant. Yields each accepted-token batch as it lands
 	 * so callers that want token-grained control (e.g. the voice scheduler
 	 * driving phrase-chunking off accept/reject events) don't have to
-	 * register a callback. Internally still routes through `generateWithUsage`
-	 * via a pump so the single-flight rule applies.
+	 * register a callback. The pump acquires the same per-slot lock as
+	 * `generateWithUsage`, so the single-flight rule applies to streams too.
 	 */
 	async *generateStream(
 		args: FfiStreamingGenerateArgs,
@@ -209,7 +224,7 @@ export class FfiStreamingRunner {
 			wakeConsumer();
 		};
 
-		const work = (async () => {
+		const work = this.withSlotLock(args.slotId, async () => {
 			try {
 				await this.runGenerateInner(args, onStep);
 			} catch (err) {
@@ -218,7 +233,7 @@ export class FfiStreamingRunner {
 				finished = true;
 				wakeConsumer();
 			}
-		})();
+		});
 
 		try {
 			while (true) {

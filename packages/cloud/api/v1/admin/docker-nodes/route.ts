@@ -99,7 +99,7 @@ const createNodeSchema = z.object({
   sshPort: z.number().int().min(1).max(65535).optional().default(22),
   capacity: z.number().int().min(1).optional().default(8),
   sshUser: z.string().min(1).optional().default("root"),
-  hostKeyFingerprint: z.string().min(1).optional(),
+  hostKeyFingerprint: z.string().min(1),
 });
 
 app.post("/", async (c) => {
@@ -148,7 +148,7 @@ app.post("/", async (c) => {
       ssh_port: sshPort,
       capacity,
       ssh_user: sshUser,
-      host_key_fingerprint: hostKeyFingerprint ?? null,
+      host_key_fingerprint: hostKeyFingerprint,
     });
 
     logger.info("[Admin Docker Nodes] Node registered", {
@@ -168,7 +168,6 @@ app.post("/", async (c) => {
       enabled: boolean;
       status: string;
       createdAt: Date;
-      warning?: string;
     } = {
       id: node.id,
       nodeId: node.node_id,
@@ -181,11 +180,6 @@ app.post("/", async (c) => {
       status: node.status,
       createdAt: node.created_at,
     };
-
-    if (!hostKeyFingerprint) {
-      responseData.warning =
-        "No host key fingerprint set. SSH connections to this node are vulnerable to MITM attacks. Set host_key_fingerprint to pin the host key.";
-    }
 
     return c.json(
       {

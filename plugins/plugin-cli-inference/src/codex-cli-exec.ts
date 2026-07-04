@@ -92,6 +92,9 @@ function collectAssistantFragments(
     try {
       obj = JSON.parse(trimmed);
     } catch {
+      // error-policy:J3 stream parse — a non-JSON line in the codex NDJSON stream
+      // is skipped (not our record); if NO valid JSON is ever seen the caller
+      // throws (sawJson stays false). Not a swallowed data failure.
       continue;
     }
     sawJson = true;
@@ -223,6 +226,8 @@ export class CodexCli {
       }
       return text;
     } finally {
+      // error-policy:J6 best-effort teardown of the isolated cwd; a cleanup
+      // failure is logged at debug and must not mask the returned result / error.
       await rm(rawCwd, { recursive: true, force: true }).catch((err) => {
         logger.debug(`[cli-inference] failed to clean isolated cwd ${rawCwd}: ${String(err)}`);
       });

@@ -1,3 +1,4 @@
+// Exercises the Smartglasses example behavior that this module protects.
 import { expect, test } from "bun:test";
 import {
   encodeTextPackets,

@@ -1,3 +1,4 @@
+// Renders a reusable UI component for the Code example.
 import type { Component } from "@elizaos/tui";
 import chalk from "chalk";
 import { getCwd } from "../lib/cwd.js";

@@ -1,3 +1,4 @@
+// Drives repo automation capability router fixture conformance smoke with explicit CLI and CI behavior.
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -153,6 +154,7 @@ try {
 } finally {
   if (child && !child.killed) {
     child.kill("SIGTERM");
+    // error-policy:J6 best-effort wait for child exit during cleanup
     await once(child, "exit").catch(() => undefined);
   }
   if (workspace) {

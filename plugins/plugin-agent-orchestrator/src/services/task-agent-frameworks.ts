@@ -365,13 +365,16 @@ function safeGetSetting(
     const fromConfig = readConfigEnvKey(key);
     if (fromConfig?.trim()) return fromConfig.trim();
   } catch {
-    // ignore — fall through to runtime
+    // error-policy:J4 config-file source unavailable degrades to the runtime
+    // setting source below.
   }
   if (!runtime) return undefined;
   try {
     const value = runtime.getSetting(key);
     return typeof value === "string" && value.trim() ? value.trim() : undefined;
   } catch {
+    // error-policy:J4 optional setting lookup; an unavailable store degrades to
+    // undefined (not configured), which callers resolve to a default.
     return undefined;
   }
 }
@@ -490,6 +493,8 @@ function readJsonFile(filePath: string): unknown {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch {
+    // error-policy:J3 read+parse of an optional config/credentials file; a
+    // missing or malformed file is an explicit null the callers guard on.
     return null;
   }
 }
@@ -550,6 +555,8 @@ function hasClaudeSubscriptionAuth(): boolean {
     if (!raw) return false;
     return Boolean(extractOauthAccessToken(JSON.parse(raw)));
   } catch {
+    // error-policy:J3 keychain-credential probe; no entry / lookup failure means
+    // no subscription auth is present (false), not a swallowed error.
     return false;
   }
 }
@@ -625,6 +632,8 @@ function hasBinaryOnPath(binaryName: string): boolean {
     });
     return true;
   } catch {
+    // error-policy:J3 binary existence probe (`which`/`where`); a non-zero exit
+    // or missing command means the binary is absent (false).
     return false;
   }
 }
@@ -690,7 +699,8 @@ async function computeTaskAgentFrameworkState(
         }
       }
     } catch {
-      // Keep status surfaces alive even if preflight fails transiently.
+      // error-policy:J4 ACP preflight probe failed transiently; discovery degrades
+      // to static filesystem/env detection so status surfaces stay alive.
     }
   }
 

@@ -105,6 +105,8 @@ export function deriveBuiltApp(
     try {
       parsed = new URL(url);
     } catch {
+      // error-policy:J3 untrusted URL string — an unparseable candidate is
+      // skipped, exactly the "not this URL" signal the scan wants.
       continue;
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
@@ -184,8 +186,18 @@ export async function registerBuiltAppsForCompletion(
 ): Promise<BuiltAppRecord | null> {
   try {
     const meta = session.metadata;
+    // The task text's metadata carrier differs by spawn path: TASKS
+    // op=spawn_agent stamps the full `initialTask`, while the durable-task
+    // route (`spawnAgentForTask`) and the direct API spawn persist the bare
+    // `goal`. Accept either so the eliza-cloud app-build gate sees the task
+    // on every spawn path — an app built via a durable task must register
+    // the same way a chat-spawned one does.
     const initialTask =
-      typeof meta?.initialTask === "string" ? meta.initialTask : undefined;
+      typeof meta?.initialTask === "string"
+        ? meta.initialTask
+        : typeof meta?.goal === "string"
+          ? meta.goal
+          : undefined;
     const derived = deriveBuiltApp(
       verifiedUrls,
       resolveAppDeployConfig(),
@@ -214,6 +226,8 @@ export async function registerBuiltAppsForCompletion(
     });
     return record;
   } catch (err) {
+    // error-policy:J7 the built-app registry is a side-record on the completion
+    // path; a failure warns and must not break completion delivery to the user.
     log?.("warn", "built-app registration failed", {
       sessionId: session.id,
       error: err instanceof Error ? err.message : String(err),

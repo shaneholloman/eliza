@@ -81,6 +81,8 @@ export const defaultSpawn: SpawnFn = (argv, opts) =>
       // before falling through to the `-p` arg.
       stdinFd = openSync(opts.stdinPath, "r");
     } catch (err) {
+      // error-policy:J1 boundary — cannot open the required stdin fd; reject the
+      // spawn (fail closed, do not launch the CLI blind).
       reject(err instanceof Error ? err : new Error(String(err)));
       return;
     }
@@ -111,7 +113,8 @@ export const defaultSpawn: SpawnFn = (argv, opts) =>
           child.kill(sig);
         }
       } catch {
-        // Group already gone — nothing to signal.
+        // error-policy:J6 best-effort signal — an ESRCH means the group already
+        // exited; there is nothing to signal, which is the intended terminal state.
       }
     };
 
@@ -236,6 +239,8 @@ export class ClaudeCli {
       }
       return text;
     } finally {
+      // error-policy:J6 best-effort teardown of the isolated cwd; logged at debug,
+      // must not mask the returned result / error.
       await rm(rawCwd, { recursive: true, force: true }).catch((err) => {
         logger.debug(`[cli-inference] failed to clean isolated cwd ${rawCwd}: ${String(err)}`);
       });

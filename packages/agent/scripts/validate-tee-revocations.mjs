@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/** Validates TEE revocation handling against configured deployment state. */
 import { readFileSync } from "node:fs";
 
 const input = process.argv[2] ?? "packages/agent/tee/revocations.example.json";

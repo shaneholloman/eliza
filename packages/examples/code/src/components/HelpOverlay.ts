@@ -1,3 +1,4 @@
+// Renders a reusable UI component for the Code example.
 import type { Component, Terminal } from "@elizaos/tui";
 import chalk from "chalk";
 

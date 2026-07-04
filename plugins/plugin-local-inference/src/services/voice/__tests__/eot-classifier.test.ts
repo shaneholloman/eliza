@@ -12,7 +12,9 @@ import { MockCheckpointManager } from "../checkpoint-manager";
 import {
 	EOT_COMMIT_SILENCE_MS,
 	EOT_COMMIT_THRESHOLD,
+	EOT_FUSED_COMMIT_THRESHOLD,
 	EOT_HANGOVER_EXTENSION_MS,
+	EOT_HEURISTIC_COMMIT_THRESHOLD,
 	EOT_MID_CLAUSE_THRESHOLD,
 	EOT_TENTATIVE_SILENCE_MS,
 	EOT_TENTATIVE_THRESHOLD,
@@ -143,6 +145,21 @@ describe("HeuristicEotClassifier — rule coverage", () => {
 		expect(await clf.score("I need a")).toBe(0.2);
 	});
 
+	it("trailing filler plus pause cue → P=0.20", async () => {
+		expect(await clf.score("Let me think um")).toBe(0.2);
+		expect(await clf.score("I was going to say uh")).toBe(0.2);
+	});
+
+	it("mid-clause dangling modal/auxiliary → P=0.20", async () => {
+		expect(await clf.score("I was thinking we could")).toBe(0.2);
+		expect(await clf.score("The reason is")).toBe(0.2);
+	});
+
+	it("sentence-final filler/modals still commit when punctuated", async () => {
+		expect(await clf.score("Let me think um.")).toBe(0.95);
+		expect(await clf.score("We could do that.")).toBe(0.95);
+	});
+
 	it("no signal (neutral content) → P=0.50", async () => {
 		expect(await clf.score("Tell me about the weather in London")).toBe(0.5);
 	});
@@ -216,6 +233,43 @@ describe("VoiceStateMachine — EOT classifier integration", () => {
 		expect(commits).toHaveLength(0);
 	});
 
+	it("fused classifiers commit at P≥0.7 with 50ms silence", async () => {
+		const fusedClf: EotClassifier = {
+			commitThreshold: EOT_FUSED_COMMIT_THRESHOLD,
+			score: async () => EOT_FUSED_COMMIT_THRESHOLD,
+		};
+		const { machine, commits } = makeMachine(fusedClf);
+
+		await machine.dispatch({ type: "speech-start", timestampMs: 0 });
+		await machine.dispatch({
+			type: "partial-transcript",
+			timestampMs: 500,
+			text: "That should work",
+			silenceSinceMs: EOT_COMMIT_SILENCE_MS,
+		});
+
+		expect(machine.getState()).toBe("SPEAKING");
+		expect(commits).toHaveLength(1);
+	});
+
+	it("heuristic-only classifiers do not commit at the fused threshold", async () => {
+		const heuristicLevelClf: EotClassifier = {
+			score: async () => EOT_FUSED_COMMIT_THRESHOLD,
+		};
+		const { machine, commits } = makeMachine(heuristicLevelClf);
+
+		await machine.dispatch({ type: "speech-start", timestampMs: 0 });
+		await machine.dispatch({
+			type: "partial-transcript",
+			timestampMs: 500,
+			text: "That should work",
+			silenceSinceMs: EOT_COMMIT_SILENCE_MS,
+		});
+
+		expect(machine.getState()).toBe("PAUSE_TENTATIVE");
+		expect(commits).toHaveLength(0);
+	});
+
 	it("P≥0.6 AND silence≥20ms while LISTENING → enters PAUSE_TENTATIVE early", async () => {
 		const tentativeClf: EotClassifier = { score: async () => 0.75 };
 		const { machine, drafter } = makeMachine(tentativeClf);
@@ -265,6 +319,57 @@ describe("VoiceStateMachine — EOT classifier integration", () => {
 		});
 
 		expect(machine.getEotHangoverExtensionMs()).toBe(EOT_HANGOVER_EXTENSION_MS);
+	});
+
+	it("filler + long pause holds instead of committing", async () => {
+		const clf = new HeuristicEotClassifier();
+		const { machine, commits } = makeMachine(clf);
+
+		await machine.dispatch({ type: "speech-start", timestampMs: 0 });
+		await machine.dispatch({
+			type: "partial-transcript",
+			timestampMs: 700,
+			text: "Let me think um",
+			silenceSinceMs: 700,
+		});
+
+		expect(machine.getState()).toBe("LISTENING");
+		expect(commits).toHaveLength(0);
+		expect(machine.getEotHangoverExtensionMs()).toBe(EOT_HANGOVER_EXTENSION_MS);
+	});
+
+	it("mid-clause pause ≥700ms holds instead of committing", async () => {
+		const clf = new HeuristicEotClassifier();
+		const { machine, commits } = makeMachine(clf);
+
+		await machine.dispatch({ type: "speech-start", timestampMs: 0 });
+		await machine.dispatch({
+			type: "partial-transcript",
+			timestampMs: 900,
+			text: "I was thinking we could",
+			silenceSinceMs: 900,
+		});
+
+		expect(machine.getState()).toBe("LISTENING");
+		expect(commits).toHaveLength(0);
+		expect(machine.getEotHangoverExtensionMs()).toBe(EOT_HANGOVER_EXTENSION_MS);
+	});
+
+	it("genuine sentence-final pause still commits within budget", async () => {
+		const clf = new HeuristicEotClassifier();
+		const { machine, commits } = makeMachine(clf);
+
+		await machine.dispatch({ type: "speech-start", timestampMs: 0 });
+		await machine.dispatch({
+			type: "partial-transcript",
+			timestampMs: 80,
+			text: "We could do that.",
+			silenceSinceMs: EOT_COMMIT_SILENCE_MS,
+		});
+
+		expect(machine.getState()).toBe("SPEAKING");
+		expect(commits).toHaveLength(1);
+		expect(commits[0].transcript).toBe("We could do that.");
 	});
 
 	it("P<0.4 across two chunks → extension accumulates additively", async () => {
@@ -421,8 +526,14 @@ describe("EotClassifier interface contract", () => {
 	});
 
 	it("EOT_COMMIT_THRESHOLD > EOT_TENTATIVE_THRESHOLD > EOT_MID_CLAUSE_THRESHOLD", () => {
+		expect(EOT_COMMIT_THRESHOLD).toBe(EOT_HEURISTIC_COMMIT_THRESHOLD);
 		expect(EOT_COMMIT_THRESHOLD).toBeGreaterThan(EOT_TENTATIVE_THRESHOLD);
 		expect(EOT_TENTATIVE_THRESHOLD).toBeGreaterThan(EOT_MID_CLAUSE_THRESHOLD);
+	});
+
+	it("fused commit threshold is lower than heuristic-only commit threshold", () => {
+		expect(EOT_FUSED_COMMIT_THRESHOLD).toBe(0.7);
+		expect(EOT_HEURISTIC_COMMIT_THRESHOLD).toBe(0.9);
 	});
 
 	it("EOT_COMMIT_SILENCE_MS > EOT_TENTATIVE_SILENCE_MS", () => {

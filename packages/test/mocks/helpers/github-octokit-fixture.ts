@@ -1,3 +1,4 @@
+/** Provides github octokit fixture helper utilities shared by package tests and scenario harnesses. */
 export interface GitHubFixtureRequest {
   action: string;
   params: Record<string, unknown>;

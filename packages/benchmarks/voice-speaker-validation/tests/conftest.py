@@ -21,8 +21,6 @@ from typing import Any
 
 import numpy as np
 import pytest
-import soundfile as sf
-import torch
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 ARTIFACTS_DIR = Path(__file__).parent.parent / "artifacts"
@@ -36,6 +34,8 @@ TARGET_SR = 16_000
 def load_wav_mono16k(path: Path) -> np.ndarray:
     """Load a WAV file and return float32 mono PCM at 16 kHz."""
     import librosa
+    import soundfile as sf
+
     audio, sr = sf.read(str(path))
     if audio.ndim > 1:
         audio = audio.mean(axis=1)

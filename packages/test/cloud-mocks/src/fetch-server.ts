@@ -1,3 +1,4 @@
+/** Exports shared cloud mock helpers for deterministic local provider API tests. */
 import http from "node:http";
 import { Readable } from "node:stream";
 

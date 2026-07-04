@@ -1,3 +1,4 @@
+/** Builds the container control-plane mock HTTP app: route handlers over the in-memory mock store. */
 import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import {

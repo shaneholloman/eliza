@@ -69,6 +69,10 @@ const CHANNEL_MAP_PATH = join(HERE, "channel-plugin-map.json");
 // this instead of hand-maintaining PROVIDER_PLUGIN_MAP. Entries opt in by
 // marking config fields with `autoEnableProvider: true`.
 const PROVIDER_MAP_PATH = join(HERE, "provider-plugin-map.json");
+// Derived short-id -> plugin-package map. The agent statically imports this to
+// build OPTIONAL_PLUGIN_MAP instead of hand-maintaining the alias table. Entries
+// opt in by listing bare ids in `shortIds` (e.g. evm/solana/wallet -> wallet).
+const SHORTID_MAP_PATH = join(HERE, "short-id-plugin-map.json");
 
 interface CuratedAppDefinition {
   slug: string;
@@ -106,6 +110,33 @@ export function collectChannelPluginMap(
         );
       }
       map[channel] = e.npmName;
+    }
+  }
+  return Object.fromEntries(
+    Object.keys(map)
+      .sort()
+      .map((k) => [k, map[k]]),
+  );
+}
+
+// Derive the short-id -> plugin-package map from entries' `shortIds`. This
+// replaces the hand-maintained OPTIONAL_PLUGIN_MAP alias table for entries that
+// declare a registry entry. Keys are sorted for a stable artifact. Conflicting
+// claims fail loudly at generation time so drift cannot silently ship — the
+// same guarantee CHANNEL_PLUGIN_MAP gives channel aliases.
+export function collectShortIdPluginMap(
+  entries: RegistryEntry[],
+): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const e of entries) {
+    if (!e.npmName) continue;
+    for (const shortId of e.shortIds ?? []) {
+      if (map[shortId] && map[shortId] !== e.npmName) {
+        throw new Error(
+          `[registry/generate] short id "${shortId}" claimed by both ${map[shortId]} and ${e.npmName}`,
+        );
+      }
+      map[shortId] = e.npmName;
     }
   }
   return Object.fromEntries(
@@ -208,6 +239,7 @@ export function generateFirstPartyRegistry(): {
   curated: string;
   channels: string;
   providers: string;
+  shortIds: string;
 } {
   const entries = collectFirstPartyEntries();
   return {
@@ -215,6 +247,7 @@ export function generateFirstPartyRegistry(): {
     curated: `${JSON.stringify(collectCuratedAppDefinitions(entries), null, 2)}\n`,
     channels: `${JSON.stringify(collectChannelPluginMap(entries), null, 2)}\n`,
     providers: `${JSON.stringify(collectProviderPluginMap(entries), null, 2)}\n`,
+    shortIds: `${JSON.stringify(collectShortIdPluginMap(entries), null, 2)}\n`,
   };
 }
 
@@ -226,6 +259,7 @@ function main(): void {
     [CURATED_DEFS_PATH, biomeFormatJson(next.curated, CURATED_DEFS_PATH)],
     [CHANNEL_MAP_PATH, biomeFormatJson(next.channels, CHANNEL_MAP_PATH)],
     [PROVIDER_MAP_PATH, biomeFormatJson(next.providers, PROVIDER_MAP_PATH)],
+    [SHORTID_MAP_PATH, biomeFormatJson(next.shortIds, SHORTID_MAP_PATH)],
   ];
   if (check) {
     for (const [path, expected] of artifacts) {

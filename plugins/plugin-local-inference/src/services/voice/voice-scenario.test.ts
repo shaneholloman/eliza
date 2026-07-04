@@ -89,6 +89,29 @@ describe("validateVoiceScenario", () => {
 		);
 	});
 
+	it("validates acoustic quality artifact ranges", () => {
+		const s = validScenario();
+		s.environment = {
+			clipThreshold: 0,
+			compressionArtifacts: 2,
+			dropoutProbability: -0.1,
+			dropoutMs: 0,
+		} as VoiceEnvironment;
+		const errors = validateVoiceScenario(s).errors;
+		expect(errors).toContain(
+			"scenario.environment.clipThreshold must be in (0, 1]",
+		);
+		expect(errors).toContain(
+			"scenario.environment.compressionArtifacts must be in [0, 1]",
+		);
+		expect(errors).toContain(
+			"scenario.environment.dropoutProbability must be in [0, 1]",
+		);
+		expect(errors).toContain(
+			"scenario.environment.dropoutMs must be a positive number",
+		);
+	});
+
 	it("collects every error at once instead of throwing on the first", () => {
 		const r = validateVoiceScenario({
 			id: "",

@@ -1,3 +1,4 @@
+/** Provides seed grants helper utilities shared by package tests and scenario harnesses. */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

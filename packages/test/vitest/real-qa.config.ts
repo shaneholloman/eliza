@@ -1,3 +1,4 @@
+/** Configures the real qa shared Vitest lane used by workspace package tests. */
 import type { UserConfig } from "vite";
 import { defineConfig, mergeConfig } from "vitest/config";
 import realConfig from "./real.config";

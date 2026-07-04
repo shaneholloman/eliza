@@ -27,6 +27,10 @@ def _fixture_speaker_operations() -> list[object]:
     return json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))["speaker_operations"]
 
 
+def _fixture_speaker_name_provenance() -> list[object]:
+    return json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))["speaker_name_provenance"]
+
+
 def _base_manifest(provider_mode: str = "real_zoom_meet") -> dict[str, object]:
     return {
         "provider_mode": provider_mode,
@@ -52,6 +56,7 @@ def _base_manifest(provider_mode: str = "real_zoom_meet") -> dict[str, object]:
         "dataset_sources": _fixture_dataset_sources(),
         "capture_paths": _fixture_capture_paths(),
         "speaker_operations": _fixture_speaker_operations(),
+        "speaker_name_provenance": _fixture_speaker_name_provenance(),
         "metrics": {
             "transcript_quality": 0.91,
             "diarization_quality": 0.82,
@@ -92,6 +97,7 @@ def test_mocked_plumbing_fixture_is_not_publishable() -> None:
     assert len(report["dataset_sources"]) == len(_fixture_dataset_sources())
     assert len(report["capture_paths"]) == len(_fixture_capture_paths())
     assert len(report["speaker_operations"]) == len(_fixture_speaker_operations())
+    assert len(report["speaker_name_provenance"]) == len(_fixture_speaker_name_provenance())
 
 
 def test_real_lane_requires_non_mock_provider(tmp_path: Path) -> None:
@@ -368,6 +374,64 @@ def test_speaker_operations_may_only_reference_known_metrics(tmp_path: Path) -> 
         build_report(lane="real_product", manifest_path=manifest)
 
 
+def test_real_lane_requires_all_speaker_name_provenance_cases(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    manifest_data["speaker_name_provenance"] = [
+        case
+        for case in _fixture_speaker_name_provenance()
+        if isinstance(case, dict) and case.get("id") != "borrowed_device_guardrail"
+    ]
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="speaker_name_provenance missing cases"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_speaker_name_provenance_requires_source_and_confidence(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    speaker_names = _fixture_speaker_name_provenance()
+    assert isinstance(speaker_names[0], dict)
+    speaker_names[0] = {key: value for key, value in speaker_names[0].items() if key != "confidence"}
+    manifest_data["speaker_name_provenance"] = speaker_names
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="missing fields"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+    speaker_names = _fixture_speaker_name_provenance()
+    assert isinstance(speaker_names[0], dict)
+    speaker_names[0] = {**speaker_names[0], "source": "chat_guess"}
+    manifest_data["speaker_name_provenance"] = speaker_names
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match=r"speaker_name_provenance\[0\]\.source must be one of"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_low_confidence_speaker_name_cannot_be_confirmed(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    speaker_names = _fixture_speaker_name_provenance()
+    assert isinstance(speaker_names[1], dict)
+    speaker_names[1] = {**speaker_names[1], "expected_resolution": "apply_name"}
+    manifest_data["speaker_name_provenance"] = speaker_names
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="low-confidence inferred names cannot use confirmed resolution"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_speaker_name_policies_reject_sensitive_attribute_shortcuts(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    speaker_names = _fixture_speaker_name_provenance()
+    assert isinstance(speaker_names[0], dict)
+    speaker_names[0] = {**speaker_names[0], "confidence_policy": "use gender and voice profile as a shortcut"}
+    manifest_data["speaker_name_provenance"] = speaker_names
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="must not use sensitive attributes"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
 def test_real_lane_scores_lowest_required_quality_and_resolves_evidence(tmp_path: Path) -> None:
     evidence_names = [
         "audio",
@@ -405,6 +469,24 @@ def test_real_lane_scores_lowest_required_quality_and_resolves_evidence(tmp_path
         "post_deletion_non_recognition",
         "multi_speaker_single_stream_attribution",
     }
+    assert {case["id"] for case in report["speaker_name_provenance"]} >= {
+        "platform_roster_name",
+        "calendar_attendee_name",
+        "self_introduction_name",
+        "user_correction_name",
+        "voice_profile_match_name",
+        "recurring_speaker_memory",
+        "same_first_name_ambiguity",
+        "borrowed_device_guardrail",
+    }
+    assert {case["expected_resolution"] for case in report["speaker_name_provenance"]} >= {
+        "apply_name",
+        "withhold_name",
+        "request_confirmation",
+        "prefer_user_correction",
+        "preserve_unknown",
+    }
+    assert all("confidence" in case for case in report["speaker_name_provenance"])
     assert all(dataset["version"] for dataset in report["dataset_sources"])
     assert all(dataset["checksum"] for dataset in report["dataset_sources"])
     assert all(dataset["sample_count"] > 0 for dataset in report["dataset_sources"])

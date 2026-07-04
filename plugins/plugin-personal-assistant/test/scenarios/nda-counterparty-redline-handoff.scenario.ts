@@ -1,3 +1,6 @@
+/**
+ * Live-model scenario (live-only lane): NDA redline approval resolves on the live queue with the walk-away floor redacted.
+ */
 import { scenario } from "@elizaos/scenario-runner/schema";
 import {
   expectApprovalResolvedApproved,
@@ -5,9 +8,6 @@ import {
   expectPendingApprovalSeeded,
 } from "./_helpers/approval-outcome.ts";
 
-/**
- * Live-model scenario (live-only lane): NDA redline approval resolves on the live queue with the walk-away floor redacted.
- */
 export default scenario({
   lane: "live-only",
   id: "nda-counterparty-redline-handoff",

@@ -1,3 +1,4 @@
+// Renders a reusable UI component for the Code example.
 import type { Component, Focusable, Terminal } from "@elizaos/tui";
 import { truncateToWidth } from "@elizaos/tui";
 import { useStore } from "../lib/store.js";

@@ -1,3 +1,12 @@
+/**
+ * In-memory {@link SendPolicyRegistry} backing the LifeOps send-policy contract.
+ * Send policies gate outbound dispatch on a connector or channel; the registry
+ * evaluates them in ascending-priority order and returns the first non-`allow`
+ * decision (`require_approval` / `deny`), defaulting to `allow` when every
+ * policy passes. The canonical contributor is the owner-send policy in
+ * `messaging/owner-send-policy.ts`, which forces Gmail drafts through owner
+ * approval.
+ */
 import type { IAgentRuntime } from "@elizaos/core";
 import type {
   SendPolicyContext,

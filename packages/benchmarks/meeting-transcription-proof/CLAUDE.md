@@ -74,6 +74,17 @@ shared-room uncertainty. Each operation must describe evidence types, metrics,
 privacy controls, and the confidence policy for applying or withholding speaker
 names.
 
+## Speaker Name Provenance Contract
+
+The real lane requires speaker-name provenance cases for platform roster names,
+calendar attendees, self-introductions, user corrections, voice profile matches,
+recurring speaker memory after correction, same-first-name ambiguity, and
+borrowed-device guardrails. Each case must describe source, surface, evidence,
+signals, confidence, conflict policy, confidence policy, privacy policy, and the
+expected resolution. Low-confidence inferred names cannot be reported as
+confirmed identities; they must request confirmation, withhold the name, or
+preserve an unknown speaker label.
+
 ## Evidence
 
 Mocked reports prove plumbing only. Real reports must reference reviewed audio,

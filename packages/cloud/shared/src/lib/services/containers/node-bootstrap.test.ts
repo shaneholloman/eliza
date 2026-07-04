@@ -1,3 +1,4 @@
+// Exercises node bootstrap behavior with deterministic cloud-shared lib fixtures.
 import { afterEach, describe, expect, test } from "bun:test";
 import { buildContainerNodeUserData } from "./node-bootstrap";
 
@@ -85,5 +86,22 @@ describe("buildContainerNodeUserData — ghcr access", () => {
     expect(dockerIdx).toBeGreaterThanOrEqual(0);
     expect(guardIdx).toBeGreaterThan(dockerIdx);
     expect(networkIdx).toBeGreaterThan(guardIdx);
+  });
+
+  test("self-registration includes the node host-key fingerprint and fails closed if it cannot be read", () => {
+    clearRegistryEnv();
+    const userData = buildContainerNodeUserData({
+      ...baseInput,
+      registrationUrl: "https://control.example.test/api/v1/admin/docker-nodes/bootstrap-callback",
+      registrationSecret: "bootstrap-secret",
+    });
+
+    expect(userData).toContain(
+      "HOST_KEY_FINGERPRINT=$(ssh-keygen -l -E sha256 -f /etc/ssh/ssh_host_ed25519_key.pub",
+    );
+    expect(userData).toContain("ssh_host_rsa_key.pub");
+    expect(userData).toContain("hostKeyFingerprint");
+    expect(userData).toContain("host key fingerprint unavailable; refusing self-registration");
+    expect(userData).toContain("exit 1");
   });
 });

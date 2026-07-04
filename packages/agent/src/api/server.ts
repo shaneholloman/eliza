@@ -152,16 +152,32 @@ async function getX402Plugin(): Promise<X402PluginModule | null> {
   return x402PluginModulePromise;
 }
 
+// Package specifier per optional-plugin key. Kept alongside the import table so
+// the unavailable-plugin fallback can key its "is this the plugin package itself
+// that's absent (benign) vs a broken transitive import (drift)" decision on the
+// real specifier rather than the short key. See optional-plugin-fallback.ts.
+const optionalPluginSpecifiers = {
+  capacitor: "@elizaos/plugin-capacitor-bridge",
+  computerUse: "@elizaos/plugin-computeruse",
+  cloud: "@elizaos/plugin-elizacloud",
+  imessage: "@elizaos/plugin-imessage",
+  mcp: "@elizaos/plugin-mcp",
+  signal: "@elizaos/plugin-signal",
+  streaming: "@elizaos/plugin-streaming",
+  whatsapp: "@elizaos/plugin-whatsapp",
+  workflow: "@elizaos/plugin-workflow",
+} as const;
+
 const optionalPluginImports = {
-  capacitor: () => importOptionalPlugin("@elizaos/plugin-capacitor-bridge"),
-  computerUse: () => importOptionalPlugin("@elizaos/plugin-computeruse"),
-  cloud: () => importOptionalPlugin("@elizaos/plugin-elizacloud"),
-  imessage: () => importOptionalPlugin("@elizaos/plugin-imessage"),
-  mcp: () => importOptionalPlugin("@elizaos/plugin-mcp"),
-  signal: () => importOptionalPlugin("@elizaos/plugin-signal"),
-  streaming: () => importOptionalPlugin("@elizaos/plugin-streaming"),
-  whatsapp: () => importOptionalPlugin("@elizaos/plugin-whatsapp"),
-  workflow: () => importOptionalPlugin("@elizaos/plugin-workflow"),
+  capacitor: () => importOptionalPlugin(optionalPluginSpecifiers.capacitor),
+  computerUse: () => importOptionalPlugin(optionalPluginSpecifiers.computerUse),
+  cloud: () => importOptionalPlugin(optionalPluginSpecifiers.cloud),
+  imessage: () => importOptionalPlugin(optionalPluginSpecifiers.imessage),
+  mcp: () => importOptionalPlugin(optionalPluginSpecifiers.mcp),
+  signal: () => importOptionalPlugin(optionalPluginSpecifiers.signal),
+  streaming: () => importOptionalPlugin(optionalPluginSpecifiers.streaming),
+  whatsapp: () => importOptionalPlugin(optionalPluginSpecifiers.whatsapp),
+  workflow: () => importOptionalPlugin(optionalPluginSpecifiers.workflow),
 };
 
 type LocalInferenceServerApi = LocalInferenceRouteApi &
@@ -188,26 +204,25 @@ async function getOptionalPluginApi<T>(
   try {
     return (await optionalPluginImports[key]()) as T;
   } catch (err) {
-    // The plugin is optional and not in this bundle (on mobile, many
-    // desktop/cloud plugins — cloud, whatsapp, wallet-adjacent, mcp,
-    // streaming, … — are excluded). Its dynamic import REJECTS with a
-    // ResolveMessage; without this catch that rejection propagates to the
-    // top-level request handler as a 500 on EVERY renderer poll of the
-    // plugin's routes. Return a Proxy of no-op handlers so route-dispatch
-    // blocks (`if (await handleX(...)) return;`) fall through to the normal
-    // 404/fallback instead of erroring. On desktop/server the import succeeds,
-    // so this branch never runs there.
-    logger.debug(
-      `[eliza-api] optional plugin '${key}' unavailable in this bundle: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+    // The plugin is optional and (on mobile) many desktop/cloud plugins — cloud,
+    // whatsapp, wallet-adjacent, mcp, streaming, … — are excluded, so their
+    // dynamic import REJECTS with a module-resolution error. Without this catch
+    // that rejection propagates to the top-level request handler as a 500 on
+    // EVERY renderer poll of the plugin's routes. We fall back to a no-op API so
+    // route-dispatch blocks (`if (await handleX(...)) return;`) fall through to
+    // the normal 404 instead of erroring.
+    //
+    // resolveOptionalPluginImportFailure distinguishes the EXPECTED
+    // module-absent case (quiet debug + fallthrough) from a present-but-broken
+    // plugin (a package that resolved but threw at init, or whose accessed
+    // export was renamed/removed). The latter is a drift regression the old
+    // silent Proxy hid — it now warns so a broken/renamed handler is observable
+    // instead of silently 404ing forever. See optional-plugin-fallback.ts.
+    return resolveOptionalPluginImportFailure<T>(
+      String(key),
+      err,
+      optionalPluginSpecifiers[key],
     );
-    return new Proxy(
-      {},
-      {
-        get: () => () => false,
-      },
-    ) as T;
   }
 }
 type BrowserBridgeKind = BrowserPluginModule["BROWSER_BRIDGE_KINDS"][number];
@@ -252,18 +267,14 @@ function getWalletApi(): Promise<typeof import("@elizaos/plugin-wallet")> {
     typeof import("@elizaos/plugin-wallet")
   >("@elizaos/plugin-wallet").catch((err) => {
     // plugin-wallet is desktop/cloud-only; on mobile it is not in the bundle so
-    // this import REJECTS. Cache a no-op proxy so /api/wallet/* falls through to
-    // 404 instead of 500ing on every renderer poll. Desktop imports succeed, so
-    // this never runs there.
-    logger.debug(
-      `[eliza-api] plugin-wallet unavailable in this bundle: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-    return new Proxy(
-      {},
-      { get: () => () => false },
-    ) as typeof import("@elizaos/plugin-wallet");
+    // this import REJECTS. Cache a no-op fallback so /api/wallet/* falls through
+    // to 404 instead of 500ing on every renderer poll. Desktop imports succeed,
+    // so this branch never runs there. resolveOptionalPluginImportFailure keeps
+    // the benign module-absent case quiet while surfacing a present-but-broken
+    // plugin-wallet load (drift) as an observable warning.
+    return resolveOptionalPluginImportFailure<
+      typeof import("@elizaos/plugin-wallet")
+    >("@elizaos/plugin-wallet", err, "@elizaos/plugin-wallet");
   });
   return walletApiPromise;
 }
@@ -370,6 +381,7 @@ import {
   DISABLED_TRIGGER_INTERVAL_MS,
   normalizeTriggerDraft,
 } from "../triggers/scheduling.ts";
+import { resolveAbsentPluginRouteStub } from "./absent-plugin-route-stubs.ts";
 import { detectRuntimeModel, resolveProviderFromModel } from "./agent-model.ts";
 import { persistConfigEnv } from "./config-env.ts";
 import { wireCoordinatorBridgesWhenReady } from "./coordinator-wiring.ts";
@@ -382,6 +394,7 @@ import {
   loadLocalInferenceVoiceRouteApi,
 } from "./local-inference-server-api.ts";
 import { pushWithBatchEvict } from "./memory-bounds.ts";
+import { resolveOptionalPluginImportFailure } from "./optional-plugin-fallback.ts";
 import {
   buildPluginDiagnosticEntry,
   resolveWalletDiagnosticStatus,
@@ -975,136 +988,19 @@ async function handleBuiltinOptionalRoutes(
     return true;
   }
 
-  if (pathname === "/api/lifeops/activity-signals") {
-    if (method === "GET") {
-      json(res, { signals: [] });
-      return true;
-    }
+  // Pure-fabrication "capability unavailable" stubs are declared once in the
+  // absent-plugin route stub registry (see absent-plugin-route-stubs.ts /
+  // arch-audit #12089 item 12). Anything that reads live runtime state (wallet
+  // addresses, on-disk training config) is handled above and is intentionally
+  // NOT in the registry, because those are not fabrications.
+  const absentPluginStub = resolveAbsentPluginRouteStub(method, pathname);
+  if (absentPluginStub) {
+    // POST stubs still drain the request body so the socket is not left with a
+    // pending payload (matches the pre-registry behavior for activity-signals).
     if (method === "POST") {
       await readBody(req).catch(() => undefined);
-      json(res, {
-        ok: true,
-        stored: false,
-        reason: "lifeops_route_unavailable",
-      });
-      return true;
     }
-  }
-
-  if (method === "GET" && pathname === "/api/voice/profiles") {
-    json(res, { profiles: [] });
-    return true;
-  }
-
-  if (method === "GET" && pathname === "/api/discord-local/status") {
-    json(res, {
-      available: false,
-      connected: false,
-      authenticated: false,
-      currentUser: null,
-      subscribedChannelIds: [],
-      configuredChannelIds: [],
-      scopes: [],
-      lastError: null,
-      ipcPath: null,
-    });
-    return true;
-  }
-
-  if (
-    method === "GET" &&
-    pathname === "/api/lifeops/connectors/imessage/status"
-  ) {
-    json(res, {
-      available: false,
-      connected: false,
-      bridgeType: "none",
-      hostPlatform: process.platform,
-      diagnostics: [],
-      error: null,
-      chatDbAvailable: false,
-      sendOnly: false,
-      reason: "lifeops_route_unavailable",
-      permissionAction: null,
-    });
-    return true;
-  }
-
-  if (method === "GET" && pathname === "/api/signal/status") {
-    const requestUrl = new URL(req.url ?? pathname, "http://localhost");
-    const accountId = requestUrl.searchParams.get("accountId") || "default";
-    json(res, {
-      accountId,
-      status: "idle",
-      authExists: false,
-      serviceConnected: false,
-      qrDataUrl: null,
-      phoneNumber: null,
-      error: null,
-    });
-    return true;
-  }
-
-  if (method === "GET" && pathname === "/api/setup/telegram-account/status") {
-    json(res, {
-      connector: "telegram-account",
-      state: "idle",
-      detail: {
-        status: "idle",
-        configured: false,
-        sessionExists: false,
-        serviceConnected: false,
-        restartRequired: false,
-        hasAppCredentials: false,
-        phone: null,
-        isCodeViaApp: false,
-        account: null,
-        error: null,
-      },
-    });
-    return true;
-  }
-
-  if (method === "GET" && pathname === "/api/whatsapp/status") {
-    const requestUrl = new URL(req.url ?? pathname, "http://localhost");
-    const accountId = requestUrl.searchParams.get("accountId") || "default";
-    const authScope = requestUrl.searchParams.get("authScope");
-    json(res, {
-      accountId,
-      ...(authScope === "platform" || authScope === "lifeops"
-        ? { authScope }
-        : {}),
-      status: "idle",
-      authExists: false,
-      serviceConnected: false,
-      servicePhone: null,
-    });
-    return true;
-  }
-
-  if (method === "GET" && pathname === "/api/coding-agents/preflight") {
-    json(res, { installed: [], available: false });
-    return true;
-  }
-
-  if (
-    method === "GET" &&
-    pathname === "/api/coding-agents/coordinator/status"
-  ) {
-    json(res, {
-      supervisionLevel: "unavailable",
-      taskCount: 0,
-      tasks: [],
-      pendingConfirmations: 0,
-      taskThreadCount: 0,
-      taskThreads: [],
-      frameworks: [],
-    });
-    return true;
-  }
-
-  if (method === "GET" && pathname === "/api/browser-bridge/companions") {
-    json(res, { companions: [] });
+    json(res, absentPluginStub.buildBody(req));
     return true;
   }
 
@@ -1616,9 +1512,9 @@ import {
   getPairingExpiresAt as _getPairingExpiresAt,
   isAllowedHost as _isAllowedHost,
   isAuthorized as _isAuthorized,
+  isBoundaryRoleAuthorized as _isBoundaryRoleAuthorized,
   isSharedTerminalClientId as _isSharedTerminalClientId,
   isTrustedLocalRequest as _isTrustedLocalRequest,
-  isWaifuChatAuthorized as _isWaifuChatAuthorized,
   isWebSocketAuthorized as _isWebSocketAuthorized,
   normalizePairingCode as _normalizePairingCode,
   normalizeWsClientId as _normalizeWsClientId,
@@ -1636,7 +1532,6 @@ export {
   extractAuthToken,
   isAllowedHost,
   isAuthorized,
-  isWaifuChatAuthorized,
   normalizeWsClientId,
   resolveCorsOrigin,
   resolveTerminalRunClientId,
@@ -1646,12 +1541,17 @@ export {
   type WebSocketUpgradeRejection,
 } from "./server-helpers-auth.ts";
 
+// Back-compat re-export: the WaifuChat scheme now lives in its own resolver
+// module. Importing it here also self-registers the resolver with the trunk
+// boundary-role registry (#12087 item 12).
+export { isWaifuChatAuthorized } from "./waifu-chat-role-resolver.ts";
+
 const isAllowedHost = _isAllowedHost;
 const applyCors = _applyCors;
 const isAuthorized = _isAuthorized;
 const resolveBoundaryRole = _resolveBoundaryRole;
 const isTrustedLocalRequest = _isTrustedLocalRequest;
-const isWaifuChatAuthorized = _isWaifuChatAuthorized;
+const isBoundaryRoleAuthorized = _isBoundaryRoleAuthorized;
 const ensureApiTokenForBindHost = _ensureApiTokenForBindHost;
 const normalizeWsClientId = _normalizeWsClientId;
 const resolveTerminalRunClientId = _resolveTerminalRunClientId;
@@ -1986,7 +1886,7 @@ async function handleRequest(
       pathname,
     }) &&
     !isAuthorized(req) &&
-    !isWaifuChatAuthorized(req, method, pathname)
+    !isBoundaryRoleAuthorized(req, method, pathname)
   ) {
     json(res, { error: "Unauthorized" }, 401);
     return;

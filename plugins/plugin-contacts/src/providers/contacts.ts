@@ -51,7 +51,7 @@ export const contactsProvider: Provider = {
   cacheStable: false,
 
   get: async (
-    _runtime: IAgentRuntime,
+    runtime: IAgentRuntime,
     _message: Memory,
     _state: State,
   ): Promise<ProviderResult> => {
@@ -80,9 +80,15 @@ export const contactsProvider: Provider = {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-
+      // error-policy:J4 explicit user-facing degrade — a native address-book
+      // read failure is surfaced to the planner via `contactsError`/`error`
+      // (never a fabricated empty contact list); reportError also makes it
+      // observable in RECENT_ERRORS + owner-escalation.
+      runtime.reportError?.(`${CONTACTS_PROVIDER_NAME}.provider`, error);
       return {
-        text: "",
+        text: JSON.stringify({
+          android_contacts: { error: message },
+        }),
         values: {
           contactsAvailable: false,
           contactsCount: 0,

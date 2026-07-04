@@ -55,7 +55,13 @@ export const linearTeamsProvider: Provider = {
           truncated: teams.length > listedTeams.length,
         },
       };
-    } catch (_error) {
+    } catch (error) {
+      // error-policy:J4 explicit user-facing degrade — a Linear API/auth/network
+      // failure renders the distinguishable "error" prompt state (never a
+      // fabricated "no teams found"), and reportError makes the underlying
+      // failure observable in RECENT_ERRORS + owner-escalation instead of being
+      // silently swallowed.
+      runtime.reportError?.("LINEAR_TEAMS.provider", error);
       return {
         text: "Error retrieving Linear teams",
       };

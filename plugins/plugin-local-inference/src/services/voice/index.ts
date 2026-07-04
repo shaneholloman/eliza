@@ -116,33 +116,20 @@ export {
 	type Eliza1EotScorerOptions,
 	EOT_COMMIT_SILENCE_MS,
 	EOT_COMMIT_THRESHOLD,
+	EOT_FUSED_COMMIT_THRESHOLD,
 	EOT_HANGOVER_EXTENSION_MS,
+	EOT_HEURISTIC_COMMIT_THRESHOLD,
 	EOT_MID_CLAUSE_THRESHOLD,
 	EOT_TENTATIVE_SILENCE_MS,
 	EOT_TENTATIVE_THRESHOLD,
 	type EotClassifier,
 	HeuristicEotClassifier,
-	LIVEKIT_TURN_DETECTOR_EN_REVISION,
-	LIVEKIT_TURN_DETECTOR_INTL_REVISION,
 	RemoteEotClassifier,
 	type RemoteEotClassifierOptions,
-	turnDetectorRevisionForTier,
 	turnSignalFromProbability,
 	type VoiceNextSpeaker,
 	type VoiceTurnSignal,
 } from "./eot-classifier";
-export {
-	applyGemmaUserTemplate,
-	createBundledLiveKitGgmlTurnDetector,
-	DEFAULT_LIVEKIT_TURN_DETECTOR_GGML_DIR,
-	DEFAULT_LIVEKIT_TURN_DETECTOR_GGUF_EN,
-	DEFAULT_LIVEKIT_TURN_DETECTOR_GGUF_INTL,
-	EotGgmlUnavailableError,
-	LIVEKIT_END_OF_TURN_TOKEN,
-	LiveKitGgmlTurnDetector,
-	type LiveKitGgmlTurnDetectorOptions,
-	turnDetectorGgufForTier,
-} from "./eot-classifier-ggml";
 export { VoiceStartupError } from "./errors";
 export {
 	cancelEchoInWavUtterance,
@@ -189,6 +176,25 @@ export {
 	type VoiceLifecycleLoaders,
 	type VoiceLifecycleState,
 } from "./lifecycle";
+export {
+	buildMeetingAcousticStressMatrix,
+	MEETING_ACOUSTIC_STRESS_SOURCE_MANIFESTS,
+	MEETING_STRESS_BACKGROUNDS,
+	MEETING_STRESS_NEGATIVE_BEHAVIORS,
+	MEETING_STRESS_QUALITIES,
+	MEETING_STRESS_ROOMS,
+	MEETING_STRESS_SNRS_DB,
+	MEETING_STRESS_SPEAKER_COUNTS,
+	MEETING_STRESS_SPEECH_STRUCTURES,
+	type MeetingAcousticStressCase,
+	type MeetingAcousticStressMatrix,
+	type MeetingAcousticStressSourceManifest,
+	type MeetingStressBackground,
+	type MeetingStressNegativeBehavior,
+	type MeetingStressQuality,
+	type MeetingStressRoom,
+	type MeetingStressSpeechStructure,
+} from "./meeting-acoustic-stress-matrix";
 export {
 	DesktopMicSource,
 	type DesktopMicSourceOptions,
@@ -265,6 +271,25 @@ export {
 } from "./profile-store";
 export { InMemoryAudioSink, PcmRingBuffer } from "./ring-buffer";
 export { type RollbackEvent, RollbackQueue } from "./rollback-queue";
+export {
+	assertRoomFeedTransition,
+	type ClassifyRoomFeedInput,
+	classifyRoomFeed,
+	isRoomFeedTransitionAllowed,
+	type RoomFeedCandidateSpeaker,
+	type RoomFeedCaptureMode,
+	type RoomFeedClassification,
+	type RoomFeedNameEvidence,
+	type RoomFeedNameEvidenceSource,
+	type RoomFeedParticipantKind,
+	type RoomFeedParticipantMetadata,
+	type RoomFeedReasonCode,
+	type RoomFeedSourceKind,
+	type RoomFeedSourceStreamMetadata,
+	type RoomFeedState,
+	type RoomFeedUiHint,
+	type RoomFeedVoiceProfileMatch,
+} from "./room-feed-fst";
 export {
 	type SchedulerDeps,
 	type SchedulerEvents,

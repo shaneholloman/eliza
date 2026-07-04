@@ -1,3 +1,4 @@
+// Defines shared TypeScript types for the Capacitor app example.
 export type ProviderMode =
   | "openai"
   | "openrouter"

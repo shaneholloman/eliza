@@ -2,8 +2,11 @@
 import { describe, expect, it } from "vitest";
 import {
 	addNoise,
+	applyClipping,
+	applyCompressionArtifacts,
 	applyGainDb,
 	applyLowQualityLine,
+	applyPacketDropouts,
 	applyReverb,
 	augmentPcm,
 	dbToGain,
@@ -182,6 +185,43 @@ describe("applyLowQualityLine", () => {
 	});
 });
 
+describe("quality artifacts", () => {
+	it("clips peaks to the requested threshold", () => {
+		const pcm = new Float32Array([-0.9, -0.2, 0, 0.4, 0.95]);
+		const clipped = applyClipping(pcm, 0.5);
+		expect(clipped[0]).toBeCloseTo(-0.5);
+		expect(clipped[1]).toBeCloseTo(-0.2);
+		expect(clipped[2]).toBeCloseTo(0);
+		expect(clipped[3]).toBeCloseTo(0.4);
+		expect(clipped[4]).toBeCloseTo(0.5);
+	});
+
+	it("adds deterministic compression artifacts", () => {
+		const { pcm } = makeTone(220, 0.2, 0);
+		const a = applyCompressionArtifacts(pcm, 0.8);
+		const b = applyCompressionArtifacts(pcm, 0.8);
+		expect(Array.from(a)).toEqual(Array.from(b));
+		expect(Array.from(a)).not.toEqual(Array.from(pcm));
+	});
+
+	it("adds seeded packet dropouts", () => {
+		const { pcm } = makeTone(220, 0.6, 0);
+		const a = applyPacketDropouts(pcm, SR, {
+			probability: 0.4,
+			dropoutMs: 20,
+			seed: 9,
+		});
+		const b = applyPacketDropouts(pcm, SR, {
+			probability: 0.4,
+			dropoutMs: 20,
+			seed: 9,
+		});
+		expect(Array.from(a)).toEqual(Array.from(b));
+		expect(a.some((sample) => sample === 0)).toBe(true);
+		expect(Array.from(a)).not.toEqual(Array.from(pcm));
+	});
+});
+
 describe("mixInto", () => {
 	it("adds an overlay at the requested level without changing length", () => {
 		const base = new Float32Array(1000);
@@ -218,6 +258,9 @@ describe("augmentPcm chain", () => {
 		expect(specIsClean({ noiseSnrDb: 10 })).toBe(false);
 		expect(specIsClean({ reverb: 0.5 })).toBe(false);
 		expect(specIsClean({ lowQuality: true })).toBe(false);
+		expect(specIsClean({ clipThreshold: 0.7 })).toBe(false);
+		expect(specIsClean({ compressionArtifacts: 0.5 })).toBe(false);
+		expect(specIsClean({ dropoutProbability: 0.2 })).toBe(false);
 	});
 
 	it("preserves length and stays within [-1, 1]", () => {
@@ -269,7 +312,16 @@ describe("augmentPcm chain", () => {
 
 	it("is fully deterministic end-to-end", () => {
 		const { pcm } = makeTone(220, 0.4, 0.1);
-		const spec = { noiseSnrDb: 7, reverb: 0.5, lowQuality: true, seed: 11 };
+		const spec = {
+			noiseSnrDb: 7,
+			reverb: 0.5,
+			lowQuality: true,
+			clipThreshold: 0.8,
+			compressionArtifacts: 0.4,
+			dropoutProbability: 0.1,
+			dropoutMs: 25,
+			seed: 11,
+		};
 		const a = augmentPcm(pcm, SR, spec, {});
 		const b = augmentPcm(pcm, SR, spec, {});
 		expect(Array.from(a)).toEqual(Array.from(b));

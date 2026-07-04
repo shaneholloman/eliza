@@ -1,3 +1,4 @@
+/** Public entry that starts the container control-plane mock server and re-exports its app and store builders. */
 import { startFetchServer } from "../fetch-server";
 import { buildControlPlaneApp, type ControlPlaneMockOptions } from "./server";
 import type { ControlPlaneStore } from "./store";

@@ -1,3 +1,7 @@
+/**
+ * Owns the dynamic settings-section registry shared by built-ins, hosts, and
+ * plugins so the Settings view can render declared sections in one order.
+ */
 import type { ViewKind } from "@elizaos/core";
 import type { LucideIcon } from "lucide-react";
 import type { ComponentType, LazyExoticComponent } from "react";
@@ -30,6 +34,14 @@ export type SettingsSectionHue = "accent" | "amber" | "rose" | "slate";
 export interface SettingsSectionDef {
   /** Stable id — URL hash + agent-surface address. */
   id: string;
+  /**
+   * Extra friendly tokens (beyond {@link id}) a user can type to reach this
+   * section via `/settings <token>`. Owner-declared so a plugin-registered
+   * section carries its own aliases instead of needing a central host edit;
+   * `resolveSettingsSectionToken` consults the live registry, so these resolve
+   * for dynamically-registered sections too. The `id` itself is always a token.
+   */
+  aliases?: readonly string[];
   /** i18n key for the nav label. */
   label: string;
   /** English fallback for {@link label}. */
