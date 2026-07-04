@@ -28,7 +28,7 @@ vi.mock("../../state", () => ({
   addAgentProfile: mocks.addAgentProfile,
   switchRuntimeNonDestructive: mocks.switchRuntimeNonDestructive,
 }));
-vi.mock("../../state/startup-phase-restore", () => ({
+vi.mock("../../state/runtime-url-trust", () => ({
   isTrustedRestoreApiBaseUrl: mocks.isTrustedRestoreApiBaseUrl,
 }));
 vi.mock("../../build-variant", () => ({

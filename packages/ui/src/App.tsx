@@ -1838,7 +1838,6 @@ export function App() {
           kind: "remote",
           apiBase: payload.gatewayUrl,
           token: typeof payload.token === "string" ? payload.token : null,
-          allowPublicHttps: true,
         });
         persistMobileRuntimeModeForServerTarget("remote");
         setState("firstRunRuntimeTarget", "remote");

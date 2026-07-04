@@ -8,7 +8,10 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { applyLaunchConnectionFromUrl } from "./browser-launch";
+import {
+  applyLaunchConnection,
+  applyLaunchConnectionFromUrl,
+} from "./browser-launch";
 
 const mocks = vi.hoisted(() => ({
   createPersistedActiveServer: vi.fn((input) => ({
@@ -46,6 +49,7 @@ vi.mock("../state/agent-profiles", () => ({
 describe("browser launch connection handling", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.clearAllMocks();
     mocks.createPersistedActiveServer.mockImplementation((input) => ({
       id: "test-server",
@@ -71,22 +75,20 @@ describe("browser launch connection handling", () => {
     expect(mocks.savePersistedActiveServer).not.toHaveBeenCalled();
   });
 
-  it("allows the configured cloud API host without accepting arbitrary public HTTPS", async () => {
+  it("allows trusted private apiBase parameters and syncs the profile registry", async () => {
     window.history.replaceState(
       null,
       "",
-      "http://localhost/?apiBase=https%3A%2F%2Fapi.elizacloud.ai%2Fv1%2F",
+      "http://localhost/?apiBase=http%3A%2F%2F100.96.0.1%3A31337%2Fv1%2F",
     );
 
     await expect(applyLaunchConnectionFromUrl()).resolves.toBe(true);
 
-    expect(mocks.setBaseUrl).toHaveBeenCalledWith(
-      "https://api.elizacloud.ai/v1",
-    );
+    expect(mocks.setBaseUrl).toHaveBeenCalledWith("http://100.96.0.1:31337/v1");
     expect(mocks.setToken).toHaveBeenCalledWith(null);
     expect(mocks.savePersistedActiveServer).toHaveBeenCalledWith(
       expect.objectContaining({
-        apiBase: "https://api.elizacloud.ai/v1",
+        apiBase: "http://100.96.0.1:31337/v1",
         kind: "remote",
       }),
     );
@@ -95,32 +97,25 @@ describe("browser launch connection handling", () => {
     expect(mocks.upsertAndActivateAgentProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "remote",
-        apiBase: "https://api.elizacloud.ai/v1",
+        apiBase: "http://100.96.0.1:31337/v1",
       }),
     );
     expect(window.location.href).toBe("http://localhost/");
   });
 
-  it("allows dedicated cloud agent apiBase parameters", async () => {
+  it("rejects public cloud apiBase parameters outside the managed launch-session flow", async () => {
     window.history.replaceState(
       null,
       "",
       "http://localhost/?apiBase=https%3A%2F%2Fagent-1.elizacloud.ai%2F",
     );
 
-    await expect(applyLaunchConnectionFromUrl()).resolves.toBe(true);
+    await expect(applyLaunchConnectionFromUrl()).rejects.toThrow(
+      "Rejected invalid launch apiBase",
+    );
 
-    expect(mocks.setBaseUrl).toHaveBeenCalledWith(
-      "https://agent-1.elizacloud.ai",
-    );
-    expect(mocks.setToken).toHaveBeenCalledWith(null);
-    expect(mocks.savePersistedActiveServer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        apiBase: "https://agent-1.elizacloud.ai",
-        kind: "remote",
-      }),
-    );
-    expect(window.location.href).toBe("http://localhost/");
+    expect(mocks.setBaseUrl).not.toHaveBeenCalled();
+    expect(mocks.savePersistedActiveServer).not.toHaveBeenCalled();
   });
 
   it("rejects unconfigured public HTTPS apiBase parameters", async () => {
@@ -136,6 +131,43 @@ describe("browser launch connection handling", () => {
 
     expect(mocks.setBaseUrl).not.toHaveBeenCalled();
     expect(mocks.savePersistedActiveServer).not.toHaveBeenCalled();
+  });
+
+  it("rejects Settings-style remote connect calls to arbitrary public HTTPS", () => {
+    expect(() =>
+      applyLaunchConnection({
+        kind: "remote",
+        apiBase: "https://agent.attacker.example/",
+        token: "secret-token",
+      }),
+    ).toThrow("Rejected invalid launch apiBase");
+
+    expect(mocks.setBaseUrl).not.toHaveBeenCalled();
+    expect(mocks.setToken).not.toHaveBeenCalled();
+    expect(mocks.savePersistedActiveServer).not.toHaveBeenCalled();
+  });
+
+  it("allows Settings-style remote connect calls to trusted private URLs", () => {
+    expect(
+      applyLaunchConnection({
+        kind: "remote",
+        apiBase: "https://my-box.local:31337/",
+        token: " secret-token ",
+      }),
+    ).toEqual({
+      apiBase: "https://my-box.local:31337",
+      token: "secret-token",
+    });
+
+    expect(mocks.setBaseUrl).toHaveBeenCalledWith("https://my-box.local:31337");
+    expect(mocks.setToken).toHaveBeenCalledWith("secret-token");
+    expect(mocks.savePersistedActiveServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accessToken: "secret-token",
+        apiBase: "https://my-box.local:31337",
+        kind: "remote",
+      }),
+    );
   });
 
   it("rejects configured cloud API hosts over plaintext HTTP", async () => {
@@ -194,5 +226,32 @@ describe("browser launch connection handling", () => {
       }),
     );
     expect(window.location.href).toBe("http://localhost/");
+  });
+
+  it("rejects managed cloud launch sessions that return a non-cloud public runtime URL", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        success: true,
+        data: {
+          connection: {
+            apiBase: "https://agent.attacker.example",
+            token: "runtime-token",
+          },
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.replaceState(
+      null,
+      "",
+      "http://localhost/?cloudLaunchSession=launch-1&cloudLaunchBase=https%3A%2F%2Fapi.elizacloud.ai",
+    );
+
+    await expect(applyLaunchConnectionFromUrl()).rejects.toThrow(
+      "Rejected invalid launch apiBase",
+    );
+
+    expect(mocks.setBaseUrl).not.toHaveBeenCalled();
+    expect(mocks.savePersistedActiveServer).not.toHaveBeenCalled();
   });
 });

@@ -63,9 +63,9 @@ import {
   createPersistedActiveServer,
   savePersistedActiveServer,
 } from "./persistence";
+import { isTrustedRestoreApiBaseUrl } from "./runtime-url-trust";
 import { deriveUiShellModeForTab } from "./shell-routing";
 import type { RuntimeTarget } from "./startup-coordinator";
-import { isTrustedRestoreApiBaseUrl } from "./startup-phase-restore";
 import { useTranslation } from "./TranslationContext.hooks";
 import { TranslationProvider } from "./TranslationProvider";
 import { useAppLifecycleEvents } from "./useAppLifecycleEvents";

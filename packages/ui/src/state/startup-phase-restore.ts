@@ -27,7 +27,6 @@ import {
   ANDROID_LOCAL_AGENT_LABEL,
   ANDROID_LOCAL_AGENT_SERVER_ID,
   IOS_LOCAL_AGENT_IPC_BASE,
-  isMobileLocalAgentIpcBase,
   isMobileLocalAgentUrl,
   MOBILE_LOCAL_AGENT_LABEL,
   MOBILE_LOCAL_AGENT_SERVER_ID,
@@ -57,6 +56,7 @@ import {
   savePersistedActiveServer,
   savePersistedFirstRunComplete,
 } from "./persistence";
+import { isTrustedRestoreApiBaseUrl } from "./runtime-url-trust";
 import type { StartupEvent } from "./startup-coordinator";
 import { buildStaticFirstRunOptions } from "./startup-first-run-options";
 
@@ -192,74 +192,6 @@ function isMobileLocalActiveServer(server: PersistedActiveServer): boolean {
 function isLoopbackHostname(hostname: string): boolean {
   const h = hostname.toLowerCase();
   return h === "127.0.0.1" || h === "localhost" || h === "::1";
-}
-
-/**
- * Whether a persisted `remote` apiBase is safe to dial at restore. The persisted
- * active-server record lives in localStorage (mirrored to native Preferences),
- * so an XSS or a malicious same-origin plugin view could have written it. Only
- * dial — and attach the bearer token to — a trusted host; otherwise the record
- * is dropped and the app falls back to first-run (fail closed) rather than
- * silently connecting to an attacker-chosen server at boot.
- *
- * Trust mirrors the app's full policy (createUrlTrustPolicy in
- * `packages/app/src/url-trust-policy.ts`, which `@elizaos/ui` cannot import):
- * loopback, the current page origin, and private/LAN/CGNAT/link-local hosts —
- * never an arbitrary public host. Keep the private-host set in sync with
- * `isTrustedPrivateHttpHost` there. `local`/`cloud` records use their own
- * validated branches in {@link applyRestoredConnection} and are not gated here.
- */
-export function isTrustedRestoreApiBaseUrl(
-  apiBase: string | undefined,
-): boolean {
-  if (!apiBase) return false;
-  // The bundled on-device agent's IPC pseudo-base (eliza-local-agent://ipc) is
-  // in-process: no network dial, no attacker-choosable host, no bearer-token
-  // exfiltration surface. Its custom scheme fails the http/https gate below,
-  // and without this allowance EVERY relaunch of a local-mode phone dropped
-  // its saved on-device server and silently un-completed first-run (the iOS
-  // boot-to-onboarding bounce found via the #11110 device boot trace).
-  if (isMobileLocalAgentIpcBase(apiBase)) return true;
-  let parsed: URL;
-  try {
-    parsed = new URL(apiBase);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return false;
-  }
-  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (isLoopbackHostname(host) || host === "0.0.0.0") return true;
-  if (
-    typeof window !== "undefined" &&
-    host === window.location.hostname.toLowerCase()
-  ) {
-    return true;
-  }
-  // IPv6 ULA (fc00::/7) / link-local (fe80::/10).
-  if (
-    host.includes(":") &&
-    (host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:"))
-  ) {
-    return true;
-  }
-  // RFC1918 / CGNAT (tailscale) / link-local IPv4 + private name suffixes.
-  return (
-    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
-    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(host) ||
-    /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(host) ||
-    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}$/.test(host) ||
-    /^169\.254\.\d{1,3}\.\d{1,3}$/.test(host) ||
-    host === "local" ||
-    host === "internal" ||
-    host === "lan" ||
-    host === "ts.net" ||
-    host.endsWith(".local") ||
-    host.endsWith(".lan") ||
-    host.endsWith(".internal") ||
-    host.endsWith(".ts.net")
-  );
 }
 
 // Re-resolve a persisted loopback apiBase against whatever port the

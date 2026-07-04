@@ -9,6 +9,7 @@ import {
   createPersistedActiveServer,
   savePersistedActiveServer,
 } from "../state/persistence";
+import { isTrustedRestoreApiBaseUrl } from "../state/runtime-url-trust";
 import { isDedicatedCloudAgentBase } from "../utils/cloud-agent-base";
 
 const TRUSTED_CLOUD_LAUNCH_HOSTS = new Set([
@@ -26,25 +27,6 @@ function getSearchParams(): URLSearchParams {
   return new URLSearchParams(
     window.location.search || window.location.hash.split("?")[1] || "",
   );
-}
-
-function isAllowedHttpHost(host: string): boolean {
-  return (
-    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
-    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(host) ||
-    /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(host) ||
-    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}$/.test(host) ||
-    host.endsWith(".local") ||
-    host.endsWith(".internal") ||
-    host.endsWith(".ts.net") ||
-    host === "localhost" ||
-    host === "127.0.0.1" ||
-    host === "::1"
-  );
-}
-
-function isCurrentHost(host: string): boolean {
-  return typeof window !== "undefined" && host === window.location.hostname;
 }
 
 function isConfiguredCloudHost(host: string): boolean {
@@ -67,7 +49,7 @@ function isTrustedCloudLaunchHost(host: string): boolean {
 
 function normalizeLaunchApiBase(
   apiBase: string,
-  options: { allowPublicHttps?: boolean } = {},
+  options: { kind?: "cloud" | "remote" } = {},
 ): string {
   const trimmed = apiBase.trim();
   if (!trimmed) {
@@ -82,13 +64,11 @@ function normalizeLaunchApiBase(
   try {
     const parsed = new URL(trimmed);
     if (
-      (parsed.protocol === "https:" &&
-        (options.allowPublicHttps ||
-          isAllowedHttpHost(parsed.hostname) ||
-          isConfiguredCloudHost(parsed.hostname) ||
-          isDedicatedCloudAgentBase(parsed.toString()) ||
-          isCurrentHost(parsed.hostname))) ||
-      (parsed.protocol === "http:" && isAllowedHttpHost(parsed.hostname))
+      isTrustedRestoreApiBaseUrl(parsed.toString()) ||
+      (options.kind === "cloud" &&
+        parsed.protocol === "https:" &&
+        (isConfiguredCloudHost(parsed.hostname) ||
+          isDedicatedCloudAgentBase(parsed.toString())))
     ) {
       return stripTrailingSlashes(parsed.toString());
     }
@@ -104,11 +84,8 @@ function normalizeLaunchApiBase(
 function normalizeLaunchBaseUrl(baseUrl: string): string {
   const parsed = new URL(baseUrl);
   if (
-    (parsed.protocol === "https:" &&
-      (isAllowedHttpHost(parsed.hostname) ||
-        isCurrentHost(parsed.hostname) ||
-        isTrustedCloudLaunchHost(parsed.hostname))) ||
-    (parsed.protocol === "http:" && isAllowedHttpHost(parsed.hostname))
+    isTrustedRestoreApiBaseUrl(parsed.toString()) ||
+    (parsed.protocol === "https:" && isTrustedCloudLaunchHost(parsed.hostname))
   ) {
     parsed.pathname = "";
     parsed.search = "";
@@ -186,7 +163,7 @@ async function exchangeCloudLaunchSession(
 
     return {
       apiBase: normalizeLaunchApiBase(payload.data.connection.apiBase, {
-        allowPublicHttps: true,
+        kind: "cloud",
       }),
       token,
     };
@@ -199,14 +176,13 @@ export function applyLaunchConnection(args: {
   apiBase: string;
   token?: string | null;
   kind?: "cloud" | "remote";
-  allowPublicHttps?: boolean;
 }): { apiBase: string; token: string | null } {
+  const kind = args.kind ?? "remote";
   const normalizedApiBase = normalizeLaunchApiBase(args.apiBase, {
-    allowPublicHttps: args.allowPublicHttps === true,
+    kind,
   });
   const token = args.token?.trim() || null;
 
-  const kind = args.kind ?? "remote";
   client.setBaseUrl(normalizedApiBase);
   client.setToken(token);
   const persisted = createPersistedActiveServer({
@@ -245,7 +221,6 @@ export async function applyLaunchConnectionFromUrl(): Promise<boolean> {
       kind: "cloud",
       apiBase: connection.apiBase,
       token: connection.token,
-      allowPublicHttps: true,
     });
     stripLaunchParams();
     return true;
@@ -263,7 +238,7 @@ export async function applyLaunchConnectionFromUrl(): Promise<boolean> {
 
   applyLaunchConnection({
     kind: "remote",
-    apiBase: normalizeLaunchApiBase(apiBase),
+    apiBase,
     token: null,
   });
   stripLaunchParams();
