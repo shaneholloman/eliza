@@ -30,6 +30,54 @@ export interface CompatRuntimeState {
   pendingRestartReasons: string[];
 }
 
+/**
+ * Per-request context handed to every ordered compat-route entry. Carries the
+ * pre-parsed `method`/`url` so entries do not each re-derive them, matching the
+ * values the dispatcher already computed for the mode gate.
+ */
+export interface CompatRouteContext {
+  req: http.IncomingMessage;
+  res: http.ServerResponse;
+  state: CompatRuntimeState;
+  method: string;
+  url: URL;
+}
+
+/**
+ * One entry in the ordered compat-route registry (#12089 item 5). Replaces the
+ * former ~30-branch fixed if-chain in `handleCompatRouteInner`: registration
+ * ORDER is now the array order (data), not source line order (a hardcoded
+ * if-chain). `handler` returns `true` when it fully handled the request (the
+ * dispatcher then short-circuits, exactly like the old `return true`), or
+ * `false` to fall through to the next entry.
+ */
+export interface CompatRouteChainEntry {
+  /** Stable id for tests, drift guards, and per-route timing/telemetry. */
+  id: string;
+  handler: (ctx: CompatRouteContext) => Promise<boolean> | boolean;
+}
+
+/**
+ * Iterate an ordered compat-route chain, short-circuiting on the first entry
+ * that reports it handled the request. Pure over the entry list so the
+ * order/short-circuit contract that used to be implicit in the if-chain is
+ * now directly unit-testable. Preserves the legacy semantics exactly: entries
+ * run in array order, the first `true` wins and stops the chain, and an
+ * all-`false` chain returns `false` so the caller can fall through to its
+ * terminal handler.
+ */
+export async function runCompatRouteChain(
+  chain: readonly CompatRouteChainEntry[],
+  ctx: CompatRouteContext,
+): Promise<boolean> {
+  for (const entry of chain) {
+    if (await entry.handler(ctx)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function clearCompatRuntimeRestart(state: CompatRuntimeState): void {
   state.pendingRestartReasons = [];
 }
