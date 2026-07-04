@@ -12,7 +12,11 @@ import * as React from "react";
 
 import { useAgentElement } from "../../../agent-surface";
 import { dispatchChatOpen } from "../../../events";
-import { restartTutorial, startTutorial, useTutorial } from "../../../tutorial/tutorial-service";
+import {
+  restartTutorial,
+  startTutorial,
+  useTutorial,
+} from "../../../tutorial/tutorial-service";
 import { Button } from "../../ui/button";
 import { ShellViewAgentSurface } from "../../views/ShellViewAgentSurface";
 

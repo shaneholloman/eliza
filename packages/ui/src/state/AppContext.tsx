@@ -29,10 +29,6 @@ import {
 } from "../first-run/mobile-runtime-mode";
 import { tryHandleModelAction } from "../first-run/model-action-channel";
 import {
-  tryHandleTutorialAction,
-  tryHandleTutorialText,
-} from "../tutorial/tutorial-action-channel";
-import {
   activeServerKindToFirstRunRuntimeTarget,
   type FirstRunRuntimeTarget,
 } from "../first-run/runtime-target";
@@ -45,6 +41,10 @@ import {
 } from "../navigation";
 import { getFrontendPlatform } from "../platform/platform-guards";
 import { applyThemeToDocument } from "../themes/apply-theme";
+import {
+  tryHandleTutorialAction,
+  tryHandleTutorialText,
+} from "../tutorial/tutorial-action-channel";
 import { copyTextToClipboard } from "../utils";
 import { RESYNC_EVENT, type ResyncEventDetail } from "./AppContext.hooks";
 import {

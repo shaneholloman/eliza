@@ -139,9 +139,7 @@ describe("advanceTutorial", () => {
     advanceTutorial(TUTORIAL_STEP_IDS[0]);
     restartTutorial();
     advanceTutorial(TUTORIAL_STEP_IDS[0]);
-    expect(getTutorialState().completedStepIds).toEqual([
-      TUTORIAL_STEP_IDS[0],
-    ]);
+    expect(getTutorialState().completedStepIds).toEqual([TUTORIAL_STEP_IDS[0]]);
   });
 
   it("is a no-op outside an active tour", () => {

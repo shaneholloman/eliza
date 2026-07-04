@@ -323,7 +323,6 @@ describe("ContinuousChatOverlay — reachable states", () => {
     assertInvariants("free-rest");
     expect(detentOf()).toBe("half"); // free-rest below full still labels half
   });
-
 });
 
 describe("ContinuousChatOverlay — state × action matrix", () => {

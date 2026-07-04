@@ -178,9 +178,10 @@ export function useTutorialConductor(): void {
   }, []);
 
   // ── Seed the current step's turn while active ────────────────────────────
-  // activeConversationId is a dependency on purpose: switching conversations
-  // replaces the transcript array, so the current step's turn is re-seeded
-  // into the new conversation (same id → idempotent within a run).
+  // activeConversationId is a re-seed trigger, not a value read here: switching
+  // conversations replaces the transcript array, so the current step's turn is
+  // re-seeded into the new conversation (same id → idempotent within a run).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: activeConversationId is the intentional re-seed trigger
   React.useEffect(() => {
     if (status !== "active") return;
     const step = script[stepIndex];
@@ -208,13 +209,17 @@ function TutorialActiveEffects({
 }): null {
   const { conversationMessages } = useConversationMessages();
   const controller = useShellControllerContext();
-  const { tab, activeConversationId, uiLanguage, elizaCloudVoiceProxyAvailable } =
-    useAppSelectorShallow((s) => ({
-      tab: s.tab,
-      activeConversationId: s.activeConversationId,
-      uiLanguage: s.uiLanguage,
-      elizaCloudVoiceProxyAvailable: s.elizaCloudVoiceProxyAvailable,
-    }));
+  const {
+    tab,
+    activeConversationId,
+    uiLanguage,
+    elizaCloudVoiceProxyAvailable,
+  } = useAppSelectorShallow((s) => ({
+    tab: s.tab,
+    activeConversationId: s.activeConversationId,
+    uiLanguage: s.uiLanguage,
+    elizaCloudVoiceProxyAvailable: s.elizaCloudVoiceProxyAvailable,
+  }));
 
   // Per-step baselines, captured when the step mounts: detections fire on a
   // CHANGE from here (a message sent after, a tab reached after, a different
@@ -260,7 +265,11 @@ function TutorialActiveEffects({
   React.useEffect(() => {
     if (complete !== "new-conversation") return;
     const base = baselineRef.current.conversationId;
-    if (base != null && activeConversationId != null && activeConversationId !== base) {
+    if (
+      base != null &&
+      activeConversationId != null &&
+      activeConversationId !== base
+    ) {
       advanceTutorial(step.id);
     }
   }, [complete, activeConversationId, step.id]);
@@ -279,9 +288,14 @@ function TutorialActiveEffects({
     if (!step.voiceLine) return;
     if (voiceBootstrapTick === 0) return; // voice config not loaded yet
     unlockAudio?.();
-    queueAssistantSpeech(`tutorial-${runNonce}-${step.id}`, step.voiceLine, true, {
-      replace: true,
-    });
+    queueAssistantSpeech(
+      `tutorial-${runNonce}-${step.id}`,
+      step.voiceLine,
+      true,
+      {
+        replace: true,
+      },
+    );
     return () => stopSpeaking();
   }, [
     step.id,

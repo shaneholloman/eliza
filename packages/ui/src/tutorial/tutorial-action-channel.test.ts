@@ -69,7 +69,9 @@ describe("matchTutorialCommand", () => {
 
   it("never swallows normal chat that merely mentions the tutorial", () => {
     expect(matchTutorialCommand("how do I stop the tutorial?")).toBeNull();
-    expect(matchTutorialCommand("can you start the tutorial for me")).toBeNull();
+    expect(
+      matchTutorialCommand("can you start the tutorial for me"),
+    ).toBeNull();
     expect(matchTutorialCommand("tutorial")).toBeNull();
     expect(matchTutorialCommand("restart")).toBeNull();
     expect(matchTutorialCommand("start tutorials")).toBeNull();
