@@ -66,6 +66,8 @@ export function resolveBrowserWorkspaceMessageOrigin(
     if (!expectedOrigin || expectedOrigin === "null") return null;
     return origin === expectedOrigin ? origin : null;
   } catch {
+    // error-policy:J3 unparseable tab URL cannot vouch for the message
+    // origin — the wallet bridge rejects it (fail-closed).
     return null;
   }
 }

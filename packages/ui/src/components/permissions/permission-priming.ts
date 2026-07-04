@@ -143,6 +143,8 @@ export function hasPrimedPermissions(): boolean {
   try {
     return localStorage.getItem(PERMISSION_PRIMING_STORAGE_KEY) === "1";
   } catch {
+    // error-policy:J3 storage throw means "we don't know" (see JSDoc) — err
+    // toward showing the modal rather than silently never priming.
     return false;
   }
 }

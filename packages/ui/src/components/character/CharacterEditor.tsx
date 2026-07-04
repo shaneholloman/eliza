@@ -1019,6 +1019,8 @@ export function CharacterEditor({
     try {
       await handleSaveCharacter();
     } catch {
+      // error-policy:J5 handleSaveCharacter surfaces its own failure via
+      // characterSaveError state; false reports the combined save failed.
       return false;
     }
     // Mark the current selection as saved
