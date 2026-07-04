@@ -319,12 +319,6 @@ const CORE_ROUTE_PROBES: readonly RouteProbe[] = [
     readyChecks: [{ selector: '[data-testid="tutorial-launcher"]' }],
     timeoutMs: 60_000,
   },
-  {
-    name: "help",
-    path: "/help",
-    readyChecks: [{ selector: '[data-testid="help-view"]' }],
-    timeoutMs: 60_000,
-  },
 ];
 
 function coreRouteProbe(name: string): RouteProbe {

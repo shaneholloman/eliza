@@ -23,6 +23,7 @@ import * as React from "react";
 import type { ConversationMessage } from "../api";
 import { useShellControllerContext } from "../components/shell/ShellControllerContext.hooks";
 import { useBranding } from "../config/branding";
+import { dispatchChatOpen } from "../events";
 import { useVoiceChat } from "../hooks/useVoiceChat";
 import { useAppSelectorShallow } from "../state";
 import { useConversationMessages } from "../state/ConversationMessagesContext.hooks";
@@ -176,6 +177,17 @@ export function useTutorialConductor(): void {
       setTutorialTextHandler(null);
     };
   }, []);
+
+  // The tour lives in the transcript, so BECOMING active must reveal the chat
+  // — a "start tutorial" typed from the collapsed composer would otherwise
+  // seed turns the user never sees. Transition-edged (not on mount) so a
+  // resumed-after-reload tour doesn't yank the chat open at boot.
+  const prevStatusRef = React.useRef(status);
+  React.useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if (status === "active" && prev !== "active") dispatchChatOpen();
+  }, [status]);
 
   // ── Seed the current step's turn while active ────────────────────────────
   // activeConversationId is a re-seed trigger, not a value read here: switching

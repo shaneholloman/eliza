@@ -227,18 +227,18 @@ test.describe("in-chat onboarding → home → launcher", () => {
     await page.goto("/", { waitUntil: "domcontentloaded" });
 
     // Same Local path, but pick "Take the tutorial" at the final CHOICE — it
-    // still flips firstRunComplete and lands on the home, AND launches the
-    // interactive tutorial spotlight overlay.
+    // still flips firstRunComplete and lands on the home, AND starts the
+    // chat-native tour: the welcome turn (with its Next choice) lands in the
+    // same live transcript onboarding just used. No overlay engine remains.
     await completeOnboardingToHome(page, desktopClick, {
       state,
       tutorial: "start",
     });
 
-    // The interactive tutorial overlay is now active (startTutorial fired):
-    // its spotlight renders over the shell.
-    await expect(page.getByTestId("tutorial-spotlight")).toBeVisible({
-      timeout: 30_000,
-    });
+    await expect(
+      page.getByTestId("choice-__tutorial__:next:welcome"),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("tutorial-spotlight")).toHaveCount(0);
     await settleHomeEntrance(page);
     await screenshot(page, "tutorial-start");
   });
