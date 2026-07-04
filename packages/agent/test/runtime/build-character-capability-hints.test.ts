@@ -1,3 +1,4 @@
+/** Exercises character capability hint construction with deterministic runtime metadata fixtures. */
 import { describe, expect, it } from "vitest";
 import type { ElizaConfig } from "../../src/config/config.js";
 import { buildCharacterFromConfig } from "../../src/runtime/build-character-config.js";

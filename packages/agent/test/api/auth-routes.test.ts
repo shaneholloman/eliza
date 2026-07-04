@@ -1,3 +1,4 @@
+/** Exercises auth API route behavior with deterministic OAuth and session fixtures. */
 import type http from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleAuthRoutes } from "../../src/api/auth-routes";

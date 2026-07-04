@@ -1,3 +1,4 @@
+/** Exercises account API route behavior with deterministic auth and storage fixtures. */
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import type { LinkedAccountConfig } from "@elizaos/shared";

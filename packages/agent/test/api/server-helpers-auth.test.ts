@@ -1,3 +1,4 @@
+/** Exercises server auth helper boundaries with deterministic request fixtures. */
 import crypto from "node:crypto";
 import * as http from "node:http";
 import { Socket } from "node:net";
