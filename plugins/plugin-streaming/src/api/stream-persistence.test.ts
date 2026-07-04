@@ -35,7 +35,10 @@ vi.mock("node:fs", () => ({
   },
 }));
 
-import { getHeadlessCaptureConfig, readOverlayLayout } from "./stream-persistence.js";
+import {
+  getHeadlessCaptureConfig,
+  readOverlayLayout,
+} from "./stream-persistence.js";
 
 beforeEach(() => {
   warn.mockClear();
@@ -50,8 +53,8 @@ afterEach(() => {
 describe("getOverlayLayoutJson (via getHeadlessCaptureConfig) — read failures are observable", () => {
   it("warns and does not seed an overlay when the layout file exists but is unreadable", () => {
     // Settings file: absent. Overlay file: present but read throws (EACCES).
-    existsSync.mockImplementation((p: string) =>
-      typeof p === "string" && p.includes("overlay-layout"),
+    existsSync.mockImplementation(
+      (p: string) => typeof p === "string" && p.includes("overlay-layout"),
     );
     readFileSync.mockImplementation((p: string) => {
       if (typeof p === "string" && p.includes("overlay-layout")) {
@@ -86,8 +89,8 @@ describe("getOverlayLayoutJson (via getHeadlessCaptureConfig) — read failures 
   });
 
   it("returns the layout without warning when the file reads cleanly", () => {
-    existsSync.mockImplementation((p: string) =>
-      typeof p === "string" && p.includes("overlay-layout"),
+    existsSync.mockImplementation(
+      (p: string) => typeof p === "string" && p.includes("overlay-layout"),
     );
     readFileSync.mockImplementation((p: string) => {
       if (typeof p === "string" && p.includes("overlay-layout")) {
@@ -105,8 +108,8 @@ describe("getOverlayLayoutJson (via getHeadlessCaptureConfig) — read failures 
 
 describe("readOverlayLayout — read failures fall through observably", () => {
   it("warns and falls back to null when the destination layout is corrupt JSON", () => {
-    existsSync.mockImplementation((p: string) =>
-      typeof p === "string" && p.includes("overlay-layout-"),
+    existsSync.mockImplementation(
+      (p: string) => typeof p === "string" && p.includes("overlay-layout-"),
     );
     readFileSync.mockReturnValue("{ this is not json");
 
