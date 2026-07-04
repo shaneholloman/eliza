@@ -1,3 +1,4 @@
+/** Covers the google gmail fault mock fixture using deterministic local services rather than live external APIs. */
 import { afterEach, describe, expect, it } from "vitest";
 import { type StartedMocks, startMocks } from "../scripts/start-mocks.ts";
 

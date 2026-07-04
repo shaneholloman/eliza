@@ -1,3 +1,4 @@
+/** Provides elizaos core shim helper utilities shared by package tests and scenario harnesses. */
 export const ModelType = {
   NANO: "TEXT_NANO",
   SMALL: "TEXT_SMALL",

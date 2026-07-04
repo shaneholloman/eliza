@@ -1,3 +1,4 @@
+/** Covers the with mock llm runtime test harness behavior using a real PGLite-backed runtime and deterministic mock LLM fixtures. */
 import {
   type Action,
   type Memory,

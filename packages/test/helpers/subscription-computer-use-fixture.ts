@@ -1,3 +1,4 @@
+/** Provides subscription computer use fixture helper utilities shared by package tests and scenario harnesses. */
 import type { AgentRuntime, Service } from "@elizaos/core";
 
 type BrowserActionParams =

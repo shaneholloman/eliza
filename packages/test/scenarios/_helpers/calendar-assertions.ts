@@ -1,3 +1,4 @@
+/** Provides calendar assertions assertions and seeds shared by scenario-runner fixtures. */
 import type {
   ScenarioCheckResult,
   ScenarioContext,

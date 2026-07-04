@@ -1,3 +1,4 @@
+/** Provides benchmark runtime fixtures helper utilities shared by package tests and scenario harnesses. */
 import crypto from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";

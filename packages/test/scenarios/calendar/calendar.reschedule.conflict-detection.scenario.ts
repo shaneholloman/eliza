@@ -1,3 +1,4 @@
+/** Scenario fixture for calendar reschedule conflict detection; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import { scenario } from "@elizaos/scenario-runner/schema";
 import { expectCalendarPayload } from "../_helpers/calendar-assertions.ts";
 

@@ -1,3 +1,4 @@
+/** Configures the e2e shared Vitest lane used by workspace package tests. */
 import { defineConfig } from "vitest/config";
 import baseConfig from "./real.config";
 

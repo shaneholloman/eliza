@@ -1,3 +1,4 @@
+/** Provides the ai sdk anthropic Vitest shim for deterministic package tests without live provider SDK calls. */
 type AnthropicModel = {
   readonly provider: string;
   readonly modelId: string;

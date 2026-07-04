@@ -1,3 +1,4 @@
+/** Scenario fixture for selfcontrol conditional unblock fixed duration; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import { scenario } from "@elizaos/scenario-runner/schema";
 
 export default scenario({

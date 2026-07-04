@@ -1,3 +1,4 @@
+/** Provides action spy helper utilities shared by package tests and scenario harnesses. */
 import type {
   ActionEventPayload,
   EventHandler,

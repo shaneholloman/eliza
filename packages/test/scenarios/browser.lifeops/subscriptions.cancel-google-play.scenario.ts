@@ -1,3 +1,4 @@
+/** Scenario fixture for subscriptions cancel google play; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import { scenario } from "@elizaos/scenario-runner/schema";
 import { browserPlugin } from "../../../../plugins/plugin-browser/src/plugin.ts";
 import {

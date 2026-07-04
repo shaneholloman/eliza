@@ -1,3 +1,4 @@
+/** Scenario fixture for bluebubbles imessage receive; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import { scenario } from "@elizaos/scenario-runner/schema";
 import { expectMemoryWrite } from "../_helpers/action-assertions.ts";
 

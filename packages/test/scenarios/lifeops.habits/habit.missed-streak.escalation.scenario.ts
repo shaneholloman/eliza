@@ -1,3 +1,4 @@
+/** Scenario fixture for habit missed streak escalation; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import type { IAgentRuntime } from "@elizaos/core";
 import { scenario } from "@elizaos/scenario-runner/schema";
 import {

@@ -1,3 +1,4 @@
+/** Scenario fixture for billing 20 percent markup applied; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import {
   type ScenarioContext,
   scenario,

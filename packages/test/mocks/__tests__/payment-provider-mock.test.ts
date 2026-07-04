@@ -1,3 +1,4 @@
+/** Covers the payment provider mock mock fixture using deterministic local services rather than live external APIs. */
 import crypto from "node:crypto";
 import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";

@@ -1,3 +1,4 @@
+/** Scenario fixture for identity merge 4 platforms same person; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import { scenario } from "@elizaos/scenario-runner/schema";
 import {
   expectMemoryWrite,

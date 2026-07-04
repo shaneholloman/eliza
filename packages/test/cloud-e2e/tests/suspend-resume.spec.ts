@@ -1,3 +1,4 @@
+/** Covers the suspend resume cloud E2E flow using Playwright against the real local stack with mock-backed external services. */
 import {
   agentLifecycleAction,
   createCloudAgent,

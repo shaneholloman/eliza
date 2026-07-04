@@ -1,3 +1,4 @@
+/** Defines lifeops presence active fixture data for deterministic LifeOps mock-service tests. */
 export type LifeOpsPresenceActiveUseCase =
   | "common"
   | "edge"

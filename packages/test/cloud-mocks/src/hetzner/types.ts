@@ -56,7 +56,7 @@ export interface MockServer {
   server_type: { id: number; name: string };
   datacenter: { id: number; name: string; location: MockLocation };
   labels: Record<string, string>;
-  /** Mock-only: tracks the action that will delete this server once completed. */
+  /** Test-store action that deletes this server once completed. */
   _deletePendingActionId?: number | null;
 }
 

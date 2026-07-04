@@ -1,3 +1,4 @@
+/** Provides the elizaos core connector Vitest shim for deterministic package tests without live provider SDK calls. */
 export type * from "../../../core/src/connectors/account-manager.ts";
 
 import { createHash } from "node:crypto";

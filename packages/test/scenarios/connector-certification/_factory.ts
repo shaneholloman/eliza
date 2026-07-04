@@ -1,3 +1,4 @@
+/** Provides factory utilities for the shared package test harness. */
 import type {
   ScenarioFinalCheck,
   ScenarioSeedStep,

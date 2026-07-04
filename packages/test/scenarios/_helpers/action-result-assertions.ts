@@ -1,3 +1,4 @@
+/** Provides action result assertions assertions and seeds shared by scenario-runner fixtures. */
 import type {
   CapturedAction,
   ScenarioCheckResult,

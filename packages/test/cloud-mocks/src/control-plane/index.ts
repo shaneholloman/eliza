@@ -1,3 +1,4 @@
+/** Implements the index control-plane mock used by tests against real container-control clients. */
 import { startFetchServer } from "../fetch-server";
 import { buildControlPlaneApp, type ControlPlaneMockOptions } from "./server";
 import type { ControlPlaneStore } from "./store";

@@ -1,3 +1,4 @@
+/** Re-exports app-core package path helpers for package tests that need stable workspace locations. */
 if (
   process.env.ELIZA_SKIP_LOCAL_UPSTREAMS === "1" &&
   process.env.ELIZA_SKIP_LOCAL_UPSTREAMS !== "1"

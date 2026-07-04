@@ -104,9 +104,9 @@ test.describe("cloud-frontend monetization pages", () => {
     await visit("/dashboard/apps", "/api/v1/apps");
     await visit("/dashboard/analytics", "/api/analytics");
 
-    // Account-management surfaces live in the in-app Settings sections; the
-    // legacy dashboard URLs must land there via the shell's compat redirects
-    // (query preserved before the section hash), never on the cloud 404.
+    // Account-management surfaces live in the in-app Settings sections; compat
+    // dashboard URLs land there via shell redirects (query preserved before the
+    // section hash), never on the cloud 404.
     const redirects: Array<[from: string, to: RegExp]> = [
       ["/dashboard/billing", /\/settings#cloud-billing$/],
       ["/dashboard/billing?canceled=true", /\/settings\?canceled=true#cloud-billing$/],
