@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -329,10 +329,6 @@ def reference_to_rttm(reference: dict[str, Any]) -> str:
             f"SPEAKER {recording_id} 1 {start_s:.3f} {duration_s:.3f} <NA> <NA> {speaker_id} <NA> <NA>"
         )
     return "\n".join(lines)
-
-
-def specs_as_dicts(corpus_ids: Iterable[str] = P0_CORPUS_IDS) -> list[dict[str, Any]]:
-    return [asdict(_REGISTRY[corpus_id]) for corpus_id in corpus_ids]
 
 
 def _required_str(row: dict[str, Any], key: str) -> str:
