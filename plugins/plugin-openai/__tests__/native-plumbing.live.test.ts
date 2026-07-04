@@ -40,5 +40,53 @@ describeLive(
       expect(result.usage?.completionTokens ?? 0).toBeGreaterThan(0);
       expect(result.usage?.totalTokens ?? 0).toBeGreaterThan(0);
     }, 120_000);
+
+    it("round-trips free-form record tool args through the strict-safe transform", async () => {
+      const { runtime } = harness();
+      const result = await handleTextSmall(runtime, {
+        messages: [
+          {
+            role: "system",
+            content: "You must call the requested tool. Do not answer in prose.",
+          },
+          {
+            role: "user",
+            content:
+              "Call SAVE_CONTACT with customFields favoriteColor equal to blue and score equal to 7.",
+          },
+        ],
+        tools: [
+          {
+            name: "SAVE_CONTACT",
+            description: "Save a contact record.",
+            parameters: {
+              type: "object",
+              properties: {
+                customFields: {
+                  type: "object",
+                  additionalProperties: true,
+                },
+              },
+              required: ["customFields"],
+            },
+          },
+        ],
+        toolChoice: { type: "tool", name: "SAVE_CONTACT" },
+      } as never);
+
+      const toolCalls = (result as { toolCalls?: unknown[] }).toolCalls ?? [];
+      expect(toolCalls.length).toBeGreaterThan(0);
+      expect(toolCalls[0]).toMatchObject({
+        toolName: "SAVE_CONTACT",
+        input: {
+          customFields: expect.objectContaining({
+            favoriteColor: "blue",
+          }),
+        },
+      });
+      expect(JSON.stringify((toolCalls[0] as { input?: unknown }).input)).not.toContain(
+        "__eliza_record_entries"
+      );
+    }, 120_000);
   }
 );
