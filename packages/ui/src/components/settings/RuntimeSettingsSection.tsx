@@ -26,10 +26,16 @@ import {
 } from "../../first-run/reload-into-first-run-runtime";
 import { useRuntimeMode } from "../../hooks/useRuntimeMode";
 import { isAndroidCloudBuild } from "../../platform/android-runtime";
-import { useAppSelector } from "../../state";
+import {
+  type AgentProfile,
+  loadAgentProfileRegistry,
+  switchRuntimeNonDestructive,
+  useAppSelector,
+} from "../../state";
 import {
   type AgentRuntimeTargetKind,
   inferAgentRuntimeTarget,
+  isLocalAgentApiBase,
 } from "../../state/agent-runtime-target";
 import { loadPersistedActiveServer } from "../../state/persistence";
 import { Input } from "../ui/input";
@@ -89,9 +95,51 @@ type RuntimeAction = {
 const STORE_LOCAL_DISABLED_DOCS_URL =
   "https://github.com/eliza-ai/eliza/blob/develop/docs/desktop/build-variants.md";
 
+function profileMatchesRuntimeTarget(
+  profile: AgentProfile,
+  target: FirstRunReloadTarget,
+): boolean {
+  if (target === "cloud") {
+    return profile.kind === "cloud";
+  }
+  if (target === "local") {
+    return (
+      profile.kind === "local" ||
+      (profile.kind === "remote" && isLocalAgentApiBase(profile.apiBase))
+    );
+  }
+  return false;
+}
+
+function profileRecency(profile: AgentProfile): number {
+  const value = Date.parse(profile.lastConnectedAt ?? profile.createdAt);
+  return Number.isFinite(value) ? value : 0;
+}
+
+export function findSavedRuntimeProfileForTarget(
+  target: FirstRunReloadTarget,
+): AgentProfile | null {
+  if (target === "remote") return null;
+
+  const registry = loadAgentProfileRegistry();
+  const activeProfile = registry.profiles.find(
+    (profile) => profile.id === registry.activeProfileId,
+  );
+  if (activeProfile && profileMatchesRuntimeTarget(activeProfile, target)) {
+    return activeProfile;
+  }
+
+  return (
+    registry.profiles
+      .filter((profile) => profileMatchesRuntimeTarget(profile, target))
+      .sort((a, b) => profileRecency(b) - profileRecency(a))[0] ?? null
+  );
+}
+
 export function RuntimeSettingsSection() {
   const t = useAppSelector((s) => s.t);
-  const { state: runtimeModeState } = useRuntimeMode();
+  const { state: runtimeModeState, refetch: refetchRuntimeMode } =
+    useRuntimeMode();
   const advancedEnabled = useAdvancedSettingsEnabled();
   const [migrationMessage, setMigrationMessage] = useState<string | null>(null);
   const [migrationBusy, setMigrationBusy] = useState(false);
@@ -156,18 +204,34 @@ export function RuntimeSettingsSection() {
     return base;
   }, [t, cloudOnly, storeBuild, localDisabledReason]);
 
-  const handleSwitch = useCallback((target: FirstRunReloadTarget) => {
-    // Cloud/local re-enter the first-run runtime picker. Remote no longer routes
-    // through first-run (post-#9952 there is no remote URL capture there);
-    // instead it reveals an inline "connect a remote agent" form that points the
-    // app straight at a host via the hardened CONNECT_EVENT path.
-    if (target === "remote") {
-      setRemoteError(null);
-      setRemoteFormOpen((open) => !open);
-      return;
-    }
-    reloadIntoFirstRunRuntime(target);
-  }, []);
+  const handleSwitch = useCallback(
+    (target: FirstRunReloadTarget) => {
+      // Remote no longer routes through first-run (post-#9952 there is no
+      // remote URL capture there); instead it reveals an inline "connect a
+      // remote agent" form that points the app straight at a host via the
+      // hardened CONNECT_EVENT path.
+      if (target === "remote") {
+        setRemoteError(null);
+        setRemoteFormOpen((open) => !open);
+        return;
+      }
+      if (currentRuntime.kind === target) {
+        return;
+      }
+
+      const savedProfile = findSavedRuntimeProfileForTarget(target);
+      if (savedProfile) {
+        const result = switchRuntimeNonDestructive(savedProfile.id);
+        if (result.ok) {
+          refetchRuntimeMode();
+          return;
+        }
+      }
+
+      reloadIntoFirstRunRuntime(target);
+    },
+    [currentRuntime.kind, refetchRuntimeMode],
+  );
 
   const handleConnectRemote = useCallback(() => {
     let normalized: string;
