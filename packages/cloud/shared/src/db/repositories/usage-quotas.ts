@@ -2,6 +2,7 @@
 import { and, eq, lte, sql } from "drizzle-orm";
 import { dbRead, dbWrite } from "../helpers";
 import { type NewUsageQuota, type UsageQuota, usageQuotas } from "../schemas/usage-quotas";
+import { parseUsageQuotaNumber } from "./usage-quotas-numeric";
 
 export type { NewUsageQuota, UsageQuota };
 
@@ -74,8 +75,8 @@ export class UsageQuotasRepository {
       return false;
     }
 
-    const currentUsage = Number(quota.current_usage);
-    const creditsLimit = Number(quota.credits_limit);
+    const currentUsage = parseUsageQuotaNumber(quota.current_usage, "current_usage");
+    const creditsLimit = parseUsageQuotaNumber(quota.credits_limit, "credits_limit");
 
     return currentUsage >= creditsLimit;
   }
@@ -108,12 +109,12 @@ export class UsageQuotasRepository {
 
     for (const quota of quotas) {
       if (quota.quota_type === "global") {
-        result.global.used = Number(quota.current_usage);
-        result.global.limit = Number(quota.credits_limit);
+        result.global.used = parseUsageQuotaNumber(quota.current_usage, "current_usage");
+        result.global.limit = parseUsageQuotaNumber(quota.credits_limit, "credits_limit");
       } else if (quota.quota_type === "model_specific" && quota.model_name) {
         result.modelSpecific[quota.model_name] = {
-          used: Number(quota.current_usage),
-          limit: Number(quota.credits_limit),
+          used: parseUsageQuotaNumber(quota.current_usage, "current_usage"),
+          limit: parseUsageQuotaNumber(quota.credits_limit, "credits_limit"),
         };
       }
     }
