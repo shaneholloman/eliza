@@ -5,7 +5,12 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { buildAgentContainerSecurityFlags } from "../agent-container-security";
+import {
+  buildAgentContainerSecurityFlags,
+  buildAgentNetworkFlag,
+  buildAgentNetworkName,
+  buildEnsureAgentNetworkCmd,
+} from "../agent-container-security";
 
 describe("buildAgentContainerSecurityFlags — hosted-agent escape hardening (#12468)", () => {
   test("always drops all caps, forbids priv-escalation, and bounds pids (default 512)", () => {
@@ -49,5 +54,23 @@ describe("buildAgentContainerSecurityFlags — hosted-agent escape hardening (#1
     expect(buildAgentContainerSecurityFlags({ headscaleEnabled: true, pidsLimit: 1024 })).toContain(
       "--pids-limit=1024",
     );
+  });
+
+  test("non-headscale agents use a separate internal default-deny bridge", () => {
+    const opts = { baseNetwork: "containers-isolated", headscaleEnabled: false };
+    expect(buildAgentNetworkName(opts)).toBe("containers-isolated-agent-deny");
+    expect(buildAgentNetworkFlag(opts)).toBe("--network 'containers-isolated-agent-deny'");
+    expect(buildEnsureAgentNetworkCmd(opts)).toContain(
+      "docker network create --driver bridge --internal 'containers-isolated-agent-deny'",
+    );
+  });
+
+  test("headscale agents keep the routable shared bridge for VPN bootstrap", () => {
+    const opts = { baseNetwork: "containers-isolated", headscaleEnabled: true };
+    expect(buildAgentNetworkName(opts)).toBe("containers-isolated");
+    expect(buildAgentNetworkFlag(opts)).toBe("--network 'containers-isolated'");
+    const ensureCmd = buildEnsureAgentNetworkCmd(opts);
+    expect(ensureCmd).toContain("docker network create --driver bridge 'containers-isolated'");
+    expect(ensureCmd).not.toContain("--internal");
   });
 });

@@ -20,7 +20,11 @@ import { signStewardMutatingRequest } from "../steward/sign";
 import { resolveServerStewardApiUrlFromEnv } from "../steward-url";
 import { logger } from "../utils/logger";
 import { withTimeout } from "../utils/with-timeout";
-import { buildAgentContainerSecurityFlags } from "./agent-container-security";
+import {
+  buildAgentContainerSecurityFlags,
+  buildAgentNetworkFlag,
+  buildEnsureAgentNetworkCmd,
+} from "./agent-container-security";
 import { ensureRegistryAccess } from "./containers/hetzner-client/registry";
 import { getNodeAutoscaler } from "./containers/node-autoscaler";
 import { resolveImageDigest } from "./containers/registry-probe";
@@ -31,7 +35,6 @@ import {
   allocatePort,
   BRIDGE_PORT_MAX,
   BRIDGE_PORT_MIN,
-  buildEnsureNetworkCmd,
   dockerPlatformFlag,
   extractDockerCreateContainerId,
   getContainerName,
@@ -928,7 +931,7 @@ export class DockerSandboxProvider implements SandboxProvider {
     let sshPort = DEFAULT_SSH_PORT;
     let sshUser = DEFAULT_SSH_USERNAME;
 
-    // host_key_fingerprint from DB node (null for env-var fallback, TOFU applies)
+    // host_key_fingerprint from DB node. Missing pins now fail closed in DockerSSHClient.
     let hostKeyFingerprint: string | undefined;
 
     if (dbNode) {
@@ -958,10 +961,10 @@ export class DockerSandboxProvider implements SandboxProvider {
       const envNode = envNodes[Math.floor(Math.random() * envNodes.length)]!;
       nodeId = envNode.nodeId;
       hostname = envNode.hostname;
-      // Env-var nodes use defaults for SSH port/user — log a warning since
-      // host key fingerprint is unavailable (TOFU applies)
+      // Env-var nodes use defaults for SSH port/user and cannot provide a host
+      // key pin, so SSH will fail closed. Register nodes in docker_nodes for production.
       logger.warn(
-        `[docker-sandbox] Env-var fallback node ${nodeId}: using SSH defaults (port ${sshPort}, user ${sshUser}, no fingerprint)`,
+        `[docker-sandbox] Env-var fallback node ${nodeId}: using SSH defaults (port ${sshPort}, user ${sshUser}, no fingerprint; SSH will fail closed)`,
       );
     }
 
@@ -1252,7 +1255,7 @@ export class DockerSandboxProvider implements SandboxProvider {
         ...platformFlags,
         `--name ${shellQuote(containerName)}`,
         "--restart unless-stopped",
-        `--network ${shellQuote(DOCKER_NETWORK)}`,
+        buildAgentNetworkFlag({ baseNetwork: DOCKER_NETWORK, headscaleEnabled }),
         ...(requiresDockerHostGateway(stewardContainerUrl) || Object.keys(proxyEnv).length > 0
           ? ["--add-host host.docker.internal:host-gateway"]
           : []),
@@ -1284,7 +1287,10 @@ export class DockerSandboxProvider implements SandboxProvider {
       // run the cloud-init bootstrap; the network can also be pruned away).
       // Without this, `docker create --network` below fails with an opaque
       // "network not found" and the provision retries forever.
-      await ssh.exec(buildEnsureNetworkCmd(DOCKER_NETWORK), DOCKER_CMD_TIMEOUT_MS);
+      await ssh.exec(
+        buildEnsureAgentNetworkCmd({ baseNetwork: DOCKER_NETWORK, headscaleEnabled }),
+        DOCKER_CMD_TIMEOUT_MS,
+      );
 
       const containerId = extractDockerCreateContainerId(
         await ssh.exec(dockerCreateCmd, DOCKER_CMD_TIMEOUT_MS),

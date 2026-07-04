@@ -101,16 +101,16 @@ describe("bootstrap-callback node-identity guard (#12876)", () => {
     mockFindByNodeId.mockClear();
   });
 
-  test("rejects hostname mutation on existing node without a fingerprint (409, server values preserved)", async () => {
+  test("rejects hostname mutation on existing node without the required fingerprint", async () => {
     const res = await post({
       nodeId: "node-1",
       hostname: "10.6.6.6", // attacker-controlled MITM host
     });
 
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(400);
     const json = (await res.json()) as { success: boolean; error: string };
     expect(json.success).toBe(false);
-    expect(json.error).toContain("host key fingerprint");
+    expect(json.error).toContain("Validation failed");
 
     // The SSH identity must NOT have been written.
     expect(mockUpdate).not.toHaveBeenCalled();
@@ -137,6 +137,7 @@ describe("bootstrap-callback node-identity guard (#12876)", () => {
       nodeId: "node-1",
       hostname: "10.0.0.1",
       sshPort: 2222,
+      hostKeyFingerprint: "SHA256:wrong-fingerprint",
     });
 
     expect(res.status).toBe(409);
@@ -162,6 +163,27 @@ describe("bootstrap-callback node-identity guard (#12876)", () => {
     expect(stored?.hostname).toBe("10.0.0.1");
   });
 
+  test("allows first host-key pin on an existing autoscaler placeholder when identity is unchanged", async () => {
+    stored = {
+      ...EXISTING,
+      host_key_fingerprint: null,
+      metadata: { provider: "hetzner-cloud", autoscaled: true },
+    };
+
+    const res = await post({
+      nodeId: "node-1",
+      hostname: "10.0.0.1",
+      sshUser: "root",
+      sshPort: 22,
+      hostKeyFingerprint: "SHA256:first-real-pin",
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(lastUpdateArg?.host_key_fingerprint).toBe("SHA256:first-real-pin");
+    expect(stored?.host_key_fingerprint).toBe("SHA256:first-real-pin");
+  });
+
   test("allows identity mutation with a matching pinned fingerprint", async () => {
     const res = await post({
       nodeId: "node-1",
@@ -181,13 +203,14 @@ describe("bootstrap-callback node-identity guard (#12876)", () => {
     expect(lastUpdateArg?.ssh_port).toBe(2200);
   });
 
-  test("liveness re-bootstrap with unchanged identity succeeds without a fingerprint", async () => {
+  test("liveness re-bootstrap with unchanged identity succeeds with the matching fingerprint", async () => {
     const res = await post({
       nodeId: "node-1",
       hostname: "10.0.0.1",
       sshUser: "root",
       sshPort: 22,
       capacity: 16,
+      hostKeyFingerprint: "SHA256:pinned-fingerprint",
     });
 
     expect(res.status).toBe(200);
@@ -197,6 +220,18 @@ describe("bootstrap-callback node-identity guard (#12876)", () => {
     expect(lastUpdateArg?.ssh_user).toBe("root");
     expect(lastUpdateArg?.ssh_port).toBe(22);
     expect(lastUpdateArg?.capacity).toBe(16);
+  });
+
+  test("rejects liveness re-bootstrap without the required pinned fingerprint", async () => {
+    const res = await post({
+      nodeId: "node-1",
+      hostname: "10.0.0.1",
+      sshUser: "root",
+      sshPort: 22,
+    });
+
+    expect(res.status).toBe(400);
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 
   test("rejects host-key fingerprint mutation even when SSH identity is unchanged", async () => {

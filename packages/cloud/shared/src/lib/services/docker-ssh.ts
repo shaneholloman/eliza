@@ -102,8 +102,8 @@ export class DockerSSHClient {
    * two nodes share a hostname but use different SSH ports or users.
    *
    * When hostKeyFingerprint is provided, the pooled client will reject
-   * connections if the remote key doesn't match. When omitted, TOFU
-   * (trust-on-first-use) applies: the fingerprint is logged on first connect.
+   * connections if the remote key doesn't match. When omitted, connections
+   * fail closed; Docker nodes must carry a pinned host key in docker_nodes.
    */
   static getClient(
     hostname: string,
@@ -126,8 +126,12 @@ export class DockerSSHClient {
         DockerSSHClient.pool.delete(poolKey);
         client = undefined;
       }
-      // Evict if fingerprint requirements changed
-      if (client && hostKeyFingerprint && client.pinnedFingerprint !== hostKeyFingerprint) {
+      // Evict if fingerprint requirements changed, including pin removal.
+      if (
+        client &&
+        normalizeSshFingerprint(client.pinnedFingerprint ?? "") !==
+          normalizeSshFingerprint(hostKeyFingerprint ?? "")
+      ) {
         logger.info(`[docker-ssh] Evicting pooled connection for ${poolKey} — fingerprint changed`);
         client.disconnect().catch(() => {});
         DockerSSHClient.pool.delete(poolKey);
@@ -300,11 +304,10 @@ export class DockerSSHClient {
         hostVerifier: (key: Buffer) => {
           const fingerprint = crypto.createHash("sha256").update(key).digest("base64");
           if (!this.hostKeyFingerprint) {
-            // No fingerprint configured — TOFU: accept and log at warn for operator visibility
-            logger.warn(
-              `[docker-ssh] Host key for ${this.hostname}: SHA256:${fingerprint} (not verified — set hostKeyFingerprint to pin)`,
+            logger.error(
+              `[docker-ssh] Refusing unpinned host key for ${this.hostname}: SHA256:${fingerprint}. Register host_key_fingerprint before SSH.`,
             );
-            return true;
+            return false;
           }
           if (
             normalizeSshFingerprint(fingerprint) !==
@@ -627,9 +630,9 @@ export class DockerSSHClient {
   }
 }
 
-function normalizeSshFingerprint(fingerprint: string): string {
+export function normalizeSshFingerprint(fingerprint: string): string {
   return fingerprint
     .trim()
-    .replace(/^SHA256:/, "")
-    .replace(/=+$/, "");
+    .replace(/^SHA256:/i, "")
+    .replace(/=+$/g, "");
 }

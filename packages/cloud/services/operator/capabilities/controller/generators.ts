@@ -78,7 +78,7 @@ function getRedisAddress(): string {
   return "redis.eliza-infra.svc:6379";
 }
 
-function generateDeployment(server: Server) {
+export function generateDeployment(server: Server) {
   const { name, namespace: ns } = serverMetadata(server);
 
   return {
@@ -165,7 +165,7 @@ function generateDeployment(server: Server) {
   };
 }
 
-function generateService(server: Server) {
+export function generateService(server: Server) {
   const { name, namespace: ns } = serverMetadata(server);
 
   return {
@@ -185,7 +185,7 @@ function generateService(server: Server) {
   };
 }
 
-function generateScaledObject(server: Server) {
+export function generateScaledObject(server: Server) {
   const { name, namespace: ns } = serverMetadata(server);
 
   return {
@@ -234,10 +234,35 @@ function generateScaledObject(server: Server) {
   };
 }
 
+export function generateNetworkPolicy(server: Server) {
+  const { name, namespace: ns } = serverMetadata(server);
+
+  return {
+    apiVersion: "networking.k8s.io/v1",
+    kind: "NetworkPolicy",
+    metadata: {
+      name: `${name}-default-deny-egress`,
+      namespace: ns,
+      labels: labels(server),
+      ownerReferences: ownerRef(server),
+    },
+    spec: {
+      podSelector: {
+        matchLabels: { "eliza.ai/server": name },
+      },
+      policyTypes: ["Egress"],
+      egress: [],
+    },
+  };
+}
+
 export async function applyResources(server: Server) {
   await K8s(kind.Deployment).Apply(generateDeployment(server), {
     force: true,
   });
   await K8s(kind.Service).Apply(generateService(server), { force: true });
   await K8s(ScaledObject).Apply(generateScaledObject(server), { force: true });
+  await K8s(kind.NetworkPolicy).Apply(generateNetworkPolicy(server), {
+    force: true,
+  });
 }
