@@ -79,13 +79,8 @@ const ALREADY_RUNNING_TEXT =
   'The tutorial is already running — look for the latest tour message above. Type "stop tutorial" to end it or "restart tutorial" to start over.';
 
 export function useTutorialConductor(): void {
-  const { status, stepIndex, startedAt } = useTutorial();
-  const { appName } = useBranding();
-  const script = React.useMemo(() => buildTutorialScript(appName), [appName]);
+  const { status } = useTutorial();
   const { setConversationMessages } = useConversationMessages();
-  const { activeConversationId } = useAppSelectorShallow((s) => ({
-    activeConversationId: s.activeConversationId,
-  }));
 
   const seedTurn = React.useCallback(
     (turn: ConversationMessage) => {
@@ -188,38 +183,24 @@ export function useTutorialConductor(): void {
     prevStatusRef.current = status;
     if (status === "active" && prev !== "active") dispatchChatOpen();
   }, [status]);
-
-  // ── Seed the current step's turn while active ────────────────────────────
-  // activeConversationId is a re-seed trigger, not a value read here: switching
-  // conversations replaces the transcript array, so the current step's turn is
-  // re-seeded into the new conversation (same id → idempotent within a run).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: activeConversationId is the intentional re-seed trigger
-  React.useEffect(() => {
-    if (status !== "active") return;
-    const step = script[stepIndex];
-    if (!step) return;
-    seedTurn(
-      makeTurn(
-        `tutorial:${startedAt ?? 0}:step:${step.id}`,
-        stepTurnText(step, stepIndex >= script.length - 1),
-      ),
-    );
-  }, [status, stepIndex, startedAt, script, seedTurn, activeConversationId]);
 }
 
 /**
- * Auto-advance + narration effects that only exist while a tour runs — split
- * from the always-mounted conductor so the idle app never subscribes to the
- * per-token transcript stream or spins up the voice engine.
+ * Seeding + auto-advance + narration effects that only exist while a tour
+ * runs — split from the always-mounted conductor so the idle app never
+ * subscribes to the per-token transcript stream or spins up the voice engine.
  */
 function TutorialActiveEffects({
   step,
+  isLast,
   runNonce,
 }: {
   step: TutorialScriptStep;
+  isLast: boolean;
   runNonce: number;
 }): null {
-  const { conversationMessages } = useConversationMessages();
+  const { conversationMessages, setConversationMessages } =
+    useConversationMessages();
   const controller = useShellControllerContext();
   const {
     tab,
@@ -241,6 +222,20 @@ function TutorialActiveEffects({
     tab,
     conversationId: activeConversationId,
   });
+
+  // Keep the current step's turn IN the transcript, not just seed it once:
+  // a server round-trip or conversation switch can replace the whole message
+  // array (rehydration drops local-only turns), so whenever the turn id goes
+  // missing while this step is live, it is re-appended. Idempotent — the id
+  // embeds the run nonce + step id.
+  const turnId = `tutorial:${runNonce}:step:${step.id}`;
+  React.useEffect(() => {
+    if (conversationMessages.some((m) => m.id === turnId)) return;
+    const turn = makeTurn(turnId, stepTurnText(step, isLast));
+    setConversationMessages((prev) =>
+      prev.some((m) => m.id === turn.id) ? prev : [...prev, turn],
+    );
+  }, [conversationMessages, turnId, step, isLast, setConversationMessages]);
 
   const complete: TutorialStepCompletion | undefined = step.completeOn;
 
@@ -334,6 +329,7 @@ export function TutorialConductorMount(): React.ReactElement | null {
     <TutorialActiveEffects
       key={`${startedAt ?? 0}:${step.id}`}
       step={step}
+      isLast={stepIndex >= script.length - 1}
       runNonce={startedAt ?? 0}
     />
   );

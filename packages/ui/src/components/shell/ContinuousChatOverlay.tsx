@@ -69,6 +69,7 @@ import {
 import { useConversationMessages } from "../../state/ConversationMessagesContext.hooks";
 import { goHome, goLauncher } from "../../state/shell-surface-store";
 import { useViewChatBinding } from "../../state/view-chat-binding";
+import { tryHandleTutorialText } from "../../tutorial/tutorial-action-channel";
 import { copyTextToClipboard } from "../../utils/clipboard";
 import {
   CHAT_UPLOAD_ACCEPT,
@@ -1572,6 +1573,20 @@ export function ContinuousChatOverlay({
       // onboarding, so any images are dropped (text-only echo).
       if (firstRunOpen) {
         if (trimmed) void sendActionMessage(trimmed);
+        setDraft("");
+        setSlashDismissed(false);
+        setPendingImages([]);
+        setImageError(null);
+        inputRef.current?.focus();
+        return;
+      }
+      // Explicit tutorial commands ("start/stop/restart tutorial") drive the
+      // chat-native tour locally — never an agent turn. Text-only: a turn
+      // carrying images is a real message, not a command. Sits BEFORE the
+      // canSend gate because the tour is fully client-side and must work with
+      // the agent stopped.
+      if (trimmed && images.length === 0 && tryHandleTutorialText(trimmed)) {
+        clearChatDraft(activeConversationIdRef.current);
         setDraft("");
         setSlashDismissed(false);
         setPendingImages([]);
