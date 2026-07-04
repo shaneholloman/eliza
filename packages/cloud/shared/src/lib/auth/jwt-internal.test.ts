@@ -10,8 +10,8 @@
  *    (per-jti revocation unsupported → key-rotation model), and `revoke` throws.
  */
 
+import { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Generate a real ES256 keypair and expose it the way `jwks.ts` reads it:
 // base64-encoded PEM in JWT_SIGNING_PRIVATE_KEY / JWT_SIGNING_PUBLIC_KEY.
@@ -29,17 +29,51 @@ function makeKeys() {
 
 const KEYS = makeKeys();
 
-/** Import the module fresh so cached keys/redis client pick up current env. */
-async function loadModule() {
-  vi.resetModules();
-  return await import("./jwt-internal");
-}
+const denylistStore = new Map<string, string>();
+let denylistConfigured = true;
+let denylistGetError: Error | null = null;
+
+mock.module("../cache/redis-factory", () => ({
+  buildRedisClient: () => {
+    if (!denylistConfigured) return null;
+    return {
+      async get(key: string) {
+        if (denylistGetError) throw denylistGetError;
+        return denylistStore.get(key) ?? null;
+      },
+      async set(key: string, value: unknown, options?: { ex?: number }) {
+        denylistStore.set(key, String(value));
+        if (options?.ex !== undefined) {
+          setTimeout(() => denylistStore.delete(key), options.ex * 1000).unref?.();
+        }
+        return "OK";
+      },
+    };
+  },
+  hasRedisConfig: () => denylistConfigured,
+  isCloudflareWorkerRuntime: () => false,
+}));
+
+mock.module("../utils/logger", () => ({
+  logger: {
+    info: mock(() => undefined),
+  },
+}));
+
+const mod = await import("./jwt-internal");
+const denylistMod = await import("./jwt-internal-denylist");
 
 describe("internal JWT jti revocation denylist (#12879)", () => {
   beforeEach(() => {
     process.env.JWT_SIGNING_PRIVATE_KEY = KEYS.priv;
     process.env.JWT_SIGNING_PUBLIC_KEY = KEYS.pub;
     process.env.JWT_SIGNING_KEY_ID = "test";
+    process.env.MOCK_REDIS = "1";
+    denylistStore.clear();
+    denylistConfigured = true;
+    denylistGetError = null;
+    denylistMod.__resetDenylistClientForTests();
+    setSystemTime();
   });
 
   afterEach(() => {
@@ -50,8 +84,7 @@ describe("internal JWT jti revocation denylist (#12879)", () => {
     delete process.env.REDIS_URL;
     delete process.env.KV_REST_API_URL;
     delete process.env.KV_REST_API_TOKEN;
-    vi.restoreAllMocks();
-    vi.useRealTimers();
+    setSystemTime();
   });
 
   describe("with a Redis-backed denylist configured", () => {
@@ -59,8 +92,7 @@ describe("internal JWT jti revocation denylist (#12879)", () => {
       process.env.MOCK_REDIS = "1";
     });
 
-    it("verifies a freshly minted token within TTL (positive)", async () => {
-      const mod = await loadModule();
+    test("verifies a freshly minted token within TTL (positive)", async () => {
       const { access_token } = await mod.signInternalToken({
         subject: "pod-1",
         service: "discord-gateway",
@@ -73,8 +105,7 @@ describe("internal JWT jti revocation denylist (#12879)", () => {
       expect(typeof result.payload.jti).toBe("string");
     });
 
-    it("rejects a token after its jti is revoked (negative)", async () => {
-      const mod = await loadModule();
+    test("rejects a token after its jti is revoked (negative)", async () => {
       const { access_token } = await mod.signInternalToken({ subject: "pod-2" });
 
       // Sanity: valid before revocation.
@@ -88,8 +119,7 @@ describe("internal JWT jti revocation denylist (#12879)", () => {
       await expect(mod.verifyInternalToken(access_token)).rejects.toThrow(/revoked/i);
     });
 
-    it("does not revoke unrelated tokens (revocation is per-jti)", async () => {
-      const mod = await loadModule();
+    test("does not revoke unrelated tokens (revocation is per-jti)", async () => {
       const a = await mod.signInternalToken({ subject: "pod-a" });
       const b = await mod.signInternalToken({ subject: "pod-b" });
 
@@ -102,57 +132,37 @@ describe("internal JWT jti revocation denylist (#12879)", () => {
       expect(vb.valid).toBe(true);
     });
 
-    it("rejects an expired token (negative)", async () => {
-      const mod = await loadModule();
+    test("rejects an expired token (negative)", async () => {
       // Mint a token, then advance the system clock past its exp. jose reads
       // the wall clock for exp validation, so fake timers move it forward.
-      vi.useFakeTimers();
+      const now = new Date();
       try {
+        setSystemTime(now);
         const { access_token } = await mod.signInternalToken({
           subject: "pod-exp",
           expiresIn: 1,
         });
 
         // Jump well past exp (+ jose's default clock tolerance).
-        vi.advanceTimersByTime(120_000);
+        setSystemTime(new Date(now.getTime() + 120_000));
 
         await expect(mod.verifyInternalToken(access_token)).rejects.toThrow(/exp/i);
       } finally {
-        vi.useRealTimers();
+        setSystemTime();
       }
     });
 
-    it("fails closed when the denylist store errors (never allow-on-error)", async () => {
+    test("fails closed when the denylist store errors (never allow-on-error)", async () => {
       // Force the underlying Redis GET to throw. The denylist read is
       // intentionally un-try/catch'd, so the error propagates through
       // verifyInternalToken and the token is rejected (never allowed).
-      // `vi.doMock` is NOT hoisted and applies to the dynamic imports that
-      // follow, surviving the `vi.resetModules()` inside loadModule().
-      const throwingGet = vi.fn().mockRejectedValue(new Error("redis unavailable"));
-      vi.doMock("../cache/redis-factory", async () => {
-        const actual =
-          await vi.importActual<typeof import("../cache/redis-factory")>("../cache/redis-factory");
-        return {
-          ...actual,
-          buildRedisClient: () =>
-            ({
-              get: throwingGet,
-              set: vi.fn().mockResolvedValue("OK"),
-            }) as unknown as ReturnType<typeof actual.buildRedisClient>,
-        };
+      denylistGetError = new Error("redis unavailable");
+
+      const { access_token } = await mod.signInternalToken({
+        subject: "pod-err",
       });
 
-      try {
-        const mod = await loadModule();
-        const { access_token } = await mod.signInternalToken({
-          subject: "pod-err",
-        });
-
-        await expect(mod.verifyInternalToken(access_token)).rejects.toThrow(/redis unavailable/i);
-        expect(throwingGet).toHaveBeenCalled();
-      } finally {
-        vi.doUnmock("../cache/redis-factory");
-      }
+      await expect(mod.verifyInternalToken(access_token)).rejects.toThrow(/redis unavailable/i);
     });
   });
 
@@ -163,22 +173,21 @@ describe("internal JWT jti revocation denylist (#12879)", () => {
       delete process.env.REDIS_URL;
       delete process.env.KV_REST_API_URL;
       delete process.env.KV_REST_API_TOKEN;
+      denylistConfigured = false;
+      denylistMod.__resetDenylistClientForTests();
     });
 
-    it("still verifies valid tokens (key-rotation + TTL model)", async () => {
-      const mod = await loadModule();
+    test("still verifies valid tokens (key-rotation + TTL model)", async () => {
       const { access_token } = await mod.signInternalToken({ subject: "pod-nr" });
       const result = await mod.verifyInternalToken(access_token);
       expect(result.valid).toBe(true);
     });
 
-    it("reports the denylist as not configured", async () => {
-      const mod = await loadModule();
+    test("reports the denylist as not configured", async () => {
       expect(mod.isDenylistConfigured()).toBe(false);
     });
 
-    it("revokeInternalToken throws so callers know it did not take effect", async () => {
-      const mod = await loadModule();
+    test("revokeInternalToken throws so callers know it did not take effect", async () => {
       await expect(mod.revokeInternalToken("some-jti", undefined)).rejects.toThrow(
         /no Redis backend configured/i,
       );
