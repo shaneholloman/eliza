@@ -60,7 +60,7 @@ import {
 	type CandidateActionBackstopRule,
 	getCandidateActionBackstopRules,
 } from "../runtime/candidate-action-backstop";
-import { filterByContextGate } from "../runtime/context-gates";
+import { filterProvidersByContextGate } from "../runtime/context-gates";
 import { computePrefixHashes, hashString } from "../runtime/context-hash";
 import {
 	appendContextEvent,
@@ -1168,7 +1168,7 @@ async function composeProviderGroundedResponseState(
 	);
 }
 
-function selectV5PlannerStateProviderNames(args: {
+export function selectV5PlannerStateProviderNames(args: {
 	runtime: IAgentRuntime;
 	message: Memory;
 	selectedContexts: readonly AgentContext[];
@@ -1189,7 +1189,10 @@ function selectV5PlannerStateProviderNames(args: {
 	for (const name of alwaysOnResponseStateProviderNames(args.runtime)) {
 		providerNames.add(name);
 	}
-	for (const provider of filterByContextGate(
+	// filterProvidersByContextGate honors the FULL declared contextGate
+	// (anyOf/allOf/noneOf) plus the catalog fallback for undeclared providers —
+	// the plain {contexts, roleGate} reduction dropped world-style gates (#13203).
+	for (const provider of filterProvidersByContextGate(
 		providers,
 		args.selectedContexts,
 		args.userRoles,
@@ -1906,7 +1909,9 @@ function appendPriorDialogueEvents(
 	runtime: IAgentRuntime,
 	state: State,
 	currentMessage: Memory,
+	options?: { includeOwnReplies?: boolean },
 ): void {
+	const includeOwnReplies = options?.includeOwnReplies ?? false;
 	const providers = state.data?.providers;
 	if (!providers || typeof providers !== "object") {
 		return;
@@ -1928,7 +1933,15 @@ function appendPriorDialogueEvents(
 			if (!memory || typeof memory !== "object") return false;
 			const m = memory as Memory;
 			if (m.id && currentMessage.id && m.id === currentMessage.id) return false;
-			if (m.entityId === runtime.agentId) {
+			// The agent's own prior replies stay in the chat-recall window
+			// (role-tagged prior_message:agent below): the current_turn_boundary
+			// contract tells the model these blocks are its only chat-recall
+			// source, so dropping its own turns made it confabulate about what it
+			// previously said. The tool planner opts out (includeOwnReplies=false)
+			// because a planner that sees its own stale tool-derived answer
+			// parrots it instead of running the fresh check. The artifact guards
+			// below still strip non-dialogue agent output for every sender.
+			if (!includeOwnReplies && m.entityId === runtime.agentId) {
 				return false;
 			}
 			if (
@@ -1959,7 +1972,10 @@ function appendPriorDialogueEvents(
 	for (const memory of dialogue) {
 		const text = getUserMessageText(memory);
 		if (!text) continue;
-		const speakerName = priorDialogueSpeakerName(memory);
+		const isOwnReply = memory.entityId === runtime.agentId;
+		const speakerName = isOwnReply
+			? (runtime.character?.name ?? priorDialogueSpeakerName(memory))
+			: priorDialogueSpeakerName(memory);
 		events.push({
 			id: `history:${memory.id}`,
 			type: "segment",
@@ -1967,7 +1983,7 @@ function appendPriorDialogueEvents(
 			createdAt: memory.createdAt,
 			segment: {
 				id: `history:${memory.id}`,
-				label: "prior_message:user",
+				label: isOwnReply ? "prior_message:agent" : "prior_message:user",
 				content: priorDialogueContent(text, speakerName),
 				stable: false,
 				metadata: {
@@ -2820,7 +2836,13 @@ async function createV5MessageContextObject(args: {
 		});
 	}
 
-	appendPriorDialogueEvents(events, args.runtime, args.state, args.message);
+	appendPriorDialogueEvents(events, args.runtime, args.state, args.message, {
+		// The response handler needs the agent's own prior turns for grounded
+		// chat recall ("did you tell me X?"); the tool planner must not see its
+		// own stale tool-derived answers or it answers from them instead of
+		// executing the fresh check the user asked for.
+		includeOwnReplies: !args.includeTools,
+	});
 
 	events.push({
 		id: "current-turn-boundary",
@@ -2828,7 +2850,14 @@ async function createV5MessageContextObject(args: {
 		source: "message-service",
 		stable: false,
 		content:
-			'current_turn_boundary: The prior_message blocks above are context only. If a reply_reference block follows, it is the platform message that the final message:user is replying to; use it only to resolve references such as this/that/it. Execute and answer only the final message:user below. Do not merge separate prior requests into the current task unless the final message explicitly references them. Exception for visible-context recall: when the final message asks a recall question about what was said in this conversation (who mentioned X, did anyone bring up Y, what did I say about Z, what was the last message), you may scan the prior_message blocks above and answer from what is literally visible there. Before saying you cannot find something, read the final message:user itself: if the asker states a fact and asks about it in the same message ("my favorite color is teal, what is my favorite color?"), answer from the current message directly. Only when the asked-about token appears neither in the current message nor in any visible prior_message block, say so plainly ("I don\'t see X in the recent messages I can see") rather than claiming you searched beyond the visible window or fabricating an action — the prior_message blocks are the only window you have, and there is no separate chat-history search tool. This "no chat-history search" limit is about CHAT recall ONLY. It does NOT apply to what a task, build, deploy, or sub-agent YOU ran actually did: that run status IS verifiable with the task/sub-agent tools. So when the final message asks "what happened with [the build/app/task]" or disputes whether something you ran actually worked, treat it as a live verification request (set requiresTool) and CHECK the current task/sub-agent status with a tool before reporting, disclaiming, or conceding — never say you cannot verify a run you can look up.',
+			"current_turn_boundary: The prior_message blocks above are context only. If a reply_reference block follows, it is the platform message that the final message:user is replying to; use it only to resolve references such as this/that/it. Execute and answer only the final message:user below. Do not merge separate prior requests into the current task unless the final message explicitly references them. Exception for visible-context recall: when the final message asks a recall question about what was said in this conversation (who mentioned X, did anyone bring up Y, what did I say about Z, what was the last message, did you yourself say W), you may scan the prior_message blocks above and answer from what is literally visible there." +
+			// Only the chat-recall context renders the agent's own prior turns;
+			// the tool-planner context deliberately omits them (stale-answer
+			// hazard), so this grounding sentence would be false there.
+			(args.includeTools
+				? ""
+				: " Your own prior replies are the prior_message:agent blocks: when asked what YOU said, told, or promised earlier, answer only from those blocks — never assert you said something that does not appear in them, and never deny saying something that does.") +
+			' Before saying you cannot find something, read the final message:user itself: if the asker states a fact and asks about it in the same message ("my favorite color is teal, what is my favorite color?"), answer from the current message directly. Only when the asked-about token appears neither in the current message nor in any visible prior_message block, say so plainly ("I don\'t see X in the recent messages I can see") rather than claiming you searched beyond the visible window or fabricating an action — the prior_message blocks are the only window you have, and there is no separate chat-history search tool. This "no chat-history search" limit is about CHAT recall ONLY. It does NOT apply to what a task, build, deploy, or sub-agent YOU ran actually did: that run status IS verifiable with the task/sub-agent tools. So when the final message asks "what happened with [the build/app/task]" or disputes whether something you ran actually worked, treat it as a live verification request (set requiresTool) and CHECK the current task/sub-agent status with a tool before reporting, disclaiming, or conceding — never say you cannot verify a run you can look up.',
 	});
 
 	const replyReferenceEvent = replyReferenceEventForContext(args.message);
@@ -3807,6 +3836,7 @@ export function messageHandlerFromFieldResult(
 		actions: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 		messageText?: string;
 		candidateBackstopRules?: readonly CandidateActionBackstopRule[];
+		subAgentCompletionRelay?: boolean;
 	},
 ): MessageHandlerResult {
 	const rawContexts = Array.isArray(result.contexts)
@@ -3818,12 +3848,27 @@ export function messageHandlerFromFieldResult(
 				.filter(Boolean)
 		: [];
 	const currentMessageText = runtimeContext?.messageText ?? "";
-	const candidateBackstop = applyCodingCandidateBackstop({
-		candidateActions: rawCandidateActions,
-		actions: runtimeContext?.actions ?? [],
-		messageText: currentMessageText,
-		backstopRules: runtimeContext?.candidateBackstopRules ?? [],
-	});
+	// A sub-agent completion relay's envelope echoes the original task text
+	// ("[sub-agent: Build and deploy…]"), so every text-intent inference over
+	// the CURRENT message reads a FINISHED task as fresh task intent. Disable
+	// the text-derived candidate injections (coding backstop, ack-intent
+	// inference, direct-current inference) on relay turns — the relay's only
+	// job is to deliver the result, and forcing a tool over it rejects REPLY up
+	// to the required-tool miss cap or re-spawns completed work. Structural:
+	// the flag comes from the relay's own markers (metadata.subAgent / router
+	// source / envelope prefix), not from classifying LLM text. The model's OWN
+	// explicit routing (contexts + candidateActionNames it emitted) is
+	// untouched, so genuine user task-intent turns keep the full backstop.
+	const subAgentCompletionRelay =
+		runtimeContext?.subAgentCompletionRelay === true;
+	const candidateBackstop = subAgentCompletionRelay
+		? { candidateActions: [...rawCandidateActions], forceCodeContext: false }
+		: applyCodingCandidateBackstop({
+				candidateActions: rawCandidateActions,
+				actions: runtimeContext?.actions ?? [],
+				messageText: currentMessageText,
+				backstopRules: runtimeContext?.candidateBackstopRules ?? [],
+			});
 	const candidateActions = candidateBackstop.candidateActions;
 	const contexts =
 		candidateBackstop.forceCodeContext &&
@@ -3838,6 +3883,7 @@ export function messageHandlerFromFieldResult(
 		runtimeContext,
 	);
 	const inferredAckCandidateActions =
+		!subAgentCompletionRelay &&
 		!hasRunnableCandidateAction &&
 		hasAckOnlyActionableIntent(result, replyTextRaw, currentMessageText)
 			? inferAckIntentCandidateActions(
@@ -3857,7 +3903,7 @@ export function messageHandlerFromFieldResult(
 				})
 			: candidateActions.length > 0;
 	const directCurrentCandidateActions =
-		currentMessageText.trim().length > 0
+		!subAgentCompletionRelay && currentMessageText.trim().length > 0
 			? inferDirectCurrentRequestCandidateActions(
 					runtimeContext?.actions ?? [],
 					currentMessageText,
@@ -4206,13 +4252,24 @@ export function applyDirectCurrentCandidateBackstopToMessageHandler(
 		| {
 				actions: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 				messageText?: string;
+				subAgentCompletionRelay?: boolean;
 		  }
 		| undefined,
 ): MessageHandlerResult {
 	const currentMessageText = runtimeContext?.messageText ?? "";
+	// A sub-agent completion relay is not a user request — its envelope ECHOES
+	// the original task text ("[sub-agent: Build and deploy…]"), so the intent
+	// inference below reads a FINISHED task as fresh task intent, promotes the
+	// turn to requiresTool, and the planner rejects REPLY up to the
+	// required-tool miss cap (or re-runs the injected delegation candidate,
+	// re-spawning completed work). The flag is derived from the relay's
+	// structural markers (metadata.subAgent / router source / envelope
+	// prefix), never from classifying LLM text, so genuine user task-intent
+	// turns keep the backstop.
 	if (
 		messageHandler.processMessage !== "RESPOND" ||
 		!runtimeContext ||
+		runtimeContext.subAgentCompletionRelay === true ||
 		currentMessageText.trim().length === 0
 	) {
 		return messageHandler;
@@ -4810,6 +4867,7 @@ function parseMessageHandlerModelOutput(
 	runtimeContext?: {
 		actions: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 		messageText?: string;
+		subAgentCompletionRelay?: boolean;
 	},
 ): MessageHandlerResult | null {
 	const applyBackstops = (result: MessageHandlerResult | null) =>
@@ -6145,6 +6203,7 @@ export async function runV5MessageRuntimeStage1(args: {
 					actions: args.runtime.actions,
 					messageText: getUserMessageText(args.message),
 					candidateBackstopRules: getCandidateActionBackstopRules(args.runtime),
+					subAgentCompletionRelay: isSubAgentCompletionArtifact(args.message),
 				},
 			);
 		}
@@ -6152,6 +6211,7 @@ export async function runV5MessageRuntimeStage1(args: {
 			messageHandler = parseMessageHandlerModelOutput(rawMessageHandler, {
 				actions: args.runtime.actions,
 				messageText: getUserMessageText(args.message),
+				subAgentCompletionRelay: isSubAgentCompletionArtifact(args.message),
 			});
 		}
 		const stage1CompletionLimitHit = stage1HitCompletionLimit(
