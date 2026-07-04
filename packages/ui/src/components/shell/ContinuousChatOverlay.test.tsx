@@ -1240,21 +1240,29 @@ describe("ContinuousChatOverlay", () => {
       />,
     );
     fireEvent.focus(screen.getByLabelText("message")); // open the sheet
-    const scrollIntoView = Element.prototype.scrollIntoView as ReturnType<
-      typeof vi.fn
-    >;
-    scrollIntoView.mockClear();
-    rerender(
-      <ContinuousChatOverlay
-        controller={makeController({
-          messages: [
-            ...base,
-            { id: "b", role: "user", content: "new line", createdAt: 2 },
-          ],
-        } as unknown as Partial<ShellController>)}
-      />,
-    );
-    expect(scrollIntoView).toHaveBeenCalled();
+    // The shared thread-scroll engine glides to a NEW line with a smooth
+    // el.scrollTo (jsdom has neither smooth scrolling nor Element.scrollTo,
+    // so stub it to observe the call).
+    const scrollTo = vi.fn();
+    Element.prototype.scrollTo = scrollTo as unknown as Element["scrollTo"];
+    try {
+      rerender(
+        <ContinuousChatOverlay
+          controller={makeController({
+            messages: [
+              ...base,
+              { id: "b", role: "user", content: "new line", createdAt: 2 },
+            ],
+          } as unknown as Partial<ShellController>)}
+        />,
+      );
+      expect(scrollTo).toHaveBeenCalledWith(
+        expect.objectContaining({ behavior: "smooth" }),
+      );
+    } finally {
+      // biome-ignore lint/performance/noDelete: restore the pristine jsdom prototype
+      delete (Element.prototype as { scrollTo?: unknown }).scrollTo;
+    }
   });
 
   it("marks chat transcript changes as transient layout motion", () => {

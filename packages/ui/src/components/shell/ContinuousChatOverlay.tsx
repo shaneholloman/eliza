@@ -66,6 +66,7 @@ import {
   LAYOUT_SHIFT_INTENT_TRANSIENT,
 } from "../../hooks/useLayoutShiftMonitor";
 import { usePushToTalk } from "../../hooks/usePushToTalk";
+import { useThreadAutoScroll } from "../../hooks/useThreadAutoScroll";
 import { Z_SHELL_OVERLAY } from "../../lib/floating-layers";
 import { cn } from "../../lib/utils";
 import { claimAssistantLaunchPayloadFromHash } from "../../platform/assistant-launch-payload";
@@ -1922,12 +1923,10 @@ export function ContinuousChatOverlay({
     [],
   );
   const [imageError, setImageError] = React.useState<string | null>(null);
-  const endRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const overlayRef = React.useRef<HTMLDivElement>(null);
   const panelRef = React.useRef<HTMLFieldSetElement>(null);
-  const threadRef = React.useRef<HTMLDivElement>(null);
   // The transcript's inner content wrapper — measured to size the onboarding
   // sheet to its content (grow-from-the-bottom) instead of a tall empty panel.
   const threadContentRef = React.useRef<HTMLDivElement>(null);
@@ -2006,6 +2005,28 @@ export function ContinuousChatOverlay({
   );
   const lastId = visibleMessages.at(-1)?.id ?? null;
   const lastContent = visibleMessages.at(-1)?.content ?? "";
+  // The thread body is mounted while the sheet is open OR during an upward
+  // drag's inert preview; the auto-scroll engine runs exactly then.
+  const threadPresented = sheetOpen || dragPreviewVisible;
+  // Keep the transcript pinned to the latest line via the one shared
+  // thread-scroll engine (useThreadAutoScroll): first reveal pins instantly
+  // (pre-paint — the thread never flashes at the top), a NEW line re-pins with
+  // a smooth glide while the reader rests at the bottom, streaming growth
+  // follows in a single rAF, and a reader who scrolled up is never yanked.
+  const { scrollRef: threadRef } = useThreadAutoScroll<HTMLDivElement>({
+    growthKey: `${visibleMessages.length}:${lastId ?? ""}:${lastContent.length}`,
+    lineKey: lastId ?? "",
+    enabled: threadPresented,
+    reduceMotion: reduce,
+  });
+  // Focus the thread for keyboard scrolling when an opener requested it —
+  // consumed on the reveal edge, separate from the scroll engine above.
+  React.useLayoutEffect(() => {
+    if (sheetOpen && focusThreadRef.current) {
+      threadRef.current?.focus();
+      focusThreadRef.current = false;
+    }
+  }, [sheetOpen, threadRef]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: these values are the event keys for transient layout-motion intent.
   React.useEffect(() => {
     markLayoutShiftIntent();
@@ -2020,11 +2041,6 @@ export function ContinuousChatOverlay({
     turnStatus?.toolName,
     markLayoutShiftIntent,
   ]);
-
-  // The last line id the scroll effect pinned to — lets it tell a NEW line
-  // (always pin to bottom) from streaming growth of the current line (follow
-  // only when the reader is already at the bottom).
-  const scrollPinnedIdRef = React.useRef(lastId);
 
   // Topic grouping + chips bar (#8928). Derived from the per-message Stage-1
   // topic tags; when no message is tagged the transcript renders flat (the
@@ -2155,83 +2171,6 @@ export function ContinuousChatOverlay({
   const suggestions = usePromptSuggestions(messages, {
     enabled: suggestionsVisible,
   });
-
-  // Keep the transcript pinned to the latest line. On first open jump INSTANTLY
-  // to the bottom — a layout effect runs before paint, so the thread never
-  // flashes at the top. A NEW line (the user's own send, or a fresh reply)
-  // always re-pins to the bottom; streaming growth of the current line follows
-  // only when the reader is already resting at the bottom, so scrolling up to
-  // read history is never yanked down.
-  const wasOpenRef = React.useRef(false);
-  // Coalesces the per-token streaming-follow scroll into one rAF so a burst of
-  // tokens landing within a frame triggers at most one measure+write instead of
-  // a forced reflow per token. New-line / first-open pins stay synchronous below.
-  const followRafRef = React.useRef<number | null>(null);
-  React.useEffect(
-    () => () => {
-      if (followRafRef.current != null)
-        cancelAnimationFrame(followRafRef.current);
-    },
-    [],
-  );
-  const threadPresented = sheetOpen || dragPreviewVisible;
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: lastId/lastContent/sheetOpen/dragPreviewVisible are the triggers; the body reads refs
-  React.useLayoutEffect(() => {
-    const el = threadRef.current;
-    if (!el) return;
-    const isNewLine = lastId !== scrollPinnedIdRef.current;
-    scrollPinnedIdRef.current = lastId;
-
-    if (!sheetOpen) {
-      wasOpenRef.current = false;
-      if (dragPreviewVisible) el.scrollTop = el.scrollHeight;
-      return;
-    }
-
-    // OPEN: jump to the bottom on first open; a NEW line re-pins (smooth); while
-    // already resting at the bottom, follow streaming growth — but never yank a
-    // reader who has scrolled up to read history. Direct scrollTop assignment is
-    // more reliable than scrollIntoView inside this clipped flex column.
-    const justOpened = !wasOpenRef.current;
-    wasOpenRef.current = true;
-
-    // New line or first open: pin synchronously (pre-paint) so the thread never
-    // flashes at the top. Infrequent — once per turn, not per token.
-    if (isNewLine || justOpened) {
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-      // Pin to the latest line ONLY on first open, or when the reader is already
-      // resting at the bottom. If they have scrolled UP to read history, a new
-      // line must NOT yank them down — the previous code force-pinned on every
-      // new line (the `else` ran whenever !atBottom), which is exactly the
-      // "scroll up to the first message and get snapped back to the bottom" bug.
-      if (justOpened || atBottom) {
-        if (isNewLine && !justOpened && !reduce) {
-          endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-        } else {
-          el.scrollTop = el.scrollHeight;
-        }
-      }
-      if (justOpened && focusThreadRef.current) {
-        el.focus();
-        focusThreadRef.current = false;
-      }
-      return;
-    }
-
-    // Streaming growth of the current line: coalesce the bottom-follow into a
-    // single rAF (measure atBottom + write scrollTop at most once per frame).
-    // Same semantics as before — only follows when the reader is at the bottom.
-    if (followRafRef.current != null) return;
-    followRafRef.current = requestAnimationFrame(() => {
-      followRafRef.current = null;
-      const node = threadRef.current;
-      if (!node) return;
-      const atBottom =
-        node.scrollHeight - node.scrollTop - node.clientHeight < 80;
-      if (atBottom) node.scrollTop = node.scrollHeight;
-    });
-  }, [lastId, lastContent, sheetOpen, dragPreviewVisible]);
 
   // Send `text` (and optional images) through the normal chat pipeline, clearing
   // the composer. Shared by the send button, the slash menu (agent commands),
@@ -4608,7 +4547,6 @@ export function ContinuousChatOverlay({
                         />
                       ) : null}
                     </AnimatePresence>
-                    <div ref={endRef} />
                   </div>
                 </motion.div>
               </motion.div>
