@@ -3,6 +3,11 @@
  * asks the multimodal Gemini model for a `{ title, description }`. Prefers the
  * model's JSON output and falls back to regex title extraction from prose. The
  * call is wrapped in `recordLlmCall` for trajectory capture.
+ *
+ * Provider failures (image fetch error, bad key, model-not-found, rate-limit,
+ * timeout, safety block, empty completion) surface as typed errors so the caller
+ * and model see a real failure — they are never fabricated into a
+ * `{ title, description }` result the runtime would read as a real description.
  */
 import type {
   IAgentRuntime,
@@ -95,7 +100,13 @@ export async function handleImageDescription(
       return result;
     });
 
-    const responseText = response.text || "";
+    const responseText = (response.text || "").trim();
+    if (!responseText) {
+      // An empty completion is a provider failure (safety block, truncation,
+      // model error), not a describable image. Surface it instead of returning
+      // a fabricated "Image Analysis" / empty-description result.
+      throw new Error("Google GenAI API returned an empty image description");
+    }
 
     try {
       const jsonResponse = JSON.parse(responseText) as {
@@ -119,15 +130,15 @@ export async function handleImageDescription(
     const title = titleMatch?.[1]?.trim() || "Image Analysis";
     const description = titleMatch
       ? responseText.replace(/title[:\s]+(.+?)(?:\n|$)/i, "").trim()
-      : responseText.trim();
+      : responseText;
 
     return { title, description };
   } catch (error) {
+    // Do not fabricate a `{ title, description }` on failure — the caller/model
+    // must see the real error, not an "Error: ..." string dressed up as a
+    // successful image description.
     const message = error instanceof Error ? error.message : String(error);
     logger.error(`Error analyzing image: ${message}`);
-    return {
-      title: "Failed to analyze image",
-      description: `Error: ${message}`,
-    };
+    throw error instanceof Error ? error : new Error(message);
   }
 }

@@ -31,6 +31,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "agents"
     },
@@ -104,6 +105,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "agents"
     },
@@ -179,6 +181,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -203,6 +206,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "automation"
     },
@@ -226,6 +230,7 @@
       "resources": {},
       "dependsOn": ["wallet"],
       "channels": [],
+      "shortIds": ["polymarket", "app-polymarket", "appPolymarket"],
       "curatedApp": {
         "slug": "polymarket",
         "order": 7,
@@ -449,6 +454,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "blockchain"
     },
@@ -483,6 +489,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "automation"
     },
@@ -586,6 +593,7 @@
       },
       "dependsOn": [],
       "channels": ["blooio"],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "other"
     },
@@ -688,6 +696,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": ["bluebubbles"],
+      "shortIds": ["bluebubbles"],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -862,6 +871,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -948,6 +958,15 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [
+        "browser",
+        "app-browser",
+        "appBrowser",
+        "eliza-browser",
+        "elizaBrowser",
+        "browser-bridge",
+        "browserBridge"
+      ],
       "kind": "plugin",
       "subtype": "devtools"
     },
@@ -989,6 +1008,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "devtools"
     },
@@ -1065,6 +1085,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -1110,6 +1131,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "documents"
     },
@@ -1182,6 +1204,12 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [
+        "coding-agent",
+        "codingAgent",
+        "coding-tools",
+        "codingTools"
+      ],
       "kind": "plugin",
       "subtype": "devtools"
     },
@@ -1246,6 +1274,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "automation"
     },
@@ -1321,6 +1350,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": ["computeruse"],
       "kind": "plugin",
       "subtype": "devtools"
     },
@@ -1347,6 +1377,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "curatedApp": {
         "slug": "contacts",
         "order": 1,
@@ -1446,6 +1477,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "agents"
     },
@@ -1469,6 +1501,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "app",
       "subtype": "tool",
       "launch": {
@@ -1511,6 +1544,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -1575,6 +1609,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "agents"
     },
@@ -1684,6 +1719,7 @@
       },
       "dependsOn": [],
       "channels": ["discord"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -1728,6 +1764,7 @@
       },
       "dependsOn": [],
       "channels": ["discordLocal"],
+      "shortIds": ["discordLocal"],
       "kind": "connector",
       "subtype": "social"
     },
@@ -1751,6 +1788,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "app",
       "subtype": "tool",
       "launch": {
@@ -1857,6 +1895,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "voice",
       "defaultTextToSpeech": true
@@ -2028,6 +2067,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "voice"
     },
@@ -2239,6 +2279,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": ["elizacloud"],
       "kind": "plugin",
       "subtype": "other"
     },
@@ -2312,6 +2353,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -2447,6 +2489,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": ["evm", "solana", "wallet", "agent_wallet", "agent-wallet"],
       "kind": "plugin",
       "subtype": "blockchain"
     },
@@ -2482,6 +2525,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "storage"
     },
@@ -2599,6 +2643,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "media",
       "launch": {
@@ -2785,6 +2830,7 @@
       },
       "dependsOn": [],
       "channels": ["farcaster"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -2812,6 +2858,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "curatedApp": {
         "slug": "feed",
         "order": 4,
@@ -2898,6 +2945,7 @@
       },
       "dependsOn": [],
       "channels": ["feishu"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -2929,6 +2977,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": ["form"],
       "kind": "plugin",
       "subtype": "media"
     },
@@ -3023,6 +3072,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "devtools"
     },
@@ -3049,6 +3099,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "media"
     },
@@ -3127,6 +3178,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "agents"
     },
@@ -3188,6 +3240,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "email",
       "auth": {
@@ -3327,6 +3380,7 @@
       },
       "dependsOn": [],
       "channels": ["googlechat"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -3457,6 +3511,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -3552,6 +3607,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -3601,6 +3657,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "other"
     },
@@ -3624,6 +3681,7 @@
       "resources": {},
       "dependsOn": ["wallet"],
       "channels": [],
+      "shortIds": [],
       "curatedApp": {
         "slug": "hyperliquid",
         "order": 6,
@@ -3731,6 +3789,7 @@
       },
       "dependsOn": [],
       "channels": ["imessage"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -3761,6 +3820,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "database"
     },
@@ -3822,6 +3882,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -3851,6 +3912,7 @@
       },
       "dependsOn": [],
       "channels": ["lens"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "social"
     },
@@ -3934,6 +3996,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -3990,6 +4053,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "devtools"
     },
@@ -4128,6 +4192,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -4164,6 +4229,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "storage"
     },
@@ -4190,6 +4256,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "database"
     },
@@ -4213,6 +4280,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "app",
       "subtype": "tool",
       "launch": {
@@ -4316,6 +4384,7 @@
       },
       "dependsOn": [],
       "channels": ["matrix"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -4427,6 +4496,7 @@
       },
       "dependsOn": [],
       "channels": ["mattermost"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -4476,6 +4546,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "devtools"
     },
@@ -4601,6 +4672,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "documents"
     },
@@ -4624,6 +4696,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "app",
       "subtype": "tool",
       "launch": {
@@ -4666,6 +4739,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -4689,6 +4763,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "app",
       "subtype": "tool",
       "launch": {
@@ -4782,6 +4857,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "gaming"
     },
@@ -4883,6 +4959,7 @@
       },
       "dependsOn": [],
       "channels": ["msteams"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -5043,6 +5120,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "other"
     },
@@ -5127,6 +5205,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -5228,6 +5307,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -5302,6 +5382,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "devtools"
     },
@@ -5369,6 +5450,7 @@
       },
       "dependsOn": [],
       "channels": ["nostr"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -5479,6 +5561,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -5679,6 +5762,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -5869,6 +5953,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -5896,6 +5981,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "documents"
     },
@@ -5922,6 +6008,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "curatedApp": {
         "slug": "phone",
         "order": 2,
@@ -6007,6 +6094,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "feature"
     },
@@ -6031,6 +6119,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "agents"
     },
@@ -6054,6 +6143,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "app",
       "subtype": "tool",
       "launch": {
@@ -6108,6 +6198,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "media"
     },
@@ -6131,6 +6222,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "app",
       "subtype": "tool",
       "launch": {
@@ -6201,6 +6293,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "media"
     },
@@ -6224,6 +6317,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "app",
       "subtype": "tool",
       "launch": {
@@ -6321,6 +6415,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "storage"
     },
@@ -6357,6 +6452,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "automation"
     },
@@ -6383,6 +6479,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "curatedApp": {
         "slug": "screenshare",
         "order": 9,
@@ -6483,6 +6580,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "devtools"
     },
@@ -6506,6 +6604,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "curatedApp": {
         "slug": "shopify",
         "order": 8,
@@ -6598,6 +6697,7 @@
       },
       "dependsOn": [],
       "channels": ["signal"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -6625,6 +6725,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "app",
       "subtype": "tool",
       "launch": {
@@ -6722,6 +6823,7 @@
       },
       "dependsOn": [],
       "channels": ["slack"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -6819,6 +6921,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "blockchain"
     },
@@ -6900,6 +7003,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "devtools"
     },
@@ -6954,6 +7058,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "other"
     },
@@ -7022,6 +7127,7 @@
       },
       "dependsOn": [],
       "channels": ["telegram"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -7117,6 +7223,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -7148,6 +7255,7 @@
       },
       "dependsOn": ["sql"],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "devtools"
     },
@@ -7185,6 +7293,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -7218,6 +7327,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "app",
       "subtype": "tool",
       "launch": {
@@ -7278,6 +7388,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "curatedApp": {
         "slug": "trajectory-logger",
         "order": 10,
@@ -7306,6 +7417,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "app",
       "subtype": "tool",
       "launch": {
@@ -7351,6 +7463,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "blockchain"
     },
@@ -7423,6 +7536,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "voice"
     },
@@ -7469,6 +7583,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "devtools"
     },
@@ -7638,6 +7753,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "other"
     },
@@ -7745,6 +7861,7 @@
       },
       "dependsOn": [],
       "channels": ["twitch"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -7880,6 +7997,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -7904,6 +8022,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "media"
     },
@@ -7948,6 +8067,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": ["vision"],
       "kind": "plugin",
       "subtype": "media"
     },
@@ -7972,6 +8092,7 @@
       "resources": {},
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "devtools"
     },
@@ -8025,6 +8146,7 @@
       },
       "dependsOn": [],
       "channels": ["wechat"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -8139,6 +8261,7 @@
       },
       "dependsOn": [],
       "channels": ["whatsapp"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -8169,6 +8292,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "curatedApp": {
         "slug": "wifi",
         "order": 3,
@@ -8200,6 +8324,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "other"
     },
@@ -8406,6 +8531,7 @@
       },
       "dependsOn": [],
       "channels": ["x", "twitter"],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "social",
       "auth": {
@@ -8509,6 +8635,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -8582,6 +8709,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "plugin",
       "subtype": "ai-provider"
     },
@@ -8698,6 +8826,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {
@@ -8821,6 +8950,7 @@
       },
       "dependsOn": [],
       "channels": [],
+      "shortIds": [],
       "kind": "connector",
       "subtype": "messaging",
       "auth": {

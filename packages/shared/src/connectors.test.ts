@@ -8,8 +8,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   expandConnectorSourceFilter,
+  getConnectorIdentityMetadataMapping,
   getConnectorSourceAliases,
   getConnectorSourceMetadata,
+  getConnectorWorldIdMetadataKeys,
   isPassiveConnectorSource,
   normalizeConnectorSource,
   registerConnectorSourceAliases,
@@ -85,5 +87,114 @@ describe("connector source aliases", () => {
     expect(getConnectorSourceMetadata("custom-passive-account")).toMatchObject({
       sourceKind: "passive",
     });
+  });
+});
+
+// #12090 item 22 / #12087: the flat-field -> identity projection and world-id
+// derivation keys are declared connector-owned registry metadata now, so core's
+// roles.ts reads them generically instead of special-casing individual
+// connectors. These cover the registry contract those helpers depend on.
+describe("connector identity / world-id metadata mapping", () => {
+  it("round-trips a registered identity mapping and normalizes blank fields to null", () => {
+    const owner = "identity-mapping-test";
+    try {
+      registerConnectorSourceMetadata(
+        "map-chat",
+        {
+          identityMetadataMapping: {
+            userIdField: "  senderId  ",
+            nameField: "  handle  ",
+          },
+        },
+        owner,
+      );
+      expect(getConnectorIdentityMetadataMapping("map-chat")).toEqual({
+        userIdField: "senderId",
+        nameField: "handle",
+      });
+    } finally {
+      unregisterConnectorSourceMetadataOwner(owner);
+    }
+  });
+
+  it("drops an identity mapping whose user-id field is blank (fails closed)", () => {
+    const owner = "identity-mapping-blank-test";
+    try {
+      registerConnectorSourceMetadata(
+        "blank-chat",
+        { identityMetadataMapping: { userIdField: "   " } },
+        owner,
+      );
+      expect(getConnectorIdentityMetadataMapping("blank-chat")).toBeNull();
+    } finally {
+      unregisterConnectorSourceMetadataOwner(owner);
+    }
+  });
+
+  it("returns null / empty for a source with no mapping declared", () => {
+    expect(getConnectorIdentityMetadataMapping("never-registered")).toBeNull();
+    expect(getConnectorWorldIdMetadataKeys("never-registered")).toEqual([]);
+  });
+
+  it("filters non-string / blank world-id keys and trims survivors", () => {
+    const owner = "worldid-keys-test";
+    try {
+      registerConnectorSourceMetadata(
+        "world-chat",
+        {
+          worldIdMetadataKeys: [
+            " primaryId ",
+            "",
+            42 as unknown as string,
+            "secondaryId",
+          ],
+        },
+        owner,
+      );
+      expect(getConnectorWorldIdMetadataKeys("world-chat")).toEqual([
+        "primaryId",
+        "secondaryId",
+      ]);
+    } finally {
+      unregisterConnectorSourceMetadataOwner(owner);
+    }
+  });
+
+  it("ships the Discord legacy mapping as a built-in default (moved out of core roles.ts)", () => {
+    expect(getConnectorIdentityMetadataMapping("discord")).toEqual({
+      userIdField: "fromId",
+      nameField: "entityName",
+    });
+    expect(getConnectorWorldIdMetadataKeys("discord")).toEqual([
+      "discordServerId",
+      "discordChannelId",
+    ]);
+  });
+
+  it("lets a runtime-registered mapping override the built-in default (registered wins)", () => {
+    const owner = "discord-override-test";
+    try {
+      registerConnectorSourceMetadata(
+        "discord",
+        {
+          identityMetadataMapping: {
+            userIdField: "authorId",
+            nameField: "authorName",
+          },
+        },
+        owner,
+      );
+      expect(getConnectorIdentityMetadataMapping("discord")).toEqual({
+        userIdField: "authorId",
+        nameField: "authorName",
+      });
+    } finally {
+      unregisterConnectorSourceMetadataOwner(owner);
+      // Built-in default is restored once the override owner is removed.
+      expect(getConnectorIdentityMetadataMapping("discord")).toEqual({
+        userIdField: "fromId",
+        nameField: "entityName",
+      });
+    }
   });
 });

@@ -230,3 +230,56 @@ describe("NerEntityRecognizer (injected fake pipeline — no download)", () => {
     expect(text.slice(spans[0].start, spans[0].end)).toBe("Dana");
   });
 });
+
+// Fail-closed coverage for the #12740 security-path sweep. A classify failure
+// that happens AFTER the model loaded successfully must NOT be swallowed into a
+// fabricated "no PII found" ([]) result — that would silently under-redact PII.
+// The contract is: recognize() REJECTS so the caller sees the failure, rather
+// than returning partial/empty spans that look like a clean scan.
+describe("NerEntityRecognizer fails closed on a post-load classify failure", () => {
+  it("rejects (does not swallow to []) when the classifier throws mid-run", async () => {
+    // Model load succeeds; the classifier itself throws on invocation.
+    const factory: ClassifierFactory = () =>
+      Promise.resolve(() => {
+        throw new Error("onnx runtime exploded mid-inference");
+      });
+    const rec = new NerEntityRecognizer({ classifierFactory: factory });
+
+    // Must NOT resolve to [] (that would be a silent fail-open, under-redacting
+    // PII); it must surface the error to the caller.
+    await expect(
+      rec.recognize("Ping Dana Whitfield at Northwind."),
+    ).rejects.toThrow(/onnx runtime exploded/);
+    // The load itself did not fail — this is a runtime classify failure, not a
+    // degrade-to-regex-only load failure.
+    expect(rec.hasFailed()).toBe(false);
+  });
+
+  it("does not return the partial spans it already gathered before the failure", async () => {
+    // Force multiple chunks: chunk 1 yields a span, chunk 2 throws. The partial
+    // span from chunk 1 must NOT leak out as if it were a complete scan.
+    const prefix = "filler word ".repeat(200); // ~2400 chars → forces chunking
+    const text = `Contact Dana here. ${prefix} and Reese there.`;
+    let call = 0;
+    const factory: ClassifierFactory = () =>
+      Promise.resolve((chunk: string) => {
+        call += 1;
+        if (call === 1 && chunk.includes("Dana")) {
+          return Promise.resolve([
+            {
+              entity_group: "PER",
+              word: "Dana",
+              score: 0.99,
+              start: null,
+              end: null,
+            },
+          ]);
+        }
+        return Promise.reject(new Error("classifier failed on a later chunk"));
+      });
+    const rec = new NerEntityRecognizer({ classifierFactory: factory });
+    await expect(rec.recognize(text)).rejects.toThrow(
+      /classifier failed on a later chunk/,
+    );
+  });
+});

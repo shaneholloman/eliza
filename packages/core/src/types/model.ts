@@ -1468,6 +1468,24 @@ export interface ModelRegistrationMetadata {
 	 * for this registration.
 	 */
 	displayModelSetting?: string;
+	/**
+	 * Provider-declared capability: this registration runs on local/on-device
+	 * inference (Ollama, LM Studio, MLX, llama.cpp, capacitor-llama, …) rather
+	 * than a hosted cloud API.
+	 *
+	 * This is the authoritative signal for local-provider classification in
+	 * action-model routing and trajectory pricing. When a provider declares this
+	 * flag, routing/pricing consume it directly instead of substring-matching the
+	 * provider name. The name heuristic remains only as an explicitly-tested
+	 * fallback for providers that have not yet adopted the flag.
+	 */
+	local?: boolean;
+	/**
+	 * Provider-declared capability: this registration can stream tokens
+	 * incrementally via the handler-facing `onStreamChunk` callback. Consumed by
+	 * the runtime streaming gate; absence means "unknown / do not assume".
+	 */
+	streamable?: boolean;
 }
 
 /**

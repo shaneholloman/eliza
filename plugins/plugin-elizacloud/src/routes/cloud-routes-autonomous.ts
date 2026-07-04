@@ -202,6 +202,8 @@ async function captureConfigEnvRollbackSnapshot(): Promise<ConfigEnvRollbackSnap
   try {
     originalRaw = await fs.readFile(filePath, "utf8");
   } catch (err) {
+    // error-policy:J3 sanitizing boundary — a missing config.env (ENOENT) is a
+    // valid "no prior state" snapshot; any other read failure rethrows.
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
       throw err;
     }
@@ -336,6 +338,8 @@ export async function handleCloudRoute(
         CLOUD_LOGIN_CREATE_TIMEOUT_MS,
       );
     } catch (err) {
+      // error-policy:J1 boundary translation — transport failure maps to 504
+      // (timeout) / 502 (unreachable), reported on the telemetry span.
       if (isTimeoutError(err)) {
         loginCreateSpan.failure({ error: err, statusCode: 504 });
         sendJsonError(res, "Eliza Cloud login request timed out", 504);
@@ -407,6 +411,8 @@ export async function handleCloudRoute(
         CLOUD_LOGIN_POLL_TIMEOUT_MS,
       );
     } catch (err) {
+      // error-policy:J1 boundary translation — transport failure maps to 504
+      // (timeout) / 502 (unreachable), reported on the telemetry span.
       if (isTimeoutError(err)) {
         loginPollSpan.failure({ error: err, statusCode: 504 });
         sendJson(
@@ -481,6 +487,8 @@ export async function handleCloudRoute(
         userId?: string;
       };
     } catch (parseErr) {
+      // error-policy:J3 sanitizing boundary — an unparseable upstream body is an
+      // explicit 502 "invalid JSON", never a fabricated authenticated result.
       loginPollSpan.failure({ error: parseErr, statusCode: pollRes.status });
       sendJson(
         res,
@@ -527,6 +535,8 @@ export async function handleCloudRoute(
         }
         logger.info("[cloud-login] API key saved to config file");
       } catch (saveErr) {
+        // error-policy:J1 boundary translation — a post-auth config-save failure
+        // surfaces as a 500 with an explicit "failed to save config" status.
         logger.error(`[cloud-login] Failed to save config: ${String(saveErr)}`);
         sendJson(
           res,
@@ -701,9 +711,14 @@ export async function handleCloudRoute(
             );
           }
         } catch (cloudWalletErr) {
+          // error-policy:J6 best-effort — the API key is already saved, so a
+          // cloud-wallet provisioning failure must not abort login; we roll the
+          // partial wallet bind back and fall through (see the block header).
           try {
             await restoreConfigEnvRollbackSnapshot(rollbackEnvSnapshot);
           } catch (rollbackErr) {
+            // error-policy:J6 best-effort teardown — a rollback that itself fails
+            // is logged loud; there is no further recovery action available.
             logger.error(
               `[cloud-login] cloud-wallet rollback failed: ${String(
                 rollbackErr,
@@ -715,6 +730,8 @@ export async function handleCloudRoute(
           try {
             saveConfigOrThrow(state);
           } catch (saveRollbackErr) {
+            // error-policy:J6 best-effort teardown — an in-memory config restore
+            // already happened; a failure to persist it is logged, not fatal.
             logger.error(
               `[cloud-login] cloud-wallet config rollback failed: ${String(
                 saveRollbackErr,
@@ -813,6 +830,8 @@ export async function handleCloudRoute(
         environmentVars: body.environmentVars,
       });
     } catch (err) {
+      // error-policy:J1 boundary translation — an upstream createAgent failure
+      // surfaces as a 502 with the message, never a fabricated agent.
       logger.error(`[cloud] createAgent failed: ${String(err)}`);
       sendJson(
         res,
@@ -839,6 +858,8 @@ export async function handleCloudRoute(
     try {
       proxy = await state.cloudManager.connect(agentId);
     } catch (err) {
+      // error-policy:J1 boundary translation — an upstream provision/connect
+      // failure surfaces as a 502 with the message.
       logger.error(`[cloud] provision/connect failed: ${String(err)}`);
       sendJson(
         res,
@@ -877,6 +898,8 @@ export async function handleCloudRoute(
       }
       await client.deleteAgent(agentId);
     } catch (err) {
+      // error-policy:J1 boundary translation — an upstream shutdown/delete
+      // failure surfaces as a 502 with the message.
       logger.error(`[cloud] shutdown/deleteAgent failed: ${String(err)}`);
       sendJson(
         res,
@@ -906,6 +929,8 @@ export async function handleCloudRoute(
       }
       proxy = await state.cloudManager.connect(agentId);
     } catch (err) {
+      // error-policy:J1 boundary translation — an upstream connect failure
+      // surfaces as a 502 with the message.
       logger.error(`[cloud] connect failed: ${String(err)}`);
       sendJson(
         res,
@@ -953,6 +978,8 @@ export async function handleCloudRoute(
         );
       }
     } catch (saveErr) {
+      // error-policy:J1 boundary translation — a config-save failure after
+      // disconnect surfaces as a 500 with an explicit status.
       logger.error(
         `[cloud-disconnect] Failed to save config: ${String(saveErr)}`,
       );

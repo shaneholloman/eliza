@@ -112,6 +112,9 @@ export async function reconcileStalePglitePid(
   try {
     content = await fs.readFile(pidPath, "utf8");
   } catch {
+    // error-policy:J3 untrusted-input sanitizing — no pid file is the expected
+    // "no lock present" state, not a swallowed failure; "missing" is an
+    // explicit status the caller acts on (open proceeds).
     return "missing";
   }
   // Mobile embedded modes are single-tenant — each app launch is a fresh
@@ -121,11 +124,16 @@ export async function reconcileStalePglitePid(
     process.env.ELIZA_IOS_LOCAL_BACKEND === "1" ||
     process.env.ELIZA_ANDROID_LOCAL_BACKEND === "1"
   ) {
+    // error-policy:J6 best-effort teardown — removing a stale lock file; if the
+    // unlink races another cleaner or fails, the subsequent open surfaces the
+    // real error, so the delete need not be observed here.
     await fs.unlink(pidPath).catch(() => {});
     return "cleared-stale";
   }
   const pid = Number.parseInt(content.split("\n")[0]?.trim() ?? "", 10);
   if (!Number.isInteger(pid) || pid <= 0) {
+    // error-policy:J6 best-effort teardown — see above; clearing a malformed
+    // lock, real failures surface at open time.
     await fs.unlink(pidPath).catch(() => {});
     return "cleared-malformed";
   }
@@ -134,9 +142,14 @@ export async function reconcileStalePglitePid(
     return "active";
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ESRCH") {
+      // error-policy:J6 best-effort teardown — owner is provably gone (ESRCH);
+      // clearing its stale lock, real failures surface at open time.
       await fs.unlink(pidPath).catch(() => {});
       return "cleared-stale";
     }
+    // error-policy:J3 untrusted-input sanitizing — an unprovable owner (EPERM
+    // etc.) fails CLOSED: we do NOT clear the lock, we report "unconfirmed" so
+    // the caller leaves it in place rather than risk clobbering a live DB.
     return "unconfirmed"; // EPERM etc. — can't prove it's dead; leave it
   }
 }
@@ -384,6 +397,9 @@ export class PgliteVaultImpl implements Vault {
       try {
         return decrypt(masterKey, row.ciphertext, key);
       } catch (err) {
+        // error-policy:J2 context-adding rethrow — a decrypt failure means the
+        // stored secret is unreadable; surface it, never return a fabricated
+        // or empty value that a caller would treat as the real secret.
         throw new Error(
           `vault: failed to decrypt ${JSON.stringify(key)} (wrong master key or corrupt ciphertext): ${
             err instanceof Error ? err.message : String(err)
@@ -411,8 +427,9 @@ export class PgliteVaultImpl implements Vault {
     try {
       this.cachedKey = await this.opts.masterKey.load();
     } catch (err) {
-      // Without the master key every secret read/write fails — surface a
-      // clear remediation path instead of a bare resolver error.
+      // error-policy:J2 context-adding rethrow — without the master key every
+      // secret read/write fails; surface a clear remediation path instead of a
+      // bare resolver error. Never proceed with a fabricated key.
       throw new Error(
         `vault: master key unavailable (${this.opts.masterKey.describe()}): ${
           err instanceof Error ? err.message : String(err)
@@ -428,6 +445,9 @@ export class PgliteVaultImpl implements Vault {
       // Never cache a rejected open: a transient failure (e.g. a stale lock a
       // later attempt can clear) must not brick the vault for the rest of the
       // process lifetime. Drop the cache on failure so callers can retry.
+      // error-policy:J2 context-adding rethrow — never cache a rejected open; a
+      // transient open failure must not brick the vault for the process
+      // lifetime, so we drop the cache and rethrow for the caller to retry.
       this.dbPromise = this.openDb().catch((err) => {
         this.dbPromise = null;
         throw err;
@@ -461,6 +481,10 @@ export class PgliteVaultImpl implements Vault {
     try {
       return await PGlite.create(dataDir);
     } catch (initErr) {
+      // error-policy:J2 context-adding rethrow (below) / J4 explicit recovery —
+      // an open failure is diagnosed against the lock state: a live owner or an
+      // unclearable failure rethrows with remediation; a provably-stale lock is
+      // cleared and retried once. No path fabricates an open DB.
       const status = await reconcileStalePglitePid(dataDir);
       if (status === "active") {
         throw new Error(
@@ -483,11 +507,14 @@ export class PgliteVaultImpl implements Vault {
       try {
         return await PGlite.create(dataDir);
       } catch (retryErr) {
-        // The open path is exhausted (lock cleared, retry still fails — typically
-        // a WASM `Aborted()` from a PGlite corrupted by a kill mid-write). A
-        // corrupt vault is unreadable, so its secrets are already lost; bricking
-        // the agent on every boot helps no one. Recover by moving the corrupt dir
-        // aside (preserved) and recreating a fresh vault.
+        // error-policy:J4 explicit degrade — the open path is exhausted (lock
+        // cleared, retry still fails — typically a WASM `Aborted()` from a
+        // PGlite corrupted by a kill mid-write). A corrupt vault is already
+        // unreadable, so its secrets are lost regardless; bricking the agent on
+        // every boot helps no one. Recovery preserves the corrupt dir aside
+        // (never deletes it) and is opt-out via ELIZA_VAULT_NO_AUTO_RECOVER.
+        // This fabricates NO secret — the fresh vault is empty and the user
+        // re-enters keys, exactly as the documented manual fix.
         return await this.recoverCorruptPgliteDir(dataDir, retryErr);
       }
     }
@@ -561,12 +588,16 @@ export class PgliteVaultImpl implements Vault {
     try {
       store = await readStore(legacyPath);
     } catch (err) {
+      // error-policy:J4 explicit degrade — one-shot legacy-file migration only.
+      // A missing/corrupt legacy vault.json means there is nothing to import;
+      // the live PGlite vault starts empty (it fabricates NO secret values —
+      // real reads still fail closed via loadMasterKey/decrypt). The failure is
+      // warned and a sentinel is written so we do not re-read a broken file and
+      // re-warn on every boot.
       this.opts.logger?.warn(
         `[vault] failed to read legacy vault.json for migration; PGlite vault starts empty`,
         err,
       );
-      // Still write the sentinel — without it every subsequent boot
-      // re-reads the file (which keeps failing) and re-logs the warning.
       await writeMigrationSentinel(db, "read-failed");
       return;
     }

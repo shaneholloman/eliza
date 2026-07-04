@@ -10,6 +10,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -126,6 +127,123 @@ describe("sub-agent session transcript redaction", () => {
     removeTempRoot(sessionsRoot);
   });
 
+  it("emits a failure audit record when a transcript write fails mid-session", async () => {
+    const sessionsRoot = mkTempRoot();
+    const events: AuditEvent[] = [];
+    const auditDispatcher = {
+      emit: async (event: EmitInput) => {
+        const full = {
+          event_id: "event-fail",
+          ts: "2026-01-01T00:00:00.000Z",
+          ...event,
+        } as AuditEvent;
+        events.push(full);
+        return full;
+      },
+    } as unknown as AuditDispatcher;
+    const recorder = new SessionRecorder({
+      sessionId: "session-fail",
+      actorId: "user-1",
+      sessionsRoot,
+      auditDispatcher,
+    });
+
+    // First line lands on disk normally.
+    recorder.record("first line\n");
+    const persistedBefore = readFileSync(
+      join(sessionsRoot, "session-fail", "transcript.log"),
+      "utf8",
+    );
+    expect(persistedBefore).toBe("first line\n");
+
+    // Break the transcript path so the next append fails: replace the log file
+    // with a directory of the same name. writeFileSync(..., { flag: "a" })
+    // then throws EISDIR, exercising the disk-failure branch.
+    rmSync(join(sessionsRoot, "session-fail", "transcript.log"), {
+      force: true,
+    });
+    mkdirSync(join(sessionsRoot, "session-fail", "transcript.log"));
+
+    recorder.record("second line that cannot be written\n");
+    // A line recorded after the failure must be a no-op for the hash so the
+    // digest keeps describing only the bytes that actually reached disk.
+    recorder.record("third line after failure\n");
+
+    await recorder.finalize();
+
+    expect(events).toHaveLength(1);
+    const failEvent = events[0];
+    expect(failEvent?.result).toBe("failure");
+    expect(failEvent?.metadata).toMatchObject({
+      session_id: "session-fail",
+      transcript_complete: false,
+      // hash + byte count cover only the first, successfully-written line.
+      transcript_hash: createHash("sha256")
+        .update("first line\n")
+        .digest("hex"),
+      transcript_bytes: Buffer.byteLength("first line\n"),
+    });
+    expect(
+      (failEvent?.metadata as { transcript_error?: unknown }).transcript_error,
+    ).toBeTruthy();
+
+    removeTempRoot(sessionsRoot);
+  });
+
+  it("surfaces audit emit failures without throwing out of finalize", async () => {
+    const sessionsRoot = mkTempRoot();
+    const auditDispatcher = {
+      emit: async () => {
+        throw new Error("audit sink offline");
+      },
+    } as unknown as AuditDispatcher;
+    const recorder = new SessionRecorder({
+      sessionId: "session-audit-fail",
+      actorId: "user-1",
+      sessionsRoot,
+      auditDispatcher,
+    });
+
+    recorder.record("line that landed");
+
+    const stderr = await captureStderrAsync(async () => {
+      await recorder.finalize();
+    });
+
+    expect(stderr).toContain("audit emit failed");
+    expect(stderr).toContain("audit sink offline");
+    expect(
+      readFileSync(
+        join(sessionsRoot, "session-audit-fail", "transcript.log"),
+        "utf8",
+      ),
+    ).toBe("line that landed\n");
+
+    removeTempRoot(sessionsRoot);
+  });
+
+  it("continues pruning old session directories across the sweep", () => {
+    const sessionsRoot = mkTempRoot();
+    const now = Date.parse("2026-01-31T00:00:00.000Z");
+    const oldTime = new Date(now - 31 * 24 * 60 * 60 * 1000);
+
+    // Two old dirs; statSync on a non-directory entry pretending to be one is
+    // hard to force portably, so instead assert the happy path still prunes
+    // both and returns the count (regression guard on the annotated J6 loop).
+    const a = join(sessionsRoot, "old-a");
+    const b = join(sessionsRoot, "old-b");
+    mkdirSync(a);
+    mkdirSync(b);
+    utimesSync(a, oldTime, oldTime);
+    utimesSync(b, oldTime, oldTime);
+
+    expect(pruneOldSessions(now, sessionsRoot)).toBe(2);
+    expect(existsSync(a)).toBe(false);
+    expect(existsSync(b)).toBe(false);
+
+    removeTempRoot(sessionsRoot);
+  });
+
   it("prunes only old session directories", () => {
     const sessionsRoot = mkTempRoot();
     const now = Date.parse("2026-01-31T00:00:00.000Z");
@@ -178,4 +296,21 @@ function removeTempRoot(root: string): void {
   execFileSync("node", [removePathRecursive, root], {
     stdio: ["ignore", "ignore", "ignore"],
   });
+}
+
+async function captureStderrAsync(fn: () => Promise<void>): Promise<string> {
+  const originalWrite = process.stderr.write;
+  const chunks: string[] = [];
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    chunks.push(
+      Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk),
+    );
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await fn();
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  return chunks.join("");
 }

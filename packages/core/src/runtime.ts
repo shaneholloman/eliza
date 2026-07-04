@@ -61,7 +61,7 @@ import {
 } from "./plugins/native-features";
 import {
 	executeChainWithFallback,
-	isLocalProvider,
+	isLocalHandler,
 	maybeReroute,
 	resolveChain,
 } from "./runtime/action-model-routing";
@@ -5540,21 +5540,24 @@ export class AgentRuntime implements IAgentRuntime {
 						await emitModelStreamChunk(safeText, visibleText);
 					}
 				};
-				// Wire the handler-facing stream callback for local providers AND for the
-				// prefer-local router ("eliza-router"): the router resolves to itself as
-				// the top-priority handler but invokes the underlying provider's handler
-				// directly and forwards `onStreamChunk` transparently, so on mobile (where
-				// the router is always the resolved provider, dispatching to the on-device
-				// capacitor-llama / bionic host) streaming is only wired if we recognize
-				// it here. Scoped to the streaming gate only — it intentionally does NOT
-				// change validation/pricing semantics keyed on isLocalProvider().
-				const resolvedIsStreamableLocal =
-					!!resolvedProviderName &&
-					(isLocalProvider(resolvedProviderName) ||
-						resolvedProviderName === "eliza-router");
+				// Wire the handler-facing stream callback for registrations that declare
+				// handler streaming support, with local-provider recognition retained as
+				// the legacy fallback. The prefer-local router ("eliza-router") still opts
+				// in by name because it forwards `onStreamChunk` to the underlying
+				// on-device handler after routing.
+				const declaredStreamable = resolvedModel.metadata?.streamable;
+				const resolvedAcceptsHandlerStream =
+					resolvedProviderName === "eliza-router" ||
+					(typeof declaredStreamable === "boolean"
+						? declaredStreamable
+						: !!resolvedProviderName &&
+							isLocalHandler({
+								provider: resolvedProviderName,
+								metadata: resolvedModel.metadata,
+							}));
 				const handlerStreamChunk: StreamChunkCallback | undefined =
 					shouldStream &&
-					resolvedIsStreamableLocal &&
+					resolvedAcceptsHandlerStream &&
 					(paramsChunk || ctxChunk || structuredExtractor)
 						? async (chunk) => {
 								handlerDeliveredStream = true;

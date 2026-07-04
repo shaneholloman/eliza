@@ -3,6 +3,7 @@
   "name": "Bluebubbles",
   "description": "BlueBubbles connector for sending and receiving iMessage through a local BlueBubbles server.",
   "npmName": "@elizaos/plugin-bluebubbles",
+  "shortIds": ["bluebubbles"],
   "version": "2.0.0-beta.0",
   "source": "bundled",
   "tags": [

@@ -285,8 +285,38 @@ export async function forwardToServer(
     `/agents/${agentId}/message`,
     JSON.stringify(body),
   );
-  const data = JSON.parse(raw) as { response: string };
-  return data.response;
+  return parseAgentResponse(raw, agentId);
+}
+
+/**
+ * Parses and validates an agent-server message response.
+ *
+ * The agent-server contract is a JSON body with a string `response` field.
+ * A 200 with a malformed body (non-JSON, missing `response`, or a non-string
+ * `response`) is an upstream failure, not an empty reply: returning `undefined`
+ * here would surface as success-shaped silence (adapters drop empty/undefined
+ * text without erroring), hiding the fault from logs and the caller. Fail-closed
+ * by throwing so `processMessage`'s catch logs a structured forward failure.
+ */
+export function parseAgentResponse(raw: string, agentId: string): string {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `Agent-server returned non-JSON response for agent ${agentId}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+
+  const response = (data as { response?: unknown } | null)?.response;
+  if (typeof response !== "string") {
+    throw new Error(
+      `Agent-server response for agent ${agentId} missing string "response" field (got ${typeof response})`,
+    );
+  }
+  return response;
 }
 
 /**

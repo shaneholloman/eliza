@@ -1,4 +1,5 @@
 // Handles webhook cloud API eliza app webhook forward route traffic with signature or internal auth checks.
+import { timingSafeEqualSecret } from "@/lib/auth/cron";
 import { logger } from "@/lib/utils/logger";
 import type { AppContext } from "@/types/cloud-worker-env";
 
@@ -9,6 +10,31 @@ const WEBHOOK_GATEWAY_ENV_KEYS = [
   "WEBHOOK_GATEWAY_URL",
   "GATEWAY_WEBHOOK_URL",
 ] as const;
+
+// Shared secret proving a request actually came from THIS BFF forwarder rather
+// than straight at the internal gateway. The forwarders are unauthenticated at
+// the edge (providers can't present a Cloud session), so without a local
+// signal the gateway has to trust its network boundary alone. Stamping a
+// shared secret on the forwarded call lets the gateway reject anything that
+// didn't transit the BFF. (finding L3, #12878 / #12227)
+//
+// This is a DEDICATED secret, deliberately NOT reusing `GATEWAY_INTERNAL_SECRET`
+// (which gates the gateway's `/internal/event` K8s path). Coupling the two would
+// force every direct provider webhook to present the internal-event secret the
+// moment internal events are enabled. Keeping it separate makes the
+// forwarder-only gate opt-in without touching existing traffic.
+const WEBHOOK_GATEWAY_SECRET_ENV_KEYS = [
+  "ELIZA_APP_WEBHOOK_GATEWAY_SECRET",
+] as const;
+
+// The header the gateway validates for BFF-forwarded webhooks
+// (`enforceForwarderSecret` in
+// packages/cloud/services/gateway-webhook/src/internal-auth.ts). Any inbound
+// copy of this header from the original caller MUST be stripped before we
+// (re)stamp our own value — a client that could inject it would forge the
+// "came from the BFF" proof. It is stripped on EVERY proxied request (including
+// the Discord handler) and stamped ONLY on gateway forwards.
+const GATEWAY_SECRET_HEADER = "x-eliza-webhook-forwarder-secret";
 
 function readStringEnv(c: AppContext, keys: readonly string[]): string | null {
   for (const key of keys) {
@@ -48,15 +74,245 @@ function requestSuffix(c: AppContext, platform: string): string | null {
   return safeWebhookSuffix(new URL(c.req.url).pathname, platform);
 }
 
+function isProduction(c: AppContext): boolean {
+  return (
+    c.env.NODE_ENV === "production" || process.env.NODE_ENV === "production"
+  );
+}
+
+function platformSecret(
+  c: AppContext,
+  platform: GatewayPlatform,
+): string | null {
+  switch (platform) {
+    case "telegram":
+      return readStringEnv(c, [
+        "ELIZA_APP_TELEGRAM_WEBHOOK_SECRET",
+        "TELEGRAM_WEBHOOK_SECRET",
+      ]);
+    case "blooio":
+      return readStringEnv(c, [
+        "ELIZA_APP_BLOOIO_WEBHOOK_SECRET",
+        "BLOOIO_WEBHOOK_SECRET",
+      ]);
+    case "twilio":
+      return readStringEnv(c, [
+        "ELIZA_APP_TWILIO_AUTH_TOKEN",
+        "TWILIO_AUTH_TOKEN",
+      ]);
+    case "whatsapp":
+      return readStringEnv(c, [
+        "ELIZA_APP_WHATSAPP_APP_SECRET",
+        "WHATSAPP_APP_SECRET",
+      ]);
+  }
+}
+
+async function hmacHex(
+  secret: string,
+  payload: string,
+  algorithm: AlgorithmIdentifier,
+): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: algorithm },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(payload),
+  );
+  return Array.from(new Uint8Array(signature))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function hmacBase64(
+  secret: string,
+  payload: string,
+  algorithm: AlgorithmIdentifier,
+): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: algorithm },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(payload),
+  );
+  return btoa(String.fromCharCode(...new Uint8Array(signature)));
+}
+
+function constantTimeHexEqual(actual: string, expected: string): boolean {
+  return timingSafeEqualSecret(actual.toLowerCase(), expected.toLowerCase());
+}
+
+async function verifyBlooioSignature(
+  request: Request,
+  rawBody: string,
+  secret: string,
+): Promise<boolean> {
+  const signatureHeader = request.headers.get("x-blooio-signature") ?? "";
+  const parts = signatureHeader.split(",");
+  const timestampPart = parts.find((p) => p.startsWith("t="));
+  const signaturePart = parts.find((p) => p.startsWith("v1="));
+  if (!timestampPart || !signaturePart) return false;
+
+  const timestamp = Number.parseInt(timestampPart.slice(2), 10);
+  if (!Number.isFinite(timestamp)) return false;
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - timestamp) > 120) return false;
+
+  const expected = signaturePart.slice(3);
+  const computed = await hmacHex(secret, `${timestamp}.${rawBody}`, "SHA-256");
+  return constantTimeHexEqual(computed, expected);
+}
+
+async function verifyWhatsAppSignature(
+  request: Request,
+  rawBody: string,
+  secret: string,
+): Promise<boolean> {
+  const header = request.headers.get("x-hub-signature-256") ?? "";
+  if (!header.startsWith("sha256=")) return false;
+  const expected = header.slice("sha256=".length);
+  const computed = await hmacHex(secret, rawBody, "SHA-256");
+  return constantTimeHexEqual(computed, expected);
+}
+
+async function verifyTwilioSignature(
+  request: Request,
+  rawBody: string,
+  secret: string,
+): Promise<boolean> {
+  const signature = request.headers.get("x-twilio-signature") ?? "";
+  if (!signature) return false;
+
+  const url = new URL(request.url);
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  const forwardedHost = request.headers.get("x-forwarded-host");
+  if (forwardedProto) url.protocol = `${forwardedProto}:`;
+  if (forwardedHost) url.host = forwardedHost;
+
+  const params = new URLSearchParams(rawBody);
+  const sorted = Array.from(params.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}${value}`)
+    .join("");
+
+  const computed = await hmacBase64(
+    secret,
+    `${url.toString()}${sorted}`,
+    "SHA-1",
+  );
+  return timingSafeEqualSecret(computed, signature);
+}
+
+export async function verifyLocalWebhookSignature(
+  request: Request,
+  platform: GatewayPlatform,
+  rawBody: string,
+  secret: string,
+): Promise<boolean> {
+  switch (platform) {
+    case "telegram": {
+      const header =
+        request.headers.get("x-telegram-bot-api-secret-token") ?? "";
+      return timingSafeEqualSecret(header, secret);
+    }
+    case "blooio":
+      return verifyBlooioSignature(request, rawBody, secret);
+    case "twilio":
+      return verifyTwilioSignature(request, rawBody, secret);
+    case "whatsapp":
+      return verifyWhatsAppSignature(request, rawBody, secret);
+  }
+}
+
+async function validateLocalWebhookSignature(
+  c: AppContext,
+  platform: GatewayPlatform,
+): Promise<{ response?: Response; body?: string }> {
+  const secret = platformSecret(c, platform);
+  if (!secret) {
+    if (isProduction(c)) {
+      logger.error(
+        "[ElizaAppWebhook] webhook signature secret is not configured",
+        { platform },
+      );
+      return {
+        response: c.json(
+          {
+            success: false,
+            code: "WEBHOOK_SIGNATURE_NOT_CONFIGURED",
+            error: "Webhook signature secret is not configured",
+          },
+          503,
+        ),
+      };
+    }
+    logger.warn(
+      "[ElizaAppWebhook] webhook signature validation skipped outside production",
+      {
+        platform,
+      },
+    );
+    return {};
+  }
+
+  const needsBody =
+    platform !== "telegram" &&
+    c.req.method !== "GET" &&
+    c.req.method !== "HEAD";
+  const body = needsBody ? await c.req.text() : undefined;
+  const valid = await verifyLocalWebhookSignature(
+    c.req.raw,
+    platform,
+    body ?? "",
+    secret,
+  );
+  if (!valid) {
+    logger.warn("[ElizaAppWebhook] rejected invalid webhook signature", {
+      platform,
+    });
+    return {
+      response: c.json(
+        {
+          success: false,
+          code: "WEBHOOK_SIGNATURE_INVALID",
+          error: "Invalid webhook signature",
+        },
+        401,
+      ),
+    };
+  }
+
+  return { body };
+}
+
 interface ForwardOptions {
   body?: BodyInit | null;
+}
+
+interface ProxyOptions extends ForwardOptions {
+  // When true, stamp the BFF forwarder secret (gateway forwards only). The
+  // trust header is ALWAYS stripped regardless, so a client can never inject it
+  // — even on the Discord path, which never stamps.
+  stampGatewaySecret?: boolean;
 }
 
 async function proxyRequest(
   c: AppContext,
   target: URL,
   serviceName: string,
-  options: ForwardOptions = {},
+  options: ProxyOptions = {},
 ): Promise<Response> {
   const headers = new Headers(c.req.raw.headers);
   headers.delete("host");
@@ -65,6 +321,20 @@ async function proxyRequest(
     "x-forwarded-proto",
     new URL(c.req.url).protocol.replace(":", ""),
   );
+
+  // L3: never let the original caller supply the forwarder trust header. Strip
+  // it unconditionally on EVERY proxied request (gateway AND Discord), so a
+  // client can never forge the "came from the BFF" proof.
+  headers.delete(GATEWAY_SECRET_HEADER);
+  // Stamp our own value ONLY on gateway forwards, and only when the dedicated
+  // secret is configured. The Discord handler (a potentially separate/public
+  // service) must never receive this credential.
+  if (options.stampGatewaySecret) {
+    const gatewaySecret = readStringEnv(c, WEBHOOK_GATEWAY_SECRET_ENV_KEYS);
+    if (gatewaySecret) {
+      headers.set(GATEWAY_SECRET_HEADER, gatewaySecret);
+    }
+  }
 
   try {
     const upstream = await fetch(target, {
@@ -128,6 +398,9 @@ export async function forwardToWebhookGateway(
     );
   }
 
+  const validation = await validateLocalWebhookSignature(c, platform);
+  if (validation.response) return validation.response;
+
   const project =
     readStringEnv(c, ["ELIZA_APP_WEBHOOK_PROJECT"]) ?? "eliza-app";
   const target = new URL(baseUrl);
@@ -135,7 +408,11 @@ export async function forwardToWebhookGateway(
   target.pathname = `/webhook/${encodeURIComponent(project)}/${platform}${suffix}`;
   target.search = sourceUrl.search;
 
-  return proxyRequest(c, target, "webhook gateway", options);
+  return proxyRequest(c, target, "webhook gateway", {
+    ...options,
+    body: options.body ?? validation.body,
+    stampGatewaySecret: true,
+  });
 }
 
 export async function forwardToDiscordWebhookHandler(

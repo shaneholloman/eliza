@@ -429,6 +429,49 @@ describe("dispatcher action callbacks", () => {
     });
   });
 
+  it("still returns PERMISSION_DENIED when the denial audit sink fails", async () => {
+    const auditDispatcher = {
+      emit: async () => {
+        throw new Error("audit sink offline");
+      },
+    } as unknown as AuditDispatcher;
+    const channel = createTestChannel();
+    const registry = makeRegistry({
+      id: "provider-1",
+      surface: "provider",
+      target: "contextProvider",
+      handler: async () => ({ text: "should not run" }),
+    } as HandlerEntry);
+    const dispatch = createWorkerRpcDispatcher(registry, {
+      runtime: {} as never,
+      channel: { send: channel.send } as never,
+      permissions: {
+        pluginId: "test-plugin",
+        granted: { bun: { env: true }, host: {} },
+        auditDispatcher,
+      },
+    });
+
+    const stderr = await captureStderrAsync(async () => {
+      await dispatch({
+        type: "worker-rpc",
+        requestId: 7,
+        surface: "provider",
+        target: "provider-1",
+        args: { message: null, state: null },
+      } as WorkerRpcMessage);
+    });
+
+    expect(channel.outbox[0]).toMatchObject({
+      type: "worker-rpc-result",
+      requestId: 7,
+      ok: false,
+      error: { code: "PERMISSION_DENIED" },
+    });
+    expect(stderr).toContain("permission-denial audit emit failed");
+    expect(stderr).toContain("audit sink offline");
+  });
+
   it("rejects a message whose declared surface does not match the registered target", async () => {
     let invoked = false;
     const channel = createTestChannel();
@@ -470,6 +513,23 @@ describe("dispatcher action callbacks", () => {
     });
   });
 });
+
+async function captureStderrAsync(fn: () => Promise<void>): Promise<string> {
+  const originalWrite = process.stderr.write;
+  const chunks: string[] = [];
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    chunks.push(
+      Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk),
+    );
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await fn();
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  return chunks.join("");
+}
 
 describe("dispatcher target and handler errors", () => {
   it("returns UNKNOWN_TARGET when no handler is registered for the rpc target", async () => {

@@ -174,6 +174,11 @@ function parseRoutingConfig(raw: string): RoutingConfig {
   try {
     parsed = JSON.parse(raw);
   } catch {
+    // error-policy:J3 untrusted-input sanitizing — routing config is non-secret
+    // UI/plumbing data (per-context key routing rules), not a credential. An
+    // unparseable config yields the explicit empty routing set ("no custom
+    // rules → use defaults"), which is the safe/closed direction: it can only
+    // remove routing overrides, never grant access to a value.
     return EMPTY_ROUTING;
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {

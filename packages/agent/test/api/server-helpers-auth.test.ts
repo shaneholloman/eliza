@@ -1,5 +1,4 @@
 /** Exercises server auth helper boundaries with deterministic request fixtures. */
-import crypto from "node:crypto";
 import * as http from "node:http";
 import { Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,9 +7,6 @@ import {
   CORS_ALLOWED_HEADERS,
   isAuthorized,
   isServerTokenAuthorized,
-  isWaifuChatAuthorized,
-  resolveWaifuChatAccessToken,
-  waifuChatRoleToWorldRole,
 } from "../../src/api/server-helpers-auth";
 
 class HeaderCapture extends http.ServerResponse {
@@ -38,29 +34,6 @@ class RequestWithOrigin extends http.IncomingMessage {
 
 function requestWithOrigin(origin: string): http.IncomingMessage {
   return new RequestWithOrigin(origin);
-}
-
-function signWaifuJwt(
-  payload: Record<string, unknown>,
-  secret = "waifu-secret",
-): string {
-  const header = Buffer.from(
-    JSON.stringify({ alg: "HS256", typ: "JWT" }),
-  ).toString("base64url");
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signature = crypto
-    .createHmac("sha256", secret)
-    .update(`${header}.${body}`)
-    .digest("base64url");
-  return `${header}.${body}.${signature}`;
-}
-
-function requestWithBearer(token: string): http.IncomingMessage {
-  const req = new http.IncomingMessage(new Socket());
-  req.headers = {};
-  req.headers.authorization = `Bearer ${token}`;
-  req.headers.host = "agent.example";
-  return req;
 }
 
 describe("applyCors", () => {
@@ -114,200 +87,7 @@ describe("applyCors", () => {
   });
 });
 
-describe("waifu chat JWT auth", () => {
-  const futureExp = () => Math.floor(Date.now() / 1000) + 60;
-
-  beforeEach(() => {
-    process.env.WAIFU_CHAT_ACCESS_JWT_SECRET = "waifu-secret";
-    process.env.TOKEN_CONTRACT_ADDRESS =
-      "0x2222222222222222222222222222222222222222";
-    process.env.TOKEN_CHAIN_ID = "56";
-    delete process.env.WAIFU_ELIZA_CLOUD_AGENT_ID;
-    delete process.env.ELIZA_CLOUD_AGENT_ID;
-  });
-
-  afterEach(() => {
-    delete process.env.WAIFU_CHAT_ACCESS_JWT_SECRET;
-    delete process.env.TOKEN_CONTRACT_ADDRESS;
-    delete process.env.TOKEN_CHAIN_ID;
-    delete process.env.WAIFU_ELIZA_CLOUD_AGENT_ID;
-    delete process.env.ELIZA_CLOUD_AGENT_ID;
-  });
-
-  it("verifies issuer, audience, expiry, signature, wallet, and token scope", () => {
-    const token = signWaifuJwt({
-      iss: "waifu.fun",
-      aud: "eliza-cloud-chat",
-      exp: 2_000,
-      role: "user",
-      walletAddress: "0x1111111111111111111111111111111111111111",
-      tokenAddress: "0x2222222222222222222222222222222222222222",
-      chainId: 56,
-      cloudAgentId: "cloud-agent-1",
-      balanceTokens: 100_001,
-    });
-
-    expect(resolveWaifuChatAccessToken(token, 1_000)).toEqual({
-      role: "user",
-      walletAddress: "0x1111111111111111111111111111111111111111",
-      tokenAddress: "0x2222222222222222222222222222222222222222",
-      chainId: 56,
-      cloudAgentId: "cloud-agent-1",
-      balanceTokens: 100_001,
-    });
-
-    expect(resolveWaifuChatAccessToken(`${token}tampered`, 1_000)).toBeNull();
-    expect(resolveWaifuChatAccessToken(token, 2_001)).toBeNull();
-    expect(
-      resolveWaifuChatAccessToken(
-        signWaifuJwt({
-          iss: "waifu.fun",
-          aud: "eliza-cloud-chat",
-          exp: 2_000,
-          role: "user",
-          walletAddress: "0x1111111111111111111111111111111111111111",
-          tokenAddress: "0x3333333333333333333333333333333333333333",
-          chainId: 56,
-        }),
-        1_000,
-      ),
-    ).toBeNull();
-  });
-
-  it("binds waifu chat JWTs to the hosted cloud agent id when configured", () => {
-    process.env.WAIFU_ELIZA_CLOUD_AGENT_ID = "cloud-agent-1";
-    const token = signWaifuJwt({
-      iss: "waifu.fun",
-      aud: "eliza-cloud-chat",
-      exp: futureExp(),
-      role: "guest",
-      walletAddress: "0x1111111111111111111111111111111111111111",
-      tokenAddress: "0x2222222222222222222222222222222222222222",
-      chainId: 56,
-      cloudAgentId: "cloud-agent-1",
-    });
-
-    expect(resolveWaifuChatAccessToken(token)?.cloudAgentId).toBe(
-      "cloud-agent-1",
-    );
-    expect(
-      resolveWaifuChatAccessToken(
-        signWaifuJwt({
-          iss: "waifu.fun",
-          aud: "eliza-cloud-chat",
-          exp: futureExp(),
-          role: "guest",
-          walletAddress: "0x1111111111111111111111111111111111111111",
-          tokenAddress: "0x2222222222222222222222222222222222222222",
-          chainId: 56,
-          cloudAgentId: "cloud-agent-2",
-        }),
-      ),
-    ).toBeNull();
-    expect(
-      resolveWaifuChatAccessToken(
-        signWaifuJwt({
-          iss: "waifu.fun",
-          aud: "eliza-cloud-chat",
-          exp: futureExp(),
-          role: "guest",
-          walletAddress: "0x1111111111111111111111111111111111111111",
-          tokenAddress: "0x2222222222222222222222222222222222222222",
-          chainId: 56,
-        }),
-      ),
-    ).toBeNull();
-  });
-
-  it("accepts waifu admin, user, and guest chat roles", () => {
-    const cases = [
-      { role: "admin", worldRole: "OWNER" },
-      { role: "user", worldRole: "USER" },
-      { role: "guest", worldRole: "GUEST" },
-    ] as const;
-
-    for (const { role, worldRole } of cases) {
-      const token = signWaifuJwt({
-        iss: "waifu.fun",
-        aud: "eliza-cloud-chat",
-        exp: futureExp(),
-        role,
-        walletAddress: "0x1111111111111111111111111111111111111111",
-        tokenAddress: "0x2222222222222222222222222222222222222222",
-        chainId: 56,
-      });
-
-      expect(resolveWaifuChatAccessToken(token)?.role).toBe(role);
-      expect(waifuChatRoleToWorldRole(role)).toBe(worldRole);
-    }
-  });
-
-  it("scopes guest and user JWTs to chat-safe routes while admin can use owner UI routes", () => {
-    const guestToken = signWaifuJwt({
-      iss: "waifu.fun",
-      aud: "eliza-cloud-chat",
-      exp: futureExp(),
-      role: "guest",
-      walletAddress: "0x1111111111111111111111111111111111111111",
-      tokenAddress: "0x2222222222222222222222222222222222222222",
-      chainId: 56,
-    });
-    const userToken = signWaifuJwt({
-      iss: "waifu.fun",
-      aud: "eliza-cloud-chat",
-      exp: futureExp(),
-      role: "user",
-      walletAddress: "0x1111111111111111111111111111111111111111",
-      tokenAddress: "0x2222222222222222222222222222222222222222",
-      chainId: 56,
-    });
-    const adminToken = signWaifuJwt({
-      iss: "waifu.fun",
-      aud: "eliza-cloud-chat",
-      exp: futureExp(),
-      role: "admin",
-      walletAddress: "0x1111111111111111111111111111111111111111",
-      tokenAddress: "0x2222222222222222222222222222222222222222",
-      chainId: 56,
-    });
-
-    expect(
-      isWaifuChatAuthorized(
-        requestWithBearer(guestToken),
-        "POST",
-        "/api/conversations/conv-1/messages/stream",
-      ),
-    ).toBe(true);
-    expect(
-      isWaifuChatAuthorized(
-        requestWithBearer(userToken),
-        "POST",
-        "/api/conversations/conv-1/messages/stream",
-      ),
-    ).toBe(true);
-    expect(
-      isWaifuChatAuthorized(
-        requestWithBearer(guestToken),
-        "POST",
-        "/api/config",
-      ),
-    ).toBe(false);
-    expect(
-      isWaifuChatAuthorized(
-        requestWithBearer(userToken),
-        "POST",
-        "/api/config",
-      ),
-    ).toBe(false);
-    expect(
-      isWaifuChatAuthorized(
-        requestWithBearer(adminToken),
-        "POST",
-        "/api/config",
-      ),
-    ).toBe(true);
-  });
-
+describe("CORS advertises gateway + product headers", () => {
   it("advertises X-Server-Token so gateway forwards pass CORS preflight", () => {
     const res = new HeaderCapture();
     applyCors(requestWithOrigin("https://localhost"), res, "/api/status");

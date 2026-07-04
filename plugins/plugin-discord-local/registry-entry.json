@@ -3,6 +3,7 @@
   "name": "Discord (Local)",
   "description": "Discord (Local) connector for elizaOS.",
   "npmName": "@elizaos/plugin-discord-local",
+  "shortIds": ["discordLocal"],
   "version": "2.0.0-beta.0",
   "source": "bundled",
   "tags": [

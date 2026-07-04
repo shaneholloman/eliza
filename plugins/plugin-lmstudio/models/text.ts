@@ -242,6 +242,9 @@ function parseJsonIfPossible(value: unknown): unknown {
   try {
     return JSON.parse(value);
   } catch {
+    // error-policy:J3 tool-argument values are JSON text OR an already-plain
+    // string literal; a non-JSON string is a valid argument, not a parse failure
+    // of required data. Returning it unchanged is the designed passthrough.
     return value;
   }
 }
@@ -378,6 +381,9 @@ function stringifyMessageContent(content: unknown): string {
     try {
       return JSON.stringify(content);
     } catch {
+      // error-policy:J7 message-content stringify for the wire request; a
+      // non-serializable (e.g. circular) object degrades to a marker so the
+      // request still forms. Not a data/inference-result path.
       return "[unserializable content]";
     }
   }
@@ -491,6 +497,8 @@ function buildStreamResult(args: {
   promptForEstimate: string;
 }): TextStreamResult {
   const streamResult = streamText(args.streamParams);
+  // error-policy:J5 side-promise catches only dedupe the unhandled rejection; the
+  // authoritative failure is rethrown from the textStream generator's catch below.
   const textPromise = Promise.resolve(streamResult.text).catch(() => "");
   const finishReasonPromise = Promise.resolve(streamResult.finishReason).catch(
     () => undefined
@@ -503,6 +511,8 @@ function buildStreamResult(args: {
       emitModelUsed(args.runtime, args.modelType, args.model, normalized);
       return normalized;
     })
+    // error-policy:J7 usage/telemetry estimation must not crash the stream; the
+    // generation itself still surfaces via the textStream generator.
     .catch(() => undefined);
 
   async function* textStreamWithUsage(): AsyncIterable<string> {
@@ -517,6 +527,8 @@ function buildStreamResult(args: {
       throw err;
     } finally {
       if (completed) {
+        // error-policy:J7 only after a SUCCESSFUL stream; a usage-emit failure
+        // must not convert a completed generation into an error.
         await usagePromise.catch(() => undefined);
       }
     }
@@ -646,6 +658,7 @@ async function handleTextWithModelType(
     }
     return result.text;
   } catch (error) {
+    // error-policy:J2 context-adding rethrow — log then rethrow the original error.
     logTextFailure("generateText", modelType, modelIdForLog || "(unknown)", baseURL, error);
     // Throw, never fabricate a reply. A hardcoded "Error generating text…" string
     // would be persisted to memory and sent to the user as the agent's response —

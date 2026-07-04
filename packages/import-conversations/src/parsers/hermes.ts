@@ -39,6 +39,14 @@ export type ParseOptions = {
 
 const SOURCE = "hermes" as const;
 
+function isNotFound(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: string }).code === "ENOENT"
+  );
+}
+
 /**
  * Shape of a Hermes session_meta header line (first line of a session file).
  * `model` is often an empty string; `platform` records the connector (discord,
@@ -194,7 +202,9 @@ async function parseSessionFile(
       try {
         parsed = JSON.parse(line);
       } catch {
-        // Resilience: a truncated/corrupt line must not abort the session.
+        // error-policy:J3 each JSONL line is untrusted input; a truncated/
+        // corrupt line (common on the still-appending tail of a live session
+        // log) is skipped so it does not abort import of the valid lines.
         continue;
       }
 
@@ -271,8 +281,13 @@ async function parseMemoryFile(
   let content: string;
   try {
     content = await readFile(filePath, "utf8");
-  } catch {
-    return undefined;
+  } catch (error) {
+    // error-policy:J3 the path came from readdir moments ago; ENOENT means the
+    // note was removed under us (benign race in a live agent home) so we skip
+    // it. Any other read failure (EACCES, EIO, ...) is a real error and must
+    // surface rather than silently dropping the note.
+    if (isNotFound(error)) return undefined;
+    throw error;
   }
   if (content.trim().length === 0) return undefined;
 
@@ -323,19 +338,20 @@ async function detect(input: string): Promise<boolean> {
   try {
     const st = await stat(input);
     if (!st.isDirectory()) return false;
-  } catch {
-    return false;
+  } catch (error) {
+    // error-policy:J3 an absent path is "not a Hermes home"; any other stat
+    // failure (EACCES, EIO, ...) is a real I/O error and must surface.
+    if (isNotFound(error)) return false;
+    throw error;
   }
 
   const sessionsDir = resolveSessionsDir(input);
   if (!existsSync(sessionsDir)) return false;
 
-  let entries: string[];
-  try {
-    entries = await readdir(sessionsDir);
-  } catch {
-    return false;
-  }
+  // sessionsDir existed a moment ago (existsSync above): a readdir failure here
+  // is a real I/O error on required input, not "not a Hermes home" — surface it
+  // rather than silently reporting the export as unrecognized.
+  const entries = await readdir(sessionsDir);
   const jsonlFiles = entries.filter((f) => f.toLowerCase().endsWith(".jsonl"));
   const firstJsonl = jsonlFiles[0];
   if (!firstJsonl) return false;
@@ -360,6 +376,9 @@ async function detect(input: string): Promise<boolean> {
           parsed.role === "tool"
         );
       } catch {
+        // error-policy:J3 the signature line is untrusted input; a non-JSON
+        // first line means this file does not carry the Hermes signature, so
+        // the input is not a recognizable Hermes home (probe returns false).
         return false;
       }
     }
@@ -384,12 +403,9 @@ async function* parse(
 
   const sessionsDir = resolveSessionsDir(input);
   if (existsSync(sessionsDir)) {
-    let entries: string[] = [];
-    try {
-      entries = await readdir(sessionsDir);
-    } catch {
-      entries = [];
-    }
+    // existsSync passed: a readdir failure is a real I/O error, not an empty
+    // session set. Surface it rather than silently importing zero sessions.
+    const entries = await readdir(sessionsDir);
     const sessionFiles = entries
       .filter((f) => f.toLowerCase().endsWith(".jsonl"))
       .sort(); // filenames are timestamp-prefixed => chronological
@@ -403,12 +419,9 @@ async function* parse(
   if (opts.includeMemories) {
     const memoriesDir = resolveMemoriesDir(input);
     if (existsSync(memoriesDir)) {
-      let entries: string[] = [];
-      try {
-        entries = await readdir(memoriesDir);
-      } catch {
-        entries = [];
-      }
+      // existsSync passed: a readdir failure is a real I/O error on the
+      // memories dir, not "no notes". Surface it rather than dropping them.
+      const entries = await readdir(memoriesDir);
       const memoryFiles = entries
         .filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/i.test(f))
         .sort();

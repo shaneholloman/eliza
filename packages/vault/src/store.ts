@@ -41,6 +41,9 @@ export async function readStore(path: string): Promise<StoreData> {
   try {
     raw = await fs.readFile(path, "utf8");
   } catch (err) {
+    // error-policy:J3 untrusted-input sanitizing — a nonexistent legacy file is
+    // the expected "no data yet" state (explicit empty store); any OTHER read
+    // error (permissions, I/O) is rethrown, never masked as an empty vault.
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return emptyStore();
     throw err;
   }
@@ -48,6 +51,9 @@ export async function readStore(path: string): Promise<StoreData> {
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
+    // error-policy:J3 untrusted-input sanitizing — a corrupt store file yields
+    // an explicit typed StoreFormatError, never a silently-empty vault (which
+    // would look healthy while hiding every stored secret).
     throw new StoreFormatError(
       `parse error: ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -70,9 +76,11 @@ export async function writeStore(path: string, data: StoreData): Promise<void> {
   try {
     await fs.rename(tmp, path);
   } catch (renameErr) {
-    // rename failure (cross-device, EROFS, ENOSPC) leaves the tmp file
-    // behind. Best-effort cleanup so future writes aren't blocked by stale
-    // junk under the same per-pid prefix.
+    // error-policy:J2 context-adding rethrow — the write failed; rethrow so the
+    // caller knows the store was NOT persisted. The inner
+    // `fs.rm(...).catch(() => {})` is error-policy:J6 best-effort teardown of
+    // the orphaned tmp file (cross-device / EROFS / ENOSPC); its own failure is
+    // irrelevant to the already-failing write.
     await fs.rm(tmp, { force: true }).catch(() => {});
     throw renameErr;
   }

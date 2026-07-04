@@ -1,5 +1,7 @@
 /** Unit tests for the Hermes home parser: detect() and session/memory normalization over tmp-dir fixtures. Deterministic. */
 
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -48,6 +50,38 @@ describe("hermes parser: detect()", () => {
   it("returns false for a dir without a sessions/ subdir", async () => {
     // The memories dir has no sessions/ under it.
     expect(await detect(path.join(HERMES_HOME, "memories"))).toBe(false);
+  });
+
+  it("throws when sessions/ exists but is unreadable (real I/O error, not 'not a Hermes home')", async () => {
+    // sessions/ exists (existsSync passes) but is a regular file, so readdir
+    // fails with ENOTDIR. That is a real I/O error on required input and must
+    // surface, not be swallowed as a plain false.
+    const home = await mkdtemp(path.join(tmpdir(), "hermes-badsessions-"));
+    await writeFile(path.join(home, "sessions"), "not a directory", "utf8");
+    await expect(detect(home)).rejects.toThrow();
+  });
+});
+
+describe("hermes parser: parse() fail-closed on I/O", () => {
+  it("surfaces a readdir failure on an existing sessions/ instead of importing zero sessions", async () => {
+    // sessions/ resolves (existsSync passes) but is a file: readdir throws.
+    // parse() must propagate that rather than silently yielding nothing.
+    const home = await mkdtemp(path.join(tmpdir(), "hermes-parse-io-"));
+    await writeFile(path.join(home, "sessions"), "not a directory", "utf8");
+    await expect(
+      collect(parse(home, { includeMemories: false })),
+    ).rejects.toThrow();
+  });
+
+  it("surfaces a readdir failure on an existing memories/ instead of dropping notes", async () => {
+    // A valid sessions/ dir (so parse gets past sessions), plus a memories/
+    // that exists as a file: the memories readdir must surface, not be dropped.
+    const home = await mkdtemp(path.join(tmpdir(), "hermes-mem-io-"));
+    await mkdir(path.join(home, "sessions"));
+    await writeFile(path.join(home, "memories"), "not a directory", "utf8");
+    await expect(
+      collect(parse(home, { includeMemories: true })),
+    ).rejects.toThrow();
   });
 });
 

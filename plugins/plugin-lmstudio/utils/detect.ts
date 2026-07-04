@@ -110,6 +110,10 @@ export async function detectLMStudio(options: DetectionOptions = {}): Promise<De
 
     return { available: true, baseURL, models };
   } catch (err) {
+    // error-policy:J4 explicit degrade — this probe's contract (documented above)
+    // is to always return a result, never throw: a network/timeout failure IS the
+    // "not available" answer, carried in the typed `error` field, not a swallowed
+    // error. Callers (auto-enable, init) branch on `available`.
     const message = err instanceof Error ? err.message : String(err);
     return { available: false, baseURL, error: message };
   } finally {

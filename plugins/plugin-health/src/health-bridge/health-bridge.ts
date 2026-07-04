@@ -63,6 +63,14 @@ export interface HealthDailySummary {
   steps: number;
   activeMinutes: number;
   sleepHours: number;
+  /**
+   * True when the sleep sub-fetch for this day failed (connector/transport
+   * error) rather than returning zero sleep. Consumers must treat this as
+   * "sleep unknown for this day", NOT as "slept 0 hours": a swallowed failure
+   * that leaves `sleepHours: 0` otherwise fabricates a genuine-looking
+   * zero-sleep reading and corrupts circadian/regularity inference.
+   */
+  sleepUnavailable?: boolean;
   heartRateAvg?: number;
   calories?: number;
   distanceMeters?: number;
@@ -652,12 +660,22 @@ async function googleFitDailySummary(
       summary.sleepHours = sleepMs / (1000 * 60 * 60);
     }
   } catch (error) {
-    // Sleep is optional — record via debug without exposing values.
-    logger.debug(
-      { boundary: "lifeops", integration: "google-fit" },
-      "[lifeops] Google Fit sleep aggregation failed",
+    // Sleep is a separate best-effort sub-fetch: steps/active-minutes above
+    // already succeeded, so we return the summary instead of throwing. But we
+    // must NOT let the swallowed failure masquerade as `sleepHours: 0` — that
+    // fabricates a real-looking zero-sleep reading. Flag the day as
+    // sleep-unavailable and surface the failure through a structured warn so
+    // it is observable rather than silently discarded.
+    summary.sleepUnavailable = true;
+    logger.warn(
+      {
+        boundary: "lifeops",
+        integration: "google-fit",
+        date,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "[lifeops] Google Fit sleep aggregation failed; sleep marked unavailable for this day",
     );
-    void error;
   }
 
   return summary;
@@ -671,7 +689,11 @@ async function googleFitDataPoints(
     const points: HealthDataPoint[] = [];
     for (const date of enumerateGoogleFitDates(opts.startAt, opts.endAt)) {
       const summary = await googleFitDailySummary(date, accessToken);
-      if (summary.sleepHours <= 0) {
+      // Skip days with no sleep points OR a failed sleep sub-fetch: emitting a
+      // point for a `sleepUnavailable` day would surface a fabricated value.
+      // The failure is already logged as a structured warn in
+      // googleFitDailySummary; here we simply omit the unknown day.
+      if (summary.sleepUnavailable || summary.sleepHours <= 0) {
         continue;
       }
       points.push({

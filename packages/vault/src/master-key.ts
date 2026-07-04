@@ -122,8 +122,9 @@ export function attestationMasterKey(
       try {
         key = await verifier.releaseSealedVolumeKey();
       } catch (err) {
-        // Fail closed: a refused/absent/tampered attestation means the key is
-        // UNAVAILABLE. Never substitute a fallback key.
+        // error-policy:J2 context-adding rethrow — fail closed: a refused / absent
+        // / tampered attestation means the key is UNAVAILABLE. Never substitute
+        // a fallback key.
         throw new MasterKeyUnavailableError(
           `attestation-bound master key unavailable (${verifier.describe()}): ${
             err instanceof Error ? err.message : String(err)
@@ -228,6 +229,8 @@ export function passphraseMasterKey(
         }
         return derived;
       } catch (err) {
+        // error-policy:J2 context-adding rethrow — a scrypt derivation failure
+        // means no usable key; rethrow, never return a partial/fabricated key.
         if (err instanceof MasterKeyUnavailableError) throw err;
         throw new MasterKeyUnavailableError(
           `passphraseMasterKey: scrypt derivation failed: ${
@@ -310,6 +313,10 @@ async function readMacOSKeychainPassword(
     const value = stdout.trim();
     return value.length > 0 ? value : null;
   } catch (err) {
+    // error-policy:J3 untrusted-input sanitizing — "item not found" is the
+    // expected first-run state (return null → caller generates + stores a key);
+    // ANY other keychain failure is rethrown as MasterKeyUnavailableError. We
+    // never silently proceed without a real key.
     const stderr = String((err as { stderr?: string }).stderr ?? err);
     if (
       stderr.includes("could not be found") ||
@@ -358,6 +365,10 @@ function writeMacOSKeychainPassword(
         ),
       );
     });
+    // error-policy:J5 unhandled-rejection suppression — a stdin write EPIPE (child
+    // exited early) is observed via the `close` handler above, which rejects
+    // with the security stderr/exit code; this listener only prevents an
+    // unhandled 'error' event from crashing the process.
     child.stdin.on("error", () => {});
     child.stdin.write(`${password}\n${password}\n`, () => {
       child.stdin.end();
@@ -393,6 +404,10 @@ export function defaultMasterKey(
       try {
         return await keychain.load();
       } catch (keychainErr) {
+        // error-policy:J2 context-adding rethrow — the keychain path failed; try
+        // the passphrase path, and if BOTH fail throw a single
+        // MasterKeyUnavailableError naming every remediation option. No path
+        // returns a fabricated/default key.
         const passphrase = passphraseMasterKeyFromEnv(opts.service);
         if (passphrase) {
           try {
@@ -475,6 +490,8 @@ export function osKeychainMasterKey(
       try {
         ({ Entry } = await import("@napi-rs/keyring"));
       } catch (err) {
+        // error-policy:J2 context-adding rethrow — no native keyring binding = no
+        // key; rethrow with remediation, never proceed keyless.
         throw new MasterKeyUnavailableError(
           `OS keychain binding unavailable (${service}/${account}): ${
             err instanceof Error ? err.message : String(err)
@@ -486,6 +503,8 @@ export function osKeychainMasterKey(
       try {
         entry = new Entry(service, account);
       } catch (err) {
+        // error-policy:J2 context-adding rethrow — cannot open the keychain entry
+        // = no key; rethrow, never proceed keyless.
         throw new MasterKeyUnavailableError(
           `OS keychain entry construction failed (${service}/${account}): ${
             err instanceof Error ? err.message : String(err)
@@ -496,6 +515,9 @@ export function osKeychainMasterKey(
       try {
         existing = entry.getPassword();
       } catch (err) {
+        // error-policy:J2 context-adding rethrow — a keychain read failure is
+        // surfaced (not treated as "no key yet", which would silently mint a
+        // NEW key and orphan every existing ciphertext).
         throw new MasterKeyUnavailableError(
           `OS keychain read failed (${service}/${account}): ${
             err instanceof Error ? err.message : String(err)
@@ -515,6 +537,9 @@ export function osKeychainMasterKey(
       try {
         entry.setPassword(created.toString("base64"));
       } catch (err) {
+        // error-policy:J2 context-adding rethrow — a freshly-generated key that
+        // cannot be persisted must fail loudly; returning it un-stored would
+        // mint a new key on every boot and orphan prior ciphertext.
         throw new MasterKeyUnavailableError(
           `OS keychain write failed (${service}/${account}): ${
             err instanceof Error ? err.message : String(err)

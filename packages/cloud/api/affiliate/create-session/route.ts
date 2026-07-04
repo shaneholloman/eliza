@@ -112,6 +112,9 @@ app.post("/", async (c) => {
       userId: newSession.user_id ?? newUser.id,
     });
   } catch (error) {
+    // error-policy:J1 outermost route boundary; anonymous user/session mint
+    // failures translate to a structured failure response, never a fabricated
+    // success with a phantom token.
     logger.error("[Create Session] Error creating session:", error);
     return failureResponse(c, error);
   }

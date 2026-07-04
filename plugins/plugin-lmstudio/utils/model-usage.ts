@@ -74,6 +74,9 @@ function stringifyForUsage(value: unknown): string {
   try {
     return JSON.stringify(value);
   } catch {
+    // error-policy:J7 token-count estimation only — a non-serializable value
+    // degrades to String() so usage telemetry never throws out of a successful
+    // generation. Not a data path.
     return String(value);
   }
 }

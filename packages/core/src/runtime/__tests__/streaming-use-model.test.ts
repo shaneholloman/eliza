@@ -255,6 +255,78 @@ describe("AgentRuntime structured streaming", () => {
 		expect(streamed).toEqual(["Hello", " there."]);
 	});
 
+	it("passes stream callbacks to handlers that declare streamable capability", async () => {
+		const runtime = makeRuntime();
+		const streamed: string[] = [];
+		const handler = vi.fn(async (_runtime, params: unknown) => {
+			const streamingParams = params as {
+				stream?: boolean;
+				onStreamChunk?: (chunk: string) => Promise<void> | void;
+			};
+			expect(streamingParams.stream).toBe(true);
+			expect(typeof streamingParams.onStreamChunk).toBe("function");
+			await streamingParams.onStreamChunk?.("edge");
+			await streamingParams.onStreamChunk?.(" stream");
+			return "edge stream";
+		});
+		runtime.registerModel(ModelType.TEXT_LARGE, handler, "acme-edge", 0, {
+			streamable: true,
+		});
+
+		const result = await runWithStreamingContext(
+			{
+				messageId: "message-1",
+				onStreamChunk: (chunk) => {
+					streamed.push(chunk);
+				},
+			},
+			() =>
+				runtime.useModel(ModelType.TEXT_LARGE, {
+					prompt: "say hello",
+				}),
+		);
+
+		expect(result).toBe("edge stream");
+		expect(streamed).toEqual(["edge", " stream"]);
+	});
+
+	it("does not pass stream callbacks when streamable capability is explicitly false", async () => {
+		const runtime = makeRuntime();
+		const streamed: string[] = [];
+		const handler = vi.fn(async (_runtime, params: unknown) => {
+			const streamingParams = params as {
+				stream?: boolean;
+				onStreamChunk?: (chunk: string) => Promise<void> | void;
+			};
+			expect(streamingParams.stream).toBe(true);
+			expect(streamingParams.onStreamChunk).toBeUndefined();
+			return "fallback text";
+		});
+		runtime.registerModel(
+			ModelType.TEXT_LARGE,
+			handler,
+			"eliza-local-inference",
+			0,
+			{ streamable: false },
+		);
+
+		const result = await runWithStreamingContext(
+			{
+				messageId: "message-1",
+				onStreamChunk: (chunk) => {
+					streamed.push(chunk);
+				},
+			},
+			() =>
+				runtime.useModel(ModelType.TEXT_LARGE, {
+					prompt: "say hello",
+				}),
+		);
+
+		expect(result).toBe("fallback text");
+		expect(streamed).toEqual([]);
+	});
+
 	it("does not leak hidden local image-description calls into ambient chat streams", async () => {
 		const runtime = makeRuntime();
 		const streamed: string[] = [];

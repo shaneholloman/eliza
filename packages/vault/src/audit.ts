@@ -28,7 +28,10 @@ export class AuditLog {
       await fs.mkdir(dirname(this.path), { recursive: true });
       await fs.appendFile(this.path, line, { mode: 0o600 });
     } catch (err) {
-      // Vault access without an audit trail is unsafe; surface the failure.
+      // error-policy:J7 diagnostics-must-not-kill-the-loop — vault access without
+      // an audit trail is unsafe, so a failed audit append is warned AND
+      // rethrown, failing the caller's privileged operation closed rather than
+      // proceeding un-audited.
       this.logger?.warn(
         `[vault] failed to append audit record to ${this.path}`,
         err,

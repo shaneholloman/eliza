@@ -3,6 +3,15 @@
   "name": "Browser",
   "description": "Web scraping and content extraction with Playwright",
   "npmName": "@elizaos/plugin-browser",
+  "shortIds": [
+    "browser",
+    "app-browser",
+    "appBrowser",
+    "eliza-browser",
+    "elizaBrowser",
+    "browser-bridge",
+    "browserBridge"
+  ],
   "version": "2.0.0-beta.0",
   "source": "bundled",
   "tags": ["browser", "automation", "stagehand", "playwright", "web-scraping"],

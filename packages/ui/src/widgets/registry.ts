@@ -66,7 +66,7 @@ registerWidgetComponent(
   MusicLibraryCharacterWidget,
 );
 // Notifications is a core feature (no separate plugin), so its frontpage widget
-// always resolves (see ALWAYS_VISIBLE_BUILTIN_WIDGET_PLUGIN_IDS). (#9143)
+// always resolves (its declaration carries `visibility: "always"`). (#9143)
 registerWidgetComponent(
   "notifications",
   "notifications.recent",
@@ -314,7 +314,7 @@ export function registerBuiltinWidgetDeclarations(
   }
   if (options?.fallbackPluginIds) {
     for (const id of options.fallbackPluginIds) {
-      BUILTIN_WIDGET_FALLBACK_PLUGIN_IDS.add(id);
+      EXTERNAL_FALLBACK_PLUGIN_IDS.add(id);
     }
   }
   // Wake any mounted home/sidebar host so a declaration registered after the
@@ -341,6 +341,8 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "Sparkles",
     order: FTU_WELCOME_HOME_WIDGET.order,
     defaultEnabled: true,
+    // Core FTU surface, not a loadable plugin — always-visible, self-retires.
+    visibility: "always",
     signalKinds: FTU_WELCOME_HOME_WIDGET.signalKinds,
     size: FTU_WELCOME_HOME_WIDGET.size,
     sunset: FTU_WELCOME_HOME_WIDGET.sunset,
@@ -354,6 +356,8 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "Bell",
     order: 50,
     defaultEnabled: true,
+    // Core NotificationService feature, not a loadable plugin — always-visible.
+    visibility: "always",
     // Boosted by any notification; urgent ones map to escalation-level weight.
     signalKinds: ["notification", "approval", "escalation"],
   },
@@ -369,6 +373,7 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "Activity",
     order: 150,
     defaultEnabled: true,
+    visibility: "fallback",
   },
   // Agent Orchestrator — activity
   {
@@ -379,6 +384,7 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "Activity",
     order: 300,
     defaultEnabled: true,
+    visibility: "fallback",
   },
   // Agent Orchestrator — activity surfaced on the home/frontpage too (#9143).
   // Same pluginId+id reuses the registered component; the `home` slot is a
@@ -391,6 +397,7 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "Activity",
     order: 100,
     defaultEnabled: true,
+    visibility: "fallback",
     // The orchestrator activity card bubbles up when a run is blocked, escalated,
     // or busy — the highest-attention home signals.
     signalKinds: ["blocked", "escalation", "workflow", "activity"],
@@ -406,6 +413,7 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "LayoutGrid",
     order: 70,
     defaultEnabled: true,
+    visibility: "fallback",
     signalKinds: ["activity"],
   },
   // Todos — the todo plugin's frontpage widget (#9143 per-plugin breadth).
@@ -417,6 +425,11 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "ListTodo",
     order: 80,
     defaultEnabled: true,
+    // Renders from the workbench store, so it shows even before the runtime
+    // plugin snapshot lists the plugin (#9143). Declaration-driven `fallback`
+    // replaces the hardcoded `"todo"` allow-set entry that used to drift out of
+    // sync with the `todos` app-manifest plugin id (#12090 item 9).
+    visibility: "fallback",
     signalKinds: ["reminder", "check-in", "nudge"],
   },
   // -- Per-plugin real-data frontpage widgets (#9143) ------------------------
@@ -436,9 +449,9 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
   },
   // Needs response — the canonical "actions requiring your response" card
   // (#9449). Backed by the core ApprovalService (GET /api/approvals), not a
-  // loadable plugin, so it is always-visible (see
-  // ALWAYS_VISIBLE_BUILTIN_WIDGET_PLUGIN_IDS) and self-hides when nothing is
-  // pending. Floats up at approval/escalation weight on its own data.
+  // loadable plugin, so it is always-visible (declaration `visibility:
+  // "always"`) and self-hides when nothing is pending. Floats up at
+  // approval/escalation weight on its own data.
   {
     id: NEEDS_ATTENTION_HOME_WIDGET.id,
     pluginId: NEEDS_ATTENTION_HOME_WIDGET.pluginId,
@@ -447,6 +460,8 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "CircleHelp",
     order: NEEDS_ATTENTION_HOME_WIDGET.order,
     defaultEnabled: true,
+    // Backed by the core ApprovalService, not a loadable plugin (#9449).
+    visibility: "always",
     signalKinds: NEEDS_ATTENTION_HOME_WIDGET.signalKinds,
   },
   {
@@ -457,6 +472,9 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "Users",
     order: RELATIONSHIPS_HOME_WIDGET.order,
     defaultEnabled: true,
+    // Core API-backed home tile; renders regardless of snapshot, self-hides
+    // when empty. A `present + disabled` snapshot entry still hides it.
+    visibility: "always",
     signalKinds: RELATIONSHIPS_HOME_WIDGET.signalKinds,
     size: { cols: 2, rows: 1 },
   },
@@ -468,6 +486,9 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "Clock",
     order: CALENDAR_HOME_WIDGET.order,
     defaultEnabled: true,
+    // Core API-backed home tile; renders regardless of snapshot, self-hides
+    // when empty. A `present + disabled` snapshot entry still hides it.
+    visibility: "always",
     signalKinds: CALENDAR_HOME_WIDGET.signalKinds,
     // Own full-width row; the widget renders only when an event exists.
     size: { cols: 4, rows: 1 },
@@ -488,6 +509,9 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "Download",
     order: MODEL_DOWNLOAD_HOME_WIDGET.order,
     defaultEnabled: true,
+    // Setup-progress tile backed by the local-inference hub, not a loadable
+    // plugin — always-visible, self-hides once the model is ready.
+    visibility: "always",
     signalKinds: MODEL_DOWNLOAD_HOME_WIDGET.signalKinds,
     // Full-width, double-height: model download/activation is the one thing
     // standing between a fresh local agent and its first reply, so it owns a
@@ -506,6 +530,9 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "CloudCog",
     order: AGENT_PROVISIONING_HOME_WIDGET.order,
     defaultEnabled: true,
+    // Setup-progress tile backed by the cloud handoff phase, not a loadable
+    // plugin — always-visible, self-hides once the dedicated agent attaches.
+    visibility: "always",
     signalKinds: AGENT_PROVISIONING_HOME_WIDGET.signalKinds,
     size: { cols: 2, rows: 1 },
   },
@@ -517,6 +544,9 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "Activity",
     order: 65,
     defaultEnabled: true,
+    // Core API-backed home tile; renders regardless of snapshot, self-hides
+    // when empty.
+    visibility: "always",
     signalKinds: ["workflow", "activity"],
     size: { cols: 2, rows: 1 },
   },
@@ -528,6 +558,8 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "Wallet",
     order: 140,
     defaultEnabled: true,
+    // Core app-core surface, not a separately loadable plugin — always-visible.
+    visibility: "always",
     signalKinds: ["activity"],
     size: { cols: 2, rows: 1 },
   },
@@ -543,6 +575,9 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "Workflow",
     order: 130,
     defaultEnabled: true,
+    // Backed by GET /api/automations; always-visible, self-hides when nothing
+    // is running. A `present + disabled` snapshot entry still hides it.
+    visibility: "always",
     signalKinds: ["workflow", "activity"],
     size: { cols: 2, rows: 1 },
   },
@@ -591,6 +626,9 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "Globe",
     order: BROWSER_STATUS_WIDGET.order,
     defaultEnabled: BROWSER_STATUS_WIDGET.defaultEnabled,
+    // Core app-core surface (browser-workspace), not a loadable plugin — shows
+    // even when the snapshot omits it.
+    visibility: "fallback",
   },
   {
     id: MUSIC_PLAYER_WIDGET.id,
@@ -600,6 +638,8 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     icon: "Music",
     order: MUSIC_PLAYER_WIDGET.order,
     defaultEnabled: MUSIC_PLAYER_WIDGET.defaultEnabled,
+    // Core playback surface, not a loadable plugin — always-visible.
+    visibility: "always",
   },
   {
     id: "music-library.playlists",
@@ -618,59 +658,30 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
 export type WidgetPluginState = Pick<PluginInfo, "id" | "enabled" | "isActive">;
 
 /**
- * Some bundled widgets intentionally stay visible even when the runtime plugin
- * snapshot omits their feature IDs because the UI has compat-backed data
- * sources for them. Generic task-list widgets do not qualify here — Eliza does
- * not ship a runtime task-list plugin, and leaving the fallback enabled would
- * crowd the sidebar with a stale generic tasks panel.
+ * Supplementary `fallback`-class plugin ids contributed by third-party callers via
+ * `registerBuiltinWidgetDeclarations({ fallbackPluginIds })`. Built-in
+ * declarations no longer rely on a hardcoded id set — each carries its own
+ * `visibility` flag (#12090 item 9) so a declaration cannot drift out of the
+ * allow set when its plugin id changes (e.g. the historical `todo`/`todos`
+ * split). This set only extends `fallback` behavior for declarations that don't
+ * (or can't) set the flag themselves.
  */
-const BUILTIN_WIDGET_FALLBACK_PLUGIN_IDS = new Set([
-  "agent-orchestrator",
-  // Wallet + browser-workspace are core app-core surfaces, not separately
-  // loadable plugins, so their widgets must render even when the runtime
-  // plugin snapshot doesn't list them as plugins.
-  "wallet",
-  "browser-workspace",
-  // Todos render from the workbench store; show on the frontpage even before the
-  // runtime plugin snapshot lists the plugin (#9143).
-  "todo",
-]);
+const EXTERNAL_FALLBACK_PLUGIN_IDS = new Set<string>();
 
-const ALWAYS_VISIBLE_BUILTIN_WIDGET_PLUGIN_IDS = new Set([
-  "music-player",
-  // First-time-user welcome (#9959): a core FTU surface, not a loadable plugin —
-  // must render on a fresh account before any plugin snapshot arrives, and
-  // self-retires via the sunset lifecycle.
-  "welcome",
-  // Notifications is a core runtime feature (NotificationService), not a
-  // loadable plugin, so its frontpage widget must render regardless of the
-  // plugin snapshot. (#9143). Messages was removed (#9304) — redundant with the
-  // always-present chat overlay.
-  "notifications",
-  // Needs-response is backed by the core ApprovalService (not a loadable
-  // plugin), so its frontpage widget must render regardless of the plugin
-  // snapshot — it self-hides when no decisions are pending (#9449).
-  "needs-attention",
-  // Curated home-grid widgets backed by core API surfaces, not loadable
-  // plugins. They must render regardless of the plugin snapshot so the home
-  // grid is populated on first paint; each shows populated data, a
-  // connected-but-empty state, or self-hides when empty.
-  "feed",
-  "wallet",
-  "calendar",
-  "relationships",
-  // Running-workflows tile backed by GET /api/automations (system automations +
-  // active user workflows); always-visible since it self-hides when nothing is
-  // running. `workflow` matches @elizaos/plugin-workflow (default-enabled).
-  "workflow",
-  // Setup-progress tiles backed by core surfaces, not loadable plugins: the
-  // local model download (local-inference hub) and the cloud-agent provisioning
-  // handoff (cloud handoff phase). Must render regardless of the plugin snapshot
-  // so a fresh local/cloud agent watches setup on the home grid; each self-hides
-  // when there's nothing in flight (model ready / dedicated agent attached).
-  "local-inference",
-  "cloud-agent",
-]);
+/**
+ * Visibility class for a built-in declaration, derived from its own
+ * `visibility` field with a back-compat fallback to the third-party allow set.
+ * Server-provided declarations are always snapshot-gated.
+ */
+export function widgetVisibilityClass(
+  declaration: PluginWidgetDeclaration,
+  source: WidgetDeclarationSource = "builtin",
+): "always" | "fallback" | "snapshot" {
+  if (source !== "builtin") return "snapshot";
+  if (declaration.visibility) return declaration.visibility;
+  if (EXTERNAL_FALLBACK_PLUGIN_IDS.has(declaration.pluginId)) return "fallback";
+  return "snapshot";
+}
 
 export interface ResolvedWidget {
   declaration: PluginWidgetDeclaration;
@@ -685,46 +696,51 @@ function isWidgetEnabled(
   plugins: readonly WidgetPluginState[],
   source: WidgetDeclarationSource,
 ): boolean {
+  if (declaration.defaultEnabled === false) return false;
+
+  const visibility = widgetVisibilityClass(declaration, source);
+
   // Some always-visible ids (calendar / relationships / workflow) ARE backed by
   // real loadable plugins, so an explicit "present + disabled" snapshot entry
-  // must still hide them — the always-visible short-circuit is for core surfaces
-  // with NO plugin package (welcome/notifications/needs-attention/feed/wallet/
-  // …), which never appear in the snapshot and so pass this check untouched.
+  // must still hide them — the always/fallback short-circuits are for core
+  // surfaces with NO plugin package (welcome/notifications/needs-attention/
+  // feed/wallet/…), which never appear in the snapshot and so pass this check
+  // untouched.
   const snapshotPlugin = plugins.find((p) => p.id === declaration.pluginId);
-  if (
-    snapshotPlugin &&
+  const explicitlyDisabled =
+    snapshotPlugin != null &&
     snapshotPlugin.enabled === false &&
-    snapshotPlugin.isActive !== true
-  ) {
-    return false;
+    snapshotPlugin.isActive !== true;
+  if (explicitlyDisabled) return false;
+
+  // `always`: render regardless of the snapshot (already gated above by the
+  // explicit present+disabled hide).
+  if (visibility === "always") return true;
+
+  // `fallback`: render when the snapshot is empty OR omits the plugin (a
+  // store/compat-backed surface), but a present+active/enabled entry is honored
+  // like any snapshot-gated widget.
+  if (visibility === "fallback") {
+    if (plugins.length === 0 || snapshotPlugin == null) return true;
+    return snapshotPlugin.isActive === true || snapshotPlugin.enabled !== false;
   }
 
-  if (
-    source === "builtin" &&
-    declaration.defaultEnabled !== false &&
-    ALWAYS_VISIBLE_BUILTIN_WIDGET_PLUGIN_IDS.has(declaration.pluginId)
-  ) {
-    return true;
+  // Server-provided declarations pre-date the `visibility` flag. Preserve the
+  // pre-refactor semantics exactly: an EMPTY snapshot leaves them enabled (the
+  // declaration only exists because its plugin sent it, and may have arrived
+  // before the snapshot entry — a race we don't want to hide it), but a
+  // NON-empty snapshot that OMITS the plugin means the plugin is genuinely
+  // absent, so hide it (the old `!plugin -> false` branch).
+  if (source === "server") {
+    if (plugins.length === 0) return true;
+    if (snapshotPlugin == null) return false;
+    return snapshotPlugin.isActive === true || snapshotPlugin.enabled !== false;
   }
 
-  if (plugins.length === 0) {
-    return (
-      declaration.defaultEnabled !== false &&
-      (source !== "builtin" ||
-        BUILTIN_WIDGET_FALLBACK_PLUGIN_IDS.has(declaration.pluginId))
-    );
-  }
-
-  const plugin = plugins.find((p) => p.id === declaration.pluginId);
-  if (!plugin) {
-    return (
-      source === "builtin" &&
-      declaration.defaultEnabled !== false &&
-      BUILTIN_WIDGET_FALLBACK_PLUGIN_IDS.has(declaration.pluginId)
-    );
-  }
-
-  return plugin.isActive === true || plugin.enabled !== false;
+  // Built-in `snapshot` (default): visible only when present + enabled/active.
+  if (plugins.length === 0) return false;
+  if (snapshotPlugin == null) return false;
+  return snapshotPlugin.isActive === true || snapshotPlugin.enabled !== false;
 }
 
 /**

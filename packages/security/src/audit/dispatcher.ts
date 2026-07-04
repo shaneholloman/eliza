@@ -162,6 +162,11 @@ export class AuditDispatcher {
         try {
           await sink.emit(event);
         } catch (err) {
+          // error-policy:J7 diagnostics-must-not-kill-the-loop — one sink's
+          // delivery failure must not suppress the other sinks or the caller's
+          // privileged action, but a dropped audit event is a compliance
+          // failure, so it is surfaced via onSinkError (never silently
+          // swallowed).
           this.onSinkError(
             {
               sink: sink.name,

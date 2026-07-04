@@ -78,6 +78,10 @@ export async function handleTextEmbedding(
     }
     return embedding;
   } catch (error) {
+    // error-policy:J2 context-adding rethrow — log then rethrow. Fabricating a
+    // zero/empty embedding on failure would silently poison the vector store and
+    // degrade RAG with no signal (see #9324). Recall callers fail open to keyword
+    // search on the throw.
     logger.error({ error }, "Error in TEXT_EMBEDDING model");
     throw error instanceof Error ? error : new Error(String(error));
   }

@@ -8,6 +8,13 @@
 import { type JWTPayload, jwtVerify, SignJWT } from "jose";
 import { nanoid } from "nanoid";
 import { getAlgorithm, getKeyId, getPrivateKey, getPublicKey } from "./jwks";
+import { isJtiRevoked } from "./jwt-internal-denylist";
+
+export {
+  isDenylistConfigured,
+  isJtiRevoked,
+  revokeInternalToken,
+} from "./jwt-internal-denylist";
 
 /**
  * JWT token lifetime in seconds (1 hour).
@@ -39,7 +46,15 @@ export interface InternalJWTPayload extends JWTPayload {
   iat: number;
   /** Expiration (Unix timestamp) */
   exp: number;
-  /** JWT ID - unique identifier for revocation */
+  /**
+   * JWT ID — unique per-token nonce.
+   *
+   * Revocation model: a single token can be revoked before its natural expiry
+   * via the `jti` denylist (`revokeInternalToken`), enforced fail-closed in
+   * `verifyInternalToken`. When no Redis backend is configured, per-`jti`
+   * revocation is unsupported and revocation falls back to signing-key
+   * rotation + short TTL. See `./jwt-internal-denylist`.
+   */
   jti: string;
   /** Service type (e.g., "discord-gateway") */
   service?: string;
@@ -105,7 +120,13 @@ export async function signInternalToken(options: SignTokenOptions): Promise<{
 /**
  * Verify an internal JWT and extract its payload.
  *
- * @throws Error if token is invalid, expired, or has wrong issuer/audience
+ * Enforces the `jti` revocation contract: a token whose `jti` has been revoked
+ * via `revokeInternalToken` is rejected. The denylist check is FAIL-CLOSED — if
+ * the denylist store errors while it is configured, verification throws (the
+ * token is NOT accepted). See `./jwt-internal-denylist`.
+ *
+ * @throws Error if token is invalid, expired, has wrong issuer/audience, is
+ *   missing a required claim, has a revoked `jti`, or the denylist check fails.
  */
 export async function verifyInternalToken(token: string): Promise<VerificationResult> {
   const publicKey = await getPublicKey();
@@ -122,6 +143,12 @@ export async function verifyInternalToken(token: string): Promise<VerificationRe
   }
   if (!payload.jti) {
     throw new Error("Token missing JWT ID claim");
+  }
+
+  // Revocation denylist check — fail closed. A thrown store error propagates so
+  // the token is rejected rather than accepted on an unreachable denylist.
+  if (await isJtiRevoked(payload.jti)) {
+    throw new Error("Token has been revoked");
   }
 
   return {

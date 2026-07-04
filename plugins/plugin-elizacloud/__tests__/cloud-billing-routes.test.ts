@@ -115,4 +115,66 @@ describe("handleCloudBillingRoute money proxies", () => {
       await close(proxy);
     }
   });
+
+  it("degrades a malformed crypto/status to crypto-disabled without poisoning the cache", async () => {
+    process.env.NODE_ENV = "development";
+    delete process.env.ELIZAOS_CLOUD_BASE_URL;
+
+    let cryptoStatusCalls = 0;
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.includes("/api/v1/credits/summary")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            organization: { creditBalance: 10 },
+            pricing: {},
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("/api/crypto/status")) {
+        cryptoStatusCalls += 1;
+        // A 200 with a body that is not valid JSON: a real upstream defect,
+        // NOT a healthy "crypto disabled" status.
+        return new Response("<html>gateway error</html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const makeProxy = () =>
+      http.createServer((req, res) => {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        void handleCloudBillingRoute(req, res, url.pathname, (req.method ?? "GET").toUpperCase(), {
+          config: {
+            cloud: {
+              apiKey: "eliza_test_key",
+              baseUrl: "https://www.elizacloud.ai",
+            },
+          },
+          runtime: null,
+        });
+      });
+
+    const proxy = makeProxy();
+    const proxyBaseUrl = await listen(proxy);
+    try {
+      const first = await originalFetch(`${proxyBaseUrl}/api/cloud/billing/summary`);
+      const firstBody = (await first.json()) as { cryptoEnabled?: boolean };
+      // Malformed status degrades to the safe default (crypto disabled), never
+      // a fabricated "enabled".
+      expect(firstBody.cryptoEnabled).toBe(false);
+
+      // A second request must re-fetch crypto/status rather than serve a
+      // fabricated empty object cached for the full TTL.
+      const second = await originalFetch(`${proxyBaseUrl}/api/cloud/billing/summary`);
+      await second.json();
+      expect(cryptoStatusCalls).toBe(2);
+    } finally {
+      await close(proxy);
+    }
+  });
 });

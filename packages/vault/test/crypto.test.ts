@@ -36,6 +36,31 @@ describe("crypto envelope", () => {
     expect(() => decrypt(key, ciphertext, "slot.b")).toThrow(CryptoError);
   });
 
+  // Fail-closed coverage for the #12740 sweep: a tampered ciphertext body or a
+  // wrong master key must THROW (GCM auth-tag failure), never return a
+  // fabricated/partial plaintext that a caller would trust as the real secret.
+  it("throws on a bit-flipped ciphertext body (never returns fabricated plaintext)", () => {
+    const key = generateMasterKey();
+    const ciphertext = encrypt(key, "top-secret-value", "vault.key");
+    const parts = ciphertext.split(":");
+    const ctBuf = Buffer.from(parts[3] ?? "", "base64");
+    // Flip one bit in the ciphertext body — GCM must reject on the auth tag.
+    ctBuf[0] = (ctBuf[0] ?? 0) ^ 0x01;
+    const tampered = `v1:${parts[1]}:${parts[2]}:${ctBuf.toString("base64")}`;
+
+    expect(() => decrypt(key, tampered, "vault.key")).toThrow(CryptoError);
+  });
+
+  it("throws when decrypting with the wrong master key", () => {
+    const key = generateMasterKey();
+    const otherKey = generateMasterKey();
+    const ciphertext = encrypt(key, "top-secret-value", "vault.key");
+
+    expect(() => decrypt(otherKey, ciphertext, "vault.key")).toThrow(
+      CryptoError,
+    );
+  });
+
   it("rejects wrong master-key sizes before encryption or decryption", () => {
     const badKey = Buffer.alloc(KEY_BYTES - 1);
 
