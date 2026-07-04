@@ -4199,7 +4199,9 @@ ElizaClient.prototype.stopCodingAgent = async function (
 ElizaClient.prototype.listCodingAgentScratchWorkspaces = async function (
   this: ElizaClient,
 ) {
-  return this.fetch<CodingAgentScratchWorkspace[]>("/api/coding-agents/scratch");
+  return this.fetch<CodingAgentScratchWorkspace[]>(
+    "/api/coding-agents/scratch",
+  );
 };
 
 ElizaClient.prototype.keepCodingAgentScratchWorkspace = async function (
