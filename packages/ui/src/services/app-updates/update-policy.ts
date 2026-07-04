@@ -297,6 +297,8 @@ export async function readNativeAppInfo(): Promise<NativeAppInfo | null> {
     )) as CapacitorAppModule;
     return await mod.App.getInfo();
   } catch {
+    // error-policy:J4 optional native module — builds without @capacitor/app
+    // have no native app info; the update policy uses web-build defaults.
     return null;
   }
 }

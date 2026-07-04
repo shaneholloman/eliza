@@ -64,6 +64,8 @@ async function readManifest(): Promise<BundledModelManifest | null> {
     }
     return parsed;
   } catch {
+    // error-policy:J4 the bundled-model manifest only ships on packaged
+    // builds — a missing/corrupt manifest means "no bundled models".
     return null;
   }
 }
