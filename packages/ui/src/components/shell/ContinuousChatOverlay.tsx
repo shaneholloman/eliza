@@ -745,12 +745,6 @@ export function BootStatusIndicator({
 }
 
 /**
- * One turn of the transcript as a chat bubble — assistant on the left, user on
- * the right. Memoized so a live drag (which re-renders the overlay on every
- * pointer-move frame) doesn't re-render every message in a long thread.
- */
-
-/**
  * Render a user turn's text, bolding a leading slash command so a sent
  * `/command` reads as a command in the transcript (mirroring the composer's
  * inline autocomplete). Plain prose renders unchanged.
