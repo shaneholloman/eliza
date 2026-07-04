@@ -608,8 +608,19 @@ export function deleteMediaFile(fileName: string): boolean {
     if (path.dirname(filePath) !== dir) return false;
     fs.unlinkSync(filePath);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // Absence is idempotent: the file is already gone, so a delete has nothing
+    // to remove — report "not removed" without erroring.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    // error-policy:J2 context-adding rethrow — a real unlink failure
+    // (EACCES/EPERM/EIO) is distinct from absence; swallowing it as `false`
+    // makes DELETE /api/files answer 404 "not found" for a file that exists but
+    // could not be removed. Surface it to the route boundary (→ 500).
+    throw new ElizaError(`media delete failed for ${fileName}`, {
+      code: "MEDIA_STORE_DELETE_FAILED",
+      cause: err,
+      context: { fileName },
+    });
   }
 }
 
