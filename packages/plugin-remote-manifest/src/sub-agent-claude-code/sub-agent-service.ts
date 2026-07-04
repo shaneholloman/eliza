@@ -125,8 +125,15 @@ export class ClaudeCodeSubAgentService {
     // Fire-and-forget retention sweep at boot.
     try {
       pruneOldSessions();
-    } catch {
-      // Non-critical.
+    } catch (error) {
+      // error-policy:J6 best-effort teardown — boot must proceed even if the
+      // retention sweep cannot run, but a boot-time prune failure (e.g. the
+      // sessions root being unreadable) is a real signal, not a no-op, so it is
+      // surfaced on stderr instead of being swallowed as "non-critical".
+      const cause = error instanceof Error ? error : new Error(String(error));
+      process.stderr.write(
+        `[sub-agent] WARN: boot retention prune failed: ${cause.message}\n`,
+      );
     }
     return svc;
   }
@@ -136,7 +143,9 @@ export class ClaudeCodeSubAgentService {
       try {
         session.proc.kill("SIGTERM");
       } catch {
-        // already dead
+        // error-policy:J6 best-effort teardown — killing an already-exited
+        // child throws ESRCH; the process is gone, which is the desired
+        // post-condition, so nothing is masked by continuing to finalize.
       }
       await session.recorder.finalize();
     }
@@ -258,7 +267,8 @@ export class ClaudeCodeSubAgentService {
     try {
       session.proc.kill("SIGTERM");
     } catch {
-      // already dead
+      // error-policy:J6 best-effort teardown — an already-exited child throws
+      // ESRCH on kill; the process is already gone so termination succeeded.
     }
     await session.recorder.finalize();
     this.sessions.delete(params.sessionId);

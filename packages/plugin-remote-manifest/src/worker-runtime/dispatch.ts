@@ -135,8 +135,18 @@ export function createWorkerRpcDispatcher(
                 reason: "permission_not_granted",
               },
             });
-          } catch {
-            // Audit must not break dispatch.
+          } catch (auditError) {
+            // error-policy:J7 diagnostics-must-not-kill-the-loop — a failed
+            // permission-denial audit emit must not stop us from sending the
+            // deny reply, but the dropped audit event is surfaced rather than
+            // swallowed so a broken audit sink is visible.
+            const cause =
+              auditError instanceof Error
+                ? auditError
+                : new Error(String(auditError));
+            process.stderr.write(
+              `[remote-plugin] WARN: permission-denial audit emit failed for plugin ${context.permissions.pluginId}: ${cause.message}\n`,
+            );
           }
         }
         reply({

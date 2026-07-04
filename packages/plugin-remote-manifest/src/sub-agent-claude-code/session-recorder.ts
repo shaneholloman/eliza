@@ -79,6 +79,15 @@ export class SessionRecorder {
   private readonly hash = createHash("sha256");
   private bytes = 0;
   private finalized = false;
+  /**
+   * Set on the first disk-write failure. Once set, the on-disk transcript is
+   * known to be incomplete, so the digest/byte-count we later hand to the audit
+   * pipeline no longer describe a complete artifact. `finalize()` emits a
+   * failure audit event in that case instead of a success-shaped one — a
+   * partial transcript reported as a healthy record is exactly the
+   * swallowed-failure shape #12182 bans.
+   */
+  private writeFailure: Error | undefined;
 
   constructor(private readonly opts: SessionRecorderOptions) {
     this.dir = join(opts.sessionsRoot ?? SESSIONS_ROOT, opts.sessionId);
@@ -89,17 +98,33 @@ export class SessionRecorder {
 
   record(line: string): void {
     if (this.finalized) return;
+    // Once a write has failed the transcript is already truncated; stop hashing
+    // further lines so the digest keeps describing what actually reached disk
+    // rather than a stream the audit event will never be able to reproduce.
+    if (this.writeFailure) return;
     const safe = redactTranscriptLine(line);
     const withNl = safe.endsWith("\n") ? safe : `${safe}\n`;
+    const buf = Buffer.from(withNl, "utf8");
     try {
-      // appendFileSync semantics; small writes only.
-      const buf = Buffer.from(withNl, "utf8");
+      // Append the line first, then fold it into the running hash/byte count
+      // only on success. Hashing before the write (the previous shape) drifted
+      // the digest/byte-count away from the on-disk bytes on any partial
+      // failure, producing an audit record for a transcript that never existed.
+      writeFileSync(this.path, buf, { flag: "a" });
       this.hash.update(buf);
       this.bytes += buf.byteLength;
-      // Use appendFileSync via writeFileSync with { flag: 'a' }.
-      writeFileSync(this.path, buf, { flag: "a" });
-    } catch {
-      // Disk errors must not crash the sub-agent.
+    } catch (error) {
+      // A disk write failure must not crash the sub-agent, but it must not be
+      // silent either: record the first failure so finalize() can flag the
+      // transcript as incomplete, and surface it once on stderr (this shared,
+      // runtime-less package has no logger/runtime.reportError handle — stderr
+      // is the same diagnostic channel the service already uses for its
+      // sandbox WARN).
+      this.writeFailure =
+        error instanceof Error ? error : new Error(String(error));
+      process.stderr.write(
+        `[sub-agent] WARN: session ${this.opts.sessionId} transcript write failed; audit record will report an incomplete transcript: ${this.writeFailure.message}\n`,
+      );
     }
   }
 
@@ -108,6 +133,10 @@ export class SessionRecorder {
     this.finalized = true;
     const digest = this.hash.digest("hex");
     if (this.opts.auditDispatcher) {
+      // A transcript that hit a write failure is incomplete; emit an error
+      // result naming the failure instead of a success-shaped record whose hash
+      // covers only the bytes that happened to land before the disk gave out.
+      const failed = this.writeFailure;
       try {
         await this.opts.auditDispatcher.emit({
           actor: {
@@ -115,16 +144,29 @@ export class SessionRecorder {
             id: this.opts.actorId ?? "agent",
           },
           action: "agent.session_record",
-          result: "success",
+          result: failed ? "failure" : "success",
           resource: { type: "sub-agent.session", id: this.opts.sessionId },
           metadata: {
             session_id: this.opts.sessionId,
             transcript_hash: digest,
             transcript_bytes: this.bytes,
+            ...(failed
+              ? {
+                  transcript_complete: false,
+                  transcript_error: failed.message,
+                }
+              : {}),
           },
         });
-      } catch {
-        // Audit must never throw out of session lifecycle.
+      } catch (error) {
+        // error-policy:J7 diagnostics-must-not-kill-the-loop — the audit sink
+        // failing must not throw out of session teardown, but the drop is
+        // observable on the package's stderr diagnostic channel rather than
+        // swallowed. The dispatcher itself owns delivery retries.
+        const cause = error instanceof Error ? error : new Error(String(error));
+        process.stderr.write(
+          `[sub-agent] WARN: session ${this.opts.sessionId} audit emit failed; session_record event dropped: ${cause.message}\n`,
+        );
       }
     }
   }
@@ -150,8 +192,15 @@ export function pruneOldSessions(
         rmSync(dir, { recursive: true, force: true });
         removed++;
       }
-    } catch {
-      // Ignore individual prune errors.
+    } catch (error) {
+      // error-policy:J6 best-effort teardown — one un-prunable session dir (a
+      // permission or transient FS error) must not abort the rest of the
+      // retention sweep, but a persistently stuck dir is a real disk/leak
+      // signal, so it is surfaced on stderr rather than silently dropped.
+      const cause = error instanceof Error ? error : new Error(String(error));
+      process.stderr.write(
+        `[sub-agent] WARN: retention prune skipped ${dir}: ${cause.message}\n`,
+      );
     }
   }
   return removed;
