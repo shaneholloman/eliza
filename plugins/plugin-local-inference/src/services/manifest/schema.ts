@@ -305,11 +305,9 @@ export const Eliza1FilesSchema = z.object({
 	imagegen: z.array(Eliza1FileEntrySchema).optional(),
 	vad: z.array(Eliza1FileEntrySchema).optional(),
 	wakeword: z.array(Eliza1FileEntrySchema).optional(),
-	// Voice Wave 2 (2026-05-14): bundled semantic turn detector. Optional —
-	// when omitted, the runtime falls back to `HeuristicEotClassifier` (the
-	// deterministic punctuation/conjunction baseline). When present, the
-	// runtime loads the model via the GGUF-backed LiveKit turn detector
-	// (`eot-classifier-ggml.ts`) and pre-warms it at voice-session start.
+	// Voice Wave 2 (2026-05-14): bundled semantic turn detector assets.
+	// Runtime EOT now prefers the fused in-process scorer and falls back to
+	// `HeuristicEotClassifier` when fused scoring is unavailable.
 	// Tier mapping is data-driven (see
 	// `stage_turn_detector` in
 	// `packages/training/scripts/manifest/stage_eliza1_bundle_assets.py`):

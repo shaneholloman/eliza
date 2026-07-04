@@ -8,9 +8,6 @@ import {
 	clampProbability,
 	EOT_MID_CLAUSE_THRESHOLD,
 	EOT_TENTATIVE_THRESHOLD,
-	LIVEKIT_TURN_DETECTOR_EN_REVISION,
-	LIVEKIT_TURN_DETECTOR_INTL_REVISION,
-	turnDetectorRevisionForTier,
 	turnSignalFromProbability,
 } from "./eot-classifier";
 
@@ -77,22 +74,5 @@ describe("turnSignalFromProbability", () => {
 		const without = turnSignalFromProbability({ ...base, probability: 0.9 });
 		expect("model" in without).toBe(false);
 		expect("latencyMs" in without).toBe(false);
-	});
-});
-
-describe("turnDetectorRevisionForTier", () => {
-	it("maps the 2b entry tier to the English variant, others to multilingual", () => {
-		expect(turnDetectorRevisionForTier("2b")).toBe(
-			LIVEKIT_TURN_DETECTOR_EN_REVISION,
-		);
-		expect(turnDetectorRevisionForTier("eliza-1-2b")).toBe(
-			LIVEKIT_TURN_DETECTOR_EN_REVISION,
-		);
-		expect(turnDetectorRevisionForTier("4b")).toBe(
-			LIVEKIT_TURN_DETECTOR_INTL_REVISION,
-		);
-		expect(turnDetectorRevisionForTier("eliza-1-8b")).toBe(
-			LIVEKIT_TURN_DETECTOR_INTL_REVISION,
-		);
 	});
 });

@@ -12,7 +12,9 @@ import { MockCheckpointManager } from "../checkpoint-manager";
 import {
 	EOT_COMMIT_SILENCE_MS,
 	EOT_COMMIT_THRESHOLD,
+	EOT_FUSED_COMMIT_THRESHOLD,
 	EOT_HANGOVER_EXTENSION_MS,
+	EOT_HEURISTIC_COMMIT_THRESHOLD,
 	EOT_MID_CLAUSE_THRESHOLD,
 	EOT_TENTATIVE_SILENCE_MS,
 	EOT_TENTATIVE_THRESHOLD,
@@ -213,6 +215,43 @@ describe("VoiceStateMachine — EOT classifier integration", () => {
 		// Not enough silence despite high P — should still be LISTENING or
 		// have entered PAUSE_TENTATIVE (via tentative branch if P≥0.6 too),
 		// but NOT have committed.
+		expect(commits).toHaveLength(0);
+	});
+
+	it("fused classifiers commit at P≥0.7 with 50ms silence", async () => {
+		const fusedClf: EotClassifier = {
+			commitThreshold: EOT_FUSED_COMMIT_THRESHOLD,
+			score: async () => EOT_FUSED_COMMIT_THRESHOLD,
+		};
+		const { machine, commits } = makeMachine(fusedClf);
+
+		await machine.dispatch({ type: "speech-start", timestampMs: 0 });
+		await machine.dispatch({
+			type: "partial-transcript",
+			timestampMs: 500,
+			text: "That should work",
+			silenceSinceMs: EOT_COMMIT_SILENCE_MS,
+		});
+
+		expect(machine.getState()).toBe("SPEAKING");
+		expect(commits).toHaveLength(1);
+	});
+
+	it("heuristic-only classifiers do not commit at the fused threshold", async () => {
+		const heuristicLevelClf: EotClassifier = {
+			score: async () => EOT_FUSED_COMMIT_THRESHOLD,
+		};
+		const { machine, commits } = makeMachine(heuristicLevelClf);
+
+		await machine.dispatch({ type: "speech-start", timestampMs: 0 });
+		await machine.dispatch({
+			type: "partial-transcript",
+			timestampMs: 500,
+			text: "That should work",
+			silenceSinceMs: EOT_COMMIT_SILENCE_MS,
+		});
+
+		expect(machine.getState()).toBe("PAUSE_TENTATIVE");
 		expect(commits).toHaveLength(0);
 	});
 
@@ -421,8 +460,14 @@ describe("EotClassifier interface contract", () => {
 	});
 
 	it("EOT_COMMIT_THRESHOLD > EOT_TENTATIVE_THRESHOLD > EOT_MID_CLAUSE_THRESHOLD", () => {
+		expect(EOT_COMMIT_THRESHOLD).toBe(EOT_HEURISTIC_COMMIT_THRESHOLD);
 		expect(EOT_COMMIT_THRESHOLD).toBeGreaterThan(EOT_TENTATIVE_THRESHOLD);
 		expect(EOT_TENTATIVE_THRESHOLD).toBeGreaterThan(EOT_MID_CLAUSE_THRESHOLD);
+	});
+
+	it("fused commit threshold is lower than heuristic-only commit threshold", () => {
+		expect(EOT_FUSED_COMMIT_THRESHOLD).toBe(0.7);
+		expect(EOT_HEURISTIC_COMMIT_THRESHOLD).toBe(0.9);
 	});
 
 	it("EOT_COMMIT_SILENCE_MS > EOT_TENTATIVE_SILENCE_MS", () => {

@@ -1,6 +1,9 @@
 /** Covers the composite end-of-turn classifier combining the fused scorer with heuristic signals. Deterministic. */
 import { describe, expect, it, vi } from "vitest";
-import { CompositeEotClassifier } from "./eot-classifier";
+import {
+	CompositeEotClassifier,
+	EOT_FUSED_COMMIT_THRESHOLD,
+} from "./eot-classifier";
 import type { FfiEotScorer } from "./fused-eot-scorer";
 
 /** A stub fused scorer that returns a fixed model probability. */
@@ -56,5 +59,11 @@ describe("CompositeEotClassifier", () => {
 		const ambiguous = await c.signal("tell me more about it");
 		expect(ambiguous.source).toBe("eliza-1-drafter");
 		expect(ambiguous.model).toContain("mock-eot");
+	});
+
+	it("declares the fused early-commit threshold", () => {
+		const { scorer } = mockScorer(EOT_FUSED_COMMIT_THRESHOLD);
+		const c = new CompositeEotClassifier({ model: scorer });
+		expect(c.commitThreshold).toBe(EOT_FUSED_COMMIT_THRESHOLD);
 	});
 });
