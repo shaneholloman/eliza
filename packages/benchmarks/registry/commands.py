@@ -2206,6 +2206,18 @@ def get_benchmark_registry(repo_root: Path) -> list[BenchmarkDefinition]:
             args.extend(["--manifest", manifest.strip()])
         return args
 
+    def _meeting_voice_cmd(
+        output_dir: Path, model: ModelSpec, extra: Mapping[str, JSONValue]
+    ) -> list[str]:
+        return _meeting_transcription_proof_cmd(output_dir, model, extra)
+
+    def _meeting_voice_real_cmd(
+        output_dir: Path, model: ModelSpec, extra: Mapping[str, JSONValue]
+    ) -> list[str]:
+        merged_extra = dict(extra)
+        merged_extra.setdefault("lane", "real_product")
+        return _meeting_transcription_proof_cmd(output_dir, model, merged_extra)
+
     def _meeting_transcription_proof_result(output_dir: Path) -> Path:
         return output_dir / "meeting-transcription-proof-report.json"
 
@@ -2926,6 +2938,95 @@ def get_benchmark_registry(repo_root: Path) -> list[BenchmarkDefinition]:
             build_command=_voiceagentbench_cmd,
             locate_result=_voiceagentbench_result,
             extract_score=_score_from_voiceagentbench_json,
+        ),
+        BenchmarkDefinition(
+            id="meeting_voice",
+            display_name="Meeting Voice Smoke",
+            description=(
+                "No-key smoke lane for meeting voice transcription proof wiring, "
+                "canonical artifact shape, capture-path metadata, and evidence "
+                "bundle validation. Mocked plumbing is never product proof."
+            ),
+            cwd_rel="packages/benchmarks/meeting-transcription-proof",
+            requirements=BenchmarkRequirements(
+                env_vars=(),
+                paths=(
+                    "packages/benchmarks/meeting-transcription-proof/elizaos_meeting_transcription_proof",
+                    "packages/benchmarks/meeting-transcription-proof/fixtures/mock-meeting-manifest.json",
+                ),
+                notes=(
+                    "Alias for meeting_transcription_proof. With a mock provider it builds "
+                    "the lane='mocked_plumbing' no-key smoke route; with a real provider it "
+                    "builds lane='real_product'. Use meeting_voice_real, meeting_voice_stress, "
+                    "or meeting_voice_av with extra.manifest=<path> for reviewed product evidence."
+                ),
+            ),
+            build_command=_meeting_voice_cmd,
+            locate_result=_meeting_transcription_proof_result,
+            extract_score=_score_from_meeting_transcription_proof_json,
+        ),
+        BenchmarkDefinition(
+            id="meeting_voice_real",
+            display_name="Meeting Voice Real Product Evidence",
+            description=(
+                "Manual real-product lane for Zoom, Google Meet, on-device, cloud-agent, "
+                "and hybrid local/cloud meeting transcription proof"
+            ),
+            cwd_rel="packages/benchmarks/meeting-transcription-proof",
+            requirements=BenchmarkRequirements(
+                env_vars=(),
+                paths=("packages/benchmarks/meeting-transcription-proof/elizaos_meeting_transcription_proof",),
+                notes=(
+                    "Manual evidence-gated alias for meeting_transcription_proof with "
+                    "lane='real_product'. Requires extra.manifest=<path> containing real "
+                    "media/log/screenshot/model artifact evidence; mock provider runs fail closed."
+                ),
+            ),
+            build_command=_meeting_voice_real_cmd,
+            locate_result=_meeting_transcription_proof_result,
+            extract_score=_score_from_meeting_transcription_proof_json,
+        ),
+        BenchmarkDefinition(
+            id="meeting_voice_stress",
+            display_name="Meeting Voice Acoustic Stress Evidence",
+            description=(
+                "Manual real-product lane for meeting voice stressors: music, noise, "
+                "babble, overlap, far-field room audio, and multi-speaker single-stream cases"
+            ),
+            cwd_rel="packages/benchmarks/meeting-transcription-proof",
+            requirements=BenchmarkRequirements(
+                env_vars=(),
+                paths=("packages/benchmarks/meeting-transcription-proof/elizaos_meeting_transcription_proof",),
+                notes=(
+                    "Manual evidence-gated alias for meeting_transcription_proof with "
+                    "lane='real_product'. The manifest must include stress dataset sources, "
+                    "metrics, media refs, logs, and reviewed model outputs."
+                ),
+            ),
+            build_command=_meeting_voice_real_cmd,
+            locate_result=_meeting_transcription_proof_result,
+            extract_score=_score_from_meeting_transcription_proof_json,
+        ),
+        BenchmarkDefinition(
+            id="meeting_voice_av",
+            display_name="Meeting Voice Audio-Visual Evidence",
+            description=(
+                "Manual real-product lane for audio-visual meeting proof, active-speaker "
+                "metadata, video evidence, screenshots, and transcript/diarization artifacts"
+            ),
+            cwd_rel="packages/benchmarks/meeting-transcription-proof",
+            requirements=BenchmarkRequirements(
+                env_vars=(),
+                paths=("packages/benchmarks/meeting-transcription-proof/elizaos_meeting_transcription_proof",),
+                notes=(
+                    "Manual evidence-gated alias for meeting_transcription_proof with "
+                    "lane='real_product'. Requires an AV manifest with video, active speaker, "
+                    "media, logs, screenshots, and manual review artifacts."
+                ),
+            ),
+            build_command=_meeting_voice_real_cmd,
+            locate_result=_meeting_transcription_proof_result,
+            extract_score=_score_from_meeting_transcription_proof_json,
         ),
         BenchmarkDefinition(
             id="meeting_transcription_proof",

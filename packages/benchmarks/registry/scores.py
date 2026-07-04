@@ -888,6 +888,45 @@ def _score_from_mmau_json(data: JSONValue) -> ScoreExtraction:
     )
 
 
+_MEETING_PROOF_REQUIRED_EVIDENCE = {
+    "audio",
+    "video",
+    "backend_logs",
+    "frontend_logs",
+    "screenshots",
+    "metrics",
+    "model_trajectories",
+    "transcript_artifact",
+    "speaker_profile_artifact",
+    "consent_record",
+    "retention_artifact",
+}
+
+_MEETING_PROOF_REQUIRED_SECTIONS = (
+    "scenarios",
+    "dataset_sources",
+    "capture_paths",
+    "speaker_operations",
+)
+
+_MEETING_PROOF_REQUIRED_REAL_METRICS = {
+    "wer",
+    "cer",
+    "speaker_attributed_wer",
+    "der",
+    "jer",
+    "overlap_aware_wer",
+    "active_speaker_accuracy",
+    "voice_profile_false_accept_rate",
+    "voice_profile_false_reject_rate",
+    "end_of_turn_latency_ms",
+    "barge_in_latency_ms",
+    "p95_end_to_end_latency_ms",
+    "notes_factuality",
+    "action_item_extraction",
+}
+
+
 def _score_from_meeting_transcription_proof_json(data: JSONValue) -> ScoreExtraction:
     """Extract the #12486 meeting transcription proof score.
 
@@ -912,12 +951,39 @@ def _score_from_meeting_transcription_proof_json(data: JSONValue) -> ScoreExtrac
     )
     evidence_files = root.get("evidence_files")
     evidence_count = len(evidence_files) if isinstance(evidence_files, dict) else 0
+    speaker_name_provenance = root.get("speaker_name_provenance")
+    speaker_name_provenance_count = (
+        len(speaker_name_provenance) if isinstance(speaker_name_provenance, list) else 0
+    )
     publishable = root.get("publishable") is True
     if lane == "real_product":
         if not publishable:
             raise ValueError("meeting_transcription_proof: real lane must be publishable")
-        if evidence_count < 11:
-            raise ValueError("meeting_transcription_proof: real lane requires complete evidence files")
+        if not isinstance(evidence_files, dict):
+            raise ValueError("meeting_transcription_proof: real lane requires evidence file map")
+        missing_evidence = _MEETING_PROOF_REQUIRED_EVIDENCE - set(evidence_files)
+        if missing_evidence:
+            raise ValueError(
+                "meeting_transcription_proof: real lane requires named evidence files "
+                f"{sorted(missing_evidence)}"
+            )
+        for section in _MEETING_PROOF_REQUIRED_SECTIONS:
+            rows = expect_list(
+                get_required(root, section, ctx="meeting_transcription_proof:root"),
+                ctx=f"meeting_transcription_proof:{section}",
+            )
+            if not rows:
+                raise ValueError(f"meeting_transcription_proof: real lane requires non-empty {section}")
+        missing_metrics = _MEETING_PROOF_REQUIRED_REAL_METRICS - set(metrics)
+        if missing_metrics:
+            raise ValueError(
+                "meeting_transcription_proof: real lane requires detailed metrics "
+                f"{sorted(missing_metrics)}"
+            )
+        # #12498: the named-evidence gate above (#12502) subsumes the old count
+        # check; the speaker-name provenance requirement is additive on top of it.
+        if speaker_name_provenance_count < 8:
+            raise ValueError("meeting_transcription_proof: real lane requires speaker name provenance")
     elif publishable:
         raise ValueError("meeting_transcription_proof: mocked lane cannot be publishable")
 
@@ -929,6 +995,7 @@ def _score_from_meeting_transcription_proof_json(data: JSONValue) -> ScoreExtrac
             "lane": lane,
             "publishable": publishable,
             "evidence_file_count": evidence_count,
+            "speaker_name_provenance_count": speaker_name_provenance_count,
             "transcript_quality": metrics.get("transcript_quality") or 0,
             "diarization_quality": metrics.get("diarization_quality") or 0,
             "speaker_identity_quality": metrics.get("speaker_identity_quality") or 0,

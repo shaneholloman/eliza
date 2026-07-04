@@ -31,6 +31,11 @@
 		},
 		"./*": {
 			"types": "./dist/*.d.ts",
+			"eliza-source": {
+				"types": "./*.ts",
+				"import": "./*.ts",
+				"default": "./*.ts"
+			},
 			"import": "./dist/*.js",
 			"default": "./dist/*.js"
 		}

@@ -43,7 +43,6 @@ import type {
   UUID,
   World,
 } from "@elizaos/core";
-import { DISCORD_SERVICE_NAME } from "@elizaos/plugin-discord/constants";
 import type { DiscordService as IDiscordService } from "@elizaos/plugin-discord/service";
 import {
   expandConnectorSourceFilter,
@@ -66,6 +65,12 @@ let discordModulePromise: Promise<{
     },
   ) => Promise<string | undefined>;
 }> | null = null;
+
+// Inlined (not imported from @elizaos/plugin-discord/constants) so the mobile
+// Vite bundle does not statically pull in the Discord plugin. Must stay equal to
+// plugin-discord's DISCORD_SERVICE_NAME — the dynamic import below resolves the
+// same service by this name.
+const DISCORD_SERVICE_NAME = "discord";
 
 function getDiscordModule() {
   if (!discordModulePromise) {
