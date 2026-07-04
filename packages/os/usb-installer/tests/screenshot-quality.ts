@@ -1,3 +1,4 @@
+// Exercises USB installer browser flows and screenshot quality gates.
 import { expect, type Page } from "@playwright/test";
 import sharp from "sharp";
 

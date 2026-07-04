@@ -1,3 +1,4 @@
+// Defines shared system-state interfaces used by OS surfaces.
 export type CellSignalBars = 0 | 1 | 2 | 3 | 4 | 5;
 
 export interface WifiState {

@@ -1,3 +1,4 @@
+// Mounts the OS homepage React app for Cloudflare Pages.
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";

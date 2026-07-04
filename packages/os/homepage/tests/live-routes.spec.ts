@@ -1,3 +1,4 @@
+// Exercises the OS homepage route, checkout, and visual behavior.
 import { expect, type Page, test } from "playwright/test";
 import { captureScreenshotWithQualityRetry } from "./screenshot-quality";
 

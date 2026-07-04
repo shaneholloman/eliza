@@ -1,3 +1,4 @@
+// Exercises USB installer backend safety and platform behavior.
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -116,8 +117,8 @@ describe("partial-file cleanup", () => {
     await fs.writeFile(path.join(tmpDir, "abandoned.iso.partial"), "junk");
     await fs.writeFile(path.join(tmpDir, "other.partial"), "junk");
 
-    // Inline the cleanup logic to verify the policy without needing to
-    // re-instantiate the whole backend (which would touch /tmp/elizaos-installer).
+    // Inline the partial-file sweep so the policy is checked without
+    // re-instantiating the whole backend (which would touch /tmp/elizaos-installer).
     const entries = await fs.readdir(tmpDir);
     await Promise.all(
       entries

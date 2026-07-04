@@ -1,3 +1,4 @@
+// Renders the OS hardware preorder checkout flow.
 import { BRAND_COLORS, BRAND_PATHS, LOGO_FILES } from "@elizaos/shared/brand";
 import {
   StripeCheckoutError,

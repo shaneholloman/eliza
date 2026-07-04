@@ -1,3 +1,4 @@
+// Implements platform-specific USB installer backend safety behavior.
 import type { PlatformId } from "./types";
 
 export interface PlatformNote {

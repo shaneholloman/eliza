@@ -1,3 +1,4 @@
+// Renders an Android SystemUI surface for the elizaOS device image.
 import { useMemo } from "react";
 import { useSystemProvider } from "../providers/context";
 import { AudioIcon } from "./indicators/AudioIcon";

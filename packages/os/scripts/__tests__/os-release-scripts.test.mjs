@@ -1,3 +1,4 @@
+// Exercises OS release pipeline scripts and evidence checks.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";

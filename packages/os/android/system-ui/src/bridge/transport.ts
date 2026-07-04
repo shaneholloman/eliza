@@ -1,3 +1,4 @@
+// Bridges Android system state between the native host and the TypeScript SystemUI shell.
 export interface BridgeTransport {
   on<T>(channel: string, handler: (payload: T) => void): () => void;
   send<TIn, TOut>(channel: string, payload: TIn): Promise<TOut>;

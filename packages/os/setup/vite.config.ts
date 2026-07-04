@@ -1,3 +1,4 @@
+// Configures the AOSP setup flasher build and tests.
 import { defineConfig } from "vite";
 
 export default defineConfig({

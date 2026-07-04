@@ -1,3 +1,4 @@
+// Renders an Android SystemUI surface for the elizaOS device image.
 export interface NavigationButtonsProps {
   onBack?: () => void;
   onHome?: () => void;

@@ -1,3 +1,4 @@
+// Supplies Android SystemUI state for real and mocked device providers.
 import { createContext, useContext } from "react";
 import type { SystemProvider } from "../types";
 

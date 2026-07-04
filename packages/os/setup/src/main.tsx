@@ -1,3 +1,4 @@
+// Exposes the AOSP setup flasher entrypoint and public surface.
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { InstallerShell } from "./components/InstallerShell";

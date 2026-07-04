@@ -1,3 +1,4 @@
+// Implements backend device and HTTP operations for the AOSP setup flasher.
 import type {
   AospBuild,
   AospFlasherBackend,
