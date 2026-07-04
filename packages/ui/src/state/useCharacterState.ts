@@ -68,17 +68,17 @@ export function useCharacterState({
     const normalized = normalizeAvatarIndex(v);
     setSelectedVrmIndexRaw(normalized);
     saveAvatarIndex(normalized);
-    // error-policy:J5 localStorage (saveAvatarIndex, just above) is the source
-    // of truth for the avatar; this is a best-effort server mirror so headless
-    // stream capture matches. A failed mirror must not block the local change,
-    // but it is logged rather than swallowed so a diverging capture is
-    // diagnosable.
-    client.saveStreamSettings({ avatarIndex: normalized }).catch((err) => {
-      logger.warn(
-        { err, avatarIndex: normalized },
-        "[useCharacterState] failed to mirror avatarIndex to stream settings",
-      );
-    });
+    client
+      .saveStreamSettings({ avatarIndex: normalized })
+      .catch((err: unknown) => {
+        // The local avatar switch already applied; a failed server sync means
+        // headless stream capture diverges — surface it instead of hiding it.
+        logger.error(
+          { err, avatarIndex: normalized },
+          "[useCharacterState] avatar sync to stream settings failed",
+        );
+        setCharacterSaveError("Avatar selection failed to sync to the server");
+      });
   }, []);
 
   // ── Callbacks ───────────────────────────────────────────────────────
