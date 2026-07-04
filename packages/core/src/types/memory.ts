@@ -453,6 +453,7 @@ interface MemoryMetadataBase {
 	source?: string;
 	scope?: MemoryScope;
 	timestamp?: number;
+	platformMessageId?: string;
 }
 
 export type MemoryMetadata = (

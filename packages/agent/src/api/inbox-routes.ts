@@ -43,7 +43,6 @@ import type {
   UUID,
   World,
 } from "@elizaos/core";
-import { DISCORD_SERVICE_NAME } from "@elizaos/plugin-discord/constants";
 import type { DiscordService as IDiscordService } from "@elizaos/plugin-discord/service";
 import {
   expandConnectorSourceFilter,
@@ -66,6 +65,8 @@ let discordModulePromise: Promise<{
     },
   ) => Promise<string | undefined>;
 }> | null = null;
+
+const DISCORD_SERVICE_NAME = "discord";
 
 function getDiscordModule() {
   if (!discordModulePromise) {

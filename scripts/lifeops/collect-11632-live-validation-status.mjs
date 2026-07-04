@@ -189,6 +189,31 @@ function groupStatus(group) {
   };
 }
 
+function adbHasOnlineSerial(adbSummary, serial) {
+  if (!serial) return false;
+  return adbSummary.split("\n").some((line) => {
+    const [deviceSerial, state] = line.trim().split(/\s+/, 2);
+    return deviceSerial === serial && state === "device";
+  });
+}
+
+function applyDeviceReadiness(envGroups, devices) {
+  const androidGroup = envGroups.find((group) => group.id === "native_android");
+  if (!androidGroup?.readyForOperatorRun) return;
+
+  // biome-ignore lint/suspicious/noUndeclaredEnvVars: evidence collector probes the local operator device outside Turbo tasks.
+  const androidSerial = process.env.ANDROID_SERIAL?.trim();
+  const online = adbHasOnlineSerial(devices.adb.summary, androidSerial);
+  androidGroup.deviceReady = online;
+  if (online) return;
+
+  androidGroup.readyForOperatorRun = false;
+  androidGroup.missingRequiredAny = [
+    ...androidGroup.missingRequiredAny,
+    `online adb device${androidSerial ? ` ${androidSerial}` : ""}`,
+  ];
+}
+
 function fileStatus(path) {
   const full = join(ROOT, path);
   return { path, exists: existsSync(full) };
@@ -225,6 +250,34 @@ function buildStatus() {
       [/20\/20 pass/i, /20 passed/i],
     ),
     parseEvidenceLog(
+      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/android-build-after-resolved-appdir.txt",
+      [/BUILD SUCCESSFUL/i, /android sideload artifact audit passed/i],
+    ),
+    parseEvidenceLog(
+      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/android-app-actions-test.txt",
+      [/12 pass/i, /0 fail/i],
+    ),
+    parseEvidenceLog(
+      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/biome-edited-files.txt",
+      [/Checked \d+ files/i],
+    ),
+    parseEvidenceLog(
+      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/core-build-node.txt",
+      [/Node-only build complete/i],
+    ),
+    parseEvidenceLog(
+      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/core-typecheck.txt",
+      [/tsgo --noEmit -p \.\/tsconfig\.json/i],
+    ),
+    parseEvidenceLog(
+      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/agent-typecheck.txt",
+      [/tsgo --noEmit -p tsconfig\.json/i],
+    ),
+    parseEvidenceLog(
+      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/plugin-discord-typecheck.txt",
+      [/tsgo --noEmit/i],
+    ),
+    parseEvidenceLog(
       ".github/issue-evidence/8833-lifeops-live-validation/11632-status/plugin-google-live.txt",
       [/pass/i, /skip/i],
     ),
@@ -243,6 +296,7 @@ function buildStatus() {
     ]),
     devicectl: commandAvailable("devicectl", ["list", "devices"]),
   };
+  applyDeviceReadiness(envGroups, devices);
   const operatorReadyGroups = envGroups.filter(
     (group) => group.readyForOperatorRun,
   );
