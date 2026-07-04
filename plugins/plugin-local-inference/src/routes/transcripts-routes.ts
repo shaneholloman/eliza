@@ -50,7 +50,13 @@ export interface CreateTranscriptRequest {
 	/** Base64 WAV bytes — persisted to the media store; sets audioUrl. */
 	audioBase64?: string;
 	metadata?: Record<string, unknown>;
-	/** Canonical meeting artifact persisted into transcript metadata after validation. */
+	/**
+	 * Canonical meeting artifact persisted into transcript metadata after validation.
+	 * Forward contract (#12487): the schema + validated write path exist, but no
+	 * capture adapter (Zoom/Meet/local) emits this field yet, so it is optional and
+	 * `undefined` skips validation — the existing transcript-create path is unchanged
+	 * until a producer is wired.
+	 */
 	meetingArtifact?: MeetingArtifact;
 	createdAt?: number;
 }
