@@ -15,13 +15,15 @@ import type {
 	UUID,
 } from "@elizaos/core";
 import {
+	type MeetingArtifact,
 	type Transcript,
 	type TranscriptScope,
 	type TranscriptSegment,
 	type TranscriptSource,
 	transcriptDurationMs,
 	transcriptSpeakerCount,
-} from "@elizaos/shared/transcripts";
+	validateMeetingArtifact,
+} from "@elizaos/shared";
 import {
 	TranscriptService,
 	type TranscriptServiceRuntime,
@@ -47,6 +49,9 @@ export interface CreateTranscriptRequest {
 	audioContentType?: string;
 	/** Base64 WAV bytes — persisted to the media store; sets audioUrl. */
 	audioBase64?: string;
+	metadata?: Record<string, unknown>;
+	/** Canonical meeting artifact persisted into transcript metadata after validation. */
+	meetingArtifact?: MeetingArtifact;
 	createdAt?: number;
 }
 
@@ -62,6 +67,15 @@ export function buildTranscriptFromRequest(
 ): Transcript {
 	const segments = Array.isArray(body.segments) ? body.segments : [];
 	const createdAt = body.createdAt ?? now;
+	const metadata =
+		body.meetingArtifact || body.metadata
+			? {
+					...(body.metadata ?? {}),
+					...(body.meetingArtifact
+						? { meetingArtifact: body.meetingArtifact }
+						: {}),
+				}
+			: undefined;
 	return {
 		id,
 		title: body.title?.trim() || defaultTitle(createdAt),
@@ -75,6 +89,7 @@ export function buildTranscriptFromRequest(
 		scope: body.scope ?? "owner-private",
 		status: "ready",
 		speakerCount: transcriptSpeakerCount(segments),
+		...(metadata ? { metadata } : {}),
 	};
 }
 
@@ -155,6 +170,18 @@ const createRoute: Route = {
 		const body = ctx.body as CreateTranscriptRequest | undefined;
 		if (!body || !Array.isArray(body.segments) || body.segments.length === 0) {
 			return { status: 400, body: { error: "segments are required" } };
+		}
+		if (body.meetingArtifact !== undefined) {
+			const validation = validateMeetingArtifact(body.meetingArtifact);
+			if (!validation.valid) {
+				return {
+					status: 400,
+					body: {
+						error: "meetingArtifact is invalid",
+						errors: validation.errors,
+					},
+				};
+			}
 		}
 		// The shell client doesn't carry world/room/entity ids — default them to
 		// the agent context (single-user local) when not supplied.

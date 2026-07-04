@@ -4,6 +4,7 @@
  */
 
 import type { Memory, RouteHandlerContext, UUID } from "@elizaos/core";
+import { buildMeetingArtifactFixtures } from "@elizaos/shared";
 import type { TranscriptSegment } from "@elizaos/shared/transcripts";
 import { describe, expect, it } from "vitest";
 import {
@@ -97,6 +98,24 @@ describe("buildTranscriptFromRequest", () => {
 		expect(t.endedAt).toBe(9000);
 		expect(t.title).toContain("Recording");
 	});
+
+	it("preserves a validated canonical meeting artifact in metadata", () => {
+		const meetingArtifact = buildMeetingArtifactFixtures().googleMeetRoom;
+		const t = buildTranscriptFromRequest(
+			{
+				segments,
+				metadata: { source: "test" },
+				meetingArtifact,
+			},
+			"id-1",
+			9000,
+		);
+
+		expect(t.metadata).toEqual({
+			source: "test",
+			meetingArtifact,
+		});
+	});
 });
 
 describe("transcripts routes", () => {
@@ -151,6 +170,64 @@ describe("transcripts routes", () => {
 			"/api/transcripts",
 		)(ctx({ runtime: runtime as never, body: { segments: [] } }));
 		expect(res.status).toBe(400);
+	});
+
+	it("POST rejects an invalid canonical meeting artifact", async () => {
+		const { runtime } = fakeRuntime();
+		const meetingArtifact = {
+			...buildMeetingArtifactFixtures().googleMeetRoom,
+			media: [],
+		};
+		const res = await handlerFor(
+			"POST",
+			"/api/transcripts",
+		)(
+			ctx({
+				runtime: runtime as never,
+				body: {
+					title: "Bad artifact",
+					segments,
+					meetingArtifact,
+				},
+			}),
+		);
+
+		expect(res.status).toBe(400);
+		expect(res.body).toMatchObject({
+			error: "meetingArtifact is invalid",
+		});
+		expect(
+			(res.body as { errors: string[] }).errors.some((error) =>
+				error.includes("mediaRefId references missing media"),
+			),
+		).toBe(true);
+	});
+
+	it("POST stores a valid canonical meeting artifact", async () => {
+		const { runtime } = fakeRuntime();
+		const meetingArtifact = buildMeetingArtifactFixtures().googleMeetRoom;
+		const created = await handlerFor(
+			"POST",
+			"/api/transcripts",
+		)(
+			ctx({
+				runtime: runtime as never,
+				body: {
+					title: "Meeting",
+					segments,
+					meetingArtifact,
+				},
+			}),
+		);
+
+		expect(created.status).toBe(201);
+		expect(
+			(
+				created.body as {
+					transcript: { metadata?: { meetingArtifact?: unknown } };
+				}
+			).transcript.metadata?.meetingArtifact,
+		).toEqual(meetingArtifact);
 	});
 
 	it("PUT edits an existing transcript and 404s on a missing one", async () => {
