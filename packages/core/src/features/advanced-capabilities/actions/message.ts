@@ -2770,6 +2770,12 @@ async function handleSearch(
 // op=list_channels / list_servers
 // ---------------------------------------------------------------------------
 
+// Cap on rendered channel entries so a large deployment can't flood the
+// action result. Counts are always computed over the connector's complete
+// room set, and a capped listing is annotated (truncated + channelCount)
+// instead of silently posing as complete.
+const MAX_LISTED_CHANNELS = 50;
+
 async function handleListChannels(
 	runtime: IAgentRuntime,
 	message: Memory,
@@ -2806,17 +2812,22 @@ async function handleListChannels(
 		const targets = await listRooms(context);
 		// Muted visibility: without the flag "which channels are you muted in"
 		// is unanswerable — the participant/world mute state is queryable
-		// nowhere else.
+		// nowhere else. Flags cover the FULL set so mutedCount stays correct
+		// even when the rendered listing below is capped.
 		const mutedFlags = await resolveMutedTargetFlags(runtime, targets);
 		const mutedCount = mutedFlags.filter(Boolean).length;
+		const rendered = targets.slice(0, MAX_LISTED_CHANNELS);
+		const truncated = rendered.length < targets.length;
 		return opSuccess(
 			"list_channels",
 			`Listed ${targets.length} channels from ${connector.label}${
 				mutedCount > 0 ? ` (${mutedCount} muted)` : ""
-			}.`,
+			}${truncated ? ` — showing the first ${rendered.length}` : ""}.`,
 			{
 				source: connector.source,
-				channels: targets.map((t, index) => ({
+				channelCount: targets.length,
+				...(truncated ? { truncated: true } : {}),
+				channels: rendered.map((t, index) => ({
 					label: t.label,
 					kind: t.kind,
 					target: t.target,
