@@ -431,9 +431,9 @@ describe("App navigate-view shell handler", () => {
       }),
     );
 
-    expect(
-      consumeNavigateViewPayload<{ number: string }>("phone"),
-    ).toEqual({ number: "+15550100" });
+    expect(consumeNavigateViewPayload<{ number: string }>("phone")).toEqual({
+      number: "+15550100",
+    });
     // Single-shot: a later plain navigation to the same view does not re-seed.
     expect(consumeNavigateViewPayload("phone")).toBeNull();
   });
