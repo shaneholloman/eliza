@@ -1,3 +1,4 @@
+// Bridges Android system state between the native host and the TypeScript SystemUI shell.
 import type {
   AudioState,
   BatteryState,

@@ -1,3 +1,4 @@
+// Provides locale state for the OS homepage React app.
 import { detectClientLanguage } from "@elizaos/ui/i18n/region";
 import {
   createContext,

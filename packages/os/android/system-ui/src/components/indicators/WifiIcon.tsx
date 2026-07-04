@@ -1,3 +1,4 @@
+// Renders an Android SystemUI status indicator from provider state.
 import { useSystemProvider } from "../../providers/context";
 
 export function WifiIcon() {

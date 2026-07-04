@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Supports OS release manifests, checksums, and TEE evidence automation.
 import { execFile } from "node:child_process";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";

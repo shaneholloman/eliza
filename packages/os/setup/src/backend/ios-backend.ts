@@ -1,3 +1,4 @@
+// Implements backend device and HTTP operations for the AOSP setup flasher.
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Validates Android release manifests before installer artifacts are shipped.
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

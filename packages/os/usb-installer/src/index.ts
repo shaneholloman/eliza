@@ -1,3 +1,4 @@
+// Exposes the USB installer app entrypoint and backend surface.
 export type {
   DriveSafety,
   ElizaOsImage,

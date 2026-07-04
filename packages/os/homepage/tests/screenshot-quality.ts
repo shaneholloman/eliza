@@ -1,3 +1,4 @@
+// Exercises the OS homepage route, checkout, and visual behavior.
 import { expect, type Page } from "playwright/test";
 import sharp from "sharp";
 

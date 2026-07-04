@@ -1,3 +1,4 @@
+// Exercises the AOSP setup flasher backend and dependency gates.
 import { describe, expect, it } from "vitest";
 import { detectLinuxDistro } from "../dependencies/dep-manager";
 

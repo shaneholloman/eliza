@@ -1,3 +1,4 @@
+// Routes the OS homepage across downloads, hardware, and checkout views.
 import { BRAND_PATHS, EXTERNAL_URLS, LOGO_FILES } from "@elizaos/shared/brand";
 import {
   HARDWARE_PRODUCTS as hardwareProducts,

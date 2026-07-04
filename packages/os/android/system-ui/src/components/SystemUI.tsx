@@ -1,3 +1,4 @@
+// Renders an Android SystemUI surface for the elizaOS device image.
 import type { ReactNode } from "react";
 import {
   NavigationButtons,

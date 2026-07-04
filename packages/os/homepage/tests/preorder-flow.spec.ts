@@ -1,3 +1,4 @@
+// Exercises the OS homepage route, checkout, and visual behavior.
 import { expect, test } from "playwright/test";
 
 const CHECKOUT_BASE = "/checkout";

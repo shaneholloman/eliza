@@ -1,3 +1,4 @@
+// Exercises USB installer server and dry-run application behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { createUsbInstallerHandler } from "../../server";
 import type {

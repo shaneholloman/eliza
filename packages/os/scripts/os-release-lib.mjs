@@ -1,3 +1,4 @@
+// Supports OS release manifests, checksums, and TEE evidence automation.
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";

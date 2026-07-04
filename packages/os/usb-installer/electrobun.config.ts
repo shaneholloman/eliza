@@ -1,3 +1,4 @@
+// Configures the USB installer build, server, and tests.
 import type { ElectrobunConfig } from "electrobun/bun";
 
 export default {

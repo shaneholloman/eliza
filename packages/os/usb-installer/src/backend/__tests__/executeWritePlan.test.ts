@@ -1,3 +1,4 @@
+// Exercises USB installer backend safety and platform behavior.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
