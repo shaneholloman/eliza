@@ -601,7 +601,7 @@ export interface PluginWidgetDeclaration {
 	 *   `present + disabled` snapshot entry exists for its plugin id.
 	 * - `"fallback"` — backed by a store/compat data source, so it renders when
 	 *   the snapshot is missing OR omits the plugin, but a `present + disabled`
-	 *   entry hides it (agent-orchestrator, wallet, browser-workspace, todo).
+	 *   entry hides it (agent-orchestrator, browser-workspace, todo).
 	 * - `"snapshot"` / omitted — standard gate: visible only when the plugin is
 	 *   enabled+active in the snapshot.
 	 *

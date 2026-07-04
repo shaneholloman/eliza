@@ -40,9 +40,17 @@ registerBuiltinWidgetDeclarations([
 `resolveWidgetsForSlot(slot, plugins)` filters by `slot`, gates on the plugin
 being enabled (`isWidgetEnabled`), and resolves the component by
 `(pluginId, declarationId)`. A widget shows only when its component resolves
-**and** the plugin is enabled — unless the `pluginId` is in
-`ALWAYS_VISIBLE_BUILTIN_WIDGET_PLUGIN_IDS` (for **core** features with no
-loadable plugin, e.g. `notifications`/`messages`).
+**and** its declaration visibility allows it:
+
+- `visibility: "always"` is for core surfaces with no loadable plugin package
+  (for example `notifications`, `welcome`, `needs-attention`). These render
+  without waiting for a runtime plugin snapshot, while an explicit
+  `present + disabled` snapshot entry still hides them.
+- `visibility: "fallback"` is for store/compat-backed surfaces that should
+  render when the snapshot is empty or omits the plugin, but still respect an
+  explicit disabled snapshot entry.
+- omitted / `visibility: "snapshot"` is the normal plugin gate: the plugin must
+  be present and enabled/active.
 
 ## The `home` / frontpage surface (#9143)
 

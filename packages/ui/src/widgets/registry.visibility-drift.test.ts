@@ -19,6 +19,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   BUILTIN_WIDGET_DECLARATIONS,
+  registerBuiltinWidgetDeclarations,
+  registerWidgetComponent,
   resolveWidgetsForSlot,
   widgetVisibilityClass,
 } from "./registry";
@@ -33,16 +35,14 @@ describe("widget visibility drift guard (#12090 item 9)", () => {
     // The coupling this audit item targets: a hardcoded `Set<pluginId>` that had
     // to be hand-synced with declaration pluginIds. Its removal (outside of
     // reference comments) is what keeps `todo`/`todos` from drifting again.
-    const executableRefs = registrySource
-      .split("\n")
-      .filter((line) => {
-        const trimmed = line.trimStart();
-        if (trimmed.startsWith("//") || trimmed.startsWith("*")) return false;
-        return (
-          line.includes("ALWAYS_VISIBLE_BUILTIN_WIDGET_PLUGIN_IDS") ||
-          line.includes("BUILTIN_WIDGET_FALLBACK_PLUGIN_IDS")
-        );
-      });
+    const executableRefs = registrySource.split("\n").filter((line) => {
+      const trimmed = line.trimStart();
+      if (trimmed.startsWith("//") || trimmed.startsWith("*")) return false;
+      return (
+        line.includes("ALWAYS_VISIBLE_BUILTIN_WIDGET_PLUGIN_IDS") ||
+        line.includes("BUILTIN_WIDGET_FALLBACK_PLUGIN_IDS")
+      );
+    });
     expect(executableRefs).toEqual([]);
   });
 
@@ -87,8 +87,9 @@ describe("widget visibility drift guard (#12090 item 9)", () => {
     const todoDecl = BUILTIN_WIDGET_DECLARATIONS.find(
       (d) => d.id === "todo.items" && d.slot === "home",
     );
+    if (!todoDecl) throw new Error("missing todo home widget declaration");
     expect(todoDecl?.pluginId).toBe("todo");
-    expect(widgetVisibilityClass(todoDecl!, "builtin")).toBe("fallback");
+    expect(widgetVisibilityClass(todoDecl, "builtin")).toBe("fallback");
 
     const resolved = resolveWidgetsForSlot("home", []);
     const todos = resolved.find((r) => r.declaration.id === "todo.items");
@@ -118,8 +119,9 @@ describe("widget visibility drift guard (#12090 item 9)", () => {
     const calendarDecl = BUILTIN_WIDGET_DECLARATIONS.find(
       (d) => d.slot === "home" && d.pluginId === "calendar",
     );
-    expect(calendarDecl).toBeTruthy();
-    expect(widgetVisibilityClass(calendarDecl!, "builtin")).toBe("always");
+    if (!calendarDecl)
+      throw new Error("missing calendar home widget declaration");
+    expect(widgetVisibilityClass(calendarDecl, "builtin")).toBe("always");
     const disabled = resolveWidgetsForSlot("home", [
       { id: "calendar", enabled: false, isActive: false },
     ]);
@@ -134,8 +136,8 @@ describe("widget visibility drift guard (#12090 item 9)", () => {
     const healthDecl = BUILTIN_WIDGET_DECLARATIONS.find(
       (d) => d.slot === "home" && d.pluginId === "health",
     );
-    expect(healthDecl).toBeTruthy();
-    expect(widgetVisibilityClass(healthDecl!, "builtin")).toBe("snapshot");
+    if (!healthDecl) throw new Error("missing health home widget declaration");
+    expect(widgetVisibilityClass(healthDecl, "builtin")).toBe("snapshot");
 
     const empty = resolveWidgetsForSlot("home", []);
     expect(
@@ -153,8 +155,37 @@ describe("widget visibility drift guard (#12090 item 9)", () => {
   it("still honors third-party `fallbackPluginIds` for declarations without a `visibility` flag", () => {
     // Back-compat: registerBuiltinWidgetDeclarations({ fallbackPluginIds })
     // continues to promote flag-less declarations to fallback behavior.
-    // (Covered structurally: the resolver reads EXTERNAL_FALLBACK_PLUGIN_IDS.)
     expect(registrySource).toContain("EXTERNAL_FALLBACK_PLUGIN_IDS");
     expect(registrySource).toContain("fallbackPluginIds");
+
+    const originalLength = BUILTIN_WIDGET_DECLARATIONS.length;
+    registerWidgetComponent(
+      "external-fallback-test",
+      "external-fallback-test.card",
+      () => null,
+    );
+    try {
+      registerBuiltinWidgetDeclarations(
+        [
+          {
+            id: "external-fallback-test.card",
+            pluginId: "external-fallback-test",
+            slot: "home",
+            label: "External fallback test",
+            defaultEnabled: true,
+          },
+        ],
+        { fallbackPluginIds: ["external-fallback-test"] },
+      );
+
+      const resolved = resolveWidgetsForSlot("home", []);
+      expect(
+        resolved.find(
+          (r) => r.declaration.id === "external-fallback-test.card",
+        ),
+      ).toBeTruthy();
+    } finally {
+      BUILTIN_WIDGET_DECLARATIONS.splice(originalLength);
+    }
   });
 });
