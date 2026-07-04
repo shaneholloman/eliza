@@ -20,12 +20,10 @@ const state = {} as State;
 
 function runtimeWith(
   service: Record<string, unknown> | undefined,
-  reportError = vi.fn(),
+  reportError = vi.fn()
 ): IAgentRuntime {
   return {
-    getService: vi.fn((name: string) =>
-      name === "linear" ? service : undefined,
-    ),
+    getService: vi.fn((name: string) => (name === "linear" ? service : undefined)),
     reportError,
   } as unknown as IAgentRuntime;
 }
