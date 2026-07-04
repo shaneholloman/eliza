@@ -233,7 +233,11 @@ function hasSelectedContext(
   return contexts.some((context) => selected.has(context.toLowerCase()));
 }
 
-async function fetchPolymarketJson<T>(
+// Sentinel distinct from any legitimately-parsed body (including `null`), so a
+// body that fails to parse is never confused with a successful empty response.
+const POLYMARKET_UNPARSEABLE = Symbol("polymarket-unparseable-body");
+
+export async function fetchPolymarketJson<T>(
   path: string,
   options: { allowErrorStatus?: boolean } = {},
 ): Promise<T> {
@@ -241,18 +245,31 @@ async function fetchPolymarketJson<T>(
     headers: { accept: "application/json", ...buildAuthHeaders() },
     signal: AbortSignal.timeout(ACTION_TIMEOUT_MS),
   });
-  const payload = (await response.json().catch(() => null)) as T;
-  if (options.allowErrorStatus && payload !== null) {
-    return payload;
+  // Fail closed: a body that does not parse as JSON is a provider/transport
+  // failure, not a successful `null` result. Returning `null as T` here would
+  // fabricate success and surface later as an opaque null-deref in the caller
+  // (e.g. `status.publicReads.ready`), masking the real cause.
+  const payload: T | typeof POLYMARKET_UNPARSEABLE = await response
+    .json()
+    .then((value) => value as T)
+    .catch(() => POLYMARKET_UNPARSEABLE);
+  const parsed = payload !== POLYMARKET_UNPARSEABLE;
+  if (options.allowErrorStatus && parsed) {
+    return payload as T;
   }
   if (!response.ok) {
     const message =
-      payload && typeof payload === "object" && "error" in payload
+      parsed && payload && typeof payload === "object" && "error" in payload
         ? String((payload as { error?: unknown }).error)
         : `Polymarket API request failed with ${response.status}`;
     throw new Error(message);
   }
-  return payload;
+  if (!parsed) {
+    throw new Error(
+      `Polymarket API returned an unreadable response body for ${path} (HTTP ${response.status})`,
+    );
+  }
+  return payload as T;
 }
 
 async function emit(
