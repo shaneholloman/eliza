@@ -18,6 +18,7 @@
  * The trajectory recorder logs this as a `facts_and_relationships` stage so
  * extraction quality can be reviewed offline.
  */
+import { getEntityDetails } from "../entities.ts";
 import {
 	buildFactKeywordsForStorage,
 	scoreFactKeywordRelevance,
@@ -177,9 +178,14 @@ export async function runFactsAndRelationshipsStage(
 		};
 	}
 
-	const [similarFacts, existingRelationships] = await Promise.all([
+	const candidateEntityNames = candidateRelationships.flatMap((rel) => [
+		rel.subject,
+		rel.object,
+	]);
+	const [similarFacts, existingRelationships, roomEntities] = await Promise.all([
 		searchSimilarFacts(runtime, message, candidateFacts),
 		fetchExistingRelationships(runtime, message),
+		fetchRoomEntities(runtime, message, candidateEntityNames),
 	]);
 
 	const tools = [createFactsAndRelationshipsTool()];
@@ -193,8 +199,8 @@ export async function runFactsAndRelationshipsStage(
 		},
 		similarFacts,
 		existingRelationships,
+		roomEntities,
 		priorDialogue: args.priorDialogue ?? [],
-		state: args.state,
 	});
 
 	const raw = await runtime.useModel(ModelType.TEXT_LARGE, {
@@ -207,7 +213,7 @@ export async function runFactsAndRelationshipsStage(
 	const written = await persistFactsAndRelationships({
 		runtime,
 		message,
-		state: args.state,
+		roomEntities,
 		parsed,
 	});
 
@@ -220,8 +226,8 @@ interface BuildMessagesArgs {
 	extract: MessageHandlerExtract;
 	similarFacts: Memory[];
 	existingRelationships: Relationship[];
+	roomEntities: RoomEntityRef[];
 	priorDialogue: readonly Memory[];
-	state: State;
 }
 
 function buildFactsStageMessages(args: BuildMessagesArgs): ChatMessage[] {
@@ -279,11 +285,11 @@ function buildFactsStageMessages(args: BuildMessagesArgs): ChatMessage[] {
 		}
 	}
 
-	const roomEntities = readRoomEntityRefs(args.state).map((entity) =>
+	const roomEntityLines = args.roomEntities.map((entity) =>
 		formatRoomEntityRef(entity),
 	);
-	if (roomEntities.length > 0) {
-		userBlocks.push(`room_entities:\n${roomEntities.join("\n")}`);
+	if (roomEntityLines.length > 0) {
+		userBlocks.push(`room_entities:\n${roomEntityLines.join("\n")}`);
 	}
 
 	const candidateLines: string[] = [];
@@ -308,27 +314,103 @@ type RoomEntityRef = {
 	names: string[];
 };
 
-function readRoomEntityRefs(state: State): RoomEntityRef[] {
-	const providers = state.data.providers;
-	if (!providers || typeof providers !== "object") return [];
-	const entitiesEntry = (providers as Record<string, unknown>).ENTITIES;
-	if (!entitiesEntry || typeof entitiesEntry !== "object") return [];
-	const data = (entitiesEntry as { data?: unknown }).data;
-	if (!data || typeof data !== "object") return [];
-	const entities = (data as { entities?: unknown }).entities;
-	if (!Array.isArray(entities)) return [];
-	return entities
-		.map((entity): RoomEntityRef | null => {
-			if (!entity || typeof entity !== "object") return null;
-			const e = entity as { id?: unknown; names?: unknown };
-			const names = Array.isArray(e.names)
-				? e.names.filter((name): name is string => typeof name === "string")
-				: [];
-			const id = typeof e.id === "string" ? asUuidOrNull(e.id) : null;
-			if (!id && names.length === 0) return null;
-			return { ...(id ? { id } : {}), names };
-		})
-		.filter((entity): entity is RoomEntityRef => entity !== null);
+// Hard cap on how many room entities we ground into the validation prompt.
+// `getEntityDetails` returns EVERY room participant (it does not apply the
+// display cap `formatEntities` uses), so a busy Discord/Slack room could
+// otherwise flood the `room_entities:` block with hundreds/thousands of lines
+// and blow up TEXT_LARGE latency/context before a single candidate is
+// validated. We only need enough to resolve the candidate relationship
+// subject/object names to their room UUIDs, so we prioritize name-matched
+// participants and fill any remaining slots up to this bound.
+const MAX_GROUNDING_ROOM_ENTITIES = 12;
+
+/**
+ * Fetch the room's participant entities directly for facts-stage grounding.
+ *
+ * Previously this scraped the Stage-1 `state.data.providers.ENTITIES` entry,
+ * which was doubly broken: (1) it read `data.entities` but the ENTITIES
+ * provider publishes its payload under `data.entitiesData`, so the read
+ * silently returned `[]` on develop (#13196); and (2) after #13195 deferred the
+ * ENTITIES provider off the Stage-1 execution path, the state no longer carries
+ * an ENTITIES entry at all, so a key rename alone could not revive it. We now
+ * source the entities from the same `getEntityDetails({ runtime, roomId })` the
+ * provider itself uses — the authoritative room-participant list — so the
+ * grounding (`room_entities:` prompt block + persist-time name->UUID
+ * resolution) works regardless of provider execution order. The stage only runs
+ * on fact-bearing turns, and getEntityDetails is per-runtime cached, so the
+ * added read is bounded; we additionally cap the grounding set (see
+ * MAX_GROUNDING_ROOM_ENTITIES) so a large room can't flood the prompt.
+ *
+ * `candidateNames` are the subject/object strings from the candidate
+ * relationships; entities whose names match one of them are prioritized so the
+ * bounded set keeps the ones the model actually needs to resolve.
+ */
+async function fetchRoomEntities(
+	runtime: IAgentRuntime,
+	message: Memory,
+	candidateNames: readonly string[],
+): Promise<RoomEntityRef[]> {
+	const roomId = message.roomId;
+	if (!roomId) return [];
+	try {
+		const details = await getEntityDetails({ runtime, roomId });
+		if (!Array.isArray(details)) return [];
+		const refs = details
+			.map((entity): RoomEntityRef | null => {
+				if (!entity || typeof entity !== "object") return null;
+				const names = Array.isArray(entity.names)
+					? entity.names.filter(
+							(name: unknown): name is string => typeof name === "string",
+						)
+					: [];
+				const id =
+					typeof entity.id === "string" ? asUuidOrNull(entity.id) : null;
+				if (!id && names.length === 0) return null;
+				return { ...(id ? { id } : {}), names };
+			})
+			.filter((entity): entity is RoomEntityRef => entity !== null);
+		return boundGroundingEntities(refs, candidateNames);
+	} catch (error) {
+		// error-policy:J7 diagnostics-must-not-kill-the-loop — failing to load
+		// room entities disables name->UUID grounding for this turn (relationship
+		// endpoints fall back to non-room resolution, and the room_entities: block
+		// is omitted from the prompt). Degrade to no grounding, but surface the
+		// read failure via reportError so a broken getEntityDetails / room-entity
+		// pipeline reaches the agent rather than silently disappearing.
+		runtime.reportError("FactsAndRelationships.fetchRoomEntities", error, {
+			roomId,
+		});
+		return [];
+	}
+}
+
+/**
+ * Bound the room-entity grounding set to MAX_GROUNDING_ROOM_ENTITIES,
+ * prioritizing entities whose names match a candidate relationship
+ * subject/object (those are the ones the model needs to resolve to a UUID),
+ * then filling any remaining slots with other participants for context. Keeps
+ * the `room_entities:` prompt block small in busy rooms without dropping the
+ * entities that actually matter for this turn.
+ */
+function boundGroundingEntities(
+	refs: readonly RoomEntityRef[],
+	candidateNames: readonly string[],
+): RoomEntityRef[] {
+	if (refs.length <= MAX_GROUNDING_ROOM_ENTITIES) return [...refs];
+	const wanted = new Set(
+		candidateNames
+			.map((name) => normalizeForComparison(name))
+			.filter((name) => name.length > 0),
+	);
+	const matched: RoomEntityRef[] = [];
+	const rest: RoomEntityRef[] = [];
+	for (const ref of refs) {
+		const isMatch = ref.names.some((name) =>
+			wanted.has(normalizeForComparison(name)),
+		);
+		(isMatch ? matched : rest).push(ref);
+	}
+	return [...matched, ...rest].slice(0, MAX_GROUNDING_ROOM_ENTITIES);
 }
 
 function formatRoomEntityRef(entity: RoomEntityRef): string {
@@ -487,7 +569,7 @@ function extractText(raw: unknown): string {
 interface PersistArgs {
 	runtime: IAgentRuntime;
 	message: Memory;
-	state: State;
+	roomEntities: RoomEntityRef[];
 	parsed: FactsAndRelationshipsResult;
 }
 
@@ -495,7 +577,7 @@ async function persistFactsAndRelationships(
 	args: PersistArgs,
 ): Promise<{ facts: number; relationships: number }> {
 	const { runtime, message, parsed } = args;
-	const roomEntities = readRoomEntityRefs(args.state);
+	const roomEntities = args.roomEntities;
 	let factsWritten = 0;
 	let relationshipsWritten = 0;
 
