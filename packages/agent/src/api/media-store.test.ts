@@ -692,7 +692,9 @@ describe("deleteMediaFile fast-fail (#12265)", () => {
       // Real permission failure: a populated media/ dir stripped of write perms
       // makes unlink throw EACCES/EPERM (not ENOENT). root bypasses mode bits.
       const prev = process.env.ELIZA_STATE_DIR;
-      const roRoot = fs.mkdtempSync(path.join(os.tmpdir(), "media-store-del-ro-"));
+      const roRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), "media-store-del-ro-"),
+      );
       const roMedia = path.join(roRoot, "media");
       fs.mkdirSync(roMedia, { recursive: true });
       const name = `${"f".repeat(64)}.bin`;
