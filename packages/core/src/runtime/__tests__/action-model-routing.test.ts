@@ -14,12 +14,16 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { ActionModelClass } from "../../types/components";
-import type { ModelHandler } from "../../types/model";
+import type {
+	ModelHandler,
+	ModelRegistrationMetadata,
+} from "../../types/model";
 import { ModelType } from "../../types/model";
 import {
 	ACTION_MODEL_STRATEGIES,
 	executeChainWithFallback,
 	getActionModelStrategy,
+	isLocalHandler,
 	isLocalProvider,
 	isLowConfidence,
 	maybeReroute,
@@ -39,12 +43,14 @@ import {
 function makeHandler(
 	provider: string,
 	returnValue: unknown = "ok",
+	metadata?: ModelRegistrationMetadata,
 ): ModelHandler {
 	return {
 		handler: vi.fn(async () => returnValue),
 		provider,
 		priority: 0,
 		registrationOrder: Date.now(),
+		...(metadata ? { metadata } : {}),
 	};
 }
 
@@ -65,11 +71,20 @@ describe("ACTION_MODEL_STRATEGIES", () => {
 		}
 	});
 
-	it("LOCAL chain leads with a local-provider-filtered TEXT_SMALL step", () => {
+	it("LOCAL chain leads with a local-capability-filtered TEXT_SMALL step", () => {
 		const local = ACTION_MODEL_STRATEGIES.LOCAL;
 		const first = local.chain[0];
 		expect(first?.modelType).toBe(ModelType.TEXT_SMALL);
 		expect(first?.providerFilter).toBeDefined();
+		// The filter is capability-first: it selects a declared-local handler even
+		// when its provider name does not match the legacy heuristic.
+		expect(
+			first?.providerFilter?.({
+				provider: "custom-cloud-name",
+				metadata: { local: true },
+			}),
+		).toBe(true);
+		expect(first?.providerFilter?.({ provider: "anthropic" })).toBe(false);
 	});
 
 	it("LOCAL → TEXT_SMALL → TEXT_LARGE escalation order", () => {
@@ -113,6 +128,41 @@ describe("isLocalProvider", () => {
 	it("is case-insensitive", () => {
 		expect(isLocalProvider("OLLAMA")).toBe(true);
 		expect(isLocalProvider("LM-Studio")).toBe(true);
+	});
+});
+
+// ─── isLocalHandler (capability-first) ────────────────────────────────
+describe("isLocalHandler", () => {
+	it("prefers the declared metadata.local capability (true) over the name", () => {
+		// Cloud-looking name, but declared local → local.
+		expect(
+			isLocalHandler({ provider: "openai", metadata: { local: true } }),
+		).toBe(true);
+	});
+
+	it("prefers the declared metadata.local capability (false) over the name", () => {
+		// Local-looking name, but declared non-local → not local.
+		expect(
+			isLocalHandler({ provider: "ollama", metadata: { local: false } }),
+		).toBe(false);
+	});
+
+	it("falls back to the name heuristic when no capability is declared", () => {
+		expect(isLocalHandler({ provider: "ollama" })).toBe(true);
+		expect(isLocalHandler({ provider: "lm-studio" })).toBe(true);
+		expect(isLocalHandler({ provider: "anthropic" })).toBe(false);
+	});
+
+	it("falls back to the name heuristic when metadata omits the local flag", () => {
+		expect(
+			isLocalHandler({ provider: "ollama", metadata: { displayModel: "x" } }),
+		).toBe(true);
+		expect(
+			isLocalHandler({
+				provider: "anthropic",
+				metadata: { displayModel: "claude" },
+			}),
+		).toBe(false);
 	});
 });
 
@@ -192,7 +242,7 @@ describe("resolveStep", () => {
 		const resolved = resolveStep(
 			{
 				modelType: ModelType.TEXT_SMALL,
-				providerFilter: isLocalProvider,
+				providerFilter: isLocalHandler,
 			},
 			lookup,
 		);
@@ -204,10 +254,42 @@ describe("resolveStep", () => {
 		const lookup = makeRegistry({ [ModelType.TEXT_SMALL]: handlers });
 		expect(
 			resolveStep(
-				{ modelType: ModelType.TEXT_SMALL, providerFilter: isLocalProvider },
+				{ modelType: ModelType.TEXT_SMALL, providerFilter: isLocalHandler },
 				lookup,
 			),
 		).toBeUndefined();
+	});
+
+	it("providerFilter selects a capability-declared local handler over a name-mismatched cloud provider", () => {
+		// A provider whose NAME does not look local but that declares
+		// `metadata.local: true` must be selected by the LOCAL filter.
+		const handlers = [
+			makeHandler("openai"),
+			makeHandler("my-edge-runtime", "ok", { local: true }),
+			makeHandler("anthropic"),
+		];
+		const lookup = makeRegistry({ [ModelType.TEXT_SMALL]: handlers });
+		const resolved = resolveStep(
+			{ modelType: ModelType.TEXT_SMALL, providerFilter: isLocalHandler },
+			lookup,
+		);
+		expect(resolved?.provider).toBe("my-edge-runtime");
+	});
+
+	it("providerFilter respects an explicit metadata.local:false even for a local-looking name", () => {
+		// `ollama` matches the name heuristic, but an explicit false capability
+		// declaration is authoritative and must exclude it.
+		const handlers = [
+			makeHandler("ollama", "ok", { local: false }),
+			makeHandler("lm-studio"),
+		];
+		const lookup = makeRegistry({ [ModelType.TEXT_SMALL]: handlers });
+		const resolved = resolveStep(
+			{ modelType: ModelType.TEXT_SMALL, providerFilter: isLocalHandler },
+			lookup,
+		);
+		// lm-studio (no flag) still matches via the name heuristic fallback.
+		expect(resolved?.provider).toBe("lm-studio");
 	});
 });
 
@@ -238,6 +320,22 @@ describe("resolveChain", () => {
 		});
 		const chain = resolveChain(ACTION_MODEL_STRATEGIES.LOCAL, lookup);
 		expect(chain.map((r) => r.provider)).toEqual(["openai", "anthropic"]);
+	});
+
+	it("LOCAL chain: routes to a capability-declared local handler even with a cloud-like name", () => {
+		const lookup = makeRegistry({
+			[ModelType.TEXT_SMALL]: [
+				makeHandler("openai"),
+				makeHandler("acme-inference", "ok", { local: true }),
+			],
+			[ModelType.TEXT_LARGE]: [makeHandler("anthropic")],
+		});
+		const chain = resolveChain(ACTION_MODEL_STRATEGIES.LOCAL, lookup);
+		expect(chain.map((r) => r.provider)).toEqual([
+			"acme-inference", // capability-local TEXT_SMALL
+			"openai", // unfiltered TEXT_SMALL
+			"anthropic", // TEXT_LARGE
+		]);
 	});
 
 	it("LOCAL chain: does not repeat the same provider when the local handler is already first", () => {

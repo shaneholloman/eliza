@@ -17,6 +17,7 @@
  * comment if a provider changes their rate card.
  */
 import { logger } from "../../logger";
+import { isLocalProvider as isLocalProviderName } from "../../runtime/action-model-routing";
 import { readEnv } from "../../utils/read-env";
 import type {
 	TokenUsageForCost,
@@ -524,17 +525,26 @@ export function lookupModelContextWindow(
 }
 
 /**
- * Provider tags that emit cost 0 with no warning when no model entry is
- * found. Local inference is a real zero, not a missing price — per
- * AGENTS.md: "cost=0 for local is a real zero (not 'missing'). No fallback
- * that masks."
+ * Whether a provider counts as local-tier for pricing (cost 0 with no
+ * missing-price warning). Local inference is a real zero, not a missing price
+ * — per AGENTS.md: "cost=0 for local is a real zero (not 'missing'). No
+ * fallback that masks."
+ *
+ * Delegates to the shared name heuristic in action-model-routing so pricing no
+ * longer maintains its own drifting provider list (see #12635 / #12090 item 7).
+ * When a caller has the provider-declared `local` capability flag it should
+ * pass it via `localCapability`, which is authoritative over the name guess.
  */
-const LOCAL_PROVIDERS: ReadonlySet<ProviderName> = new Set<ProviderName>([
-	"ollama",
-	"lm-studio",
-	"llama.cpp",
-	"local",
-]);
+function isLocalTierProvider(
+	provider: string | undefined,
+	localCapability?: boolean,
+): boolean {
+	if (typeof localCapability === "boolean") {
+		return localCapability;
+	}
+	if (!provider) return false;
+	return isLocalProviderName(provider);
+}
 
 /**
  * Result of a price lookup. Carries the matched table key so callers can
@@ -600,14 +610,18 @@ export function computeCallCostUsd(
 	usage: TokenUsageForCost | undefined,
 	options: {
 		provider?: string;
+		/**
+		 * Provider-declared `local` capability (`ModelRegistrationMetadata.local`),
+		 * when the caller has it. Authoritative over the provider-name heuristic.
+		 */
+		local?: boolean;
 		logger?: TrajectoryRuntimeLogger;
 	} = {},
 ): number {
 	if (!usage) return 0;
 
 	const provider = options.provider?.toLowerCase().trim();
-	const isLocalProvider =
-		provider !== undefined && LOCAL_PROVIDERS.has(provider as ProviderName);
+	const isLocalProvider = isLocalTierProvider(provider, options.local);
 
 	const lookup = lookupModelPrice(modelName);
 	if (!lookup) {
@@ -646,7 +660,9 @@ export function computeCallCostUsd(
  * Used by the recorder to suppress the missing-model warning when a user
  * runs entirely on local hardware.
  */
-export function isLocalProvider(provider: string | undefined): boolean {
-	if (!provider) return false;
-	return LOCAL_PROVIDERS.has(provider.toLowerCase().trim() as ProviderName);
+export function isLocalProvider(
+	provider: string | undefined,
+	localCapability?: boolean,
+): boolean {
+	return isLocalTierProvider(provider?.toLowerCase().trim(), localCapability);
 }

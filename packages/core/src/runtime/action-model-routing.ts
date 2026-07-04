@@ -29,23 +29,47 @@
 
 import { LOCAL_MODEL_PROVIDERS } from "../constants/secrets";
 import type { ActionModelClass } from "../types/components";
-import type { ModelHandler } from "../types/model";
+import type { ModelHandler, ModelRegistrationMetadata } from "../types/model";
 import { ModelType } from "../types/model";
+
+/**
+ * Minimal capability view of a model registration, used by routing predicates.
+ *
+ * Routing decisions are driven by provider-declared capability metadata
+ * ({@link ModelRegistrationMetadata}) first, with the provider *name* available
+ * only as an explicitly-tested fallback for registrations that have not yet
+ * adopted the capability flags. Accepting this view (rather than a bare name
+ * string) is what lets {@link isLocalHandler} consult the declared contract
+ * instead of duck-typing the provider name.
+ */
+export interface ModelCapabilityView {
+	readonly provider: string;
+	readonly metadata?: ModelRegistrationMetadata;
+}
 
 /**
  * One step in a fallback chain.
  *
  * `modelType` is the model registration key to look up (one of `ModelType.*`).
  *
- * `providerFilter` is an optional predicate over the registered provider name.
- * For the `LOCAL` strategy this restricts resolution to local-provider
- * registrations (Ollama, LM Studio, MLX, llama.cpp, …) so that a `LOCAL`
- * request never silently calls a cloud provider that also happens to be
- * registered for `TEXT_SMALL`.
+ * `providerFilter` is an optional predicate over the registered provider's
+ * capability view. For the `LOCAL` strategy this restricts resolution to
+ * local-provider registrations (Ollama, LM Studio, MLX, llama.cpp, etc.) so
+ * that a `LOCAL` request never silently calls a cloud provider that also
+ * happens to be registered for `TEXT_SMALL`.
  */
 export interface ActionModelRoutingStep {
 	readonly modelType: string;
-	readonly providerFilter?: (provider: string) => boolean;
+	/**
+	 * Optional predicate over a candidate registration. Receives the full
+	 * capability view ({@link ModelCapabilityView}) so the filter can consult
+	 * provider-declared metadata (e.g. `metadata.local`) rather than substring-
+	 * matching the provider name. For the `LOCAL` strategy this is
+	 * {@link isLocalHandler}, which prefers the declared `local` capability and
+	 * falls back to the {@link isLocalProvider} name heuristic only for providers
+	 * that have not adopted the flag.
+	 */
+	readonly providerFilter?: (candidate: ModelCapabilityView) => boolean;
 }
 
 /**
@@ -64,21 +88,29 @@ export interface ActionModelRoutingStrategy {
 }
 
 /**
- * Predicate: does this provider name look like a local-inference provider?
+ * Name-only heuristic: does this provider *name* look like a local-inference
+ * provider?
  *
- * Currently sourced from {@link LOCAL_MODEL_PROVIDERS} (single source of truth
- * for the local providers list, also used by the secrets layer). Common
- * local-OpenAI-compatible servers (LM Studio, MLX, llama.cpp, vLLM running
- * on `localhost`) are accepted by substring match so plugins that register
- * under names like `"lm-studio"` or `"mlx-lm"` still resolve.
+ * @deprecated for classification decisions. Prefer {@link isLocalHandler},
+ * which consumes the provider-declared `metadata.local` capability and only
+ * falls back to this name heuristic for registrations that have not adopted the
+ * flag yet. This function is retained as that explicitly-tested fallback (and
+ * for the runtime streaming gate, which keys off the name for the
+ * `eliza-router` special case). It is intentionally narrow.
+ *
+ * Sourced from {@link LOCAL_MODEL_PROVIDERS} (the single source of truth for
+ * the canonical local providers list, also used by the secrets and pricing
+ * layers) plus a substring pass for common local-OpenAI-compatible servers
+ * (LM Studio, MLX, llama.cpp) so plugins registered under names like
+ * `"lm-studio"` or `"mlx-lm"` still resolve when they omit the capability flag.
  */
 export function isLocalProvider(provider: string): boolean {
 	const normalized = provider.toLowerCase();
 	if ((LOCAL_MODEL_PROVIDERS as readonly string[]).includes(normalized)) {
 		return true;
 	}
-	// Heuristic for plugins not in the canonical list yet. The list above is
-	// the authoritative gate when present; this only opens the door for
+	// Heuristic for plugins not declaring `metadata.local` yet. The list above
+	// is the authoritative gate when present; this only opens the door for
 	// well-known local-server families. Keep narrow.
 	return (
 		normalized.includes("ollama") ||
@@ -96,6 +128,28 @@ export function isLocalProvider(provider: string): boolean {
 }
 
 /**
+ * Predicate: is this registration a local-inference target?
+ *
+ * Capability-first classification. Precedence:
+ *   1. If the provider declared `metadata.local` explicitly (`true`/`false`),
+ *      that verdict wins — the owner metadata is authoritative.
+ *   2. Otherwise fall back to the {@link isLocalProvider} name heuristic for
+ *      providers that have not adopted the capability flag yet.
+ *
+ * This is the predicate the `LOCAL` routing strategy uses so a `LOCAL` request
+ * never silently resolves to a cloud provider, and so providers can opt out of
+ * the name heuristic (or opt in without matching a name family) by declaring
+ * the flag.
+ */
+export function isLocalHandler(candidate: ModelCapabilityView): boolean {
+	const declared = candidate.metadata?.local;
+	if (typeof declared === "boolean") {
+		return declared;
+	}
+	return isLocalProvider(candidate.provider);
+}
+
+/**
  * The strategy registry. Keyed by {@link ActionModelClass}.
  *
  * To add a new class, add it to the {@link ActionModelClass} union in
@@ -107,7 +161,7 @@ export const ACTION_MODEL_STRATEGIES: Readonly<
 > = {
 	LOCAL: {
 		chain: [
-			{ modelType: ModelType.TEXT_SMALL, providerFilter: isLocalProvider },
+			{ modelType: ModelType.TEXT_SMALL, providerFilter: isLocalHandler },
 			{ modelType: ModelType.TEXT_SMALL },
 			{ modelType: ModelType.TEXT_LARGE },
 		],
@@ -213,7 +267,7 @@ export function resolveStep(
 	}
 	const providerFilter = step.providerFilter;
 	const match = providerFilter
-		? handlers.find((h) => providerFilter(h.provider))
+		? handlers.find((h) => providerFilter(h))
 		: handlers[0];
 	if (!match) {
 		return undefined;
@@ -243,7 +297,7 @@ export function resolveChain(
 			continue;
 		}
 		for (const handler of handlers) {
-			if (step.providerFilter && !step.providerFilter(handler.provider)) {
+			if (step.providerFilter && !step.providerFilter(handler)) {
 				continue;
 			}
 			const key = `${step.modelType}:${handler.provider}`;
