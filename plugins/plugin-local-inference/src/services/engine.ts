@@ -1269,24 +1269,21 @@ export class LocalInferenceEngine {
 			request: import("./voice/turn-controller").VoiceGenerateRequest,
 		) => Promise<import("./voice/turn-controller").VoiceTurnOutcome>;
 		/**
-		 * Semantic turn detector layered with VAD/STT. Defaults to the local
-		 * LiveKit ONNX model when installed, otherwise the deterministic heuristic.
-		 * Pass `false` only for tests/manual troubleshooting.
+		 * Semantic turn detector layered with VAD/STT. Defaults to the fused
+		 * in-process scorer when the active FFI supports it, then the
+		 * deterministic heuristic. Pass `false` only for tests/manual
+		 * troubleshooting.
 		 */
 		turnDetector?: import("./voice/eot-classifier").EotClassifier | false;
-		/** Optional local LiveKit turn-detector directory override. */
-		turnDetectorModelDir?: string;
 		/**
 		 * Use the already-loaded eliza-1 text model as the EOT classifier — see
-		 * `voice/eliza1-eot-scorer.ts`. When set, the runtime skips the
-		 * separate LiveKit/Turnsense ONNX and reads P(`<end_of_turn>`) directly
-		 * off the live model.
+		 * `voice/eliza1-eot-scorer.ts`. When set, the runtime reads
+		 * P(`<end_of_turn>`) directly off the live model.
 		 *
 		 * `"auto"` (default): use eliza-1 EOT when `ELIZA_VOICE_EOT_BACKEND=eliza-1`
-		 * or when no bundled LiveKit ONNX is resolvable; otherwise fall
-		 * through to the existing LiveKit path. `true` forces eliza-1 EOT
-		 * (throws if the active backend is not in-process). `false` forces
-		 * the historical LiveKit path.
+		 * or otherwise prefer the fused scorer. `true` forces eliza-1 EOT
+		 * (throws if the active backend is not in-process). `false` skips
+		 * eliza-1 and uses fused EOT or heuristic fallback.
 		 */
 		useEliza1Eot?: boolean | "auto";
 		/**
@@ -1361,14 +1358,12 @@ export class LocalInferenceEngine {
 			{ VoiceTurnController },
 			{ InMemoryAudioSink },
 			eotMod,
-			eotGgmlMod,
 		] = await Promise.all([
 			import("./voice/mic-source"),
 			import("./voice/vad"),
 			import("./voice/turn-controller"),
 			import("./voice/ring-buffer"),
 			import("./voice/eot-classifier"),
-			import("./voice/eot-classifier-ggml"),
 		]);
 
 		const micSource = opts.micSource ?? new DesktopMicSource();
@@ -1438,18 +1433,6 @@ export class LocalInferenceEngine {
 			// unavailable (the fused build is the sole on-device ASR runtime). Gated
 			// on the VAD so silent frames aren't decoded.
 			const transcriber = bridge.createStreamingTranscriber({ vad });
-			// Voice Wave 2 (2026-05-14): tier-aware turn-detector revision selection.
-			// `2b` (the entry tier) ships the ~66 MB EN-only SmolLM2-135M distill
-			// (`v1.2.2-en`); `4b`+ ship the ~396 MB multilingual pruned
-			// semantic detector (`v0.4.1-intl`). The on-disk layout is per-tier so the
-			// bundle dir already contains the matching ONNX — `revision` here is a
-			// telemetry label (the upstream tag the bundle was staged from). When no
-			// active bundle is resolvable we omit the hint and the resolver falls
-			// back to the upstream-default filename order.
-			const activeTier = this.activeEliza1Bundle?.tierId;
-			const tierRevision = activeTier
-				? eotMod.turnDetectorRevisionForTier(activeTier)
-				: undefined;
 			const eliza1EotSelected = resolveEliza1EotSelection(
 				opts.useEliza1Eot,
 				opts.eliza1EotLoraPath,
@@ -1464,31 +1447,18 @@ export class LocalInferenceEngine {
 			if (eliza1EotSelected === "force" && !eliza1EotClassifier) {
 				throw new VoiceStartupError(
 					"missing-turn-detector",
-					"[voice] useEliza1Eot:true requested but the in-process Eliza-1 EOT scorer is unavailable on the FFI runtime — use the GGUF turn detector by setting useEliza1Eot:false.",
+					"[voice] useEliza1Eot:true requested but the in-process Eliza-1 EOT scorer is unavailable on the FFI runtime — set useEliza1Eot:false to use fused EOT or heuristic fallback.",
 				);
 			}
-			// Resolver order: prefer the fused composite EOT (v11), then the legacy
-			// in-process Eliza-1 scorer + GGUF turn detector (both null on the FFI
-			// runtime — they needed node-llama controlledEvaluate), then the
-			// heuristic. The ONNX path was removed.
-			const ggmlTurnDetector =
-				opts.turnDetector === false || fusedEot
-					? undefined
-					: await eotGgmlMod
-							.createBundledLiveKitGgmlTurnDetector({
-								...(opts.turnDetectorModelDir
-									? { modelDir: opts.turnDetectorModelDir }
-									: {}),
-								...(tierRevision ? { revision: tierRevision } : {}),
-							})
-							.catch(() => null);
+			// Resolver order: prefer the fused composite EOT (v11), then the
+			// in-process Eliza-1 scorer when explicitly enabled, then the heuristic.
+			// The dead GGUF/controlledEvaluate fallback was removed.
 			const turnDetector =
 				opts.turnDetector === false
 					? undefined
 					: (opts.turnDetector ??
 						fusedEot ??
 						eliza1EotClassifier ??
-						ggmlTurnDetector ??
 						new eotMod.HeuristicEotClassifier());
 			if (turnDetector) {
 				try {
@@ -2127,14 +2097,13 @@ export class LocalInferenceEngine {
  *   1. Explicit `opts.useEliza1Eot` (`true` → `"force"`; `false` → `"off"`;
  *      `"auto"` or unset → step 2).
  *   2. `ELIZA_VOICE_EOT_BACKEND` env var (`eliza-1` → `"force"`, anything
- *      else like `livekit`/`turnsense`/`heuristic` → `"off"`; unset →
- *      step 3).
+ *      else like `heuristic` → `"off"`; unset → step 3).
  *   3. Default `"prefer"` — we try eliza-1 first when available and fall
- *      back to LiveKit/Heuristic when the in-process backend is unavailable.
+ *      back to fused/heuristic EOT when the in-process backend is unavailable.
  *
  * Returns:
  *   - `"force"`  — must build; throw if preconditions fail.
- *   - `"prefer"` — try; on null, fall through to the LiveKit chain.
+ *   - `"prefer"` — try; on null, fall through to the fused/heuristic chain.
  *   - `"off"`    — skip eliza-1 entirely.
  */
 function resolveEliza1EotSelection(

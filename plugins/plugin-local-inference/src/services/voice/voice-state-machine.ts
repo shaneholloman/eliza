@@ -58,8 +58,8 @@ import type {
 import type { ContextPartial } from "./eager-context-builder";
 import {
 	EOT_COMMIT_SILENCE_MS,
-	EOT_COMMIT_THRESHOLD,
 	EOT_HANGOVER_EXTENSION_MS,
+	EOT_HEURISTIC_COMMIT_THRESHOLD,
 	EOT_MID_CLAUSE_THRESHOLD,
 	EOT_TENTATIVE_SILENCE_MS,
 	EOT_TENTATIVE_THRESHOLD,
@@ -560,7 +560,7 @@ export class VoiceStateMachine {
 	 *
 	 * When an `eotClassifier` is configured, scores the text and applies:
 	 *
-	 *   P ≥ EOT_COMMIT_THRESHOLD  AND silence ≥ EOT_COMMIT_SILENCE_MS
+	 *   P ≥ classifier commit threshold  AND silence ≥ EOT_COMMIT_SILENCE_MS
 	 *     → behave as `speech-end` (commit immediately, skip remaining hangover)
 	 *
 	 *   P ≥ EOT_TENTATIVE_THRESHOLD AND silence ≥ EOT_TENTATIVE_SILENCE_MS
@@ -586,15 +586,14 @@ export class VoiceStateMachine {
 		const pDone = await this.checkEot(text);
 		this.latestEotProb = pDone;
 		this.events.onEotScore?.(this.getTurnId(), text, pDone);
+		const commitThreshold =
+			this.eotClassifier.commitThreshold ?? EOT_HEURISTIC_COMMIT_THRESHOLD;
 
 		// Re-check state after async classifier — it may have changed.
 		const stateNow = this.currentState();
 		if (!validStates.includes(stateNow)) return;
 
-		if (
-			pDone >= EOT_COMMIT_THRESHOLD &&
-			silenceSinceMs >= EOT_COMMIT_SILENCE_MS
-		) {
+		if (pDone >= commitThreshold && silenceSinceMs >= EOT_COMMIT_SILENCE_MS) {
 			// Treat as speech-end: commit immediately.
 			// Use the partial as the final transcript (streaming ASR may not have
 			// finalized yet; callers that have the final transcript should prefer
