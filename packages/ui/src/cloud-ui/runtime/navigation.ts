@@ -27,6 +27,8 @@ function isExternalHref(href: string): boolean {
     const url = new URL(href, window.location.origin);
     return url.origin !== window.location.origin;
   } catch {
+    // error-policy:J3 unparseable href cannot be proven external — keep it on
+    // the in-app router, which rejects unroutable paths itself.
     return false;
   }
 }
@@ -38,8 +40,8 @@ function normalizeInternalHref(href: string): string {
       return `${url.pathname}${url.search}${url.hash}`;
     }
   } catch {
-    // error-policy:J3 unparseable href is untrusted input → return it verbatim
-    // for the caller to route; never fabricate a normalized path from garbage.
+    // error-policy:J3 unparseable href passes through unchanged for the
+    // router to reject; normalization is best-effort sugar.
   }
   return href;
 }
