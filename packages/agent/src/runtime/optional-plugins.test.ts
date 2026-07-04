@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   OPTIONAL_STATIC_PLUGIN_PACKAGES,
+  OPTIONAL_STATIC_PLUGIN_REGISTRATIONS,
   renderOptionalPluginImportsModule,
   UNBUNDLED_OPTIONAL_PLUGINS,
 } from "./optional-plugins.ts";
@@ -41,13 +42,15 @@ function generatedImporterEntries(): { key: string; specifier: string }[] {
 
 /**
  * Optional plugin packages the descriptor table (CORE_STATIC_PLUGIN_REGISTRATIONS
- * in eliza.ts) loads via getOptionalPlugin(...). Scanned from source so the
- * check needs no heavy import of eliza.ts.
+ * in eliza.ts) registers in the deferred phase. The descriptor table is now
+ * DERIVED from OPTIONAL_STATIC_PLUGIN_REGISTRATIONS (the single source of truth)
+ * rather than hand-listing `getOptionalPlugin("pkg")` literals (#12089 item 3),
+ * so this reads that source directly. A dedicated grep guard in
+ * core-static-plugin-registrations.test.ts proves eliza.ts no longer hand-mirrors
+ * the list; here we assert the manifest/importer consistency built on top of it.
  */
 function descriptorTableOptionalPackages(): string[] {
-  const source = readSource("eliza.ts");
-  const matches = source.matchAll(/getOptionalPlugin\(\s*"([^"]+)"\s*\)/g);
-  return [...new Set([...matches].map((m) => m[1]))];
+  return [...new Set(OPTIONAL_STATIC_PLUGIN_REGISTRATIONS)];
 }
 
 describe("optional-plugin literal-import codegen", () => {

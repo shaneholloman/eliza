@@ -39,6 +39,10 @@ import { startMemoryWatchdog } from "./memory-watchdog.ts";
 import { resolveConfigEnvForProcess } from "./operations/vault-bridge.ts";
 import { OPTIONAL_PLUGIN_IMPORTERS } from "./optional-plugin-imports.generated.ts";
 import {
+  OPTIONAL_STATIC_PLUGIN_OVERRIDES,
+  OPTIONAL_STATIC_PLUGIN_REGISTRATIONS,
+} from "./optional-plugins.ts";
+import {
   isWorkspacePluginSourceFallbackAllowed,
   type PluginResolutionPhase,
   resolvePlugins,
@@ -415,129 +419,76 @@ type CoreStaticPluginRegistration = {
   load: () => Promise<unknown>;
 };
 
+// Blocking-phase loaders. These two plugins each need a bespoke loader (the
+// required SQL adapter with a workspace-source fallback; the local-inference
+// pre-init hook), so they are the only descriptor rows whose `load` is not the
+// generic optional loader. Their membership + required-ness is derived from
+// BLOCKING_CORE_PLUGINS (the single source of truth for the blocking set) rather
+// than re-listed here — buildBlockingStaticRegistrations() below asserts the two
+// stay in lockstep so a change to BLOCKING_CORE_PLUGINS can't silently orphan a
+// loader or register a plugin with no loader.
+const BLOCKING_STATIC_PLUGIN_LOADERS: Readonly<
+  Record<string, { required: boolean; load: () => Promise<unknown> }>
+> = {
+  "@elizaos/plugin-sql": { required: true, load: () => getPluginSql() },
+  "@elizaos/plugin-local-inference": {
+    required: false,
+    load: () => getPluginLocalEmbedding(),
+  },
+};
+
+function buildBlockingStaticRegistrations(): CoreStaticPluginRegistration[] {
+  return BLOCKING_CORE_PLUGINS.map((packageName) => {
+    const loader = BLOCKING_STATIC_PLUGIN_LOADERS[packageName];
+    if (!loader) {
+      // Fail loud rather than silently skip: a plugin declared blocking with no
+      // bespoke loader here would otherwise never register, stranding the
+      // runtime's readiness dependency (this is exactly the parallel-list drift
+      // #12089 item 3 flagged).
+      throw new Error(
+        `[boot] BLOCKING_CORE_PLUGINS lists ${packageName} but no blocking static loader is declared for it in eliza.ts`,
+      );
+    }
+    return {
+      packageName,
+      phase: "blocking" as const,
+      required: loader.required,
+      load: loader.load,
+    };
+  });
+}
+
+function buildDeferredStaticRegistrations(): CoreStaticPluginRegistration[] {
+  // Derived from the single optional-plugin source of truth
+  // (OPTIONAL_STATIC_PLUGIN_REGISTRATIONS) so the runtime descriptor table and
+  // the bundle-manifest layer can no longer drift into two parallel lists
+  // (#12089 item 3). Per-plugin variance (short-name registry key, mobile skip)
+  // comes from the declared OPTIONAL_STATIC_PLUGIN_OVERRIDES beside that list,
+  // not from hand-written rows here.
+  return OPTIONAL_STATIC_PLUGIN_REGISTRATIONS.map((packageName) => {
+    const override = OPTIONAL_STATIC_PLUGIN_OVERRIDES[packageName];
+    const load = override?.skipOnMobile
+      ? () =>
+          isMobilePlatform()
+            ? Promise.resolve(null)
+            : getOptionalPlugin(packageName)
+      : () => getOptionalPlugin(packageName);
+    return {
+      packageName,
+      ...(override?.registryName
+        ? { registryName: override.registryName }
+        : {}),
+      phase: "deferred" as const,
+      required: false,
+      load,
+    };
+  });
+}
+
 const CORE_STATIC_PLUGIN_REGISTRATIONS: readonly CoreStaticPluginRegistration[] =
   [
-    {
-      packageName: "@elizaos/plugin-sql",
-      phase: "blocking",
-      required: true,
-      load: () => getPluginSql(),
-    },
-    {
-      packageName: "@elizaos/plugin-local-inference",
-      phase: "blocking",
-      required: false,
-      load: () => getPluginLocalEmbedding(),
-    },
-    {
-      packageName: "@elizaos/plugin-agent-orchestrator",
-      registryName: "agent-orchestrator",
-      phase: "deferred",
-      required: false,
-      load: () => getOptionalPlugin("@elizaos/plugin-agent-orchestrator"),
-    },
-    {
-      packageName: "@elizaos/plugin-task-coordinator",
-      phase: "deferred",
-      required: false,
-      load: () => getOptionalPlugin("@elizaos/plugin-task-coordinator"),
-    },
-    {
-      packageName: "@elizaos/plugin-shell",
-      phase: "deferred",
-      required: false,
-      load: () => getOptionalPlugin("@elizaos/plugin-shell"),
-    },
-    {
-      packageName: "@elizaos/plugin-coding-tools",
-      phase: "deferred",
-      required: false,
-      load: () => getOptionalPlugin("@elizaos/plugin-coding-tools"),
-    },
-    {
-      // Opt-in only: dormant unless a character lists @elizaos/plugin-pty (no
-      // autoEnable). Registers PTY_SERVICE so the web terminal can drive a real
-      // interactive CLI (eliza-code on Eliza Cloud/cerebras).
-      packageName: "@elizaos/plugin-pty",
-      phase: "deferred",
-      required: false,
-      load: () => getOptionalPlugin("@elizaos/plugin-pty"),
-    },
-    {
-      // Auto-on only when the host has the birdclaw CLI or an existing
-      // ~/.birdclaw data root (see birdclawRequested in plugin-collector.ts).
-      // Registers BIRDCLAW_SERVICE + the local Twitter/X archive view/action.
-      packageName: "@elizaos/plugin-birdclaw",
-      phase: "deferred",
-      required: false,
-      load: () => getOptionalPlugin("@elizaos/plugin-birdclaw"),
-    },
-    {
-      packageName: "@elizaos/plugin-commands",
-      phase: "deferred",
-      required: false,
-      load: () => getOptionalPlugin("@elizaos/plugin-commands"),
-    },
-    {
-      packageName: "@elizaos/plugin-video",
-      phase: "deferred",
-      required: false,
-      load: () => getOptionalPlugin("@elizaos/plugin-video"),
-    },
-    {
-      // MOBILE_CORE_PLUGINS lists plugin-vision (screen understanding on
-      // mobile — GET_SCREEN, the renderer-pulled screen-capture bridge, and
-      // the #11111 ML Kit OCR bridge routes), but without a static
-      // registration the mobile agent bundle could never resolve it: the
-      // renderer OCR poller polled /api/vision/ocr-requests into a 404
-      // forever (verified live on emulator-5554).
-      packageName: "@elizaos/plugin-vision",
-      phase: "deferred",
-      required: false,
-      load: () => getOptionalPlugin("@elizaos/plugin-vision"),
-    },
-    {
-      packageName: "@elizaos/plugin-background-runner",
-      phase: "deferred",
-      required: false,
-      load: () => getOptionalPlugin("@elizaos/plugin-background-runner"),
-    },
-    {
-      packageName: "@elizaos/plugin-elizacloud",
-      phase: "deferred",
-      required: false,
-      load: () => getOptionalPlugin("@elizaos/plugin-elizacloud"),
-    },
-    {
-      packageName: "@elizaos/plugin-ollama",
-      phase: "deferred",
-      required: false,
-      load: () => getOptionalPlugin("@elizaos/plugin-ollama"),
-    },
-    {
-      packageName: "@elizaos/plugin-anthropic",
-      phase: "deferred",
-      required: false,
-      load: () => getOptionalPlugin("@elizaos/plugin-anthropic"),
-    },
-    {
-      packageName: "@elizaos/plugin-openai",
-      phase: "deferred",
-      required: false,
-      load: () => getOptionalPlugin("@elizaos/plugin-openai"),
-    },
-    {
-      packageName: "@elizaos/plugin-gitpathologist",
-      phase: "deferred",
-      required: false,
-      // Not in the mobile bundle — attempting the import there hangs the full
-      // 30s deferred-plugin timeout before being skipped. Skip it up front on
-      // android/ios (it's a desktop dev tool, already gated in plugin-collector).
-      load: () =>
-        isMobilePlatform()
-          ? Promise.resolve(null)
-          : getOptionalPlugin("@elizaos/plugin-gitpathologist"),
-    },
+    ...buildBlockingStaticRegistrations(),
+    ...buildDeferredStaticRegistrations(),
   ];
 
 let _blockingStaticPluginsRegistered = false;
