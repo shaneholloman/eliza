@@ -12,7 +12,7 @@
 import type http from "node:http";
 import type { Route } from "@elizaos/core";
 import { sendJsonError } from "../../api/response";
-import { findRouteModeRule } from "./route-mode-matrix";
+import { findProtectedNamespace, findRouteModeRule } from "./route-mode-matrix";
 import { getRuntimeModeSnapshot, type RuntimeMode } from "./runtime-mode";
 
 export interface ModeGateOutcome {
@@ -87,6 +87,41 @@ export function findRegisteredRouteModeRule(args: {
   return null;
 }
 
+/**
+ * Pure decision core: given the resolved runtime mode and request, decide
+ * whether the mode gate hides the route. Exported so the fail-closed drift
+ * logic (arch-audit #12633) can be unit-tested without stubbing the
+ * disk-backed mode snapshot.
+ *
+ * Returns `{ hidden: true }` when the caller must respond 404 (hidden), or
+ * `{ hidden: false }` to pass through to the handler chain.
+ */
+export function evaluateRouteModeGate(args: {
+  pathname: string;
+  method: string;
+  mode: RuntimeMode;
+  runtime?: RouteModeRuntimeLike | null;
+}): { hidden: boolean } {
+  const method = args.method.toUpperCase();
+  const rule =
+    findRegisteredRouteModeRule({
+      runtime: args.runtime,
+      pathname: args.pathname,
+      method,
+    }) ?? findRouteModeRule(args.pathname, method);
+
+  if (rule) {
+    return { hidden: !rule.modes.includes(args.mode) };
+  }
+
+  // No explicit rule (neither handler-declared nor static matrix). Fail
+  // CLOSED when the path sits inside an owner-declared mode-sensitive
+  // namespace: a forgotten sub-route under a gated prefix must hide, never
+  // leak in every mode (arch-audit #12633). Everything outside a protected
+  // namespace default-allows — the matrix is a targeted gate, not an ACL.
+  return { hidden: findProtectedNamespace(args.pathname) !== null };
+}
+
 export function applyRouteModeGuard(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -96,22 +131,19 @@ export function applyRouteModeGuard(
   const method = (req.method ?? "GET").toUpperCase();
   const snapshot = getRuntimeModeSnapshot();
 
-  const rule =
-    findRegisteredRouteModeRule({
-      runtime,
-      pathname: url.pathname,
-      method,
-    }) ?? findRouteModeRule(url.pathname, method);
-  if (!rule) {
-    return { handled: false, mode: snapshot.mode };
+  const { hidden } = evaluateRouteModeGate({
+    pathname: url.pathname,
+    method,
+    mode: snapshot.mode,
+    runtime,
+  });
+
+  if (hidden) {
+    // Hidden — not forbidden. Don't include the mode or rule reason in the
+    // body; cloud mode must not be able to probe local-inference state.
+    sendJsonError(res, 404, "Not found");
+    return { handled: true, mode: snapshot.mode };
   }
 
-  if (rule.modes.includes(snapshot.mode)) {
-    return { handled: false, mode: snapshot.mode };
-  }
-
-  // Hidden — not forbidden. Don't include the mode or rule reason in the
-  // body; cloud mode must not be able to probe local-inference state.
-  sendJsonError(res, 404, "Not found");
-  return { handled: true, mode: snapshot.mode };
+  return { handled: false, mode: snapshot.mode };
 }
