@@ -602,10 +602,10 @@ export function listMediaFiles(): MediaFileInfo[] {
  */
 export function deleteMediaFile(fileName: string): boolean {
   if (!MEDIA_FILE_NAME.test(fileName)) return false;
-  const dir = mediaDir();
-  const filePath = path.join(dir, fileName);
-  if (path.dirname(filePath) !== dir) return false;
   try {
+    const dir = mediaDir();
+    const filePath = path.join(dir, fileName);
+    if (path.dirname(filePath) !== dir) return false;
     fs.unlinkSync(filePath);
     return true;
   } catch (err) {
