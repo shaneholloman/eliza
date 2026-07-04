@@ -5,7 +5,7 @@
 // asserts the failure reaches the user-visible `error` state instead of being
 // swallowed into a false "idle" (issue #12267).
 
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getWhatsAppStatus = vi.fn();
