@@ -219,6 +219,20 @@ const appRuntimeHookSchema = z.object({
   exportName: z.string().min(1),
 });
 
+// An app's optional PRE-READY boot hook: a named export
+// `(runtime) => void | Promise<void>` the host invokes once, at a fixed point in
+// `repairRuntimeAfterBoot` BEFORE the runtime is marked ready, to install
+// handlers / warm subsystems that must exist before the first turn (e.g. a local
+// model handler). Parallel to `runtimeHook`, but pre-ready instead of post-ready:
+// the host resolves it by data (naming no plugin) and drains it through the
+// generic boot-hook registry. The hook owns its own applicability gating
+// (platform/config checks) — it is a no-op when it does not apply. `exportName`
+// is required (a hook must name its function).
+const appBootHookSchema = z.object({
+  specifier: packageRoutePluginSpecifierSchema,
+  exportName: z.string().min(1),
+});
+
 export const appLaunchSchema = z.object({
   type: z.enum(["internal-tab", "overlay", "server-launch"]),
   target: z.string().optional(),
@@ -232,6 +246,7 @@ export const appLaunchSchema = z.object({
   curatedSlug: z.string().optional(),
   routePlugin: appRoutePluginSchema.optional(),
   runtimeHook: appRuntimeHookSchema.optional(),
+  bootHook: appBootHookSchema.optional(),
   /**
    * If true, the app declares itself as the default landing tab.
    * Mirrors `package.json#elizaos.app.mainTab`. Consumed by

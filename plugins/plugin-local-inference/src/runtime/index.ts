@@ -29,6 +29,7 @@ export {
 	selectEmbeddingPresetFromHardware,
 	selectEmbeddingTierFromHardware,
 } from "./embedding-presets.js";
+export { registerLocalInferenceBoot } from "./boot.js";
 export { shouldWarmupLocalEmbeddingModel } from "./embedding-warmup-policy.js";
 export { ensureLocalInferenceHandler } from "./ensure-local-inference-handler.js";
 export {

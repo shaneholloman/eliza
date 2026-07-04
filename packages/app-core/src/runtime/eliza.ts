@@ -76,7 +76,7 @@ import {
   syncElizaEnvAliases,
   syncResolvedApiPort,
 } from "@elizaos/shared";
-import { getApps, loadRegistry } from "../registry";
+import { getApps, getPlugins, loadRegistry } from "../registry";
 import { registerSubAgentCredentialBridgeAdapter } from "../services/credential-tunnel-service";
 import { registerCoreSensitiveRequestAdapters } from "../services/sensitive-requests/index.js";
 import {
@@ -683,6 +683,167 @@ async function registerRuntimeHooks(runtime: AgentRuntime): Promise<void> {
   await drainRuntimeHookContributors(runtime, getRuntimeHookContributors());
 }
 
+/**
+ * A PRE-READY boot-hook contributor: an app/plugin's optional init step run at a
+ * fixed point in {@link repairRuntimeAfterBoot}, BEFORE the runtime is marked
+ * ready, to install handlers / warm subsystems that must exist before the first
+ * turn (e.g. the local model handler). `invoke` loads the declared hook module
+ * and calls it with the runtime. Resolved from the registry ({@link
+ * getBootHookContributors}) — no feature plugin is hard-wired by name here; the
+ * host drains whatever entries declare a `bootHook`. Parallel to {@link
+ * RuntimeHookContributor}, but pre-ready instead of post-ready.
+ */
+interface BootHookContributor {
+  id: string;
+  invoke: (runtime: AgentRuntime) => Promise<void>;
+}
+
+/**
+ * LEGACY host-owned fallback for plugin-local-inference's pre-ready boot hook.
+ *
+ * The canonical source of this binding is the plugin's own `registry-entry.json`
+ * (`launch.bootHook`), resolved data-driven by {@link getBootHookContributors}.
+ * But a packaged build can ship WITHOUT the aggregated
+ * `@elizaos/registry/first-party/generated.json`; in that case `loadRegistry()`
+ * intentionally returns an EMPTY registry (it logs and continues rather than
+ * crashing the agent — see `readEntriesFromDisk`). Without this fallback the
+ * resolver would then yield no contributors and the local model handlers would
+ * never install — a regression from the previous hard-wired path, which always
+ * installed them regardless of registry presence. So when the registry does not
+ * supply the local-inference boot hook, we fall back to this explicitly-marked
+ * legacy host-owned binding. `importAppModuleFromSpecifier` still treats an
+ * actually-absent optional plugin as a graceful skip, so this is safe on
+ * deployments that ship no local-inference at all.
+ */
+const LEGACY_LOCAL_INFERENCE_BOOT_HOOK = {
+  id: "@elizaos/plugin-local-inference",
+  specifier: "@elizaos/plugin-local-inference/runtime",
+  exportName: "registerLocalInferenceBoot",
+} as const;
+
+/**
+ * Resolve every registry entry (app OR plugin) that declares a `bootHook` into a
+ * contributor. Data-driven and generic: the registry owns the package bindings
+ * (each plugin self-declares its hook in its own `registry-entry.json`), so the
+ * boot path names no plugin. Scans both apps and plugins because a pre-ready
+ * boot hook typically belongs to a provider plugin (e.g. plugin-local-inference)
+ * rather than a launchable app.
+ *
+ * When the registry does not supply the local-inference boot hook (e.g. a
+ * packaged build shipped without `generated.json`, so `loadRegistry()` is
+ * empty), the {@link LEGACY_LOCAL_INFERENCE_BOOT_HOOK} fallback is appended so
+ * the local model handlers still install — preserving the pre-migration
+ * guarantee. The registry entry, when present, takes precedence (deduped by id).
+ */
+function getBootHookContributors(): BootHookContributor[] {
+  const registry = loadRegistry();
+  // Extract just the boot-hook shape from each entry at the call site (an
+  // explicit projection off the wide AppEntry/PluginEntry union) so the pure
+  // resolver takes a narrow, test-friendly declaration type — no wide-union
+  // assignability coupling.
+  const declarations: BootHookDeclaration[] = [];
+  for (const entry of [...getApps(registry), ...getPlugins(registry)]) {
+    const bootHook = entry.launch?.bootHook;
+    if (!bootHook) continue;
+    declarations.push({
+      id: entry.npmName ?? entry.id,
+      specifier: bootHook.specifier,
+      exportName: bootHook.exportName,
+    });
+  }
+  return resolveBootHookContributors(declarations);
+}
+
+/**
+ * A registry entry's projected boot-hook declaration: the resolved contributor
+ * id plus the module specifier/export the host loads and invokes. Projected off
+ * the wide registry entry union by {@link getBootHookContributors} so the
+ * resolver stays decoupled from the full entry type.
+ */
+interface BootHookDeclaration {
+  id: string;
+  specifier: string;
+  exportName: string;
+}
+
+/**
+ * Pure resolver for the boot-hook contributors, split out so a focused unit test
+ * can drive it with hand-built declarations (empty registry, registry-declared
+ * entry, both) without loading the real registry. Registry-declared boot hooks
+ * win by id; the {@link LEGACY_LOCAL_INFERENCE_BOOT_HOOK} fallback is appended
+ * only when the registry did not already supply the local-inference boot hook.
+ */
+export function resolveBootHookContributors(
+  declarations: BootHookDeclaration[],
+): BootHookContributor[] {
+  const byId = new Map<string, BootHookContributor>();
+  for (const { id, specifier, exportName } of declarations) {
+    byId.set(id, {
+      id,
+      invoke: (runtime: AgentRuntime) =>
+        loadAndInvokeRuntimeHook(specifier, exportName, runtime),
+    });
+  }
+
+  // Legacy host-owned fallback: only when the registry did not already declare
+  // the local-inference boot hook (registry entry wins when present).
+  if (!byId.has(LEGACY_LOCAL_INFERENCE_BOOT_HOOK.id)) {
+    byId.set(LEGACY_LOCAL_INFERENCE_BOOT_HOOK.id, {
+      id: LEGACY_LOCAL_INFERENCE_BOOT_HOOK.id,
+      invoke: (runtime: AgentRuntime) =>
+        loadAndInvokeRuntimeHook(
+          LEGACY_LOCAL_INFERENCE_BOOT_HOOK.specifier,
+          LEGACY_LOCAL_INFERENCE_BOOT_HOOK.exportName,
+          runtime,
+        ),
+    });
+  }
+
+  return [...byId.values()];
+}
+
+/**
+ * Drain pre-ready boot-hook contributors in order, invoking each against the
+ * runtime. An optional plugin that is not installed is skipped gracefully
+ * (debug-logged); any real failure is logged and rethrown so a broken hook is
+ * never mistaken for a benign absence — matching the fixed if-chain it replaces,
+ * which would have thrown at that step. Exported for a focused unit test of the
+ * generic channel.
+ */
+export async function drainBootHookContributors(
+  runtime: AgentRuntime,
+  contributors: BootHookContributor[],
+): Promise<void> {
+  for (const { id, invoke } of contributors) {
+    try {
+      await invoke(runtime);
+    } catch (err) {
+      if (isOptionalAppRoutePluginUnavailableError(err)) {
+        logger.debug(
+          `[eliza] Boot-hook contributor ${id} unavailable, skipping`,
+        );
+        continue;
+      }
+      logger.error(
+        `[eliza] Boot-hook contributor ${id} failed: ${formatErrorWithStack(err)}`,
+      );
+      throw err;
+    }
+  }
+}
+
+/**
+ * Run the registry-declared pre-ready boot hooks. Replaces the hard-wired
+ * `@elizaos/plugin-local-inference/runtime` internals that used to be called at
+ * fixed init points in {@link repairRuntimeAfterBoot} (arch-audit #12089 item
+ * 18): the local-inference boot (mobile-gate warning + platform-appropriate
+ * model-handler registration) is now owned by the plugin's `registerLocalInferenceBoot`
+ * hook, declared in its `registry-entry.json` and drained here by data.
+ */
+async function runBootHooks(runtime: AgentRuntime): Promise<void> {
+  await drainBootHookContributors(runtime, getBootHookContributors());
+}
+
 // The most recent runtime handed to the post-ready boot tail. A backgrounded
 // (deferred) tail compares against this so a hot-restart that boots a newer
 // runtime supersedes the old one's still-running tail, preventing route/service
@@ -699,20 +860,21 @@ async function repairRuntimeAfterBoot(
   // Make the app-bundled fused libelizainference (staged into the desktop
   // package) discoverable before any local-inference handler probes
   // `supported()`. No-op in dev / on mobile and when an explicit override is
-  // set. Must run before the ensureLocalInferenceHandler calls below.
+  // set. Must run before the boot hooks (which install the local-inference
+  // handler) below.
   ensureBundledFusedLibDir();
 
-  // Invariant guard: the mobile voice backend selector pins phones to the
-  // Kokoro-exclusive TTS path via `mobile: isMobilePlatform()`, which keys off
-  // ELIZA_PLATFORM. The mobile local-inference gate can fire on the
-  // device-bridge / ELIZA_LOCAL_LLAMA / riscv64 triggers without ELIZA_PLATFORM
-  // being set, leaving `mobile` false in the selector — risking OmniVoice on a
-  // phone. Evaluate both predicates here (outside the mobile branch below) so
-  // the warning is actually reachable on the real mismatch.
-  (await _localInference()).warnIfMobileGateActiveWithoutPlatform({
-    mobilePlatform: isMobilePlatform(),
-    warn: logger.warn,
-  });
+  // Pre-ready boot hooks: registry-declared init steps that must run before the
+  // runtime is marked ready (e.g. installing the local model handler so it's
+  // present for the first turn). This is where plugin-local-inference's boot
+  // now lives — the mobile-voice-invariant warning + the platform-appropriate
+  // model-handler registration are owned by its `registerLocalInferenceBoot`
+  // hook (declared in registry-entry.json), NOT hard-wired here by name
+  // (arch-audit #12089 item 18). The hook owns its platform gating, so it runs
+  // identically on mobile (gated handler-ensure) and desktop (unconditional
+  // handler-ensure), and emits the mobile-gate warning regardless of platform —
+  // matching the previous fixed-point ordering exactly.
+  await runBootHooks(runtime);
 
   // Mobile (Android / iOS) shortcut: the runtime is already serving from
   // PGlite + the AI provider plugin. The remaining boot steps either spawn
@@ -722,17 +884,15 @@ async function repairRuntimeAfterBoot(
   // (registered app route plugins and app runtime hooks). Skipping
   // them here is what the mobile bundle has to do to avoid crashing on first
   // turn — feature parity comes from cloud-side services, not on-device state.
+  // (The local model handler, when a mobile-safe backend is wired, was already
+  // installed by the boot hooks above.)
   if (isMobilePlatform()) {
-    if ((await _localInference()).shouldEnableMobileLocalInference()) {
-      await (await _localInference()).ensureLocalInferenceHandler(runtime);
-    }
     logger.info(
       "[eliza] Mobile platform detected — skipping desktop-only boot helpers",
     );
     return runtime;
   }
 
-  await (await _localInference()).ensureLocalInferenceHandler(runtime);
   const autonomyLoopEnabled = isRuntimeAutonomyEnabled(process.env);
   if (autonomyLoopEnabled) {
     await ensureAutonomyBootstrapContext(runtime);
