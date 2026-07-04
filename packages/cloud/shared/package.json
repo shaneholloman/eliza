@@ -20,8 +20,11 @@
   },
   "scripts": {
     "build:linked-workspaces": "bun run --cwd ../../.. build:core",
-    "lint": "bunx @biomejs/biome check .",
-    "lint:fix": "bunx @biomejs/biome check --write .",
+    "lint": "bunx @biomejs/biome check --write --unsafe .",
+    "lint:check": "bunx @biomejs/biome check .",
+    "lint:fix": "bunx @biomejs/biome check --write --unsafe .",
+    "format": "bunx @biomejs/biome format --write .",
+    "format:check": "bunx @biomejs/biome format .",
     "typecheck": "tsgo --noEmit",
     "check:tenant-scope": "bun scripts/check-tenant-scope.ts",
     "check:tenant-scope:self-test": "bun test scripts/check-tenant-scope.test.ts",

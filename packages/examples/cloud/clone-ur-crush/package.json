@@ -8,6 +8,7 @@
     "typecheck": "tsgo --noEmit",
     "test": "bun run typecheck",
     "build": "node ../../../scripts/with-package-build-lock.mjs packages/examples/cloud/clone-ur-crush -- node scripts/build.mjs",
+    "clean": "rm -rf .next .next-build-* tsconfig.tsbuildinfo",
     "start": "next start --port 3012",
     "lint": "bunx @biomejs/biome check --write --unsafe .",
     "lint:check": "bunx @biomejs/biome check .",

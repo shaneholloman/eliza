@@ -1,6 +1,15 @@
+/**
+ * Mounts the agent lifecycle HTTP routes on the shared route state: POST
+ * /api/agent/{start,stop,pause,resume} drive the reported agent-state machine
+ * (running/paused/stopped) and its uptime/startedAt, while GET /api/agent/autonomy
+ * reads and POST /api/agent/autonomy toggles the autonomy loop — the POST
+ * validates its body, calls enable/disableAutonomy on the AUTONOMY_SERVICE_TYPE
+ * service when present, and always syncs runtime.enableAutonomy. Sits behind the
+ * authenticated dashboard gate; not public.
+ */
 import {
-  AUTONOMY_SERVICE_TYPE,
   type AgentRuntime,
+  AUTONOMY_SERVICE_TYPE,
   type RouteRequestMeta,
 } from "@elizaos/core";
 import type { RouteHelpers } from "@elizaos/shared";

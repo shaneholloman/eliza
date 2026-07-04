@@ -1,3 +1,30 @@
+/**
+ * The `AgentRuntime` — the central orchestrator every Eliza agent runs on, and
+ * the concrete `implements IAgentRuntime`. One instance owns a single agent's
+ * whole world: its actions, providers, evaluators, and services; the
+ * model-handler registry and the `useModel` dispatch/routing/fallback layer; the
+ * plugin set and its lifecycle (register / unload / reload / config); memory and
+ * state (database adapter, embeddings, `stateCache`, working memory); and the
+ * message loop that runs provider -> model -> action -> evaluator. Plugins
+ * contribute capabilities; the runtime wires and runs them, and nearly all of
+ * `@elizaos/core` and every plugin ultimately talks to this class.
+ *
+ * The file is ~10k lines — navigate by symbol, never top-to-bottom. Alongside the
+ * class it exports typed boot errors (`NoModelProviderConfiguredError`,
+ * `EmbeddingDimensionProbeError`) that `initialize()` treats specially.
+ *
+ * Invariants to preserve when editing:
+ * - `getSetting()` resolves per-agent config and DELIBERATELY never reads
+ *   `process.env` — in a multi-tenant process that would leak a host secret into
+ *   every agent; hosts fold dotenv into the constructor `settings` map instead.
+ * - Embedding width is pinned to whichever TEXT_EMBEDDING provider answered the
+ *   boot dimension probe; a later embedding from a different provider can emit a
+ *   width the SQL adapter silently drops (#8769). If every provider fails the
+ *   probe, `initialize()` catches `EmbeddingDimensionProbeError` non-fatally and
+ *   disables embedding generation instead of crashing boot.
+ * - Without a database adapter, `initialize()` falls back to the in-memory
+ *   adapter only when `ALLOW_NO_DATABASE` is set.
+ */
 import Handlebars from "handlebars";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -48,6 +75,7 @@ import { BUILTIN_RESPONSE_HANDLER_FIELD_EVALUATORS } from "./runtime/builtin-fie
 import { ChatPreHandlerRegistry } from "./runtime/chat-pre-handler-registry";
 import { ContextRegistry } from "./runtime/context-registry";
 import { DEFAULT_CONTEXT_DEFINITIONS } from "./runtime/default-contexts";
+import { findEquivalentFactId } from "./runtime/fact-write-dedupe";
 import type { ResponseHandlerEvaluator } from "./runtime/response-handler-evaluators";
 import type { ResponseHandlerFieldEvaluator } from "./runtime/response-handler-field-evaluator";
 import { ResponseHandlerFieldRegistry } from "./runtime/response-handler-field-registry";
@@ -9716,6 +9744,17 @@ ${section_end}`;
 					}),
 				},
 			};
+		}
+
+		// Facts are structurally deduped at write time: when an equivalent row
+		// (same normalized text + room + entity) already exists, skip the insert
+		// and hand back the existing id. The adapter cannot do this — its
+		// similarity check needs an embedding (absent inline on fact writes) and
+		// is bypassed whenever callers pass `unique` — so without this guard the
+		// same claim lands as multiple rows (see runtime/fact-write-dedupe.ts).
+		if (tableName === "facts") {
+			const equivalentId = await findEquivalentFactId(this, memory);
+			if (equivalentId) return equivalentId;
 		}
 
 		const ids = await this.adapter.createMemories([

@@ -1,3 +1,13 @@
+/**
+ * Built-in `DefaultMessageService` (the runtime's `IMessageService` singleton) and
+ * the helpers it composes, implementing the full inbound-message pipeline: memory
+ * creation, should-respond gating, the pre-LLM shortcut gate, Stage-1 response
+ * generation with its retry/truncation policy, the planner loop over tiered
+ * actions, attachment enrichment, voice-turn arbitration, and post-turn evaluation
+ * — turning a received `Memory` into a response plus any executed actions. The
+ * runtime message loop drives it; a host may swap in an alternate `IMessageService`
+ * to replace it wholesale.
+ */
 import { v4 } from "uuid";
 import z from "zod";
 import { formatActionNames, formatActions } from "../actions";
@@ -264,6 +274,12 @@ import {
 	extractGenerateTextContentText,
 	getV5ModelText,
 } from "./message/generate-text-result";
+import { resolveEffectiveMuteState } from "./message/mute-state";
+import {
+	GROUP_TRIAGE_MESSAGE_HANDLER_TEMPLATE,
+	isStage1GroupTriageTierEnabled,
+	isUnaddressedTextGroupTurn,
+} from "./message/stage1-prompt-tier";
 import type { OptimizedPromptTask } from "./optimized-prompt";
 import {
 	type OptimizedPromptRuntimeLike,
@@ -381,6 +397,27 @@ function textContainsUserTag(text: string | undefined): boolean {
 
 	const safeText = text.length > 10_000 ? text.slice(0, 10_000) : text;
 	return /<@!?[^>]+>|@\w+/u.test(safeText);
+}
+
+/**
+ * Structural "this message addresses the agent" signal: platform mention,
+ * platform reply-to-agent, or the agent's name/username appearing in the
+ * text. Shared by the reply gate, the bot-noise TEXT_SMALL triage, and the
+ * Stage-1 prompt tier so all three branch on the same ground truth.
+ */
+function messageExplicitlyAddressesAgent(
+	runtime: IAgentRuntime,
+	message: Memory,
+): boolean {
+	const mentionContext = message.content?.mentionContext;
+	return (
+		mentionContext?.isMention === true ||
+		mentionContext?.isReply === true ||
+		textContainsAgentName(message.content?.text, [
+			runtime.character?.name,
+			runtime.character?.username,
+		])
+	);
 }
 
 function getPlannerActionObjectName(action: Record<string, unknown>): string {
@@ -1457,6 +1494,17 @@ export {
 	stripReasoningBlocks,
 } from "./message/fallback-reply";
 
+export {
+	type EffectiveMuteState,
+	muteExpiryDue,
+	resolveEffectiveMuteState,
+	resolveMutedTargetFlags,
+	roomMuteActive,
+	setRoomMuteUntil,
+	setWorldMuteState,
+	worldMuteActive,
+} from "./message/mute-state";
+
 export type V5MessageRuntimeStage1Result =
 	| {
 			kind: "terminal";
@@ -2201,6 +2249,14 @@ type V5PlannerActionSurfaceSummary = {
 	catalogParentCount: number;
 	exposedActionCount: number;
 	tierAParents: string[];
+	/**
+	 * Children exposed as first-class planner tools per tier-A parent, after
+	 * the per-parent child narrowing (`maxTierAChildrenPerParent`). Read back
+	 * by `collectPlannerTools` so the native-tool expansion matches the tiered
+	 * surface instead of re-expanding every subaction of a hot parent. Absent
+	 * in full-surface mode, where every subaction expands.
+	 */
+	tierAChildrenByParent?: Record<string, string[]>;
 	tierBParents: string[];
 	omittedParentCount: number;
 	omittedParentNamesPreview: string[];
@@ -2225,16 +2281,14 @@ async function collectV5PlannerCandidateActions(args: {
 	candidateActions?: readonly string[];
 	userRoles?: readonly RoleGateRole[];
 }): Promise<Action[]> {
-	// We used to filter the candidate set by `action.contexts` against the
-	// messageHandler-picked `selectedContexts`. That filter excluded owner
-	// actions, CALENDAR, SCHEDULED_TASKS, etc. whenever the messageHandler routed to
-	// "general" — even when the user clearly asked for a habit/event/etc.
-	// (See the 2026-05-09 candidate-surface root-cause audit.)
-	//
-	// Now: the surface starts from every action, then applies only the same
-	// execution gates the planner executor will enforce. That keeps role-policy
-	// overrides working for deployments that intentionally expose an action
-	// outside its declared context, while avoiding dead tools that the planner
+	// The candidate surface starts from every runtime action and applies only the
+	// same execution gates the planner executor will enforce — it deliberately does
+	// NOT pre-filter by `action.contexts` against the messageHandler-picked
+	// `selectedContexts`. Context pre-filtering excludes owner actions, CALENDAR,
+	// SCHEDULED_TASKS, etc. whenever the messageHandler routes to "general", even
+	// when the user clearly asked for a habit/event/etc. Starting from every action
+	// keeps role-policy overrides working for deployments that intentionally expose
+	// an action outside its declared context, while avoiding dead tools the planner
 	// could select but execution would immediately reject.
 	const allRuntimeActions = args.runtime.actions;
 	const actionLookup = buildRuntimeActionLookup(args.runtime);
@@ -2588,6 +2642,10 @@ function buildV5PlannerActionSurface(params: {
 		catalog,
 		results: retrieval.results,
 		narrowToCandidateActions: candidateActions,
+		// Message-text + candidate tokens rank children WITHIN each tier-A
+		// parent so a hot parent exposes its turn-relevant children instead of
+		// its whole namespace (maxTierAChildrenPerParent).
+		queryTokens: retrieval.query.tokens,
 	});
 	const toolSearchEndedAt = Date.now();
 	const exposedActionNames = new Set(
@@ -2698,6 +2756,12 @@ function buildV5PlannerActionSurface(params: {
 			catalogParentCount: catalog.parents.length,
 			exposedActionCount,
 			tierAParents: tieredSurface.sortedTierAParentNames,
+			tierAChildrenByParent: Object.fromEntries(
+				tieredSurface.tierAParents.map((parent) => [
+					parent.name,
+					[...parent.childNames],
+				]),
+			),
 			tierBParents: tieredSurface.sortedTierBParentNames,
 			omittedParentCount: tieredSurface.omittedParentNames.length,
 			omittedParentNamesPreview: tieredSurface.omittedParentNames.slice(0, 20),
@@ -3282,7 +3346,13 @@ export function formatAvailableContextsForPrompt(
 			].filter(Boolean);
 			const suffix = metadata.length > 0 ? ` [${metadata.join("; ")}]` : "";
 			if (options?.compact) {
-				return `- ${definition.id}${suffix}`;
+				// Compact catalog lines carry only the short routing hint (when the
+				// definition ships one) — never the full description, which is what
+				// the compact tiers exist to avoid.
+				const compressed = definition.descriptionCompressed?.trim();
+				return compressed
+					? `- ${definition.id}${suffix}: ${compressed}`
+					: `- ${definition.id}${suffix}`;
 			}
 			return description
 				? `- ${definition.id}${suffix}: ${description}`
@@ -3333,11 +3403,23 @@ function selectMessageHandlerTask(
 function renderMessageHandlerInstructions(
 	runtime: OptimizedPromptRuntimeLike,
 	availableContexts: readonly ContextDefinition[],
-	options?: { directMessage?: boolean; responseHandlerFields?: string },
+	options?: {
+		directMessage?: boolean;
+		groupTriage?: boolean;
+		responseHandlerFields?: string;
+	},
 ): string {
+	// Three tiers: DM/private (compact, no shouldRespond), unaddressed
+	// group-triage (compact + shouldRespond — most such turns end in IGNORE,
+	// so they must not pay the full ~16KB rule block), and the full template
+	// for addressed/respond-likely turns.
+	const compactTier =
+		options?.directMessage === true || options?.groupTriage === true;
 	const baselineTemplate = options?.directMessage
 		? DIRECT_MESSAGE_HANDLER_TEMPLATE
-		: messageHandlerTemplate;
+		: options?.groupTriage
+			? GROUP_TRIAGE_MESSAGE_HANDLER_TEMPLATE
+			: messageHandlerTemplate;
 	const baseline = resolveOptimizedPromptForRuntime(
 		runtime,
 		selectMessageHandlerTask(availableContexts),
@@ -3347,13 +3429,13 @@ function renderMessageHandlerInstructions(
 		state: {
 			directMessage: options?.directMessage ? "true" : "",
 			availableContexts: formatAvailableContextsForPrompt(availableContexts, {
-				compact: options?.directMessage === true,
+				compact: compactTier,
 			}),
 			handleResponseToolName: HANDLE_RESPONSE_TOOL_NAME,
 		},
 		template: baseline,
 	}).trim();
-	const renderedWithSharedRules = options?.directMessage
+	const renderedWithSharedRules = compactTier
 		? [rendered, "", `- ${COMPACT_CODE_SNIPPET_VALIDITY_INSTRUCTION}`].join(
 				"\n",
 			)
@@ -3379,7 +3461,11 @@ function renderMessageHandlerModelInput(
 	runtime: OptimizedPromptRuntimeLike,
 	context: ContextObject,
 	availableContexts: readonly ContextDefinition[] = [],
-	options?: { directMessage?: boolean; responseHandlerFields?: string },
+	options?: {
+		directMessage?: boolean;
+		groupTriage?: boolean;
+		responseHandlerFields?: string;
+	},
 ): {
 	messages: ChatMessage[];
 	promptSegments: PromptSegment[];
@@ -4150,12 +4236,12 @@ export function applyDirectCurrentCandidateBackstopToMessageHandler(
 	// to force-plan over a finished answer whose only planning signals are weak,
 	// injectable ones (a simple/general context + search/shell-class candidates)
 	// via shouldPreferCompleteDirectReply. The plain-text fallback lands here
-	// instead and previously skipped that valve, so a COMPLETE plain-text answer
+	// too and must apply the same valve: without it, a COMPLETE plain-text answer
 	// ("Your lucky number is 4291." / a solved logic puzzle) that this backstop
-	// happened to tag with an inferred WEB_SEARCH candidate got promoted to
+	// happened to tag with an inferred WEB_SEARCH candidate would be promoted to
 	// requiresTool=true — forcing a pointless web search + a slow extra planner
 	// round, even though the identical answer in JSON form (contexts=[simple])
-	// went direct. Apply the same structural valve here so the two Stage-1 shapes
+	// goes direct. Apply the same structural valve here so the two Stage-1 shapes
 	// route identically. Live-info stays correct: its Stage-1 reply is an ack
 	// ("Checking the price now."), not a complete answer, so it fails
 	// looksLikeCompleteDirectReply and still forces the fetch. Coding/spawn stays
@@ -5473,6 +5559,7 @@ function collectPlannerTools(
 			actionLookup: new Map(
 				actions.map((action) => [action.name, action] as const),
 			),
+			tierAChildrenByParent: readTierAChildrenByParentFromContext(context),
 		}),
 		...CORE_PLANNER_TERMINALS,
 	];
@@ -5502,6 +5589,38 @@ function readTierAParentsFromContext(context: ContextObject): Set<string> {
 		}
 	}
 	return set;
+}
+
+/**
+ * Read the per-parent tier-A child allow-list from the action surface
+ * metadata. Returns `undefined` when the surface carries no
+ * `tierAChildrenByParent` (full-surface mode, or contexts built outside the
+ * tiered pipeline), in which case the tiered tool builder expands every
+ * subaction of a tier-A parent as before.
+ */
+function readTierAChildrenByParentFromContext(
+	context: ContextObject,
+): Record<string, string[]> | undefined {
+	const surface = (context.metadata as { actionSurface?: unknown } | undefined)
+		?.actionSurface;
+	if (!surface || typeof surface !== "object") {
+		return undefined;
+	}
+	const raw = (surface as { tierAChildrenByParent?: unknown })
+		.tierAChildrenByParent;
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+		return undefined;
+	}
+	const record: Record<string, string[]> = {};
+	for (const [parentName, childNames] of Object.entries(raw)) {
+		if (!Array.isArray(childNames)) {
+			continue;
+		}
+		record[parentName] = childNames.filter(
+			(name): name is string => typeof name === "string",
+		);
+	}
+	return record;
 }
 
 /**
@@ -5786,6 +5905,18 @@ export async function runV5MessageRuntimeStage1(args: {
 			args.message.content?.channelType === ChannelType.DM ||
 			args.message.content?.channelType === ChannelType.API ||
 			args.message.content?.channelType === ChannelType.SELF;
+		// Compact-triage tier: an unaddressed text-group turn usually ends in
+		// IGNORE, so it gets the compact template + compact context catalog +
+		// compressed field docs instead of the full ~27KB static rule block.
+		// Structural signals only; anything uncertain fails open to the full
+		// tier (see stage1-prompt-tier.ts).
+		const groupTriageTurn =
+			!directMessageChannel &&
+			isUnaddressedTextGroupTurn(
+				args.message,
+				messageExplicitlyAddressesAgent(args.runtime, args.message),
+			) &&
+			isStage1GroupTriageTierEnabled(args.runtime);
 		const stage1TurnSignal =
 			getStreamingContext()?.abortSignal ?? new AbortController().signal;
 
@@ -5798,9 +5929,14 @@ export async function runV5MessageRuntimeStage1(args: {
 		};
 		const responseHandlerFields =
 			args.runtime.responseHandlerFieldRegistry.list();
+		// Group-triage turns keep the full field set (shouldRespond is the whole
+		// point) but render the compressed prompt slices; the schema is
+		// unaffected by `compact` so the HANDLE_RESPONSE contract is identical.
 		const responseHandlerFieldSelection = directMessageChannel
 			? buildDirectChannelResponseFieldSelection(responseHandlerFields)
-			: undefined;
+			: groupTriageTurn
+				? { compact: true }
+				: undefined;
 		const selectedResponseHandlerFields =
 			args.runtime.responseHandlerFieldRegistry.list(
 				responseHandlerFieldSelection,
@@ -5820,6 +5956,7 @@ export async function runV5MessageRuntimeStage1(args: {
 			availableContexts,
 			{
 				directMessage: directMessageChannel,
+				groupTriage: groupTriageTurn,
 				responseHandlerFields: responseHandlerFieldPrompt.rendered,
 			},
 		);
@@ -8805,24 +8942,30 @@ export class DefaultMessageService implements IMessageService {
 			};
 		}
 
-		// Check if room is muted
-		const agentName = runtime.character.name ?? "agent";
+		// Effective mute check — room participant state, server-wide world mute,
+		// and the timed-mute due-check — independent of any addressing logic. A
+		// muted room drops even a direct @mention: on mention-gated deployments
+		// (strict mode) every turn reaching this point IS a mention, so a
+		// mention bypass here made mute a complete no-op. Unmuting a muted room
+		// is done from another room (or DM) via the ROOM action's cross-room
+		// targeting.
 		const mentionContext = message.content.mentionContext;
-		const explicitlyAddressesAgent =
-			mentionContext?.isMention === true ||
-			mentionContext?.isReply === true ||
-			textContainsAgentName(message.content.text, [
-				runtime.character.name,
-				runtime.character.username,
-			]);
-		if (
-			agentUserState === "MUTED" &&
-			message.content.text &&
-			!explicitlyAddressesAgent &&
-			!message.content.text.toLowerCase().includes(agentName.toLowerCase())
-		) {
+		const explicitlyAddressesAgent = messageExplicitlyAddressesAgent(
+			runtime,
+			message,
+		);
+		const muteState = await resolveEffectiveMuteState(runtime, {
+			roomIds: [message.roomId],
+			primaryParticipantState: agentUserState,
+			...(message.worldId ? { worldId: message.worldId } : {}),
+		});
+		if (muteState.muted) {
 			runtime.logger.debug(
-				{ src: "service:message", roomId: message.roomId },
+				{
+					src: "service:message",
+					roomId: message.roomId,
+					scope: muteState.scope,
+				},
 				"Ignoring muted room",
 			);
 			await this.emitRunEnded(runtime, runId, message, startTime, "muted");
@@ -10526,7 +10669,6 @@ export class DefaultMessageService implements IMessageService {
 
 	/**
 	 * Deletes a message from the agent's memory.
-	 * This method handles the actual deletion logic that was previously in event handlers.
 	 *
 	 * @param runtime - The agent runtime instance
 	 * @param message - The message memory to delete

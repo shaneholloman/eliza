@@ -46,13 +46,53 @@ bun run test:server    # core/agent/app-core/shared/vault/elizaos/skills/scenari
 bun run test:client    # app/ui + lifeops/training plugins
 bun run test:e2e       # end-to-end lane
 bun run start          # run an agent (packages/agent start)
-bun run clean          # nuke dist/.turbo/node_modules, reinstall, rebuild
+bun run clean          # nuke dist/.turbo/node_modules and local state
+bun run reset          # clean, reinstall, rebuild
 bun run cloud:mock     # boot the full local cloud stack with mocks
 ```
 
 Scope any command to one package with `--cwd`:
-`bun run --cwd packages/core test`. The repo has ~200 root scripts; the list
+`bun run --cwd packages/core test`. The repo has 188 root scripts; the list
 above is the day-to-day set. Use `bun run` with no args to print them all.
+
+### Removed Root Command Migrations
+
+| Removed command | Use instead |
+| --- | --- |
+| `bun run test:ci` | `bun run test` |
+| `bun run test:cloud:playwright` | `bun run --cwd packages/app test:e2e` |
+| `bun run test:ui:playwright` | `bun run --cwd packages/app test:e2e` |
+| `bun run test:lifeops` | `bun run test:plugin 'plugin-personal-assistant'` |
+| `bun run trajectory:inspect:test` | `bun test packages/scripts/__tests__/trajectory-validate.test.ts` |
+| `bun run audit:e2e-coverage:test` | `bun test packages/scripts/e2e-coverage/check-e2e-coverage.test.ts` |
+| `bun run test:browser-bridge` | `bun run --cwd packages/browser-extension test` |
+| `bun run test:browser-bridge:safari` | `bun run --cwd packages/browser-extension test:smoke:safari` |
+| `bun run voice:latency-report` | `bun run --cwd packages/app-core voice:latency-report` |
+| `bun run voice:interactive` | `bun run --cwd packages/app-core voice:interactive` |
+| `bun run voice:duet` | `bun run --cwd packages/app-core voice:duet` |
+| `bun run voice:create-profile` | `bun run --cwd packages/app-core voice:create-profile` |
+| `bun run smartglasses:hardware:doctor` | `bun run --cwd packages/examples/smartglasses hardware:doctor` |
+| `bun run smartglasses:hardware:status` | `bun run --cwd packages/examples/smartglasses hardware:status-latest` |
+| `bun run smartglasses:hardware:validate` | `bun run --cwd packages/examples/smartglasses hardware:validate-latest` |
+| `bun run smartglasses:hardware:prove` | `bun run --cwd packages/examples/smartglasses hardware:prove:bleak` |
+| `bun run smartglasses:hardware:prove:watch` | `bun run --cwd packages/examples/smartglasses hardware:prove:bleak:watch` |
+| `bun run smartglasses:hardware:prove:noble` | `bun run --cwd packages/examples/smartglasses hardware:prove:noble` |
+| `bun run smartglasses:hardware:prove:noble:watch` | `bun run --cwd packages/examples/smartglasses hardware:prove:noble:watch` |
+| `bun run smartglasses:dev:hardware` | `bun run --cwd packages/examples/smartglasses dev:hardware` |
+| `bun run smartglasses:dev:simulator` | `bun run --cwd packages/examples/smartglasses dev:simulator` |
+| `bun run smartglasses:simulator` | `bun run --cwd packages/examples/smartglasses simulator` |
+| `bun run smartglasses:smoke:simulator` | `bun run --cwd packages/examples/smartglasses smoke:simulator` |
+| `bun run test:ci:live` | `bun run test:live` |
+| `bun run test:lint` | `bun run audit:test-integrity:all` |
+| `bun run test:lint:no-vi-mocks` | `bun run audit:test-integrity:no-vi-mocks` |
+| `bun run test:lint:lane-coverage` | `bun run audit:test-integrity:lane-coverage` |
+| `bun run test:lint:test-integrity` | `bun run audit:test-integrity` |
+| `bun run test:lint:test-integrity:self-test` | `bun run audit:test-integrity:self-test` |
+| `bun run verify:smartglasses-software` | `bun run audit:smartglasses-software` |
+| `bun run personality:judge` | `bun run bench:personality` |
+| `bun run personality:bench:calibrate` | `bun run bench:personality:calibrate` |
+| `bun run lint:all` | `bun run verify` |
+| `bun run build:typescript` | `node packages/scripts/run-turbo.mjs run build` |
 
 ## Repo map — where to find what
 

@@ -1,3 +1,10 @@
+/**
+ * Cloud route resolver for local-key, cloud-proxy, and disabled service access.
+ *
+ * The resolver reads settings at call time, validates caller-provided service
+ * names and base URLs, and never performs network I/O.
+ */
+
 import {
   DEFAULT_FEATURE_POLICY,
   FEATURE_IDS,
@@ -51,6 +58,9 @@ function normalizeCloudBaseUrl(rawUrl: string): string | null {
   try {
     parsed = new URL(rawUrl);
   } catch {
+    // error-policy:J3 rawUrl is a caller/config-provided string; an unparseable
+    // value is an explicit "no valid cloud base" signal (null), which
+    // buildCloudProxyRoute keeps distinct from a resolved route.
     return null;
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {

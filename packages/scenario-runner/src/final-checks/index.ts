@@ -468,6 +468,16 @@ type DefinitionCountCheck = {
   requiredEveryMinutes?: number;
   requiredMaxOccurrencesPerDay?: number;
   expectedTimeZone?: string;
+  expectedDueLocalTimes?: Array<{
+    hour?: number;
+    minute?: number;
+    timeZone?: string;
+  }>;
+  forbiddenDueLocalTimes?: Array<{
+    hour?: number;
+    minute?: number;
+    timeZone?: string;
+  }>;
   requireReminderPlan?: boolean;
   websiteAccess?: Record<string, unknown>;
 };
@@ -593,6 +603,40 @@ function looselyMatchesValue(actual: unknown, expected: unknown): boolean {
   return actual === expected;
 }
 
+function localHourMinuteForInstant(
+  dueAt: unknown,
+  timeZone: unknown,
+): { hour: number; minute: number } | null {
+  if (typeof dueAt !== "string" || typeof timeZone !== "string") {
+    return null;
+  }
+  const date = new Date(dueAt);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(date);
+    const hourPart = parts.find((part) => part.type === "hour")?.value;
+    const minutePart = parts.find((part) => part.type === "minute")?.value;
+    if (hourPart === undefined || minutePart === undefined) {
+      return null;
+    }
+    const parsedHour = Number(hourPart);
+    const parsedMinute = Number(minutePart);
+    if (Number.isNaN(parsedHour) || Number.isNaN(parsedMinute)) {
+      return null;
+    }
+    return { hour: parsedHour % 24, minute: parsedMinute };
+  } catch {
+    return null;
+  }
+}
+
 function definitionMismatchReasons(
   record: DefinitionRecordLike,
   check: DefinitionCountCheck,
@@ -614,6 +658,50 @@ function definitionMismatchReasons(
     reasons.push(
       `timezone expected ${check.expectedTimeZone}, saw ${String(record.definition.timezone ?? "missing")}`,
     );
+  }
+  if (
+    Array.isArray(check.expectedDueLocalTimes) &&
+    check.expectedDueLocalTimes.length > 0
+  ) {
+    const dueAt = cadence?.dueAt;
+    const expectedLocalTimes = check.expectedDueLocalTimes.filter(
+      (expected) => typeof expected.hour === "number",
+    );
+    const observedLocalTimes = expectedLocalTimes.map((expected) => {
+      const timeZone = expected.timeZone ?? record.definition.timezone;
+      return {
+        expected,
+        timeZone,
+        local: localHourMinuteForInstant(dueAt, timeZone),
+      };
+    });
+    if (observedLocalTimes.some(({ local }) => !local)) {
+      reasons.push(
+        `dueAt local time unavailable for ${String(dueAt ?? "missing")}`,
+      );
+    } else if (
+      !observedLocalTimes.some(({ expected, local }) => {
+        const minute = expected.minute ?? 0;
+        return local?.hour === expected.hour && local?.minute === minute;
+      })
+    ) {
+      const expectedText = expectedLocalTimes
+        .map((expected) => {
+          const timeZone = expected.timeZone ?? record.definition.timezone;
+          return `${String(expected.hour).padStart(2, "0")}:${String(expected.minute ?? 0).padStart(2, "0")} in ${String(timeZone)}`;
+        })
+        .join(" or ");
+      const observedText = observedLocalTimes
+        .map(({ local, timeZone }) =>
+          local
+            ? `${String(local.hour).padStart(2, "0")}:${String(local.minute).padStart(2, "0")} in ${String(timeZone)}`
+            : `unavailable in ${String(timeZone)}`,
+        )
+        .join(", ");
+      reasons.push(
+        `dueAt local time expected ${expectedText}, saw ${observedText}`,
+      );
+    }
   }
   if (Array.isArray(check.requiredSlots) && check.requiredSlots.length > 0) {
     const slots = Array.isArray(cadence?.slots) ? cadence.slots : [];
@@ -652,6 +740,31 @@ function definitionMismatchReasons(
     reasons.push(
       `maxOccurrencesPerDay expected ${check.requiredMaxOccurrencesPerDay}, saw ${String(cadence?.maxOccurrencesPerDay ?? "missing")}`,
     );
+  }
+  if (
+    Array.isArray(check.forbiddenDueLocalTimes) &&
+    check.forbiddenDueLocalTimes.length > 0
+  ) {
+    const dueAt = cadence?.dueAt;
+    for (const forbidden of check.forbiddenDueLocalTimes) {
+      if (typeof forbidden.hour !== "number") {
+        continue;
+      }
+      const timeZone = forbidden.timeZone ?? record.definition.timezone;
+      const local = localHourMinuteForInstant(dueAt, timeZone);
+      if (!local) {
+        reasons.push(
+          `dueAt local time unavailable for ${String(dueAt ?? "missing")} in ${String(timeZone ?? "missing timezone")}`,
+        );
+        continue;
+      }
+      const minute = forbidden.minute ?? 0;
+      if (local.hour === forbidden.hour && local.minute === minute) {
+        reasons.push(
+          `dueAt local time ${String(local.hour).padStart(2, "0")}:${String(local.minute).padStart(2, "0")} in ${String(timeZone)} is forbidden`,
+        );
+      }
+    }
   }
   if (typeof check.requireReminderPlan === "boolean") {
     const hasReminderPlan =

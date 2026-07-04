@@ -1,3 +1,8 @@
+/**
+ * Pure Zoom Web page-state classification — waiting-room, removal,
+ * auth-required, and host-not-started decisions plus the URL predicates.
+ * Deterministic.
+ */
 import { describe, expect, it } from "vitest";
 import {
   classifyZoomPage,
@@ -51,10 +56,14 @@ describe("classifyZoomPage", () => {
 
   it("live audio alone is NOT in-meeting while pre-join controls remain (mic preview on pre-join page)", () => {
     expect(
-      classifyZoomPage(snap({ liveAudioCount: 3, preJoinControlsPresent: true })),
+      classifyZoomPage(
+        snap({ liveAudioCount: 3, preJoinControlsPresent: true }),
+      ),
     ).toBe("pre_join");
     expect(
-      classifyZoomPage(snap({ liveAudioCount: 3, preJoinControlsPresent: false })),
+      classifyZoomPage(
+        snap({ liveAudioCount: 3, preJoinControlsPresent: false }),
+      ),
     ).toBe("in_meeting");
   });
 
@@ -71,13 +80,19 @@ describe("classifyZoomPage", () => {
 
   it("detects the authenticated-users gate case-insensitively", () => {
     expect(
-      classifyZoomPage(snap({ bodyText: "Only Authenticated Users Can Join this meeting" })),
+      classifyZoomPage(
+        snap({ bodyText: "Only Authenticated Users Can Join this meeting" }),
+      ),
     ).toBe("auth_required");
   });
 
   it("detects host-not-started via the error page title", () => {
-    expect(classifyZoomPage(snap({ title: "Error - Zoom" }))).toBe("host_not_started");
-    expect(classifyZoomPage(snap({ title: "error - Zoom" }))).toBe("host_not_started");
+    expect(classifyZoomPage(snap({ title: "Error - Zoom" }))).toBe(
+      "host_not_started",
+    );
+    expect(classifyZoomPage(snap({ title: "error - Zoom" }))).toBe(
+      "host_not_started",
+    );
   });
 
   it("falls through to unknown when nothing matches", () => {
@@ -87,10 +102,18 @@ describe("classifyZoomPage", () => {
 
 describe("isZoomAudioInitUrl", () => {
   it("matches the transient join/audio-handshake redirect URLs", () => {
-    expect(isZoomAudioInitUrl("https://app.zoom.us/wc/84335626851/join?pwd=x")).toBe(true);
-    expect(isZoomAudioInitUrl("https://app.zoom.us/wc/84335626851/start")).toBe(true);
-    expect(isZoomAudioInitUrl("https://app.zoom.us/wc-loading/84335626851")).toBe(true);
-    expect(isZoomAudioInitUrl("https://app.zoom.us/wc/84335626851/videomeeting")).toBe(true);
+    expect(
+      isZoomAudioInitUrl("https://app.zoom.us/wc/84335626851/join?pwd=x"),
+    ).toBe(true);
+    expect(isZoomAudioInitUrl("https://app.zoom.us/wc/84335626851/start")).toBe(
+      true,
+    );
+    expect(
+      isZoomAudioInitUrl("https://app.zoom.us/wc-loading/84335626851"),
+    ).toBe(true);
+    expect(
+      isZoomAudioInitUrl("https://app.zoom.us/wc/84335626851/videomeeting"),
+    ).toBe(true);
   });
 
   it("does not match sign-in or non-Zoom URLs", () => {
@@ -104,7 +127,11 @@ describe("isZoomDomainUrl", () => {
   it("matches zoom regional domains and rejects lookalikes", () => {
     expect(isZoomDomainUrl("https://us05web.zoom.us/j/123")).toBe(true);
     expect(isZoomDomainUrl("https://zoom.com.cn/j/123")).toBe(true);
-    expect(isZoomDomainUrl("https://zoom-lfx.platform.linuxfoundation.org/meeting/1")).toBe(false);
+    expect(
+      isZoomDomainUrl(
+        "https://zoom-lfx.platform.linuxfoundation.org/meeting/1",
+      ),
+    ).toBe(false);
     expect(isZoomDomainUrl("https://example.com/")).toBe(false);
   });
 });

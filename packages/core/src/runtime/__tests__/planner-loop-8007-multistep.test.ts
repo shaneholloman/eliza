@@ -1,6 +1,3 @@
-import { describe, expect, it, vi } from "vitest";
-import { runPlannerLoop } from "../planner-loop";
-
 /**
  * Regression coverage for issue elizaOS/eliza#8007:
  * "v5 planner loops on `decision: CONTINUE` without advancing past the first
@@ -12,7 +9,7 @@ import { runPlannerLoop } from "../planner-loop";
  * 8 successive `ACTION_STARTED actionName=TASKS op=provision_workspace` events,
  * until the trajectory limit fired and Discord showed the 120s timeout.
  *
- * Two framework mechanisms now bound and unblock this loop; these tests pin
+ * Two framework mechanisms bound and unblock this loop; these tests pin
  * both against the exact orchestrator shape from the issue:
  *
  *  1. Prior successful tool results ARE surfaced into the next planner turn's
@@ -23,6 +20,9 @@ import { runPlannerLoop } from "../planner-loop";
  *     past `maxRepeatedToolCalls` forces one terminal synthesis instead of
  *     running the turn to the trajectory/token limit.
  */
+import { describe, expect, it, vi } from "vitest";
+import { runPlannerLoop } from "../planner-loop";
+
 describe("v5 planner #8007 - multi-step orchestrator advance", () => {
 	const REPO = "acme/hello-world";
 

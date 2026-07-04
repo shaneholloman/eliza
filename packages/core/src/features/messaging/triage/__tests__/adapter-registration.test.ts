@@ -1,3 +1,8 @@
+/**
+ * Exercises the TriageService registration contract: a connector-style adapter
+ * registered the way a plugin registers one resolves and drives the real
+ * triage() dispatch, and unknown sources are skipped rather than throwing.
+ */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { IAgentRuntime } from "../../../../types/index.ts";
 import { BaseMessageAdapter } from "../adapters/base.ts";
@@ -6,17 +11,13 @@ import {
 	__resetDefaultTriageServiceForTests,
 	getDefaultTriageService,
 } from "../triage-service.ts";
-import type {
-	ListOptions,
-	MessageRef,
-	MessageSource,
-} from "../types.ts";
+import type { ListOptions, MessageRef, MessageSource } from "../types.ts";
 import { createFakeRuntime } from "./fake-runtime.ts";
 
 /**
  * Mirrors what a connector plugin does at init: define an adapter for its own
- * source and register it into the shared TriageService. Core no longer ships
- * any connector-named adapters — they live in their owning plugins and register
+ * source and register it into the shared TriageService. Core ships no
+ * connector-named adapters — they live in their owning plugins and register
  * themselves. These tests pin that contract.
  */
 class TestConnectorAdapter extends BaseMessageAdapter {

@@ -1,3 +1,15 @@
+/**
+ * Reply-boundary egress test for the PII pseudonymization layer (#10827).
+ *
+ * The tool-call boundary (`execute-planned-tool-call.ts`) restores real PII into
+ * handler args, but a direct/terminal reply that does NOT go through a tool call
+ * would otherwise ship the surrogate to the user. `restorePiiInUserReplyText`
+ * is the restore wired into `createV5ReplyStrategyResult` — the single chokepoint
+ * every user-facing reply (direct `final_reply`, terminal `messageToUser`,
+ * terminal planner `REPLY`, LifeOps direct) is built through. This proves the
+ * user sees the REAL value while the surrogate is what the model produced
+ * (i.e. what the trajectory/providers kept).
+ */
 import { describe, expect, it } from "vitest";
 import {
 	GazetteerEntityRecognizer,
@@ -6,18 +18,6 @@ import {
 import { restorePiiInUserReplyText } from "../../services/message";
 import { runWithTrajectoryContext } from "../../trajectory-context";
 
-/**
- * Reply-boundary egress test for the PII pseudonymization layer (#10827).
- *
- * The tool-call boundary (`execute-planned-tool-call.ts`) already restores real
- * PII into handler args, but a direct/terminal reply that does NOT go through a
- * tool call was shipping the surrogate to the user. `restorePiiInUserReplyText`
- * is the restore wired into `createV5ReplyStrategyResult` — the single chokepoint
- * every user-facing reply (direct `final_reply`, terminal `messageToUser`,
- * terminal planner `REPLY`, LifeOps direct) is built through. This proves the
- * user sees the REAL value while the surrogate is what the model produced
- * (i.e. what the trajectory/providers kept).
- */
 
 /** A turn session over a known contact roster, exactly as the ingress mints one. */
 function sessionWithContacts(): PseudonymSession {

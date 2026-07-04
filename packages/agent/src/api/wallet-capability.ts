@@ -1,3 +1,13 @@
+/**
+ * Derives the agent's wallet capability status — the single computed shape the
+ * dashboard renders to explain what the wallet can and cannot do, so the client
+ * never has to reconstruct the gate itself. Resolves the effective wallet source
+ * (local / managed / none), network, EVM and Solana addresses, whether
+ * @elizaos/plugin-wallet (or a managed EVM bridge, or a live EVM service) is
+ * loaded, BSC RPC readiness, connectors-only vs full automation mode, and the EVM
+ * signing capability, then folds them into an executionReady flag plus a
+ * human-readable executionBlockedReason.
+ */
 import type { AgentRuntime } from "@elizaos/core";
 import type { ElizaConfig } from "../config/config.ts";
 import {
@@ -74,7 +84,10 @@ function hasRuntimeEvmService(runtime: AgentRuntime | null): boolean {
           ) {
             return true;
           }
-        } catch {}
+        } catch {
+          // error-policy:J3 service-registry probe — a lookup that throws means
+          // this provider isn't usable here; treated as absent, try the next.
+        }
       }
     }
     return false;
@@ -88,7 +101,10 @@ function hasRuntimeEvmService(runtime: AgentRuntime | null): boolean {
         if (getService(serviceName)) {
           return true;
         }
-      } catch {}
+      } catch {
+        // error-policy:J3 service-registry probe — a lookup that throws means
+        // this provider isn't usable here; treated as absent, try the next.
+      }
     }
     return false;
   } catch {

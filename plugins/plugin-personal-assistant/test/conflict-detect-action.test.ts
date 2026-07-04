@@ -146,7 +146,7 @@ describe("CONFLICT_DETECT umbrella action — proactive calendar scans", () => {
       expect(data.conflicts).toHaveLength(1);
       expect(data.conflicts[0]).toMatchObject({ severity: "hard" });
       expect(
-        new Set([data.conflicts[0]!.eventA.id, data.conflicts[0]!.eventB.id]),
+        new Set([data.conflicts[0]?.eventA.id, data.conflicts[0]?.eventB.id]),
       ).toEqual(new Set(["evt-a", "evt-b"]));
       expect(data.checkedEvents).toBe(3);
     });
@@ -180,8 +180,11 @@ describe("CONFLICT_DETECT umbrella action — proactive calendar scans", () => {
       const [{ start, end }] = seen;
       expect(start).toBeTruthy();
       expect(end).toBeTruthy();
+      if (!start || !end) {
+        throw new Error("Expected scan_week to pass a populated date range.");
+      }
       const days =
-        (Date.parse(end!) - Date.parse(start!)) / (24 * 60 * 60 * 1000);
+        (Date.parse(end) - Date.parse(start)) / (24 * 60 * 60 * 1000);
       expect(days).toBeGreaterThanOrEqual(6.9);
       expect(days).toBeLessThanOrEqual(8.1);
     });
@@ -210,7 +213,7 @@ describe("CONFLICT_DETECT umbrella action — proactive calendar scans", () => {
       });
       const data = result.data as { conflicts: { severity: string }[] };
       expect(data.conflicts).toHaveLength(1);
-      expect(data.conflicts[0]!.severity).toBe("warning");
+      expect(data.conflicts[0]?.severity).toBe("warning");
     });
   });
 
@@ -481,10 +484,10 @@ describe("CONFLICT_DETECT umbrella action — proactive calendar scans", () => {
       expect(data.checkedEvents).toBe(2);
       expect(data.conflicts).toHaveLength(1);
       expect(
-        new Set([data.conflicts[0]!.eventA.id, data.conflicts[0]!.eventB.id]),
+        new Set([data.conflicts[0]?.eventA.id, data.conflicts[0]?.eventB.id]),
       ).toEqual(new Set(["evt-flight", "evt-board"]));
       // Shared attendee email (null emails dropped) makes the overlap hard.
-      expect(data.conflicts[0]!.severity).toBe("hard");
+      expect(data.conflicts[0]?.severity).toBe("hard");
     });
 
     it("excludes all-day events so they never fabricate conflicts", async () => {

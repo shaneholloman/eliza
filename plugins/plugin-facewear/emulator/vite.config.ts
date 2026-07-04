@@ -1,9 +1,19 @@
+/**
+ * Vite build configuration for the browser-side XR emulator injected by
+ * Playwright.
+ */
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
-// Builds the browser-side emulator as a self-contained IIFE.
-// Output: dist/emulator.js — injected into pages by Playwright via addInitScript.
+const require = createRequire(import.meta.url);
+
 export default defineConfig({
+  resolve: {
+    alias: {
+      iwer: require.resolve("iwer"),
+    },
+  },
   build: {
     lib: {
       entry: resolve(__dirname, "src/emulator.ts"),
@@ -15,7 +25,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         inlineDynamicImports: true,
-        // Force the output filename to emulator.js (not emulator.iife.js)
+        // Playwright fixtures load this exact filename with addInitScript.
         entryFileNames: "[name].js",
       },
     },

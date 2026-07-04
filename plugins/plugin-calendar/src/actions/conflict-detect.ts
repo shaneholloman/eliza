@@ -1,3 +1,9 @@
+/**
+ * Registers the scaffolded CONFLICT_DETECT action and its calendar-conflict
+ * sub-op vocabulary. The action is intentionally non-mutating until the full
+ * conflict scanner is migrated; each recognized op returns a scaffold failure
+ * instead of pretending to inspect the owner's feed.
+ */
 import type {
   Action,
   ActionResult,
@@ -6,21 +12,6 @@ import type {
   Memory,
   State,
 } from "@elizaos/core";
-
-/**
- * CONFLICT_DETECT calendar-conflict scanner action — STUB.
- *
- * MIGRATION STATUS: STUB.
- * TODO(migrate: plugins/plugin-lifeops/src/actions/conflict-detect.ts)
- *
- * Reference subactions to port (see lifeops source `SUBACTIONS`):
- *   - scan_today: surface overlapping events for today.
- *   - scan_week:  surface overlapping events across the rolling week.
- *   - scan_event_proposal: check a proposed window vs the owner feed.
- *
- * For now this returns `scaffold_stub` so callers see exactly which subaction
- * needs to be migrated.
- */
 
 const CONFLICT_DETECT_OPS = [
   "scan_today",
@@ -84,8 +75,6 @@ export const conflictDetectAction: Action = {
     _message: Memory,
     _state?: State,
   ): Promise<boolean> => {
-    // TODO(migrate: plugins/plugin-lifeops/src/actions/conflict-detect.ts):
-    // port the owner role gate + lifeops access check.
     return true;
   },
   handler: async (
@@ -111,19 +100,16 @@ export const conflictDetectAction: Action = {
 
     switch (op as ConflictDetectOp) {
       case "scan_today":
-        // TODO(migrate: plugins/plugin-lifeops/src/actions/conflict-detect.ts scan_today branch)
         return failure(
           "scaffold_stub",
           "CONFLICT_DETECT.scan_today is not migrated yet.",
         );
       case "scan_week":
-        // TODO(migrate: plugins/plugin-lifeops/src/actions/conflict-detect.ts scan_week branch)
         return failure(
           "scaffold_stub",
           "CONFLICT_DETECT.scan_week is not migrated yet.",
         );
       case "scan_event_proposal":
-        // TODO(migrate: plugins/plugin-lifeops/src/actions/conflict-detect.ts scan_event_proposal branch)
         return failure(
           "scaffold_stub",
           "CONFLICT_DETECT.scan_event_proposal is not migrated yet.",

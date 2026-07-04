@@ -12,5 +12,14 @@
       "status flips planned -> authored once the scenario file/literal exists; -> verified once a real-LLM run has been captured and hand-reviewed per PR_EVIDENCE.md."
     ]
   },
-  "scenarios": []
+  "scenarios": [
+    {
+      "id": "night-owl-flexible-habit-any-time-today",
+      "pack": "B1",
+      "tier": "T1",
+      "surface": "scenario-runner",
+      "status": "authored",
+      "notes": "Follow-up to #12972: the first live report resolved 2026-07-04T13:00:00Z to 09:00 America/New_York, so it is not verified until recaptured with the structural forbiddenDueLocalTimes check passing."
+    }
+  ]
 }

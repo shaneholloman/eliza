@@ -1,3 +1,9 @@
+/**
+ * Coverage for the Stage 1 available-contexts catalog: `formatAvailableContextsForPrompt`
+ * rendering (compact and role-gated) and the role-scoped context list injected
+ * into the `runV5MessageRuntimeStage1` system prompt. Deterministic `vi`-mocked
+ * runtime with a canned tool-call response; no live model.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { HANDLE_RESPONSE_TOOL_NAME } from "../actions/to-tool";
 import { BUILTIN_RESPONSE_HANDLER_FIELD_EVALUATORS } from "../runtime/builtin-field-evaluators";
@@ -163,6 +169,30 @@ describe("formatAvailableContextsForPrompt", () => {
 		expect(formatAvailableContextsForPrompt([])).toBe(
 			"(no contexts registered)",
 		);
+	});
+
+	it("compact mode renders descriptionCompressed and never the full description", () => {
+		const contexts: readonly ContextDefinition[] = [
+			{
+				id: "general",
+				label: "General",
+				description: "Normal conversation.",
+			},
+			{
+				id: "tasks",
+				label: "Tasks",
+				description: "A very long routing description that must not render.",
+				descriptionCompressed: "reminders/habits/todos",
+			},
+		];
+		const block = formatAvailableContextsForPrompt(contexts, {
+			compact: true,
+		});
+		// Compressed hint when present; bare id line when absent.
+		expect(block).toContain("- tasks [label=Tasks]: reminders/habits/todos");
+		expect(block).toContain("- general [label=General]");
+		expect(block).not.toContain("Normal conversation.");
+		expect(block).not.toContain("must not render");
 	});
 });
 

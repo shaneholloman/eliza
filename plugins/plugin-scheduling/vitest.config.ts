@@ -1,3 +1,7 @@
+/**
+ * Vitest configuration for scheduling runner and route tests in a Node
+ * environment.
+ */
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({

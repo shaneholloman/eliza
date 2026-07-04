@@ -318,21 +318,9 @@
       "outputs": ["dist/**"]
     },
     "lint": {
-      "dependsOn": [
-        "@elizaos/core#build",
-        "@elizaos/shared#build",
-        "@elizaos/plugin-agent-skills#build",
-        "@elizaos/plugin-app-manager#build"
-      ],
       "outputs": []
     },
     "lint:check": {
-      "dependsOn": [
-        "@elizaos/core#build",
-        "@elizaos/shared#build",
-        "@elizaos/plugin-agent-skills#build",
-        "@elizaos/plugin-app-manager#build"
-      ],
       "outputs": []
     },
     "typecheck": {
@@ -351,8 +339,6 @@
       "dependsOn": [
         "@elizaos/core#build",
         "@elizaos/shared#build",
-        "@elizaos/plugin-agent-skills#build",
-        "@elizaos/plugin-app-manager#build",
         "@elizaos/agent#build",
         "^build"
       ],
@@ -362,13 +348,11 @@
       "dependsOn": [
         "@elizaos/plugin-browser#build",
         "@elizaos/plugin-personal-assistant#build",
-        "@elizaos/plugin-registry#build",
         "@elizaos/ui#build"
       ],
       "outputs": []
     },
     "@elizaos/cloud-api#typecheck": {
-      "dependsOn": ["@elizaos/plugin-cloud-apps#build"],
       "outputs": []
     },
     "@elizaos/cloud-shared#typecheck": {
@@ -376,7 +360,7 @@
       "outputs": []
     },
     "@elizaos/plugin-discord#typecheck": {
-      "dependsOn": ["@elizaos/plugin-sql#build", "^build"],
+      "dependsOn": ["^build"],
       "outputs": []
     },
     "@elizaos/plugin-tailscale#typecheck": {
@@ -384,25 +368,23 @@
       "outputs": []
     },
     "@elizaos/plugin-calendar#typecheck": {
-      "dependsOn": [
-        "@elizaos/plugin-app-manager#build",
-        "@elizaos/plugin-browser#build",
-        "@elizaos/plugin-capacitor-bridge#build",
-        "@elizaos/plugin-coding-tools#build",
-        "@elizaos/plugin-registry#build",
-        "@elizaos/plugin-remote-manifest#build",
-        "@elizaos/plugin-task-coordinator#build"
-      ],
       "outputs": []
     },
     "@elizaos/plugin-personal-assistant#typecheck": {
       "dependsOn": [
         "@elizaos/plugin-blocker#build",
         "@elizaos/plugin-calendar#build",
+        "@elizaos/plugin-calendly#build",
         "@elizaos/plugin-finances#build",
         "@elizaos/plugin-goals#build",
+        "@elizaos/plugin-health#build",
         "@elizaos/plugin-inbox#build",
-        "@elizaos/plugin-reminders#build"
+        "@elizaos/plugin-reminders#build",
+        "@elizaos/plugin-remote-desktop#build",
+        "@elizaos/plugin-x#build",
+        "@elizaos/capacitor-mobile-signals#build",
+        "@elizaos/macosreminders#build",
+        "@elizaos/native-activity-tracker#build"
       ],
       "outputs": []
     },
@@ -420,30 +402,16 @@
         "@elizaos/core#build",
         "@elizaos/shared#build",
         "@elizaos/ui#build",
-        "@elizaos/plugin-agent-skills#build",
-        "@elizaos/plugin-app-manager#build",
-        "@elizaos/plugin-task-coordinator#build",
         "^build"
       ],
       "outputs": []
     },
     "@elizaos/plugin-capacitor-bridge#typecheck": {
-      "dependsOn": [
-        "@elizaos/core#build",
-        "@elizaos/shared#build",
-        "@elizaos/plugin-agent-skills#build",
-        "@elizaos/plugin-app-manager#build",
-        "@elizaos/ui#build",
-        "^build"
-      ],
+      "dependsOn": ["@elizaos/core#build", "@elizaos/shared#build", "^build"],
       "outputs": []
     },
     "@elizaos/example-autonomous#typecheck": {
-      "dependsOn": [
-        "@elizaos/app-core#build",
-        "@elizaos/agent#build",
-        "^build"
-      ],
+      "dependsOn": ["^build"],
       "outputs": []
     },
     "@elizaos/example-telegram#typecheck": {
@@ -527,19 +495,11 @@
       "outputs": []
     },
     "@elizaos/plugin-sub-agent-claude-code#typecheck": {
-      "dependsOn": [
-        "@elizaos/plugin-remote-manifest#build",
-        "@elizaos/plugin-worker-runtime#build",
-        "^build"
-      ],
+      "dependsOn": ["@elizaos/plugin-remote-manifest#build", "^build"],
       "outputs": []
     },
     "@elizaos/plugin-local-inference#typecheck": {
-      "dependsOn": [
-        "@elizaos/agent#build",
-        "@elizaos/plugin-task-coordinator#build",
-        "^build"
-      ],
+      "dependsOn": ["@elizaos/agent#build", "^build"],
       "outputs": []
     },
     "@elizaos/example-farcaster#build": {
@@ -572,24 +532,13 @@
     "start": {
       "dependsOn": ["@elizaos/core#build"],
       "env": ["LOG_LEVEL"],
+      "cache": false,
       "persistent": true
     },
     "dev": {
       "dependsOn": ["@elizaos/core#build"],
+      "cache": false,
       "persistent": true
-    },
-    "test": {
-      "dependsOn": ["^build"],
-      "outputs": ["coverage/**"],
-      "inputs": [
-        "src/**/*.ts",
-        "src/**/*.js",
-        "__tests__/**/*",
-        "*.test.*",
-        "package.json",
-        "tests/**/*"
-      ],
-      "cache": false
     },
     "migrate": {
       "dependsOn": ["@elizaos/core#build"],

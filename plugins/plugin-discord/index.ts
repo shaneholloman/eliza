@@ -20,10 +20,10 @@ import { registerDiscordTargetSource } from "./discord-target-source";
 import { DiscordOwnerPairingServiceImpl } from "./owner-pairing-service";
 import { getPermissionValues } from "./permissions";
 import { registerDiscordDmSensitiveRequestAdapter } from "./sensitive-request-adapter";
-import { registerDiscordTriageAdapter } from "./triage-adapter";
 import { DiscordService } from "./service";
 import { discordSetupRoutes } from "./setup-routes";
 import { DiscordTestSuite } from "./tests";
+import { registerDiscordTriageAdapter } from "./triage-adapter";
 import { DiscordUserAccountScraperImpl } from "./user-account-scraper/service";
 
 const discordPlugin: Plugin = {
@@ -338,6 +338,8 @@ export {
 export type { DiscordService as IDiscordService } from "./service";
 export { DiscordService } from "./service";
 export { discordSetupRoutes } from "./setup-routes";
+// Message-triage adapter (registered at init; exported for tests/consumers)
+export { DiscordTriageAdapter, mapDiscordMemoryToRef } from "./triage-adapter";
 export type {
 	AuditInfo,
 	ChannelPermissionsChangedPayload,

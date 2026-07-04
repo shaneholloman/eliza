@@ -1,3 +1,11 @@
+/**
+ * #12087 Item 17: CHARACTER declares a coarse `roleGate: { minRole: "ADMIN" }`
+ * (the floor enforced by canActionRun) but `update_identity` (rename agent /
+ * replace system prompt) requires OWNER. That finer per-op requirement lives in
+ * the single, exported CHARACTER_OP_ACCESS map the handler enforces uniformly,
+ * not in scattered inline `hasRoleAccess` checks invisible in the metadata.
+ * Deterministic: `hasRoleAccess` is mocked; no live model or DB.
+ */
 import { describe, expect, it, vi } from "vitest";
 import type {
 	HandlerCallback,
@@ -6,14 +14,6 @@ import type {
 	State,
 } from "../../../../types/index.ts";
 
-/**
- * #12087 Item 17: CHARACTER declares a coarse `roleGate: { minRole: "ADMIN" }`
- * (the floor enforced by canActionRun) but `update_identity` (rename agent /
- * replace system prompt) requires OWNER. That per-op requirement used to be
- * three scattered inline `hasRoleAccess` checks — invisible in the metadata and
- * contradicting the declared gate. It now lives in the single, exported
- * CHARACTER_OP_ACCESS map that the handler enforces uniformly.
- */
 const rolesMock = vi.hoisted(() => ({ hasRoleAccess: vi.fn() }));
 vi.mock("../../../../roles.ts", () => rolesMock);
 
