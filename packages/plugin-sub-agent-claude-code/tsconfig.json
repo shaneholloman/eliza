@@ -28,7 +28,7 @@
       "@elizaos/security": ["../security/src/index.ts"],
       "@elizaos/security/*": ["../security/src/*"]
     },
-    "rootDir": "src",
+    "rootDir": "..",
     "outDir": "dist"
   },
   "include": ["src/**/*.ts"]
