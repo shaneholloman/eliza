@@ -33,6 +33,7 @@ export function fuzzyMatch(query: string, text: string): FuzzyMatch {
       i++
     ) {
       if (textLower[i] === normalizedQuery[queryIndex]) {
+        // biome-ignore lint/style/noNonNullAssertion: short-circuited by i === 0, so this is only read when i >= 1 and textLower[i - 1] is in bounds.
         const isWordBoundary = i === 0 || /[\s\-_./:]/.test(textLower[i - 1]!);
 
         // Reward consecutive matches

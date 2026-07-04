@@ -44,6 +44,7 @@ describe("TruncatedText component", () => {
 
     assert.strictEqual(visibleWidth(lines[0]), 30);
 
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
     const stripped = lines[0].replace(/\x1b\[[0-9;]*m/g, "");
     assert.ok(stripped.includes("..."));
   });
@@ -81,6 +82,7 @@ describe("TruncatedText component", () => {
     assert.strictEqual(lines.length, 1);
     assert.strictEqual(visibleWidth(lines[0]), 30);
 
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
     const stripped = lines[0].replace(/\x1b\[[0-9;]*m/g, "");
     assert.ok(!stripped.includes("..."));
   });
@@ -101,6 +103,7 @@ describe("TruncatedText component", () => {
     assert.strictEqual(lines.length, 1);
     assert.strictEqual(visibleWidth(lines[0]), 40);
 
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
     const stripped = lines[0].replace(/\x1b\[[0-9;]*m/g, "").trim();
     assert.ok(stripped.includes("First line"));
     assert.ok(!stripped.includes("Second line"));
@@ -116,6 +119,7 @@ describe("TruncatedText component", () => {
     assert.strictEqual(lines.length, 1);
     assert.strictEqual(visibleWidth(lines[0]), 25);
 
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
     const stripped = lines[0].replace(/\x1b\[[0-9;]*m/g, "");
     assert.ok(stripped.includes("..."));
     assert.ok(!stripped.includes("Second line"));

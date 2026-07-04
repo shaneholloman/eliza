@@ -44,6 +44,7 @@ describe("Markdown component", () => {
 
       // Strip ANSI codes for checking
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
 
@@ -67,6 +68,7 @@ describe("Markdown component", () => {
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
 
@@ -90,6 +92,7 @@ describe("Markdown component", () => {
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
 
@@ -113,6 +116,7 @@ describe("Markdown component", () => {
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
 
@@ -147,6 +151,7 @@ describe("Markdown component", () => {
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, "").trim(),
       );
 
@@ -190,6 +195,7 @@ describe("Markdown component", () => {
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
 
@@ -216,6 +222,7 @@ describe("Markdown component", () => {
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
       const dividerLines = plainLines.filter((line) => line.includes("┼"));
@@ -241,6 +248,7 @@ describe("Markdown component", () => {
 
       const lines = markdown.render(32);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
       const dataLine = plainLines.find((line) => line.includes(longestWord));
@@ -270,6 +278,7 @@ describe("Markdown component", () => {
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
 
@@ -298,6 +307,7 @@ describe("Markdown component", () => {
       assert.ok(lines.length > 0);
 
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
       assert.ok(
@@ -324,6 +334,7 @@ describe("Markdown component", () => {
       // Render at narrow width that forces wrapping
       const lines = markdown.render(50);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd(),
       );
 
@@ -362,6 +373,7 @@ describe("Markdown component", () => {
       // Render at width that forces the cell to wrap
       const lines = markdown.render(25);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd(),
       );
 
@@ -402,6 +414,7 @@ describe("Markdown component", () => {
       const width = 30;
       const lines = markdown.render(width);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd(),
       );
 
@@ -450,6 +463,7 @@ describe("Markdown component", () => {
       );
 
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd(),
       );
       for (const line of plainLines) {
@@ -483,6 +497,7 @@ describe("Markdown component", () => {
       // Very narrow width
       const lines = markdown.render(15);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd(),
       );
 
@@ -511,6 +526,7 @@ describe("Markdown component", () => {
       // Wide width where table fits naturally
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd(),
       );
 
@@ -545,6 +561,7 @@ describe("Markdown component", () => {
       // Width 40 with paddingX=2 means contentWidth=36
       const lines = markdown.render(40);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd(),
       );
 
@@ -581,6 +598,7 @@ describe("Markdown component", () => {
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
 
@@ -715,6 +733,7 @@ again, hello world`,
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd(),
       );
 
@@ -747,6 +766,7 @@ again, hello world`,
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd(),
       );
 
@@ -777,6 +797,7 @@ This is a paragraph`,
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd(),
       );
 
@@ -811,6 +832,7 @@ again, hello world`,
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd(),
       );
 
@@ -848,6 +870,7 @@ bar`,
 
       // Both lines should have the quote border
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
       const quotedLines = plainLines.filter((line) => line.startsWith("│ "));
@@ -900,6 +923,7 @@ bar`,
 
       // Both lines should have the quote border
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
       const quotedLines = plainLines.filter((line) => line.startsWith("│ "));
@@ -945,6 +969,7 @@ bar`,
       // Render at narrow width to force wrapping
       const lines = markdown.render(30);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd(),
       );
 
@@ -986,6 +1011,7 @@ bar`,
 
       const lines = markdown.render(25);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd(),
       );
 
@@ -1021,6 +1047,7 @@ bar`,
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
 
@@ -1069,6 +1096,7 @@ bar`,
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
       const joinedPlain = plainLines.join(" ");
@@ -1094,6 +1122,7 @@ bar`,
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
       const joinedPlain = plainLines.join(" ");
@@ -1114,6 +1143,7 @@ bar`,
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
       const joinedPlain = plainLines.join(" ");
@@ -1136,6 +1166,7 @@ bar`,
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
       const joinedPlain = plainLines.join(" ");
@@ -1162,6 +1193,7 @@ bar`,
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
       const joinedPlain = plainLines.join(" ");
@@ -1184,6 +1216,7 @@ bar`,
 
       const lines = markdown.render(80);
       const plainLines = lines.map((line) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matches SGR sequences (literal ESC \x1b) to strip ANSI color codes from rendered output.
         line.replace(/\x1b\[[0-9;]*m/g, ""),
       );
       const joinedPlain = plainLines.join("\n");
