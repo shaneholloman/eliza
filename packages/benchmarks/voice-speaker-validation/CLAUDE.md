@@ -2,8 +2,11 @@
 
 W3-6 multi-speaker audio validation benchmark: diarization accuracy, speaker ID
 cosine thresholds, entity creation (Jill scenario), owner LRU cache latency, and
-async profile search. Not registered in the suite orchestrator — run directly via
-pytest.
+async profile search. The #12494 lifecycle gate additionally covers enrollment,
+naming/correction provenance, merge/split/delete/revoke/export/bind-unbind,
+short utterance bins, spoof/replay, similar-voice confusion, and metrics math
+with deterministic synthetic embeddings. Not registered in the suite
+orchestrator — run directly via pytest.
 
 ## Run
 
@@ -29,6 +32,8 @@ pytest tests/test_speaker_id.py -v          # intra/inter cosine thresholds
 pytest tests/test_entity_creation.py -v    # Jill scenario end-to-end
 pytest tests/test_owner_lru_cache.py -v    # hot-profile latency < 50 ms
 pytest tests/test_async_search.py -v       # async profile search
+pytest tests/test_voice_profile_lifecycle.py -v # #12494 no-audio lifecycle gate
+python voice_profile_lifecycle.py          # write artifacts/voice-profile-lifecycle.json
 ```
 
 ## Layout
@@ -42,8 +47,10 @@ pytest tests/test_async_search.py -v       # async profile search
 | `tests/test_entity_creation.py` | Full Jill scenario: 2 entities, partner_of edge, no duplicates |
 | `tests/test_owner_lru_cache.py` | Owner hot-profile lookup latency < 50 ms |
 | `tests/test_async_search.py` | Async profile search correctness |
+| `tests/test_voice_profile_lifecycle.py` | #12494 lifecycle and metrics gate without audio fixtures |
 | `tests/test_diarization_production.py` | Production-stack diarization tests (needs live stack) |
 | `tests/production_stack.py` | Production stack helpers |
+| `voice_profile_lifecycle.py` | Deterministic lifecycle report writer |
 | `fixtures/manifest.json` | Ground-truth segment boundaries for 5 audio fixtures (f1–f5) |
 | `pyproject.toml` | Package definition and pytest config |
 
