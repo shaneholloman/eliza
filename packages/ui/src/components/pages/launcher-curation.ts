@@ -30,6 +30,7 @@ import {
 } from "@elizaos/core";
 import type { ViewEntry } from "../../hooks/view-catalog";
 import { LAUNCHER_AOSP_ONLY_VIEW_IDS, pathForTab } from "../../navigation";
+import { getInternalToolAppTargetTab } from "../apps/internal-tool-apps";
 
 /** Everyday apps, in display order. They lead the single launcher page; other
  *  loaded apps append after (alphabetically). */
@@ -109,22 +110,30 @@ export const LAUNCHER_HIDDEN_IDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Duplicate/alias ids collapsed onto one canonical launcher id. Kills the double
- * "Wallet" (standalone `wallet` view + `wallet.inventory` app-shell page +
- * builtin `inventory` tab) and double "Automations" (`automations` + `triggers`)
- * tiles, and folds the standalone tasks/todos surfaces into Automations.
+ * Legacy id-alias fallback: duplicate/short-id aliases collapsed onto one
+ * canonical launcher id. Kills the double "Wallet" (standalone `wallet` view +
+ * `wallet.inventory` app-shell page + builtin `inventory` tab) and double
+ * "Automations" (`automations` + `triggers`) tiles, and folds the standalone
+ * tasks/todos surfaces into Automations.
+ *
+ * These are SHORT builtin-tab / view-id aliases only — NOT package names. The
+ * package-name → canonical mapping (`@elizaos/plugin-training` →
+ * `fine-tuning`, …) used to live here as a hand-maintained `@elizaos/...`
+ * switch that silently drifted from the owning app declarations; it now derives
+ * from the internal-tool app declarations' own `targetTab` metadata via
+ * {@link getInternalToolAppTargetTab} (see `canonicalLauncherId`). This map is
+ * the covered legacy host-owned fallback for the remaining id aliases that have
+ * no owning declaration.
  */
-const CANONICAL_ID: ReadonlyMap<string, string> = new Map([
+const LEGACY_ID_ALIAS_FALLBACK: ReadonlyMap<string, string> = new Map([
   ["inventory", "wallet"],
   ["wallet.inventory", "wallet"],
-  ["@elizaos/plugin-wallet-ui", "wallet"],
   ["triggers", "automations"],
   ["todos", "automations"],
   // The task-coordinator plugin view + the builtin Tasks tab are the one Tasks
   // orchestrator surface (/apps/tasks); collapse to a single tile.
   ["task-coordinator", "tasks"],
   ["knowledge", "documents"],
-  ["@elizaos/plugin-documents-routes", "documents"],
   ["plugins-page", "plugins"],
   ["trajectory-logger", "trajectories"],
   ["trajectory-viewer", "trajectories"],
@@ -137,15 +146,29 @@ const CANONICAL_ID: ReadonlyMap<string, string> = new Map([
   // Triple "Fine-Tuning" tile: the `advanced` builtin tab alias, the
   // `fine-tuning` builtin tab, and the plugin-training app registration
   // (view id `training`) all route to /apps/fine-tuning — collapse to one
-  // tile (#10710).
+  // tile (#10710). The `@elizaos/plugin-training` package name is handled by
+  // its declaration's `targetTab`, not a literal here.
   ["advanced", "fine-tuning"],
   ["training", "fine-tuning"],
-  ["plugin-training", "fine-tuning"],
-  ["@elizaos/plugin-training", "fine-tuning"],
 ]);
 
+/**
+ * Resolve the canonical launcher id an entry id collapses onto.
+ *
+ * Precedence:
+ *  1. Owner-declared metadata: if `id` is an internal-tool app package name, its
+ *     declaration's `targetTab` IS the canonical launcher id (so a package
+ *     rename/add flows through with no edit here — the coupling the audit
+ *     flagged). This replaces the old hand-kept `@elizaos/...` → canonical
+ *     switch.
+ *  2. Legacy id-alias fallback: covered short builtin-tab / view-id aliases with
+ *     no owning declaration (`inventory`, `triggers`, `rolodex`, …).
+ *  3. Identity: the id is already canonical.
+ */
 export function canonicalLauncherId(id: string): string {
-  return CANONICAL_ID.get(id) ?? id;
+  const declaredTargetTab = getInternalToolAppTargetTab(id);
+  if (declaredTargetTab) return declaredTargetTab;
+  return LEGACY_ID_ALIAS_FALLBACK.get(id) ?? id;
 }
 
 const APPS_INDEX = new Map(LAUNCHER_APPS_ORDER.map((id, i) => [id, i]));
