@@ -152,16 +152,32 @@ async function getX402Plugin(): Promise<X402PluginModule | null> {
   return x402PluginModulePromise;
 }
 
+// Package specifier per optional-plugin key. Kept alongside the import table so
+// the unavailable-plugin fallback can key its "is this the plugin package itself
+// that's absent (benign) vs a broken transitive import (drift)" decision on the
+// real specifier rather than the short key. See optional-plugin-fallback.ts.
+const optionalPluginSpecifiers = {
+  capacitor: "@elizaos/plugin-capacitor-bridge",
+  computerUse: "@elizaos/plugin-computeruse",
+  cloud: "@elizaos/plugin-elizacloud",
+  imessage: "@elizaos/plugin-imessage",
+  mcp: "@elizaos/plugin-mcp",
+  signal: "@elizaos/plugin-signal",
+  streaming: "@elizaos/plugin-streaming",
+  whatsapp: "@elizaos/plugin-whatsapp",
+  workflow: "@elizaos/plugin-workflow",
+} as const;
+
 const optionalPluginImports = {
-  capacitor: () => importOptionalPlugin("@elizaos/plugin-capacitor-bridge"),
-  computerUse: () => importOptionalPlugin("@elizaos/plugin-computeruse"),
-  cloud: () => importOptionalPlugin("@elizaos/plugin-elizacloud"),
-  imessage: () => importOptionalPlugin("@elizaos/plugin-imessage"),
-  mcp: () => importOptionalPlugin("@elizaos/plugin-mcp"),
-  signal: () => importOptionalPlugin("@elizaos/plugin-signal"),
-  streaming: () => importOptionalPlugin("@elizaos/plugin-streaming"),
-  whatsapp: () => importOptionalPlugin("@elizaos/plugin-whatsapp"),
-  workflow: () => importOptionalPlugin("@elizaos/plugin-workflow"),
+  capacitor: () => importOptionalPlugin(optionalPluginSpecifiers.capacitor),
+  computerUse: () => importOptionalPlugin(optionalPluginSpecifiers.computerUse),
+  cloud: () => importOptionalPlugin(optionalPluginSpecifiers.cloud),
+  imessage: () => importOptionalPlugin(optionalPluginSpecifiers.imessage),
+  mcp: () => importOptionalPlugin(optionalPluginSpecifiers.mcp),
+  signal: () => importOptionalPlugin(optionalPluginSpecifiers.signal),
+  streaming: () => importOptionalPlugin(optionalPluginSpecifiers.streaming),
+  whatsapp: () => importOptionalPlugin(optionalPluginSpecifiers.whatsapp),
+  workflow: () => importOptionalPlugin(optionalPluginSpecifiers.workflow),
 };
 
 type LocalInferenceServerApi = LocalInferenceRouteApi &
@@ -188,26 +204,25 @@ async function getOptionalPluginApi<T>(
   try {
     return (await optionalPluginImports[key]()) as T;
   } catch (err) {
-    // The plugin is optional and not in this bundle (on mobile, many
-    // desktop/cloud plugins — cloud, whatsapp, wallet-adjacent, mcp,
-    // streaming, … — are excluded). Its dynamic import REJECTS with a
-    // ResolveMessage; without this catch that rejection propagates to the
-    // top-level request handler as a 500 on EVERY renderer poll of the
-    // plugin's routes. Return a Proxy of no-op handlers so route-dispatch
-    // blocks (`if (await handleX(...)) return;`) fall through to the normal
-    // 404/fallback instead of erroring. On desktop/server the import succeeds,
-    // so this branch never runs there.
-    logger.debug(
-      `[eliza-api] optional plugin '${key}' unavailable in this bundle: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+    // The plugin is optional and (on mobile) many desktop/cloud plugins — cloud,
+    // whatsapp, wallet-adjacent, mcp, streaming, … — are excluded, so their
+    // dynamic import REJECTS with a module-resolution error. Without this catch
+    // that rejection propagates to the top-level request handler as a 500 on
+    // EVERY renderer poll of the plugin's routes. We fall back to a no-op API so
+    // route-dispatch blocks (`if (await handleX(...)) return;`) fall through to
+    // the normal 404 instead of erroring.
+    //
+    // resolveOptionalPluginImportFailure distinguishes the EXPECTED
+    // module-absent case (quiet debug + fallthrough) from a present-but-broken
+    // plugin (a package that resolved but threw at init, or whose accessed
+    // export was renamed/removed). The latter is a drift regression the old
+    // silent Proxy hid — it now warns so a broken/renamed handler is observable
+    // instead of silently 404ing forever. See optional-plugin-fallback.ts.
+    return resolveOptionalPluginImportFailure<T>(
+      String(key),
+      err,
+      optionalPluginSpecifiers[key],
     );
-    return new Proxy(
-      {},
-      {
-        get: () => () => false,
-      },
-    ) as T;
   }
 }
 type BrowserBridgeKind = BrowserPluginModule["BROWSER_BRIDGE_KINDS"][number];
@@ -252,18 +267,14 @@ function getWalletApi(): Promise<typeof import("@elizaos/plugin-wallet")> {
     typeof import("@elizaos/plugin-wallet")
   >("@elizaos/plugin-wallet").catch((err) => {
     // plugin-wallet is desktop/cloud-only; on mobile it is not in the bundle so
-    // this import REJECTS. Cache a no-op proxy so /api/wallet/* falls through to
-    // 404 instead of 500ing on every renderer poll. Desktop imports succeed, so
-    // this never runs there.
-    logger.debug(
-      `[eliza-api] plugin-wallet unavailable in this bundle: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-    return new Proxy(
-      {},
-      { get: () => () => false },
-    ) as typeof import("@elizaos/plugin-wallet");
+    // this import REJECTS. Cache a no-op fallback so /api/wallet/* falls through
+    // to 404 instead of 500ing on every renderer poll. Desktop imports succeed,
+    // so this branch never runs there. resolveOptionalPluginImportFailure keeps
+    // the benign module-absent case quiet while surfacing a present-but-broken
+    // plugin-wallet load (drift) as an observable warning.
+    return resolveOptionalPluginImportFailure<
+      typeof import("@elizaos/plugin-wallet")
+    >("@elizaos/plugin-wallet", err, "@elizaos/plugin-wallet");
   });
   return walletApiPromise;
 }
@@ -382,6 +393,7 @@ import {
   loadLocalInferenceVoiceRouteApi,
 } from "./local-inference-server-api.ts";
 import { pushWithBatchEvict } from "./memory-bounds.ts";
+import { resolveOptionalPluginImportFailure } from "./optional-plugin-fallback.ts";
 import {
   buildPluginDiagnosticEntry,
   resolveWalletDiagnosticStatus,
