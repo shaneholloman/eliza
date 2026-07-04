@@ -1,6 +1,6 @@
 # Manual review — Developer launcher page (fine-pointer, dev mode)
 
-Screenshot: `screenshots/launcher-desktop-developer-page.png` (from
+Screenshot: `launcher-desktop-developer-page.png` (from
 `test:home-screen-e2e`, developer-mode-on profile).
 
 ## Verdict: good

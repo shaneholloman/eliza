@@ -11,6 +11,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { goHome, goLauncher } from "../../state/shell-surface-store";
 import { HomeLauncherSurface } from "./HomeLauncherSurface";
@@ -209,6 +210,27 @@ describe("HomeLauncherSurface", () => {
     expect(screen.queryByTestId("rail-pager-edge-next")).toBeNull();
 
     fireEvent.click(screen.getByTestId("rail-pager-edge-prev"));
+    expect(surface.getAttribute("data-page")).toBe("home");
+  });
+
+  it("activates the edge buttons from the keyboard (Enter opens the launcher, Space returns home)", async () => {
+    mockDesktopPagingMedia({ finePointer: true });
+    const user = userEvent.setup();
+    render(
+      <HomeLauncherSurface
+        home={<div>home</div>}
+        launcher={<LauncherProbe />}
+      />,
+    );
+    const surface = screen.getByTestId("home-launcher-surface");
+    expect(surface.getAttribute("data-page")).toBe("home");
+
+    screen.getByTestId("rail-pager-edge-next").focus();
+    await user.keyboard("{Enter}");
+    expect(surface.getAttribute("data-page")).toBe("launcher");
+
+    screen.getByTestId("rail-pager-edge-prev").focus();
+    await user.keyboard(" ");
     expect(surface.getAttribute("data-page")).toBe("home");
   });
 

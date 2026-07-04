@@ -462,3 +462,31 @@ describe("useHorizontalPager — mouse-button guards + committed-swipe click sup
     expect(onRailClick).not.toHaveBeenCalled();
   });
 });
+
+describe("useHorizontalPager — pointercancel abandonment", () => {
+  it("a pointercancel mid-drag settles back with no page change, even past the commit distance", () => {
+    runAnimationFramesImmediately();
+    const onChange = vi.fn();
+    const { getByTestId } = render(<Harness onPageChange={onChange} />);
+    const rail = getByTestId("rail");
+    const touch = {
+      pointerId: 21,
+      pointerType: "touch",
+      isPrimary: true,
+      clientY: 300,
+    } as const;
+    act(() => {
+      clock = 1000;
+      fireEvent.pointerDown(rail, { ...touch, clientX: 800 });
+      fireEvent.pointerMove(rail, { ...touch, clientX: 780 });
+      // dx = -700: past the 50% commit distance — a pointerup here WOULD
+      // advance. The OS reclaiming the pointer must abandon it instead.
+      fireEvent.pointerMove(rail, { ...touch, clientX: 100 });
+      clock = 1040;
+      fireEvent.pointerCancel(rail, { ...touch, clientX: 100 });
+    });
+    expect(onChange).not.toHaveBeenCalled();
+    // The rail settles back to the resting offset of the original page.
+    expect(rail.style.transform).toContain("translate3d(0px");
+  });
+});

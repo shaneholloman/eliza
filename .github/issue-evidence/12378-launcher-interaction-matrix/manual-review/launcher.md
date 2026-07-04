@@ -2,8 +2,8 @@
 
 Reviewed from the regenerated `test:launcher-e2e` walkthrough (real headless
 Chromium on the composed launcher fixture — the exact renderer bundle Electrobun
-and Capacitor ship). Screenshots: `screenshots/launcher-desktop-rest.png`,
-`screenshots/launcher-mobile-rest.png`, `screenshots/launcher-mobile-after-swipe-home.png`.
+and Capacitor ship). Screenshots: `launcher-desktop-rest.png`,
+`launcher-mobile-rest.png`, `launcher-mobile-after-swipe-home.png`.
 Video: `launcher-walkthrough.webm`.
 
 ## Verdict: good

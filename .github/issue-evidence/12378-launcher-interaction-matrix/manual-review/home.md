@@ -1,9 +1,9 @@
 # Manual review — Home screen (dashboard + notification pull)
 
 Reviewed from the regenerated `test:home-screen-e2e` walkthrough (real headless
-Chromium). Screenshots: `screenshots/home-desktop.png`, `screenshots/home-mobile.png`,
-`screenshots/home-mobile-notification-pull.png`, `screenshots/home-desktop-edge-buttons.png`,
-`screenshots/home-desktop-notification-panel.png`. Video: `home-launcher-flow.webm`.
+Chromium). Screenshots: `home-desktop.png`, `home-mobile.png`,
+`home-mobile-notification-pull.png`, `home-desktop-edge-buttons.png`,
+`home-desktop-notification-panel.png`. Video: `home-launcher-flow.webm`.
 
 ## Verdict: good
 
