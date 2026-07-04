@@ -5,12 +5,19 @@
  * scheduled full-matrix run cannot silently drop coverage or report vacuous
  * green.
  *
- * It cross-checks three independent sources of truth:
+ * It cross-checks four independent sources of truth:
  *   1. `packages/scripts/ci-lane-manifest.json` — the committed expectation.
  *   2. `.github/workflows/test.yml` — every manifest lane must exist as a job
  *      and must not be gated so it can never run on the exhaustive (non-PR)
  *      event, which would turn a "required" lane into a permanent skip.
- *   3. `run-all-tests.mjs --plan=json` — the discovered task plan must clear the
+ *   3. `.github/workflows/develop-exhaustive.yml` — the scheduled orchestrator
+ *      must still invoke every manifest `reusableWorkflows` lane via
+ *      `workflow_call`, and each of those workflows must still declare a
+ *      `workflow_call` trigger without unconditional concurrency cancellation.
+ *      A dropped `uses:`, removed trigger, or reusable lane that can cancel a
+ *      prior scheduled run silently strips platform coverage (Windows/mobile/
+ *      scenario/UI/desktop) from the exhaustive matrix and fails the job.
+ *   4. `run-all-tests.mjs --plan=json` — the discovered task plan must clear the
  *      manifest floors (total tasks/packages, per-script-lane presence, and the
  *      set of required core packages). A pointed-at-a-nonexistent-glob lane or a
  *      deleted core package collapses one of these and fails the job.
@@ -134,6 +141,69 @@ function extractJobBlock(workflowText, jobKey) {
   return body.join("\n");
 }
 
+function extractWorkflowJobKeys(workflowText) {
+  const keys = [];
+  for (const line of workflowText.split(/\r?\n/)) {
+    const match = line.match(/^ {2}([A-Za-z0-9_-]+):\s*$/);
+    if (match) keys.push(match[1]);
+  }
+  return keys;
+}
+
+function parseNeeds(jobBlock) {
+  const lines = jobBlock.split(/\r?\n/);
+  const needs = new Set();
+  const needsLineIndex = lines.findIndex((line) => /^ {4}needs:\s*/.test(line));
+  if (needsLineIndex < 0) return needs;
+
+  const inline = lines[needsLineIndex].replace(/^ {4}needs:\s*/, "").trim();
+  if (inline.startsWith("[") && inline.endsWith("]")) {
+    for (const value of inline
+      .slice(1, -1)
+      .split(",")
+      .map((item) => item.trim().replace(/^['"]|['"]$/g, ""))
+      .filter(Boolean)) {
+      needs.add(value);
+    }
+    return needs;
+  }
+  if (inline) {
+    needs.add(inline.replace(/^['"]|['"]$/g, ""));
+    return needs;
+  }
+
+  for (let i = needsLineIndex + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (/^ {4}\S/.test(line)) break;
+    const match = line.match(/^ {6}-\s*([A-Za-z0-9_-]+)\s*$/);
+    if (match) needs.add(match[1]);
+  }
+  return needs;
+}
+
+function buildNeedsGraph(workflowText) {
+  const graph = new Map();
+  for (const jobKey of extractWorkflowJobKeys(workflowText)) {
+    const block = extractJobBlock(workflowText, jobKey);
+    if (block) graph.set(jobKey, parseNeeds(block));
+  }
+  return graph;
+}
+
+function collectTransitiveNeeds(graph, root) {
+  const visited = new Set();
+  const stack = [...(graph.get(root) ?? [])];
+  while (stack.length > 0) {
+    const job = stack.pop();
+    if (!job || visited.has(job)) continue;
+    visited.add(job);
+    for (const next of graph.get(job) ?? []) {
+      if (!visited.has(next)) stack.push(next);
+    }
+  }
+  return visited;
+}
+
 // A lane job is "exhaustively runnable" when its `if:` does not force a skip on
 // non-PR events. The repo convention gates PR runs with
 // `github.event_name != 'pull_request' || needs.changes.outputs.<x> == 'true'`,
@@ -188,7 +258,99 @@ function checkWorkflowLanes(manifest, violations, laneReport) {
       violations.push(
         `missing aggregate: job "${manifest.aggregateStatusJob}" not found in ${manifest.workflow}`,
       );
+    } else {
+      const graph = buildNeedsGraph(workflowText);
+      const reachable = collectTransitiveNeeds(
+        graph,
+        manifest.aggregateStatusJob,
+      );
+      for (const lane of manifest.workflowLanes) {
+        if (!reachable.has(lane.job)) {
+          violations.push(
+            `aggregate drift: job "${manifest.aggregateStatusJob}" does not need lane "${lane.job}" (${lane.name}) directly or through an aggregate dependency`,
+          );
+        }
+      }
     }
+  }
+}
+
+// The scheduled exhaustive orchestrator (develop-exhaustive.yml) must keep
+// invoking every platform lane the manifest lists, and each of those workflows
+// must still declare a `workflow_call` trigger — otherwise the orchestrator
+// silently drops that lane's coverage. Both halves are checked statically so a
+// dropped `uses:` or a removed trigger fails without waiting for the run.
+function checkReusableWorkflows(manifest, violations, laneReport) {
+  if (
+    !manifest.exhaustiveOrchestrator ||
+    !Array.isArray(manifest.reusableWorkflows)
+  ) {
+    return;
+  }
+  const orchestratorPath = resolve(repoRoot, manifest.exhaustiveOrchestrator);
+  let orchestratorText;
+  try {
+    orchestratorText = readFileSync(orchestratorPath, "utf8");
+  } catch {
+    violations.push(
+      `missing exhaustive orchestrator: ${manifest.exhaustiveOrchestrator} not found`,
+    );
+    return;
+  }
+
+  for (const reusable of manifest.reusableWorkflows) {
+    const basename = reusable.workflow.split("/").pop();
+    const usesRef = `./.github/workflows/${basename}`;
+    if (!orchestratorText.includes(`uses: ${usesRef}`)) {
+      violations.push(
+        `missing reusable lane: ${manifest.exhaustiveOrchestrator} does not invoke ${usesRef} (${reusable.name})`,
+      );
+      laneReport.push({
+        lane: basename,
+        name: reusable.name,
+        status: "NOT-WIRED",
+      });
+      continue;
+    }
+    let reusableText;
+    let declaresWorkflowCall = false;
+    try {
+      reusableText = readFileSync(resolve(repoRoot, reusable.workflow), "utf8");
+      declaresWorkflowCall = /^\s{2}workflow_call:/m.test(reusableText);
+    } catch {
+      violations.push(
+        `missing reusable workflow: ${reusable.workflow} (${reusable.name}) not found`,
+      );
+      laneReport.push({
+        lane: basename,
+        name: reusable.name,
+        status: "MISSING",
+      });
+      continue;
+    }
+    if (!declaresWorkflowCall) {
+      violations.push(
+        `reusable workflow not callable: ${reusable.workflow} does not declare a workflow_call trigger, so ${manifest.exhaustiveOrchestrator} cannot invoke it`,
+      );
+      laneReport.push({
+        lane: basename,
+        name: reusable.name,
+        status: "NO-CALL",
+      });
+      continue;
+    }
+    if (/^\s{2}cancel-in-progress:\s*true\s*$/m.test(reusableText)) {
+      violations.push(
+        `reusable workflow can cancel scheduled coverage: ${reusable.workflow} has unconditional cancel-in-progress: true; gate cancellation to pull_request so ${manifest.exhaustiveOrchestrator} remains uncancellable`,
+      );
+      laneReport.push({
+        lane: basename,
+        name: reusable.name,
+        status: "CANCELS",
+      });
+      continue;
+    }
+    laneReport.push({ lane: basename, name: reusable.name, status: "OK" });
   }
 }
 
@@ -314,6 +476,7 @@ export function runProof(options) {
   const floorReport = [];
 
   checkWorkflowLanes(manifest, violations, laneReport);
+  checkReusableWorkflows(manifest, violations, laneReport);
   checkPlanFloors(manifest, plan, violations, floorReport);
 
   return { manifest, plan, violations, laneReport, floorReport };
