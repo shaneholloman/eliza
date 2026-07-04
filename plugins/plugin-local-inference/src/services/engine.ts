@@ -70,6 +70,7 @@ import {
 	createEvictableModelRole,
 	SharedResourceRegistry,
 } from "./voice/shared-resources";
+import { getSharedVoiceProfileStore } from "./voice/speaker/profile-store-factory";
 import type {
 	RejectedTokenRange,
 	TextToken,
@@ -1156,9 +1157,16 @@ export class LocalInferenceEngine {
 					speakerPresetOverride: createKokoroSpeakerPreset(kokoro),
 				}
 			: {};
+		// Light up speaker attribution on the speak-back loop (#12257): thread
+		// the one shared VoiceProfileStore in so the engine-bridge attribution
+		// gate opens. The store is shared with Pipeline A (live frames) so both
+		// paths resolve the same identities. Absent fused speaker artifacts
+		// degrade to attribution-off with a single warn (engine-bridge gate).
+		const profileStore = await getSharedVoiceProfileStore();
 		bridge = this.startVoice({
 			bundleRoot: bundle.root,
 			useFfiBackend: true,
+			profileStore,
 			...kokoroOverrides,
 		});
 		await bridge.arm();
@@ -1173,6 +1181,12 @@ export class LocalInferenceEngine {
 			// the boot-time warmup race where TTS fires before any text request.
 			await this.activateAssignedBundleForVoice();
 			const bundle = this.activeEliza1Bundle;
+			// Speaker attribution is wired on the fused ASR path
+			// (`ensureActiveBundleAsrReadyOnce`), not here: both startVoice calls
+			// below take the Kokoro-only TTS path (`useFfiBackend: false`), which
+			// has no fused `libelizainference` handle and therefore no speaker
+			// runtime. Threading a profileStore here would be inert — the
+			// engine-bridge gate needs the fused handle to attribute (#12257).
 			if (bundle) {
 				const bundleKokoroRoot = path.join(bundle.root, "tts", "kokoro");
 				const kokoro =
