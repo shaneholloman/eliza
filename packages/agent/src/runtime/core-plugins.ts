@@ -3,16 +3,162 @@
  *
  * Keeping this in a standalone module avoids a circular dependency between
  * `api/server.ts` and `runtime/eliza.ts`.
+ *
+ * ## Platform/profile eligibility (arch-audit #12089 item 2)
+ *
+ * Platform and profile membership USED to live in five hand-maintained,
+ * order-coupled name lists (`DESKTOP_ONLY_PLUGINS`, `MOBILE_CORE_PLUGINS`,
+ * `MOBILE_VIEW_PLUGINS`, `ELIZAOS_ANDROID_CORE_PLUGINS`,
+ * `ELIZAOS_ANDROID_TERMINAL_PLUGINS`). A plugin's eligibility for a given
+ * platform was a fact about the plugin, but it was asserted centrally in the
+ * host and had to be re-typed into whichever list(s) it belonged to. That is
+ * exactly the drift trap the audit flagged: adding a mobile-safe plugin meant
+ * remembering to touch `MOBILE_CORE_PLUGINS`, and there was no single place
+ * that said "this plugin runs on mobile."
+ *
+ * Eligibility now lives in ONE declarative capability table
+ * ({@link CORE_PLUGIN_PROFILE_METADATA}); the host filters that table by
+ * capability. The legacy name lists below are DERIVED from the table via
+ * {@link selectCorePluginsByProfile} — they remain as a stable, host-owned
+ * read surface (nothing else in the codebase has to change), but they are no
+ * longer an independent source that can drift. `plugin-sql` is the only entry
+ * marked `requiredBootstrap`; everything else is opt-in-by-capability.
+ *
+ * A drift-guard test (`core-plugins-profile-metadata.test.ts`) asserts the
+ * derived lists still match the historical membership and that exactly one
+ * plugin is required bootstrap, so a future edit to the table that silently
+ * changes a platform load set fails CI instead of shipping.
  */
+
+/**
+ * Declarative platform/profile capability flags for a single core plugin.
+ *
+ * Each flag answers a capability question about the plugin, not a placement
+ * question about a list. The host reads these to build every platform load set,
+ * so a plugin declaring (say) `mobileCore: true` is the single fact that puts it
+ * on the mobile boot — no parallel list to keep in sync.
+ */
+export interface CorePluginProfile {
+  /** Package name / plugin id as it appears in the load set. */
+  readonly plugin: string;
+  /**
+   * Requires PTY / native workspace tooling that cloud images intentionally
+   * omit. Seeds {@link DESKTOP_ONLY_PLUGINS}.
+   */
+  readonly desktopOnly?: boolean;
+  /**
+   * Safe to load on the stock mobile (`ELIZA_PLATFORM=android|ios`) boot: no
+   * subprocess/launcher/PTY dependency that would crash the app sandbox at
+   * init. Seeds {@link MOBILE_CORE_PLUGINS}.
+   */
+  readonly mobileCore?: boolean;
+  /**
+   * Registers `/api/views` entries that must resolve on EVERY platform
+   * (including stock mobile) so home tiles have a real destination. These are
+   * views-only or degrade gracefully without a backend. Seeds
+   * {@link MOBILE_VIEW_PLUGINS}.
+   */
+  readonly viewEveryPlatform?: boolean;
+  /**
+   * Privileged AOSP-only overlay app plugin (WiFi/Contacts/Phone). Appended to
+   * the mobile set only on the custom ElizaOS Android build. Seeds
+   * {@link ELIZAOS_ANDROID_CORE_PLUGINS}.
+   */
+  readonly aospCore?: boolean;
+  /**
+   * Terminal/shell/coding-tool plugin available only on the privileged AOSP
+   * build (priv_app SELinux context permits `execve`). Seeds
+   * {@link ELIZAOS_ANDROID_TERMINAL_PLUGINS}.
+   */
+  readonly aospTerminal?: boolean;
+  /**
+   * Explicit load-order rank within {@link ELIZAOS_ANDROID_TERMINAL_PLUGINS}.
+   * `agent-orchestrator` also carries `desktopOnly` (so it must lead the
+   * desktop list), but historically loaded LAST among AOSP terminal plugins;
+   * this rank decouples the terminal load order from the table's row order so
+   * both derived lists keep their historical ordering. Lower ranks first;
+   * unset defaults to 0.
+   */
+  readonly aospTerminalOrder?: number;
+  /**
+   * Must be imported and registered before the runtime is considered ready —
+   * the required bootstrap dependency. Only `plugin-sql` carries this.
+   */
+  readonly requiredBootstrap?: boolean;
+}
+
+/**
+ * Single source of truth for platform/profile plugin eligibility. Order is
+ * preserved per selector; the derived lists keep the exact ordering the old
+ * hand-lists shipped so no load-order behavior changes.
+ *
+ * Adding a platform-eligible plugin = add a row (or a flag to an existing row)
+ * here. Do NOT reintroduce a parallel name list — derive from this table.
+ */
+export const CORE_PLUGIN_PROFILE_METADATA: readonly CorePluginProfile[] = [
+  // Desktop-only (PTY/native workspace tooling; absent from cloud images).
+  // agent-orchestrator is also an AOSP terminal surface, but loads LAST there
+  // (aospTerminalOrder: 2) while leading the desktop list.
+  {
+    plugin: "agent-orchestrator",
+    desktopOnly: true,
+    aospTerminal: true,
+    aospTerminalOrder: 2,
+  },
+  { plugin: "coding-tools", desktopOnly: true },
+  // Mobile-safe core boot. `plugin-sql` is the required bootstrap dependency.
+  { plugin: "@elizaos/plugin-sql", mobileCore: true, requiredBootstrap: true },
+  { plugin: "@elizaos/plugin-background-runner", mobileCore: true },
+  { plugin: "@elizaos/plugin-native-filesystem", mobileCore: true },
+  { plugin: "@elizaos/plugin-vision", mobileCore: true },
+  { plugin: "@elizaos/plugin-scheduling", mobileCore: true },
+  // View-providing plugins that must resolve their home tiles on every platform.
+  { plugin: "@elizaos/plugin-task-coordinator", viewEveryPlatform: true },
+  { plugin: "@elizaos/plugin-inbox", viewEveryPlatform: true },
+  { plugin: "@elizaos/plugin-app-control", viewEveryPlatform: true },
+  // Privileged ElizaOS-Android overlay app plugins (system surfaces).
+  { plugin: "@elizaos/plugin-wifi", aospCore: true },
+  { plugin: "@elizaos/plugin-contacts", aospCore: true },
+  { plugin: "@elizaos/plugin-phone", aospCore: true },
+  // Privileged AOSP terminal/shell/coding surfaces (priv_app SELinux execve).
+  { plugin: "@elizaos/plugin-shell", aospTerminal: true, aospTerminalOrder: 0 },
+  {
+    plugin: "@elizaos/plugin-coding-tools",
+    aospTerminal: true,
+    aospTerminalOrder: 1,
+  },
+];
+
+/**
+ * Host-owned capability filter: derive an ordered load set from the metadata
+ * table for a given profile predicate. This is the "host filters by capability"
+ * primitive the audit calls for — a plugin's eligibility is read off its
+ * declared flags, not looked up in a placement list.
+ */
+export function selectCorePluginsByProfile(
+  predicate: (entry: CorePluginProfile) => boolean | undefined,
+): readonly string[] {
+  return CORE_PLUGIN_PROFILE_METADATA.filter((entry) =>
+    Boolean(predicate(entry)),
+  ).map((entry) => entry.plugin);
+}
+
+/**
+ * The single required-bootstrap plugin (`plugin-sql`). Exposed so callers can
+ * assert the invariant instead of hardcoding the name.
+ */
+export const REQUIRED_BOOTSTRAP_PLUGINS: readonly string[] =
+  selectCorePluginsByProfile((entry) => entry.requiredBootstrap);
 
 /**
  * Plugins that depend on PTY/native workspace tooling.
  * Keep them out of cloud images where those binaries are intentionally absent.
+ *
+ * Derived from {@link CORE_PLUGIN_PROFILE_METADATA} (`desktopOnly`) — legacy
+ * host-owned read surface, no longer an independent list.
  */
-export const DESKTOP_ONLY_PLUGINS: readonly string[] = [
-  "agent-orchestrator",
-  "coding-tools",
-];
+export const DESKTOP_ONLY_PLUGINS: readonly string[] =
+  selectCorePluginsByProfile((entry) => entry.desktopOnly);
 
 /**
  * Mobile-safe core plugins. Used when `ELIZA_PLATFORM=android` (or `ios`).
@@ -36,29 +182,17 @@ export const DESKTOP_ONLY_PLUGINS: readonly string[] = [
  * binding, or the AOSP-only FFI bridge
  * (`@elizaos/plugin-aosp-local-inference`) when `ELIZA_LOCAL_LLAMA=1`.
  */
-export const MOBILE_CORE_PLUGINS: readonly string[] = [
-  "@elizaos/plugin-sql",
-  "@elizaos/plugin-background-runner",
-  "@elizaos/plugin-native-filesystem",
-  // Screen understanding on mobile (EPIC #9105): the GET_SCREEN op + the
-  // renderer-pulled screen-capture bridge + the IMAGE_DESCRIPTION describe
-  // path. plugin-vision is now mobile-safe — `sharp` is lazy-loaded with a
-  // pure-JS fallback and the native YOLO/face detectors are dynamic-imported,
-  // so module-eval no longer pulls a native addon. VisionService degrades
-  // gracefully on a phone (camera mode finds no capture tool → warns, never
-  // starts a processing loop), and its computeruse OCR/set-of-marks bridges
-  // are best-effort dynamic imports that no-op without plugin-computeruse.
-  "@elizaos/plugin-vision",
-  // Scheduling spine: the always-loaded ScheduledTask runtime primitive
-  // (runner host + REST surface + default-pack seed registry). Mobile-safe —
-  // its deps are core/shared/drizzle + the peer plugin-sql (already first in
-  // this list); it imports no app-core/agent/personal-assistant and probes
-  // host capabilities via ELIZA_PLATFORM. Personal-assistant enriches it
-  // (production deps + domain packs) when present; on a stock mobile boot the
-  // built-in defaults serve /api/lifeops/scheduled-tasks so the home Tasks
-  // widget resolves.
-  "@elizaos/plugin-scheduling",
-];
+// Mobile-safe boot notes (kept here as the rationale for the metadata flags):
+// - plugin-vision (EPIC #9105) is mobile-safe: `sharp` is lazy-loaded with a
+//   pure-JS fallback, native YOLO/face detectors are dynamic-imported, and
+//   VisionService degrades gracefully on a phone (no capture tool → warns).
+// - plugin-scheduling is the always-loaded ScheduledTask runtime primitive;
+//   its deps are core/shared/drizzle + the peer plugin-sql, it imports no
+//   app-core/agent, and probes host capabilities via ELIZA_PLATFORM.
+// Membership is declared via `mobileCore` in CORE_PLUGIN_PROFILE_METADATA;
+// this list is derived (legacy host-owned read surface).
+export const MOBILE_CORE_PLUGINS: readonly string[] =
+  selectCorePluginsByProfile((entry) => entry.mobileCore);
 
 /**
  * Model-provider plugins that are statically imported by the mobile runtime and
@@ -82,20 +216,15 @@ export const MOBILE_MODEL_PROVIDER_PLUGINS: readonly string[] = [
  * separately). Seeded into the load set for all platforms and spread into the
  * mobile allow-list so the mobile filter keeps them.
  */
-export const MOBILE_VIEW_PLUGINS: readonly string[] = [
-  "@elizaos/plugin-task-coordinator",
-  // Inbox: registered on mobile so its home tile resolves + the /inbox view
-  // appears in /api/views. The plugin's de-stub + client wiring are owned by a
-  // separate effort; this keeps it in the mobile load/allow set.
-  "@elizaos/plugin-inbox",
-  // App-control: provides the VIEWS navigation action + the contextual
-  // view-switch evaluators. Without it, mobile chat has no way to act on
-  // "open settings" / "go to my calendar" — view switching only worked on
-  // desktop/web. Its view-nav path (VIEWS action, evaluators, available-apps
-  // provider) needs no services; the app-launch/verification/worker-host
-  // services it also registers stay idle on mobile (no registered apps).
-  "@elizaos/plugin-app-control",
-];
+// View-plugin rationale (declared via `viewEveryPlatform` in the metadata):
+// - plugin-inbox: registered on mobile so its home tile resolves + the /inbox
+//   view appears in /api/views.
+// - plugin-app-control: provides the VIEWS navigation action + view-switch
+//   evaluators ("open settings" / "go to my calendar"); its view-nav path needs
+//   no services, and the app-launch/worker-host services stay idle on mobile.
+// Derived from CORE_PLUGIN_PROFILE_METADATA (legacy host-owned read surface).
+export const MOBILE_VIEW_PLUGINS: readonly string[] =
+  selectCorePluginsByProfile((entry) => entry.viewEveryPlatform);
 
 /**
  * ElizaOS-only overlay app plugins. Used when the runtime is the custom
@@ -111,11 +240,10 @@ export const MOBILE_VIEW_PLUGINS: readonly string[] = [
  * expose privileged OS-control surfaces merely because `Capacitor` reports
  * `android`.
  */
-export const ELIZAOS_ANDROID_CORE_PLUGINS: readonly string[] = [
-  "@elizaos/plugin-wifi",
-  "@elizaos/plugin-contacts",
-  "@elizaos/plugin-phone",
-];
+// Derived from CORE_PLUGIN_PROFILE_METADATA (`aospCore`) — legacy host-owned
+// read surface; declare new AOSP overlay app plugins via the metadata table.
+export const ELIZAOS_ANDROID_CORE_PLUGINS: readonly string[] =
+  selectCorePluginsByProfile((entry) => entry.aospCore);
 
 /**
  * Terminal / shell / coding-tool plugins available on the privileged AOSP
@@ -127,11 +255,16 @@ export const ELIZAOS_ANDROID_CORE_PLUGINS: readonly string[] = [
  * Stock Play-Store Android cannot have these — `execve` of arbitrary binaries
  * is blocked by the default SELinux policy and would also fail Play review.
  */
-export const ELIZAOS_ANDROID_TERMINAL_PLUGINS: readonly string[] = [
-  "@elizaos/plugin-shell",
-  "@elizaos/plugin-coding-tools",
-  "agent-orchestrator",
-];
+// Derived from CORE_PLUGIN_PROFILE_METADATA (`aospTerminal`), ordered by the
+// declared `aospTerminalOrder` so the historical shell -> coding-tools ->
+// agent-orchestrator load order is preserved even though agent-orchestrator
+// leads the (table-ordered) desktop list. Legacy host-owned read surface;
+// declare new AOSP terminal plugins via the metadata table.
+export const ELIZAOS_ANDROID_TERMINAL_PLUGINS: readonly string[] =
+  CORE_PLUGIN_PROFILE_METADATA.filter((entry) => entry.aospTerminal)
+    .slice()
+    .sort((a, b) => (a.aospTerminalOrder ?? 0) - (b.aospTerminalOrder ?? 0))
+    .map((entry) => entry.plugin);
 
 /** Core plugins that should always be loaded. collectPluginNames() seeds from this list only. */
 export const CORE_PLUGINS: readonly string[] = [
