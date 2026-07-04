@@ -269,6 +269,14 @@ const commonFields = {
   // declare none. Connectors are the typical owners, but a plugin may also claim
   // a channel (e.g. blooio).
   channels: z.array(z.string()).default([]),
+  // Optional short-id aliases this entry claims (drives OPTIONAL_PLUGIN_MAP).
+  // These are the bare ids that `plugins.allow`, `plugins.entries`, and
+  // `config.features` may carry (e.g. "evm", "solana", "wallet") which must
+  // resolve to this entry's `npmName` instead of falling through to loading the
+  // short id as a literal package name (`import("evm")`). The declaring plugin
+  // owns its aliases here; the central OPTIONAL_PLUGIN_MAP is generated from
+  // these instead of a hand-synced host table. Most entries declare none.
+  shortIds: z.array(z.string()).default([]),
   // Curated-app marker: when present, this entry is one of the curated apps the
   // agent can resolve by name (NL matching). `slug` is the short curated name,
   // `order` fixes its catalog position, `aliases` are extra match terms. The

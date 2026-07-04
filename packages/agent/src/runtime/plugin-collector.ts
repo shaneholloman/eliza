@@ -19,6 +19,9 @@ import channelPluginMap from "@elizaos/registry/first-party/channel-plugin-map.j
 import providerPluginMap from "@elizaos/registry/first-party/provider-plugin-map.json" with {
   type: "json",
 };
+import shortIdPluginMap from "@elizaos/registry/first-party/short-id-plugin-map.json" with {
+  type: "json",
+};
 import {
   hasExplicitCanonicalRuntimeConfig,
   isAndroidMobile,
@@ -253,64 +256,58 @@ function removeAllModelProviderSurfaces(pluginsToLoad: Set<string>): void {
 }
 
 /**
- * Optional feature plugins keyed by feature name.
- *
- * Mappings here support short IDs in allow-lists and feature toggles.
- * Keep this map in sync with optional plugin registration and tests.
+ * Legacy host-owned short-id aliases for optional plugins that do NOT yet ship a
+ * `registry-entry.json` (so their aliases cannot be derived at registry-build
+ * time like {@link CHANNEL_PLUGIN_MAP} / {@link PROVIDER_PLUGIN_MAP}). Each key
+ * is a bare short id that `plugins.allow`, `plugins.entries`, or
+ * `config.features` may carry; without an entry here collectPluginNames() would
+ * fall through to loading the short id as a literal package name (`import("cua")`),
+ * which silently fails inside the loader's error boundary. This is the shrinking
+ * legacy tail — when one of these plugins adds a registry entry, move its aliases
+ * into that entry's `shortIds` and delete the row here.
  */
-export const OPTIONAL_PLUGIN_MAP: Readonly<Record<string, string>> = {
-  // ── Wallet plugins ─────────────────────────────────────────────────
-  // These short ids are what plugin-wallet's auto-enable.ts writes into
-  // `plugins.allow` when an EVM / Solana / Steward signing path is
-  // available. Without entries here, collectPluginNames() would fall
-  // through to loading the short id as a literal package name
-  // (`import("evm")`), which silently fails inside the loader's error
-  // boundary — short ids must resolve to real package names or optional
-  // plugins silently fail. Keep in sync with the short ids that
-  // plugin-wallet auto-enables under (`wallet`, plus legacy `evm` /
-  // `solana` aliases for older configs).
-  evm: "@elizaos/plugin-wallet",
-  solana: "@elizaos/plugin-wallet",
-  wallet: "@elizaos/plugin-wallet",
-  // Coding tools — persisted user configs may carry the legacy "coding-agent"
-  // short ID (the plugin was renamed to plugin-coding-tools). Map both forms
-  // so the resolver doesn't try to load a non-existent package.
-  "coding-agent": "@elizaos/plugin-coding-tools",
-  codingAgent: "@elizaos/plugin-coding-tools",
-  "coding-tools": "@elizaos/plugin-coding-tools",
-  codingTools: "@elizaos/plugin-coding-tools",
-  /** Unified wallet (canonical actions + providers — incremental migration). */
-  agent_wallet: "@elizaos/plugin-wallet",
-  "agent-wallet": "@elizaos/plugin-wallet",
-  /** Browser plugin: workspace browser + companion bridge. Aliases here so short IDs in plugins.allow and config.features resolve to the canonical package. */
-  browser: "@elizaos/plugin-browser",
-  "app-browser": "@elizaos/plugin-browser",
-  appBrowser: "@elizaos/plugin-browser",
-  "eliza-browser": "@elizaos/plugin-browser",
-  elizaBrowser: "@elizaos/plugin-browser",
-  "browser-bridge": "@elizaos/plugin-browser",
-  browserBridge: "@elizaos/plugin-browser",
-  /** Native Polymarket app runtime plugin. */
-  polymarket: "@elizaos/plugin-polymarket",
-  "app-polymarket": "@elizaos/plugin-polymarket",
-  appPolymarket: "@elizaos/plugin-polymarket",
-  vision: "@elizaos/plugin-vision",
-  elizacloud: "@elizaos/plugin-elizacloud",
+const LEGACY_HOST_OWNED_SHORT_ID_MAP: Readonly<Record<string, string>> = {
+  // plugin-personal-assistant (no registry-entry.json yet).
   selfcontrol: "@elizaos/plugin-personal-assistant",
+  // plugin-cua (no registry-entry.json yet).
   cua: "@elizaos/plugin-cua",
-  computeruse: "@elizaos/plugin-computeruse",
+  // plugin-obsidian (no registry-entry.json yet).
   obsidian: "@elizaos/plugin-obsidian",
+  // plugin-repoprompt (no registry-entry.json yet).
   repoprompt: "@elizaos/plugin-repoprompt",
   repoPrompt: "@elizaos/plugin-repoprompt",
-  bluebubbles: "@elizaos/plugin-bluebubbles",
-  discordLocal: "@elizaos/plugin-discord-local",
+  // plugin-x402 (no registry-entry.json yet).
   x402: "@elizaos/plugin-x402",
-  // plugin-manager, secrets (SECRETS), trust: now built-in core capabilities
-  // Enable via ENABLE_PLUGIN_MANAGER, ENABLE_SECRETS_MANAGER, ENABLE_TRUST
+  // plugin-streaming (no registry-entry.json yet).
+  // plugin-manager, secrets (SECRETS), trust: now built-in core capabilities.
+  // Enable via ENABLE_PLUGIN_MANAGER, ENABLE_SECRETS_MANAGER, ENABLE_TRUST.
   streaming: "@elizaos/plugin-streaming",
-  form: "@elizaos/plugin-form",
-  // Steward wallet plugin — short ID used by auto-enable
+  // Steward wallet plugin — short ID used by auto-enable; third-party npm scope,
+  // no first-party registry entry.
   "stwd-eliza-plugin": "@stwd/eliza-plugin",
+};
+
+/**
+ * Optional feature plugins keyed by short id.
+ *
+ * Mappings here support short IDs in allow-lists and feature toggles. Short ids
+ * must resolve to real package names or optional plugins silently fail inside
+ * the loader's error boundary (`import("evm")` -> "Cannot find module").
+ *
+ * The registry-owned aliases (wallet, browser, polymarket, vision, …) are
+ * generated at registry-build time from each entry's `shortIds` field — see
+ * `collectShortIdPluginMap` in packages/registry/src/first-party/generate.ts.
+ * To add or rename one of those aliases, edit the owning plugin's
+ * registry-entry.json `shortIds` and regenerate — not this map. The generator
+ * fails loudly if two plugins claim the same short id, so drift cannot ship.
+ *
+ * {@link LEGACY_HOST_OWNED_SHORT_ID_MAP} is the shrinking tail of plugins that
+ * do not yet declare a registry entry; it is layered underneath the generated
+ * map so a registry entry always wins over a stale hand-maintained row.
+ */
+export const OPTIONAL_PLUGIN_MAP: Readonly<Record<string, string>> = {
+  ...LEGACY_HOST_OWNED_SHORT_ID_MAP,
+  ...(shortIdPluginMap as Readonly<Record<string, string>>),
 };
 
 // ---------------------------------------------------------------------------

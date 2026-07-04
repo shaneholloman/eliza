@@ -3,6 +3,7 @@
   "name": "Elizacloud",
   "description": "elizaOS plugin to connect with elizaOS Cloud services",
   "npmName": "@elizaos/plugin-elizacloud",
+  "shortIds": ["elizacloud"],
   "version": "2.0.0-beta.0",
   "source": "bundled",
   "tags": [
