@@ -256,9 +256,8 @@ function requestModelSet(
       rememberModelSet(key, set);
       return set;
     })
-    // error-policy:J4 designed degrade — null signals "no model suggestions",
-    // identical to the heuristic-tier branch above; the caller then renders the
-    // deterministic heuristic set instead of an error.
+    // error-policy:J4 model suggestions are tiered — a failed model fetch
+    // returns null and the caller renders the heuristic suggestion set.
     .catch(() => null)
     .finally(() => {
       inFlightModelSets.delete(key);
