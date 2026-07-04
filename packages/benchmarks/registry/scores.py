@@ -912,12 +912,18 @@ def _score_from_meeting_transcription_proof_json(data: JSONValue) -> ScoreExtrac
     )
     evidence_files = root.get("evidence_files")
     evidence_count = len(evidence_files) if isinstance(evidence_files, dict) else 0
+    speaker_name_provenance = root.get("speaker_name_provenance")
+    speaker_name_provenance_count = (
+        len(speaker_name_provenance) if isinstance(speaker_name_provenance, list) else 0
+    )
     publishable = root.get("publishable") is True
     if lane == "real_product":
         if not publishable:
             raise ValueError("meeting_transcription_proof: real lane must be publishable")
         if evidence_count < 11:
             raise ValueError("meeting_transcription_proof: real lane requires complete evidence files")
+        if speaker_name_provenance_count < 8:
+            raise ValueError("meeting_transcription_proof: real lane requires speaker name provenance")
     elif publishable:
         raise ValueError("meeting_transcription_proof: mocked lane cannot be publishable")
 
@@ -929,6 +935,7 @@ def _score_from_meeting_transcription_proof_json(data: JSONValue) -> ScoreExtrac
             "lane": lane,
             "publishable": publishable,
             "evidence_file_count": evidence_count,
+            "speaker_name_provenance_count": speaker_name_provenance_count,
             "transcript_quality": metrics.get("transcript_quality") or 0,
             "diarization_quality": metrics.get("diarization_quality") or 0,
             "speaker_identity_quality": metrics.get("speaker_identity_quality") or 0,

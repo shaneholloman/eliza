@@ -80,6 +80,7 @@ def test_meeting_transcription_mock_lane_is_non_publishable_smoke_score() -> Non
     assert extraction.score == pytest.approx(1.0)
     assert extraction.metrics["lane"] == "mocked_plumbing"
     assert extraction.metrics["publishable"] is False
+    assert extraction.metrics["speaker_name_provenance_count"] == 0
 
 
 def test_meeting_transcription_mock_lane_cannot_claim_publishable() -> None:
@@ -110,6 +111,22 @@ def test_meeting_transcription_real_lane_requires_complete_evidence() -> None:
         )
 
 
+def test_meeting_transcription_real_lane_requires_speaker_name_provenance() -> None:
+    evidence_files = {f"evidence_{index}": f"/tmp/evidence-{index}.txt" for index in range(11)}
+    with pytest.raises(ValueError, match="speaker name provenance"):
+        _score_from_meeting_transcription_proof_json(
+            {
+                "kind": "meeting_transcription_proof_report",
+                "lane": "real_product",
+                "publishable": True,
+                "score": 0.8,
+                "metrics": {},
+                "evidence_files": evidence_files,
+                "speaker_name_provenance": [{} for _ in range(7)],
+            }
+        )
+
+
 def test_meeting_transcription_real_lane_score_is_publishable_with_evidence() -> None:
     evidence_files = {f"evidence_{index}": f"/tmp/evidence-{index}.txt" for index in range(11)}
     extraction = _score_from_meeting_transcription_proof_json(
@@ -126,6 +143,7 @@ def test_meeting_transcription_real_lane_score_is_publishable_with_evidence() ->
                 "consent_retention_quality": 1.0,
             },
             "evidence_files": evidence_files,
+            "speaker_name_provenance": [{} for _ in range(8)],
         }
     )
 
@@ -133,3 +151,4 @@ def test_meeting_transcription_real_lane_score_is_publishable_with_evidence() ->
     assert extraction.metrics["lane"] == "real_product"
     assert extraction.metrics["publishable"] is True
     assert extraction.metrics["evidence_file_count"] == 11
+    assert extraction.metrics["speaker_name_provenance_count"] == 8
