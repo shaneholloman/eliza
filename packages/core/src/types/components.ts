@@ -314,6 +314,25 @@ export interface Action {
 	/** Optional priority for action ordering */
 	priority?: number;
 
+	/**
+	 * Explicit override policy for name collisions during registration.
+	 *
+	 * When two components register under the same `name`, the runtime keeps the
+	 * first-registered instance (deterministic first-wins) and emits a WARN for
+	 * the undeclared collision. Set `override: true` on the LATER registrant to
+	 * declare that it intentionally supersedes an already-registered component of
+	 * the same name; the runtime then replaces the incumbent and logs the
+	 * override at INFO instead of warning. This turns a silent, order-sensitive
+	 * dedupe into an explicit, declared precedence contract.
+	 *
+	 * NOTE: `override` is honored on the DIRECT host/core registration path only.
+	 * Across `registerPlugin` boundaries it is downgraded to safe first-wins,
+	 * because hot plugin teardown (unload/reload/rollback) does not restore a
+	 * displaced incumbent — a plugin override would otherwise destructively strip
+	 * another plugin's component on unload.
+	 */
+	override?: boolean;
+
 	/** Optional tags for categorization */
 	tags?: string[];
 
@@ -616,6 +635,14 @@ export interface Provider {
 
 	/** Position of the provider in the provider list, positive or negative */
 	position?: number;
+
+	/**
+	 * Explicit override policy for name collisions during registration.
+	 * See {@link Action.override}: set `override: true` on the later registrant
+	 * to intentionally supersede an already-registered provider of the same name.
+	 * Undeclared collisions keep the incumbent (first-wins) and emit a WARN.
+	 */
+	override?: boolean;
 
 	/**
 	 * Whether the provider is private

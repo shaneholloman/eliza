@@ -51,6 +51,13 @@ export interface Evaluator<TOutput = JsonValue, TPrepared = unknown> {
 	description: string;
 	similes?: string[];
 	priority?: number;
+	/**
+	 * Explicit override policy for name collisions during registration.
+	 * See {@link Action.override}: set `override: true` on the later registrant
+	 * to intentionally supersede an already-registered evaluator of the same
+	 * name. Undeclared collisions keep the incumbent (first-wins) + emit a WARN.
+	 */
+	override?: boolean;
 	providers?: string[];
 	schema: JSONSchema;
 	modelType?: ModelTypeName;
