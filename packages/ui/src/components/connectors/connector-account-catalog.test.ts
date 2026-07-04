@@ -63,8 +63,6 @@ describe("grep guard: no hardcoded connector-default literals in the UI", () => 
   });
 
   it("imports the catalog from @elizaos/shared", () => {
-    expect(source).toMatch(
-      /@elizaos\/shared\/connector-account-catalog/,
-    );
+    expect(source).toMatch(/@elizaos\/shared\/connector-account-catalog/);
   });
 });

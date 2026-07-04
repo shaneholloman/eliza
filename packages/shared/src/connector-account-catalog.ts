@@ -145,9 +145,7 @@ const CONNECTOR_ACCOUNT_CATALOG_BY_ID: ReadonlyMap<
   CONNECTOR_ACCOUNT_CATALOG.flatMap((entry) => [
     [entry.connectorId, entry] as const,
     [entry.provider, entry] as const,
-    ...(entry.aliases ?? []).map(
-      (alias) => [alias, entry] as const,
-    ),
+    ...(entry.aliases ?? []).map((alias) => [alias, entry] as const),
   ]),
 );
 

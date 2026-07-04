@@ -219,7 +219,8 @@ export function getConnectorPluginManagedAccountOption(
   const entry = getConnectorAccountCatalogEntry(connectorId);
   if (!entry) return null;
   return (
-    CONNECTOR_PLUGIN_MANAGED_ACCOUNT_OPTIONS_BY_ID.get(entry.connectorId) ?? null
+    CONNECTOR_PLUGIN_MANAGED_ACCOUNT_OPTIONS_BY_ID.get(entry.connectorId) ??
+    null
   );
 }
 
