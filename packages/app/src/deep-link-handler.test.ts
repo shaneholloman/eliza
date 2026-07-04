@@ -9,13 +9,24 @@
  * untrusted or unconfigured hosts are ignored. Runs under jsdom with `window`,
  * `location.hash`, and event listeners; dispatch seams are `vi.fn()` spies.
  */
-import { NAVIGATE_VIEW_EVENT } from "@elizaos/ui/events";
+import { CONNECT_EVENT, NAVIGATE_VIEW_EVENT } from "@elizaos/ui/events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDeepLinkHandler,
   type DeepLinkHandlerContext,
   isTrustedAppLink,
 } from "./deep-link-handler";
+
+const mocks = vi.hoisted(() => ({
+  applyLaunchConnection: vi.fn(() => ({
+    apiBase: "http://100.96.0.1:31337/v1",
+    token: null,
+  })),
+}));
+
+vi.mock("@elizaos/ui/platform/browser-launch", () => ({
+  applyLaunchConnection: mocks.applyLaunchConnection,
+}));
 
 function makeHandler(over: Partial<DeepLinkHandlerContext> = {}) {
   const dispatchShareTarget = vi.fn();
@@ -43,6 +54,11 @@ function makeHandler(over: Partial<DeepLinkHandlerContext> = {}) {
 
 beforeEach(() => {
   window.location.hash = "";
+  vi.clearAllMocks();
+  mocks.applyLaunchConnection.mockReturnValue({
+    apiBase: "http://100.96.0.1:31337/v1",
+    token: null,
+  });
 });
 
 describe("isTrustedAppLink", () => {
@@ -173,6 +189,57 @@ describe("createDeepLinkHandler — universal (https) app links", () => {
     const { handle } = makeHandler({ appLinkHosts: undefined });
     handle("https://eliza.app/wallet");
     expect(window.location.hash).toBe("");
+  });
+});
+
+describe("createDeepLinkHandler — remote runtime connect links", () => {
+  it("routes trusted connect links through the registry-sync launch seam", () => {
+    const { handle } = makeHandler();
+    const seen: unknown[] = [];
+    const onConnect = (event: Event) => {
+      seen.push((event as CustomEvent).detail);
+    };
+    document.addEventListener(CONNECT_EVENT, onConnect);
+    try {
+      handle(
+        "elizaos://connect?url=http%3A%2F%2F100.96.0.1%3A31337%2Fv1%2F&token=attacker-token",
+      );
+    } finally {
+      document.removeEventListener(CONNECT_EVENT, onConnect);
+    }
+
+    expect(mocks.applyLaunchConnection).toHaveBeenCalledWith({
+      kind: "remote",
+      apiBase: "http://100.96.0.1:31337/v1/",
+      token: null,
+    });
+    expect(seen).toEqual([
+      {
+        gatewayUrl: "http://100.96.0.1:31337/v1",
+        token: undefined,
+      },
+    ]);
+  });
+
+  it("rejects untrusted connect links before persisting or dispatching", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { handle } = makeHandler({
+      trustPolicy: { isTrustedDeepLinkApiBaseUrl: () => false } as never,
+    });
+    const onConnect = vi.fn();
+    document.addEventListener(CONNECT_EVENT, onConnect);
+    try {
+      handle("elizaos://connect?url=https%3A%2F%2Fagent.attacker.example");
+      expect(mocks.applyLaunchConnection).not.toHaveBeenCalled();
+      expect(onConnect).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Rejected untrusted gateway URL host"),
+        "agent.attacker.example",
+      );
+    } finally {
+      document.removeEventListener(CONNECT_EVENT, onConnect);
+      warn.mockRestore();
+    }
   });
 });
 

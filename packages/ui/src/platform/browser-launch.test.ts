@@ -168,6 +168,13 @@ describe("browser launch connection handling", () => {
         kind: "remote",
       }),
     );
+    expect(mocks.upsertAndActivateAgentProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accessToken: "secret-token",
+        apiBase: "https://my-box.local:31337",
+        kind: "remote",
+      }),
+    );
   });
 
   it("rejects configured cloud API hosts over plaintext HTTP", async () => {
