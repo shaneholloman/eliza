@@ -83,6 +83,9 @@ export function decrypt(
       "utf8",
     );
   } catch (err) {
+    // error-policy:J2 context-adding rethrow — a GCM auth-tag failure (tampered
+    // ciphertext / wrong master key / slot-swap) must surface as a decrypt
+    // failure, never as a fabricated/empty secret value. Fail closed.
     throw new CryptoError(
       err instanceof Error
         ? `decryption failed: ${err.message}`
