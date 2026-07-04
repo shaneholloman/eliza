@@ -1,3 +1,4 @@
+// Renders a reusable UI component for the Farcaster Miniapp example.
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";

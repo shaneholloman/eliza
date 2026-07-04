@@ -1,3 +1,4 @@
+// Provides shared support logic for the Code example.
 import { stringToUuid, type UUID } from "@elizaos/core";
 import { v4 as uuidv4 } from "uuid";
 

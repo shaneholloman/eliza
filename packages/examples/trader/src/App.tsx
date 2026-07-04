@@ -1,3 +1,4 @@
+// Renders the primary UI shell for the Trader example.
 import type { AgentRuntime } from "@elizaos/core";
 import { useCallback, useState } from "react";
 import { PositionList } from "./components/PositionList";

@@ -1,3 +1,4 @@
+// Exercises the Plugin example behavior that this module protects.
 import { describe, it } from "vitest";
 import { cleanupTestRuntime, createTestRuntime } from "../__tests__/test-utils";
 import { starterPlugin } from "../plugin";

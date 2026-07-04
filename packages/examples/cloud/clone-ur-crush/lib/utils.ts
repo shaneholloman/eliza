@@ -1,3 +1,4 @@
+// Provides shared support logic for the Clone Ur Crush cloud example.
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 

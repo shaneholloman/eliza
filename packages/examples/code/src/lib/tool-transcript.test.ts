@@ -1,3 +1,4 @@
+// Exercises the Code example behavior that this module protects.
 import { describe, expect, test } from "bun:test";
 import { type ActionEventPayload, stringToUuid } from "@elizaos/core";
 import {

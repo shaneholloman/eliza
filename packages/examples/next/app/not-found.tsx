@@ -1,3 +1,4 @@
+// Renders the not-found view for the Next example.
 export default function NotFound() {
   return (
     <div

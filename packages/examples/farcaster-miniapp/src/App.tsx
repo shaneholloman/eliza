@@ -1,3 +1,4 @@
+// Renders the primary UI shell for the Farcaster Miniapp example.
 import { sdk } from "@farcaster/miniapp-sdk";
 import { useCallback, useEffect, useState } from "react";
 import { ElizaChat } from "./components/ElizaChat";

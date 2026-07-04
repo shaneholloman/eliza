@@ -1,3 +1,4 @@
+// Registers IPC handlers for the Electron app example shell.
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { app, ipcMain } from "electron";

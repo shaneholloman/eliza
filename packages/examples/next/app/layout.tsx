@@ -1,3 +1,4 @@
+// Defines the Next.js layout shell for the Next example.
 import type { Metadata } from "next";
 import "./globals.css";
 

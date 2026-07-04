@@ -1,3 +1,4 @@
+// Starts the HTTP server surface for the Capacitor app example.
 import {
   createServer,
   type IncomingMessage,

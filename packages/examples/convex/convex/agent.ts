@@ -1,3 +1,4 @@
+// Supports the Convex example described in this package README.
 "use node";
 
 /**

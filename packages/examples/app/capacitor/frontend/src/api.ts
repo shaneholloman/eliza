@@ -1,3 +1,4 @@
+// Wraps API calls used by the Capacitor app example UI.
 import type { AppConfig, ChatMessage, ProviderMode } from "./types";
 
 type ChatResponse = {

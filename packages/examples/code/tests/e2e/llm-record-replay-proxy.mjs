@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Drives end-to-end coverage for the Code example.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 /**

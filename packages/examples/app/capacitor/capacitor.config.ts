@@ -1,3 +1,4 @@
+// Configures Capacitor packaging for the Capacitor app example.
 import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {

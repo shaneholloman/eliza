@@ -1,3 +1,4 @@
+// Provides a React hook for the Trader example.
 import type { AgentRuntime, Service } from "@elizaos/core";
 import { useCallback, useEffect, useState } from "react";
 
