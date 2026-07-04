@@ -19,7 +19,15 @@ vi.mock("../api", () => ({
 
 import { useWalletState } from "./useWalletState";
 
-function mountHook(setActionNotice: ReturnType<typeof vi.fn>) {
+type ActionNoticeFn = (
+  text: string,
+  tone?: "info" | "success" | "error",
+  ttlMs?: number,
+  once?: boolean,
+  busy?: boolean,
+) => void;
+
+function mountHook(setActionNotice: ActionNoticeFn) {
   return renderHook(() =>
     useWalletState({
       setActionNotice,
@@ -39,7 +47,7 @@ describe("useWalletState capability sync", () => {
 
   it("surfaces a rejected capability sync via setActionNotice", async () => {
     updateConfig.mockRejectedValue(new Error("HTTP 500"));
-    const setActionNotice = vi.fn();
+    const setActionNotice = vi.fn<ActionNoticeFn>();
     const { result } = mountHook(setActionNotice);
 
     act(() => {
@@ -59,7 +67,7 @@ describe("useWalletState capability sync", () => {
 
   it("stays silent when the capability sync succeeds", async () => {
     updateConfig.mockResolvedValue({});
-    const setActionNotice = vi.fn();
+    const setActionNotice = vi.fn<ActionNoticeFn>();
     const { result } = mountHook(setActionNotice);
 
     act(() => {
