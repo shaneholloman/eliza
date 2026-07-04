@@ -661,6 +661,25 @@ def main() -> int:
         else:
             log.warning(msg)
         use_liger = False
+    # Liger has no validated gemma4_unified (dense 12B/31B) kernel path. Its
+    # fused RMSNorm/RoPE/CE assume the Gemma2/3 layer layout and silently
+    # corrupt the gemma4_unified forward — which adds per-layer q_norm/k_norm,
+    # a layer_scalar, and logit softcapping the Gemma3 kernels don't model — so
+    # the loss NaNs within the first optimizer steps and the saved checkpoint is
+    # all-NaN. Force Liger off for this arch (E2B/E4B "gemma4" stay on). The
+    # generic finite-weights guard (make_finite_weights_callback) is the second
+    # line of defense; this is the specific known-arch prevention.
+    _model_type = str(getattr(model.config, "model_type", "")).lower()
+    _arch_names = getattr(model.config, "architectures", None) or []
+    if use_liger and (
+        "gemma4_unified" in _model_type
+        or any("Gemma4Unified" in a for a in _arch_names)
+    ):
+        log.warning(
+            "Liger kernel disabled for gemma4_unified arch (no validated fused "
+            "kernel path; avoids NaN divergence in 12B/31B SFT)."
+        )
+        use_liger = False
     if use_liger and device == "cuda":
         try:
             from liger_kernel.transformers import _apply_liger_kernel_to_instance
@@ -896,8 +915,15 @@ def main() -> int:
         trainer.training_step = _fp8_training_step  # type: ignore[assignment]
 
     from training.instrumentation import (
-        InstrumentationConfig, log_environment, make_hf_callback,
+        InstrumentationConfig, log_environment, make_finite_weights_callback,
+        make_hf_callback,
     )
+    # Materialize the exact tokenizer this run trains with (including any chat-
+    # template override applied above) to a stable path so its artifact hash is
+    # captured in the reproducibility manifest. This is the actual tokenizer the
+    # model sees, not just the base-model source.
+    tokenizer_dir = out_dir / "tokenizer"
+    tokenizer.save_pretrained(str(tokenizer_dir))
     log_environment(
         out_dir,
         run_meta={
@@ -906,6 +932,19 @@ def main() -> int:
             "max_seq_len": args.max_seq_len, "lr": args.lr,
             "registry_key": args.registry_key,
         },
+        # Reproducibility manifest (AGENTS.md §9): hash the exact inputs. A bare
+        # HF repo id for --model won't resolve to a local path and is skipped;
+        # a local base checkpoint is hashed.
+        dataset_files=[args.train_file, args.val_file],
+        tokenizer_path=tokenizer_dir,
+        base_checkpoint=args.model,
+    )
+    # Post-step finite-weights guard — registered unconditionally. A divergent
+    # run (e.g. a fused kernel that doesn't model an arch's layer layout) must
+    # die within one logging interval instead of completing and persisting an
+    # all-NaN checkpoint. Not gated on --memory-budget-gb.
+    trainer.add_callback(
+        make_finite_weights_callback(sft_cfg.logging_steps)
     )
     if args.memory_budget_gb:
         trainer.add_callback(make_hf_callback(InstrumentationConfig(

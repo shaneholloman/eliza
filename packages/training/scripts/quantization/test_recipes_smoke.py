@@ -20,6 +20,7 @@ data. Run them by hand from the repo root.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -212,8 +213,7 @@ def test_legacy_push_model_to_hf_redirects_to_canonical_publishers():
 # Kernel-vs-recipe parity tests
 #
 # These tests pin the recipes to the canonical kernel references in
-# eliza/packages/inference/{reference,verify}/ and
-# eliza/packages/native-plugins/{qjl-cpu,polarquant-cpu}/.
+# packages/native/plugins/{turboquant-cpu,qjl-cpu,polarquant-cpu}/.
 #
 # Per packages/training/AGENTS.md §3:
 #   "Bit-exact with kernels — when a quantization recipe and a kernel
@@ -226,18 +226,33 @@ def test_legacy_push_model_to_hf_redirects_to_canonical_publishers():
 # ---------------------------------------------------------------------------
 
 
-# _HERE = .../eliza/packages/training/scripts/quantization
-# parents: [0]=quantization, [1]=scripts, [2]=training, [3]=packages
-_KERNEL_PACKAGES_DIR = _HERE.parents[2]
-_REF_C = _KERNEL_PACKAGES_DIR / "inference" / "verify" / "qjl_polar_ref.c"
-_REF_H = _KERNEL_PACKAGES_DIR / "inference" / "verify" / "qjl_polar_ref.h"
-_TURBO_C = _KERNEL_PACKAGES_DIR / "inference" / "reference" / "turbo_kernels.c"
-_TURBO_H = _KERNEL_PACKAGES_DIR / "inference" / "reference" / "turbo_kernels.h"
+# _HERE = <repo>/packages/training/scripts/quantization
+# parents: [0]=quantization, [1]=scripts, [2]=training, [3]=packages, [4]=<repo>
+#
+# The canonical qjl/polar/turbo C references live in the local-inference plugin
+# at plugins/plugin-local-inference/native/{verify,reference}/. The old path
+# (_HERE.parents[2] / "inference" / ...) pointed at a nonexistent
+# packages/training/inference/ tree, so every C-parity test silently skipped —
+# a false green. Resolve the real location relative to the repo root, with an
+# ELIZA_KERNEL_REF_DIR override for layouts where the plugin tree is not a
+# sibling of packages/training (e.g. the CI container that mounts only
+# packages/training — see the loud-skip note in the parity tests).
+_REPO_ROOT = _HERE.parents[3]
+_KERNEL_REF_DIR = Path(
+    os.environ.get(
+        "ELIZA_KERNEL_REF_DIR",
+        str(_REPO_ROOT / "plugins" / "plugin-local-inference" / "native"),
+    )
+)
+_REF_C = _KERNEL_REF_DIR / "verify" / "qjl_polar_ref.c"
+_REF_H = _KERNEL_REF_DIR / "verify" / "qjl_polar_ref.h"
+_TURBO_C = _KERNEL_REF_DIR / "reference" / "turbo_kernels.c"
+_TURBO_H = _KERNEL_REF_DIR / "reference" / "turbo_kernels.h"
 
 
 # Canonical 4-bit Lloyd-Max centroids for N(0,1), bit-exact match required
-# against eliza/packages/native-plugins/polarquant-cpu/include/polarquant/polar_centroids.h
-# and eliza/packages/inference/verify/qjl_polar_ref.c.
+# against packages/native/plugins/polarquant-cpu/include/polarquant/polar_centroids.h
+# and the qjl-cpu reference kernels (packages/native/plugins/qjl-cpu/src/).
 _C_POLAR_Q4_CENTROIDS = (
     -2.754354807, -2.093562707, -1.643041510, -1.279739752,
     -0.962640978, -0.672392117, -0.397897103, -0.131757782,
