@@ -60,8 +60,8 @@ Kept handlers each carry a grep-able `// error-policy:J3 <reason>` annotation.
 ```bash
 bun run --cwd packages/import-conversations test
 ```
-Result: 10 files / 113 tests passed (5 new fail-closed tests added: claude +2,
-chatgpt +1, hermes +4 net; corrupt-payload throws + I/O-failure surfaces + still
+Result: 10 files / 113 tests passed (6 new fail-closed tests added: claude +2,
+chatgpt +1, hermes +3; corrupt-payload throws + I/O-failure surfaces + still
 returns false on genuinely-absent input).
 
 ```bash
