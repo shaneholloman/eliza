@@ -1,3 +1,4 @@
+/** Provides x seeds assertions and seeds shared by scenario-runner fixtures. */
 import crypto from "node:crypto";
 import type { IAgentRuntime } from "@elizaos/core";
 import type {

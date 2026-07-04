@@ -1,3 +1,4 @@
+/** Covers the control plane extended cloud mock with deterministic in-process state and real HTTP handlers. */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
   type RunningControlPlaneMock,

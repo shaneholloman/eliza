@@ -1,3 +1,4 @@
+/** Configures the shared test harness Vitest project for deterministic keyless runtime tests. */
 import { defineConfig } from "vitest/config";
 import { buildHarnessSourceAliases } from "./source-aliases.ts";
 

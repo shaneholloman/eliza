@@ -1,3 +1,4 @@
+/** Scenario fixture for remote mobile controls mac; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import type { ScenarioContext } from "@elizaos/scenario-runner/schema";
 import { scenario } from "@elizaos/scenario-runner/schema";
 import { successfulActionData } from "../_helpers/effect-assertions.ts";

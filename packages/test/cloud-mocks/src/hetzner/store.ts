@@ -1,3 +1,4 @@
+/** Implements the store Hetzner Cloud mock used by tests against the real autoscaler client. */
 import type { MockAction, MockLocation, MockServer, MockVolume } from "./types";
 
 const FALKENSTEIN: MockLocation = {

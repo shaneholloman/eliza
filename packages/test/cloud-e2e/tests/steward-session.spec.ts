@@ -1,3 +1,4 @@
+/** Covers the steward session cloud E2E flow using Playwright against the real local stack with mock-backed external services. */
 import crypto from "node:crypto";
 import { PLAYWRIGHT_TEST_AUTH_SECRET } from "../src/fixtures/env";
 import { expect, test } from "../src/helpers/test-fixtures";

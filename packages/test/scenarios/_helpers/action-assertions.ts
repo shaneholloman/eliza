@@ -1,3 +1,4 @@
+/** Provides action assertions assertions and seeds shared by scenario-runner fixtures. */
 import type {
   ApprovalRequestState,
   CapturedAction,

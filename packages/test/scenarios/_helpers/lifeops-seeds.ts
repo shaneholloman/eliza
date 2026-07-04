@@ -1,3 +1,4 @@
+/** Provides lifeops seeds assertions and seeds shared by scenario-runner fixtures. */
 import type { IAgentRuntime } from "@elizaos/core";
 import type {
   ScenarioCheckResult,

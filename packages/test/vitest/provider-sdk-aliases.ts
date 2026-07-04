@@ -1,3 +1,4 @@
+/** Configures the provider sdk aliases shared Vitest lane used by workspace package tests. */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 

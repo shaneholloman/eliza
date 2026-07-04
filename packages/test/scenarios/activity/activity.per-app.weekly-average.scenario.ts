@@ -1,3 +1,4 @@
+/** Scenario fixture for activity per app weekly average; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import { scenario } from "@elizaos/scenario-runner/schema";
 import { expectTurnToCallAction } from "../_helpers/action-assertions.ts";
 import { seedScreenTimeSessions } from "../_helpers/lifeops-seeds.ts";

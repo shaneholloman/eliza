@@ -1,3 +1,4 @@
+/** Provides app charge test plugin utilities for the shared package test harness. */
 import type { Memory, Plugin } from "@elizaos/core";
 
 const CHARGE_ID = "charge_scenario_five";

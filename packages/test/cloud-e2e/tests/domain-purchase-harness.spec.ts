@@ -43,15 +43,15 @@ import { expect, test } from "../src/helpers/test-fixtures";
 test.use({ stackOptions: { frontend: false } });
 
 /**
- * The registrar dev stub quotes every domain at 1099¢ WHOLESALE; the check/buy
- * routes add the platform margin via computeDomainPrice (1495¢ total today —
+ * The registrar fixture quotes every domain at 1099¢ wholesale; the check/buy
+ * routes add the platform margin via computeDomainPrice (1495¢ total here —
  * the same $14.95 the domain-lifecycle spec asserts). Assert against the
  * quoted TOTAL rather than hardcoding the margin math.
  */
 const STUB_WHOLESALE_CENTS = 1099;
-/** Ceiling that admits the stub total — the happy chain. */
+/** Ceiling that admits the fixture total for the happy chain. */
 const PERMISSIVE_CEILING_CENTS = 2000;
-/** The real default ceiling (500¢) — must refuse the stub quote. */
+/** Production default ceiling (500¢) that must refuse the fixture quote. */
 const STRICT_CEILING_CENTS = 500;
 
 const MOCK_POLL = { pollIntervalMs: 250, capMs: 30_000 };

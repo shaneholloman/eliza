@@ -1,3 +1,4 @@
+/** Implements the latency Hetzner Cloud mock used by tests against the real autoscaler client. */
 export interface LatencyEntry {
   p50: number;
   jitter: number;

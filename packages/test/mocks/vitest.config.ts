@@ -1,3 +1,4 @@
+/** Configures the mock fixture Vitest project for deterministic external-service tests. */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";

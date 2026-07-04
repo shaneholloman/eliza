@@ -1,3 +1,4 @@
+/** Scenario fixture for todo routine night checkin; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import { scenario } from "@elizaos/scenario-runner/schema";
 import { expectTurnToCallAction } from "../_helpers/action-assertions.ts";
 import { expectScenarioActionResultData } from "../_helpers/action-result-assertions.ts";

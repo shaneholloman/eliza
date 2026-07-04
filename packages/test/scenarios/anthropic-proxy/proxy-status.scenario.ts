@@ -1,3 +1,4 @@
+/** Scenario fixture for proxy status; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import type { AgentRuntime } from "@elizaos/core";
 import { ModelType } from "@elizaos/core";
 import { scenario } from "@elizaos/scenario-runner/schema";

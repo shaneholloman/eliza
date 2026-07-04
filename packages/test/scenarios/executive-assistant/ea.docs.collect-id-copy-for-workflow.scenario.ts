@@ -1,3 +1,4 @@
+/** Scenario fixture for ea docs collect id copy for workflow; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import { scenario } from "@elizaos/scenario-runner/schema";
 import {
   expectScenarioToCallAction,

@@ -1,3 +1,4 @@
+/** Provides seed benchmark fixtures helper utilities shared by package tests and scenario harnesses. */
 import type { IAgentRuntime } from "@elizaos/core";
 import { LifeOpsService } from "../../../../plugins/plugin-personal-assistant/src/lifeops/service.ts";
 import { ensureLifeOpsSchema } from "./seed-grants.ts";

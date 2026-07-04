@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+/** Starts the Hetzner cloud mock as a standalone local HTTP fixture for tests and manual probes. */
 import { startHetznerMock } from "../src/hetzner";
 
 function parseFlag(name: string): string | undefined {

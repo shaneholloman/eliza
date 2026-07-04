@@ -1,3 +1,4 @@
+/** Scenario fixture for security should respond injection gate; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import type { ScenarioTurnExecution } from "@elizaos/scenario-runner/schema";
 import { scenario } from "@elizaos/scenario-runner/schema";
 

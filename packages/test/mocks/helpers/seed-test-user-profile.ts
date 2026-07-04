@@ -1,3 +1,4 @@
+/** Provides seed test user profile helper utilities shared by package tests and scenario harnesses. */
 import type { IAgentRuntime } from "@elizaos/core";
 import { HABIT_STARTER_RECORDS } from "../../../../plugins/plugin-personal-assistant/src/default-packs/habit-starters.ts";
 import {

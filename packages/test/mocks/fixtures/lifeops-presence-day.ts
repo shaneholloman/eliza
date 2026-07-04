@@ -1,3 +1,4 @@
+/** Defines lifeops presence day fixture data for deterministic LifeOps mock-service tests. */
 import type {
   LifeOpsActivitySignal,
   LifeOpsActivitySignalSource,

@@ -1,3 +1,4 @@
+/** Scenario fixture for telegram local mute chat; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import { listTriggerTasks, readTriggerConfig } from "@elizaos/agent";
 import type { AgentRuntime, UUID } from "@elizaos/core";
 import { ChannelType, stringToUuid } from "@elizaos/core";

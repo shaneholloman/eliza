@@ -1,3 +1,4 @@
+/** Defines lifeops simulator fixture data for deterministic LifeOps mock-service tests. */
 export const LIFEOPS_SIMULATOR_CHANNELS = [
   "discord",
   "telegram",

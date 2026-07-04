@@ -1,3 +1,4 @@
+/** Scenario fixture for calendar create simple; runs through scenario-runner with deterministic services unless the scenario name marks an external-service gate. */
 import {
   type ScenarioContext,
   scenario,
