@@ -112,6 +112,25 @@ describe("claude parser: detect()", () => {
     await writeFile(zipPath, makeZipWithConversationsJson(json));
     expect(await detect(zipPath)).toBe(true);
   });
+
+  it("returns false for a genuinely absent path (not a Claude export)", async () => {
+    expect(await detect(path.join(here, "fixtures", "does-not-exist"))).toBe(
+      false,
+    );
+  });
+
+  it("throws on a resolved-but-corrupt conversations.json instead of silently reporting 'not a Claude export'", async () => {
+    // A directory that DOES resolve to a conversations.json whose body is a
+    // truncated/corrupt JSON array. This is required input for a resolved
+    // export: detect() must surface the corruption, not swallow it as false.
+    const tmp = await mkdtemp(path.join(tmpdir(), "claude-corrupt-"));
+    await writeFile(
+      path.join(tmp, "conversations.json"),
+      '[{"uuid":"x","chat_messages":[',
+      "utf8",
+    );
+    await expect(detect(tmp)).rejects.toThrow();
+  });
 });
 
 describe("claude parser: parse() mapping", () => {

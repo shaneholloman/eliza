@@ -423,6 +423,14 @@ export async function* streamJsonArrayElements(
 
 // --- ConversationImporter surface -------------------------------------------
 
+function isNotFound(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: string }).code === "ENOENT"
+  );
+}
+
 async function resolveInput(
   input: string,
 ): Promise<
@@ -431,8 +439,12 @@ async function resolveInput(
   let st: Awaited<ReturnType<typeof stat>>;
   try {
     st = await stat(input);
-  } catch {
-    return undefined;
+  } catch (error) {
+    // error-policy:J3 an absent path is "not a ChatGPT export"; any other stat
+    // failure (EACCES, EIO, ...) is a real I/O error on required input and must
+    // surface rather than masquerade as an unrecognized/absent input.
+    if (isNotFound(error)) return undefined;
+    throw error;
   }
 
   if (st.isDirectory()) {
@@ -440,8 +452,12 @@ async function resolveInput(
     try {
       const fileStat = await stat(file);
       return fileStat.isFile() ? { kind: "json", path: file } : undefined;
-    } catch {
-      return undefined;
+    } catch (error) {
+      // error-policy:J3 a missing conversations.json inside a directory means
+      // "not a ChatGPT export"; a non-ENOENT failure reading it is a real I/O
+      // error on required input and must surface.
+      if (isNotFound(error)) return undefined;
+      throw error;
     }
   }
 
@@ -478,24 +494,25 @@ async function openConversationsStream(input: string): Promise<Readable> {
  * (which has `chat_messages`).
  */
 async function detect(input: string): Promise<boolean> {
-  try {
-    const resolved = await resolveInput(input);
-    if (!resolved) return false;
-    if (resolved.kind === "zip") {
-      const metadata = await findZipEntryMetadata(
-        resolved.path,
-        CONVERSATIONS_FILE,
-      );
-      if (!metadata) return false;
-    }
-
-    const first = await readFirstJsonArrayObject(
-      await openConversationsStream(input),
+  // Resolution decides recognition: an input that does not resolve to a ChatGPT
+  // `conversations.json` (or a zip carrying one) is not a ChatGPT export and
+  // returns false. Once it resolves, the payload is required input — a corrupt
+  // or unreadable body throws so callers see a "corrupt ChatGPT export" failure
+  // rather than a silent "unrecognized format".
+  const resolved = await resolveInput(input);
+  if (!resolved) return false;
+  if (resolved.kind === "zip") {
+    const metadata = await findZipEntryMetadata(
+      resolved.path,
+      CONVERSATIONS_FILE,
     );
-    return isRecord(first) && isRecord((first as ChatGptConversation).mapping);
-  } catch {
-    return false;
+    if (!metadata) return false;
   }
+
+  const first = await readFirstJsonArrayObject(
+    await openConversationsStream(input),
+  );
+  return isRecord(first) && isRecord((first as ChatGptConversation).mapping);
 }
 
 /**
