@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react";
-import { TypingIndicator } from "./chat-typing-indicator";
+import { TurnStatus, TypingIndicator } from "./chat-typing-indicator";
 
 const meta = {
   title: "Composites/Chat/ChatTypingIndicator",
@@ -7,7 +7,6 @@ const meta = {
   tags: ["autodocs"],
   argTypes: {
     agentName: { control: "text" },
-    agentAvatarSrc: { control: "text" },
     variant: { control: "select", options: ["default", "game-modal"] },
     className: { control: "text" },
   },
@@ -35,9 +34,22 @@ export const GameModal: Story = {
   },
 };
 
-export const WithAvatar: Story = {
-  args: {
-    agentName: "Eliza",
-    agentAvatarSrc: "https://placehold.co/40x40/png?text=E",
-  },
+/** The overlay's phase-aware variant (dots + debounced label) on a dark glass
+ * substrate, as it renders in the continuous-chat overlay. */
+export const TurnStatusWorking: Story = {
+  render: () => (
+    <div className="rounded-2xl bg-black/70 p-4">
+      <TurnStatus
+        status={{ kind: "running_action", actionName: "SEND_MESSAGE" }}
+      />
+    </div>
+  ),
+};
+
+export const TurnStatusSpeaking: Story = {
+  render: () => (
+    <div className="rounded-2xl bg-black/70 p-4">
+      <TurnStatus status={{ kind: "speaking" }} />
+    </div>
+  ),
 };

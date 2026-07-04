@@ -441,8 +441,6 @@ export function ChatView({
     isGameModal,
     visibleMsgs,
   });
-  const agentAvatarSrc =
-    selectedVrmIndex > 0 ? getVrmPreviewUrl(selectedVrmIndex) : null;
 
   useChatAvatarVoiceBridge({
     mouthOpen: voice.mouthOpen,
@@ -718,10 +716,7 @@ export function ChatView({
             isGameModal ? (
               <TypingIndicator variant="game-modal" agentName={agentName} />
             ) : (
-              <TypingIndicator
-                agentName={agentName}
-                agentAvatarSrc={agentAvatarSrc}
-              />
+              <TypingIndicator agentName={agentName} />
             )
           ) : null
         }
