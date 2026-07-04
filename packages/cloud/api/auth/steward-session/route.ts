@@ -214,7 +214,12 @@ app.post("/", async (c) => {
           request_id: c.get("requestId"),
           metadata: { provider: "steward", reason: "invalid_token" },
         })
-        .catch(() => undefined);
+        // error-policy:J7 audit write must not block the 401; a dropped auth audit is logged.
+        .catch((err) =>
+          logger.error("[StewardSession] audit emit for failed login failed", {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
       return c.json(errorBody("Invalid token", "invalid_token"), 401);
     }
 
@@ -289,7 +294,16 @@ app.post("/", async (c) => {
         request_id: c.get("requestId"),
         metadata: { provider: "steward", method: "session_exchange" },
       })
-      .catch(() => undefined);
+      // error-policy:J7 audit write must not block the login response; a dropped auth audit is logged.
+      .catch((err) =>
+        logger.error(
+          "[StewardSession] audit emit for successful login failed",
+          {
+            userId: cloudUser.id,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        ),
+      );
     const response: StewardSessionResponse = {
       ok: true,
       userId: cloudUser.id,

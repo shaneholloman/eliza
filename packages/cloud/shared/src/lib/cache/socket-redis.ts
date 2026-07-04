@@ -295,6 +295,7 @@ class Connection {
       ]);
       if (queueTimer) clearTimeout(queueTimer);
       if (queueWait === "orphaned") {
+        // error-policy:J6 best-effort teardown of a poisoned socket; the reconnect below is the real path.
         await this.close().catch(() => {});
       }
       let opGeneration = -1;
@@ -312,6 +313,7 @@ class Connection {
         // generation: if a queued caller already reconnected, this failure
         // belongs to the previous socket and must not tear down the current one.
         if (opGeneration === -1 || opGeneration === this.generation) {
+          // error-policy:J6 best-effort teardown of a poisoned socket; the original error is rethrown below.
           await this.close().catch(() => {});
         }
         throw error;
@@ -332,6 +334,7 @@ class Connection {
     const op = fn();
     // The losing side of the race keeps running; swallow its late rejection so
     // a post-timeout socket error doesn't surface as an unhandled rejection.
+    // error-policy:J5 the winning side's error is observed by the caller via `op`/`timeout`.
     op.catch(() => {});
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {

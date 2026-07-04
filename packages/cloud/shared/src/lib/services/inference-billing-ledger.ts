@@ -200,6 +200,23 @@ interface DebitRow {
  * `pending` row) and no concurrent admission ever sees a claimed-but-undebited
  * state. A refused debit (would overdraw) marks the row `uncollected`. Never throws.
  */
+// Post-commit cache-freshness side-effects tolerate failure (the debit already
+// committed to Postgres, the source of truth) but must not fail silently: a
+// dropped invalidation leaves a stale balance view, so surface it at warn with
+// the org + target so the staleness is observable instead of invisible.
+// error-policy:J7 side-effect must not fail the settled charge; failure is logged.
+function reportInvalidationFailure(organizationId: string, target: string): (err: unknown) => void {
+  return (err: unknown) =>
+    logger.warn(
+      "[InferenceLedger] post-commit cache invalidation failed; balance view may be stale",
+      {
+        organizationId,
+        target,
+        error: err instanceof Error ? err.message : String(err),
+      },
+    );
+}
+
 async function settleLedgerCharge(
   ctx: LedgerChargeContext,
   amountUsd: number,
@@ -286,9 +303,15 @@ async function settleLedgerCharge(
   // Post-commit side-effects (cache freshness; alerting). Outside the transaction.
   if (!outcome.claimed) return outcome;
   if (outcome.debited) {
-    await CacheInvalidation.onCreditMutation(ctx.organizationId).catch(() => {});
-    invalidateOrganizationCache(ctx.organizationId).catch(() => {});
-    invalidateOrgBalanceHint(ctx.organizationId).catch(() => {});
+    await CacheInvalidation.onCreditMutation(ctx.organizationId).catch(
+      reportInvalidationFailure(ctx.organizationId, "credit-mutation"),
+    );
+    invalidateOrganizationCache(ctx.organizationId).catch(
+      reportInvalidationFailure(ctx.organizationId, "organization-cache"),
+    );
+    invalidateOrgBalanceHint(ctx.organizationId).catch(
+      reportInvalidationFailure(ctx.organizationId, "balance-hint"),
+    );
     // Parity with deductCredits: fire low-credits email + auto-top-up + the waifu
     // hosted-agent pause webhook so an org draining via optimistic inference still
     // gets low-balance warnings (the ledger debits with its own SQL, not deductCredits).
@@ -311,7 +334,9 @@ async function settleLedgerCharge(
       amountUsd,
       source,
     });
-    invalidateOrgBalanceHint(ctx.organizationId).catch(() => {});
+    invalidateOrgBalanceHint(ctx.organizationId).catch(
+      reportInvalidationFailure(ctx.organizationId, "balance-hint"),
+    );
   }
   return outcome;
 }

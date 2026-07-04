@@ -514,7 +514,18 @@ async function cancelAgentInfrastructure(
         userId,
       });
     }
-    void provisioningJobService.triggerImmediate(triggerEnv).catch(() => {});
+    // The teardown job is already durably enqueued above; triggerImmediate is a
+    // best-effort nudge to run it now rather than on the next poll. A failed nudge
+    // only delays teardown, so it must not fail this call — but it is logged so a
+    // stuck orchestrator is observable.
+    // error-policy:J7 nudge failure only delays an already-enqueued job; logged, not fatal.
+    void provisioningJobService.triggerImmediate(triggerEnv).catch((err) =>
+      logger.warn("[ActiveBilling] provisioning triggerImmediate nudge failed", {
+        agentId,
+        organizationId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
 
     return {
       attempted: true,
