@@ -264,6 +264,13 @@ const EXPECTED_PR_DETERMINISTIC_SCENARIO_IDS = [
   "anthropic-proxy.proxy-status",
   "benchmarks.osworld-action",
   "commands.help-command",
+  // LifeOps persona pack D1 (comms-flood-triage, #12774). Convention (G1):
+  // pr-deterministic persona scenarios live in
+  // plugins/plugin-personal-assistant/test/scenarios — the one root scanned by
+  // BOTH this guard AND check-lifeops-persona-catalog-coverage.mjs — and are
+  // added here in the same commit so this toEqual stays green while the coverage
+  // ledger can still resolve their ids.
+  "comms-flood-quiet-hours-vip-exception",
   "computeruse.get-cursor-position",
   "convo.echo-self-test",
   "convo.greeting-dynamic",
