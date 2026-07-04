@@ -46,6 +46,7 @@ Result:
 ```text
 Test Files  1 passed (1)
 Tests       11 passed (11)
+Duration    422ms
 ```
 
 ```bash
@@ -57,6 +58,7 @@ Result:
 ```text
 Test Files  1 passed (1)
 Tests       8 passed (8)
+Duration    4.54s
 ```
 
 ```bash
@@ -67,7 +69,7 @@ bun run --cwd plugins/plugin-local-inference typecheck
 Result: both passed (`tsgo --noEmit -p tsconfig.json`).
 
 ```bash
-bunx @biomejs/biome check --write \
+bunx @biomejs/biome check \
   packages/shared/src/meeting-artifacts.ts \
   packages/shared/src/meeting-artifacts.test.ts \
   packages/shared/src/index.ts \
@@ -75,7 +77,19 @@ bunx @biomejs/biome check --write \
   plugins/plugin-local-inference/src/routes/transcripts-routes.test.ts
 ```
 
-Result: passed after formatting one touched file.
+Result:
+
+```text
+Checked 5 files in 18ms. No fixes applied.
+```
+
+```bash
+bun run --cwd packages/shared build
+bun run --cwd plugins/plugin-local-inference build
+```
+
+Result: both passed. The plugin build reported `Build complete`; the shared
+build regenerated i18n and completed its dist build.
 
 ## Broader Verification
 
@@ -88,6 +102,7 @@ Result:
 ```text
 Test Files  103 passed (103)
 Tests       1173 passed (1173)
+Duration    16.15s
 ```
 
 ```bash
@@ -117,6 +132,30 @@ Result: failed with unrelated current-baseline failures:
   fallback while current code throws `MissingMtpDrafterError`.
 
 Summary from that run: `3 failed | 243 passed`, `14 failed | 2482 passed | 20 skipped`.
+
+## Repo-Level Checks
+
+```bash
+bun run audit:type-safety-ratchet
+bun run audit:error-policy-ratchet
+git diff --check
+```
+
+Result: passed. The error-policy ratchet reported no new fallback-slop in the
+three touched production files:
+
+- `packages/shared/src/index.ts`
+- `packages/shared/src/meeting-artifacts.ts`
+- `plugins/plugin-local-inference/src/routes/transcripts-routes.ts`
+
+```bash
+bun run verify
+```
+
+Result: blocked after the CLAUDE/AGENTS check and both ratchets passed. Turbo
+stopped on unrelated current-baseline `@elizaos/plugin-computeruse#lint`
+diagnostics around non-null assertions. The same run also replayed unrelated
+`@elizaos/bun-ios-runtime#lint` string-placeholder warnings.
 
 ## Evidence Rows
 
