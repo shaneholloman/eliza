@@ -33,19 +33,31 @@ describe("scoreEndOfTurnHeuristic — canonical heuristic", () => {
     expect(score("i went to the store but")).toBe(0.15);
   });
 
-  it("rule 5: trailing preposition/article → incomplete NP (0.2)", () => {
+  it("rule 6: trailing preposition/article → incomplete NP (0.2)", () => {
     expect(score("schedule a meeting with")).toBe(0.2);
     expect(score("put it on the")).toBe(0.2);
     expect(score("i need a")).toBe(0.2);
   });
 
-  it("rule 6: short utterance with no trail-off → complete (0.7)", () => {
+  it("rule 5: trailing filler or hedge → tail-off hold (0.2)", () => {
+    expect(score("let me think um")).toBe(0.2);
+    expect(score("i was going to say uh")).toBe(0.2);
+    expect(score("we could do maybe")).toBe(0.2);
+  });
+
+  it("rule 7: dangling modal/auxiliary → incomplete clause (0.2)", () => {
+    expect(score("i was thinking we could")).toBe(0.2);
+    expect(score("the thing is")).toBe(0.2);
+    expect(score("what i would")).toBe(0.2);
+  });
+
+  it("rule 8: short utterance with no trail-off → complete (0.7)", () => {
     expect(score("go home")).toBe(0.7);
     expect(score("yes")).toBe(0.7);
     expect(score("no thanks")).toBe(0.7);
   });
 
-  it("rule 7: no signal → neutral (0.5)", () => {
+  it("rule 9: no signal → neutral (0.5)", () => {
     expect(score("tell me about the weather in london")).toBe(0.5);
     expect(score("buy milk and eggs")).toBe(0.5);
   });
@@ -55,6 +67,13 @@ describe("scoreEndOfTurnHeuristic — canonical heuristic", () => {
     expect(score("and so")).toBe(0.15); // trailing conjunction, not 0.7
     expect(score("going to")).toBe(0.2); // trailing preposition, not 0.7
     expect(score("set the")).toBe(0.2); // trailing article, not 0.7
+    expect(score("maybe uh")).toBe(0.2); // trailing filler, not 0.7
+    expect(score("we could")).toBe(0.2); // dangling modal, not 0.7
+  });
+
+  it("sentence-final punctuation still commits within budget", () => {
+    expect(score("let me think um.")).toBe(0.95);
+    expect(score("we could do that.")).toBe(0.95);
   });
 
   it("empty / whitespace → neutral (0.5)", () => {

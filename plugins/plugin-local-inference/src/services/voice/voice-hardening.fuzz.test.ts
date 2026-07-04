@@ -6,7 +6,12 @@
 // the declared contract. A seeded LCG makes failures reproducible.
 
 import { describe, expect, it } from "vitest";
-import { clampProbability, turnSignalFromProbability } from "./eot-classifier";
+import {
+	clampProbability,
+	EOT_MID_CLAUSE_THRESHOLD,
+	HeuristicEotClassifier,
+	turnSignalFromProbability,
+} from "./eot-classifier";
 import { type VoiceScenario, validateVoiceScenario } from "./voice-scenario";
 
 function makeRng(seed: number): () => number {
@@ -111,6 +116,28 @@ describe("turnSignalFromProbability / clampProbability - fuzz", () => {
 			expect(sig.endOfTurnProbability).toBeGreaterThanOrEqual(0);
 			expect(sig.endOfTurnProbability).toBeLessThanOrEqual(1);
 			expect([true, false, null]).toContain(sig.agentShouldSpeak);
+		}
+	});
+});
+
+describe("HeuristicEotClassifier tail-off cues - fuzz", () => {
+	it("keeps filler and dangling-modal endings below the mid-clause threshold", async () => {
+		const rng = makeRng(0x12889);
+		const classifier = new HeuristicEotClassifier();
+		const prefixes = [
+			"let me think",
+			"i was going to say",
+			"the thing is",
+			"we could do that but",
+			"what i would",
+			"maybe we",
+		];
+		const endings = ["um", "uh", "hmm", "maybe", "could", "would", "is"];
+		for (let i = 0; i < 500; i++) {
+			const prefix = prefixes[Math.floor(rng() * prefixes.length)];
+			const ending = endings[Math.floor(rng() * endings.length)];
+			const score = await classifier.score(`${prefix} ${ending}`);
+			expect(score).toBeLessThan(EOT_MID_CLAUSE_THRESHOLD);
 		}
 	});
 });
