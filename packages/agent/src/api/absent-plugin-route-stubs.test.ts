@@ -11,8 +11,8 @@
  *     literal stubs are gone from both handlers' executable paths.
  */
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import type http from "node:http";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   ABSENT_PLUGIN_ROUTE_STUBS,
@@ -114,9 +114,9 @@ describe("absent-plugin route stub registry", () => {
       stub?.buildBody(req("/api/signal/status?accountId=acct-9")),
     ).toMatchObject({ accountId: "acct-9" });
     // Empty accountId falls back to "default" (matches legacy `|| "default"`).
-    expect(
-      stub?.buildBody(req("/api/signal/status?accountId=")),
-    ).toMatchObject({ accountId: "default" });
+    expect(stub?.buildBody(req("/api/signal/status?accountId="))).toMatchObject(
+      { accountId: "default" },
+    );
   });
 
   it("produces the telegram-account idle snapshot", () => {
@@ -124,9 +124,7 @@ describe("absent-plugin route stub registry", () => {
       "GET",
       "/api/setup/telegram-account/status",
     );
-    expect(
-      stub?.buildBody(req("/api/setup/telegram-account/status")),
-    ).toEqual({
+    expect(stub?.buildBody(req("/api/setup/telegram-account/status"))).toEqual({
       connector: "telegram-account",
       state: "idle",
       detail: {
@@ -231,7 +229,7 @@ describe("grep guard: inline absent-plugin stubs removed from host handlers", ()
       'connector: "telegram-account"',
       'supervisionLevel: "unavailable"',
       'bridgeType: "none"',
-      '{ companions: [] }',
+      "{ companions: [] }",
     ]) {
       expect(
         serverSrc.includes(marker),

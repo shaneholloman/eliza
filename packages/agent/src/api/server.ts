@@ -381,6 +381,7 @@ import {
   DISABLED_TRIGGER_INTERVAL_MS,
   normalizeTriggerDraft,
 } from "../triggers/scheduling.ts";
+import { resolveAbsentPluginRouteStub } from "./absent-plugin-route-stubs.ts";
 import { detectRuntimeModel, resolveProviderFromModel } from "./agent-model.ts";
 import { persistConfigEnv } from "./config-env.ts";
 import { wireCoordinatorBridgesWhenReady } from "./coordinator-wiring.ts";
@@ -474,7 +475,6 @@ import {
   parseEventCursor,
   selectReplayEvents,
 } from "./ws-event-replay.ts";
-import { resolveAbsentPluginRouteStub } from "./absent-plugin-route-stubs.ts";
 import { runtimeRoutesNeedX402Validation } from "./x402-route-validation.ts";
 
 type FirstRunRouteArg = Parameters<typeof handleFirstRunRoutes>[0];
