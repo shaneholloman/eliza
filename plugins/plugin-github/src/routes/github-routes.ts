@@ -229,8 +229,7 @@ async function handlePostToken(ctx: GitHubRouteContext): Promise<boolean> {
     // (client input), an unreachable/misbehaving GitHub as 502 (upstream);
     // TokenValidationError carries which. Unexpected error types default to
     // 500 rather than masquerading as a client error.
-    const status =
-      err instanceof TokenValidationError ? err.status : 500;
+    const status = err instanceof TokenValidationError ? err.status : 500;
     const message = err instanceof Error ? err.message : String(err);
     logger.warn(
       `[github-routes] token validation failed (${status}): ${message}`,

@@ -130,7 +130,7 @@ describe("handleCloudBillingRoute money proxies", () => {
             organization: { creditBalance: 10 },
             pricing: {},
           }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
+          { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
       if (url.includes("/api/crypto/status")) {
@@ -148,29 +148,21 @@ describe("handleCloudBillingRoute money proxies", () => {
     const makeProxy = () =>
       http.createServer((req, res) => {
         const url = new URL(req.url ?? "/", "http://localhost");
-        void handleCloudBillingRoute(
-          req,
-          res,
-          url.pathname,
-          (req.method ?? "GET").toUpperCase(),
-          {
-            config: {
-              cloud: {
-                apiKey: "eliza_test_key",
-                baseUrl: "https://www.elizacloud.ai",
-              },
+        void handleCloudBillingRoute(req, res, url.pathname, (req.method ?? "GET").toUpperCase(), {
+          config: {
+            cloud: {
+              apiKey: "eliza_test_key",
+              baseUrl: "https://www.elizacloud.ai",
             },
-            runtime: null,
           },
-        );
+          runtime: null,
+        });
       });
 
     const proxy = makeProxy();
     const proxyBaseUrl = await listen(proxy);
     try {
-      const first = await originalFetch(
-        `${proxyBaseUrl}/api/cloud/billing/summary`,
-      );
+      const first = await originalFetch(`${proxyBaseUrl}/api/cloud/billing/summary`);
       const firstBody = (await first.json()) as { cryptoEnabled?: boolean };
       // Malformed status degrades to the safe default (crypto disabled), never
       // a fabricated "enabled".
@@ -178,9 +170,7 @@ describe("handleCloudBillingRoute money proxies", () => {
 
       // A second request must re-fetch crypto/status rather than serve a
       // fabricated empty object cached for the full TTL.
-      const second = await originalFetch(
-        `${proxyBaseUrl}/api/cloud/billing/summary`,
-      );
+      const second = await originalFetch(`${proxyBaseUrl}/api/cloud/billing/summary`);
       await second.json();
       expect(cryptoStatusCalls).toBe(2);
     } finally {

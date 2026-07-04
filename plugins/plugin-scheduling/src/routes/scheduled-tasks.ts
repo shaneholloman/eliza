@@ -151,7 +151,10 @@ const RUNNER_INVALID_OPERATION_RE =
  * Returning 400 for all of these (the prior behaviour) hid runner failures
  * behind a "bad request" the client cannot act on.
  */
-function classifyRunnerError(err: unknown): { status: number; message: string } {
+function classifyRunnerError(err: unknown): {
+  status: number;
+  message: string;
+} {
   const message = err instanceof Error ? err.message : String(err);
   if (
     err instanceof ScheduledTaskValidationError ||
