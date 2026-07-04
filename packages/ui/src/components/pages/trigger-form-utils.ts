@@ -321,6 +321,8 @@ export function validateCronExpression(
     CronExpressionParser.parse(trimmed);
     return { ok: true, message: null };
   } catch (err) {
+    // error-policy:J3 parse-sanitize — invalid user cron input yields an explicit
+    // typed { ok: false, message } the form renders, never a fake-valid pass.
     return {
       ok: false,
       message: err instanceof Error ? err.message : String(err),

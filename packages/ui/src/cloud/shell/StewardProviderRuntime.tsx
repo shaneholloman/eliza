@@ -103,6 +103,8 @@ function AuthTokenSync({ children }: { children: ReactNode }) {
             return;
           }
 
+          // error-policy:J3 parse-sanitize — non-JSON/empty body becomes null;
+          // res.status drives the branches below, the code field is advisory.
           const body = (await res.json().catch(() => null)) as {
             code?: string;
           } | null;
@@ -168,6 +170,8 @@ function AuthTokenSync({ children }: { children: ReactNode }) {
             credentials: "include",
           });
           if (res.ok) {
+            // error-policy:J3 parse-sanitize — non-JSON/empty body becomes null;
+            // only a well-formed { token } is written, else the refresh no-ops.
             const body = (await res.json().catch(() => null)) as {
               token?: string;
             } | null;

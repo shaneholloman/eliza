@@ -1255,7 +1255,8 @@ export function FullscreenView() {
         }
       })
       .catch(() => {
-        // fall through — iframe fallback is still rendered
+        // error-policy:J4 designed degrade — native canvas window unavailable,
+        // the iframe fallback is still rendered so the game stays playable.
       });
 
     return () => {
@@ -1266,6 +1267,8 @@ export function FullscreenView() {
           rpcMethod: "canvasDestroyWindow",
           ipcChannel: "canvas:destroyWindow",
           params: { id: gameWindowIdRef.current },
+          // error-policy:J6 best-effort teardown on unmount; the window is
+          // discarded regardless and a failed destroy has no further recourse.
         }).catch(() => {});
         gameWindowIdRef.current = null;
         setGameWindowId(null);

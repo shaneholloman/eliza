@@ -363,6 +363,8 @@ function scheduleRouteViewChunkPrefetch(): () => void {
       scheduledId = null;
       if (cancelled) return;
       const load = loaders.shift();
+      // error-policy:J6 best-effort chunk prefetch; a failed warm-up is harmless
+      // because React.lazy re-loads the chunk on-demand when the route mounts.
       if (load) void load().catch(() => {});
       scheduleNext();
     };
