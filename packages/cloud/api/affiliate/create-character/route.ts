@@ -36,6 +36,8 @@ function isHttpUrl(value: string): boolean {
     const url = new URL(value);
     return url.protocol === "http:" || url.protocol === "https:";
   } catch {
+    // error-policy:J3 untrusted URL input; unparseable = explicit "not an HTTP
+    // URL" verdict feeding a zod refinement, not a fabricated-valid default.
     return false;
   }
 }
@@ -184,6 +186,8 @@ app.post("/", async (c) => {
     try {
       body = await c.req.json();
     } catch {
+      // error-policy:J3 untrusted request body; malformed JSON becomes a typed
+      // 400 ValidationError, never a silently-accepted empty/default body.
       throw ValidationError("Invalid JSON body");
     }
 
@@ -236,23 +240,25 @@ app.post("/", async (c) => {
       10,
     );
 
-    try {
-      await anonymousSessionsService.create({
-        session_token: sessionId,
-        user_id: anonymousUser.id,
-        expires_at: expiresAt,
-        messages_limit: messagesLimit,
-        ip_address: clientIp(c),
-        user_agent: c.req.header("user-agent") ?? undefined,
-      });
-    } catch (error) {
-      logger.warn(
-        "[Affiliate API] Failed to create anonymous session — continuing",
-        {
-          error: error instanceof Error ? error.message : String(error),
-        },
-      );
-    }
+    // Fail closed on session provisioning. The session row IS the spend gate:
+    // downstream inference resolves it by `sessionId` (auth-anonymous
+    // reserveAnonymousMessageSlot / checkAnonymousLimit) to enforce the
+    // per-guest `messages_limit` that caps how much of the application owner's
+    // credit_balance a single guest can burn. Swallowing this failure and
+    // continuing returned `success: true` with a `sessionId` backed by no row —
+    // fabricated success: the redirect handed the guest a dead session (every
+    // chat 500s with "Session not found") while the response claimed the guest
+    // was provisioned. Let the failure propagate to the outer J1 boundary so
+    // the caller sees a real error and can retry, and so no billing-uncapped
+    // path is created off a phantom session.
+    await anonymousSessionsService.create({
+      session_token: sessionId,
+      user_id: anonymousUser.id,
+      expires_at: expiresAt,
+      messages_limit: messagesLimit,
+      ip_address: clientIp(c),
+      user_agent: c.req.header("user-agent") ?? undefined,
+    });
 
     const httpImageUrls = (metadata?.imageUrls ?? []).filter(isHttpUrl);
     const resolvedAvatarUrl = resolveAvatarUrl(
@@ -320,6 +326,9 @@ app.post("/", async (c) => {
 
     if (typeof c.executionCtx?.waitUntil === "function") {
       c.executionCtx.waitUntil(
+        // error-policy:J7 best-effort usage telemetry on a detached waitUntil
+        // path; a failed usage-counter bump must not fail the already-committed
+        // character creation. Warns so the miss is observable in logs.
         apiKeysService.incrementUsage(apiKey.id).catch((error) => {
           logger.warn("[Affiliate API] Failed to increment API key usage", {
             error: error instanceof Error ? error.message : String(error),
@@ -359,6 +368,9 @@ app.post("/", async (c) => {
       201,
     );
   } catch (error) {
+    // error-policy:J1 outermost route boundary; translates any inner throw
+    // (auth, validation, session-provisioning, persistence) into a structured
+    // failure response. Never fabricates a success body.
     if (!(error instanceof ApiError)) {
       logger.error("[Affiliate API] Request failed", error);
     }
