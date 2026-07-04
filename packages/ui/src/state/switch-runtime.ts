@@ -18,7 +18,7 @@ import {
   createPersistedActiveServer,
   savePersistedActiveServer,
 } from "./persistence";
-import { isTrustedRestoreApiBaseUrl } from "./startup-phase-restore";
+import { isTrustedRestoreApiBaseUrl } from "./runtime-url-trust";
 
 export type SwitchRuntimeResult =
   | { ok: true; profile: AgentProfile }

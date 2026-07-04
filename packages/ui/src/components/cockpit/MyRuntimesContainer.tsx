@@ -12,7 +12,7 @@ import {
   loadAgentProfileRegistry,
   switchRuntimeNonDestructive,
 } from "../../state";
-import { isTrustedRestoreApiBaseUrl } from "../../state/startup-phase-restore";
+import { isTrustedRestoreApiBaseUrl } from "../../state/runtime-url-trust";
 import { MyRuntimesSection } from "./MyRuntimesSection";
 
 export interface MyRuntimesContainerProps {
