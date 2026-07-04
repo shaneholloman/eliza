@@ -25,7 +25,6 @@ import {
   type TouchEvent,
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -400,12 +399,10 @@ function arePropsEqual(
     a.voiceSpeaker === b.voiceSpeaker &&
     a.failureKind === b.failureKind &&
     a.attachments === b.attachments &&
-    // Turn-settle fields carried for body renderers: a settled turn can gain
-    // reasoning/a secret request without its text changing.
-    (a as { reasoning?: string }).reasoning ===
-      (b as { reasoning?: string }).reasoning &&
-    (a as { secretRequest?: unknown }).secretRequest ===
-      (b as { secretRequest?: unknown }).secretRequest
+    // Turn-settle fields the glass body renderer reads: a settled turn can gain
+    // reasoning / a secret request without its text changing.
+    a.reasoning === b.reasoning &&
+    a.secretRequest === b.secretRequest
   );
 }
 
@@ -456,7 +453,9 @@ export const ChatMessage = memo(function ChatMessage({
     !message.id.startsWith("temp-") &&
     // Glass keeps the shell rule: an image-only user turn has no editable text.
     (!glass || trimmedText.length > 0);
-  const canPlay = Boolean(!isUser && typeof onSpeak === "function" && trimmedText);
+  const canPlay = Boolean(
+    !isUser && typeof onSpeak === "function" && trimmedText,
+  );
   const normalizedSource = normalizeChatSourceKey(message.source) ?? undefined;
   // Proactive interaction comments (#8792) are agent-initiated *suggestions*, not
   // replies — render them with a distinct, one-tap-dismissible affordance.
@@ -663,6 +662,31 @@ export const ChatMessage = memo(function ChatMessage({
 
   // ── Glass chrome (the continuous overlay's floating row) ──────────────────
   if (glass) {
+    // A failure the user can't recover from without wiring a provider renders a
+    // structured gate (via renderContent), NOT a normal bubble — no reveal
+    // actions, no copy-hold. The gate owns its own chrome; the row only carries
+    // the entrance motion + the data-failure hook the shell tests key off.
+    if (isAssistant && message.failureKind === "no_provider") {
+      return (
+        <motion.div
+          ref={articleRef as React.RefObject<HTMLDivElement>}
+          data-testid="thread-line"
+          data-role={message.role}
+          data-failure="no_provider"
+          initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 14 }}
+          animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
+          transition={{
+            duration: reduceMotion ? 0.15 : 0.52,
+            ease: GLASS_EASE,
+          }}
+          className="mb-2.5 flex w-full justify-start"
+        >
+          {renderContent?.(message, renderContext) ?? children ?? message.text}
+        </motion.div>
+      );
+    }
+
     const canRowCopy = !!onCopy && trimmedText.length > 0;
     const hasActions = canRowCopy || canPlay || canEdit;
     // An assistant turn carrying an inline choice/form/followups widget must
@@ -844,7 +868,6 @@ export const ChatMessage = memo(function ChatMessage({
               variant="glass"
               tone={isUser ? "user" : "assistant"}
               {...(holdHandlers ?? {})}
-              // biome-ignore lint/a11y/useSemanticElements: The message bubble can contain rich assistant content with nested controls; a native button wrapper would be invalid HTML.
               role="button"
               tabIndex={0}
               aria-label={
@@ -1101,8 +1124,8 @@ export const ChatMessage = memo(function ChatMessage({
             </div>
           ) : (
             (renderContent?.(message, renderContext) ??
-              children ??
-              message.text)
+            children ??
+            message.text)
           )}
 
           {!isUser && message.interrupted ? (

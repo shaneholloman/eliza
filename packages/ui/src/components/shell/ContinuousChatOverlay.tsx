@@ -1,7 +1,5 @@
 import { transcriptPlainText } from "@elizaos/shared/transcripts";
 import {
-  Check,
-  Copy,
   FileText,
   Film,
   LayoutGrid,
@@ -10,13 +8,8 @@ import {
   Mic,
   Minimize2,
   Music,
-  Pencil,
   RotateCcw,
   SendHorizontal,
-  Sparkles,
-  Square,
-  Volume2,
-  X,
 } from "lucide-react";
 import {
   AnimatePresence,
@@ -53,11 +46,9 @@ import {
   type TutorialChatControlDetail,
 } from "../../events";
 import {
-  COPY_HOLD_MS,
   TOUCH_TAP_MOVE_SLOP as OUTSIDE_SHEET_TAP_SLOP,
   SHEET_DETENT_OVERSHOOT_SCALE,
   sqrtRubberBand,
-  usePointerPressAndHold,
   useRafCoalescer,
 } from "../../gestures";
 import { useConversationSwipeJank } from "../../hooks/useConversationSwipeJank";
@@ -93,10 +84,13 @@ import { InlineWidgetText } from "../chat/InlineWidgetText";
 import { MessageAttachments } from "../chat/MessageAttachments";
 import { SensitiveRequestBlock } from "../chat/MessageContent";
 import { findChoiceRegions } from "../chat/message-choice-parser";
-import { findFollowupsRegions } from "../chat/message-followups-parser";
-import { findFormRegions } from "../chat/message-form-parser";
 import { ThinkingBlock } from "../chat/ThinkingBlock";
 import { withTranscriptMarker } from "../chat/TranscriptViewerOverlay";
+import { ChatMessage } from "../composites/chat/chat-message";
+import type {
+  ChatMessageData,
+  ChatMessageRenderContext,
+} from "../composites/chat/chat-types";
 import { TurnStatus } from "../composites/chat/chat-typing-indicator";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -113,12 +107,6 @@ import { deriveChannelTopics, groupMessagesByTopic } from "./topic-grouping";
 import { type PullGestureBinding, usePullGesture } from "./use-pull-gesture";
 import { usePromptSuggestions } from "./usePromptSuggestions";
 import type { ConversationNav, ShellController } from "./useShellController";
-
-/**
- * Server source tag for decider-pushed proactive suggestions (#8792) — mirrors
- * PROACTIVE_INTERACTION_SOURCE in the agent's proactive-interaction decider.
- */
-const PROACTIVE_SUGGESTION_SOURCE = "proactive-interaction";
 
 /** No-op slash controller so the overlay renders without a provider (stories). */
 const EMPTY_SLASH_CONTROLLER: SlashCommandController = {
@@ -776,35 +764,6 @@ function ThreadLineText({ content }: { content: string }): React.ReactNode {
   );
 }
 
-function isNestedInteractiveTarget(
-  currentTarget: HTMLElement,
-  target: EventTarget | null,
-): boolean {
-  if (!(target instanceof Element)) return false;
-  const interactive = target.closest(
-    'button,a,input,textarea,select,[role="button"]',
-  );
-  return !!interactive && interactive !== currentTarget;
-}
-
-/**
- * True when an assistant turn's content carries an inline interactive widget
- * (a `[CHOICE:…]` / `[FORM:…]` / `[FOLLOWUPS:…]` block — e.g. every first-run
- * onboarding turn). Such a bubble must NOT be wrapped in the tap-to-reveal
- * `role="button"` container: WebKit exposes an ARIA button as an ATOMIC AX leaf
- * (its aria-label becomes the node's name and all descendants are dropped), so
- * the wrapper silently removes the choice buttons + text from the native
- * accessibility tree — invisible to VoiceOver AND to XCUITest. The parser
- * helpers reset their own regex lastIndex, so repeated calls are safe.
- */
-function messageHasInteractiveWidget(content: string): boolean {
-  return (
-    findChoiceRegions(content).length > 0 ||
-    findFormRegions(content).length > 0 ||
-    findFollowupsRegions(content).length > 0
-  );
-}
-
 /**
  * True while there's a live (non-collapsed) text selection. The
  * conversation-swipe binding lives on the transcript surface, which contains
@@ -821,640 +780,131 @@ function hasLiveTextSelection(): boolean {
 }
 
 /**
- * One icon-only control in a message's click-to-reveal action row (#10713).
- * Overlay glass styling: no card fill, neutral resting → neutral-opacity hover;
- * an active (e.g. playing) control tints with the orange accent. `stopPropagation`
- * keeps a tap on the button from re-toggling the row or ending text selection.
+ * The overlay's message BODY — everything rendered inside the canonical
+ * ChatMessage glass row: the no-provider recovery gate, the in-flight breathing
+ * dots (TurnStatus), a user turn's slash-bolded text, and a settled assistant
+ * turn's inline widgets + attachments + secret request + reasoning. Kept
+ * structurally identical to the ChatView (MessageContent) paths for the
+ * affordances the render-parity contract pins; the row chrome (bubble,
+ * tap-reveal actions, copy-hold, retry, suggestion) lives in ChatMessage.
+ * `onOpenSettings` reaches only the no-provider gate.
  */
-function ThreadLineActionButton({
-  label,
-  icon,
-  onClick,
-  active,
-  testId,
-}: {
-  label: string;
-  icon: React.ReactNode;
-  onClick: () => void;
-  active?: boolean;
-  testId?: string;
-}): React.JSX.Element {
-  return (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      aria-label={label}
-      title={label}
-      data-testid={testId}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      className={cn(
-        "h-7 w-7 rounded-full p-0 transition-colors",
-        active
-          ? "bg-[rgb(255,88,0)]/25 text-white"
-          : "bg-white/10 text-white/80 hover:bg-white/20",
-      )}
-    >
-      {icon}
-    </Button>
-  );
-}
+function renderOverlayMessageBody(
+  message: ChatMessageData,
+  ctx: ChatMessageRenderContext | undefined,
+  onOpenSettings: (() => void) | undefined,
+): React.ReactNode {
+  const isUser = message.role === "user";
+  const attachmentsNode = message.attachments?.length ? (
+    <MessageAttachments attachments={message.attachments} />
+  ) : null;
 
-/**
- * Inline editor for a user message (#10713). Prefilled with the message text;
- * ⌘/Ctrl+Enter resends the edit, Escape cancels. The parent reveal handler
- * ignores events while editing.
- */
-function ThreadLineEditor({
-  value,
-  onChange,
-  onSave,
-  onCancel,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  onSave: () => void;
-  onCancel: () => void;
-}): React.JSX.Element {
-  const ref = React.useRef<HTMLTextAreaElement | null>(null);
-  React.useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.focus();
-    el.setSelectionRange(el.value.length, el.value.length);
-  }, []);
-  return (
-    <div className="flex flex-col gap-2">
-      <Textarea
-        ref={ref}
-        aria-label="Edit message"
-        data-testid="thread-line-edit-input"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            onSave();
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            // Escape closes THIS editor only — stop it from bubbling to the
-            // overlay's document-level Escape handler, which would otherwise
-            // also collapse the whole chat sheet and discard the edit (#9148).
-            e.stopPropagation();
-            onCancel();
-          }
-        }}
-        rows={Math.min(6, Math.max(1, value.split("\n").length))}
-        className="min-h-0 w-full resize-none rounded-lg border-0 bg-white/10 px-2.5 py-1.5 text-[14px] text-white outline-none [overflow-wrap:anywhere]"
-      />
-      <div className="flex items-center justify-end gap-1.5">
+  if (!isUser && message.failureKind === "no_provider") {
+    // A failure the user can't recover from without wiring a provider: a
+    // structured gate (not the raw error text) with a one-tap jump to Settings.
+    // #10698: minimize the own scrim now the shared glass carries contrast, but
+    // keep a fill so this critical CTA stays prominent over any wallpaper.
+    return (
+      <div
+        className={cn(
+          "max-w-[85%] rounded-2xl rounded-bl-md border border-amber-300/30 bg-black/35 px-3.5 py-3 text-white",
+          FLOAT_SHADOW,
+        )}
+      >
+        <div className="mb-1 text-[14px] font-medium">
+          Connect a provider to chat
+        </div>
+        <div className="mb-2.5 whitespace-pre-wrap text-[13px] leading-relaxed text-white/80 [overflow-wrap:anywhere]">
+          {message.text}
+        </div>
         <Button
           variant="ghost"
           size="sm"
-          data-testid="thread-line-edit-cancel"
-          onClick={onCancel}
-          className="h-auto rounded-full bg-white/10 px-3 py-1 text-[13px] font-medium text-white/80 transition-colors hover:bg-white/20"
+          data-testid="chat-no-provider-settings"
+          onClick={() => onOpenSettings?.()}
+          className="h-auto rounded-full border border-white/20 bg-white/15 px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-white/25   "
         >
-          Cancel
-        </Button>
-        <Button
-          type="button"
-          variant="default"
-          size="sm"
-          data-testid="thread-line-edit-save"
-          onClick={onSave}
-          className="h-auto rounded-full bg-[rgb(255,88,0)] px-3 py-1 text-[13px] font-medium text-white transition-colors hover:bg-[rgb(214,74,0)]"
-        >
-          Send
+          Open Settings
         </Button>
       </div>
-    </div>
-  );
-}
-
-const ThreadLine = React.memo(function ThreadLine({
-  message,
-  floating,
-  reduce,
-  onCopy,
-  onSpeak,
-  onEdit,
-  onRetry,
-  speaking,
-  onOpenSettings,
-  turnStatus,
-  suppressReasoning,
-  onAcceptSuggestion,
-  onDismissSuggestion,
-}: {
-  message: ShellMessage;
-  floating?: boolean;
-  reduce?: boolean;
-  /** Copy this message's text. Used by both the press-and-hold shortcut
-   *  (assistant) and the reveal-row Copy control (both roles). Stable identity. */
-  onCopy?: (text: string) => void;
-  /** Speak an assistant message aloud (reveal-row Play). Receives the message
-   *  id so the parent can track which bubble is playing. Stable identity. */
-  onSpeak?: (id: string, text: string) => void;
-  /** Save an edited user message and resend it (reveal-row Edit). Stable id. */
-  onEdit?: (text: string) => void;
-  /** Retry a failed/interrupted assistant turn — re-sends the preceding user
-   *  turn. Receives the assistant turn's id so the parent can walk back to the
-   *  user turn that produced it. Stable identity. */
-  onRetry?: (assistantId: string) => void;
-  /** True while assistant voice output is playing — drives Play↔Stop. */
-  speaking?: boolean;
-  /** Jump to Settings from the no_provider gate. Stable identity. */
-  onOpenSettings?: () => void;
-  /** Rich status for the in-flight (empty) assistant bubble (#8813). Only the
-   *  last, content-less assistant turn reads this; settled turns ignore it. */
-  turnStatus?: ChatTurnStatus | null;
-  /** Hide reasoning while the assistant turn is still streaming. */
-  suppressReasoning?: boolean;
-  /** Accept ("Do it") a proactive suggestion (#8792) — sends the implied
-   *  action as a real turn and clears the bubble. Stable identity. */
-  onAcceptSuggestion?: (message: ShellMessage) => void;
-  /** Dismiss a proactive suggestion (#8792) — removes the bubble locally; the
-   *  server-side per-surface cooldown guards immediate re-noise. Stable id. */
-  onDismissSuggestion?: (messageId: string) => void;
-}): React.JSX.Element {
-  const isUser = message.role === "user";
-  const isAssistant = message.role === "assistant";
-  // Proactive suggestion bubbles (#8792): distinct affordance (Suggestion chip
-  // + "Do it" + dismiss) on assistant turns pushed by the interaction decider.
-  const isSuggestion =
-    isAssistant && message.source === PROACTIVE_SUGGESTION_SOURCE;
-
-  // Press-and-hold to copy an assistant answer — the only extraction affordance
-  // on touch (no hover row). A still hold past COPY_HOLD_MS copies + flashes
-  // "Copied" + a light haptic; real finger travel cancels so it never fights the
-  // thread's touch-pan-y scroll (shared usePointerPressAndHold recognizer).
-  const [copied, setCopied] = React.useState(false);
-  const copiedTimer = React.useRef<number | null>(null);
-  React.useEffect(
-    () => () => {
-      if (copiedTimer.current !== null)
-        window.clearTimeout(copiedTimer.current);
-    },
-    [],
-  );
-  const canCopy = isAssistant && !!onCopy && message.content.trim().length > 0;
-  const holdBinding = usePointerPressAndHold<HTMLDivElement>({
-    enabled: canCopy,
-    durationMs: COPY_HOLD_MS,
-    canBegin: (e) => !isNestedInteractiveTarget(e.currentTarget, e.target),
-    onHold: () => {
-      onCopy?.(message.content);
-      detentHaptic();
-      setCopied(true);
-      if (copiedTimer.current !== null)
-        window.clearTimeout(copiedTimer.current);
-      copiedTimer.current = window.setTimeout(() => setCopied(false), 1100);
-    },
-  });
-  const copyHandlers = canCopy ? holdBinding : null;
-
-  // Click-to-reveal per-message action row (#10713): tapping a bubble reveals
-  // Copy + Play (assistant) or Copy + Edit (user) beneath it; an outside tap
-  // dismisses. This is the primary extraction affordance on pointer devices; the
-  // press-and-hold copy above stays as a secondary touch shortcut.
-  const trimmed = message.content.trim();
-  const lineRef = React.useRef<HTMLDivElement | null>(null);
-  const [revealed, setRevealed] = React.useState(false);
-  const [editing, setEditing] = React.useState(false);
-  const [editDraft, setEditDraft] = React.useState("");
-  const [rowCopied, setRowCopied] = React.useState(false);
-  const rowCopiedTimer = React.useRef<number | null>(null);
-  React.useEffect(
-    () => () => {
-      if (rowCopiedTimer.current !== null)
-        window.clearTimeout(rowCopiedTimer.current);
-    },
-    [],
-  );
-
-  const canRowCopy = !!onCopy && trimmed.length > 0;
-  const canSpeak = isAssistant && !!onSpeak && trimmed.length > 0;
-  // A user turn is editable unless it's an optimistic (temp-) turn not yet
-  // acknowledged by the server — mirrors the composite ChatMessage's canEdit.
-  const canEdit =
-    isUser && !!onEdit && trimmed.length > 0 && !message.id.startsWith("temp-");
-  const hasActions = canRowCopy || canSpeak || canEdit;
-  // An assistant turn that carries an inline choice/form/followups widget (every
-  // first-run onboarding turn) must stay a plain container — never the
-  // tap-to-reveal `role="button"` bubble, which WebKit collapses into a single
-  // atomic AX node and thereby hides the choice buttons from VoiceOver + XCUITest.
-  const hasInteractiveWidget = React.useMemo(
-    () => isAssistant && messageHasInteractiveWidget(message.content),
-    [isAssistant, message.content],
-  );
-
-  // A recoverable assistant failure (the agent was rate-limited or the provider
-  // stalled / the stream was interrupted) gets a one-tap Retry that re-sends the
-  // preceding user turn — mirroring ChatView's MessageContent gate. `no_provider`
-  // (its own Settings gate above) and `insufficient_credits` are excluded: a
-  // retry can't fix those.
-  const canRetry =
-    isAssistant &&
-    !!onRetry &&
-    (message.failureKind === "rate_limited" ||
-      message.failureKind === "provider_issue");
-
-  const toggleRevealed = React.useCallback(() => {
-    if (!hasActions || editing) return;
-    // Never hijack a text-selection drag: a click that finishes a highlight must
-    // not also toggle the row (the bubble text stays selectable to copy).
-    const sel = typeof window !== "undefined" ? window.getSelection() : null;
-    if (sel && sel.toString().trim().length > 0) return;
-    setRevealed((v) => !v);
-  }, [hasActions, editing]);
-  const bubbleInteractive = hasActions && !editing && !hasInteractiveWidget;
-  const handleBubbleClick = React.useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      if (!bubbleInteractive) return;
-      if (isNestedInteractiveTarget(e.currentTarget, e.target)) return;
-      toggleRevealed();
-    },
-    [bubbleInteractive, toggleRevealed],
-  );
-  const handleBubbleKeyDown = React.useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (!bubbleInteractive) return;
-      if (e.key !== "Enter" && e.key !== " ") return;
-      e.preventDefault();
-      toggleRevealed();
-    },
-    [bubbleInteractive, toggleRevealed],
-  );
-
-  React.useEffect(() => {
-    if (!revealed) return;
-    const onDocPointerDown = (e: PointerEvent) => {
-      if (lineRef.current && !lineRef.current.contains(e.target as Node)) {
-        setRevealed(false);
-        setEditing(false);
-      }
-    };
-    document.addEventListener("pointerdown", onDocPointerDown);
-    return () => document.removeEventListener("pointerdown", onDocPointerDown);
-  }, [revealed]);
-
-  const handleRowCopy = React.useCallback(() => {
-    onCopy?.(message.content);
-    setRowCopied(true);
-    if (rowCopiedTimer.current !== null)
-      window.clearTimeout(rowCopiedTimer.current);
-    rowCopiedTimer.current = window.setTimeout(() => setRowCopied(false), 1100);
-  }, [onCopy, message.content]);
-
-  const handleSpeak = React.useCallback(() => {
-    onSpeak?.(message.id, message.content);
-  }, [onSpeak, message.id, message.content]);
-
-  const openEditor = React.useCallback(() => {
-    setEditDraft(message.content);
-    setEditing(true);
-  }, [message.content]);
-
-  const saveEdit = React.useCallback(() => {
-    const next = editDraft.trim();
-    setEditing(false);
-    setRevealed(false);
-    if (next && next !== message.content.trim()) onEdit?.(next);
-  }, [editDraft, message.content, onEdit]);
-
-  const cancelEdit = React.useCallback(() => {
-    setEditing(false);
-    setRevealed(false);
-  }, []);
-
-  // A failed turn the user can't recover from without wiring a provider: render
-  // a structured gate (not the raw error text) with a one-tap jump to Settings.
-  if (isAssistant && message.failureKind === "no_provider") {
-    return (
-      <motion.div
-        data-testid="thread-line"
-        data-role={message.role}
-        data-failure="no_provider"
-        initial={reduce ? { opacity: 0 } : { opacity: 0, y: 14 }}
-        animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0 }}
-        exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
-        transition={{ duration: reduce ? 0.15 : 0.52, ease: OVERLAY_EASE }}
-        className={cn(
-          "flex w-full justify-start",
-          floating ? "mb-1.5" : "mb-2.5",
-        )}
-      >
-        <div
-          className={cn(
-            // #10698: minimize the own scrim (0.60 → 0.35) now the shared glass
-            // carries contrast, but keep a fill so this critical no-provider CTA
-            // stays prominent over any wallpaper; structure/amber border kept.
-            "max-w-[85%] rounded-2xl rounded-bl-md border border-amber-300/30 bg-black/35 px-3.5 py-3 text-white",
-            FLOAT_SHADOW,
-          )}
-        >
-          <div className="mb-1 text-[14px] font-medium">
-            Connect a provider to chat
-          </div>
-          <div className="mb-2.5 whitespace-pre-wrap text-[13px] leading-relaxed text-white/80 [overflow-wrap:anywhere]">
-            {message.content}
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            data-testid="chat-no-provider-settings"
-            onClick={() => onOpenSettings?.()}
-            className="h-auto rounded-full border border-white/20 bg-white/15 px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-white/25   "
-          >
-            Open Settings
-          </Button>
-        </div>
-      </motion.div>
     );
   }
 
-  const bubbleClassName = cn(
-    // whitespace-pre-wrap keeps newlines; overflow-wrap breaks long URLs /
-    // hashes / paths so they can't blow out the bubble width on a phone.
-    "relative w-fit max-w-full whitespace-pre-wrap rounded-2xl px-3.5 py-2 text-[14px] leading-relaxed [overflow-wrap:anywhere]",
-    // The chrome-free transcript renders floating: each bubble carries its
-    // own dark glass so it stays legible directly over whatever view is
-    // behind. The light tone is for any embedding that supplies its own
-    // surrounding scrim.
-    isUser ? "rounded-br-md" : "rounded-bl-md",
-    // Message text must remain selectable for normal highlight/copy.
-    // Assistant bubbles still keep the press-and-hold copy shortcut.
-    "select-text [-webkit-touch-callout:default]",
-    // Tapping a bubble with actions reveals its row (pointer affordance).
-    bubbleInteractive && "cursor-pointer",
-    // #10698: no per-message fill — text floats transparently on the one
-    // shared panel glass. FLOAT_SHADOW + light text keep it legible; a
-    // hairline edge remains to define the item boundary.
-    floating
-      ? cn("border border-white/15 text-white", FLOAT_SHADOW)
-      : isUser
-        ? "text-white"
-        : "text-white/90",
-    // Suggestion treatment (#8792): dashed accent edge + faint accent tint so
-    // a proactive offer reads as a suggestion, not a normal reply — mirrors
-    // the composite ChatMessage's affordance. Placed last so it wins over the
-    // floating hairline.
-    isSuggestion &&
-      "border border-dashed border-[rgb(255,88,0)]/45 bg-[rgb(255,88,0)]/[0.06]",
-  );
-  const bubbleContent =
-    isUser && editing ? (
-      <ThreadLineEditor
-        value={editDraft}
-        onChange={setEditDraft}
-        onSave={saveEdit}
-        onCancel={cancelEdit}
-      />
-    ) : (
+  if (!isUser && !message.text.trim() && !message.attachments?.length) {
+    // The in-flight assistant turn: dots INSIDE the bubble, anchored where the
+    // streamed text fills in — then the text replaces them. Labels stay in the
+    // standalone status row so the bubble never flashes "Running …" text.
+    return (
       <>
-        {isSuggestion ? (
-          // Proactive suggestion affordance (#8792): Suggestion chip + accept
-          // ("Do it") + dismiss. stopPropagation keeps these taps from
-          // toggling the bubble's click-to-reveal action row.
-          <div className="mb-1.5 flex items-center justify-between gap-2">
-            <span className="inline-flex items-center gap-1 text-[12px] font-medium text-[rgb(255,148,84)]">
-              <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-              Suggestion
-            </span>
-            <div className="flex items-center gap-1">
-              {onAcceptSuggestion ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  data-testid="thread-line-suggestion-accept"
-                  title="Do it"
-                  aria-label="Do it"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAcceptSuggestion(message);
-                  }}
-                  className="h-auto rounded-full bg-white/10 px-2.5 py-0.5 text-[12px] font-medium text-[rgb(255,148,84)] transition-colors hover:bg-white/20"
-                >
-                  Do it
-                </Button>
-              ) : null}
-              {onDismissSuggestion ? (
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  data-testid="thread-line-suggestion-dismiss"
-                  title="Dismiss suggestion"
-                  aria-label="Dismiss suggestion"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDismissSuggestion(message.id);
-                  }}
-                  className="h-6 w-6 rounded-full bg-white/10 text-white/70 transition-colors hover:bg-white/20"
-                >
-                  <X className="h-3.5 w-3.5" aria-hidden="true" />
-                </Button>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-        <div data-chat-selectable="true">
-          {isAssistant &&
-          !message.content.trim() &&
-          !message.attachments?.length ? (
-            // The in-flight assistant turn (kept by visibleMessages only while
-            // responding): show dots INSIDE the bubble, anchored where the
-            // streamed text fills in — then the text replaces them. Labels stay
-            // in the standalone status row so the bubble never flashes
-            // "Running …" text in place of the answer.
-            <>
-              <TurnStatus status={turnStatus ?? null} showLabel={false} />
-              {message.attachments?.length ? (
-                <MessageAttachments attachments={message.attachments} />
-              ) : null}
-            </>
-          ) : isUser ? (
-            // User turns stay raw text (slash command bolded); user uploads render
-            // through the standalone attachment renderer.
-            <>
-              <ThreadLineText content={message.content} />
-              {message.attachments?.length ? (
-                <MessageAttachments attachments={message.attachments} />
-              ) : null}
-            </>
-          ) : (
-            // Settled assistant turn: render inline widgets (task/choice/form/
-            // followups) instead of leaking raw `[TASK:…]`/`[CHOICE]`/… markers as
-            // text (#8997); plain replies fall through the fast path unchanged.
-            // Attachments, the secret/OAuth request, and the reasoning block render
-            // alongside. The secret block is `pointer-events-auto` so it stays
-            // clickable inside the open thread's scroll surface.
-            <>
-              <InlineWidgetText content={message.content} />
-              {message.attachments?.length ? (
-                <MessageAttachments attachments={message.attachments} />
-              ) : null}
-              {message.secretRequest ? (
-                <div className="pointer-events-auto">
-                  <SensitiveRequestBlock request={message.secretRequest} />
-                </div>
-              ) : null}
-              {!suppressReasoning && message.reasoning?.trim() ? (
-                <ThinkingBlock reasoning={message.reasoning} />
-              ) : null}
-            </>
-          )}
-        </div>
-        <AnimatePresence>
-          {copied ? (
-            <motion.span
-              key="copied"
-              data-testid="thread-line-copied"
-              initial={reduce ? { opacity: 0 } : { opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: reduce ? 0 : 0.18 }}
-              className="pointer-events-none absolute -top-2 right-2 rounded-full bg-white/90 px-2 py-0.5 text-[11px] font-medium text-black"
-            >
-              Copied
-            </motion.span>
-          ) : null}
-        </AnimatePresence>
+        <TurnStatus status={ctx?.turnStatus ?? null} showLabel={false} />
+        {attachmentsNode}
       </>
     );
+  }
+
+  if (isUser) {
+    // User turns stay raw text (leading slash command bolded).
+    return (
+      <>
+        <ThreadLineText content={message.text} />
+        {attachmentsNode}
+      </>
+    );
+  }
+
+  // Settled assistant turn: render inline widgets (task/choice/form/followups)
+  // instead of leaking raw markers as text (#8997); plain replies fall through
+  // the fast path unchanged. Attachments, the secret/OAuth request, and the
+  // reasoning block render alongside. The secret block is pointer-events-auto so
+  // it stays clickable inside the open thread's scroll surface.
   return (
-    <motion.div
-      ref={lineRef}
-      data-testid="thread-line"
-      data-role={message.role}
-      // New turns rise+fade in. Transform/opacity only; reduced motion collapses
-      // it to a quick fade with no positional movement.
-      initial={reduce ? { opacity: 0 } : { opacity: 0, y: 14 }}
-      animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0 }}
-      exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
-      transition={{ duration: reduce ? 0.15 : 0.52, ease: OVERLAY_EASE }}
-      className={cn(
-        "flex w-full",
-        floating ? "mb-1.5" : "mb-2.5",
-        isUser ? "justify-end" : "justify-start",
-      )}
-    >
-      {/* Bubble + its click-to-reveal action row stack vertically, aligned to the
-          turn's side (#10713). */}
-      <div
-        className={cn(
-          "flex max-w-[80%] flex-col gap-1",
-          isUser ? "items-end" : "items-start",
-        )}
-      >
-        {bubbleInteractive ? (
-          // biome-ignore lint/a11y/useSemanticElements: The message bubble can contain rich assistant content with nested controls; a native button wrapper would be invalid HTML.
-          <div
-            {...(copyHandlers ?? {})}
-            role="button"
-            tabIndex={0}
-            aria-label={
-              revealed ? "Hide message actions" : "Show message actions"
-            }
-            aria-expanded={revealed}
-            onClick={handleBubbleClick}
-            onKeyDown={handleBubbleKeyDown}
-            className={bubbleClassName}
-            data-proactive-suggestion={isSuggestion ? "true" : undefined}
-          >
-            {bubbleContent}
-          </div>
-        ) : (
-          <div
-            {...(copyHandlers ?? {})}
-            className={bubbleClassName}
-            data-proactive-suggestion={isSuggestion ? "true" : undefined}
-          >
-            {bubbleContent}
-          </div>
-        )}
-        {revealed && !editing && hasActions ? (
-          <div
-            data-testid="thread-line-actions"
-            className={cn(
-              "flex items-center gap-1.5",
-              isUser ? "pr-1" : "pl-1",
-            )}
-          >
-            {canRowCopy ? (
-              <ThreadLineActionButton
-                label={rowCopied ? "Copied" : "Copy"}
-                testId="thread-line-copy"
-                icon={
-                  rowCopied ? (
-                    <Check className="h-3.5 w-3.5" />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5" />
-                  )
-                }
-                onClick={handleRowCopy}
-                active={rowCopied}
-              />
-            ) : null}
-            {canSpeak ? (
-              <ThreadLineActionButton
-                label={speaking ? "Stop" : "Play audio"}
-                testId="thread-line-speak"
-                icon={
-                  speaking ? (
-                    <Square className="h-3.5 w-3.5" />
-                  ) : (
-                    <Volume2 className="h-3.5 w-3.5" />
-                  )
-                }
-                onClick={handleSpeak}
-                active={speaking}
-              />
-            ) : null}
-            {canEdit ? (
-              <ThreadLineActionButton
-                label="Edit"
-                testId="thread-line-edit"
-                icon={<Pencil className="h-3.5 w-3.5" />}
-                onClick={openEditor}
-              />
-            ) : null}
-          </div>
-        ) : null}
-        {/* Retry a recoverable failure by re-sending the preceding user turn.
-            Always visible on the failed turn (not gated behind the reveal row)
-            so a stalled turn isn't a dead end the user has to retype. */}
-        {canRetry ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            data-testid="thread-line-retry"
-            aria-label="Retry"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRetry?.(message.id);
-            }}
-            className="h-auto gap-1.5 rounded-full bg-white/10 px-3 py-1 text-[13px] font-medium text-white/80 transition-colors hover:bg-white/20"
-          >
-            <RotateCcw className="h-3.5 w-3.5" aria-hidden />
-            Retry
-          </Button>
-        ) : null}
-      </div>
-    </motion.div>
+    <>
+      <InlineWidgetText content={message.text} />
+      {attachmentsNode}
+      {message.secretRequest ? (
+        <div className="pointer-events-auto">
+          <SensitiveRequestBlock request={message.secretRequest} />
+        </div>
+      ) : null}
+      {!ctx?.suppressReasoning && message.reasoning?.trim() ? (
+        <ThinkingBlock reasoning={message.reasoning} />
+      ) : null}
+    </>
   );
-});
+}
+
+/** Project a shell transcript turn onto the canonical row's data shape. The
+ *  body renderer reads the passthrough fields (reasoning/secretRequest/
+ *  attachments/failureKind) straight off it, so the row stays presentation-only.
+ *  Cached per ShellMessage identity so a live drag (which re-renders the overlay
+ *  every pointer-move frame) reuses the same object — keeping ChatMessage's memo
+ *  on its `prev.message === next.message` fast path. Shell turns are immutable
+ *  (a streamed update replaces the object), so a changed turn misses the cache. */
+const shellMessageDataCache = new WeakMap<ShellMessage, ChatMessageData>();
+function shellToChatMessageData(m: ShellMessage): ChatMessageData {
+  const cached = shellMessageDataCache.get(m);
+  if (cached) return cached;
+  const data: ChatMessageData = {
+    id: m.id,
+    role: m.role,
+    text: m.content,
+    ...(m.source ? { source: m.source } : {}),
+    ...(m.failureKind ? { failureKind: m.failureKind } : {}),
+    ...(m.reasoning ? { reasoning: m.reasoning } : {}),
+    ...(m.attachments ? { attachments: m.attachments } : {}),
+    ...(m.secretRequest ? { secretRequest: m.secretRequest } : {}),
+  };
+  shellMessageDataCache.set(m, data);
+  return data;
+}
 
 /**
- * Render a settled `ThreadLine` exactly as the overlay does (floating, with copy
- * + settings handlers, reasoning shown). Test-only seam for the component-tree
- * render-parity contract (render-parity.contract.test.tsx, #9954), which diffs
- * this surface's structure against ChatView's MessageContent over a shared
- * corpus, and for the proactive-suggestion affordance unit test (#8792 —
- * optional accept/dismiss handlers). Not part of the public overlay API — keep
- * usage to those tests.
+ * Render a settled transcript row exactly as the overlay does (glass chrome,
+ * settled body). Test-only seam for the component-tree render-parity contract
+ * (render-parity.contract.test.tsx, #9954), which diffs this surface's
+ * structure against ChatView's MessageContent over a shared corpus, and for the
+ * proactive-suggestion affordance unit test (#8792 — optional accept/dismiss
+ * handlers). Not part of the public overlay API — keep usage to those tests.
  */
 export function __renderThreadLineForParity(
   message: ShellMessage,
@@ -1464,12 +914,17 @@ export function __renderThreadLineForParity(
   },
 ): React.JSX.Element {
   return (
-    <ThreadLine
-      message={message}
-      floating
+    <ChatMessage
+      appearance="glass"
+      message={shellToChatMessageData(message)}
       onCopy={() => {}}
-      onOpenSettings={() => {}}
-      onAcceptSuggestion={handlers?.onAcceptSuggestion}
+      onLongPressCopy={() => {}}
+      renderContent={(m, ctx) => renderOverlayMessageBody(m, ctx, () => {})}
+      onAcceptSuggestion={
+        handlers?.onAcceptSuggestion
+          ? () => handlers.onAcceptSuggestion?.(message)
+          : undefined
+      }
       onDismissSuggestion={handlers?.onDismissSuggestion}
     />
   );
@@ -1596,10 +1051,16 @@ export function ContinuousChatOverlay({
     },
   });
 
-  // Copy a message (press-and-hold shortcut + reveal-row Copy). Stable identity
-  // so the memoized ThreadLine isn't re-rendered every parent tick.
+  // Copy a message (reveal-row Copy). Stable identity so the memoized row isn't
+  // re-rendered every parent tick.
   const handleCopyMessage = React.useCallback((text: string) => {
     void copyTextToClipboard(text);
+  }, []);
+  // Press-and-hold copy adds a light haptic on top of the copy (the only
+  // extraction affordance on touch, where there is no hover row).
+  const handleLongPressCopy = React.useCallback((text: string) => {
+    void copyTextToClipboard(text);
+    detentHaptic();
   }, []);
 
   // Which message initiated the current voice playback, so ONLY that bubble
@@ -1633,10 +1094,13 @@ export function ContinuousChatOverlay({
   );
 
   // Save an edited user message and resend it as a new turn (#10713) — the same
-  // send path a typed turn uses, so the agent sees the corrected text.
+  // send path a typed turn uses, so the agent sees the corrected text. Adapts
+  // the row's (id, text) → bool save contract onto the overlay's text-only
+  // send; returning true tells the row the edit committed.
   const handleEditResend = React.useCallback(
-    (text: string) => {
+    (_id: string, text: string): boolean => {
       send(text);
+      return true;
     },
     [send],
   );
@@ -1680,7 +1144,7 @@ export function ContinuousChatOverlay({
     [removeConversationMessage],
   );
   const handleAcceptSuggestion = React.useCallback(
-    (m: ShellMessage) => {
+    (m: ChatMessageData) => {
       send("Yes, let's do it.");
       removeConversationMessage(m.id);
     },
@@ -2070,6 +1534,7 @@ export function ContinuousChatOverlay({
     [],
   );
   // Tapping a chip expands its group and scrolls its header into view.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: threadRef is the stable ref object returned by useThreadAutoScroll (a useRef); reading .current in the rAF is not a dependency.
   const scrollToTopic = React.useCallback((topic: string) => {
     setCollapsedTopics((prev) => {
       if (!prev.has(topic)) return prev;
@@ -2087,27 +1552,45 @@ export function ContinuousChatOverlay({
       el?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }, []);
-  // Render one transcript line; shared by the flat and topic-grouped paths so
-  // the in-flight-turn detection stays identical.
+  // The single, stable body renderer handed to every row (see
+  // renderOverlayMessageBody). Stable identity keeps ChatMessage's memo intact;
+  // per-row volatile values (turnStatus/suppressReasoning) flow via renderContext.
+  const renderRowBody = React.useCallback(
+    (m: ChatMessageData, ctx: ChatMessageRenderContext | undefined) =>
+      renderOverlayMessageBody(m, ctx, openSettings),
+    [openSettings],
+  );
+  // Render one transcript line as the canonical ChatMessage (glass chrome);
+  // shared by the flat and topic-grouped paths so the in-flight-turn detection
+  // stays identical.
   const renderThreadLine = React.useCallback(
     (m: ShellMessage, index: number) => {
       const isLastAssistant =
         index === visibleMessages.length - 1 && m.role === "assistant";
       const isInFlight = isLastAssistant && !m.content.trim();
+      // Only the last assistant turn reads volatile status; every settled row
+      // gets no renderContext so its memo identity is unchanged.
+      const renderContext: ChatMessageRenderContext | undefined =
+        isLastAssistant
+          ? {
+              turnStatus: isInFlight ? turnStatus : null,
+              suppressReasoning: responding,
+            }
+          : undefined;
       return (
-        <ThreadLine
+        <ChatMessage
           key={m.id}
-          message={m}
-          floating
-          reduce={reduce}
+          appearance="glass"
+          message={shellToChatMessageData(m)}
+          reduceMotion={reduce}
           onCopy={handleCopyMessage}
+          onLongPressCopy={handleLongPressCopy}
           onSpeak={handleSpeakMessage}
           onEdit={handleEditResend}
           onRetry={handleRetry}
-          speaking={speaking && playingMessageId === m.id}
-          onOpenSettings={openSettings}
-          turnStatus={isInFlight ? turnStatus : undefined}
-          suppressReasoning={responding && isLastAssistant}
+          playing={speaking && playingMessageId === m.id}
+          renderContent={renderRowBody}
+          renderContext={renderContext}
           onAcceptSuggestion={handleAcceptSuggestion}
           onDismissSuggestion={handleDismissSuggestion}
         />
@@ -2117,14 +1600,15 @@ export function ContinuousChatOverlay({
       visibleMessages.length,
       reduce,
       handleCopyMessage,
+      handleLongPressCopy,
       handleSpeakMessage,
       handleEditResend,
       handleRetry,
       speaking,
       playingMessageId,
-      openSettings,
       responding,
       turnStatus,
+      renderRowBody,
       handleAcceptSuggestion,
       handleDismissSuggestion,
     ],
@@ -2946,6 +2430,7 @@ export function ContinuousChatOverlay({
   // moment the chat is dismissed (pull-down, Escape, or click-out) — the chat is
   // no longer "focused". Blurring (rather than the old refocus dance) also means
   // there's no focus→expand bounce to guard against, so the model stays simple.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: threadRef is the stable ref object returned by useThreadAutoScroll (a useRef); reading .current is not a dependency.
   const collapse = React.useCallback(() => {
     // Undismissable during onboarding: Escape (document, thread, composer),
     // outside taps, the grabber close, and the sheet-open grabber tap all

@@ -7,6 +7,7 @@
 import type {
   ChatFailureKind,
   ChatTurnStatus,
+  ConversationSecretRequest,
   MessageAttachment,
 } from "../../../api/client-types-chat";
 
@@ -118,6 +119,11 @@ export interface ChatMessageData {
   /** Media attached to this turn — read by body renderers and the in-flight
    * (empty assistant) detection; the row itself renders no attachment chrome. */
   attachments?: MessageAttachment[];
+  /** Agent reasoning for this turn — read by body renderers (ThinkingBlock).
+   * Transport-only on the row; the row renders no reasoning chrome itself. */
+  reasoning?: string;
+  /** Pending secret / OAuth request — read by body renderers (SensitiveRequestBlock). */
+  secretRequest?: ConversationSecretRequest;
 }
 
 /**
