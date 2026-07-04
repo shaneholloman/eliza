@@ -189,7 +189,10 @@ export const http = {
 					continue;
 				}
 				// error-policy:J2 add attempt context, then rethrow to the caller
-				logger.error(`[http] Request failed after ${attempt} attempts:`, error);
+				logger.error(
+					{ error },
+					`[http] Request failed after ${attempt} attempts`,
+				);
 
 				throw error;
 			}
@@ -519,7 +522,7 @@ export class HeliusClient {
 			return holders;
 		} catch (error) {
 			// error-policy:J2 add context and preserve cause on rethrow
-			logger.error("[HeliusClient] Error fetching holder list:", error);
+			logger.error({ error }, "[HeliusClient] Error fetching holder list");
 			throw new Error("Failed to fetch holder list from Helius.", {
 				cause: error,
 			});
@@ -756,7 +759,7 @@ export class BirdeyeClient {
 
 		if (!res.success || !res.data) {
 			// error-policy:J1 boundary — Birdeye HTTP envelope indicates failure
-			logger.error("[BirdeyeClient] request failed", { path, res });
+			logger.error({ path, res }, "[BirdeyeClient] request failed");
 			throw new Error(`Birdeye request failed:${path}`);
 		}
 
@@ -1003,7 +1006,7 @@ export class BirdeyeClient {
 			return portfolio;
 		} catch (error) {
 			// error-policy:J2 add context, then rethrow to the caller
-			logger.error("[BirdeyeClient] Error fetching portfolio:", error);
+			logger.error({ error }, "[BirdeyeClient] Error fetching portfolio");
 			throw error;
 		}
 	}

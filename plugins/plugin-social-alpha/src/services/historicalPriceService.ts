@@ -144,8 +144,8 @@ export class HistoricalPriceService {
 				}
 			} catch (priceError) {
 				logger.error(
-					`[HistoricalPriceService] Failed to get any price data for ${address}:`,
-					priceError,
+					{ error: priceError },
+					`[HistoricalPriceService] Failed to get any price data for ${address}`,
 				);
 			}
 
@@ -252,8 +252,8 @@ export class HistoricalPriceService {
 			};
 		} catch (error) {
 			logger.error(
-				`[HistoricalPriceService] Error fetching Dexscreener data for ${address}:`,
-				error,
+				{ error },
+				`[HistoricalPriceService] Error fetching Dexscreener data for ${address}`,
 			);
 			return null;
 		}
@@ -411,8 +411,8 @@ export class HistoricalPriceService {
 			};
 		} catch (error) {
 			logger.error(
-				`[HistoricalPriceService] Error finding best token match for ${symbol}:`,
-				error,
+				{ error },
+				`[HistoricalPriceService] Error finding best token match for ${symbol}`,
 			);
 			return null;
 		}

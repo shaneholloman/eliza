@@ -856,7 +856,7 @@ export class TrustScoreOptimizer {
 		}
 
 		this.currentParams = bestParams;
-		logger.info("✅ Optimization complete. Best parameters:", bestParams);
+		logger.info({ bestParams }, "✅ Optimization complete. Best parameters");
 
 		return bestParams;
 	}

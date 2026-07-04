@@ -341,14 +341,16 @@ export class SimulationRunner {
 		}
 
 		logger.info(
-			`📊 Generated ${tokens.length} tokens with scenarios:`,
-			tokens.reduce(
-				(acc, t) => {
-					acc[t.scenario] = (acc[t.scenario] || 0) + 1;
-					return acc;
-				},
-				{} as Record<string, number>,
-			),
+			{
+				scenarioCounts: tokens.reduce(
+					(acc, t) => {
+						acc[t.scenario] = (acc[t.scenario] || 0) + 1;
+						return acc;
+					},
+					{} as Record<string, number>,
+				),
+			},
+			`📊 Generated ${tokens.length} tokens with scenarios`,
 		);
 
 		return tokens;
@@ -1179,7 +1181,7 @@ export class SimulationRunner {
 				actorPerformance: new Map(JSON.parse(perfData)),
 			};
 		} catch (error) {
-			logger.error("Failed to load cached simulation:", error);
+			logger.error({ error }, "Failed to load cached simulation");
 			return null;
 		}
 	}

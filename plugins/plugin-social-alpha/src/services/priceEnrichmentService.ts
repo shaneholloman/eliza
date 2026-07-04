@@ -94,7 +94,7 @@ export class PriceEnrichmentService {
 					const batchData = JSON.parse(content) as TradingCall[];
 					allCalls.push(...batchData);
 				} catch (error) {
-					logger.error(`Error loading batch file ${file}:`, error);
+					logger.error({ error }, `Error loading batch file ${file}`);
 				}
 			}
 
@@ -103,7 +103,7 @@ export class PriceEnrichmentService {
 			);
 			return allCalls;
 		} catch (error) {
-			logger.error("Error loading batch files:", error);
+			logger.error({ error }, "Error loading batch files");
 			return [];
 		}
 	}
@@ -145,7 +145,7 @@ export class PriceEnrichmentService {
 
 			return null;
 		} catch (error) {
-			logger.error(`Error resolving token for call ${call.callId}:`, error);
+			logger.error({ error }, `Error resolving token for call ${call.callId}`);
 			return null;
 		}
 	}
@@ -213,7 +213,7 @@ export class PriceEnrichmentService {
 				worstPriceTimestamp: worstPrice.timestamp,
 			};
 		} catch (error) {
-			logger.error(`Error getting price data for ${tokenAddress}:`, error);
+			logger.error({ error }, `Error getting price data for ${tokenAddress}`);
 			return null;
 		}
 	}
@@ -277,7 +277,7 @@ export class PriceEnrichmentService {
 			enrichedCall.enrichmentStatus = "success";
 			enrichedCall.enrichedAt = Date.now();
 		} catch (error) {
-			logger.error(`Error enriching call ${call.callId}:`, error);
+			logger.error({ error }, `Error enriching call ${call.callId}`);
 			enrichedCall.enrichmentStatus = "failed";
 			enrichedCall.enrichmentError =
 				error instanceof Error ? error.message : "Unknown error";
@@ -529,7 +529,7 @@ export class PriceEnrichmentService {
 
 			return null;
 		} catch (error) {
-			logger.error(`Error getting token info for ${address}:`, error);
+			logger.error({ error }, `Error getting token info for ${address}`);
 			return null;
 		}
 	}
@@ -562,7 +562,7 @@ export class PriceEnrichmentService {
 			logger.warn(`Could not resolve token symbol: ${symbol} on ${chain}`);
 			return null;
 		} catch (error) {
-			logger.error(`Error searching for token ${symbol}:`, error);
+			logger.error({ error }, `Error searching for token ${symbol}`);
 			return null;
 		}
 	}
@@ -1058,7 +1058,7 @@ export class PriceEnrichmentService {
 
 			return null;
 		} catch (error) {
-			logger.error(`Error searching DexScreener for symbol ${symbol}:`, error);
+			logger.error({ error }, `Error searching DexScreener for symbol ${symbol}`);
 			return null;
 		}
 	}

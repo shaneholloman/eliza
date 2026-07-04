@@ -415,7 +415,10 @@ export function transformTokenRecommendation(
 		});
 	} catch (error) {
 		// error-policy:J2 add context, then rethrow (never return a null/partial record)
-		logger.error("[schemas] Error transforming token recommendation:", error);
+		logger.error(
+			{ error },
+			"[schemas] Error transforming token recommendation",
+		);
 		throw error;
 	}
 }
