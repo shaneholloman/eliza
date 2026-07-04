@@ -122,5 +122,12 @@
 				"sensitive": true
 			}
 		}
+	},
+	"elizaos": {
+		"scripts": {
+			"buildModel": {
+				"tscTypecheck": true
+			}
+		}
 	}
 }

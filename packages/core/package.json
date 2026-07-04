@@ -169,5 +169,16 @@
 	"publishConfig": {
 		"access": "public"
 	},
-	"gitHead": "cb192f7b21c441e9463d1af2f890c145814baad2"
+	"gitHead": "cb192f7b21c441e9463d1af2f890c145814baad2",
+	"elizaos": {
+		"scripts": {
+			"coreBuild": true,
+			"testLanes": [
+				"server"
+			],
+			"buildModel": {
+				"doubleCheck": true
+			}
+		}
+	}
 }

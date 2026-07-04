@@ -151,6 +151,7 @@
     "@elizaos/plugin-agent-orchestrator": "workspace:*",
     "@elizaos/plugin-background-runner": "workspace:*",
     "@elizaos/plugin-blocker": "workspace:*",
+    "@elizaos/plugin-browser": "workspace:*",
     "@elizaos/plugin-contacts": "workspace:*",
     "@elizaos/plugin-elizacloud": "workspace:*",
     "@elizaos/plugin-facewear": "workspace:*",
@@ -201,5 +202,12 @@
     "ws": "^8.18.3",
     "yaml": "^2.9.0"
   },
-  "private": true
+  "private": true,
+  "elizaos": {
+    "scripts": {
+      "testLanes": [
+        "client"
+      ]
+    }
+  }
 }
