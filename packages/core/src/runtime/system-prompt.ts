@@ -35,9 +35,12 @@ export function normalizeSystemPromptRole(
 // before forwarding text to the model.
 function substituteNamePlaceholders(value: string, name: string): string {
 	if (!value) return value;
+	// Replacer functions, not the raw `name` string: `$`-sequences in a name
+	// (e.g. "Cash$$", "M$&M") are otherwise read as String.replace substitution
+	// patterns (`$&`, `$1`, `$$`) and corrupt the rendered name.
 	return value
-		.replace(/\{\{\s*name\s*\}\}/g, name)
-		.replace(/\{\{\s*agentName\s*\}\}/g, name);
+		.replace(/\{\{\s*name\s*\}\}/g, () => name)
+		.replace(/\{\{\s*agentName\s*\}\}/g, () => name);
 }
 
 export function buildCanonicalSystemPrompt(args: {
