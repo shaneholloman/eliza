@@ -21,8 +21,14 @@
  *
  * Usage:
  *   node scripts/ios-device-deploy.mjs [--device <devicectl-id|udid|name>]
- *     [--skip-build] [--no-launch] [--staging <dir>] [--identity <sha1>]
- *     [--derived-data <dir>] [--bundle-id <id>] [--configuration Debug|Release]
+ *     [--skip-build] [--no-launch] [--skip-appexes] [--staging <dir>]
+ *     [--identity <sha1>] [--derived-data <dir>] [--bundle-id <id>]
+ *     [--configuration Debug|Release]
+ *
+ * --skip-appexes strips PlugIns/*.appex from the staged app before signing,
+ * so the main app can be deployed for on-device testing when only the app's
+ * own provisioning profile exists (each appex otherwise requires its own
+ * profile, which only an Xcode account session or ASC API key can mint).
  *
  * Device id falls back to ELIZA_IOS_DEVICE_ID. Fails with actionable
  * remediation when no profile matches.
@@ -329,11 +335,11 @@ function signApp({
 
 async function main() {
   const args = parseCliArgs(process.argv.slice(2), {
-    booleans: ["skip-build", "no-launch", "help"],
+    booleans: ["skip-build", "no-launch", "skip-appexes", "help"],
   });
   if (args.help) {
     console.log(
-      "Usage: node scripts/ios-device-deploy.mjs [--device <id>] [--skip-build] [--no-launch] [--staging <dir>] [--identity <sha1>] [--derived-data <dir>] [--bundle-id <id>] [--configuration Debug|Release]",
+      "Usage: node scripts/ios-device-deploy.mjs [--device <id>] [--skip-build] [--no-launch] [--skip-appexes] [--staging <dir>] [--identity <sha1>] [--derived-data <dir>] [--bundle-id <id>] [--configuration Debug|Release]",
     );
     return;
   }
@@ -416,6 +422,24 @@ async function main() {
   const stagedApp = path.join(stagingRoot, "App.app");
   runInherit("ditto", [builtApp, stagedApp]);
   log(`staged ${builtApp} → ${stagedApp}`);
+
+  // Optional: strip app extensions so the main app can deploy with only its
+  // own profile. Extension surfaces (widgets, keyboard, …) are absent from
+  // the installed build — main-app-only testing, stated loudly in the log.
+  if (args["skip-appexes"]) {
+    const plugInsDir = path.join(stagedApp, "PlugIns");
+    if (fs.existsSync(plugInsDir)) {
+      const stripped = fs
+        .readdirSync(plugInsDir)
+        .filter((n) => n.endsWith(".appex"));
+      fs.rmSync(plugInsDir, { recursive: true, force: true });
+      log(
+        `--skip-appexes: stripped ${stripped.length} extension(s): ${stripped.join(", ")} — widgets/keyboard/device-activity surfaces will be MISSING from this install`,
+      );
+    } else {
+      log("--skip-appexes: no PlugIns directory present");
+    }
+  }
 
   // 3–4. Profile graft + explicit nested signing + verify.
   signApp({
