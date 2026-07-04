@@ -166,13 +166,17 @@ export function ReleaseCenterView() {
   const refreshNativeState = useCallback(async () => {
     if (!desktopRuntime) return;
 
-    // error-policy:J4 the desktop updater bridge is optional; a failed snapshot
-    // fetch degrades to null (no native-updater panel) and the release center
-    // still renders its web release-notes surface.
+    // A broken updater bridge on desktop must not read as "no native
+    // updater" — surface it in the visible action-error banner.
     const snapshot = await invokeDesktopBridgeRequest<DesktopUpdaterSnapshot>({
       rpcMethod: "desktopGetUpdaterState",
       ipcChannel: "desktop:getUpdaterState",
-    }).catch(() => null);
+    }).catch((err: unknown) => {
+      setActionError(
+        `Failed to read desktop updater state: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    });
 
     setNativeUpdater(snapshot);
     setReleaseNotesUrl((current) =>
