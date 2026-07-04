@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// iOS Simulator first-run REMOTE-CONNECT smoke. WKWebView is not CDP-drivable
-// like Android, so the harness writes a Capacitor Preferences request, launches
-// the installed app, and lets the in-app verifier drive the same hardened
-// first-run remote-connect handler used by the OS deep-link path. The verifier
-// proves the app landed on home and reports back via Preferences. No onboarding
-// DOM is driven, so the lane survives the in-chat redesign.
+// iOS Simulator native attachment smoke for #10936. WKWebView is not
+// CDP-drivable, so this mirrors ios-onboarding-smoke: seed Capacitor
+// Preferences, launch the installed app, let the in-app onboarding verifier
+// connect it to a real local agent, then let the attachment verifier exercise
+// the media store + Capacitor Filesystem/Share plugins and report back via
+// Preferences.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -17,25 +17,28 @@ import {
 
 const appDir = path.resolve(fileURLToPath(import.meta.url), "..", "..");
 const repoRoot = path.resolve(appDir, "..", "..");
-const resultDir = path.join(appDir, "test-results", "ios-onboarding-to-home");
+const resultDir = path.join(appDir, "test-results", "ios-attachment-smoke");
 const cleanupHelperScript = path.join(
   repoRoot,
   "packages",
   "scripts",
   "rm-path-recursive.mjs",
 );
-const REQUEST_KEY = "eliza:ios-onboarding-smoke:request";
-const RESULT_KEY = "eliza:ios-onboarding-smoke:result";
+
+const ONBOARDING_REQUEST_KEY = "eliza:ios-onboarding-smoke:request";
+const ONBOARDING_RESULT_KEY = "eliza:ios-onboarding-smoke:result";
 const ATTACHMENT_REQUEST_KEY = "eliza:ios-attachment-smoke:request";
 const ATTACHMENT_RESULT_KEY = "eliza:ios-attachment-smoke:result";
 const DEFAULT_API_BASE = "http://127.0.0.1:31338";
+const PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 const has = (flag) => process.argv.includes(flag);
 const val = (flag, fallback = null) => {
   const index = process.argv.indexOf(flag);
   return index >= 0 ? process.argv[index + 1] : fallback;
 };
-const log = (message) => console.log(`[ios-onboarding-smoke] ${message}`);
+const log = (message) => console.log(`[ios-attachment-smoke] ${message}`);
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -49,6 +52,18 @@ function run(command, args, options = {}) {
     );
   }
   return result.stdout?.trim() ?? "";
+}
+
+function tryRun(command, args, options = {}) {
+  try {
+    return execFileSync(command, args, {
+      cwd: options.cwd ?? repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch {
+    return null;
+  }
 }
 
 function removePathRecursive(targetPath) {
@@ -72,18 +87,6 @@ function removePathRecursive(targetPath) {
         .filter(Boolean)
         .join("\n"),
     );
-  }
-}
-
-function tryRun(command, args, options = {}) {
-  try {
-    return execFileSync(command, args, {
-      cwd: options.cwd ?? repoRoot,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  } catch {
-    return null;
   }
 }
 
@@ -127,7 +130,7 @@ function bootedUdid() {
 
 function ensureSimulatorBooted() {
   if (process.platform !== "darwin") {
-    throw new Error("iOS onboarding smoke requires macOS with xcrun simctl.");
+    throw new Error("iOS attachment smoke requires macOS with xcrun simctl.");
   }
   const existing = bootedUdid();
   if (existing) {
@@ -211,8 +214,7 @@ function preferenceNativeKeys(key) {
 }
 
 function defaultsDelete(udid, appId, key) {
-  const nativeKeys = preferenceNativeKeys(key);
-  for (const nativeKey of nativeKeys) {
+  for (const nativeKey of preferenceNativeKeys(key)) {
     tryRun("xcrun", [
       "simctl",
       "spawn",
@@ -226,18 +228,14 @@ function defaultsDelete(udid, appId, key) {
 
   const domainPath = prefsDomainPath(udid, appId);
   if (domainPath) {
-    for (const nativeKey of nativeKeys) {
+    for (const nativeKey of preferenceNativeKeys(key)) {
       tryRun("defaults", ["delete", domainPath, nativeKey]);
     }
   }
 }
 
 function defaultsWriteString(udid, appId, key, value) {
-  const nativeKeys = preferenceNativeKeys(key);
-  // Write through the simulator defaults domain. Host-path `defaults write`
-  // can be visible to the host polling process while remaining invisible to
-  // the running simulator app's UserDefaults/Capacitor Preferences bridge.
-  for (const [index, nativeKey] of nativeKeys.entries()) {
+  for (const [index, nativeKey] of preferenceNativeKeys(key).entries()) {
     const args = [
       "simctl",
       "spawn",
@@ -249,16 +247,12 @@ function defaultsWriteString(udid, appId, key, value) {
       "-string",
       value,
     ];
-    if (index === 0) {
-      run("xcrun", args, { stdio: "ignore" });
-    } else {
-      tryRun("xcrun", args);
-    }
+    if (index === 0) run("xcrun", args, { stdio: "ignore" });
+    else tryRun("xcrun", args);
   }
 }
 
 function defaultsReadString(udid, appId, key) {
-  const nativeKeys = preferenceNativeKeys(key);
   const domainPath = prefsDomainPath(udid, appId);
   if (domainPath) {
     const plist = `${domainPath}.plist`;
@@ -267,21 +261,21 @@ function defaultsReadString(udid, appId, key) {
       if (json) {
         try {
           const parsed = JSON.parse(json);
-          for (const nativeKey of nativeKeys) {
+          for (const nativeKey of preferenceNativeKeys(key)) {
             if (typeof parsed[nativeKey] === "string") return parsed[nativeKey];
           }
         } catch {
-          // Fall through to defaults read.
+          // Fall through.
         }
       }
     }
-    for (const nativeKey of nativeKeys) {
+    for (const nativeKey of preferenceNativeKeys(key)) {
       const value = tryRun("defaults", ["read", domainPath, nativeKey]);
       if (value !== null) return value;
     }
   }
 
-  for (const nativeKey of nativeKeys) {
+  for (const nativeKey of preferenceNativeKeys(key)) {
     const value = tryRun("xcrun", [
       "simctl",
       "spawn",
@@ -300,10 +294,10 @@ function flushPreferences(udid) {
   tryRun("xcrun", ["simctl", "spawn", udid, "killall", "cfprefsd"]);
 }
 
-function clearFirstRunState(udid, appId) {
+function clearState(udid, appId) {
   for (const key of [
-    REQUEST_KEY,
-    RESULT_KEY,
+    ONBOARDING_REQUEST_KEY,
+    ONBOARDING_RESULT_KEY,
     ATTACHMENT_REQUEST_KEY,
     ATTACHMENT_RESULT_KEY,
     "elizaos:active-server",
@@ -336,7 +330,7 @@ function startVideo(udid) {
   return startIosSimulatorVideo({
     target: udid,
     artifactDir: resultDir,
-    filename: "onboarding-to-home.mp4",
+    filename: "attachment-smoke.mp4",
     log,
   });
 }
@@ -348,16 +342,16 @@ async function stopVideo(recording) {
 
 async function pollResult(udid, appId) {
   const attempts = Number.parseInt(
-    process.env.IOS_ONBOARDING_SMOKE_ATTEMPTS ?? "180",
+    process.env.IOS_ATTACHMENT_SMOKE_ATTEMPTS ?? "210",
     10,
   );
   const delayMs = Number.parseInt(
-    process.env.IOS_ONBOARDING_SMOKE_DELAY_MS ?? "1000",
+    process.env.IOS_ATTACHMENT_SMOKE_DELAY_MS ?? "1000",
     10,
   );
   let lastRaw = "";
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    lastRaw = defaultsReadString(udid, appId, RESULT_KEY) ?? "";
+    lastRaw = defaultsReadString(udid, appId, ATTACHMENT_RESULT_KEY) ?? "";
     if (lastRaw) {
       let parsed = null;
       try {
@@ -367,7 +361,7 @@ async function pollResult(udid, appId) {
       }
       if (parsed?.ok === true) return parsed;
       if (parsed?.phase === "failed" || parsed?.error) {
-        throw new Error(`iOS onboarding smoke failed: ${lastRaw}`);
+        throw new Error(`iOS attachment smoke failed: ${lastRaw}`);
       }
       if (attempt % 15 === 0) {
         log(`still running (${attempt}/${attempts}): ${lastRaw}`);
@@ -376,25 +370,52 @@ async function pollResult(udid, appId) {
     await sleep(delayMs);
   }
   throw new Error(
-    `iOS onboarding smoke timed out after ${attempts} attempts. Last result: ${lastRaw || "<none>"}`,
+    `iOS attachment smoke timed out after ${attempts} attempts. Last result: ${lastRaw || "<none>"}`,
   );
 }
 
 async function main() {
   const { appId, urlScheme } = readAppIdentity();
   const apiBase = val("--api-base", DEFAULT_API_BASE);
+  const filename = val("--filename", "eliza-ios-attachment-smoke.png");
   const udid = ensureSimulatorBooted();
   removePathRecursive(resultDir);
   fs.mkdirSync(resultDir, { recursive: true });
 
   installLatestApp(udid, appId);
   tryRun("xcrun", ["simctl", "terminate", udid, appId]);
-  clearFirstRunState(udid, appId);
-  defaultsWriteString(udid, appId, REQUEST_KEY, JSON.stringify({ apiBase }));
+  clearState(udid, appId);
   defaultsWriteString(
     udid,
     appId,
-    RESULT_KEY,
+    ONBOARDING_REQUEST_KEY,
+    JSON.stringify({ apiBase }),
+  );
+  defaultsWriteString(
+    udid,
+    appId,
+    ONBOARDING_RESULT_KEY,
+    JSON.stringify({
+      ok: false,
+      phase: "requested",
+      apiBase,
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+  defaultsWriteString(
+    udid,
+    appId,
+    ATTACHMENT_REQUEST_KEY,
+    JSON.stringify({
+      apiBase,
+      filename,
+      dataUrl: `data:image/png;base64,${PNG_BASE64}`,
+    }),
+  );
+  defaultsWriteString(
+    udid,
+    appId,
+    ATTACHMENT_RESULT_KEY,
     JSON.stringify({
       ok: false,
       phase: "requested",
@@ -416,26 +437,10 @@ async function main() {
     } else {
       log(`armed in-app first-run remote connect for ${apiBase}`);
     }
-    takeScreenshot(udid, "fresh-onboarding");
+    takeScreenshot(udid, "fresh-launch");
     const result = await pollResult(udid, appId);
-    const screenshot = takeScreenshot(udid, "home-landing");
+    const screenshot = takeScreenshot(udid, "attachment-result");
     const video = await stopVideo(recording);
-    if (result.homeVisible !== true || result.composerVisible !== true) {
-      throw new Error(
-        `iOS onboarding smoke result lacked home/composer: ${JSON.stringify(result)}`,
-      );
-    }
-    if (result.onboardingHidden !== true) {
-      throw new Error(
-        `iOS onboarding smoke did not prove onboarding was hidden: ${JSON.stringify(result)}`,
-      );
-    }
-    const activeServer = result.storage?.["elizaos:active-server"];
-    if (typeof activeServer !== "string" || !activeServer.includes(apiBase)) {
-      throw new Error(
-        `iOS onboarding smoke did not persist active server ${apiBase}: ${JSON.stringify(result.storage)}`,
-      );
-    }
     fs.writeFileSync(
       path.join(resultDir, "result.json"),
       `${JSON.stringify({ ...result, screenshot, video }, null, 2)}\n`,
