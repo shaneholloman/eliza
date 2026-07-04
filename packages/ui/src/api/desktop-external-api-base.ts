@@ -18,6 +18,8 @@ export function getDesktopExternalApiBaseOrigin(): string | null {
       ? parsed.origin
       : null;
   } catch {
+    // error-policy:J3 unparseable injected base — no external API origin is
+    // trusted (fail-closed).
     return null;
   }
 }
@@ -28,6 +30,8 @@ export function isDesktopExternalApiBaseUrl(url: string): boolean {
   try {
     return new URL(url).origin === allowedOrigin;
   } catch {
+    // error-policy:J3 unparseable URL never matches the allowed origin
+    // (fail-closed).
     return false;
   }
 }
@@ -39,6 +43,8 @@ export function isDesktopExternalHttpApiBaseUrl(url: string): boolean {
     const parsed = new URL(url);
     return parsed.protocol === "http:" && parsed.origin === allowedOrigin;
   } catch {
+    // error-policy:J3 unparseable URL never matches the allowed origin
+    // (fail-closed).
     return false;
   }
 }

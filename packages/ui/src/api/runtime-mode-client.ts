@@ -52,6 +52,8 @@ export async function fetchRuntimeModeSnapshot(): Promise<RuntimeModeSnapshot | 
   try {
     res = await fetchWithCsrf(`${modeBase()}/api/runtime/mode`);
   } catch {
+    // error-policy:J4 advisory snapshot (see JSDoc) — unreachable endpoint
+    // reads as the explicit null callers resolve with local heuristics.
     return null;
   }
   if (!res.ok) return null;
