@@ -105,6 +105,23 @@ export interface TabGroup {
   description?: string;
 }
 
+function walletLauncherTabs(): Tab[] {
+  const tabs = listAppShellPages()
+    .filter((entry) => entry.group === "wallet")
+    .sort(
+      (a, b) =>
+        (a.order ?? 100) - (b.order ?? 100) ||
+        a.label.localeCompare(b.label) ||
+        a.id.localeCompare(b.id),
+    )
+    .map((entry) =>
+      normalizePath(entry.path).toLowerCase() === "/inventory"
+        ? ((entry.tabAffinity ?? "inventory") as Tab)
+        : (entry.id as Tab),
+    );
+  return [...new Set(tabs.length ? tabs : ["inventory"])];
+}
+
 export interface AndroidPhoneSurfaceDetection {
   platform?: string;
   isNative?: boolean;
@@ -162,6 +179,36 @@ export function isAospShellEnabled(
     userAgentHasElizaOSMarker(navigator.userAgent ?? "")
   );
 }
+
+/**
+ * The AOSP-ElizaOS-fork-only native device-OS surfaces (dialer, SMS, contacts,
+ * camera). They are gated to the fork via {@link isAospShellEnabled} everywhere
+ * they appear, so this is the single source of truth those gates read instead of
+ * each redeclaring the id set (which let the router filter and the launcher
+ * curation drift). Consumers:
+ *  - `useAvailableViews` strips these from the routable view set + view manager
+ *    on every non-fork build.
+ *  - `launcher-curation` appends {@link LAUNCHER_AOSP_ONLY_VIEW_IDS} to the
+ *    launcher only on the fork.
+ *  - `App.tsx` route gates (`renderPhoneSurface`) mount their pages only on the
+ *    fork.
+ */
+export const NATIVE_OS_VIEW_IDS = [
+  "phone",
+  "messages",
+  "contacts",
+  "camera",
+] as const;
+
+/**
+ * Native-OS launcher tiles: the routable native-OS surfaces plus Files — a
+ * cross-platform view (`/apps/files`) that stays routable everywhere but is only
+ * surfaced as a launcher tile on the fork.
+ */
+export const LAUNCHER_AOSP_ONLY_VIEW_IDS = [
+  ...NATIVE_OS_VIEW_IDS,
+  "files",
+] as const;
 
 interface WindowNavigationLocation {
   protocol: string;
@@ -245,9 +292,10 @@ export const ALL_TAB_GROUPS: TabGroup[] = [
     description: "Avatar identity, style, examples, and knowledge",
   },
   {
-    // Hyperliquid + Polymarket are sub-views of Wallet, not standalone apps.
     label: "Wallet",
-    tabs: ["inventory", "hyperliquid", "polymarket"],
+    get tabs() {
+      return walletLauncherTabs();
+    },
     icon: Wallet,
     description:
       "Crypto wallets, token balances, perps, and prediction markets",
@@ -265,12 +313,12 @@ export const ALL_TAB_GROUPS: TabGroup[] = [
     description: "Live streaming controls",
   },
   {
-    // One consolidated surface — scheduled tasks + recurring workflows share the
-    // Automations feed. `triggers`/`tasks` stay routable aliases (TAB_PATHS).
+    // One consolidated surface — workflows, triggers, and scheduled items share
+    // the Automations feed. `triggers`/`tasks` stay routable aliases (TAB_PATHS).
     label: "Automations",
     tabs: ["automations"],
     icon: Clock3,
-    description: "Scheduled tasks and recurring workflows",
+    description: "Workflows, triggers, and scheduled items",
   },
   {
     label: "Settings",
@@ -330,15 +378,6 @@ export const TAB_PATHS: Record<BuiltinTab, string> = {
 const PATH_TO_TAB = new Map(
   Object.entries(TAB_PATHS).map(([tab, p]) => [p, tab as Tab]),
 );
-
-const APP_SHELL_PATH_TAB_ALIASES: Record<string, Tab> = {
-  "/inventory": "inventory",
-  "/phone-companion": "phone-companion",
-};
-
-const APP_SHELL_REGISTRATION_TAB_ALIASES: Record<string, Tab> = {
-  "wallet.inventory": "inventory",
-};
 
 function normalizePathForLookup(pathname: string, basePath = ""): string {
   const base = normalizeBasePath(basePath);
@@ -442,16 +481,11 @@ export function tabFromPath(pathname: string, basePath = ""): Tab | null {
     return "character";
   }
 
-  const appShellAlias = APP_SHELL_PATH_TAB_ALIASES[normalized];
-  if (appShellAlias) return appShellAlias;
   const registeredAppShellPage = listAppShellPages().find(
     (entry) => normalizePath(entry.path).toLowerCase() === normalized,
   );
   if (registeredAppShellPage) {
-    return (
-      APP_SHELL_REGISTRATION_TAB_ALIASES[registeredAppShellPage.id] ??
-      registeredAppShellPage.id
-    );
+    return registeredAppShellPage.tabAffinity ?? registeredAppShellPage.id;
   }
 
   // /apps/<sub> — known tool tabs resolve to their tab; everything else is an app slug
@@ -473,9 +507,9 @@ export function tabFromPath(pathname: string, basePath = ""): Tab | null {
   if (normalized === "/connectors") return "settings";
 
   // Check current paths first, then route unknown top-level paths through the
-  // view registry. Plugin views declare routes like `/hyperliquid` and
-  // `/contacts/tui` that are not built-in tabs; the Views tab can then match
-  // the exact registry path and mount the remote bundle.
+  // view registry. Plugin views can declare routes that are not built-in tabs;
+  // the Views tab can then match the exact registry path and mount the remote
+  // bundle.
   const knownTab = PATH_TO_TAB.get(normalized);
   if (knownTab) return knownTab;
   if (APPS_ENABLED && normalized.startsWith("/") && normalized !== "/") {

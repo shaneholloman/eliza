@@ -1,3 +1,11 @@
+/**
+ * Reads and validates Farcaster account configuration from env vars, runtime
+ * settings, and `character.settings.farcaster` against `FarcasterConfigSchema`
+ * (zod). Owns all account-id resolution — single-account, `FARCASTER_<ID>_`
+ * namespaced vars, and the `FARCASTER_ACCOUNTS` JSON array — so callers never
+ * hand-roll account discovery; use `listFarcasterAccountIds`,
+ * `normalizeFarcasterAccountId`, and `resolveDefaultFarcasterAccountId` here.
+ */
 import { type IAgentRuntime, type ProcessEnvLike, parseBooleanFromText } from "@elizaos/core";
 import { z } from "zod";
 import {
@@ -65,6 +73,9 @@ function parseAccountsJson(runtime: IAgentRuntime): Record<string, RawFarcasterA
       ? (parsed as Record<string, RawFarcasterAccountConfig>)
       : {};
   } catch {
+    // error-policy:J3 malformed FARCASTER_ACCOUNTS JSON is untrusted config input; the
+    // multi-account blob contributes no entries while single-account env settings
+    // still govern — a corrupt blob must not crash account discovery (accounts.test.ts).
     return {};
   }
 }

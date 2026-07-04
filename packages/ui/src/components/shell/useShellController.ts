@@ -1,3 +1,18 @@
+/**
+ * The single stateful engine behind the shell's chat + voice surface, exposed as
+ * the `ShellController` returned by `useShellController`. It drives the shell
+ * phase (booting → summoned → listening → responding), the rendered message
+ * list, send + vision-capture, and the whole voice stack: mic capture (via the
+ * voice-capture factory), wake-word listening, end-of-turn aggregation,
+ * hands-free conversation looping, transcription-mode long-form recording, and
+ * spoken assistant output (through useShellVoiceOutput). Conversation switching
+ * and horizontal swipe navigation resolve through conversation-nav.
+ *
+ * ChatSurface / AssistantOverlay / ContinuousChatOverlay and the home surfaces
+ * are the consumers; they read the controller and render, holding no chat/voice
+ * state of their own. ShellControllerContext provides one instance so the pill
+ * and the overlay stay in lock-step without double-mounting this hook.
+ */
 import type { TranscriptSegment } from "@elizaos/shared/transcripts";
 import * as React from "react";
 import type {
@@ -22,6 +37,7 @@ import {
   loadWakeWordEnabled,
   saveContinuousChatMode,
 } from "../../state/persistence";
+import { goHome } from "../../state/shell-surface-store";
 import { deriveAgentReady } from "../../state/types";
 import { TurnAggregator } from "../../voice/end-of-turn";
 import { shouldRespondToVoiceTurn } from "../../voice/should-respond";
@@ -47,7 +63,6 @@ import {
   type ConversationNavDirection,
   resolveAdjacentConversationId,
 } from "./conversation-nav";
-import { dispatchHomeLauncherNavigation } from "./home-launcher-events";
 import type { ShellMessage, ShellPhase } from "./shell-state";
 import { useShellVoiceOutput } from "./useShellVoiceOutput";
 
@@ -181,8 +196,6 @@ export interface ShellController {
   openSettings: () => void;
   /** Return to the combined Home/Launcher surface and select Home. */
   navigateHome?: () => void;
-  /** Open the combined Home/Launcher surface and select Launcher. */
-  navigateToViews?: () => void;
   /** The active app tab. */
   currentTab?: string;
   /** Stop an in-flight reply stream (the composer's stop control). */
@@ -317,16 +330,12 @@ export function useShellController(): ShellController {
 
   // Jump to Settings from the chat's no_provider gate. Stable identity.
   const openSettings = React.useCallback(() => setTab("settings"), [setTab]);
-  // Return to the combined Home/Launcher route and reset its internal page.
-  // If the route is not mounted yet, the next mount starts on Home; if it is
-  // already mounted on Launcher, this event flips it without a remount.
+  // Return to the combined Home/Launcher route and select Home. If the route is
+  // not mounted yet, the next mount starts on Home; if it is already mounted on
+  // Launcher, this flips it via the shell-surface store without a remount.
   const navigateHome = React.useCallback(() => {
     setTab("chat");
-    dispatchHomeLauncherNavigation("home");
-  }, [setTab]);
-  const navigateToViews = React.useCallback(() => {
-    setTab("chat");
-    dispatchHomeLauncherNavigation("launcher");
+    goHome();
   }, [setTab]);
 
   // True while a clear or conversation switch is fetching the next thread, so
@@ -1409,7 +1418,6 @@ export function useShellController(): ShellController {
     clearConversation,
     openSettings,
     navigateHome,
-    navigateToViews,
     currentTab: tab,
     stop: stopTurn,
     conversationNav,

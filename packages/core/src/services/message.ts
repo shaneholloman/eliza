@@ -32,25 +32,25 @@ import { logger } from "../logger";
 import { describeImageCached } from "../media";
 import { fetchRemoteMedia } from "../media/fetch";
 import { imageDescriptionTemplate, messageHandlerTemplate } from "../prompts";
-import { checkSenderRole } from "../roles";
+import { checkSenderRole, hasAtLeastRole, isAdminRank } from "../roles";
 import {
 	type ActionCatalog,
 	buildActionCatalog,
 	type LocalizedActionExampleResolver,
 } from "../runtime/action-catalog";
+import { actionGateFailure, canActionRun } from "../runtime/action-gate";
 import { retrieveActions } from "../runtime/action-retrieval";
-import { resolveActionRolePolicyRole } from "../runtime/action-role-policy";
 import { tierActionResults } from "../runtime/action-tiering";
 import {
-	addresseeIsNonOwnerBot,
 	applyAddressedTo,
+	messageAddressedToOtherParticipant,
 } from "../runtime/addressed-to";
 import { normalizeTopics } from "../runtime/builtin-field-evaluators";
 import {
-	filterByContextGate,
-	satisfiesContextGate,
-	satisfiesRoleGate,
-} from "../runtime/context-gates";
+	type CandidateActionBackstopRule,
+	getCandidateActionBackstopRules,
+} from "../runtime/candidate-action-backstop";
+import { filterByContextGate } from "../runtime/context-gates";
 import { computePrefixHashes, hashString } from "../runtime/context-hash";
 import {
 	appendContextEvent,
@@ -66,6 +66,7 @@ import {
 	getMessageHistoryCompactionHook,
 	type MessageHistoryCompactionTelemetry,
 } from "../runtime/conversation-compaction-hook";
+import { runDirectMessageHooks } from "../runtime/direct-message-hook";
 import {
 	type EvaluatorEffects,
 	type EvaluatorOutput,
@@ -106,8 +107,8 @@ import {
 	type PlannerToolResult,
 	type PlannerTrajectory,
 	runPlannerLoop,
+	summarizeActionResultForPlanner,
 } from "../runtime/planner-loop";
-import { privateActionAllowedOnTurn } from "../runtime/private-action-gate";
 import {
 	extractReplyTextFromTranscript,
 	looksLikeRawFieldTranscript,
@@ -134,6 +135,7 @@ import { actionHasSubActions, runSubPlanner } from "../runtime/sub-planner";
 import { buildCanonicalSystemPrompt } from "../runtime/system-prompt";
 import {
 	createJsonFileTrajectoryRecorder,
+	finalizeTrajectoryRecording,
 	isTrajectoryRecordingEnabled,
 	type TrajectoryRecorder,
 } from "../runtime/trajectory-recorder";
@@ -170,6 +172,7 @@ import type {
 	MessageProcessingResult,
 	ShouldRespondModelType,
 } from "../types/message-service";
+import { MESSAGE_SOURCE_CLIENT_CHAT } from "../types/message-source";
 import type {
 	ChatMessage,
 	GenerateTextAttachment,
@@ -240,13 +243,16 @@ import { runPostTurnEvaluators } from "./evaluator";
 import { runBotNoiseTriage } from "./message/bot-noise-triage";
 import {
 	findAvailableActionName,
+	findCodingDelegationActionName,
 	findWebLookupActionName,
 	findWebLookupActionNames,
 	inferDirectCurrentRequestCandidateActions as inferDirectCurrentRequestCandidateActionsFromHeuristics,
 	inferLocalShellCommandFromMessageText,
 	inferWebSearchQueryFromMessageText,
+	LEGACY_CODING_DELEGATION_ACTION_NAMES,
 	looksLikeLocalShellRequest,
 	looksLikeWebSearchRequest,
+	normalizeActionIdentifier,
 } from "./message/direct-action-heuristics";
 import {
 	buildFailureReplyPrompt,
@@ -902,7 +908,7 @@ function hasInboundBenchmarkContext(message: Memory): boolean {
  * Returns true when the current turn was issued by a benchmark harness AND the
  * `ELIZA_BENCH_FORCE_TOOL_CALL` env opt-in is set. Used to bias the planner
  * toward emitting structured tool calls instead of routing every turn through
- * `REPLY`, which is what LifeOpsBench and similar harnesses score against.
+ * `REPLY`, which is what tool-calling benchmark harnesses score against.
  *
  * Detection is intentionally narrow: we require BOTH
  *   1. an env-var opt-in (so default behavior is unchanged for normal chat), AND
@@ -2223,7 +2229,7 @@ async function collectV5PlannerCandidateActions(args: {
 	// messageHandler-picked `selectedContexts`. That filter excluded owner
 	// actions, CALENDAR, SCHEDULED_TASKS, etc. whenever the messageHandler routed to
 	// "general" — even when the user clearly asked for a habit/event/etc.
-	// (See `docs/audits/lifeops-2026-05-09/12-real-root-cause.md`.)
+	// (See the 2026-05-09 candidate-surface root-cause audit.)
 	//
 	// Now: the surface starts from every action, then applies only the same
 	// execution gates the planner executor will enforce. That keeps role-policy
@@ -2253,14 +2259,12 @@ async function collectV5PlannerCandidateActions(args: {
 		if (!normalizedName || seen.has(normalizedName)) {
 			return false;
 		}
-		// Private actions are reserved for the agent's own autonomous loop and
-		// must never be exposed to the planner on a user-driven turn.
-		if (!privateActionAllowedOnTurn(action, args.message)) {
-			return false;
-		}
+		// One gate for exposure and execution (#12087 Item 9): private-action gate
+		// (private actions never reach the planner on a user turn) + ACTION_ROLE_POLICY
+		// + contextGate + roleGate, all via the shared chokepoint.
 		if (
-			!actionPassesPlannerExecutionGates({
-				action,
+			!canActionRun(action, {
+				message: args.message,
 				activeContexts,
 				userRoles: args.userRoles,
 			})
@@ -2408,27 +2412,6 @@ const CODING_SUB_AGENT_EXCLUDED_ACTIONS: ReadonlySet<string> = new Set(
 	// stripped), since that is what the filter compares against.
 	["VIEWS", "CLOSEVIEW", "CLOSEALLVIEWS", "TASKS"],
 );
-
-function actionPassesPlannerExecutionGates(args: {
-	action: Action;
-	activeContexts?: readonly AgentContext[];
-	userRoles?: readonly RoleGateRole[];
-}): boolean {
-	const policyRole = resolveActionRolePolicyRole(args.action);
-	if (policyRole) {
-		return satisfiesRoleGate(args.userRoles, { minRole: policyRole });
-	}
-
-	const contextGate = args.action.contextGate ?? {
-		contexts: args.action.contexts,
-		roleGate: args.action.roleGate,
-	};
-	if (!satisfiesContextGate(args.activeContexts, contextGate, args.userRoles)) {
-		return false;
-	}
-
-	return satisfiesRoleGate(args.userRoles, args.action.roleGate);
-}
 
 function getMessageHandlerCandidateActions(
 	messageHandler: MessageHandlerResult,
@@ -3736,6 +3719,7 @@ export function messageHandlerFromFieldResult(
 	runtimeContext?: {
 		actions: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 		messageText?: string;
+		candidateBackstopRules?: readonly CandidateActionBackstopRule[];
 	},
 ): MessageHandlerResult {
 	const rawContexts = Array.isArray(result.contexts)
@@ -3751,6 +3735,7 @@ export function messageHandlerFromFieldResult(
 		candidateActions: rawCandidateActions,
 		actions: runtimeContext?.actions ?? [],
 		messageText: currentMessageText,
+		backstopRules: runtimeContext?.candidateBackstopRules ?? [],
 	});
 	const candidateActions = candidateBackstop.candidateActions;
 	const contexts =
@@ -4032,28 +4017,11 @@ export function messageHandlerFromFieldResult(
 	};
 }
 
-const LIFEOPS_SCHEDULED_TASK_ACTIONS = new Set(
-	[
-		"SCHEDULED_TASKS",
-		"SCHEDULED_TASKS_ACKNOWLEDGE",
-		"SCHEDULED_TASKS_CANCEL",
-		"SCHEDULED_TASKS_COMPLETE",
-		"SCHEDULED_TASKS_CREATE",
-		"SCHEDULED_TASKS_DISMISS",
-		"SCHEDULED_TASKS_GET",
-		"SCHEDULED_TASKS_HISTORY",
-		"SCHEDULED_TASKS_LIST",
-		"SCHEDULED_TASKS_REOPEN",
-		"SCHEDULED_TASKS_SKIP",
-		"SCHEDULED_TASKS_SNOOZE",
-		"SCHEDULED_TASKS_UPDATE",
-	].map(normalizeActionIdentifier),
-);
-
 function applyCodingCandidateBackstop(args: {
 	candidateActions: readonly string[];
 	actions: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 	messageText: string;
+	backstopRules: readonly CandidateActionBackstopRule[];
 }): { candidateActions: string[]; forceCodeContext: boolean } {
 	if (args.candidateActions.length === 0) {
 		return {
@@ -4067,13 +4035,19 @@ function applyCodingCandidateBackstop(args: {
 			forceCodeContext: false,
 		};
 	}
-	const hasLifeOpsScheduledCandidate = args.candidateActions.some((name) =>
-		LIFEOPS_SCHEDULED_TASK_ACTIONS.has(normalizeActionIdentifier(name)),
+	const normalizedCandidates = args.candidateActions.map(
+		normalizeActionIdentifier,
 	);
-	if (
-		hasLifeOpsScheduledCandidate &&
-		looksLikeLifeOpsScheduledTaskRequest(args.messageText)
-	) {
+	// A registered backstop rule protects its candidates when it both owns one
+	// of the candidate actions AND recognizes this message as addressed to it.
+	const protectedByRule = args.backstopRules.some((rule) => {
+		const owned = new Set(rule.actionNames.map(normalizeActionIdentifier));
+		return (
+			normalizedCandidates.some((name) => owned.has(name)) &&
+			rule.matches(args.messageText)
+		);
+	});
+	if (protectedByRule) {
 		return {
 			candidateActions: [...args.candidateActions],
 			forceCodeContext: false,
@@ -4087,9 +4061,13 @@ function applyCodingCandidateBackstop(args: {
 		};
 	}
 
+	const backstopActionNames = new Set(
+		args.backstopRules.flatMap((rule) =>
+			rule.actionNames.map(normalizeActionIdentifier),
+		),
+	);
 	const filtered = args.candidateActions.filter(
-		(name) =>
-			!LIFEOPS_SCHEDULED_TASK_ACTIONS.has(normalizeActionIdentifier(name)),
+		(name) => !backstopActionNames.has(normalizeActionIdentifier(name)),
 	);
 	if (filtered.length === args.candidateActions.length) {
 		return { candidateActions: filtered, forceCodeContext: false };
@@ -4352,6 +4330,7 @@ const WEAK_DIRECT_REPLY_OVERRIDE_ACTIONS = new Set(
 		"TASKS",
 		"TASKS_SPAWN_AGENT",
 		"TERMINAL",
+		"TERMINAL_SHELL",
 		"WEB_FETCH",
 		"WEB_SEARCH",
 	].map(normalizeActionIdentifier),
@@ -4360,6 +4339,7 @@ const WEAK_DIRECT_REPLY_OVERRIDE_ACTIONS = new Set(
 const SHELL_DIRECT_ACTIONS = new Set(
 	[
 		"SHELL",
+		"TERMINAL_SHELL",
 		"RUN_IN_TERMINAL",
 		"RUN_COMMAND",
 		"EXECUTE_COMMAND",
@@ -4451,6 +4431,7 @@ function inferAckIntentCandidateActions(
 	if (looksLikeLocalShellRequest(actionText)) {
 		const shellAction = findAvailableActionName(actions, [
 			"SHELL",
+			"TERMINAL_SHELL",
 			"RUN_IN_TERMINAL",
 			"RUN_COMMAND",
 			"EXECUTE_COMMAND",
@@ -4489,40 +4470,6 @@ export function inferDirectCurrentRequestCandidateActions(
 			looksLikeCodingWorkRequest,
 			findCodingDelegationActionName,
 		},
-	);
-}
-
-const CODING_DELEGATION_ACTION_TAGS = [
-	"domain:coding",
-	"resource:agent-task",
-	"capability:delegate",
-] as const;
-
-const LEGACY_CODING_DELEGATION_ACTION_NAMES = [
-	"TASKS",
-	"TASKS_SPAWN_AGENT",
-	"SPAWN_AGENT",
-	"START_CODING_TASK",
-	"CODE_TASK",
-	"SPAWN_CODING_AGENT",
-] as const;
-
-function hasActionTags(
-	action: Pick<Action, "tags">,
-	requiredTags: readonly string[],
-): boolean {
-	const tags = new Set((action.tags ?? []).map((tag) => tag.toLowerCase()));
-	return requiredTags.every((tag) => tags.has(tag));
-}
-
-function findCodingDelegationActionName(
-	actions: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>,
-): string | undefined {
-	return (
-		actions.find((action) =>
-			hasActionTags(action, CODING_DELEGATION_ACTION_TAGS),
-		)?.name ??
-		findAvailableActionName(actions, LEGACY_CODING_DELEGATION_ACTION_NAMES)
 	);
 }
 
@@ -4734,7 +4681,7 @@ function shouldUseStage1PlannerFallback(
 		return true;
 	}
 	const source = String(content.source ?? "").toLowerCase();
-	if (source.includes("client_chat")) {
+	if (source.includes(MESSAGE_SOURCE_CLIENT_CHAT)) {
 		return true;
 	}
 	return textContainsAgentName(content.text, [
@@ -5341,7 +5288,13 @@ async function executeV5PlannedToolCall(
 		toolCall,
 		{ ...(args.executorOptions ?? {}), actions: executionActions },
 	);
-	return actionResultToPlannerToolResult(actionResult);
+	return actionResultToPlannerToolResult(actionResult, {
+		summary: summarizeActionResultForPlanner(
+			action,
+			actionResult,
+			toolCall.params,
+		),
+	});
 }
 
 function plannerToolCallHasActionParameter(toolCall: PlannerToolCall): boolean {
@@ -5630,12 +5583,12 @@ export async function runShortcutGate(args: {
 		.shortcutRegistry;
 	if (!registry || registry.size === 0) return null;
 
-	const authorized = args.senderRole === "OWNER" || args.senderRole === "ADMIN";
+	const authorized = isAdminRank(args.senderRole);
 	const match = registry.match(text, {
 		actions: args.runtime.actions.map((action) => action.name),
 		allowNatural: true,
 		isAuthorized: authorized,
-		isElevated: args.senderRole === "OWNER",
+		isElevated: hasAtLeastRole(args.senderRole, "OWNER"),
 	});
 	if (!match) return null;
 	const target = match.shortcut.target;
@@ -5645,6 +5598,27 @@ export async function runShortcutGate(args: {
 
 	const action = args.runtime.actions.find((a) => a.name === target.name);
 	if (!action) return null;
+
+	// #12087 Item 3: enforce the target action's DECLARED gate (roleGate +
+	// contextGate + private-action + ACTION_ROLE_POLICY) via the same chokepoint
+	// the planned-tool-call executor uses, BEFORE validate()/handler(). Previously
+	// the shortcut path invoked the handler directly, so a shortcut lacking
+	// `requiresElevated` that targeted an OWNER-gated action (e.g. SECRETS) let any
+	// USER execute it — the registry's coarse auth/elevated flags were the only
+	// protection. The shortcut runs pre-planner, so no contexts are active yet:
+	// role-gated actions still gate by role; a context-gated action is conservatively
+	// withheld from the shortcut fast-path (it can still run through the planner).
+	const gateFailure = actionGateFailure(action, {
+		message: args.message,
+		userRoles: [args.senderRole],
+	});
+	if (gateFailure) {
+		args.runtime.logger?.debug?.(
+			{ src: "shortcut-gate", action: action.name, reason: gateFailure },
+			"shortcut target action failed the role/context gate; falling through to pipeline",
+		);
+		return null;
+	}
 
 	let valid = false;
 	try {
@@ -6041,6 +6015,7 @@ export async function runV5MessageRuntimeStage1(args: {
 				{
 					actions: args.runtime.actions,
 					messageText: getUserMessageText(args.message),
+					candidateBackstopRules: getCandidateActionBackstopRules(args.runtime),
 				},
 			);
 		}
@@ -6281,22 +6256,24 @@ export async function runV5MessageRuntimeStage1(args: {
 			messageHandler.plan.contexts,
 			availableContexts,
 		);
-		// #9874 item 1: suppress the simple→requiresTool promotion when this turn
-		// is bot-to-bot crosstalk addressed to a non-owner bot — the agent is
+		// #9874 item 1: skip the simple→requiresTool promotion when this turn is
+		// explicitly addressed to another participant (not us) — the agent is
 		// overhearing, not being asked to act, so forcing a tool fabricates a
-		// phantom task. Cheap-gated: only resolve addressees when a promotion could
-		// actually fire (requiresTool / candidateActions) and the message carries
-		// explicit addressees.
+		// phantom task. Uniform addressing gate, NOT bot-specific: it fires the
+		// same for human and bot addressees (bot-ness is surfaced to the model as
+		// transcript context, not handled here). Cheap-gated: only resolve
+		// addressees when a promotion could actually fire (requiresTool /
+		// candidateActions) and the message carries explicit addressees.
 		const mayPromoteToTool =
 			messageHandler.plan.requiresTool === true ||
 			(messageHandler.plan.candidateActions?.length ?? 0) > 0;
-		// Fail SAFE on any resolution error (DB hiccup in getEntitiesForRoom /
-		// getAgent): a transient failure must NOT convert a normal turn into the
-		// generic failure reply — it just means "don't suppress", matching the
+		// Fail SAFE on any resolution error (DB hiccup in getEntitiesForRoom): a
+		// transient failure must NOT convert a normal turn into the generic
+		// failure reply — it just means "don't suppress", matching the
 		// conservative contract and the fire-and-forget addressee handling above.
 		const suppressToolPromotion =
 			mayPromoteToTool && addressedTo.length > 0
-				? await addresseeIsNonOwnerBot({
+				? await messageAddressedToOtherParticipant({
 						runtime: args.runtime,
 						message: args.message,
 						addressedTo,
@@ -6471,10 +6448,13 @@ export async function runV5MessageRuntimeStage1(args: {
 						!CODING_SUB_AGENT_EXCLUDED_ACTIONS.has(
 							normalizeActionIdentifier(action.name),
 						) &&
-						actionPassesPlannerExecutionGates({
-							action,
+						// Static candidate-action set for a coding sub-agent — no concrete
+						// turn message here, so skip the private-action gate; the eventual
+						// execution still enforces it through the executor.
+						canActionRun(action, {
 							activeContexts: CODING_SUB_AGENT_CONTEXTS,
 							userRoles: [senderRole],
+							skipPrivateGate: true,
 						}),
 				)
 			: await collectV5PlannerCandidateActions({
@@ -6803,32 +6783,30 @@ export async function runV5MessageRuntimeStage1(args: {
 		// finalize in the background by default and let the turn return as soon as
 		// the reply is decided. Await it only when deterministic trajectory
 		// ordering is required (e.g. the scenario-runner) via ELIZA_AWAIT_FACTS_STAGE.
+		// finalizeTrajectoryRecording is the lifecycle guard: it bounds the wait
+		// on the facts stage and writes the terminal status no matter what, so a
+		// hung facts model call can never leave the trajectory stuck `running`.
 		const finalizeTrajectory = async () => {
-			try {
-				const factsOutcome = await factsTask;
-				if (recorder && trajectoryId && factsOutcome) {
-					await recordFactsAndRelationshipsStage({
-						recorder,
-						trajectoryId,
-						outcome: factsOutcome,
-						logger: args.runtime.logger,
-					});
-				}
-			} catch (factsErr) {
-				args.runtime.logger?.warn?.(
-					{ err: (factsErr as Error).message, trajectoryId },
-					"[facts] background facts-stage recording failed",
-				);
-			} finally {
-				if (recorder && trajectoryId) {
-					await recorder.endTrajectory(trajectoryId, endStatus).catch((err) => {
-						args.runtime.logger?.warn?.(
-							{ err: (err as Error).message, trajectoryId },
-							"[TrajectoryRecorder] endTrajectory failed",
-						);
-					});
-				}
-			}
+			if (!recorder || !trajectoryId) return;
+			await finalizeTrajectoryRecording({
+				recorder,
+				trajectoryId,
+				status: endStatus,
+				beforeEnd: async () => {
+					const factsOutcome = await factsTask;
+					if (factsOutcome) {
+						await recordFactsAndRelationshipsStage({
+							recorder,
+							trajectoryId,
+							outcome: factsOutcome,
+							logger: args.runtime.logger,
+						});
+					}
+				},
+				logger: args.runtime.logger as {
+					warn?: (context: unknown, message?: string) => void;
+				},
+			});
 		};
 		if (process.env.ELIZA_AWAIT_FACTS_STAGE === "true") {
 			await finalizeTrajectory();
@@ -7228,10 +7206,6 @@ function isStopResponse(
 	);
 }
 
-function normalizeActionIdentifier(actionName: string): string {
-	return unwrapPlannerIdentifier(actionName).toUpperCase().replace(/_/g, "");
-}
-
 function unwrapPlannerIdentifier(value: string): string {
 	const safe = value.length > 10_000 ? value.slice(0, 10_000) : value;
 	const trimmed = safe
@@ -7364,24 +7338,6 @@ function looksLikeCodingWorkRequest(text: string): boolean {
 			normalized,
 		);
 	return asksDelegation || asksCodingWork;
-}
-
-function looksLikeLifeOpsScheduledTaskRequest(text: string): boolean {
-	const normalized = text.toLowerCase();
-	if (!normalized.trim()) {
-		return false;
-	}
-	return (
-		/\b(?:remind\s+me|reminder|scheduled\s+task|scheduled\s+item|lifeops|todo|to[- ]?do|snooze|recap|check[- ]?in|follow[- ]?up|watcher|approval)\b/iu.test(
-			normalized,
-		) ||
-		/\b(?:schedule|create|make|add|set\s+up)\b[\s\S]{0,80}\b(?:task|reminder|todo|to[- ]?do|check[- ]?in|follow[- ]?up|watcher|recap|approval)\b/iu.test(
-			normalized,
-		) ||
-		/\b(?:tomorrow|tonight|later|next\s+(?:week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?|every\s+(?:day|week|month|morning|evening))\b/iu.test(
-			normalized,
-		)
-	);
 }
 
 function looksLikeExplicitDelegationRequest(text: string): boolean {
@@ -9143,9 +9099,9 @@ export class DefaultMessageService implements IMessageService {
 		// #8791: pre-LLM action shortcut gate runs FIRST — before any direct hook,
 		// planner, or model call. An explicit slash/`!` command (always-on) or a
 		// confident natural-language shortcut resolves to a deterministic action
-		// reply with zero inference. Placed here (ahead of the LifeOps/workflow
-		// direct hooks and the conditional v5 stage) so a slash command can never
-		// be pre-empted by another handler.
+		// reply with zero inference. Placed here (ahead of the pre-LLM
+		// direct-message hooks and the conditional v5 stage) so a slash command can
+		// never be pre-empted by another handler.
 		if (!strategyResult) {
 			const shortcutSenderRole = await resolveStage1SenderRole(
 				runtime,
@@ -9168,38 +9124,24 @@ export class DefaultMessageService implements IMessageService {
 			}
 		}
 
-		const directLifeOpsResult = strategyResult
+		const directHookResult = strategyResult
 			? null
-			: await (
-					runtime as IAgentRuntime & {
-						lifeOpsDirectMessageHook?: {
-							handleMessageRequest?: (args: {
-								runtime: IAgentRuntime;
-								message: Memory;
-								state: State;
-							}) => Promise<ActionResult | null | undefined>;
-						};
-					}
-				).lifeOpsDirectMessageHook?.handleMessageRequest?.({
-					runtime,
-					message,
-					state,
-				});
-		if (directLifeOpsResult) {
+			: await runDirectMessageHooks(runtime, { runtime, message, state });
+		if (directHookResult) {
 			const directText =
-				typeof directLifeOpsResult.text === "string" &&
-				directLifeOpsResult.text.trim().length > 0
-					? directLifeOpsResult.text.trim()
-					: directLifeOpsResult.success
+				typeof directHookResult.text === "string" &&
+				directHookResult.text.trim().length > 0
+					? directHookResult.text.trim()
+					: directHookResult.success
 						? "Done."
-						: "I couldn't complete that LifeOps request.";
+						: "I couldn't complete that request.";
 			strategyResult = createV5ReplyStrategyResult({
 				runtime,
 				message,
 				state,
 				responseId,
 				text: directText,
-				thought: "LifeOps direct workflow hook handled this request.",
+				thought: "A pre-LLM direct-message hook handled this request.",
 				mode: "simple",
 			});
 			_usedV5Runtime = true;
@@ -9892,7 +9834,7 @@ export class DefaultMessageService implements IMessageService {
 		];
 
 		// Sources that always trigger a response
-		const alwaysRespondSources = ["client_chat"];
+		const alwaysRespondSources = [MESSAGE_SOURCE_CLIENT_CHAT];
 
 		// Support runtime-configurable overrides via env settings
 		const customChannels = normalizeEnvList(

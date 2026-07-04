@@ -1,3 +1,11 @@
+/**
+ * Force-laid-out node/edge graph of the relationships snapshot: renders people
+ * as draggable nodes and their relationships as edges (labelled with sentiment
+ * and interaction count), with zoom controls and hover tooltips. Layout
+ * positions are computed from the snapshot; selecting a group filters the
+ * visible subgraph. Mounted inside the Relationships workspace.
+ */
+
 import {
   Crown,
   Fingerprint,
@@ -27,6 +35,7 @@ import type {
   RelationshipsGraphSnapshot,
   RelationshipsPersonSummary,
 } from "../../api/client-types-relationships";
+import { GRAPH_PAN_ENGAGE_SLOP, useClickSuppression } from "../../gestures";
 import { useTranslation } from "../../state/TranslationContext.hooks";
 import { Button } from "../ui/button";
 import {
@@ -773,7 +782,9 @@ export function RelationshipsGraphPanel({
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
-  const shouldSuppressClickRef = useRef(false);
+  // A pan that actually moved must not ALSO fire the node click under the
+  // release point (shared useClickSuppression, armed in endPan).
+  const clickSuppression = useClickSuppression();
   const panStateRef = useRef<{
     pointerId: number;
     startX: number;
@@ -902,7 +913,7 @@ export function RelationshipsGraphPanel({
     if (!container) return;
     const dx = event.clientX - state.startX;
     const dy = event.clientY - state.startY;
-    if (!state.moved && Math.hypot(dx, dy) > 4) {
+    if (!state.moved && Math.hypot(dx, dy) > GRAPH_PAN_ENGAGE_SLOP) {
       state.moved = true;
       hideTooltip();
       container.setPointerCapture(event.pointerId);
@@ -925,10 +936,7 @@ export function RelationshipsGraphPanel({
         container.releasePointerCapture(event.pointerId);
       }
       if (state.moved) {
-        shouldSuppressClickRef.current = true;
-        window.setTimeout(() => {
-          shouldSuppressClickRef.current = false;
-        }, 0);
+        clickSuppression.arm();
       }
       panStateRef.current = null;
     }
@@ -1228,10 +1236,9 @@ export function RelationshipsGraphPanel({
                     <Button
                       variant="ghost"
                       onClick={(event) => {
-                        if (shouldSuppressClickRef.current) {
+                        if (clickSuppression.consumeArmed()) {
                           event.preventDefault();
                           event.stopPropagation();
-                          shouldSuppressClickRef.current = false;
                           return;
                         }
                         onSelectPersonId(person.primaryEntityId);

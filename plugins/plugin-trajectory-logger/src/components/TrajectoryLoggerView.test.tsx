@@ -4,9 +4,10 @@
 // the bundle exports for the "gui" and "xr" modalities. Asserts it mounts the
 // one presentational TrajectoryLoggerSpatialView inside a SpatialSurface, polls
 // real-shape trajectory data into the snapshot, and routes the spatial action
-// ids (`back`, `select:<slot>:<phase>`, `refresh`) — functional parity with the
-// retired hand-written GUI/TUI surfaces.
+// ids (`back`, `select:<slot>:<phase>`, `refresh`) across the GUI and TUI
+// surfaces.
 
+import { NAVIGATE_VIEW_EVENT } from "@elizaos/ui/events";
 import { SpatialSurface } from "@elizaos/ui/spatial";
 import {
   cleanup,
@@ -250,11 +251,11 @@ describe("TrajectoryLoggerView — unified GUI/XR wrapper", () => {
     render(React.createElement(TrajectoryLoggerView));
     const events: CustomEvent[] = [];
     const listener = (e: Event) => events.push(e as CustomEvent);
-    window.addEventListener("eliza:navigate:view", listener);
+    window.addEventListener(NAVIGATE_VIEW_EVENT, listener);
     try {
       fireEvent.click(buttonByAgent("back"));
     } finally {
-      window.removeEventListener("eliza:navigate:view", listener);
+      window.removeEventListener(NAVIGATE_VIEW_EVENT, listener);
     }
     expect(events).toHaveLength(1);
     expect(events[0]?.detail).toMatchObject({ viewId: "apps" });

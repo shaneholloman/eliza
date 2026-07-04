@@ -88,6 +88,7 @@ from scripts.manifest.eliza1_manifest import (  # noqa: E402
     build_manifest,
     canonical_source_repo_error,
     required_voice_artifacts_for_tier,
+    text_architecture_for_manifest,
     text_context_for_manifest,
 )
 from scripts.manifest.eliza1_platform_plan import (  # noqa: E402
@@ -96,6 +97,10 @@ from scripts.manifest.eliza1_platform_plan import (  # noqa: E402
 )
 from scripts.manifest.eliza1_licenses import (  # noqa: E402
     verify_bundle_licenses,
+)
+from scripts.manifest.audit_hf_eliza1_release import (  # noqa: E402
+    DEFAULT_DATASET_REPO,
+    audit_hf_release,
 )
 
 # ---------------------------------------------------------------------------
@@ -111,6 +116,7 @@ EXIT_EVAL_GATE_FAIL = 13
 EXIT_MANIFEST_INVALID = 14
 EXIT_HF_PUSH_FAIL = 15
 EXIT_RELEASE_EVIDENCE_FAIL = 16
+EXIT_HF_AUDIT_FAIL = 17
 
 ELIZA_1_HF_ORG = "elizaos"
 
@@ -210,6 +216,7 @@ TIER_TAGLINES: Mapping[str, str] = {
     "4b": "flagship phones, small desktops",
     "9b": "workstations, tablets, and high-memory local hosts",
     "27b": "GPU workstations",
+    "27b-256k": "long-context GPU workstations",
 }
 
 DEFAULT_VOICE_CAPABILITIES: tuple[str, ...] = ("tts", "emotion-tags", "singing")
@@ -226,6 +233,7 @@ DEFAULT_RAM_BUDGET_MB: Mapping[str, tuple[int, int]] = {
     "4b": (10000, 12000),
     "9b": (12000, 16000),
     "27b": (32000, 48000),
+    "27b-256k": (24000, 32000),
 }
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -1838,34 +1846,7 @@ def run_eval_gates(ctx: PublishContext) -> tuple[GateReport, dict[str, Any]]:
             EXIT_EVAL_GATE_FAIL,
         )
 
-    # ``e2e_loop_ok`` and ``thirty_turn_ok`` are independent contract booleans
-    # (manifest ``evals.e2eLoopOk`` / ``evals.thirtyTurnOk``) and both are
-    # ``required: true`` gates. When the eval blob is missing ``e2e_loop_ok``
-    # the operator can opt in to a lower-fidelity publish that aliases it onto
-    # ``thirty_turn_ok`` (ELIZA_PUBLISH_ALLOW_GATE_ALIAS=1) — manifest
-    # assembly already does this via ``_read_independent_bool``; do the same
-    # for the gate report so the report and the manifest stay consistent.
     results = eval_blob.get("results")
-    if (
-        isinstance(results, dict)
-        and "e2e_loop_ok" not in results
-        and "thirty_turn_ok" in results
-        and os.environ.get(PUBLISH_ALLOW_GATE_ALIAS_ENV) == "1"
-        and isinstance(results["thirty_turn_ok"], bool)
-    ):
-        log.warning(
-            "[evals] aliasing results.%s ← results.%s "
-            "(opt-in via %s=1). Two independent manifest contract gates are "
-            "being sourced from one measurement; this is a lower-fidelity "
-            "publish.",
-            "e2e_loop_ok",
-            "thirty_turn_ok",
-            PUBLISH_ALLOW_GATE_ALIAS_ENV,
-        )
-        results = dict(results)
-        results["e2e_loop_ok"] = results["thirty_turn_ok"]
-        eval_blob = dict(eval_blob)
-        eval_blob["results"] = results
     if isinstance(results, dict):
         mtp_report = _mtp_report_eval(ctx)
         enriched_results = dict(results)
@@ -1985,6 +1966,9 @@ def _collect_files_for_manifest(
                 path=rel(p),
                 sha256=_sha256_file(p),
                 ctx=text_context_for_manifest(p) if kind_src == "text" else None,
+                architecture=(
+                    text_architecture_for_manifest(p) if kind_src == "text" else None
+                ),
             )
             files[kind_dst].append(entry)
 
@@ -2167,11 +2151,7 @@ def assemble_manifest(
     # alias (e2e_loop_ok ← thirty_turn_ok gate result) hid the fact that
     # one of the two gates had no measurement.
     thirty_turn_ok = _read_independent_bool(results, "thirty_turn_ok")
-    e2e_loop_ok = _read_independent_bool(
-        results,
-        "e2e_loop_ok",
-        opt_in_alias_for="thirty_turn_ok",
-    )
+    e2e_loop_ok = _read_independent_bool(results, "e2e_loop_ok")
     mtp_report = _mtp_report_eval(ctx)
     mtp_acceptance_rate = _optional_float(results.get("mtp_acceptance"))
     if mtp_acceptance_rate is None:
@@ -2263,30 +2243,15 @@ def _gate_passed(report: GateReport, name: str) -> bool:
     return True
 
 
-# Operator opt-in for collapsing two independent contract booleans onto
-# a single observed measurement. Set to "1" to allow the orchestrator
-# to source ``e2e_loop_ok`` from the ``thirty_turn_ok`` measurement when
-# the eval blob doesn't carry an ``e2e_loop_ok`` key. Without the opt-in,
-# a missing key is publish-blocking.
-PUBLISH_ALLOW_GATE_ALIAS_ENV = "ELIZA_PUBLISH_ALLOW_GATE_ALIAS"
-
-
 def _read_independent_bool(
     results: Mapping[str, Any],
     key: str,
-    *,
-    opt_in_alias_for: str | None = None,
 ) -> bool:
     """Read an independent contract boolean from the eval results blob.
 
-    When ``key`` is missing AND ``opt_in_alias_for`` is provided, the
-    orchestrator falls back to the alias key only if the operator has
-    set ``ELIZA_PUBLISH_ALLOW_GATE_ALIAS=1`` — and logs a clear warning
-    that two independent manifest fields are being sourced from one
-    measurement. Without the opt-in, the missing key raises
-    ``OrchestratorError`` so the publish surfaces the contract gap
-    instead of silently emitting a manifest with one half of the gate
-    inferred.
+    Missing keys raise ``OrchestratorError`` so the publish surfaces
+    the contract gap instead of emitting a manifest with one gate
+    inferred from a different measurement.
     """
     if key in results:
         value = results[key]
@@ -2298,46 +2263,10 @@ def _read_independent_bool(
             )
         return value
 
-    if opt_in_alias_for is None:
-        raise OrchestratorError(
-            f"evals/aggregate.json missing required boolean results.{key!r}",
-            EXIT_EVAL_GATE_FAIL,
-        )
-
-    if os.environ.get(PUBLISH_ALLOW_GATE_ALIAS_ENV) != "1":
-        raise OrchestratorError(
-            f"evals/aggregate.json missing results.{key!r}; the manifest "
-            f"contract requires it as an independent measurement from "
-            f"{opt_in_alias_for!r}. To temporarily alias it to "
-            f"{opt_in_alias_for!r} (lower-fidelity publish), re-run with "
-            f"{PUBLISH_ALLOW_GATE_ALIAS_ENV}=1.",
-            EXIT_EVAL_GATE_FAIL,
-        )
-
-    if opt_in_alias_for not in results:
-        raise OrchestratorError(
-            f"evals/aggregate.json missing both results.{key!r} and the "
-            f"alias source results.{opt_in_alias_for!r}; nothing to alias.",
-            EXIT_EVAL_GATE_FAIL,
-        )
-
-    aliased = results[opt_in_alias_for]
-    if not isinstance(aliased, bool):
-        raise OrchestratorError(
-            f"evals/aggregate.json results.{opt_in_alias_for!r} must be "
-            f"a bool to be aliased to {key!r}, got {type(aliased).__name__}",
-            EXIT_EVAL_GATE_FAIL,
-        )
-    log.warning(
-        "[evals] aliasing results.%s ← results.%s "
-        "(opt-in via %s=1). Two independent manifest contract gates are "
-        "being sourced from one measurement; this is a lower-fidelity "
-        "publish.",
-        key,
-        opt_in_alias_for,
-        PUBLISH_ALLOW_GATE_ALIAS_ENV,
+    raise OrchestratorError(
+        f"evals/aggregate.json missing required boolean results.{key!r}",
+        EXIT_EVAL_GATE_FAIL,
     )
-    return aliased
 
 
 # ---------------------------------------------------------------------------
@@ -2729,6 +2658,28 @@ def push_final_release_evidence(
     )
 
 
+def run_hf_release_audit(ctx: PublishContext) -> None:
+    """Block completed publishes unless the public HF release surface is green."""
+
+    if ctx.dry_run:
+        log.info("[hf-audit] dry-run: skipped because no Hub upload occurred")
+        return
+    report = audit_hf_release(model_repo=ctx.repo_id, dataset_repo=DEFAULT_DATASET_REPO)
+    if report.ok:
+        log.info(
+            "[hf-audit] passed: model=%s dataset=%s checks=%d",
+            report.model_repo,
+            report.dataset_repo,
+            len(report.checks),
+        )
+        return
+    log.error("[hf-audit] failed after upload:\n%s", report.render())
+    raise OrchestratorError(
+        "HF release audit failed after upload; refusing to tag this publish.",
+        EXIT_HF_AUDIT_FAIL,
+    )
+
+
 def tag_training_repo(ctx: PublishContext, version: str, dry_run: bool) -> str | None:
     """Apply ``eliza-1-<tier>-v<version>`` to HEAD of the training repo.
 
@@ -2854,6 +2805,9 @@ def run(ctx: PublishContext) -> int:
                 upload_evidence,
             )
             push_final_release_evidence(ctx, release_path, checksum_path)
+
+        log.info("[stage 7/7] audit published HF release surface")
+        run_hf_release_audit(ctx)
 
         tag_name = tag_training_repo(ctx, version, ctx.dry_run)
         log.info("done. tag=%s", tag_name)

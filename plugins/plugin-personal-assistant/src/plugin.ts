@@ -11,10 +11,18 @@ import {
   messagingTriageActions,
   type Plugin,
   promoteSubactionsToActions,
+  registerCandidateActionBackstopRule,
+  registerDirectMessageHook,
   registerLocalizedExamplesProvider,
   registerSendPolicy,
   type State,
+  unregisterDirectMessageHook,
 } from "@elizaos/core";
+import {
+  getSelfControlPermissionState,
+  openSelfControlPermissionLocation,
+  requestSelfControlPermission,
+} from "@elizaos/plugin-blocker/services/website-blocker/index";
 import { BrowserBridgeAdapter } from "@elizaos/plugin-browser";
 import {
   calendarPlugin,
@@ -38,6 +46,7 @@ import { inboxPlugin } from "@elizaos/plugin-inbox/plugin";
 import { remindersPlugin } from "@elizaos/plugin-reminders";
 import { remoteDesktopPlugin } from "@elizaos/plugin-remote-desktop";
 import { XDmAdapter } from "@elizaos/plugin-x/lifeops-message-adapter";
+import type { IPermissionsRegistry, Prober } from "@elizaos/shared";
 import { blockAction } from "./actions/block.js";
 import { briefAction } from "./actions/brief.js";
 import { calendarAction } from "./actions/calendar.js";
@@ -136,6 +145,7 @@ import {
   LIFEOPS_TASK_NAME,
   registerLifeOpsTaskWorker,
 } from "./lifeops/runtime.js";
+import { createScheduledTaskCandidateBackstopRule } from "./lifeops/scheduled-task/candidate-backstop.js";
 import { completeFiredTasksOnOwnerReply } from "./lifeops/scheduled-task/inbound-reply-completion.js";
 import {
   installLifeOpsScheduledTaskEventBridge,
@@ -175,6 +185,7 @@ import {
 
 const GOOGLE_CONNECTOR_PLUGIN_PACKAGE = "@elizaos/plugin-google";
 const GOOGLE_CONNECTOR_PLUGIN_NAME = "google";
+const PERMISSIONS_REGISTRY_SERVICE = "eliza_permissions_registry";
 
 type LifeOpsMessageActionHookArgs = {
   operation: string;
@@ -184,6 +195,36 @@ type LifeOpsMessageActionHookArgs = {
   options?: HandlerOptions;
   callback?: HandlerCallback;
 };
+
+function isPermissionsRegistry(value: unknown): value is IPermissionsRegistry {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    typeof (value as { get?: unknown }).get === "function" &&
+    typeof (value as { check?: unknown }).check === "function" &&
+    typeof (value as { request?: unknown }).request === "function" &&
+    typeof (value as { openSettings?: unknown }).openSettings === "function" &&
+    typeof (value as { registerProber?: unknown }).registerProber === "function"
+  );
+}
+
+const websiteBlockingPermissionProber: Prober = {
+  id: "website-blocking",
+  check: getSelfControlPermissionState,
+  request: async () => requestSelfControlPermission(),
+  openSettings: openSelfControlPermissionLocation,
+};
+
+export function registerLifeOpsWebsiteBlockingPermissionProber(
+  runtime: IAgentRuntime,
+): boolean {
+  const service = runtime.getService(PERMISSIONS_REGISTRY_SERVICE);
+  if (!isPermissionsRegistry(service)) {
+    return false;
+  }
+  service.registerProber(websiteBlockingPermissionProber);
+  return true;
+}
 
 function getMessageText(message: Memory): string {
   return typeof message.content.text === "string" ? message.content.text : "";
@@ -885,6 +926,8 @@ const rawPersonalAssistantPlugin: Plugin = {
       );
     }
 
+    registerLifeOpsWebsiteBlockingPermissionProber(runtime);
+
     await ensureLifeOpsGooglePluginRegistered(runtime);
     await ensureLifeOpsCalendarPluginRegistered(runtime);
 
@@ -1040,22 +1083,20 @@ const rawPersonalAssistantPlugin: Plugin = {
         lifeOpsMessageActionHook?: {
           handleMessageAction: typeof handleLifeOpsMessageAction;
         };
-        lifeOpsDirectMessageHook?: {
-          handleMessageRequest: typeof handleLifeOpsDirectMessageRequest;
-        };
       }
     ).lifeOpsMessageActionHook = {
       handleMessageAction: handleLifeOpsMessageAction,
     };
-    (
-      runtime as IAgentRuntime & {
-        lifeOpsDirectMessageHook?: {
-          handleMessageRequest: typeof handleLifeOpsDirectMessageRequest;
-        };
-      }
-    ).lifeOpsDirectMessageHook = {
-      handleMessageRequest: handleLifeOpsDirectMessageRequest,
-    };
+    // Pre-LLM direct-message hook: core invokes this before the planner/model
+    // runs, letting LifeOps handle certain requests (missed-call repair,
+    // document-signature, portal-upload) deterministically.
+    registerDirectMessageHook(runtime, handleLifeOpsDirectMessageRequest);
+    // Candidate-action backstop: protect LifeOps scheduled-task candidates from
+    // the core coding-delegation backstop on genuine scheduled-task turns.
+    registerCandidateActionBackstopRule(
+      runtime,
+      createScheduledTaskCandidateBackstopRule(),
+    );
 
     // First-party adapters backed by LifeOps services. Gmail and X replace the
     // core default adapters so MESSAGE triage operations operate on real
@@ -1184,8 +1225,7 @@ const rawPersonalAssistantPlugin: Plugin = {
   dispose: async (runtime: IAgentRuntime) => {
     delete (runtime as IAgentRuntime & { lifeOpsMessageActionHook?: unknown })
       .lifeOpsMessageActionHook;
-    delete (runtime as IAgentRuntime & { lifeOpsDirectMessageHook?: unknown })
-      .lifeOpsDirectMessageHook;
+    unregisterDirectMessageHook(runtime, handleLifeOpsDirectMessageRequest);
 
     const taskNames: readonly string[] = [
       PROACTIVE_TASK_NAME,

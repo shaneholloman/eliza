@@ -1,5 +1,9 @@
 /**
- * Root App component — routing shell.
+ * Root App component and the dashboard routing shell mounted by every elizaOS
+ * front-end. It resolves the shell mode from the URL (`?shellMode=` — `full`,
+ * `chat-overlay`, `voice-*`), gates boot/pairing behind `StartupScreen`, mounts
+ * the shared `AppBackground` and first-run conductor once, and renders either
+ * the floating chat-overlay surface or the full tabbed shell.
  */
 
 import {
@@ -32,6 +36,7 @@ import {
   invokeDesktopBridgeRequest,
   subscribeDesktopBridgeEvent,
 } from "./bridge/electrobun-rpc";
+import { isElectrobunRuntime } from "./bridge/electrobun-runtime";
 import {
   NAVIGATE_SETTINGS_EVENT,
   type NavigateSettingsDetail,
@@ -47,6 +52,7 @@ import { CustomActionEditor } from "./components/custom-actions/CustomActionEdit
 import { CustomActionsPanel } from "./components/custom-actions/CustomActionsPanel";
 import { AppsPageView } from "./components/pages/AppsPageView";
 import { TutorialOverlay } from "./components/pages/tutorial/TutorialOverlay";
+import { PermissionPrimingOverlay } from "./components/permissions/PermissionPrimingOverlay";
 import { ActionBanner } from "./components/shell/ActionBanner";
 import { AssistantOverlay } from "./components/shell/AssistantOverlay";
 import { BugReportModal } from "./components/shell/BugReportModal";
@@ -66,6 +72,7 @@ import { ShellOverlays } from "./components/shell/ShellOverlays";
 import { StartupFailureView } from "./components/shell/StartupFailureView";
 import { StartupScreen } from "./components/shell/StartupScreen";
 import { SystemWarningBanner } from "./components/shell/SystemWarningBanner";
+import { TrayLauncher } from "./components/shell/TrayLauncher";
 import { useBarSurfaceWindows } from "./components/shell/useBarSurfaceWindows";
 import { useKioskViewSurfaces } from "./components/shell/useKioskViewSurfaces";
 import { Button } from "./components/ui/button";
@@ -75,14 +82,18 @@ import { AppWorkspaceChrome } from "./components/workspace/AppWorkspaceChrome";
 import { useBootConfig } from "./config/boot-config-react.hooks";
 import {
   CONNECT_EVENT,
+  dispatchNavigateViewEvent,
   FOCUS_CONNECTOR_EVENT,
   type FocusConnectorEventDetail,
+  NAVIGATE_VIEW_EVENT,
 } from "./events";
 import { adoptRemoteAgentFirstRun } from "./first-run/adopt-remote-first-run";
 import { persistMobileRuntimeModeForServerTarget } from "./first-run/mobile-runtime-mode";
 import { FirstRunConductorMount } from "./first-run/use-first-run-conductor";
+import { ModelStatusConductorMount } from "./first-run/use-model-status-conductor";
 import { BugReportProvider, useBugReportState, useContextMenu } from "./hooks";
 import { useAuthStatus } from "./hooks/useAuthStatus";
+import { useRole } from "./hooks/useRole";
 import { useSecretsManagerModalState } from "./hooks/useSecretsManagerModal";
 import { useSecretsManagerShortcut } from "./hooks/useSecretsManagerShortcut";
 import {
@@ -444,6 +455,26 @@ function ChatOverlayShell() {
   // The bar has no inline tab system, so "show a view" / "show the launcher"
   // intents open dedicated on-demand desktop windows instead (#9953 Phase 3).
   useBarSurfaceWindows();
+  const controller = useShellControllerContext();
+  const overlayOpen = controller?.isOpen ?? false;
+  // Escape collapses the overlay first — while it is open, AssistantOverlay's
+  // own Escape handler closes it. Once already collapsed, Escape hides the
+  // desktop window entirely (#12184) so the pill dismisses to the background
+  // like a summoned panel. Desktop-only (web has no window to hide).
+  useEffect(() => {
+    if (typeof document === "undefined" || !isElectrobunRuntime()) {
+      return undefined;
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape" || overlayOpen) return;
+      void invokeDesktopBridgeRequest<void>({
+        rpcMethod: "desktopHideWindow",
+        ipcChannel: "desktop:hideWindow",
+      });
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [overlayOpen]);
   return (
     <div
       data-testid="chat-overlay-shell"
@@ -455,18 +486,20 @@ function ChatOverlayShell() {
 }
 
 /**
- * Native tray popover surface (#9953 Phase 4). Renders ONLY the widget surface
- * (reusing the shell widget registry's "home" slot) inside the frameless,
- * transparent, always-on-top window the native tray anchors near its icon — no
- * app chrome. Each widget self-hides when it has nothing to show, so the popover
- * is a compact at-a-glance panel.
+ * Native tray popover surface (#9953 Phase 4 / #12184). Renders the compact
+ * launcher (the `DESKTOP_VIEW_WINDOWS` catalog + "Open Eliza", registered by
+ * the desktop host) above the shell widget registry's "home" slot inside the
+ * frameless, transparent, always-on-top window the native tray anchors near its
+ * icon — no app chrome. Each widget self-hides when it has nothing to show, so
+ * the popover is a compact at-a-glance panel + one-click launcher.
  */
 function TrayPopoverShell() {
   return (
     <div
       data-testid="tray-popover-shell"
-      className="fixed inset-0 overflow-y-auto bg-transparent p-3"
+      className="fixed inset-0 flex flex-col gap-3 overflow-y-auto bg-transparent p-3"
     >
+      <TrayLauncher />
       <WidgetHost slot="home" layout="stack" />
     </div>
   );
@@ -623,8 +656,8 @@ function useResolvedDynamicPage(tab: string): ResolvedDynamicPage | null {
  */
 /**
  * Props every app-shell page view receives, mirroring the OverlayAppContext that
- * `DynamicViewLoader` injects on web/desktop. Overlay-app views (polymarket,
- * …) read `t` / `exitToApps` from props and crash ("t is not a
+ * `DynamicViewLoader` injects on web/desktop. Overlay-app views can read
+ * `t` / `exitToApps` from props and crash ("t is not a
  * function") if mounted with none — which is exactly what happens on iOS/Android
  * where these views render through the in-process app-shell path instead of
  * DynamicViewLoader. Views that read translations from hooks ignore the extras.
@@ -1291,8 +1324,8 @@ function renderViewRouterContent({
       </TabContentView>
     );
   }
-  // Hyperliquid + Polymarket are sub-views of Wallet: the wallet family of
-  // routes shares one sub-nav rendered in the workspace chrome nav slot.
+  // Wallet-family routes share one sub-nav rendered in the workspace chrome
+  // nav slot. Plugins join it by registering app-shell pages with group=wallet.
   const walletNav = isWalletSectionPath(navigationPath) ? (
     <WalletSectionNav activePath={navigationPath} />
   ) : undefined;
@@ -1633,7 +1666,15 @@ function ContinuousChatOverlayMount(): ReactNode {
       agentStatus: s.agentStatus,
       firstRunComplete: s.firstRunComplete,
     }));
-  const slash = useSlashCommandController();
+  // #12087 Item 20: derive the slash-command authority from the authoritative
+  // role instead of the fail-open defaults. Elevated (owner-only) commands
+  // require OWNER; authenticated commands require rank ≥ USER. A remote
+  // USER/GUEST no longer sees elevated commands.
+  const { isOwner, atLeast } = useRole();
+  const slash = useSlashCommandController({
+    isElevated: isOwner,
+    isAuthorized: atLeast("USER"),
+  });
   if (!controller) return null;
   // The live agent's name drives the composer placeholder ("Ask {name}").
   // Character name wins (what the user configured), then the running agent's
@@ -1674,11 +1715,7 @@ function HomeScreenMount({
         // user-initiated tile navigation (#8792). Fire-and-forget.
         reportUserViewSwitch(target.tab);
       } else {
-        window.dispatchEvent(
-          new CustomEvent("eliza:navigate:view", {
-            detail: { viewPath: target.path },
-          }),
-        );
+        dispatchNavigateViewEvent({ viewPath: target.path });
         // The tile only carries a path; resolve the registered view id so the
         // decider keys off the same id the rest of the navigation bus uses
         // (#8792). Skip the report when no view is registered at that path.
@@ -2059,9 +2096,9 @@ export function App() {
       }
       baseHandler(event);
     };
-    window.addEventListener("eliza:navigate:view", handleNavigateView);
+    window.addEventListener(NAVIGATE_VIEW_EVENT, handleNavigateView);
     return () =>
-      window.removeEventListener("eliza:navigate:view", handleNavigateView);
+      window.removeEventListener(NAVIGATE_VIEW_EVENT, handleNavigateView);
   }, [
     setTab,
     availableViewsForDesktopTabs,
@@ -2268,6 +2305,7 @@ export function App() {
         <ShellControllerProvider>
           <ChatOverlayShell />
           <FirstRunConductorMount />
+          <ModelStatusConductorMount />
         </ShellControllerProvider>
         <BugReportModal />
       </BugReportProvider>
@@ -2463,11 +2501,22 @@ export function App() {
             transcript the overlay renders and routes first-run picks to the
             headless finish use case. Renders null. */}
         <FirstRunConductorMount />
+        {/* In-chat model-status card (headless) — while the local text model is
+            downloading/loading/missing/errored it seeds ONE live status turn
+            with cancel / switch-to-cloud / retry controls. Renders null. */}
+        <ModelStatusConductorMount />
         {/* Interactive tutorial: a persistent spotlight overlay that survives
             navigation (it sends the user to Settings, back home, …). Renders
             only when the tutorial is active (launched from the home Tutorial
             tile or the Help view). */}
         <TutorialOverlay />
+        {/* Post-login permission priming: a one-time soft-ask modal that walks
+            the user through the platform's onboarding permission set (voice,
+            location, notifications) BEFORE any OS prompt. Self-gates on
+            authenticated + firstRunComplete !== false + no active tutorial, so
+            it never collides with the in-chat first-run conductor. Renders null
+            when not eligible; re-triggerable from Settings → Permissions. */}
+        <PermissionPrimingOverlay />
         {/* Notification center, headless for now: the visible bell is hidden,
             but this still self-boots the notification store (hydrate + live
             stream) and routes interrupt toasts through ActionNotice. Restore

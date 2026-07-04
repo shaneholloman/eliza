@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type { ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { ElizaError } from "@elizaos/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 let stateDir: string;
@@ -28,6 +29,8 @@ const {
   gcUnreferencedMedia,
   isInlineSafeMime,
   sniffMarkupMime,
+  readStoredMediaBytes,
+  writeStoredMediaFile,
 } = await import("./media-store.ts");
 
 function mediaPath(fileName: string): string {
@@ -38,10 +41,21 @@ function mediaPath(fileName: string): string {
 function makeRes(): {
   res: ServerResponse;
   get: () => { status: number; headers: Record<string, unknown>; body: string };
+  /**
+   * Resolves once the piped read stream has finished writing. The Range path
+   * pipes `createReadStream(...).pipe(res)`, which opens the file on a later
+   * tick; awaiting this keeps that async read from racing `afterAll`'s temp-dir
+   * cleanup and surfacing as an unhandled ENOENT.
+   */
+  whenEnded: () => Promise<void>;
 } {
   let status = 0;
   let headers: Record<string, unknown> = {};
   const chunks: Buffer[] = [];
+  let resolveEnded: (() => void) | undefined;
+  const ended = new Promise<void>((resolve) => {
+    resolveEnded = resolve;
+  });
   const res = {
     writeHead(s: number, h: Record<string, unknown>) {
       status = s;
@@ -51,6 +65,7 @@ function makeRes(): {
     end(body?: unknown) {
       if (typeof body === "string") chunks.push(Buffer.from(body));
       else if (Buffer.isBuffer(body)) chunks.push(body);
+      resolveEnded?.();
     },
     // createReadStream(...).pipe(res) calls write/end
     write(chunk: Buffer | string) {
@@ -69,6 +84,7 @@ function makeRes(): {
   } as unknown as ServerResponse;
   return {
     res,
+    whenEnded: () => ended,
     get: () => ({
       status,
       headers,
@@ -372,6 +388,137 @@ describe("handleMediaRouteRequest (in-process / iOS path)", () => {
       405,
     );
   });
+
+  it("advertises Accept-Ranges: bytes so the WebView knows seeking works", () => {
+    const { url } = persistMediaBytes(Buffer.from("ranged"), "video/mp4");
+    expect(handleMediaRouteRequest(url, "GET").headers["Accept-Ranges"]).toBe(
+      "bytes",
+    );
+    // HEAD too — a player probes with HEAD before requesting ranges.
+    expect(handleMediaRouteRequest(url, "HEAD").headers["Accept-Ranges"]).toBe(
+      "bytes",
+    );
+  });
+
+  it("serves a satisfiable Range as 206 with the exact byte slice", () => {
+    const bytes = Buffer.from("0123456789");
+    const { url } = persistMediaBytes(bytes, "audio/mpeg");
+    const res = handleMediaRouteRequest(url, "GET", "bytes=2-5");
+    expect(res.status).toBe(206);
+    expect(res.headers["Content-Range"]).toBe("bytes 2-5/10");
+    expect(res.headers["Content-Length"]).toBe("4");
+    expect((res.body as Buffer).equals(Buffer.from("2345"))).toBe(true);
+  });
+
+  it("clamps an open-ended Range (bytes=N-) to the end of the file", () => {
+    const bytes = Buffer.from("0123456789");
+    const { url } = persistMediaBytes(bytes, "audio/mpeg");
+    const res = handleMediaRouteRequest(url, "GET", "bytes=7-");
+    expect(res.status).toBe(206);
+    expect(res.headers["Content-Range"]).toBe("bytes 7-9/10");
+    expect((res.body as Buffer).equals(Buffer.from("789"))).toBe(true);
+  });
+
+  it("serves a suffix Range (bytes=-N) as the last N bytes", () => {
+    const bytes = Buffer.from("0123456789");
+    const { url } = persistMediaBytes(bytes, "audio/mpeg");
+    const res = handleMediaRouteRequest(url, "GET", "bytes=-3");
+    expect(res.status).toBe(206);
+    expect(res.headers["Content-Range"]).toBe("bytes 7-9/10");
+    expect((res.body as Buffer).equals(Buffer.from("789"))).toBe(true);
+  });
+
+  it("clamps a too-large end to the last byte (partial overlap)", () => {
+    const bytes = Buffer.from("0123456789");
+    const { url } = persistMediaBytes(bytes, "audio/mpeg");
+    const res = handleMediaRouteRequest(url, "GET", "bytes=5-999");
+    expect(res.status).toBe(206);
+    expect(res.headers["Content-Range"]).toBe("bytes 5-9/10");
+    expect((res.body as Buffer).equals(Buffer.from("56789"))).toBe(true);
+  });
+
+  it("416s a Range whose start is past the end of the file", () => {
+    const bytes = Buffer.from("0123456789");
+    const { url } = persistMediaBytes(bytes, "audio/mpeg");
+    const res = handleMediaRouteRequest(url, "GET", "bytes=50-60");
+    expect(res.status).toBe(416);
+    expect(res.headers["Content-Range"]).toBe("bytes */10");
+  });
+
+  it("416s a suffix Range (bytes=-N) against a zero-byte file", () => {
+    // Regression (#12351 follow-up): the suffix branch used to skip the
+    // satisfiability guard and return {start:0,end:-1} for a 0-length file,
+    // yielding an invalid 206 (Content-Range: bytes 0--1/0) instead of 416.
+    const { url } = persistMediaBytes(Buffer.alloc(0), "audio/mpeg");
+    const res = handleMediaRouteRequest(url, "GET", "bytes=-5");
+    expect(res.status).toBe(416);
+    expect(res.headers["Content-Range"]).toBe("bytes */0");
+  });
+
+  it("ignores a malformed Range and serves the full 200", () => {
+    const bytes = Buffer.from("0123456789");
+    const { url } = persistMediaBytes(bytes, "audio/mpeg");
+    const res = handleMediaRouteRequest(url, "GET", "bytes=abc");
+    expect(res.status).toBe(200);
+    expect(res.headers["Content-Length"]).toBe("10");
+    expect((res.body as Buffer).equals(bytes)).toBe(true);
+  });
+
+  it("ignores a Range on a HEAD request (headers only, no 206)", () => {
+    const { url } = persistMediaBytes(Buffer.from("0123456789"), "audio/mpeg");
+    const res = handleMediaRouteRequest(url, "HEAD", "bytes=2-5");
+    expect(res.status).toBe(200);
+    expect(res.body).toBeUndefined();
+  });
+});
+
+describe("serveMediaFile Range (HTTP path)", () => {
+  it("answers a satisfiable Range with 206 + Content-Range + sliced bytes", async () => {
+    const { url } = persistMediaBytes(Buffer.from("0123456789"), "audio/mpeg");
+    const { res, get, whenEnded } = makeRes();
+    const handled = serveMediaFile(
+      { method: "GET", headers: { range: "bytes=2-5" } } as never,
+      res,
+      url,
+    );
+    expect(handled).toBe(true);
+    await whenEnded();
+    const out = get();
+    expect(out.status).toBe(206);
+    expect(out.headers["Content-Range"]).toBe("bytes 2-5/10");
+    expect(Number(out.headers["Content-Length"])).toBe(4);
+    expect(out.body).toBe("2345");
+  });
+
+  it("answers an out-of-bounds Range with 416", () => {
+    const { url } = persistMediaBytes(Buffer.from("0123456789"), "audio/mpeg");
+    const { res, get } = makeRes();
+    serveMediaFile(
+      { method: "GET", headers: { range: "bytes=50-60" } } as never,
+      res,
+      url,
+    );
+    const out = get();
+    expect(out.status).toBe(416);
+    expect(out.headers["Content-Range"]).toBe("bytes */10");
+  });
+
+  it("answers a suffix Range against a zero-byte file with 416 (not a mid-stream throw)", () => {
+    // Regression (#12351 follow-up): for a 0-length file the suffix branch
+    // returned {start:0,end:-1}; the HTTP path wrote the 206 head then
+    // createReadStream({end:-1}) threw ERR_OUT_OF_RANGE after the response had
+    // already started. It must return a clean 416 up front instead.
+    const { url } = persistMediaBytes(Buffer.alloc(0), "audio/mpeg");
+    const { res, get } = makeRes();
+    serveMediaFile(
+      { method: "GET", headers: { range: "bytes=-5" } } as never,
+      res,
+      url,
+    );
+    const out = get();
+    expect(out.status).toBe(416);
+    expect(out.headers["Content-Range"]).toBe("bytes */0");
+  });
 });
 
 describe("iOS in-process binary round-trip", () => {
@@ -434,4 +581,76 @@ describe("gcUnreferencedMedia", () => {
     expect(fs.existsSync(mediaPath(orphanNew.fileName))).toBe(true); // within grace window
     expect(result.removed).toBeGreaterThanOrEqual(1);
   });
+});
+
+// Real-fs error-path coverage for the fast-fail conversion (#12265): absence
+// still returns null/false, but a genuine I/O failure now throws a typed
+// ElizaError instead of being swallowed into a fabricated "media not found" /
+// "restored fewer files". No mocking — the failures are induced on the real fs.
+describe("readStoredMediaBytes fast-fail (#12265)", () => {
+  it("returns null for a genuinely absent file (not a failure)", () => {
+    expect(readStoredMediaBytes(`${"a".repeat(64)}.bin`)).toBeNull();
+  });
+
+  it("returns null for a path-traversal name rather than reading outside the store", () => {
+    expect(readStoredMediaBytes("../../etc/passwd")).toBeNull();
+  });
+
+  it("throws MEDIA_STORE_READ_FAILED when a stored entry is unreadable", () => {
+    // A directory sitting where the bytes should be makes readFileSync throw
+    // EISDIR — a real I/O failure distinct from absence, and root-independent.
+    const name = `${"d".repeat(64)}.bin`;
+    fs.mkdirSync(mediaPath(name), { recursive: true });
+    try {
+      let caught: unknown;
+      try {
+        readStoredMediaBytes(name);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(ElizaError);
+      expect((caught as ElizaError).code).toBe("MEDIA_STORE_READ_FAILED");
+      expect((caught as ElizaError).cause).toBeDefined();
+    } finally {
+      fs.rmdirSync(mediaPath(name));
+    }
+  });
+});
+
+describe("writeStoredMediaFile fast-fail (#12265)", () => {
+  it("returns true on a successful write and false on a traversal name", () => {
+    const name = `${"b".repeat(64)}.bin`;
+    expect(writeStoredMediaFile(name, Buffer.from("ok"))).toBe(true);
+    expect(readStoredMediaBytes(name)?.toString()).toBe("ok");
+    expect(writeStoredMediaFile("../escape.bin", Buffer.from("x"))).toBe(false);
+  });
+
+  it.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+    "throws MEDIA_STORE_WRITE_FAILED when the store dir is read-only",
+    () => {
+      // Real permission failure: point the store at a fresh dir, drop write
+      // perms on its media/ subdir, and attempt a fresh-name write. root would
+      // bypass mode bits, so skip there.
+      const prev = process.env.ELIZA_STATE_DIR;
+      const roRoot = fs.mkdtempSync(path.join(os.tmpdir(), "media-store-ro-"));
+      const roMedia = path.join(roRoot, "media");
+      fs.mkdirSync(roMedia, { recursive: true });
+      fs.chmodSync(roMedia, 0o555);
+      process.env.ELIZA_STATE_DIR = roRoot;
+      try {
+        let caught: unknown;
+        try {
+          writeStoredMediaFile(`${"e".repeat(64)}.bin`, Buffer.from("x"));
+        } catch (err) {
+          caught = err;
+        }
+        expect(caught).toBeInstanceOf(ElizaError);
+        expect((caught as ElizaError).code).toBe("MEDIA_STORE_WRITE_FAILED");
+      } finally {
+        fs.chmodSync(roMedia, 0o755);
+        fs.rmSync(roRoot, { recursive: true, force: true });
+        process.env.ELIZA_STATE_DIR = prev;
+      }
+    },
+  );
 });

@@ -18,11 +18,13 @@
  */
 
 import type { LifeOpsCalendarEvent, MeetingSession } from "@elizaos/shared";
-import { parseMeetingUrl } from "@elizaos/shared";
-
 import { client } from "@elizaos/ui/api";
 import { useAppSelector } from "@elizaos/ui/state";
 import { useCallback, useEffect, useMemo, useState } from "react";
+// View bundles externalize @elizaos/shared and the loader does not provide it,
+// so the runtime `parseMeetingUrl` value comes from a browser-safe local copy
+// (the type-only import above is erased and stays on the shared contract).
+import { parseMeetingUrl } from "./meeting-url";
 // Side-effect import installs the calendar client methods onto the ui client
 // prototype. The `/api/meetings` methods (requestMeetingBot / listMeetings) are
 // the canonical `@elizaos/ui` ones, already installed via `@elizaos/ui/api`.

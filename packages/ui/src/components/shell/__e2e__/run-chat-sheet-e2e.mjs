@@ -20,12 +20,18 @@
  * Exits non-zero on any failed assertion / console error.
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
-import { builtinModules } from "node:module";
+import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build } from "esbuild";
+import { PNG } from "pngjs";
 import { chromium } from "playwright";
+import {
+  renameRecordedVideo,
+  stubElizaCore,
+  stubNodeBuiltins,
+  stubPromptSuggestions,
+  writeFixturePage,
+} from "../../../testing/e2e-runner/index.ts";
 import {
   touchDragHold,
   touchSwipe,
@@ -34,7 +40,9 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = join(here, "output");
+const videoDir = join(outDir, "video");
 await mkdir(outDir, { recursive: true });
+await mkdir(videoDir, { recursive: true });
 
 let failures = 0;
 function assert(cond, msg) {
@@ -46,90 +54,28 @@ function near(a, b, tol) {
   return Math.abs(a - b) <= tol;
 }
 
-// 1) Bundle the fixture (stub the API-touching prompt-suggestions hook).
-const stubPromptSuggestions = {
-  name: "stub-prompt-suggestions",
-  setup(b) {
-    b.onResolve({ filter: /usePromptSuggestions$/ }, () => ({
-      path: join(here, "usePromptSuggestions.stub.ts"),
-    }));
-  },
-};
-// The overlay's import graph transitively reaches server-only @elizaos/core
-// features (plugin-manager, working-memory, todos, …) whose module-init touches
-// the `process` global and node builtins — DEAD code in the browser (never
-// executed at render; the only render-path core symbol, findInteractionRegions,
-// is test-only). Production Vite resolves core's `browser` export condition;
-// this raw-esbuild bundle does not, so replace `@elizaos/core` with a no-op
-// Proxy (mirrors run-home-screen-e2e) instead of bundling its Node graph.
-const stubElizaCore = {
-  name: "stub-eliza-core",
-  setup(b) {
-    b.onResolve({ filter: /^@elizaos\/core$/ }, (args) => ({
-      path: args.path,
-      namespace: "eliza-core-stub",
-    }));
-    b.onLoad({ filter: /.*/, namespace: "eliza-core-stub" }, () => ({
-      contents: `
-        const noop = new Proxy(() => noop, { get: () => noop });
-        module.exports = new Proxy(
-          {
-            isViewVisible: () => true,
-            dedupeModalities: (m) => Array.from(new Set(Array.isArray(m) ? m : [])),
-            findInteractionRegions: () => [],
-          },
-          { get: (t, p) => (p in t ? t[p] : noop) },
-        );
-      `,
-      loader: "js",
-    }));
-  },
-};
-const nodeBuiltins = new Set([
-  ...builtinModules,
-  ...builtinModules.map((m) => `node:${m}`),
-]);
-const stubNodeBuiltins = {
-  name: "stub-node-builtins",
-  setup(b) {
-    b.onResolve({ filter: /.*/ }, (args) => {
-      const bare = args.path.replace(/^node:/, "").split("/")[0];
-      if (
-        args.path.startsWith("node:") ||
-        nodeBuiltins.has(args.path) ||
-        builtinModules.includes(bare)
-      ) {
-        return { path: args.path, namespace: "node-stub" };
-      }
-      return null;
-    });
-    b.onLoad({ filter: /.*/, namespace: "node-stub" }, () => ({
-      contents:
-        "const n=()=>noop;const noop=new Proxy(n,{get:()=>noop});module.exports=noop;",
-      loader: "js",
-    }));
-  },
-};
-const result = await build({
-  entryPoints: [join(here, "chat-sheet-fixture.tsx")],
-  bundle: true,
-  format: "iife",
-  platform: "browser",
-  jsx: "automatic",
-  loader: { ".tsx": "tsx", ".ts": "ts" },
-  define: { "process.env.NODE_ENV": '"production"' },
-  plugins: [stubPromptSuggestions, stubElizaCore, stubNodeBuiltins],
-  write: false,
+// Bundle the fixture with the shared stubs: the API-touching prompt-suggestions
+// hook is replaced with a local stub, and @elizaos/core + node builtins (dead at
+// render in the browser; the only render-path core symbol, findInteractionRegions,
+// is test-only) with no-op proxies, mirroring the sibling shell runners.
+const url = await writeFixturePage({
+  entry: join(here, "chat-sheet-fixture.tsx"),
+  outDir,
+  htmlName: "chat-sheet.html",
+  title: "chat sheet e2e",
+  plugins: [
+    stubPromptSuggestions(join(here, "usePromptSuggestions.stub.ts")),
+    stubElizaCore(),
+    stubNodeBuiltins(),
+  ],
+  processShim: true,
+  background: "#0a0d16",
+  headHtml: "<style>.bg-bg{background-color:#0a0d16}</style>",
 });
-const js = result.outputFiles[0].text;
-const html = `<!doctype html><html><head><meta charset="utf-8"><title>chat sheet e2e</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script>window.process=window.process||{env:{NODE_ENV:"production"},platform:"browser",cwd:function(){return "/"}};</script>
-<style>html,body{margin:0;height:100%;background:#0a0d16}</style>
-</head><body><div id="root"></div><script>${js}</script></body></html>`;
-const htmlPath = join(outDir, "chat-sheet.html");
-await writeFile(htmlPath, html);
-const url = `file://${htmlPath}`;
+
+async function gotoFixture(p, href = url) {
+  await p.goto(href, { waitUntil: "domcontentloaded" });
+}
 
 // --- DOM probes ----------------------------------------------------------
 const variant = (p) =>
@@ -199,6 +145,16 @@ async function snap(p, name) {
   const file = `${String(shot).padStart(2, "0")}-${name}.png`;
   await p.screenshot({ path: join(outDir, file) });
   console.log(`  📸 ${file}`);
+}
+
+// Sample the ACTUAL rendered pixel at a viewport point (decoded from a 1px
+// screenshot clip). Proves visual paint, unlike elementFromPoint which skips
+// pointer-events:none layers — the #12178 opaque onboarding backdrop is
+// intentionally non-interactive yet must still paint over the launcher (#12364).
+async function pixelAt(p, x, y) {
+  const buf = await p.screenshot({ clip: { x, y, width: 1, height: 1 } });
+  const png = PNG.sync.read(buf);
+  return { r: png.data[0], g: png.data[1], b: png.data[2] };
 }
 
 function attachConsole(p, sink) {
@@ -464,23 +420,32 @@ try {
   // ===== DESKTOP + MOUSE =====
   const desktop = await browser.newPage({ viewport: { width: 1180, height: 820 } });
   attachConsole(desktop, sink);
-  await desktop.goto(url);
+  await gotoFixture(desktop);
   await desktop.waitForSelector('[data-testid="chat-sheet"]');
   await desktop.waitForTimeout(700);
   await runDragSuite(desktop, "mouse", "desktop");
 
-  // ===== MOBILE + TOUCH =====
-  const mobile = await browser.newPage({
+  // ===== MOBILE + TOUCH (recorded — the continuous detent drag-suite video) =====
+  const mobileCtx = await browser.newContext({
     viewport: { width: 402, height: 874 },
     hasTouch: true,
     isMobile: true,
     deviceScaleFactor: 2,
+    recordVideo: { dir: videoDir, size: { width: 402, height: 874 } },
   });
+  const mobile = await mobileCtx.newPage();
   attachConsole(mobile, sink);
-  await mobile.goto(url);
+  await gotoFixture(mobile);
   await mobile.waitForSelector('[data-testid="chat-sheet"]');
   await mobile.waitForTimeout(700);
   await runDragSuite(mobile, "touch", "mobile");
+  await mobile.close(); // flush the recorded touch drag-suite video
+  await mobileCtx.close();
+  await renameRecordedVideo({
+    videoDir,
+    outDir,
+    name: "chat-sheet-drag-suite.webm",
+  });
 
   // ===== GRABBER horizontal flick → launcher intent, REAL touch (#9943) =====
   // The collapsed grabber's horizontal swipe pages home → launcher through the
@@ -513,7 +478,7 @@ try {
       deviceScaleFactor: 2,
     });
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector(grabberSel);
     await p.waitForTimeout(700);
 
@@ -624,7 +589,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(`${url}?empty`);
+    await gotoFixture(p, `${url}?empty`);
     await p.waitForSelector('[data-testid="chat-composer-textarea"]');
     await p.waitForTimeout(650);
     assert((await p.locator('[data-testid="chat-thread"]').count()) === 0, "EMPTY: no thread/history mounted (just the input panel)");
@@ -641,7 +606,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(`${url}?phase=booting`);
+    await gotoFixture(p, `${url}?phase=booting`);
     await p.waitForSelector('[data-testid="chat-composer-textarea"]');
     await p.waitForTimeout(650);
     assert(
@@ -665,7 +630,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(`${url}?recording&phase=listening`);
+    await gotoFixture(p, `${url}?recording&phase=listening`);
     await p.waitForSelector('[data-testid="chat-composer-mic"]');
     await p.waitForTimeout(650);
     assert(
@@ -694,7 +659,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(`${url}?speaking`);
+    await gotoFixture(p, `${url}?speaking`);
     await p.waitForSelector('[data-testid="chat-composer-stop"]');
     await p.waitForTimeout(500);
     assert(
@@ -722,7 +687,7 @@ try {
     attachConsole(p, sink);
     const logs = [];
     p.on("console", (m) => logs.push(m.text()));
-    await p.goto(`${url}?unlock`);
+    await gotoFixture(p, `${url}?unlock`);
     await p.waitForSelector('[data-testid="overlay-voice-audio-unlock"]');
     await p.getByTestId("chat-sheet-grabber").focus();
     await p.keyboard.press("ArrowUp"); // open to half behind the chip
@@ -756,7 +721,7 @@ try {
     attachConsole(p, sink);
     const logs = [];
     p.on("console", (m) => logs.push(m.text()));
-    await p.goto(`${url}?transcribing&recording&speaking&phase=listening`);
+    await gotoFixture(p, `${url}?transcribing&recording&speaking&phase=listening`);
     await p.waitForSelector('[data-testid="chat-composer-mic"]');
     await p.waitForTimeout(500);
     assert(
@@ -785,7 +750,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(`${url}?phase=responding`);
+    await gotoFixture(p, `${url}?phase=responding`);
     await p.waitForSelector('[data-testid="chat-sheet-grabber"]');
     await p.waitForTimeout(500);
     await p.getByTestId("chat-sheet-grabber").focus();
@@ -800,7 +765,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-composer-textarea"]');
     await p.waitForTimeout(600);
     const input = p.getByTestId("chat-composer-textarea");
@@ -840,7 +805,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-composer-attach"]');
     await p.waitForTimeout(600);
     // 1x1 transparent PNG
@@ -866,7 +831,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-composer-mic"]');
     await p.waitForTimeout(600);
     await p.getByTestId("chat-composer-mic").click();
@@ -891,7 +856,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-composer-textarea"]');
     await p.waitForTimeout(500);
     await p.evaluate(() => window.__emitDictation?.("buy oat milk"));
@@ -935,7 +900,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-composer-mic"]');
     await p.waitForTimeout(500);
     await p.getByTestId("chat-composer-mic").click(); // tap = hands-free converse
@@ -964,7 +929,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-composer-mic"]');
     await p.waitForTimeout(500);
     const mic = p.getByTestId("chat-composer-mic");
@@ -998,7 +963,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-composer-mic"]');
     await p.waitForTimeout(500);
     const mic = p.getByTestId("chat-composer-mic");
@@ -1031,7 +996,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-composer-mic"]');
     await p.waitForTimeout(500);
     await p.getByTestId("chat-composer-mic").click(); // hands-free on
@@ -1057,7 +1022,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(`${url}?empty`);
+    await gotoFixture(p, `${url}?empty`);
     await p.waitForSelector('[data-testid="chat-composer-textarea"]');
     await p.waitForTimeout(500);
     assert(
@@ -1072,7 +1037,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-composer-textarea"]');
     await p.waitForTimeout(500);
     const ta = p.getByTestId("chat-composer-textarea");
@@ -1092,7 +1057,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-composer-textarea"]');
     await p.waitForTimeout(500);
     const focused = () =>
@@ -1152,7 +1117,7 @@ try {
         fake.dispatchEvent(new Event("resize"));
       };
     });
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(600);
 
@@ -1237,7 +1202,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(`${url}?failure=no_provider`);
+    await gotoFixture(p, `${url}?failure=no_provider`);
     await p.waitForSelector('[data-testid="chat-sheet-grabber"]');
     await p.waitForTimeout(500);
     await p.getByTestId("chat-sheet-grabber").focus();
@@ -1265,7 +1230,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet-grabber"]');
     await p.waitForTimeout(500);
     assert((await detent(p)) === "collapsed", "PILL: starts at input (collapsed)");
@@ -1275,7 +1240,7 @@ try {
     await p.waitForTimeout(SETTLE);
     assert((await detent(p)) === "pill", "PILL: slow drag-down collapses the input → pill");
     // Reset to the input peek and verify a quick FLICK down pills it too.
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet-grabber"]');
     await p.waitForTimeout(500);
     assert((await detent(p)) === "collapsed", "PILL: reset to the input peek before flick check");
@@ -1318,7 +1283,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(500);
     await gesture(p, -90, { pointer: "touch", slow: false, steps: 2 });
@@ -1348,7 +1313,7 @@ try {
     const p = await ctrl();
     attachConsole(p, sink);
     await p.emulateMedia({ reducedMotion: "reduce" });
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(600);
     await gesture(p, 120, { pointer: "mouse", slow: true });
@@ -1364,7 +1329,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(600);
     await gesture(p, 90, { pointer: "mouse", slow: false, steps: 2 });
@@ -1391,7 +1356,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(600);
     await gesture(p, 90, { pointer: "mouse", slow: false, steps: 2 });
@@ -1431,7 +1396,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(600);
     await gesture(p, 90, { pointer: "mouse", slow: false, steps: 2 });
@@ -1467,7 +1432,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(600);
     // Simulate the Android insets, then fire a resize so the overlay samples its
@@ -1515,7 +1480,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(600);
     const vh = await viewportH(p);
@@ -1589,7 +1554,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(600);
     const vh = await viewportH(p);
@@ -1647,7 +1612,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(600);
     await gesture(p, -160, { pointer: "touch", slow: false, steps: 2 });
@@ -1716,7 +1681,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet-grabber"]');
     await p.waitForTimeout(600);
     assert(
@@ -1760,7 +1725,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(500);
     await gesture(p, -160, { pointer: "touch", slow: false, steps: 2 });
@@ -1819,7 +1784,7 @@ try {
     // releasing. The resize must force-settle: pill fully back, grabber gone.
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(500);
     await gesture(p, -160, { pointer: "touch", slow: false, steps: 2 });
@@ -1863,7 +1828,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(url);
+    await gotoFixture(p);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(600);
     const vh = await viewportH(p);
@@ -1917,7 +1882,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(`${url}?streaming`);
+    await gotoFixture(p, `${url}?streaming`);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(500);
     // Open the thread so the in-flight assistant bubble is on screen.
@@ -1943,7 +1908,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(`${url}?streaming`);
+    await gotoFixture(p, `${url}?streaming`);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(400);
     // No draft while responding → STOP, and the mic is gated (not rendered).
@@ -1989,7 +1954,7 @@ try {
   {
     const p = await ctrl();
     attachConsole(p, sink);
-    await p.goto(`${url}?firstrun`);
+    await gotoFixture(p, `${url}?firstrun`);
     await p.waitForSelector('[data-testid="chat-sheet"]');
     await p.waitForTimeout(700);
     const vh = await viewportH(p);
@@ -2005,10 +1970,90 @@ try {
     assert(
       (await p
         .getByTestId("chat-composer-textarea")
-        .getAttribute("placeholder")) === "Pick an option to continue",
-      "ONBOARDING: composer placeholder is 'Pick an option to continue'",
+        .getAttribute("placeholder")) === "Ask me anything — or pick an option",
+      "ONBOARDING: composer placeholder invites typing (#12178 unlock)",
+    );
+    assert(
+      (await p
+        .getByTestId("chat-composer-textarea")
+        .isEnabled()),
+      "ONBOARDING: composer textarea is unlocked (#12178)",
     );
     await snap(p, "state-onboarding-bottom-anchored");
+
+    // OPAQUE BACKDROP (#12178 impl / #12364 proof): a solid bg-bg plane covers
+    // the launcher/home so no launcher pixel shows through — the fixture's
+    // "Workspace" view content behind the chat must be fully hidden. Assert the
+    // backdrop is present, opaque, full-viewport, solid-colored, and that the
+    // real rendered pixel over the fixture heading reads the opaque bg-bg.
+    const backdrop = await p.evaluate(() => {
+      const el = document.querySelector(
+        '[data-testid="chat-first-run-backdrop"]',
+      );
+      if (!el) return null;
+      const cs = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      return {
+        opaque: el.getAttribute("data-first-run-opaque"),
+        opacity: cs.opacity,
+        bg: cs.backgroundColor,
+        coversW: r.width >= window.innerWidth - 1,
+        coversH: r.height >= window.innerHeight - 1,
+      };
+    });
+    assert(
+      backdrop !== null,
+      "ONBOARDING: opaque first-run backdrop is mounted (#12178)",
+    );
+    assert(
+      backdrop.opaque === "true" && backdrop.opacity === "1",
+      `ONBOARDING: backdrop is fully opaque while onboarding is open (opaque ${backdrop?.opaque}, opacity ${backdrop?.opacity})`,
+    );
+    assert(
+      backdrop.bg !== "rgba(0, 0, 0, 0)" && backdrop.bg !== "transparent",
+      `ONBOARDING: backdrop paints a solid bg-bg color (got ${backdrop?.bg})`,
+    );
+    assert(
+      backdrop.coversW && backdrop.coversH,
+      "ONBOARDING: backdrop spans the whole viewport (inset-0)",
+    );
+    const headingCenter = await p.evaluate(() => {
+      const h = document.querySelector('[data-testid="view-content"] h1');
+      const r = h.getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + 4) };
+    });
+    const hidePx = await pixelAt(p, headingCenter.x, headingCenter.y);
+    assert(
+      hidePx.r < 40 && hidePx.g < 40 && hidePx.b < 50,
+      `ONBOARDING: launcher/home behind is hidden — pixel over the heading is the opaque bg-bg, not the home backdrop (got rgb(${hidePx.r}, ${hidePx.g}, ${hidePx.b}))`,
+    );
+    await snap(p, "state-onboarding-opaque-backdrop");
+
+    // COMPLETION REVEAL (#12364): drive the falling edge — the backdrop fades
+    // off its opaque state and the sheet auto-collapses, revealing the home
+    // surface cleanly.
+    await p.evaluate(() => window.__setFirstRun?.(false));
+    await p.waitForTimeout(900);
+    const revealOpaque = await p.evaluate(() => {
+      const el = document.querySelector(
+        '[data-testid="chat-first-run-backdrop"]',
+      );
+      return el ? el.getAttribute("data-first-run-opaque") : "gone";
+    });
+    assert(
+      revealOpaque !== "true",
+      `REVEAL: backdrop drops its opaque state after onboarding completes (got ${revealOpaque})`,
+    );
+    const revealPx = await pixelAt(p, headingCenter.x, headingCenter.y);
+    assert(
+      !(revealPx.r < 40 && revealPx.g < 40 && revealPx.b < 50),
+      `REVEAL: the home surface is painted again once the backdrop reveals (pixel rgb(${revealPx.r}, ${revealPx.g}, ${revealPx.b}) is no longer the opaque bg)`,
+    );
+    assert(
+      (await variant(p)) === "closed",
+      "REVEAL: the sheet auto-collapses on completion, revealing home",
+    );
+    await snap(p, "state-onboarding-reveal-home");
     await p.close();
   }
 } finally {

@@ -105,6 +105,7 @@ export function CharacterExperienceView() {
             <div className="text-sm text-muted">Loading experiences…</div>
           ) : (
             <CharacterExperienceWorkspace
+              showTitle={false}
               experiences={hubRecords}
               selectedExperienceId={selectedExperienceId}
               onSelectExperience={setSelectedExperienceId}

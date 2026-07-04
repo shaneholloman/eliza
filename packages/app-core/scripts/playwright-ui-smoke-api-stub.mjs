@@ -3,6 +3,12 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
+// Single source of the host-external view-import rewrite (owned by the agent
+// bundle route). Plain ESM so this node-run stub can import it without a build.
+import {
+  parseHostExternalSpecifiers,
+  wrapBundleAsHostExternalFactory,
+} from "../../agent/src/api/dynamic-view-host-external.mjs";
 
 const port = Number(process.env.ELIZA_UI_SMOKE_API_PORT || "31337");
 const repoRoot = path.resolve(
@@ -1508,83 +1514,6 @@ function contentTypeForSmokeViewAsset(assetPath) {
   return "application/octet-stream";
 }
 
-function convertNamedImportsToDestructuring(namedImports) {
-  return namedImports
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part) => part.replace(/\s+as\s+/u, ": "))
-    .join(", ");
-}
-
-function buildHostExternalImportReplacement(importClause, specifier, index) {
-  const moduleVar = `__eliza_dynamic_view_host_external_${index}`;
-  const lines = [
-    `const ${moduleVar} = await globalThis.__ELIZA_DYNAMIC_VIEW_IMPORT__(${JSON.stringify(specifier)});`,
-  ];
-  const trimmed = importClause.trim();
-  if (trimmed.startsWith("* as ")) {
-    lines.push(`const ${trimmed.slice("* as ".length).trim()} = ${moduleVar};`);
-    return lines.join("\n");
-  }
-  const namedMatch = trimmed.match(/^\{([\s\S]*)\}$/u);
-  if (namedMatch) {
-    lines.push(
-      `const { ${convertNamedImportsToDestructuring(namedMatch[1])} } = ${moduleVar};`,
-    );
-    return lines.join("\n");
-  }
-  const defaultAndNamedMatch = trimmed.match(/^([^,]+),\s*\{([\s\S]*)\}$/u);
-  if (defaultAndNamedMatch) {
-    lines.push(
-      `const ${defaultAndNamedMatch[1].trim()} = ${moduleVar}.default ?? ${moduleVar};`,
-    );
-    lines.push(
-      `const { ${convertNamedImportsToDestructuring(defaultAndNamedMatch[2])} } = ${moduleVar};`,
-    );
-    return lines.join("\n");
-  }
-  lines.push(`const ${trimmed} = ${moduleVar}.default ?? ${moduleVar};`);
-  return lines.join("\n");
-}
-
-function rewriteHostExternalImports(source, specifiers) {
-  if (specifiers.length === 0) return source;
-  const specifierPattern = specifiers
-    .map((item) => item.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
-    .join("|");
-  const fromImportPattern = new RegExp(
-    `import\\s+([^;]*?)\\s+from\\s+["'](${specifierPattern})["'];?`,
-    "gu",
-  );
-  const sideEffectPattern = new RegExp(
-    `import\\s+["'](${specifierPattern})["'];?`,
-    "gu",
-  );
-  let replacementIndex = 0;
-  return source
-    .replace(fromImportPattern, (_match, importClause, specifier) =>
-      buildHostExternalImportReplacement(
-        String(importClause),
-        String(specifier),
-        replacementIndex++,
-      ),
-    )
-    .replace(
-      sideEffectPattern,
-      (_match, specifier) =>
-        `await globalThis.__ELIZA_DYNAMIC_VIEW_IMPORT__(${JSON.stringify(String(specifier))});`,
-    );
-}
-
-function parseHostExternalSpecifiers(url) {
-  if (url.searchParams.get("hostExternalRuntime") !== "1") return [];
-  return (url.searchParams.get("hostExternalSpecifiers") ?? "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 function smokeViewByRequest(id, viewType) {
   return smokeViews.find(
     (view) => view.id === id && view.viewType === (viewType || "gui"),
@@ -2033,7 +1962,7 @@ function sendSmokeViewAsset(req, res, url, view, subResource) {
       const source = smokeViewBundleSource(view);
       const body =
         hostExternalSpecifiers.length > 0
-          ? rewriteHostExternalImports(source, hostExternalSpecifiers)
+          ? wrapBundleAsHostExternalFactory(source, hostExternalSpecifiers)
           : source;
       sendBinary(
         req,
@@ -2052,7 +1981,7 @@ function sendSmokeViewAsset(req, res, url, view, subResource) {
     hostExternalSpecifiers.length > 0 &&
     contentTypeForSmokeViewAsset(assetPath).startsWith("application/javascript")
       ? Buffer.from(
-          rewriteHostExternalImports(
+          wrapBundleAsHostExternalFactory(
             rawBody.toString("utf8"),
             hostExternalSpecifiers,
           ),
@@ -4693,6 +4622,14 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/api/lifeops/calendar/feed") {
     sendJson(req, res, 200, emptyLifeOpsCalendarFeed);
+    return;
+  }
+
+  // Meeting sessions (calendar view polls active sessions on mount). Return
+  // 200-empty so the calendar view renders without the catch-all 501 the
+  // page-error guard would otherwise flag.
+  if (req.method === "GET" && url.pathname === "/api/meetings") {
+    sendJson(req, res, 200, { sessions: [] });
     return;
   }
 

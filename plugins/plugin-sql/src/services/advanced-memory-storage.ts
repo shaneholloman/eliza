@@ -1,3 +1,16 @@
+/**
+ * `AdvancedMemoryStorageService` implements the runtime's `MemoryStorageProvider`
+ * on top of ordinary agent memories, storing long-term memories and session
+ * summaries as regular `Memory` rows (tagged via an `advancedMemory` envelope
+ * in `metadata`) in dedicated synthetic rooms rather than separate tables.
+ *
+ * Long-term memories are anchored to an "identity group" resolved through the
+ * optional `entity_resolution` service: entities confirmed-linked to the same
+ * person share one long-term-memory room (keyed by the lexicographically
+ * smallest entity ID in the group), so memories written under any alias in the
+ * group are visible from all of them. Session summaries are stored per-room
+ * without identity resolution.
+ */
 import {
   ChannelType,
   type IAgentRuntime,
@@ -262,6 +275,9 @@ export class AdvancedMemoryStorageService extends Service implements MemoryStora
     if (!this.runtime.hasService(ENTITY_RESOLUTION_SERVICE)) {
       return null;
     }
+    // error-policy:J4 optional-collaborator probe — null is the designed
+    // "resolution service unavailable" signal; getIdentityGroup then degrades to
+    // a single-entity group. This is an optional enhancement, not a required dep.
     try {
       const loaded = await this.runtime.getServiceLoadPromise(ENTITY_RESOLUTION_SERVICE);
       return isEntityResolutionService(loaded) ? loaded : null;

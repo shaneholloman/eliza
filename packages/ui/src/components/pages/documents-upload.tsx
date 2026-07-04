@@ -1,3 +1,9 @@
+/**
+ * The document-upload UI for `DocumentsView`: the `UploadZone` (file picker,
+ * drag-drop, pasted-text, and URL ingestion) plus its scope controls. Upload
+ * intents are handed back to the parent view's handlers; this file owns the
+ * input surface, not the network call.
+ */
 import {
   Bot,
   FileUp,
@@ -108,10 +114,13 @@ function ScopeButton({
       disabled={uploading}
       variant="ghost"
       size="sm"
-      className={`h-7 gap-1.5 rounded-full border px-2 text-2xs font-semibold transition-colors ${
+      // Borderless text tab (#10710): active = accent text on a faint wash,
+      // matching DocumentsView's ScopeFilterChip so the two scope rows read as
+      // one system (and the view stays under its border-density ceiling).
+      className={`h-7 gap-1.5 rounded-full px-2 text-2xs font-semibold transition-colors ${
         active
-          ? "border-accent/45 bg-accent/12 text-accent-fg"
-          : "border-border/30 bg-bg-muted/20 text-muted hover:border-border/55 hover:text-txt"
+          ? "bg-accent/12 text-accent"
+          : "text-muted hover:bg-bg-muted/30 hover:text-txt"
       }`}
       {...agentProps}
     >

@@ -446,6 +446,15 @@ const optionalPluginStubs = {
   // plugin-native-filesystem uses native fs APIs and is not available
   // in the mobile bundle — stub it so the runtime skips it gracefully.
   "@elizaos/plugin-native-filesystem": path.join(stubsDir, "null-plugin.cjs"),
+  // `plugin-meetings` drives headless-Chromium meeting bots via
+  // `playwright-core`, whose dependency closure carries chokidar → fsevents —
+  // a macOS-only native `.node` addon that trips the native-addon leak gate on
+  // mobile targets. plugin-discord's voice pipeline lazily
+  // `await import("@elizaos/plugin-meetings")` when a voice session starts,
+  // but Bun still resolves that dynamic import statically. A phone never
+  // hosts a Chromium meeting bot; transcripts arrive via the local API
+  // routes instead, so stub the whole package like whatsapp/signal above.
+  "@elizaos/plugin-meetings": path.join(stubsDir, "null-plugin.cjs"),
 };
 
 const stubAliases = { ...nativeStubs, ...optionalPluginStubs };
@@ -659,9 +668,7 @@ const dedupeTargets = {
   // depends on. Building from src against the same `@elizaos/core` source the
   // runtime uses keeps the adapter and the runtime in lockstep.
   //
-  // The on-disk layout is `plugins/plugin-sql/src/index.node.ts`. (An earlier
-  // refactor staged a `plugins/plugin-sql/typescript/` mirror; that's gone
-  // now and the path here was stale.)
+  // The on-disk layout is `plugins/plugin-sql/src/index.node.ts`.
   "@elizaos/plugin-sql": path.resolve(
     repoRoot,
     "plugins",

@@ -135,8 +135,8 @@ export interface HandleLiveVoiceAttributionOptions {
 	 * The ASR transcript for this turn, joined from the streaming-ASR path. When
 	 * provided it rides on `VOICE_TURN_OBSERVED` (and the turn signal) so the
 	 * merge engine's name/partner extraction (`VoiceObserver.ingestTurn`) runs
-	 * from LIVE audio — previously this was hardcoded `""`, so live recognition
-	 * could identify *who* spoke but never *what* they said (#8786). Diarization-
+	 * from LIVE audio, so live recognition identifies both *who* spoke and
+	 * *what* they said (#8786). Diarization-
 	 * only callers (audio-frame path) leave it unset; the in-process voice engine
 	 * (which has both ASR + diarization) passes the real transcript.
 	 */
@@ -147,6 +147,13 @@ export interface HandleLiveVoiceAttributionOptions {
 	 * agent's playback, not a human user.
 	 */
 	selfVoiceSimilarity?: number | null;
+	/**
+	 * Decision threshold for `selfVoiceSimilarity`. Travels with the value: a
+	 * WeSpeaker-embedding cosine against the agent's TTS centroid is decided at
+	 * `AGENT_SELF_VOICE_IMPRINT_THRESHOLD` (~0.28), not the 0.7 MFCC default —
+	 * at the default bar the production imprint (self ~0.37) could never fire.
+	 */
+	selfVoiceThreshold?: number;
 	/** True while the agent is currently playing TTS. */
 	agentSpeaking?: boolean;
 	/** Age of the most recent agent-spoken reply in ms. */
@@ -216,7 +223,8 @@ function foldSpeakerIntoSignal(
 		(opts.replyAgeMs ?? Number.POSITIVE_INFINITY) <= ECHO_WINDOW_MS;
 	const isSelfVoice =
 		typeof opts.selfVoiceSimilarity === "number" &&
-		opts.selfVoiceSimilarity >= AGENT_SELF_VOICE_THRESHOLD &&
+		opts.selfVoiceSimilarity >=
+			(opts.selfVoiceThreshold ?? AGENT_SELF_VOICE_THRESHOLD) &&
 		replyRecent;
 	if (isSelfVoice) agentShouldSpeak = false;
 

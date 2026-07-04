@@ -1,3 +1,11 @@
+/**
+ * iOS Bun-host bridge for the Capacitor local-agent runtime.
+ *
+ * The native shell starts this module over stdio, then exchanges JSON-RPC
+ * frames for in-process API routes, local model loading, downloads, voice
+ * calls, and transcript surfaces while all filesystem access stays sandboxed.
+ */
+
 import { Buffer } from "node:buffer";
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -12,6 +20,7 @@ import {
 	type Memory,
 	type MemoryMetadata,
 	ModelType,
+	type StreamChunkCallback,
 	stringToUuid,
 	type UUID,
 } from "@elizaos/core";
@@ -42,20 +51,12 @@ import {
 	resolveStoredModelPath,
 	toStoredModelPath,
 } from "../shared/local-inference-stored-path.ts";
+import {
+	type StdioBridgeRequestFrame as BridgeRequest,
+	type StdioBridgeResponseFrame as BridgeResponse,
+	createStdioBridge,
+} from "../shared/stdio-bridge.ts";
 import { runModelGrind } from "./model-grind.ts";
-
-interface BridgeRequest {
-	id?: unknown;
-	method?: unknown;
-	payload?: unknown;
-}
-
-interface BridgeResponse {
-	id: unknown;
-	ok: boolean;
-	result?: unknown;
-	error?: string;
-}
 
 interface HostCallFrame {
 	type: "host_call";
@@ -102,6 +103,35 @@ interface HttpRequestPayload {
 	bodyEncoding?: unknown;
 	timeoutMs?: unknown;
 }
+
+interface HttpStreamRequestPayload extends HttpRequestPayload {
+	/**
+	 * The stream identity the caller pre-allocated so it can attach
+	 * `agentStream*` listeners ahead of this request (the native `call`
+	 * blocks until the stream finishes, so listeners must be live first).
+	 */
+	streamId?: unknown;
+}
+
+/**
+ * One outbound stream event, carried from the bridge to the WebView as a
+ * `stream_emit` host-call. The kinds mirror the Android `agentStream*` Capacitor
+ * events so `createNativeStreamingResponse` consumes iOS streams unmodified:
+ * `response` (head) → `chunk` (base64 SSE bytes) → `complete`.
+ */
+export type StreamEmitFrame =
+	| {
+			streamId: string;
+			kind: "response";
+			status: number;
+			statusText?: string;
+			headers?: Record<string, string>;
+	  }
+	| { streamId: string; kind: "chunk"; dataBase64: string }
+	| { streamId: string; kind: "complete"; error?: string | null };
+
+/** Delivers one stream event to the native host (→ `notifyListeners`). */
+export type StreamEmitter = (frame: StreamEmitFrame) => Promise<void> | void;
 
 export interface IosBridgeBackend {
 	/**
@@ -893,6 +923,70 @@ async function fetchBackend(
 		error: `No iOS local route for ${method} ${pathname}`,
 		code: "not_found",
 	});
+}
+
+const CONVERSATION_STREAM_PATH =
+	/^\/api\/conversations\/([^/]+)\/messages\/stream$/;
+
+/**
+ * Serve the chat token stream (`POST /api/conversations/:id/messages/stream`)
+ * incrementally: the caller pre-allocated `streamId`, listeners are already
+ * attached WebView-side, and each token reaches the page as a `stream_emit`
+ * host-call while this request is in flight. Resolves once the stream completes.
+ *
+ * Only the conversation stream endpoint streams; any other `/stream` path is not
+ * a token stream and returns `501` so the caller falls back to the buffered
+ * request path rather than hanging on events that never arrive.
+ */
+export async function fetchBackendStream(
+	backend: IosBridgeBackend,
+	payload: HttpStreamRequestPayload,
+	streamId: string,
+	emit: StreamEmitter,
+): Promise<{ streamId: string; done: true }> {
+	const rawPath = typeof payload.path === "string" ? payload.path.trim() : "";
+	if (!rawPath || !isSafeLocalPath(rawPath)) {
+		throw new Error(
+			"iOS bridge http_request_stream requires a path that starts with / and is not an absolute URL",
+		);
+	}
+	const method = normalizeMethod(payload.method);
+	const { pathname } = splitPathAndQuery(rawPath);
+	const match = CONVERSATION_STREAM_PATH.exec(pathname);
+
+	if (method !== "POST" || !match) {
+		await emit({
+			streamId,
+			kind: "response",
+			status: 501,
+			statusText: statusTextForCode(501),
+			headers: { "content-type": "application/json; charset=utf-8" },
+		});
+		await emit({
+			streamId,
+			kind: "chunk",
+			dataBase64: Buffer.from(
+				JSON.stringify({
+					error: `No iOS local stream route for ${method} ${pathname}`,
+					code: "streaming_not_supported",
+				}),
+				"utf8",
+			).toString("base64"),
+		});
+		await emit({ streamId, kind: "complete", error: null });
+		return { streamId, done: true };
+	}
+
+	const conversationId = decodeURIComponent(match[1] ?? "");
+	const body = parseRequestBody(payload);
+	await streamConversationMessageResponse(
+		backend,
+		conversationId,
+		body,
+		streamId,
+		emit,
+	);
+	return { streamId, done: true };
 }
 
 function parseJsonBody(body: string): unknown {
@@ -2484,6 +2578,7 @@ function cleanIosNativeConversationReply(raw: string): string {
 async function maybeGenerateIosNativeConversationReply(
 	runtime: IAgentRuntime,
 	prompt: string,
+	onToken?: StreamChunkCallback,
 ): Promise<Record<string, unknown> | null> {
 	const installed = readInstalledModels().filter(
 		(model) => !isEmbeddingModel(model),
@@ -2504,6 +2599,9 @@ async function maybeGenerateIosNativeConversationReply(
 			maxTokens: 32,
 			temperature: 0,
 			stopSequences: ["<end_of_turn>", "<start_of_turn>"],
+			// When the caller is streaming, forward incremental model tokens so the
+			// hot chat stream renders progressively instead of one buffered frame.
+			...(onToken ? { onStreamChunk: onToken } : {}),
 		},
 		IOS_NATIVE_LLAMA_PROVIDER,
 	);
@@ -3627,6 +3725,7 @@ async function handleDirectConversationMessage(
 	backend: IosBridgeBackend,
 	conversation: IosConversation,
 	input: Record<string, unknown>,
+	onToken?: (token: string, accumulated: string) => void,
 ): Promise<Record<string, unknown>> {
 	const prompt =
 		typeof input.text === "string"
@@ -3675,9 +3774,24 @@ async function handleDirectConversationMessage(
 		// Best effort. Some adapters persist inside messageService.
 	}
 
+	// Track cumulative streamed text so incremental model chunks accumulate into
+	// the running `fullText` the client SSE parser expects. Emit tokens verbatim
+	// — inter-token whitespace is load-bearing, so no per-chunk trim/strip here
+	// (reasoning-block cleanup already happens in the model handler before the
+	// chunk reaches us, and the terminal `done` frame carries the final text).
+	let streamedAccumulated = "";
+	const emitToken = onToken
+		? (chunk: string): void => {
+				if (!chunk) return;
+				streamedAccumulated += chunk;
+				onToken(chunk, streamedAccumulated);
+			}
+		: undefined;
+
 	const nativeReply = await maybeGenerateIosNativeConversationReply(
 		backend.runtime,
 		prompt,
+		emitToken ? (chunk) => emitToken(chunk) : undefined,
 	).catch((error) => ({
 		text:
 			error instanceof Error
@@ -3717,7 +3831,10 @@ async function handleDirectConversationMessage(
 			runtime,
 			message,
 			async (content) => {
-				if (content?.text) chunks.push(content.text);
+				if (content?.text) {
+					chunks.push(content.text);
+					emitToken?.(content.text);
+				}
 				return [];
 			},
 		);
@@ -3812,6 +3929,157 @@ function bufferedConversationStreamResponse(
 		bodyBase64: Buffer.from(body, "utf8").toString("base64"),
 		bodyEncoding: "utf-8",
 	};
+}
+
+const SSE_STREAM_HEADERS: Record<string, string> = {
+	"content-type": "text/event-stream; charset=utf-8",
+	"cache-control": "no-cache, no-transform",
+	connection: "keep-alive",
+};
+
+function sseChunkBase64(payload: Record<string, unknown>): string {
+	return Buffer.from(sseEvent(payload), "utf8").toString("base64");
+}
+
+/**
+ * Drive the chat token stream for `POST /api/conversations/:id/messages/stream`
+ * over the native stream contract: emit the SSE response head, one `chunk` per
+ * incremental model token, then `complete`. Replaces
+ * `bufferedConversationStreamResponse` on the hot path so tokens render
+ * incrementally on iOS local mode (#12354).
+ *
+ * The emitter is the seam that reaches the WebView (via a `stream_emit`
+ * host-call → `notifyListeners`); a fake emitter unit-tests the whole flow with
+ * no device. A cached turn or a conversation lookup miss still resolves through
+ * this path — the client sees the same `token`/`done` frames as a live turn.
+ */
+export async function streamConversationMessageResponse(
+	backend: IosBridgeBackend,
+	conversationId: string,
+	body: Record<string, unknown>,
+	streamId: string,
+	emit: StreamEmitter,
+): Promise<void> {
+	const conversation = backend.conversations.get(conversationId);
+	if (!conversation) {
+		await emit({
+			streamId,
+			kind: "response",
+			status: 404,
+			statusText: statusTextForCode(404),
+			headers: { "content-type": "application/json; charset=utf-8" },
+		});
+		await emit({
+			streamId,
+			kind: "chunk",
+			dataBase64: Buffer.from(
+				JSON.stringify({ error: "Conversation not found" }),
+				"utf8",
+			).toString("base64"),
+		});
+		await emit({ streamId, kind: "complete", error: null });
+		return;
+	}
+
+	await emit({
+		streamId,
+		kind: "response",
+		status: 200,
+		statusText: statusTextForCode(200),
+		headers: SSE_STREAM_HEADERS,
+	});
+
+	// A serialized emit tail: keep `chunk` frames in generation order even though
+	// `emit` may be async, and let `complete` await every prior chunk.
+	let emitTail: Promise<void> = Promise.resolve();
+	let emitError: unknown = null;
+	const emitSafely = async (frame: StreamEmitFrame): Promise<void> => {
+		try {
+			await emit(frame);
+		} catch (error) {
+			emitError ??= error;
+		}
+	};
+	const enqueueChunk = (payload: Record<string, unknown>): void => {
+		const dataBase64 = sseChunkBase64(payload);
+		emitTail = emitTail.then(() =>
+			emitSafely({ streamId, kind: "chunk", dataBase64 }),
+		);
+	};
+
+	let streamedAny = false;
+	let result: Record<string, unknown>;
+	try {
+		const cached = cachedConversationMessageResult(conversation, body);
+		if (cached) {
+			result = cached;
+			const cachedText = typeof cached.text === "string" ? cached.text : "";
+			if (cachedText) {
+				streamedAny = true;
+				enqueueChunk({ type: "token", text: cachedText, fullText: cachedText });
+			}
+		} else {
+			result = await handleDirectConversationMessage(
+				backend,
+				conversation,
+				body,
+				(token, accumulated) => {
+					streamedAny = true;
+					enqueueChunk({ type: "token", text: token, fullText: accumulated });
+				},
+			);
+		}
+	} catch (error) {
+		await emitTail;
+		await emitSafely({
+			streamId,
+			kind: "chunk",
+			dataBase64: sseChunkBase64({
+				type: "error",
+				error: error instanceof Error ? error.message : String(error),
+			}),
+		});
+		await emit({
+			streamId,
+			kind: "complete",
+			error: emitError ? String(emitError) : null,
+		});
+		return;
+	}
+
+	const fullText = typeof result.text === "string" ? result.text : "";
+	// If the model handler produced no incremental tokens (e.g. a provider that
+	// only resolves the whole reply), emit the full text as one token so the
+	// client still renders content before `done`.
+	if (!streamedAny && fullText) {
+		enqueueChunk({ type: "token", text: fullText, fullText });
+	}
+
+	const agentName =
+		typeof result.agentName === "string" && result.agentName.trim()
+			? result.agentName
+			: "Eliza";
+	enqueueChunk({
+		type: "done",
+		fullText,
+		agentName,
+		completed: true,
+		...(typeof result.failureKind === "string"
+			? { failureKind: result.failureKind }
+			: {}),
+		...(result.localInference &&
+		typeof result.localInference === "object" &&
+		!Array.isArray(result.localInference)
+			? { localInference: result.localInference }
+			: {}),
+	});
+
+	await emitTail;
+	await emit({
+		streamId,
+		kind: "complete",
+		error: emitError ? String(emitError) : null,
+	});
 }
 
 export async function handleDirectCoreRoute(
@@ -4154,6 +4422,30 @@ async function dispatchBridgeRequest(
 				(request.payload ?? {}) as HttpRequestPayload,
 			);
 		}
+		case "http_request_stream": {
+			const streamPayload = (request.payload ?? {}) as HttpStreamRequestPayload;
+			const streamId =
+				typeof streamPayload.streamId === "string" &&
+				streamPayload.streamId.trim()
+					? streamPayload.streamId.trim()
+					: `ios-stream-${crypto.randomUUID()}`;
+			const backendForStream = await awaitIosBridgeBackend(
+				host,
+				bridgeTimeoutMs(payload.timeoutMs),
+				method,
+			);
+			// Each frame reaches the WebView as a `stream_emit` host-call, which the
+			// native host translates into an `agentStream*` Capacitor event. The
+			// call blocks until the stream finishes; tokens are already delivered by
+			// then, so the caller's pre-attached listeners saw them live.
+			return fetchBackendStream(
+				backendForStream,
+				streamPayload,
+				streamId,
+				(frame) =>
+					callIosHost("stream_emit", frame, 30 * 60_000).then(() => {}),
+			);
+		}
 		case "send_message": {
 			const backendForMessage = await awaitIosBridgeBackend(
 				host,
@@ -4312,34 +4604,16 @@ export async function runIosBridgeCli(
 		// tears down the engine, so this timer intentionally keeps the process up.
 	}, 2_147_483_647);
 
-	const handleLine = async (line: string) => {
-		if (!line.trim()) return;
-		let parsed: BridgeRequest;
-		try {
-			parsed = JSON.parse(line) as BridgeRequest;
-		} catch (err) {
-			writeProtocolLine({
-				id: null,
-				ok: false,
-				error: err instanceof Error ? err.message : String(err),
-			});
-			return;
-		}
+	// Buffered NDJSON request/response framing is the platform-neutral half of
+	// this loop — delegate it to the shared kernel. iOS keeps ownership of the
+	// host-call interleaving (`tryHandleHostResultLine`) via `interceptLine`, the
+	// runtime host, stdout reservation, and the status/streaming shims above.
+	const stdioBridge = createStdioBridge({
+		request: (request) => dispatchBridgeRequest(host, request),
+		writeFrame: (frame) => writeProtocolLine(frame),
+		interceptLine: (line) => tryHandleHostResultLine(line),
+	});
 
-		const id = parsed.id ?? null;
-		try {
-			const result = await dispatchBridgeRequest(host, parsed);
-			writeProtocolLine({ id, ok: true, result });
-		} catch (err) {
-			writeProtocolLine({
-				id,
-				ok: false,
-				error: err instanceof Error ? err.message : String(err),
-			});
-		}
-	};
-
-	let pending = Promise.resolve();
 	let bufferedInput = "";
 	const stdin = process.stdin as typeof process.stdin & {
 		setEncoding?: (encoding: BufferEncoding) => void;
@@ -4353,25 +4627,14 @@ export async function runIosBridgeCli(
 			if (newline < 0) break;
 			const line = bufferedInput.slice(0, newline).replace(/\r$/, "");
 			bufferedInput = bufferedInput.slice(newline + 1);
-			if (tryHandleHostResultLine(line)) continue;
-			pending = pending
-				.then(() => handleLine(line))
-				.catch((err) => {
-					writeProtocolLine({
-						id: null,
-						ok: false,
-						error: err instanceof Error ? err.message : String(err),
-					});
-				});
+			void stdioBridge.handleLine(line);
 		}
 	});
 	stdin.once("end", () => {
 		if (bufferedInput.trim()) {
 			const line = bufferedInput;
 			bufferedInput = "";
-			if (!tryHandleHostResultLine(line)) {
-				pending = pending.then(() => handleLine(line));
-			}
+			void stdioBridge.handleLine(line);
 		}
 		stopBridge?.();
 	});
@@ -4387,7 +4650,7 @@ export async function runIosBridgeCli(
 
 	await stopPromise;
 	clearInterval(keepAlive);
-	await pending.catch(() => undefined);
+	await stdioBridge.drain();
 
 	restoreStdout();
 	await shutdown();

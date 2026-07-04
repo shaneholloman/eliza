@@ -1,4 +1,13 @@
+/**
+ * Recent-conversation text extraction. Pulls the last N conversation lines from
+ * `State` (the `recentMessages` / `text` values plus the recent-messages memory
+ * array), strips language-agnostic speaker-prefix labels ("Name: …"), and dedupes
+ * while preserving order. `recentConversationTexts` additionally falls back to
+ * `runtime.getMemories` on the room's `messages` table when state alone is too
+ * thin, degrading to state-only context if that read fails.
+ */
 import { logger } from "../logger";
+import { getRecentMessagesData } from "../recent-messages-state";
 import type { IAgentRuntime, Memory, State } from "../types";
 
 // Match any speaker prefix pattern: "word:" or "word word:" at the start of a line.
@@ -6,21 +15,6 @@ import type { IAgentRuntime, Memory, State } from "../types";
 // rather than hardcoding specific English role names.
 const STATE_SPEAKER_PREFIX_RE =
 	/^[a-zA-Z\u00C0-\u024F\u0400-\u04FF\u3000-\u9FFF]{1,20}\s*:\s*/;
-
-/**
- * Read the recent-messages memory array that `recentMessagesProvider` writes
- * into `state.data.providers.RECENT_MESSAGES.data.recentMessages`.
- *
- * This is the canonical path — the provider system does not populate any
- * other location. Inlined here (rather than imported from `@elizaos/shared`)
- * because `@elizaos/core` does not depend on `@elizaos/shared`, and `shared`
- * depends on `core`; importing it would create a package cycle.
- */
-function getRecentMessagesData(state: State | undefined): Memory[] {
-	const messages =
-		state?.data?.providers?.RECENT_MESSAGES?.data?.recentMessages;
-	return Array.isArray(messages) ? (messages as Memory[]) : [];
-}
 
 function normalizeConversationLine(value: string): string {
 	return value.replace(STATE_SPEAKER_PREFIX_RE, "").trim();

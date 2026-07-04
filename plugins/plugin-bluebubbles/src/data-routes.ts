@@ -262,5 +262,9 @@ export const blueBubblesDataRoutes: Route[] = [
 		rawPath: true,
 		public: true,
 		name: "bluebubbles-webhook",
+		publicReason:
+			"BlueBubbles webhook delivery is authenticated by webhook payload validation.",
+		publicWrite:
+			"Inbound BlueBubbles webhook POST authenticated by payload validation, not the local gate.",
 	},
 ];

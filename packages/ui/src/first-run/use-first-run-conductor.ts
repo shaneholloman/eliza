@@ -1,32 +1,38 @@
-// ============================================================================
-// In-chat first-run conductor (headless).
-//
-// Onboarding is PART OF THE CHAT. When `firstRunComplete === false` this hook
-// seeds synthetic assistant turns into the SAME live transcript the floating
-// `ContinuousChatOverlay` renders (greeting → runtime CHOICE → Cloud OAuth via
-// the message `secretRequest` field → provider CHOICE → tutorial CHOICE), and
-// routes the user's first-run-scoped picks to the headless finish use case
-// (`first-run-finish.ts`). It owns NO presentation — the existing
-// `InlineWidgetText` + `SensitiveRequestBlock` renderers draw the widgets for
-// free from message fields. It registers an action handler on the first-run
-// channel so the chat's single send funnel short-circuits first-run picks
-// before they hit the server.
-//
-// Provisioning runs exactly once and POSTs /api/first-run exactly once (the
-// finish module funnels + idempotency-guards it). The real
-// `firstRunComplete` flip is DEFERRED to the tutorial-or-skip pick, so the
-// tutorial step is reachable after every runtime path.
-//
-// Confused-user guards (spam taps, stale widgets, out-of-order picks):
-// - `busyRef` — one finish/provision flow at a time; extra picks are consumed
-//   as no-ops while one is in flight.
-// - `provisionedRef` latch — after provisioning succeeds only the tutorial
-//   pick is live; leftover runtime/provider/cloud-agent widgets no-op.
-// - Strict id validation per group — garbage under the reserved prefix is
-//   consumed, never acted on and never forwarded to the server.
-// - needs-cloud-login re-offers an UNLOCKED runtime choice and arms a
-//   connect-and-resume continuation (`pendingCloudResumeRef`).
-// ============================================================================
+/**
+ * In-chat first-run conductor (headless).
+ *
+ * Onboarding is PART OF THE CHAT. When `firstRunComplete === false` this hook
+ * seeds synthetic assistant turns into the SAME live transcript the floating
+ * `ContinuousChatOverlay` renders (greeting → runtime CHOICE → Cloud OAuth via
+ * the message `secretRequest` field → provider CHOICE → tutorial CHOICE), and
+ * routes the user's first-run-scoped picks to the headless finish use case
+ * (`first-run-finish.ts`). It owns NO presentation — the existing
+ * `InlineWidgetText` + `SensitiveRequestBlock` renderers draw the widgets for
+ * free from message fields. It registers an action handler on the first-run
+ * channel so the chat's single send funnel short-circuits first-run picks
+ * before they hit the server.
+ *
+ * The composer is UNLOCKED during onboarding (#12178): the user can type
+ * freely, and a second channel handler (`setFirstRunTextHandler`) answers that
+ * free text with a local user turn + a deterministic assistant reply that
+ * varies by flow position. Free text NEVER reaches the server pre-completion —
+ * the AppContext funnel enforces that; this hook only renders the local echo.
+ *
+ * Provisioning runs exactly once and POSTs /api/first-run exactly once (the
+ * finish module funnels + idempotency-guards it). The real `firstRunComplete`
+ * flip is DEFERRED to the tutorial-or-skip pick, so the tutorial step is
+ * reachable after every runtime path.
+ *
+ * Confused-user guards (spam taps, stale widgets, out-of-order picks):
+ * - `busyRef` — one finish/provision flow at a time; extra picks are consumed
+ *   as no-ops while one is in flight.
+ * - `provisionedRef` latch — after provisioning succeeds only the tutorial
+ *   pick is live; leftover runtime/provider/cloud-agent widgets no-op.
+ * - Strict id validation per group — garbage under the reserved prefix is
+ *   consumed, never acted on and never forwarded to the server.
+ * - needs-cloud-login re-offers an UNLOCKED runtime choice and arms a
+ *   connect-and-resume continuation (`pendingCloudResumeRef`).
+ */
 
 import * as React from "react";
 import type {
@@ -45,6 +51,7 @@ import { normalizeFirstRunName } from "./first-run";
 import {
   FIRST_RUN_ACTION_PREFIX,
   setFirstRunActionHandler,
+  setFirstRunTextHandler,
 } from "./first-run-action-channel";
 import {
   clearCloudLoginPending,
@@ -74,6 +81,26 @@ function cloudFailureMessage(err: unknown): string {
 
 const RESTORE_GREETING =
   "I found an existing local backup for this device. Restore it before setup, or start fresh?";
+
+// The onboarding composer is unlocked (#12178) — the user can type freely
+// before the model is running. Free text never reaches the server; the
+// conductor answers locally with a deterministic, friendly not-ready line that
+// varies by where we are in the flow and re-points at the pending choice. Copy
+// is a plain constant (deterministic — no clocks/RNG in the render path).
+const FIRST_RUN_TEXT_REPLY = {
+  // Before a runtime is picked / mid-choice: no agent exists yet.
+  choosing:
+    "I'm not fully set up yet — pick one of the options above and I'll get your agent running. You can ask me anything the moment I'm ready.",
+  // A finish/provision call is in flight.
+  provisioning:
+    "Hang tight — I'm getting your agent ready right now. I'll answer as soon as I'm set up.",
+  // Provisioning succeeded; only the accent + tutorial wrap-up remains.
+  wrapUp:
+    "Almost there — pick a tutorial option above (or skip) and I'm all yours.",
+  // A finish failed and the recovery choice is on screen.
+  error:
+    "Setup hit a snag. Use one of the options above to try again, choose another way to run, or open Settings — then I'll be right with you.",
+} as const;
 
 function makeTurn(
   id: string,
@@ -145,10 +172,9 @@ const TUTORIAL_CHOICE = [
 ].join("\n");
 
 // Recovery choice seeded when a finish/provision flow fails (e.g. a 404 from
-// POST /api/first-run). It replaces the old "re-append the runtime question"
-// behavior — which, on a persistent finish error, re-looped the runtime prompt
-// forever with no explanation and no escape. Every option here is a real way
-// forward: retry the same runtime, pick a different one, or bail out to Settings
+// POST /api/first-run). Every option here is a real way forward — retry the
+// same runtime, pick a different one, or bail out to Settings — so a persistent
+// finish error surfaces an escape instead of re-looping the runtime prompt
 // and configure a provider by hand.
 const ERROR_CHOICE = [
   "[CHOICE:first-run id=error]",
@@ -318,6 +344,13 @@ export function useFirstRunConductor(): void {
   // only on the next commit, so a double-tap could otherwise re-fire
   // completeFirstRun/startTutorial in the gap.
   const completedRef = React.useRef(false);
+  // True while a finish error's recovery choice is on screen; steers the
+  // free-text reply persona (below). Cleared when the next pick supersedes it.
+  const erroredRef = React.useRef(false);
+  // Monotonic id source for typed-text turns: guarantees a unique user/reply id
+  // per send even when two land in the same millisecond, so `seedTurn`'s id
+  // dedup never silently swallows an acknowledged message.
+  const textTurnSeqRef = React.useRef(0);
 
   // ── Transcript seam ──────────────────────────────────────────────────────
   const seedTurn = React.useCallback(
@@ -448,11 +481,12 @@ export function useFirstRunConductor(): void {
 
   const seedError = React.useCallback(
     (message: string) => {
-      // A DISTINCT, non-looping error surface. Previously this re-appended the
-      // runtime CHOICE, so a persistent finish error (e.g. the /api/first-run
-      // 404) re-offered the same runtime question forever with no way out. Now
-      // the error turn carries its own recovery choice (retry / restart /
-      // Settings escape) so onboarding is always recoverable.
+      erroredRef.current = true;
+      // A DISTINCT, non-looping error surface: the error turn carries its own
+      // recovery choice (retry / restart / Settings escape) so onboarding is
+      // always recoverable. It must NOT re-append the runtime CHOICE — that
+      // would re-offer the same runtime question forever with no way out on a
+      // persistent finish error (e.g. the /api/first-run 404).
       seedTurn(
         makeTurn(
           `first-run:error:${Date.now()}`,
@@ -636,9 +670,11 @@ export function useFirstRunConductor(): void {
       if (completedRef.current) return true;
       // A fresh pick supersedes any armed connect-and-resume continuation —
       // including the durable cloud-resume marker (the cloud/hybrid branches
-      // below re-arm it if the new pick is a cloud one).
+      // below re-arm it if the new pick is a cloud one) — and clears the error
+      // persona so the free-text reply tracks the live step, not a stale error.
       pendingCloudResumeRef.current = null;
       clearCloudLoginPending();
+      erroredRef.current = false;
 
       if (group === "runtime") {
         if (id !== "cloud" && id !== "local" && id !== "remote") return true;
@@ -885,14 +921,48 @@ export function useFirstRunConductor(): void {
   const handleActionRef = React.useRef(handleFirstRunAction);
   handleActionRef.current = handleFirstRunAction;
 
+  // Free-text handler: the user can type freely during onboarding (#12178).
+  // Render their text as a local user turn, then a deterministic assistant
+  // reply keyed on the live flow position. Nothing here touches the network —
+  // the "no server send pre-completion" property is enforced at the AppContext
+  // funnel; this only echoes into the transcript.
+  const handleFirstRunText = React.useCallback(
+    (text: string): boolean => {
+      const trimmed = text.trim();
+      if (!trimmed) return true;
+      const reply = busyRef.current
+        ? FIRST_RUN_TEXT_REPLY.provisioning
+        : provisionedRef.current
+          ? FIRST_RUN_TEXT_REPLY.wrapUp
+          : erroredRef.current
+            ? FIRST_RUN_TEXT_REPLY.error
+            : FIRST_RUN_TEXT_REPLY.choosing;
+      const seq = (textTurnSeqRef.current += 1);
+      seedTurn({
+        id: `first-run:user:${seq}`,
+        role: "user",
+        text: trimmed,
+        timestamp: Date.now(),
+        source: "first_run",
+      });
+      seedTurn(makeTurn(`first-run:reply:${seq}`, reply));
+      return true;
+    },
+    [seedTurn],
+  );
+  const handleTextRef = React.useRef(handleFirstRunText);
+  handleTextRef.current = handleFirstRunText;
+
   // Register the interceptor + seed the greeting while onboarding is active.
   React.useEffect(() => {
     if (!active) {
       setFirstRunActionHandler(null);
+      setFirstRunTextHandler(null);
       return;
     }
     resetFirstRunPersistGuard();
     setFirstRunActionHandler((value) => handleActionRef.current(value));
+    setFirstRunTextHandler((value) => handleTextRef.current(value));
     // Cloud-login resume: if the app was cold-launched mid cloud OAuth (the
     // external browser evicted the WebView on a device), rehydrate the
     // interrupted cloud/hybrid flow instead of restarting at the greeting.
@@ -943,6 +1013,7 @@ export function useFirstRunConductor(): void {
     return () => {
       cancelled = true;
       setFirstRunActionHandler(null);
+      setFirstRunTextHandler(null);
     };
   }, [active, seedBackupRestoreChoice, seedRuntimeChoice, seedTurn]);
 }

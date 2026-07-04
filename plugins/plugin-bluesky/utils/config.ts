@@ -1,3 +1,12 @@
+/**
+ * Config resolution for the BlueSky plugin. Merges per-account settings,
+ * top-level character settings, and env vars (in that priority order) into a
+ * validated `BlueSkyConfig`, and exposes the account-enumeration and
+ * account-id normalization helpers (`listBlueSkyAccountIds`,
+ * `normalizeBlueSkyAccountId`, `readBlueSkyAccountId`,
+ * `resolveDefaultBlueSkyAccountId`) plus the per-setting typed getters
+ * (intervals, limits, feature flags) used by the service and agent manager.
+ */
 import type { IAgentRuntime } from "@elizaos/core";
 import {
 	BLUESKY_ACTION_INTERVAL,
@@ -76,6 +85,9 @@ function parseAccountsJson(
 			? (parsed as Record<string, RawBlueSkyAccountConfig>)
 			: {};
 	} catch {
+		// error-policy:J3 malformed BLUESKY_ACCOUNTS JSON is untrusted config input; the
+		// multi-account blob contributes no entries while single-account env settings
+		// still govern — a corrupt blob must not crash account discovery (accounts.test.ts).
 		return {};
 	}
 }

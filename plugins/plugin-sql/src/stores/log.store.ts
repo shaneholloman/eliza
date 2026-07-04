@@ -1,3 +1,9 @@
+/**
+ * Store for the `logs` table: append-only event records (actions, evaluators,
+ * model calls, embedding events) plus `getAgentRunSummaries`, which
+ * reconstructs per-run status/timing/counts by aggregating `run_event` and
+ * related log rows rather than reading from a dedicated runs table.
+ */
 import type {
   AgentRunCounts,
   AgentRunSummary,
@@ -8,7 +14,7 @@ import type {
   RunStatus,
   UUID,
 } from "@elizaos/core";
-import { logger } from "@elizaos/core";
+import { ElizaError } from "@elizaos/core";
 import { and, desc, eq, gte, lte, type SQL, sql } from "drizzle-orm";
 import { logTable, roomTable } from "../schema";
 import { sanitizeJsonObject } from "../utils";
@@ -60,17 +66,19 @@ export class LogStore implements Store {
         });
       });
     } catch (error) {
-      logger.error(
-        {
-          src: "plugin:sql",
+      // error-policy:J2 context-adding rethrow — a swallowed insert dropped the
+      // log entry silently; the caller decides whether a failed diagnostic write
+      // should be tolerated (J7), not this deep store method.
+      throw new ElizaError("LogStore.create failed", {
+        code: "DB_INSERT_FAILED",
+        cause: error,
+        context: {
+          table: "logs",
           type: params.type,
           roomId: params.roomId,
           entityId: params.entityId,
-          error: error instanceof Error ? error.message : String(error),
         },
-        "Failed to create log entry"
-      );
-      return;
+      });
     }
   }
 

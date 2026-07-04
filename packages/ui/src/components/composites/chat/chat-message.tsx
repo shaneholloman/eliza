@@ -1,3 +1,11 @@
+/**
+ * A single chat turn row: avatar/name grouping, the message bubble, source and
+ * voice-speaker badges, inline edit, hover action rail, and the accept/dismiss
+ * controls for proactive suggestion bubbles (#8792). Memoized with a custom
+ * equality check so streamed-token re-renders stay cheap; the mount-time
+ * entrance animation is deliberately excluded from that check (see
+ * `enterOnMount`). Presentation only — actions are delegated to callbacks.
+ */
 import { Sparkles, X } from "lucide-react";
 import type * as React from "react";
 import {
@@ -11,6 +19,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { TOUCH_TAP_MOVE_SLOP as TAP_REVEAL_MOVE_CANCEL_PX } from "../../../gestures";
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
 import { Textarea } from "../../ui/textarea";
@@ -59,11 +68,9 @@ export interface ChatMessageProps {
 }
 
 const HOVER_MEDIA_QUERY = "(hover: hover) and (pointer: fine)";
-// Tap-to-reveal move slop: finger travel past this between touchstart and
-// touchend means the gesture was a transcript scroll, not a tap, so it must
-// not toggle the action rail (mirrors the shell ThreadLine's
-// COPY_MOVE_CANCEL_PX).
-const TAP_REVEAL_MOVE_CANCEL_PX = 10;
+// Tap-to-reveal move slop (the shared TOUCH_TAP_MOVE_SLOP): finger travel past
+// this between touchstart and touchend means the gesture was a transcript
+// scroll, not a tap, so it must not toggle the action rail.
 const hoverSupportListeners = new Set<() => void>();
 let hoverMediaQuery: MediaQueryList | null = null;
 let hoverMediaQueryUnsubscribe: (() => void) | null = null;

@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 
-import { renderHook } from "@testing-library/react";
+/**
+ * The shared `useAuthenticatedQueryGate` resolving its session from the
+ * persisted localStorage JWT only — the page-reload reality where the Steward
+ * SDK context's MemoryStorage session is empty and no provider is mounted.
+ * `@capacitor/core` is doubled to exercise both web and native platforms.
+ */
+
+import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const capacitorState = vi.hoisted(() => ({ isNative: false }));
@@ -60,12 +67,10 @@ beforeEach(() => {
     value: storage,
   });
   capacitorState.isNative = false;
-  delete (globalThis as Record<string, unknown>).__ELIZA_CLOUD_AUTH_TOKEN__;
   setBootConfig({ branding: {}, apiToken: undefined });
 });
 
 afterEach(() => {
-  delete (globalThis as Record<string, unknown>).__ELIZA_CLOUD_AUTH_TOKEN__;
   vi.unstubAllGlobals();
 });
 
@@ -112,6 +117,44 @@ describe("shared cloud query gate — session from persisted JWT only (page-relo
     setBootConfig({ branding: {}, apiToken: "eliza_native_owner_key" });
 
     const { result } = renderHook(() => useAuthenticatedQueryGate());
+
+    expect(result.current.enabled).toBe(true);
+    expect(result.current.userId).toMatch(/^native-api-key:/);
+  });
+
+  it("native: ignores a local-agent bearer token in boot config", () => {
+    capacitorState.isNative = true;
+    setBootConfig({ branding: {}, apiToken: "local-agent-bearer-token" });
+
+    const { result } = renderHook(() => useAuthenticatedQueryGate());
+
+    expect(result.current.enabled).toBe(false);
+    expect(result.current.userId).toBeNull();
+  });
+
+  it("native: ignores a non-JWT (non-cloud) steward token", () => {
+    capacitorState.isNative = true;
+    localStorage.setItem(
+      "steward_session_token",
+      "legacy-local-agent-bearer-token",
+    );
+
+    const { result } = renderHook(() => useAuthenticatedQueryGate());
+
+    expect(result.current.enabled).toBe(false);
+    expect(result.current.userId).toBeNull();
+  });
+
+  it("native: refreshes the API-key session when the token sync event fires in the same view", () => {
+    capacitorState.isNative = true;
+
+    const { result } = renderHook(() => useAuthenticatedQueryGate());
+    expect(result.current.enabled).toBe(false);
+
+    setBootConfig({ branding: {}, apiToken: "eliza_native_owner_key" });
+    act(() => {
+      window.dispatchEvent(new CustomEvent("steward-token-sync"));
+    });
 
     expect(result.current.enabled).toBe(true);
     expect(result.current.userId).toMatch(/^native-api-key:/);

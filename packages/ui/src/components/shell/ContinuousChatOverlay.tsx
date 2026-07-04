@@ -52,14 +52,24 @@ import {
   TUTORIAL_CHAT_CONTROL_EVENT,
   type TutorialChatControlDetail,
 } from "../../events";
+import {
+  COPY_HOLD_MS,
+  TOUCH_TAP_MOVE_SLOP as OUTSIDE_SHEET_TAP_SLOP,
+  SHEET_DETENT_OVERSHOOT_SCALE,
+  sqrtRubberBand,
+  usePointerPressAndHold,
+  useRafCoalescer,
+} from "../../gestures";
 import { useConversationSwipeJank } from "../../hooks/useConversationSwipeJank";
 import {
   LAYOUT_SHIFT_INTENT_ATTR,
   LAYOUT_SHIFT_INTENT_TRANSIENT,
 } from "../../hooks/useLayoutShiftMonitor";
+import { usePushToTalk } from "../../hooks/usePushToTalk";
 import { Z_SHELL_OVERLAY } from "../../lib/floating-layers";
 import { cn } from "../../lib/utils";
 import { claimAssistantLaunchPayloadFromHash } from "../../platform/assistant-launch-payload";
+import { useAppSelectorShallow } from "../../state";
 import {
   clearChatDraft,
   readChatDraft,
@@ -113,6 +123,8 @@ const EMPTY_SLASH_CONTROLLER: SlashCommandController = {
   commands: [],
   loading: false,
   naturalShortcutsEnabled: false,
+  isAuthorized: false,
+  isElevated: false,
   resolveChoices: () => [],
   resolveSection: () => undefined,
   navigateTab: () => {},
@@ -189,13 +201,6 @@ export type ChatState =
  */
 export type ChatMode = "pill" | "input" | "half" | "full";
 
-/** Push-to-talk lifecycle. idle → pending (timer armed) → holding (dictating) →
- *  idle. A release while still `pending` is a quick tap (no capture started). */
-type PttPhase =
-  | { kind: "idle" }
-  | { kind: "pending"; pointerId: number; timer: number }
-  | { kind: "holding"; pointerId: number };
-
 type MotionControls = { stop: () => void };
 
 const SHEET_HALF_VH = 0.46; // fraction of viewport height at the HALF detent
@@ -207,7 +212,6 @@ const SHEET_HALF_VH = 0.46; // fraction of viewport height at the HALF detent
 // of resting free — so near-detent releases are deterministic + clean, and only
 // the clear gaps between detents keep the free-drag rest height.
 const SHEET_DETENT_MAGNET = 64;
-const OUTSIDE_SHEET_TAP_SLOP = 10;
 
 // Feature flag: the resting one-tap prompt-suggestion strip. Off for now so the
 // composer can be tested without it; flip to true to bring the strip back.
@@ -254,10 +258,6 @@ const OPEN_SPRING = {
 // maps offset → openProgress ∈ [0,1] over this distance; past it, the excess
 // flows into the thread height so pill → input → chat is one continuous motion.
 const PILL_OPEN_DISTANCE = 120;
-// Rubber-band resistance applied to drag past a detent (iOS-style overscroll).
-function rubberBand(overshoot: number): number {
-  return Math.sign(overshoot) * Math.sqrt(Math.abs(overshoot)) * 6;
-}
 
 // Glyphs (viewBox 0 0 36 36), rendered in currentColor inside a soft chip. Send
 // + mic now use lucide icons (SendHorizontal / Mic); the rest stay hand-drawn.
@@ -309,6 +309,7 @@ function SoftButton({
   onPointerDown,
   onPointerUp,
   onPointerCancel,
+  onPointerLeave,
   disabled,
   active,
   testId,
@@ -321,6 +322,7 @@ function SoftButton({
   onPointerDown?: React.PointerEventHandler<HTMLButtonElement>;
   onPointerUp?: React.PointerEventHandler<HTMLButtonElement>;
   onPointerCancel?: React.PointerEventHandler<HTMLButtonElement>;
+  onPointerLeave?: React.PointerEventHandler<HTMLButtonElement>;
   disabled?: boolean;
   active?: boolean;
   testId?: string;
@@ -339,6 +341,7 @@ function SoftButton({
       onPointerDown={disabled ? undefined : onPointerDown}
       onPointerUp={disabled ? undefined : onPointerUp}
       onPointerCancel={disabled ? undefined : onPointerCancel}
+      onPointerLeave={disabled ? undefined : onPointerLeave}
       className={cn(
         // Icon-only control: transparent, borderless, no capsule — just the
         // glyph, sized up to carry weight without the removed background. The
@@ -893,10 +896,6 @@ export function BootStatusIndicator({
  * the right. Memoized so a live drag (which re-renders the overlay on every
  * pointer-move frame) doesn't re-render every message in a long thread.
  */
-// Press-and-hold copy: a still hold this long fires; any finger travel past the
-// move threshold first cancels it (so it yields to the thread's scroll).
-const COPY_HOLD_MS = 420;
-const COPY_MOVE_CANCEL_PX = 10;
 
 /**
  * Render a user turn's text, bolding a leading slash command so a sent
@@ -1130,58 +1129,31 @@ const ThreadLine = React.memo(function ThreadLine({
   // Press-and-hold to copy an assistant answer — the only extraction affordance
   // on touch (no hover row). A still hold past COPY_HOLD_MS copies + flashes
   // "Copied" + a light haptic; real finger travel cancels so it never fights the
-  // thread's touch-pan-y scroll.
+  // thread's touch-pan-y scroll (shared usePointerPressAndHold recognizer).
   const [copied, setCopied] = React.useState(false);
-  const holdTimer = React.useRef<number | null>(null);
-  const holdStart = React.useRef<{ x: number; y: number } | null>(null);
   const copiedTimer = React.useRef<number | null>(null);
-  const clearHold = React.useCallback(() => {
-    if (holdTimer.current !== null) {
-      window.clearTimeout(holdTimer.current);
-      holdTimer.current = null;
-    }
-    holdStart.current = null;
-  }, []);
   React.useEffect(
     () => () => {
-      if (holdTimer.current !== null) window.clearTimeout(holdTimer.current);
       if (copiedTimer.current !== null)
         window.clearTimeout(copiedTimer.current);
     },
     [],
   );
   const canCopy = isAssistant && !!onCopy && message.content.trim().length > 0;
-  const copyHandlers = canCopy
-    ? {
-        onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
-          if (isNestedInteractiveTarget(e.currentTarget, e.target)) return;
-          holdStart.current = { x: e.clientX, y: e.clientY };
-          holdTimer.current = window.setTimeout(() => {
-            onCopy?.(message.content);
-            detentHaptic();
-            setCopied(true);
-            if (copiedTimer.current !== null)
-              window.clearTimeout(copiedTimer.current);
-            copiedTimer.current = window.setTimeout(
-              () => setCopied(false),
-              1100,
-            );
-            holdTimer.current = null;
-          }, COPY_HOLD_MS);
-        },
-        onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
-          const s = holdStart.current;
-          if (!s) return;
-          if (
-            Math.abs(e.clientX - s.x) > COPY_MOVE_CANCEL_PX ||
-            Math.abs(e.clientY - s.y) > COPY_MOVE_CANCEL_PX
-          )
-            clearHold();
-        },
-        onPointerUp: clearHold,
-        onPointerCancel: clearHold,
-      }
-    : null;
+  const holdBinding = usePointerPressAndHold<HTMLDivElement>({
+    enabled: canCopy,
+    durationMs: COPY_HOLD_MS,
+    canBegin: (e) => !isNestedInteractiveTarget(e.currentTarget, e.target),
+    onHold: () => {
+      onCopy?.(message.content);
+      detentHaptic();
+      setCopied(true);
+      if (copiedTimer.current !== null)
+        window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => setCopied(false), 1100);
+    },
+  });
+  const copyHandlers = canCopy ? holdBinding : null;
 
   // Click-to-reveal per-message action row (#10713): tapping a bubble reveals
   // Copy + Play (assistant) or Copy + Edit (user) beneath it; an outside tap
@@ -1655,12 +1627,15 @@ export function ContinuousChatOverlay({
   slash?: SlashCommandController;
   /**
    * True while in-chat first-run onboarding is active (`firstRunComplete ===
-   * false` upstream). The overlay opens to FULL and LOCKS there: every
-   * collapse path (Escape, outside tap, grabber pull-down/close, header
-   * launcher) is a no-op and the composer (text, attach, voice, send) is
-   * disabled, so the seeded choice/OAuth widgets are the only input. On the
-   * falling edge — onboarding just completed — the sheet auto-collapses to the
-   * input bar, revealing the home screen.
+   * false` upstream). The overlay opens to FULL and pins there: every collapse
+   * path (Escape, outside tap, grabber pull-down/close, header launcher) is a
+   * no-op, and the backdrop is OPAQUE (`bg-bg`) so the launcher/home behind is
+   * hidden. The composer TEXT + SEND are unlocked (#12178) — typed text is
+   * answered locally by the in-chat conductor and never reaches the server —
+   * while attach + mic stay disabled (no agent to take media yet); the seeded
+   * choice/OAuth widgets remain the primary input. On the falling edge —
+   * onboarding just completed — the sheet auto-collapses to the input bar and
+   * the opaque backdrop fades to the normal scrim, revealing the home screen.
    */
   firstRunOpen?: boolean;
 }): React.JSX.Element {
@@ -1696,6 +1671,19 @@ export function ContinuousChatOverlay({
   // True once the server has reported no LLM/model provider is configured (a
   // `no_provider` assistant turn). Defaulted for minimal mock controllers.
   const noProviderConfigured = controller.noProviderConfigured ?? false;
+  // Local text-model readiness (#12178 WI-4). While it `blocksSend`, the
+  // composer stays usable and the in-chat model-status card carries progress +
+  // cancel/switch controls; the placeholder tells the user they can keep typing.
+  const modelStatus = controller.modelStatus;
+  const modelBlocksSend = modelStatus?.blocksSend ?? false;
+  // The shared action funnel — the SAME seam the transcript's CHOICE widgets
+  // use. During onboarding the unlocked composer routes free text through it so
+  // it reaches the in-chat conductor (and never the server); post-onboarding it
+  // is unused here (the composer sends via `controller.send`). In stories/tests
+  // with no AppContext the store returns an inert no-op.
+  const { sendActionMessage } = useAppSelectorShallow((s) => ({
+    sendActionMessage: s.sendActionMessage,
+  }));
   // Defensive default so a minimal mock controller (stories/tests) that predates
   // the swipe-nav surface still renders without crashing.
   const conversationNav = controller.conversationNav ?? EMPTY_CONVERSATION_NAV;
@@ -2068,11 +2056,8 @@ export function ContinuousChatOverlay({
     dragPreviewVisibleRef.current = visible;
     setDragPreviewVisible(visible);
   }, []);
-  // Push-to-talk phase (single source of truth) + a label-only mirror.
-  const pttRef = React.useRef<PttPhase>({ kind: "idle" });
+  // Push-to-talk is a label-only mirror of the shared hold hook's holding phase.
   const [pttHolding, setPttHolding] = React.useState(false);
-  // Swallow exactly the one click that follows a held PTT release.
-  const suppressNextClickRef = React.useRef(false);
   const [pendingImages, setPendingImages] = React.useState<ImageAttachment[]>(
     [],
   );
@@ -2311,20 +2296,6 @@ export function ContinuousChatOverlay({
     enabled: suggestionsVisible,
   });
 
-  // Defensive unmount: clear a pending timer and stop a stuck dictation capture
-  // if the overlay unmounts mid-press (the controller outlives the overlay).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: stopRecording is stable; this runs once on unmount
-  React.useEffect(
-    () => () => {
-      const phase = pttRef.current;
-      if (phase.kind === "pending") window.clearTimeout(phase.timer);
-      if (phase.kind === "holding") stopRecording();
-      pttRef.current = { kind: "idle" };
-      suppressNextClickRef.current = false;
-    },
-    [],
-  );
-
   // Keep the transcript pinned to the latest line. On first open jump INSTANTLY
   // to the bottom — a layout effect runs before paint, so the thread never
   // flashes at the top. A NEW line (the user's own send, or a fresh reply)
@@ -2409,11 +2380,24 @@ export function ContinuousChatOverlay({
     (text: string, images: ImageAttachment[] = []) => {
       const trimmed = text.trim();
       // An image-only turn is valid; only bail when there's nothing to send.
-      if ((!trimmed && images.length === 0) || !canSend) return;
-      // During onboarding the transcript is choice-driven: free text never
-      // reaches the server. The composer controls are disabled too — this
-      // guards the event-driven entry points (prefill, dictation, slash).
-      if (firstRunOpen) return;
+      if (!trimmed && images.length === 0) return;
+      // During onboarding the composer is unlocked (#12178) but free text is
+      // answered locally by the in-chat conductor and NEVER reaches the server.
+      // Route it through the shared action funnel (classify → "conductor" →
+      // conductor text handler) — `controller.send` is never called here, so
+      // "no server send pre-completion" holds. Attach is disabled during
+      // onboarding, so any images are dropped (text-only echo).
+      if (firstRunOpen) {
+        if (trimmed) void sendActionMessage(trimmed);
+        setDraft("");
+        setSlashDismissed(false);
+        setPendingImages([]);
+        setImageError(null);
+        inputRef.current?.focus();
+        return;
+      }
+      // Post-onboarding: a stopped agent can't take a turn.
+      if (!canSend) return;
       // Successful submit: drop the persisted draft for this conversation NOW
       // (not just via the debounced persist of the now-empty draft) so a reload
       // in the debounce window can't restore an already-sent draft.
@@ -2460,7 +2444,7 @@ export function ContinuousChatOverlay({
       detentHaptic();
       inputRef.current?.focus();
     },
-    [canSend, firstRunOpen, send, viewChatBinding],
+    [canSend, firstRunOpen, sendActionMessage, send, viewChatBinding],
   );
 
   // Tapping a suggestion sends it immediately (same path as submit), so the
@@ -2515,80 +2499,32 @@ export function ContinuousChatOverlay({
     setPendingImages((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
-  // ── Push-to-talk state machine ──────────────────────────────────────────────
-  // ONE phase ref is the source of truth: idle → (press) pending → (200ms hold)
-  // holding → (release) idle. `pttHolding` mirrors only what the label needs.
-  // A quick tap releases while still "pending" (never started a capture) and
-  // falls through to handleMicClick → toggleHandsFree. A held release stops the
-  // dictation and suppresses the trailing click so it doesn't ALSO toggle.
-  const beginPushToTalkPress = React.useCallback(
-    (event: React.PointerEvent<HTMLButtonElement>) => {
-      // Only arm from idle, primary button, no draft, and no capture already
-      // live (a tap while hands-free toggles it off — handleMicClick). No
-      // `booting` guard: voice capture is independent of agent-respond readiness.
-      if (
-        pttRef.current.kind !== "idle" ||
-        event.button !== 0 ||
-        hasDraft ||
-        recording ||
-        transcriptionMode ||
-        // Voice input is gated while a reply is in flight; type + send to queue
-        // another turn instead. Re-enabled the instant the reply finishes.
-        responding
-      )
-        return;
-      const { pointerId } = event;
-      try {
-        event.currentTarget.setPointerCapture(pointerId);
-      } catch {
-        // Synthetic/detached pointer — capture is best-effort.
-      }
-      const timer = window.setTimeout(() => {
-        // Promote to holding only if still pending for THIS pointer.
-        const phase = pttRef.current;
-        if (phase.kind !== "pending" || phase.pointerId !== pointerId) return;
-        pttRef.current = { kind: "holding", pointerId };
-        setPttHolding(true);
-        // Press-and-hold = dictation: fills the composer draft (no send).
-        startRecording("dictate");
-      }, 200);
-      pttRef.current = { kind: "pending", pointerId, timer };
+  // ── Push-to-talk ────────────────────────────────────────────────────────────
+  // Press-and-hold on the mic dictates into the composer draft (no send); a
+  // quick tap falls through to handleMicClick → toggleHandsFree. The hold/tap/
+  // slide-off/click-suppression machine is the shared usePushToTalk hook — the
+  // overlay only supplies its can-begin guard and the dictation start/stop.
+  const { handlers: micHoldHandlers, shouldSuppressClick } = usePushToTalk({
+    // Arm only when idle with no draft and no capture already live (a tap while
+    // hands-free toggles it off — handleMicClick). Voice input is gated while a
+    // reply is in flight; type + send to queue another turn instead.
+    canBegin: () =>
+      !hasDraft && !recording && !transcriptionMode && !responding,
+    onHoldStart: () => {
+      setPttHolding(true);
+      startRecording("dictate");
     },
-    [hasDraft, recording, responding, startRecording, transcriptionMode],
-  );
-
-  // One funnel for BOTH pointerup (cancelled=false) and pointercancel
-  // (cancelled=true). Always clears the pending timer + releases pointer capture
-  // FIRST — before any early return — so a quick tap can never leak a stuck timer
-  // or a captured pointer (the bug that mis-routed later events).
-  const finishPushToTalkPress = React.useCallback(
-    (event: React.PointerEvent<HTMLButtonElement>, cancelled: boolean) => {
-      const phase = pttRef.current;
-      if (phase.kind === "pending") window.clearTimeout(phase.timer);
-      if (
-        typeof event.currentTarget.hasPointerCapture === "function" &&
-        event.currentTarget.hasPointerCapture(event.pointerId)
-      ) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-      pttRef.current = { kind: "idle" };
-      if (phase.kind === "holding") {
-        stopRecording();
-        setPttHolding(false);
-        // A real click follows a pointer-UP (never a cancel); suppress it so the
-        // dictation release doesn't also toggle hands-free. Setting it ONLY here
-        // means it can never leak true into the next legitimate tap.
-        if (!cancelled) suppressNextClickRef.current = true;
-      }
+    onHoldEnd: () => {
+      // Dictation always inserts into the draft; there is no submit-on-release,
+      // so a clean release and a slide-off both just stop the capture.
+      stopRecording();
+      setPttHolding(false);
     },
-    [stopRecording],
-  );
+  });
 
   const handleMicClick = React.useCallback(() => {
-    if (suppressNextClickRef.current) {
-      suppressNextClickRef.current = false;
-      return;
-    }
+    // Swallow exactly the one click that follows a held PTT release.
+    if (shouldSuppressClick()) return;
     // While transcribing, the mic is the master voice control: a tap turns the
     // mic OFF, which also ends transcription (mic = parent — turning off the mic
     // turns off transcript). This is distinct from the transcript button, which
@@ -2614,6 +2550,7 @@ export function ContinuousChatOverlay({
     toggleHandsFree,
     transcriptionMode,
     stopTranscriptionAndMic,
+    shouldSuppressClick,
   ]);
 
   const hasThread = visibleMessages.length > 0;
@@ -2657,36 +2594,35 @@ export function ContinuousChatOverlay({
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, []);
+  // Coalesce the high-rate vv `scroll` to at most one commit per frame (shared
+  // useRafCoalescer) so the keyboard-animation storm can't drive >60 forced
+  // style reads + setStates/s.
+  const viewportSync = useRafCoalescer<void>(() => {
+    // Bail out of the re-render when the viewport values are unchanged — vv
+    // `scroll` fires constantly while the keyboard animates but the height/
+    // inset frequently don't actually move between events.
+    setViewport((prev) => {
+      const next = readViewport();
+      return prev.height === next.height &&
+        prev.keyboardInset === next.keyboardInset &&
+        prev.innerHeight === next.innerHeight
+        ? prev
+        : next;
+    });
+    const el = overlayRef.current;
+    if (el) {
+      const pad = Number.parseFloat(getComputedStyle(el).paddingBottom) || 0;
+      setBottomPad((prev) => (prev === pad ? prev : pad));
+    }
+  });
+  // Depend on the coalescer's stable methods, NOT the wrapper object (which is a
+  // fresh literal each render) — otherwise this effect re-runs every render and
+  // re-fires settleDragRef mid-drag, stranding an in-progress sheet gesture.
+  const scheduleViewportSync = viewportSync.schedule;
+  const cancelViewportSync = viewportSync.cancel;
   React.useEffect(() => {
     if (typeof window === "undefined") return undefined;
-    const commit = () => {
-      // Bail out of the re-render when the viewport values are unchanged — vv
-      // `scroll` fires constantly while the keyboard animates but the height/
-      // inset frequently don't actually move between events.
-      setViewport((prev) => {
-        const next = readViewport();
-        return prev.height === next.height &&
-          prev.keyboardInset === next.keyboardInset &&
-          prev.innerHeight === next.innerHeight
-          ? prev
-          : next;
-      });
-      const el = overlayRef.current;
-      if (el) {
-        const pad = Number.parseFloat(getComputedStyle(el).paddingBottom) || 0;
-        setBottomPad((prev) => (prev === pad ? prev : pad));
-      }
-    };
-    // Coalesce the high-rate vv `scroll` to at most one commit per frame so the
-    // keyboard-animation storm can't drive >60 forced style reads + setStates/s.
-    let rafId = 0;
-    const sync = () => {
-      if (rafId !== 0) return;
-      rafId = requestAnimationFrame(() => {
-        rafId = 0;
-        commit();
-      });
-    };
+    const sync = () => scheduleViewportSync(undefined);
     // A real WINDOW resize (rotation/desktop resize) must never strand the
     // pill↔input morph mid-crossfade — rotation often cancels the in-flight
     // pointer with no pointerup, leaving the drag orphaned. Re-settle to a clean
@@ -2704,12 +2640,12 @@ export function ContinuousChatOverlay({
     vv?.addEventListener("resize", sync);
     vv?.addEventListener("scroll", sync, { passive: true });
     return () => {
-      if (rafId !== 0) cancelAnimationFrame(rafId);
+      cancelViewportSync();
       window.removeEventListener("resize", syncAndSettleWindow);
       vv?.removeEventListener("resize", sync);
       vv?.removeEventListener("scroll", sync);
     };
-  }, [readViewport]);
+  }, [scheduleViewportSync, cancelViewportSync]);
   const viewportH = viewport.height;
   const keyboardInset = viewport.keyboardInset;
 
@@ -2863,7 +2799,9 @@ export function ContinuousChatOverlay({
   // Map a raw drag height: rubber-band past FULL, hard-clamp the bottom to 0.
   const clampHeight = React.useCallback(
     (raw: number) =>
-      raw > openH ? openH + rubberBand(raw - openH) : Math.max(0, raw),
+      raw > openH
+        ? openH + sqrtRubberBand(raw - openH, SHEET_DETENT_OVERSHOOT_SCALE)
+        : Math.max(0, raw),
     [openH],
   );
   // Backdrop dimming + the suggestion-strip fade follow the live height; the
@@ -3148,6 +3086,26 @@ export function ContinuousChatOverlay({
     }
     if (was) goToDetent("collapsed");
   }, [firstRunOpen, goToDetent]);
+
+  // First-run opaque backdrop (#12178). While onboarding pins the sheet FULL,
+  // the backdrop is an OPAQUE `bg-bg` layer that hides the launcher/home behind
+  // the chat — the normal translucent gradient scrim would let them show
+  // through. On the falling edge (onboarding just completed) it fades opaque →
+  // transparent over ~400ms in step with the one-shot auto-collapse above,
+  // revealing home/launcher underneath (kept mounted, warm); reduced-motion
+  // cuts straight to hidden. `off` unmounts the layer for ordinary sessions.
+  const [firstRunBackdrop, setFirstRunBackdrop] = React.useState<
+    "opaque" | "revealing" | "off"
+  >(firstRunOpen ? "opaque" : "off");
+  React.useEffect(() => {
+    if (firstRunOpen) {
+      setFirstRunBackdrop("opaque");
+      return;
+    }
+    setFirstRunBackdrop((prev) =>
+      prev === "opaque" ? (reduce ? "off" : "revealing") : prev,
+    );
+  }, [firstRunOpen, reduce]);
 
   // Onboarding grows from the BOTTOM: size the sheet to its content (capped at
   // full) via the freeH rest-height seam, so the greeting + choice widget sit
@@ -3609,6 +3567,13 @@ export function ContinuousChatOverlay({
   );
 
   const submit = React.useCallback(() => {
+    // Onboarding: skip slash/shortcut resolution entirely — every submit is
+    // answered by the in-chat conductor, so nothing runs a command or reaches
+    // the server (submitText routes free text to the conductor).
+    if (firstRunOpen) {
+      submitText(draft, pendingImages);
+      return;
+    }
     const shortcut =
       pendingImages.length === 0
         ? resolveClientShortcutExecution(
@@ -3618,6 +3583,10 @@ export function ContinuousChatOverlay({
             {
               allowNatural: slash.naturalShortcutsEnabled,
               resolveChoices: slash.resolveChoices,
+              // #12087 Item 20: re-apply the sender's real authority to the
+              // natural-language path so it matches the visible menu.
+              isAuthorized: slash.isAuthorized,
+              isElevated: slash.isElevated,
             },
           )
         : null;
@@ -3626,7 +3595,7 @@ export function ContinuousChatOverlay({
       return;
     }
     submitText(draft, pendingImages);
-  }, [draft, pendingImages, runExecution, slash, submitText]);
+  }, [draft, pendingImages, firstRunOpen, runExecution, slash, submitText]);
 
   const pickSlashItem = React.useCallback(
     (index: number) => {
@@ -4259,6 +4228,35 @@ export function ContinuousChatOverlay({
           pointerEvents: "none",
         }}
       />
+
+      {/* First-run opaque backdrop (#12178): while onboarding is open this
+          OPAQUE `bg-bg` layer sits ABOVE the gradient scrim and BELOW the glass
+          panel, so no launcher/home pixel shows through — including behind the
+          translucent panel glass. On completion it fades to transparent (~400ms)
+          in step with the one-shot collapse, revealing the launcher warm
+          underneath; reduced-motion cuts. Pointer-transparent like the scrim. */}
+      {firstRunBackdrop !== "off" ? (
+        <motion.div
+          aria-hidden="true"
+          data-testid="chat-first-run-backdrop"
+          data-first-run-opaque={
+            firstRunBackdrop === "opaque" ? "true" : "false"
+          }
+          className="fixed inset-0 bg-bg"
+          initial={false}
+          animate={{ opacity: firstRunBackdrop === "opaque" ? 1 : 0 }}
+          transition={{
+            duration: firstRunBackdrop === "revealing" ? 0.4 : 0,
+            ease: "easeInOut",
+          }}
+          onAnimationComplete={() => {
+            setFirstRunBackdrop((prev) =>
+              prev === "revealing" ? "off" : prev,
+            );
+          }}
+          style={{ pointerEvents: "none" }}
+        />
+      ) : null}
 
       {/* No live interim transcript is shown above the composer while
           listening — the spoken words land as the sent message when the turn
@@ -4983,19 +4981,23 @@ export function ContinuousChatOverlay({
                     collapse();
                   }
                 }}
-                // During onboarding the transcript's choice widgets are the
-                // only input: typing is disabled until first-run completes.
+                // The composer is unlocked during onboarding (#12178): typing is
+                // always allowed. Free text is answered locally by the in-chat
+                // conductor and never reaches the server (submitText routes it).
                 // (This surface's strings are plain literals by design — see
                 // the imageError note above.)
-                disabled={firstRunOpen}
                 placeholder={
                   firstRunOpen
-                    ? "Pick an option to continue"
+                    ? "Ask me anything — or pick an option"
                     : noProviderConfigured
                       ? "Connect a model provider in Settings to chat"
-                      : booting
-                        ? `Ask ${agentName} — waking up…`
-                        : (viewChatBinding?.placeholder ?? `Ask ${agentName}`)
+                      : modelBlocksSend
+                        ? modelStatus?.kind === "downloading"
+                          ? `Downloading ${modelStatus.modelName ?? "your model"} — you can keep typing`
+                          : `Getting ${modelStatus?.modelName ?? "your model"} ready — you can keep typing`
+                        : booting
+                          ? `Ask ${agentName} — waking up…`
+                          : (viewChatBinding?.placeholder ?? `Ask ${agentName}`)
                 }
                 aria-label="message"
                 data-testid="chat-composer-textarea"
@@ -5008,10 +5010,9 @@ export function ContinuousChatOverlay({
                 // and only when a slash catalog is wired in — a plain message
                 // box otherwise.
                 {...comboboxAria}
-                // During onboarding the composer is frozen (choice widgets are
-                // the only input), so brighten the placeholder from the resting
-                // 45% to 70% — a directive hint the user can actually read,
-                // rather than a greyed-out box that reads as dead.
+                // During onboarding the placeholder is a directive hint ("Ask me
+                // anything — or pick an option"), so brighten it from the resting
+                // 45% to 70% so it reads clearly beside the seeded choices.
                 className={`max-h-[8.5rem] min-h-8 min-w-0 flex-1 resize-none self-center border-none bg-transparent px-1.5 py-1 text-left text-sm leading-relaxed text-white/[0.92] outline-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
                   firstRunOpen
                     ? "placeholder:text-white/70"
@@ -5065,7 +5066,11 @@ export function ContinuousChatOverlay({
                             ? "send another"
                             : "send"
                       }
-                      disabled={!canSend || firstRunOpen}
+                      // During onboarding the send button stays live regardless
+                      // of agent readiness — a typed message reaches the in-chat
+                      // conductor, not the (absent) agent. Post-onboarding a
+                      // stopped agent disables it as before.
+                      disabled={!firstRunOpen && !canSend}
                       // Keep focus in the textarea on tap: without this the
                       // button steals focus, the textarea blurs, the keyboard
                       // retracts and the composer relayouts between pointerdown
@@ -5094,8 +5099,8 @@ export function ContinuousChatOverlay({
                         pttHolding
                           ? // Press-and-hold dictates into the composer draft; a
                             // release drops the transcript into the text box and
-                            // does NOT send (see beginPushToTalkPress /
-                            // setDictationSink). Label the real behavior.
+                            // does NOT send (usePushToTalk onHoldEnd). Label the
+                            // real behavior.
                             "release to insert"
                           : transcriptionMode
                             ? "stop transcription"
@@ -5110,9 +5115,10 @@ export function ContinuousChatOverlay({
                       disabled={firstRunOpen}
                       active={recording || handsFree || transcriptionMode}
                       onClick={handleMicClick}
-                      onPointerDown={beginPushToTalkPress}
-                      onPointerUp={(e) => finishPushToTalkPress(e, false)}
-                      onPointerCancel={(e) => finishPushToTalkPress(e, true)}
+                      onPointerDown={micHoldHandlers.onPointerDown}
+                      onPointerUp={micHoldHandlers.onPointerUp}
+                      onPointerCancel={micHoldHandlers.onPointerCancel}
+                      onPointerLeave={micHoldHandlers.onPointerLeave}
                       testId="chat-composer-mic"
                     />
                   )}

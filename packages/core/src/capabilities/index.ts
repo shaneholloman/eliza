@@ -1,4 +1,22 @@
+/**
+ * Environment-agnostic capability-router contract and its two reference
+ * implementations. `ElizaCapabilityRouter` is the surface a host exposes to an
+ * Eliza agent for filesystem, terminal (pty), git, local-model, and
+ * remote-plugin capabilities; the concrete router service registers under
+ * `CAPABILITY_ROUTER_SERVICE_TYPE` and is retrieved with `getCapabilityRouter`.
+ *
+ * `UnavailableCapabilityRouter` fails every call with a structured
+ * `CapabilityError` (the fallback where no host capabilities exist).
+ * `RuntimeBrokerCapabilityRouter` forwards calls over an `invokeRuntime` broker
+ * and strictly decodes every response — rejecting malformed payloads,
+ * control-character / header injection, unsafe asset paths and URLs, and
+ * reserved service-method names before they reach a caller.
+ * `CAPABILITY_ROUTER_PROTOCOL_FIXTURE` is the canonical decoder-valid payload
+ * that pins the wire protocol.
+ */
 import type { JsonObject, JsonValue } from "../types/primitives";
+
+export * from "./sandbox-factory";
 
 export const CAPABILITY_ROUTER_SERVICE_TYPE = "capability-router" as const;
 
@@ -214,6 +232,8 @@ export type RemotePluginRouteManifest = {
 	path: string;
 	name?: string;
 	public?: boolean;
+	publicReason?: string;
+	publicWrite?: string;
 	description?: string;
 };
 
@@ -839,6 +859,8 @@ export const CAPABILITY_ROUTER_PROTOCOL_FIXTURE = {
 				path: "/fixture/route",
 				public: true,
 				name: "fixture-route",
+				publicReason:
+					"Capability-router fixture route is unauthenticated test transport.",
 			},
 		],
 		views: [
@@ -3306,14 +3328,24 @@ function requireRemotePluginRoute(
 	validateRemotePluginRouteMethod(routeMethod, "method", method, true);
 	const name = optionalString(object, "name", method);
 	const isPublic = optionalBoolean(object, "public", method);
+	const publicReason = optionalString(object, "publicReason", method);
+	const publicWrite = optionalString(object, "publicWrite", method);
 	const description = optionalString(object, "description", method);
 	const path = requireNonEmptyString(object, "path", method);
 	validateRemotePluginPath(path, "path", method);
+	if (isPublic === true && !publicReason?.trim()) {
+		throw decodeError(
+			method,
+			"publicReason must be a non-empty string for public routes.",
+		);
+	}
 	return {
 		method: routeMethod,
 		path,
 		...(name === undefined ? {} : { name }),
 		...(isPublic === undefined ? {} : { public: isPublic }),
+		...(publicReason === undefined ? {} : { publicReason }),
+		...(publicWrite === undefined ? {} : { publicWrite }),
 		...(description === undefined ? {} : { description }),
 	};
 }

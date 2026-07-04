@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-//
-// Transport-bridge regression for the cloud dashboard's `api-client`. The
-// load-bearing guarantee: the WEB path stays same-origin-only and STILL throws
-// `CROSS_ORIGIN_API_URL` on any cross-origin absolute URL, while native /
-// Electrobun resolves to the single allowlisted Eliza Cloud API host and rides
-// `CapacitorHttp` — but ONLY that one host (every other cross-origin target
-// still throws, even on native).
+
+/**
+ * Transport-bridge contract for the cloud dashboard's `api-client`. The
+ * load-bearing guarantee: the WEB path stays same-origin-only and throws
+ * `CROSS_ORIGIN_API_URL` on any cross-origin absolute URL, while native /
+ * Electrobun resolves to the single allowlisted Eliza Cloud API host and rides
+ * `CapacitorHttp` — but ONLY that one host (every other cross-origin target
+ * still throws, even on native). `@capacitor/core` is doubled to toggle native.
+ */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -265,7 +267,7 @@ describe("cloud api-client transport bridge", () => {
   // never the Steward JWT — native must fall back to it, web must not change.
 
   describe("cloud API key auth fallback (#11930)", () => {
-    const CLOUD_API_KEY = "eliza-cloud-owner-api-key";
+    const CLOUD_API_KEY = "eliza_cloud_owner_api_key";
 
     function nativeOk(): void {
       capacitorMocks.request.mockResolvedValue({
@@ -274,10 +276,6 @@ describe("cloud api-client transport bridge", () => {
         headers: {},
       });
     }
-
-    afterEach(() => {
-      delete (globalThis as Record<string, unknown>).__ELIZA_CLOUD_AUTH_TOKEN__;
-    });
 
     it("native: authorizes with the cloud API key when NO Steward token exists (the #11930 401 path)", async () => {
       capacitorState.isNative = true;
@@ -299,6 +297,23 @@ describe("cloud api-client transport bridge", () => {
           }),
         }),
       );
+    });
+
+    it("native: does not send a local-agent bearer token as Cloud authorization", async () => {
+      capacitorState.isNative = true;
+      window.localStorage.removeItem(STEWARD_TOKEN_KEY);
+      setBootConfig({
+        branding: {},
+        cloudApiBase: "https://www.elizacloud.ai",
+        apiToken: "local-agent-bearer-token",
+      });
+      nativeOk();
+
+      await api("/api/v1/apps");
+
+      const call = capacitorMocks.request.mock.calls[0]?.[0];
+      expect(call?.url).toBe("https://api.elizacloud.ai/api/v1/apps");
+      expect(call?.headers.authorization).toBeUndefined();
     });
 
     it("native: a live Steward JWT still WINS over the cloud API key when both exist", async () => {
@@ -345,29 +360,6 @@ describe("cloud api-client transport bridge", () => {
         }),
       );
       expect(window.localStorage.getItem(STEWARD_TOKEN_KEY)).toBeNull();
-    });
-
-    it("native: the __ELIZA_CLOUD_AUTH_TOKEN__ global outranks the REST token, matching getCloudAuthToken()", async () => {
-      capacitorState.isNative = true;
-      window.localStorage.removeItem(STEWARD_TOKEN_KEY);
-      (globalThis as Record<string, unknown>).__ELIZA_CLOUD_AUTH_TOKEN__ =
-        "legacy-global-cloud-token";
-      setBootConfig({
-        branding: {},
-        cloudApiBase: "https://www.elizacloud.ai",
-        apiToken: CLOUD_API_KEY,
-      });
-      nativeOk();
-
-      await api("/api/v1/apps");
-
-      expect(capacitorMocks.request).toHaveBeenCalledWith(
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            authorization: "Bearer legacy-global-cloud-token",
-          }),
-        }),
-      );
     });
 
     it("web: stays byte-identical — NO Authorization header from the REST token without a Steward JWT", async () => {

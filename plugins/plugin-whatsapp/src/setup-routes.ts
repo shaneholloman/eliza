@@ -429,6 +429,7 @@ export const whatsappSetupRoutes: Route[] = [
     handler: handleWebhookVerify,
     rawPath: true,
     public: true, // Meta webhook verification must bypass auth
+    publicReason: "Meta webhook verification must be reachable before local auth.",
   },
   {
     name: "whatsapp-webhook-event",
@@ -437,6 +438,9 @@ export const whatsappSetupRoutes: Route[] = [
     handler: handleWebhookEvent,
     rawPath: true,
     public: true, // Meta webhook delivery must bypass auth
+    publicReason: "Meta webhook delivery is authenticated by WhatsApp signature checks.",
+    publicWrite:
+      "Inbound Meta webhook POST authenticated by the WhatsApp payload signature, not the local gate.",
   },
   {
     type: "POST",

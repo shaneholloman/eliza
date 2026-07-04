@@ -1,3 +1,6 @@
+/**
+ * WITHDRAW_APP_EARNINGS action tests: the money-out two-phase confirm and the frozen-snapshot guard. The @elizaos/cloud-sdk client is faked (helpers.ts, SDK boundary only); the action runs for real.
+ */
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 import type { WithdrawAppEarningsRequest } from "@elizaos/cloud-sdk";
 import type { ConnectorCta } from "../src/safety.ts";
@@ -305,9 +308,8 @@ describe("WITHDRAW_APP_EARNINGS", () => {
 
   it("MONEY REGRESSION: planner-nested amount stages $50, NOT the full balance", async () => {
     // Real planner path (execute-planned-tool-call.ts): validated args arrive
-    // under options.parameters and the text carries no digits. The old
-    // top-level-only read missed the amount → requested=null → the FULL $100
-    // balance was staged and a confirm withdrew all of it.
+    // under options.parameters and the text carries no digits. Losing that
+    // nested amount would stage the full withdrawable balance.
     const withdrawals = trackWithdrawals();
     const runtime = keyedRuntime();
     const cb = captureCallback();
@@ -336,9 +338,8 @@ describe("WITHDRAW_APP_EARNINGS", () => {
   });
 
   it("REGRESSION: a digit inside the app name never reads as an amount", async () => {
-    // "withdraw my Acme2 earnings" — the old bare-number regex captured the
-    // "2" of "Acme2" as $2.00 (here: a below-threshold refusal; elsewhere a
-    // wrong staged amount). It must stage the full balance instead.
+    // App-name digits are not standalone money amounts; "Acme2" must resolve as
+    // an app reference and stage the full balance unless the user names an amount.
     const acme2 = makeApp({
       id: "id-acme2",
       name: "Acme2",
@@ -549,7 +550,7 @@ describe("parseWithdrawAmount — planner options (nested `parameters` first) + 
   });
 
   it("REGRESSION: a digit glued into an app name is NOT an amount", () => {
-    // The old bare-number regex captured the "2" of "Acme2" → $2.00.
+    // Only standalone numeric tokens count as requested payout amounts.
     expect(parseWithdrawAmount("withdraw my Acme2 earnings")).toBeNull();
     expect(parseWithdrawAmount("cash out App2000")).toBeNull();
     expect(parseWithdrawAmount("payout for my a1b2 app")).toBeNull();

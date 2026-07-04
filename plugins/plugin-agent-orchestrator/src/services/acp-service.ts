@@ -1,10 +1,30 @@
+/**
+ * `AcpService` (serviceType `ACP_SUBPROCESS_SERVICE`) owns the lifecycle of
+ * coding-agent subprocesses driven over the Agent Client Protocol (ACP). It
+ * spawns a chosen backend CLI (elizaos, pi-agent, claude, codex, opencode),
+ * speaks ACP over the native transport, tracks per-session state and emits the
+ * session events the SubAgentRouter and task store consume, and cancels or tears
+ * sessions down on stop or process shutdown.
+ *
+ * Spawns are configured for the runtime environment: a per-spawn model-gateway
+ * lease routes the sub-agent's inference through the parent (revoked when the
+ * session ends), credential-proxy and model-gateway env is injected while
+ * denied environment keys are stripped, and Codex runs get sandbox/approval
+ * configuration with a Landlock-availability fallback. A single process-wide
+ * SIGTERM/SIGINT handler fans out to every live instance so multi-tenant hosts,
+ * test runners, and hot-reload cycles don't leak per-instance listeners.
+ */
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, stat, unlink } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { type IAgentRuntime, Service } from "@elizaos/core";
+import {
+  SUB_AGENT_CREDENTIAL_PARENT_CAPABILITY_SERVICE as CORE_SUB_AGENT_CREDENTIAL_PARENT_CAPABILITY_SERVICE,
+  type IAgentRuntime,
+  Service,
+} from "@elizaos/core";
 import { NativeAcpClient } from "./acp-native-transport.js";
 import { augmentTaskWithDeployGuidance } from "./app-deploy-guidance.js";
 import {
@@ -233,8 +253,12 @@ export function isDeniedSubAgentEnvKey(key: string): boolean {
   return DENY_ENV_PATTERNS.some((pattern) => pattern.test(key));
 }
 
+export const ACP_SUBPROCESS_SERVICE_TYPE =
+  CORE_SUB_AGENT_CREDENTIAL_PARENT_CAPABILITY_SERVICE ??
+  "ACP_SUBPROCESS_SERVICE";
+
 export class AcpService extends Service {
-  static serviceType = "ACP_SUBPROCESS_SERVICE";
+  static serviceType = ACP_SUBPROCESS_SERVICE_TYPE;
 
   // Process-wide registry of live AcpService instances. The SIGTERM/SIGINT
   // listener is registered exactly ONCE per Node process and fans out to

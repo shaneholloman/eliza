@@ -95,28 +95,30 @@ export function ViewHeader({
   right?: ReactNode;
   className?: string;
 }) {
+  // A 3-column grid, not absolute positioning: responsive `static`/`relative`
+  // position variants do not survive the app's Tailwind build (the base
+  // `absolute` always won, leaving the back button detached from the row on
+  // desktop), so the layout uses grid tracks + responsive `justify-self`
+  // instead. Mobile: fixed equal side tracks keep the title truly centered
+  // with the back control on the left. ≥sm: auto tracks left-align the title
+  // right after the back button.
   return (
     <header
       data-testid="view-header"
       className={cn(
-        "relative flex min-h-14 shrink-0 items-center justify-center gap-2 px-3 py-2.5 sm:justify-start sm:px-4",
+        "grid min-h-14 shrink-0 grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-1 px-3 py-2.5 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:gap-2 sm:px-4",
         className,
       )}
     >
-      {showBack ? (
-        <ViewBackButton
-          onBack={onBack}
-          className="absolute left-2 top-1/2 -translate-y-1/2 sm:static sm:translate-y-0"
-        />
-      ) : null}
-      <h1 className="truncate text-lg font-semibold tracking-tight text-txt-strong">
+      {showBack ? <ViewBackButton onBack={onBack} /> : <span aria-hidden />}
+      <h1 className="justify-self-center truncate text-lg font-semibold tracking-tight text-txt-strong sm:justify-self-start">
         {title}
       </h1>
       {right ? (
-        <div className="absolute right-2 top-1/2 -translate-y-1/2 sm:static sm:ml-auto sm:translate-y-0">
-          {right}
-        </div>
-      ) : null}
+        <div className="justify-self-end">{right}</div>
+      ) : (
+        <span aria-hidden />
+      )}
     </header>
   );
 }

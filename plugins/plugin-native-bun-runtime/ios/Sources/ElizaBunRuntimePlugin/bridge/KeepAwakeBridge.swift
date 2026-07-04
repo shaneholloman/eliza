@@ -3,8 +3,8 @@ import Foundation
     import UIKit
 #endif
 
-/// Implements the `keep_awake_set(enabled)` host function on the
-/// `__ELIZA_BRIDGE__` compatibility (JSContext) bridge.
+/// Reference-counted holder for the iOS idle timer, shared by both runtime
+/// engines.
 ///
 /// While a large on-device model download (or load) is in flight, the agent
 /// asks the app to disable the iOS idle timer so the screen does not auto-lock
@@ -18,6 +18,13 @@ import Foundation
 /// This does NOT cover a *manual* lock / backgrounding — that needs the native
 /// background `URLSession` download (#11841 primary fix) — but it removes the
 /// far more common auto-lock stall for a foregrounded download.
+///
+/// This core type carries no JavaScriptCore dependency so it compiles into the
+/// full-Bun engine build (which omits JavaScriptCore). The `keep_awake_set`
+/// entry points are:
+///   - full-Bun engine: the `host_call` dispatch in `FullBunEngineHost`
+///     (`KeepAwakeBridge.shared.setEnabled(_:)`);
+///   - JSContext compat: the `install(into:)` extension (compat-only file).
 public final class KeepAwakeBridge {
     /// Process-wide holder shared by both runtime engines. A device runs exactly
     /// one engine (full-Bun *or* JSContext compat), but sharing one ref-counted
@@ -48,7 +55,7 @@ public final class KeepAwakeBridge {
         applyIdleTimer(disabled: false)
     }
 
-    private func setHolder(_ enabled: Bool) {
+    func setHolder(_ enabled: Bool) {
         lock.lock()
         holders = max(0, holders + (enabled ? 1 : -1))
         let disabled = holders > 0

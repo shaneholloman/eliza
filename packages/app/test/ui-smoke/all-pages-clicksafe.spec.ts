@@ -254,6 +254,26 @@ const CORE_ROUTE_PROBES: readonly RouteProbe[] = [
     timeoutMs: 60_000,
   },
   {
+    // Promoted top-level character tabs (character-skills / experience) render
+    // dedicated views with a standard ViewHeader — anchor on the header shell
+    // plus the view title.
+    name: "character skills deep link",
+    path: "/character/skills",
+    readyChecks: [{ selector: '[data-testid="view-header"]' }, { text: "Skills" }],
+    mode: "all",
+    timeoutMs: 60_000,
+  },
+  {
+    name: "character experience deep link",
+    path: "/character/experience",
+    readyChecks: [
+      { selector: '[data-testid="view-header"]' },
+      { text: "Experience" },
+    ],
+    mode: "all",
+    timeoutMs: 60_000,
+  },
+  {
     name: "automation node catalog deep link",
     path: "/automations/node-catalog",
     readyChecks: [{ selector: '[data-testid="automations-shell"]' }],

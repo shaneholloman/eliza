@@ -1,3 +1,10 @@
+/**
+ * Settings → Security section (the `security` section id), OWNER-only behind a
+ * RoleGate. Surfaces the access mode / bind endpoint (loopback vs all-
+ * interfaces, with private/public host warnings), the remote-access password,
+ * and the active device sessions with per-session revoke.
+ */
+
 import {
   KeyRound,
   Laptop,
@@ -31,6 +38,7 @@ import {
 import { useBootConfig } from "../../config/boot-config-react.hooks";
 import { cn } from "../../lib/utils";
 import { useTranslation } from "../../state/TranslationContext.hooks";
+import { OwnerOnlyNotice, RoleGate } from "../RoleGate";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
@@ -1084,7 +1092,21 @@ function RemotePasswordSection({
   );
 }
 
+/**
+ * Remote-access passwords, sessions, and device pairing are an OWNER-tier
+ * surface (#12087 Item 24): only the workspace owner manages who else may reach
+ * the agent. Gated once at the surface boundary via the canonical
+ * {@link RoleGate}.
+ */
 export function SecuritySettingsSection() {
+  return (
+    <RoleGate minRole="OWNER" fallback={<OwnerOnlyNotice />}>
+      <SecuritySettingsSectionBody />
+    </RoleGate>
+  );
+}
+
+function SecuritySettingsSectionBody() {
   const [accessState, setAccessState] = useState<AccessState>({
     phase: "loading",
   });
