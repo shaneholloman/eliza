@@ -321,6 +321,9 @@ async function hasGgufMagic(filePath: string): Promise<boolean> {
 			await handle.close();
 		}
 	} catch {
+		// error-policy:J3 untrusted-artifact validation — an unreadable/short file
+		// is NOT a valid GGUF (false). The caller treats false as "bad/absent
+		// artifact" and re-downloads; this never fabricates a valid-magic result.
 		return false;
 	}
 }
@@ -360,6 +363,9 @@ function parseGatedHubError(body: string): { repo: string } | null {
 		}
 		return null;
 	} catch {
+		// error-policy:J3 untrusted-input parse — a non-JSON HF error body is simply
+		// "not a recognizable gated-repo error" (null); the caller then reports the
+		// raw HTTP failure. No fabricated repo.
 		return null;
 	}
 }
@@ -467,6 +473,9 @@ async function partialSize(stagingPath: string): Promise<number> {
 		const stat = await fsp.stat(stagingPath);
 		return stat.isFile() ? stat.size : 0;
 	} catch {
+		// error-policy:J3 no staging file (ENOENT) means zero bytes resumable — the
+		// designed "start from 0" answer, not a masked failure. A resume from a
+		// nonexistent partial correctly begins a fresh download.
 		return 0;
 	}
 }
@@ -493,6 +502,8 @@ async function resumableStartByte(
 	const size = await partialSize(stagingPath);
 	if (size <= 0) {
 		await fsp
+			// error-policy:J6 best-effort cleanup of an orphaned staging-meta sidecar
+			// (its partial is gone); a failure here does not affect the fresh start.
 			.rm(stagingMetaPath(stagingPath), { force: true })
 			.catch(() => undefined);
 		return 0;
@@ -503,6 +514,10 @@ async function resumableStartByte(
 			await fsp.readFile(stagingMetaPath(stagingPath), "utf8")
 		).trim();
 	} catch {
+		// error-policy:J3 no recorded staging-sha sidecar means we cannot prove the
+		// partial matches the expected artifact; recorded=undefined forces the
+		// mismatch branch below (re-download), i.e. fail toward re-verifying, never
+		// accept an unverified partial as complete.
 		recorded = undefined;
 	}
 	if (recorded === expectedSha256) return size;
@@ -511,6 +526,8 @@ async function resumableStartByte(
 			`(started against ${recorded ? `sha256 ${recorded.slice(0, 12)}…` : "unknown content"}, ` +
 			`manifest now expects ${expectedSha256.slice(0, 12)}…)`,
 	);
+	// error-policy:J6 best-effort discard of a stale partial + its sidecar; a
+	// cleanup failure just means we redownload from 0 (return 0), never accept it.
 	await fsp.rm(stagingPath, { force: true }).catch(() => undefined);
 	await fsp
 		.rm(stagingMetaPath(stagingPath), { force: true })
@@ -632,8 +649,9 @@ export class Downloader {
 
 		// Fire-and-forget; errors are captured and emitted as a "failed" event.
 		void this.runJob(catalogEntry, record).catch(() => {
-			// `runJob` handles its own failure telemetry; we only need to swallow
-			// the unhandled-rejection here.
+			// error-policy:J5 unhandled-rejection suppression — runJob handles its own
+			// failure telemetry (emits a "failed" event); this only stops the
+			// fire-and-forget promise from raising an unobserved rejection.
 		});
 
 		this.emit({ type: "progress", job: { ...job } });
@@ -659,7 +677,8 @@ export class Downloader {
 			try {
 				listener(event);
 			} catch {
-				// A bad listener must not kill the downloader; drop it silently.
+				// error-policy:J7 a bad progress listener must not kill the downloader;
+				// drop it and continue emitting to the rest.
 				this.listeners.delete(listener);
 			}
 		}
@@ -689,8 +708,9 @@ export class Downloader {
 				}
 			}
 		} catch {
-			// Missing or malformed terminal-download state should not block
-			// local inference. New terminal states will rewrite the file.
+			// error-policy:J4 explicit degrade — the terminal-download state file is
+			// UI/telemetry only; missing/malformed state must not block local
+			// inference, new terminal states rewrite it. Not a model artifact.
 		}
 	}
 
@@ -707,8 +727,8 @@ export class Downloader {
 				"utf8",
 			);
 		} catch {
-			// Terminal status is useful for chat/UI telemetry but is not allowed to
-			// fail the download path.
+			// error-policy:J7 terminal-status persistence is chat/UI telemetry; a
+			// write failure must not fail the (successful) download it records.
 		}
 	}
 
@@ -752,6 +772,9 @@ export class Downloader {
 			const probe = await this.probeHardware();
 			freeDiskGb = probe.freeDiskGb ?? probe.mobile?.freeStorageGb ?? undefined;
 		} catch {
+			// error-policy:J4 explicit degrade — a hardware probe failure means we
+			// cannot compute a free-disk pre-check; skip the advisory check rather
+			// than block the download (the write itself still ENOSPC-fails loudly).
 			return; // probe failure must never block a download
 		}
 		if (freeDiskGb === undefined) return;
@@ -787,7 +810,8 @@ export class Downloader {
 			).__ELIZA_BRIDGE__;
 			bridge?.keep_awake_set?.(active);
 		} catch {
-			// Best-effort screen-wake hint; never let it affect the download.
+			// error-policy:J6 best-effort screen-wake hint; never let it affect the
+			// download.
 		}
 	}
 
@@ -850,6 +874,8 @@ export class Downloader {
 		} = args;
 
 		if (forceFresh) {
+			// error-policy:J6 best-effort cancel of any prior native download before
+			// a forced-fresh start; if none exists the cancel is a harmless no-op.
 			await Promise.resolve(
 				bridge.bg_download_cancel({ id: downloadId }),
 			).catch(() => undefined);
@@ -875,6 +901,8 @@ export class Downloader {
 		let lastSampleAt = Date.now();
 		for (;;) {
 			if (record.abortController.signal.aborted) {
+				// error-policy:J6 best-effort cancel of the native download on abort;
+				// the abort itself is then propagated via makeAbortError() below.
 				await Promise.resolve(
 					bridge.bg_download_cancel({ id: downloadId }),
 				).catch(() => undefined);
@@ -954,6 +982,10 @@ export class Downloader {
 					signal: args.signal,
 				});
 			} catch (error) {
+				// error-policy:J2 context-adding failover — record the error; if the
+				// caller aborted or this was the LAST hub candidate, rethrow (fail).
+				// Otherwise fail over to the next base. lastError is rethrown when the
+				// loop exhausts, so no failure is swallowed.
 				lastError = error;
 				if (args.signal.aborted || index === candidates.length - 1) {
 					throw error;
@@ -1040,6 +1072,9 @@ export class Downloader {
 				});
 				return;
 			} catch (error) {
+				// error-policy:J2 context-adding failover — same as the foreground
+				// path: record + rethrow on abort/last-candidate, else try the next
+				// base; lastError is rethrown when candidates exhaust.
 				lastError = error;
 				if (
 					args.record.abortController.signal.aborted ||
@@ -1163,6 +1198,9 @@ export class Downloader {
 			// likely cause (gated bundles resolve through the Eliza Cloud HF
 			// proxy, so the device must be linked to Eliza Cloud).
 			if (!(await hasGgufMagic(record.finalPath))) {
+				// error-policy:J6 best-effort removal of the bad artifact before we
+				// throw the actionable "not a valid GGUF" error below (fail closed:
+				// an invalid artifact never enters the registry).
 				await fsp.rm(record.finalPath, { force: true }).catch(() => undefined);
 				throw new Error(
 					`Downloaded file for ${catalogEntry.hfRepo ?? catalogEntry.id} is not a valid GGUF ` +
@@ -1211,6 +1249,9 @@ export class Downloader {
 			this.rememberTerminalDownload(record.job);
 			this.emit({ type: "completed", job: { ...record.job } });
 		} catch (err) {
+			// error-policy:J1 boundary translation — the one outermost job handler:
+			// map abort→cancelled and any other failure→a typed "failed" event
+			// (preserving GatedRepoError code/httpStatus). Never a success/completed.
 			if (record.abortController.signal.aborted) {
 				this.updateState(record, "cancelled");
 				this.rememberTerminalDownload(record.job);
@@ -1444,8 +1485,9 @@ export class Downloader {
 					await fsp.rm(finalPath, { force: true });
 				}
 			} catch {
-				// Missing files are downloaded below; unreadable stale files are
-				// treated as invalid and replaced by the fresh bundle artifact.
+				// error-policy:J3 untrusted-artifact validation — missing files are
+				// downloaded below; an unreadable/stale file is treated as INVALID and
+				// replaced by the fresh bundle artifact (never accepted as valid).
 			}
 		} else {
 			await fsp.rm(stagingPath, { force: true }).catch(() => undefined);
@@ -1556,6 +1598,9 @@ export class Downloader {
 			const stat = await fsp.stat(finalPath);
 			const sha256 = await hashFile(finalPath);
 			await fsp
+				// error-policy:J6 best-effort removal of the staging-meta sidecar after
+				// the artifact is finalized; the sha256 verification below is what
+				// actually gates acceptance.
 				.rm(stagingMetaPath(stagingPath), { force: true })
 				.catch(() => undefined);
 			if (expectedSha256 && sha256 !== expectedSha256) {
@@ -1617,6 +1662,8 @@ export class Downloader {
 					}
 					const headers = Object.fromEntries(response.headers.entries());
 					// Release the throttled body before re-issuing the request.
+					// error-policy:J6 best-effort release of the throttled response body
+					// before re-issuing on backoff; a cancel failure is inconsequential.
 					await response.body?.cancel().catch(() => undefined);
 					await sleep(
 						retryAfterMs(headers) ?? DOWNLOAD_TRANSIENT_BACKOFF_MS * attempt,

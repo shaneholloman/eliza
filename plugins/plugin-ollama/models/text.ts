@@ -291,6 +291,9 @@ function buildOllamaStreamTextResult(args: {
   const streamResult = streamText(args.streamParams);
   // Keep SDK promises settled-or-empty so stream failures surface through the
   // textStream generator rather than as unhandled rejections on side promises.
+  // error-policy:J5 the real failure is observed and rethrown in the textStream
+  // generator's catch below; these side-promise catches only prevent duplicate
+  // unhandled-rejection noise for the same error, they do not fabricate a reply.
   const textPromise = Promise.resolve(streamResult.text).catch(() => "");
   const finishReasonPromise = Promise.resolve(streamResult.finishReason).catch(
     () => undefined
@@ -301,6 +304,8 @@ function buildOllamaStreamTextResult(args: {
       const fullText = await textPromise;
       return normalizeTokenUsage(usage) ?? estimateUsage(args.promptForEstimate, fullText);
     })
+    // error-policy:J7 usage/telemetry estimation must not crash the stream; the
+    // generation itself still surfaces via the textStream generator.
     .catch(() => undefined);
 
   async function* textStreamWithUsage(): AsyncIterable<string> {
@@ -321,6 +326,8 @@ function buildOllamaStreamTextResult(args: {
       throw streamErr;
     } finally {
       if (completed) {
+        // error-policy:J7 only reached after a SUCCESSFUL stream; a usage-emit
+        // failure must not turn a completed generation into an error.
         const usage = await usagePromise.catch(() => undefined);
         if (usage) {
           emitModelUsed(args.runtime, args.modelType, args.model, usage);
@@ -378,6 +385,8 @@ function buildOllamaStreamWithToolsResult(args: {
   promptForEstimate: string;
 }): OllamaStreamTextWithToolsResult {
   const streamResult = streamText(args.streamParams);
+  // error-policy:J5 side-promise catches only dedupe the unhandled rejection; the
+  // authoritative failure is rethrown from the textStream generator's catch below.
   const sdkTextPromise = Promise.resolve(streamResult.text).catch(() => "");
   const finishReasonPromise = Promise.resolve(streamResult.finishReason).catch(
     () => undefined
@@ -385,6 +394,9 @@ function buildOllamaStreamWithToolsResult(args: {
 
   const toolCallsPromise = Promise.resolve(streamResult.toolCalls)
     .then((calls) => mapAiSdkToolCallsToCore(calls as unknown[] | undefined))
+    // error-policy:J5 a tool-call parse failure is observed when the generator
+    // awaits this promise and yields the fallback text / rethrows; empty tool
+    // calls here means "no native plan", the text path still runs.
     .catch(() => [] as ToolCall[]);
 
   const usagePromise = Promise.resolve(streamResult.usage)
@@ -392,6 +404,7 @@ function buildOllamaStreamWithToolsResult(args: {
       const fullText = await sdkTextPromise;
       return normalizeTokenUsage(usage) ?? estimateUsage(args.promptForEstimate, fullText);
     })
+    // error-policy:J7 usage/telemetry estimation must not crash the stream.
     .catch(() => undefined);
 
   const isNativePlannerType =
@@ -441,6 +454,8 @@ function buildOllamaStreamWithToolsResult(args: {
       throw streamErr;
     } finally {
       if (completed) {
+        // error-policy:J7 only after a SUCCESSFUL stream; usage-emit failure must
+        // not convert a completed generation into an error.
         const usage = await usagePromise.catch(() => undefined);
         if (usage) {
           emitModelUsed(args.runtime, args.modelType, args.model, usage);
@@ -665,8 +680,10 @@ async function handleTextWithModelType(
     try {
       endpoint = getBaseURL(runtime);
     } catch {
-      /* ignore */
+      // error-policy:J6 best-effort enrichment of the failure log only; the real
+      // error is rethrown below. An unreadable endpoint setting must not mask it.
     }
+    // error-policy:J2 context-adding rethrow — log with endpoint then rethrow.
     logOllamaTextFailure(
       "generateText",
       String(modelType),
