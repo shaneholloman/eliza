@@ -24,7 +24,7 @@
     "start": "bun src/index.ts",
     "dev": "bun --watch src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun --external @elizaos/core --external \"@elizaos/plugin-*\" && bun build src/acp.ts --outdir dist --target bun --external @elizaos/core --external \"@elizaos/plugin-*\" && node scripts/write-dist-tsconfig.mjs",
-    "test": "bun test --pass-with-no-tests src",
+    "test": "bun test src",
     "e2e:subagents": "bun src/e2e/subagents.ts",
     "e2e:games": "bun src/e2e/game-generation.ts",
     "e2e:deterministic-replay": "bun --conditions eliza-source --tsconfig-override ../../../tsconfig.json tests/e2e/deterministic-app-build-replay.mjs",
