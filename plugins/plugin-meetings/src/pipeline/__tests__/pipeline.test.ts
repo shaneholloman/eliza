@@ -8,9 +8,11 @@ import type { Buffer } from "node:buffer";
 import type { IAgentRuntime, UUID } from "@elizaos/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  MeetingBillingSession,
   MeetingPipelineOptions,
   PipelineTranscriptUpdate,
 } from "../../types";
+import { MeetingBillingError } from "../../types";
 import { createMeetingTranscriptionPipeline } from "../pipeline";
 import type {
   AsrBackend,
@@ -107,6 +109,81 @@ describe("createMeetingTranscriptionPipeline", () => {
 
     const segments = await pipeline.finalize();
     expect(segments.map((s) => s.text)).toContain("welcome to the standup");
+  });
+
+  it("does not call ASR when the billing meter cannot reserve the next window", async () => {
+    const backend = new ScriptedBackend();
+    backend.enqueue({ text: "this should not run" });
+    const billing: MeetingBillingSession = {
+      state: {
+        status: "reserved",
+        reservedMs: 1000,
+        consumedMs: 0,
+        capMs: 1000,
+      },
+      reserveInitial: async () => undefined,
+      ensureTranscriptionWindow: vi.fn(async () => {
+        throw new MeetingBillingError(
+          "insufficient_credits",
+          "meeting spend cap reached",
+        );
+      }),
+      reconcile: async () => ({
+        status: "reconciled",
+        reservedMs: 1000,
+        consumedMs: 0,
+      }),
+    };
+    const onSpendCapReached = vi.fn();
+    const pipeline = createMeetingTranscriptionPipeline(
+      options({ billing, onSpendCapReached }),
+      backend,
+    );
+
+    pipeline.pushSpeakerAudio("t0", seconds(2));
+    await tick(2000);
+
+    expect(billing.ensureTranscriptionWindow).toHaveBeenCalledWith(2000);
+    expect(backend.calls).toHaveLength(0);
+    expect(onSpendCapReached).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "insufficient_credits" }),
+    );
+  });
+
+  it("treats cloud billing errors with the insufficient-credit code as spend-cap stops", async () => {
+    const backend = new ScriptedBackend();
+    backend.enqueue({ text: "this should not run" });
+    const cloudBillingError = Object.assign(new Error("cloud cap reached"), {
+      code: "insufficient_credits" as const,
+    });
+    const billing: MeetingBillingSession = {
+      state: {
+        status: "reserved",
+        reservedMs: 1000,
+        consumedMs: 0,
+        capMs: 1000,
+      },
+      reserveInitial: async () => undefined,
+      ensureTranscriptionWindow: vi.fn(async () => {
+        throw cloudBillingError;
+      }),
+      reconcile: async () => ({
+        status: "reconciled",
+        reservedMs: 1000,
+        consumedMs: 0,
+      }),
+    };
+    const onSpendCapReached = vi.fn();
+    const pipeline = createMeetingTranscriptionPipeline(
+      options({ billing, onSpendCapReached }),
+      backend,
+    );
+
+    pipeline.pushSpeakerAudio("t0", seconds(2));
+    await tick(2000);
+
+    expect(backend.calls).toHaveLength(0);
+    expect(onSpendCapReached).toHaveBeenCalledWith(cloudBillingError);
   });
 
   it("emits confirmed (new-only) + pending replacement-tail updates", async () => {
