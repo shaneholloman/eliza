@@ -5,6 +5,7 @@
  * new-conversation, fullscreen) to run a command.
  */
 
+import { logger } from "@elizaos/logger";
 import type { CustomActionDef } from "@elizaos/shared";
 import * as React from "react";
 import { client } from "../api";
@@ -53,9 +54,16 @@ export function reportUserViewSwitch(viewId: string, viewPath?: string): void {
         source: "user",
         ...(viewPath ? { path: viewPath } : {}),
       }),
-    }).catch(() => {});
+    }).catch((err) => {
+      // error-policy:J7 telemetry write must not break navigation; warn keeps
+      // a dead reporting endpoint observable in the console.
+      logger.warn(
+        `[useSlashCommandController] view-switch report failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
   } catch {
-    // Best-effort observability only.
+    // error-policy:J7 same guard for synchronous setup failures — telemetry
+    // must never break navigation.
   }
 }
 
@@ -84,9 +92,16 @@ export function reportShortcutFired(
         shortcutId,
         ...(context ? { context } : {}),
       }),
-    }).catch(() => {});
+    }).catch((err) => {
+      // error-policy:J7 telemetry write must not break the shortcut; warn keeps
+      // a dead reporting endpoint observable in the console.
+      logger.warn(
+        `[useSlashCommandController] shortcut report failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
   } catch {
-    // Best-effort observability only.
+    // error-policy:J7 same guard for synchronous setup failures — telemetry
+    // must never break the shortcut.
   }
 }
 
@@ -219,6 +234,7 @@ export function useSlashCommandController(
       // made #11112 needlessly hard to diagnose.
       const catalog: SlashCommandCatalogItem[] = await client
         .listCommands("gui")
+        // error-policy:J4 degrade to an empty catalog with the failure logged
         .catch((error: unknown) => {
           console.error(
             "[useSlashCommandController] Failed to load the slash-command catalog; slash menu will be empty",
@@ -228,6 +244,7 @@ export function useSlashCommandController(
         });
       const customActions: CustomActionDef[] = await client
         .listCustomActions()
+        // error-policy:J4 omit custom actions with the failure logged
         .catch((error: unknown) => {
           console.error(
             "[useSlashCommandController] Failed to load custom actions; omitting them from the slash menu",

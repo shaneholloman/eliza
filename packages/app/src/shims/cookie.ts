@@ -40,6 +40,8 @@ function defaultDecode(value: string): string {
   try {
     return decodeURIComponent(value);
   } catch {
+    // error-policy:J3 malformed escape — keep the raw value, matching the
+    // cookie package's tolerant decode
     return value;
   }
 }

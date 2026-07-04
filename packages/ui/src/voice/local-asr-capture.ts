@@ -272,7 +272,21 @@ export async function startLocalAsrRecorder(
   });
   const context = new AudioContextCtor();
   if (context.state === "suspended") {
-    await context.resume().catch(() => {});
+    // A context that cannot resume produces silence — surface the failure to
+    // the caller (voice-capture-factory setState("error")) instead of
+    // recording a dead stream. Release the mic + context first so the failed
+    // start does not leave the capture indicator on.
+    try {
+      await context.resume();
+    } catch (err) {
+      // error-policy:J2 release the hot mic, then rethrow with context
+      for (const track of stream.getTracks()) track.stop();
+      // error-policy:J6 teardown — the context may already be closed
+      await context.close().catch(() => undefined);
+      throw new Error("AudioContext could not resume for local ASR capture", {
+        cause: err,
+      });
+    }
   }
 
   const source = context.createMediaStreamSource(stream);
@@ -322,23 +336,24 @@ export async function startLocalAsrRecorder(
     try {
       analyser?.disconnect();
     } catch {
-      /* already disconnected */
+      // error-policy:J6 teardown — node already disconnected
     }
     analyser = null;
     try {
       source.disconnect();
     } catch {
-      /* already disconnected */
+      // error-policy:J6 teardown — node already disconnected
     }
     try {
       processor.disconnect();
     } catch {
-      /* already disconnected */
+      // error-policy:J6 teardown — node already disconnected
     }
     for (const track of stream.getTracks()) {
       track.stop();
     }
-    await context.close().catch(() => {});
+    // error-policy:J6 teardown — closing an already-closed context throws
+    await context.close().catch(() => undefined);
   };
 
   return {

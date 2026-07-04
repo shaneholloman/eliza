@@ -162,6 +162,7 @@ function isHttpLoopbackBase(value: string): boolean {
       url.hostname === "[::1]"
     );
   } catch {
+    // error-policy:J3 unparseable base — fail closed as "not loopback"
     return false;
   }
 }
@@ -174,6 +175,7 @@ function shouldUseAppShellLocalAgentProxy(apiBase: string): boolean {
   try {
     return new URL(apiBase).origin !== origin;
   } catch {
+    // error-policy:J3 unparseable base — fail closed as "no proxy"
     return false;
   }
 }
@@ -210,6 +212,8 @@ function canProbeCloudStatus(): boolean {
 
 async function getCloudStatusIfSupported() {
   if (!canProbeCloudStatus()) return null;
+  // error-policy:J4 cloud-status probe — unreachable/unsupported means the
+  // finish flow skips the cloud handoff, which is the designed degrade
   return client.getCloudStatus().catch(() => null);
 }
 
@@ -225,6 +229,8 @@ function readSyncOnDeviceAgentBearer(): string | null {
     const trimmed = token.trim();
     return trimmed.length > 0 ? trimmed : null;
   } catch {
+    // error-policy:J4 native-bridge probe — no token means the request path
+    // proceeds tokenless and the local agent's 401 surfaces there
     return null;
   }
 }
@@ -237,6 +243,8 @@ async function startMobileLocalAgent(): Promise<void> {
       mode: "local",
     });
   } catch {
+    // error-policy:J4 the agent plugin is not registered on this host —
+    // load it directly; a failure of this direct start still propagates
     const agentPluginId = "@elizaos/capacitor-agent";
     const { Agent } = await import(/* @vite-ignore */ agentPluginId);
     await (Agent as AgentPluginLike | undefined)?.start?.({
@@ -249,6 +257,8 @@ async function startMobileLocalAgent(): Promise<void> {
 async function startLocalRuntime(): Promise<void> {
   if (isDesktopPlatform()) {
     try {
+      // error-policy:J4 mode probe — unknown mode proceeds with the local
+      // start below, whose failure is handled explicitly
       const desktopRuntimeMode = await getDesktopRuntimeMode().catch(
         () => null,
       );
@@ -261,10 +271,13 @@ async function startLocalRuntime(): Promise<void> {
       });
       return;
     } catch (error) {
+      // error-policy:J4 the bridge start can fail when the agent is already
+      // running — probe the API; only rethrow when it is truly unreachable
       try {
         await client.getAuthStatus();
         return;
       } catch {
+        // error-policy:J2 agent unreachable — surface the original failure
         throw error;
       }
     }
@@ -280,6 +293,8 @@ async function waitForAgentApi(): Promise<void> {
       await client.getAuthStatus();
       return;
     } catch {
+      // error-policy:J4 boot poll — retry with backoff; the loop throws a
+      // deadline error below when the agent never comes up
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       delayMs = Math.min(Math.round(delayMs * 1.35), 4_000);
     }
@@ -601,7 +616,8 @@ export async function listOrAutoProvisionCloudAgent(
   try {
     list = await client.getCloudCompatAgents();
   } catch {
-    // A thrown error here is a TRANSPORT failure (offline / DNS / timeout),
+    // error-policy:J1 a thrown error here is a TRANSPORT failure (offline /
+    // DNS / timeout),
     // not an API message — the client returns { success:false } for real API
     // errors. Surface a friendly, actionable line instead of leaking the raw
     // `Unable to resolve host "api.elizacloud.ai"` UnknownHostException to the
@@ -662,6 +678,8 @@ export async function runFirstRunFinish(
     }
     return await finishLocal(sourceDraft, ports);
   } catch (err) {
+    // error-policy:J1 finish boundary — translate the failure into the
+    // structured error outcome the onboarding chat renders
     ports.onStatus?.(null);
     return {
       kind: "error",

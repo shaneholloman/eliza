@@ -18,6 +18,7 @@ function isCapacitorNative(): boolean {
       typeof cap?.isNativePlatform === "function" && cap.isNativePlatform()
     );
   } catch {
+    // error-policy:J4 capability probe — no Capacitor bridge means not native
     return false;
   }
 }
@@ -50,6 +51,8 @@ export function registerViewServiceWorker(): void {
     .then((registration) => {
       console.info("[SW] Registered, scope:", registration.scope);
     })
+    // error-policy:J4 the service worker is a PWA enhancement — the app
+    // works without it; the failure is logged for triage
     .catch((err: unknown) => {
       console.error(
         "[SW] Registration failed:",

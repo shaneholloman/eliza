@@ -34,6 +34,7 @@ function formatPrice(priceUsd: number): string {
       maximumFractionDigits: digits,
     }).format(priceUsd);
   } catch {
+    // error-policy:J3 Intl rejected the locale/currency — plain formatting
     return `$${priceUsd.toFixed(digits)}`;
   }
 }
@@ -67,6 +68,8 @@ export function WalletBalanceWidget(
         // shows prices only, so a balances failure means "nothing to show".
         const [balances, overview] = await Promise.all([
           client.getWalletBalances() as Promise<WalletBalancesResponse>,
+          // error-policy:J4 prices are the widget's optional decoration; the
+          // hide-on-failure degrade below covers a missing overview too
           client.getWalletMarketOverview().catch(() => null),
         ]);
         if (cancelled) return;

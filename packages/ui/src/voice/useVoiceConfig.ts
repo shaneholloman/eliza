@@ -2,6 +2,7 @@
  * Hook that loads, applies defaults to, and persists the character's voice
  * config, staying in sync via VOICE_CONFIG_UPDATED_EVENT.
  */
+import { logger } from "@elizaos/logger";
 import * as React from "react";
 
 import { client } from "../api/client";
@@ -47,13 +48,22 @@ export function useVoiceConfig(uiLanguage: string): UseVoiceConfigResult {
       if (!isMountedRef.current) return;
       setVoiceConfig(resolved.voiceConfig);
       if (resolved.shouldPersist && resolved.voiceConfig) {
+        // error-policy:J6 best-effort background persist — a lost persist
+        // means the resolved voice diverges from the server copy across
+        // restarts, so the failure is logged, never swallowed
         void client
           .updateConfig({ messages: { tts: resolved.voiceConfig } })
-          .catch(() => {});
+          .catch((err: unknown) => {
+            logger.warn(
+              { err },
+              "[useVoiceConfig] failed to persist resolved voice config",
+            );
+          });
       }
     } catch {
       if (!isMountedRef.current) return;
-      // No config endpoint / parse failure — fall back to provider defaults.
+      // error-policy:J4 no config endpoint (minimal shells) or unreadable
+      // config — voice degrades to provider defaults rather than blocking.
       setVoiceConfig(null);
     } finally {
       if (isMountedRef.current) {
