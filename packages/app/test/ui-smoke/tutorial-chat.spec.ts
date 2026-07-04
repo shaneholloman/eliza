@@ -117,7 +117,13 @@ test.beforeEach(async ({ page }) => {
 
 test("the chat-native tour runs end to end in the live transcript", async ({
   page,
-}) => {
+}, testInfo) => {
+  const shot = async (name: string) => {
+    await testInfo.attach(name, {
+      body: await page.screenshot({ fullPage: false }),
+      contentType: "image/png",
+    });
+  };
   await openAppPath(page, "/chat");
   await expect(page.locator(COMPOSER).first()).toBeVisible({
     timeout: 25_000,
@@ -130,6 +136,7 @@ test("the chat-native tour runs end to end in the live transcript", async ({
     timeout: 15_000,
   });
   await expect(page.getByText(/Want a quick tour\?/i)).toBeVisible();
+  await shot("01-welcome-turn.png");
 
   // No overlay engine: no spotlight card, no dim, and the app stays fully
   // interactive (the composer is still editable mid-tour).
@@ -147,6 +154,7 @@ test("the chat-native tour runs end to end in the live transcript", async ({
   // message lands the voice step WITHOUT tapping Next.
   await typeAndSend(page, "hello from the tour");
   await expect(choice(page, "next", "voice")).toBeVisible({ timeout: 10_000 });
+  await shot("02-auto-advanced-after-send.png");
 
   // Manual Next remains the universal fallback for the remaining steps.
   await choice(page, "next", "voice").click();
@@ -162,6 +170,7 @@ test("the chat-native tour runs end to end in the live transcript", async ({
   // The wrap-up offers Done + Restart; Done completes the tour.
   await expect(choice(page, "next", "done")).toBeVisible({ timeout: 10_000 });
   await expect(choice(page, "restart", "done")).toBeVisible();
+  await shot("03-wrap-up.png");
   await choice(page, "next", "done").click();
   await expect.poll(() => tutorialStatus(page), { timeout: 10_000 }).toBe(
     "completed",
