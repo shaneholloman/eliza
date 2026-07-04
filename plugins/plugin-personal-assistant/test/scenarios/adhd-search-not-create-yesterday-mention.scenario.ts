@@ -9,14 +9,14 @@
  * Personas-as-data: the retrieval ask lives in the turn text, never in
  * `promptInstructions` (root AGENTS.md — one scheduler, structural fields only).
  *
- * OUTCOME (not routing-only): the actionCalled(INBOX) proves a real search ran,
- * and definitionCountDelta{delta:0} proves NO new dentist reminder was created —
- * the paired negative that keeps this off the all-actionCalled ratchet and makes
- * "search, don't create" fail for the real reason.
+ * OUTCOME (not routing-only): the actionCalled(INBOX_SEARCH) proves a real
+ * search ran, and definitionCountDelta{delta:0} proves NO new dentist reminder
+ * was created — the paired negative that keeps this off the all-actionCalled
+ * ratchet and makes "search, don't create" fail for the real reason.
  *
- * Live-verify note (#12781): the exact search action the live model routes to
- * (INBOX search_inbox vs. a memory recall) is confirmed at live capture; the
- * load-bearing negative outcome (delta:0) does not depend on the action name.
+ * Live-verify note (#12781): live capture confirmed the model routes this to
+ * the promoted INBOX_SEARCH subaction; the load-bearing negative outcome
+ * (delta:0) still proves the no-fabricated-reminder behavior.
  */
 import { scenario } from "@elizaos/scenario-runner/schema";
 
@@ -47,7 +47,7 @@ export default scenario({
   finalChecks: [
     {
       type: "actionCalled",
-      actionName: "INBOX",
+      actionName: "INBOX_SEARCH",
     },
     {
       type: "definitionCountDelta",

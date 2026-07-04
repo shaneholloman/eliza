@@ -42,24 +42,24 @@
       "pack": "A1",
       "tier": "T2",
       "surface": "scenario-runner",
-      "status": "authored",
-      "notes": "Live-only. Identical re-ask collapses to one reminder: definitionCountDelta{recycling, delta:1} proves capture, judge grades the no-duplicate nuance. Live-verify deferred to the key boundary (#12781)."
+      "status": "verified",
+      "notes": "Live provider run passed on 2026-07-04: explicit 9pm recycling reminder created once (definitionCountDelta{recycling, delta:1}); duplicate re-ask responded without creating a second reminder; judge score 1.00."
     },
     {
       "id": "adhd-search-not-create-yesterday-mention",
       "pack": "A1",
       "tier": "T2",
       "surface": "scenario-runner",
-      "status": "authored",
-      "notes": "Live-only. Half-remembered mention searches (actionCalled INBOX) instead of creating: paired with definitionCountDelta{dentist, delta:0} to beat the all-actionCalled ratchet and prove 'search, don't create'. Live-verify deferred (#12781)."
+      "status": "verified",
+      "notes": "Live provider run passed on 2026-07-04: model routed to INBOX_SEARCH, no dentist reminder was created (definitionCountDelta{dentist, delta:0}), and judge score was 1.00."
     },
     {
       "id": "adhd-task-initiation-two-minute-step",
       "pack": "A1",
       "tier": "T2",
       "surface": "scenario-runner",
-      "status": "authored",
-      "notes": "Live-only. Stuck-on-starting -> one consented ~2-minute step, non-shaming tone (judge) + definitionCountDelta{expense, delta:1}. NOT a crisis guard: asserts no 988/crisis-guard effect (#12780 not-planned). Live-verify deferred (#12781)."
+      "status": "verified",
+      "notes": "Live provider run passed on 2026-07-04 (runId 4df8ab23-626e-4b0f-ad9a-0c378078524c): first turn proposed exactly one tiny expense-report first step and asked before scheduling; consent turn scheduled Expense Report - Tiny First Step for 2:15pm; judge score 0.60; native export strict privacy attestation passed with 0 residual findings."
     },
     {
       "id": "adhd-hyperfocus-guardrail-protects-standup",
