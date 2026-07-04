@@ -314,7 +314,7 @@ describe("CI plugin sharding contract", () => {
       /plugin-tests-status:\s+name:\s+Plugin Tests[\s\S]*?needs:[\s\S]*?-\s+plugin-tests/,
     );
     expect(testWorkflow).toMatch(
-      /test-status:[\s\S]*?needs:[\s\S]*?-\s+plugin-tests-status/,
+      /ci-ok:[\s\S]*?needs:[\s\S]*?-\s+plugin-tests-status/,
     );
   });
 
