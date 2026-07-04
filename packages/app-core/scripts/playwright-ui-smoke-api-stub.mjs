@@ -4625,6 +4625,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Meeting sessions (calendar view polls active sessions on mount). Return
+  // 200-empty so the calendar view renders without the catch-all 501 the
+  // page-error guard would otherwise flag.
+  if (req.method === "GET" && url.pathname === "/api/meetings") {
+    sendJson(req, res, 200, { sessions: [] });
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/lifeops/inbox") {
     sendJson(req, res, 200, emptyLifeOpsInbox);
     return;
