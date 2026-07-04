@@ -258,6 +258,15 @@ const EXPECTED_PR_DETERMINISTIC_SCENARIO_IDS = [
   // added here in the same commit so this toEqual stays green while the coverage
   // ledger can still resolve their ids.
   "adhd-distractor-storm-mid-capture",
+  // LifeOps persona pack A2 (adhd-follow-through, #12770). Same G1 convention:
+  // these keyless api+tick scenarios drive the REAL no-reply/escalation ladder
+  // (create a reminder with a completionCheck, tick across simulated no-reply,
+  // assert the retry -> re-fire -> skip/expire progression + reminderIntensity
+  // differences) and are registered here in the same commit.
+  "adhd-followthrough-intensity-minimal-chases-none",
+  "adhd-followthrough-intensity-persistent-chases-twice",
+  "adhd-followthrough-noreply-retry-then-skip",
+  "adhd-followthrough-reply-breaks-escalation",
   "adhd-hyperfocus-guardrail-protects-standup",
   // LifeOps persona pack C1 (traveler-timezone-truth, #12773). Same G1
   // convention: keyless `tick`-driven timezone journeys authored under
