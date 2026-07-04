@@ -1,3 +1,4 @@
+/** Runs the core e2e smoke harness with package-local defaults. */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

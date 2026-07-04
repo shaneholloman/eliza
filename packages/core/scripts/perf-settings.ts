@@ -1,3 +1,4 @@
+/** Captures deterministic performance-setting fixtures for core runtime benchmark runs. */
 import { decryptStringValue, encryptStringValue } from "../src/settings";
 
 function formatNumber(value: number): string {

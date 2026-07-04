@@ -1,3 +1,4 @@
+/** Runs live core runtime smoke coverage against real provider or orchestration surfaces. */
 import {
 	type CoordinatorEvalChannel,
 	runCoordinatorLiveScenarios,
