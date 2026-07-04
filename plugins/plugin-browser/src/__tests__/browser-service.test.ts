@@ -2,7 +2,7 @@
  * BrowserService tests for target registration, resolution, and dispatch behavior.
  */
 
-import { ElizaError } from "@elizaos/core";
+import { ElizaError, logger } from "@elizaos/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserService, type BrowserTarget } from "../browser-service.js";
 
@@ -68,6 +68,37 @@ describe("BrowserService target routing", () => {
     expect(result.value).toBe("bridge");
     expect(workspace.execute).toHaveBeenCalledTimes(1);
     expect(bridge.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("excludes an unpinned target whose availability check throws, still resolves a healthy one, and logs the exclusion", async () => {
+    const logSpy = vi
+      .spyOn(logger, "debug")
+      .mockImplementation(() => logger as never);
+    const service = new BrowserService();
+    const broken = createTarget({
+      id: "broken",
+      priority: 200,
+      availableError: new Error("probe boom"),
+    });
+    const workspace = createTarget({ id: "workspace", priority: 100 });
+    service.registerTarget(broken);
+    service.registerTarget(workspace);
+
+    // Automatic (unpinned) resolution must not throw: the broken candidate is
+    // skipped and the next healthy target is selected (designed failover).
+    const result = await service.execute({ subaction: "state" });
+    expect(result.value).toBe("workspace");
+    expect(broken.execute).not.toHaveBeenCalled();
+    // The exclusion is observable, not silently swallowed by an empty catch.
+    expect(
+      logSpy.mock.calls.some(
+        (call) =>
+          typeof call[0] === "string" &&
+          call[0].includes('"broken"') &&
+          call[0].includes("probe boom"),
+      ),
+    ).toBe(true);
+    logSpy.mockRestore();
   });
 
   it("does not fall back when the caller pins a target", async () => {
