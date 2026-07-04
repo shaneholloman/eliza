@@ -17,6 +17,17 @@
     "declarationMap": true,
     "sourceMap": true,
     "noEmit": true,
+    "paths": {
+      "@elizaos/plugin-remote-manifest": [
+        "../plugin-remote-manifest/src/types.ts"
+      ],
+      "@elizaos/plugin-remote-manifest/sub-agent-claude-code": [
+        "../plugin-remote-manifest/src/sub-agent-claude-code/plugin.ts"
+      ],
+      "@elizaos/plugin-remote-manifest/*": ["../plugin-remote-manifest/src/*"],
+      "@elizaos/security": ["../security/src/index.ts"],
+      "@elizaos/security/*": ["../security/src/*"]
+    },
     "rootDir": "src",
     "outDir": "dist"
   },
