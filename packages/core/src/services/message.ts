@@ -252,13 +252,14 @@ import { ChannelTopicsService } from "./channel-topics";
 import { runPostTurnEvaluators } from "./evaluator";
 import { runBotNoiseTriage } from "./message/bot-noise-triage";
 import {
-	findAvailableActionName,
 	findCodingDelegationActionName,
+	findShellDirectActionName,
 	findWebLookupActionName,
 	findWebLookupActionNames,
 	inferDirectCurrentRequestCandidateActions as inferDirectCurrentRequestCandidateActionsFromHeuristics,
 	inferLocalShellCommandFromMessageText,
 	inferWebSearchQueryFromMessageText,
+	isShellDirectActionName,
 	LEGACY_CODING_DELEGATION_ACTION_NAMES,
 	looksLikeLocalShellRequest,
 	looksLikeWebSearchRequest,
@@ -3867,6 +3868,7 @@ export function messageHandlerFromFieldResult(
 			candidateActions,
 			currentMessageText,
 			directCandidateActions: directCurrentCandidateActions,
+			actions: runtimeContext?.actions,
 		});
 	const inferredDirectCandidateActions =
 		!preferDirectCurrentCandidateActions &&
@@ -4422,30 +4424,23 @@ const WEAK_DIRECT_REPLY_OVERRIDE_ACTIONS = new Set(
 	].map(normalizeActionIdentifier),
 );
 
-const SHELL_DIRECT_ACTIONS = new Set(
-	[
-		"SHELL",
-		"TERMINAL_SHELL",
-		"RUN_IN_TERMINAL",
-		"RUN_COMMAND",
-		"EXECUTE_COMMAND",
-		"TERMINAL",
-		"RUN_SHELL",
-		"EXEC",
-	].map(normalizeActionIdentifier),
-);
-
 export function shouldPreferDirectCurrentCandidateActions(args: {
 	candidateActions: readonly string[];
 	currentMessageText: string;
 	directCandidateActions: readonly string[];
+	// Optional live action registry. When supplied, shell-direct membership is
+	// resolved through the declared SHELL_DIRECT_ACTION_TAGS contract (with the
+	// legacy name set as a covered fallback) instead of a hardcoded literal set;
+	// when omitted (e.g. pure unit call sites), the legacy name membership still
+	// applies so behavior is unchanged for owner actions that predate the tags.
+	actions?: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
 }): boolean {
 	if (args.candidateActions.length === 0) return false;
 	if (!looksLikeLocalShellRequest(args.currentMessageText)) return false;
 	if (looksLikeCodingWorkRequest(args.currentMessageText)) return false;
 	if (
 		!args.directCandidateActions.some((name) =>
-			SHELL_DIRECT_ACTIONS.has(normalizeActionIdentifier(name)),
+			isShellDirectActionName(name, args.actions),
 		)
 	) {
 		return false;
@@ -4454,7 +4449,13 @@ export function shouldPreferDirectCurrentCandidateActions(args: {
 		const normalized = normalizeActionIdentifier(name);
 		return (
 			WEAK_DIRECT_REPLY_OVERRIDE_ACTIONS.has(normalized) ||
-			canonicalPlannerControlActionName(normalized) !== null
+			canonicalPlannerControlActionName(normalized) !== null ||
+			// A shell-direct action resolved through the declared tag contract counts
+			// as a weak/overridable signal too — same class as the shell names
+			// enumerated in WEAK_DIRECT_REPLY_OVERRIDE_ACTIONS — so an owner that
+			// renamed its shell action but kept SHELL_DIRECT_ACTION_TAGS still
+			// promotes the direct shell turn instead of falling through to planning.
+			isShellDirectActionName(normalized, args.actions)
 		);
 	});
 }
@@ -4515,16 +4516,7 @@ function inferAckIntentCandidateActions(
 	const actionText = [intentText, fallbackText].filter(Boolean).join("\n");
 	if (!actionText.trim()) return [];
 	if (looksLikeLocalShellRequest(actionText)) {
-		const shellAction = findAvailableActionName(actions, [
-			"SHELL",
-			"TERMINAL_SHELL",
-			"RUN_IN_TERMINAL",
-			"RUN_COMMAND",
-			"EXECUTE_COMMAND",
-			"TERMINAL",
-			"RUN_SHELL",
-			"EXEC",
-		]);
+		const shellAction = findShellDirectActionName(actions);
 		if (shellAction) return [shellAction];
 	}
 	// Coding-work precedes web-search: "build an app that shows the bitcoin price"
