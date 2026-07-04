@@ -54,6 +54,7 @@ Per-page verdicts (all **good**) are in `manual-review/`:
 | `home-desktop-edge-buttons.png` | Desktop fine-pointer rail edge buttons on home |
 | `home-desktop-notification-panel.png` | Right-anchored desktop notification panel |
 | `ios-sim-iphone16pro-app-running.png` / `-launch.png` | The app running natively on the booted iPhone 16 Pro simulator |
+| `ios-sim-iphone16pro-live-frame.png` | Frame pulled from `ios-sim-iphone16pro-live-launch.mp4` (below) |
 
 ### Videos
 
@@ -62,6 +63,7 @@ Per-page verdicts (all **good**) are in `manual-review/`:
 | `launcher-walkthrough.webm` | Launcher tap-launch + long-press + right-swipe-home walkthrough |
 | `home-launcher-flow.webm` | Home → launcher rail + notification flow |
 | `launcher-loop-gestures-sample.webm` | A batch of the seeded loop: real CDP-touch launcher gestures (rail swipes, tile taps, notification pulls, grid/widget scrolls, tab focus) with per-action invariant checks |
+| `ios-sim-iphone16pro-live-launch.mp4` | Live 5.6s `simctl recordVideo` of the app launching natively on the booted iPhone 16 Pro simulator. Watched frame-by-frame (6 frames, `ffmpeg fps=1`): the app renders natively, the agent badge counts "Reconnecting… (attempt 11→13/15)" because no agent API is reachable for the sim on this host, and it sits behind the "Open in Eliza?" URL-scheme dialog + the #12288 permission-priming "Set up Eliza" modal (Step 1 of 3, mic). No gestures — `simctl` cannot inject touch, so it cannot clear the dialogs or drive a rail swipe. This is the concrete proof of why the seeded iOS gesture loop needs the committed XCUITest lane (native touch), not `simctl`. |
 
 ### Loop failure reproducibility (``) — environment-limited on this host
 
@@ -102,10 +104,10 @@ running before the environmental hiccup.
 | Evidence type | Status |
 |---|---|
 | Before/after full-page screenshots (desktop + mobile) | Present — ``. Before == after (docs+test-only branch; renders identically to develop). |
-| Video walkthrough | Present — `launcher-walkthrough.webm`, `home-launcher-flow.webm`, `launcher-loop-200action.webm`. |
+| Video walkthrough | Present — `launcher-walkthrough.webm`, `home-launcher-flow.webm`, `launcher-loop-gestures-sample.webm`. |
 | Loop videos + seed-reproducible failures | Present — loop webm + `launcher-loop-batch4-*`. |
 | Frontend console/network logs | Present — the `__e2e__` runners assert `no page errors 0` and dump console; captured in `*.txt`. |
-| iOS simulator capture | Present (rendering) — `ios-sim-iphone16pro-*.png`, app running natively on the booted iPhone 16 Pro. Seeded gesture-loop VIDEO: run-on-demand via the committed `LauncherGestureLoopUITests.swift` / `GestureSemanticsUITests.swift` XCUITest lanes — producing it requires regenerating the gitignored `packages/app/ios` Xcode project (cap:sync) + a full Xcode build, whose renderer inputs this docs/test branch does not change. Getting past the "Open in Eliza?" URL-scheme dialog + permission-priming modal to a clean launcher requires an XCUITest tap (simctl cannot synthesize taps/gestures). |
+| iOS simulator capture | Present — stills `ios-sim-iphone16pro-*.png` **and a live video** `ios-sim-iphone16pro-live-launch.mp4` (5.6s `simctl recordVideo`), the app running natively on the booted iPhone 16 Pro sim, **watched frame-by-frame**. The video shows a real non-happy state: agent "Reconnecting… (attempt 11→13/15)" (no agent API for the sim on this host) behind the "Open in Eliza?" URL-scheme dialog + the #12288 permission-priming modal. Seeded gesture-loop VIDEO: **not** capturable via `simctl` — it cannot inject touch to clear the dialogs or drive a rail swipe; it runs via the committed `LauncherGestureLoopUITests.swift` / `GestureSemanticsUITests.swift` XCUITest lanes (native touch), which need the gitignored `packages/app/ios` Xcode project regenerated (cap:sync = full web build + capacitor sync) + an Xcode build — disproportionate for a docs/test branch that changes zero renderer/iOS source. |
 | Android capture | **N/A — pending hardware.** `emulator -list-avds` is empty on this host (no AVD installed); the committed `packages/app/test/android/launcher-gesture-loop.android.spec.ts` + `touch-gesture.android.spec.ts` run on a machine with an emulator/device. Not faked. |
 | Real-LLM trajectories | N/A — no agent/action/provider/prompt/model change; this is docs + a boot-free enforcement test. |
 | Backend structured logs | N/A — no server code path changed. |
@@ -118,12 +120,18 @@ running before the environmental hiccup.
   gates on a dedicated runner and this branch changes no launcher source, but a
   reviewer should confirm the green loop on CI / a clean host. Documented, not
   hidden.
-- **iOS seeded gesture-loop video not captured.** The app renders natively on the
-  booted iPhone 16 Pro sim (screenshots attached), but driving the seeded gesture
-  loop needs the committed XCUITest lane + a full Xcode build of the gitignored
-  `packages/app/ios` project — out of proportion for a docs/test branch that
-  changes no renderer/iOS source. Run
-  `bun run --cwd packages/app capture:ios-sim:boot` / the `LauncherGestureLoopUITests`
-  scheme on a machine with the built project to produce it.
+- **iOS seeded gesture-loop video not captured (a live-launch video is).** The app
+  renders natively on the booted iPhone 16 Pro sim and a 5.6s live `simctl
+  recordVideo` is attached and was watched frame-by-frame
+  (`ios-sim-iphone16pro-live-launch.mp4`) — it shows the real disconnected/
+  dialog-blocked state, not gestures, because `simctl` cannot inject touch to clear
+  the "Open in Eliza?" URL-scheme dialog + permission-priming modal or drive a rail
+  swipe. The seeded gesture loop runs only through the committed XCUITest lane
+  (native touch) + a full Xcode build of the gitignored `packages/app/ios` project
+  (cap:sync + xcodebuild) — disproportionate for a docs/test branch that changes no
+  renderer/iOS source, and unreliable on this shared-`node_modules` worktree host.
+  Run `bun run --cwd packages/app capture:ios-sim:boot` / the
+  `LauncherGestureLoopUITests` scheme on a machine with the built project to
+  produce the seeded-loop video.
 - **Android video pending hardware.** No AVD on this host (`emulator -list-avds`
   empty); the committed Android specs run where an emulator/device exists.
