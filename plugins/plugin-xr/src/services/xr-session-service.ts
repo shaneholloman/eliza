@@ -216,7 +216,9 @@ export class XRSessionService extends Service {
 			// error-policy:J5 unhandled-rejection suppression — a per-connection ws
 			// transport error (ECONNRESET etc.) precedes 'close'; the session is torn
 			// down there. Log so it is observable without escalating benign drops.
-			logger.warn(`[XRSessionService] ws error on ${connId}:`, err),
+			logger.warn(
+				`[XRSessionService] ws error on ${connId}: ${err instanceof Error ? err.message : String(err)}`,
+			),
 		);
 	}
 
