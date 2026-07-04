@@ -54,8 +54,23 @@ export interface BackgroundConfig {
   shader?: ShaderConfig;
 }
 
-/** The default shader color — preserves the prior warm-orange home look. */
-export const DEFAULT_BACKGROUND_COLOR = "#ef5a1f";
+/**
+ * The default shader base: a warm near-black field (NOT a saturated orange
+ * wall). The home reads as a banked ember in a dark room, a deep brown-black
+ * substrate the orange glow breathes against, so content stays legible and the
+ * accent stays an accent. The old default (#ef5a1f) flooded the whole viewport
+ * with bright orange and washed every surface out.
+ */
+export const DEFAULT_BACKGROUND_COLOR = "#160d07";
+
+/**
+ * The ember glow hue the shader layers over {@link DEFAULT_BACKGROUND_COLOR}:
+ * the warm orange that gives the dark field its banked-fire warmth without
+ * becoming the field itself. Matches the brand accent (`#ff6a1f`). The shader
+ * pools this glow low near the composer, so the field reads as a banked ember
+ * rather than a flat color wall.
+ */
+export const DEFAULT_BACKGROUND_GLOW = "#ff6a1f";
 
 export const DEFAULT_BACKGROUND_CONFIG: BackgroundConfig = {
   mode: "shader",
@@ -79,7 +94,7 @@ export interface BackgroundPreset {
  * live, breathing shader field — not a flat fill.
  */
 export const BACKGROUND_PRESETS: readonly BackgroundPreset[] = [
-  { id: "orange", label: "Orange", color: DEFAULT_BACKGROUND_COLOR },
+  { id: "orange", label: "Orange", color: "#ef5a1f" },
   { id: "amber", label: "Amber", color: "#f59e0b" },
   { id: "rose", label: "Rose", color: "#e11d48" },
   { id: "red", label: "Red", color: "#dc2626" },
