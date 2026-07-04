@@ -7,8 +7,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { actionStateProvider } from "../features/basic-capabilities/providers/actionState";
 import { FIRST_PARTY_CONTEXT_IDS } from "../runtime/context-normalization";
@@ -31,7 +31,10 @@ function makeAction(name: string, contexts?: AgentContext[]): Action {
  * source file whose action object must carry a `contexts:` declaration.
  */
 const MIGRATED_CORE_ACTIONS: ReadonlyArray<{ name: string; file: string }> = [
-	{ name: "ATTACHMENT", file: "../features/working-memory/readAttachmentAction.ts" },
+	{
+		name: "ATTACHMENT",
+		file: "../features/working-memory/readAttachmentAction.ts",
+	},
 	{ name: "DOCUMENT", file: "../features/documents/actions.ts" },
 	{
 		name: "GENERATE_MEDIA",
@@ -42,7 +45,10 @@ const MIGRATED_CORE_ACTIONS: ReadonlyArray<{ name: string; file: string }> = [
 		file: "../features/advanced-capabilities/actions/message.ts",
 	},
 	{ name: "POST", file: "../features/advanced-capabilities/actions/post.ts" },
-	{ name: "MANAGE_PLUGINS", file: "../features/plugin-manager/actions/plugin.ts" },
+	{
+		name: "MANAGE_PLUGINS",
+		file: "../features/plugin-manager/actions/plugin.ts",
+	},
 	{ name: "PAYMENT", file: "../features/payments/actions/payment.ts" },
 ];
 
@@ -60,10 +66,10 @@ describe("resolveActionContexts", () => {
 		expect(resolveActionContexts(makeAction("send_token"))).toEqual(["wallet"]);
 	});
 
-	it("defaults unknown, undeclared action names to [\"general\"]", () => {
-		expect(
-			resolveActionContexts(makeAction("TOTALLY_UNKNOWN_ACTION")),
-		).toEqual(["general"]);
+	it('defaults unknown, undeclared action names to ["general"]', () => {
+		expect(resolveActionContexts(makeAction("TOTALLY_UNKNOWN_ACTION"))).toEqual(
+			["general"],
+		);
 	});
 
 	it("treats an empty declared contexts array as undeclared (falls through)", () => {
@@ -74,12 +80,7 @@ describe("resolveActionContexts", () => {
 describe("LEGACY_ACTION_CONTEXT_FALLBACK drift guard (#12090 item 35)", () => {
 	it("does not keep any migrated core-owned action name as a key", () => {
 		for (const { name } of MIGRATED_CORE_ACTIONS) {
-			expect(
-				Object.prototype.hasOwnProperty.call(
-					LEGACY_ACTION_CONTEXT_FALLBACK,
-					name,
-				),
-			).toBe(false);
+			expect(Object.hasOwn(LEGACY_ACTION_CONTEXT_FALLBACK, name)).toBe(false);
 		}
 	});
 

@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { InMemoryDatabaseAdapter } from "../../database/inMemoryAdapter";
 import { factsProvider } from "../../features/advanced-capabilities/providers/facts";
 import { AgentRuntime } from "../../runtime";
-import { type Character, ChannelType, ModelType } from "../../types";
+import { ChannelType, type Character, ModelType } from "../../types";
 import type { Memory } from "../../types/memory";
 import type { UUID } from "../../types/primitives";
 import type { State } from "../../types/state";

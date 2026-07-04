@@ -12,6 +12,7 @@
 // over the local handlers (priority 0) — the "stuck-cloud" failure where the
 // chat hits plugin-elizacloud's generateNativeChatCompletion and 401s.
 export { installRouterHandler } from "../services/router-handler.js";
+export { registerLocalInferenceBoot } from "./boot.js";
 export {
 	DEFAULT_MODELS_DIR,
 	type EmbeddingProgressCallback,
@@ -29,7 +30,6 @@ export {
 	selectEmbeddingPresetFromHardware,
 	selectEmbeddingTierFromHardware,
 } from "./embedding-presets.js";
-export { registerLocalInferenceBoot } from "./boot.js";
 export { shouldWarmupLocalEmbeddingModel } from "./embedding-warmup-policy.js";
 export { ensureLocalInferenceHandler } from "./ensure-local-inference-handler.js";
 export {

@@ -399,9 +399,9 @@ describe("runFactsAndRelationshipsStage", () => {
 			components: [],
 			metadata: {},
 		};
-		(runtime.getEntitiesForRoom as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-			[...many, zoe],
-		);
+		(
+			runtime.getEntitiesForRoom as ReturnType<typeof vi.fn>
+		).mockResolvedValueOnce([...many, zoe]);
 		await runFactsAndRelationshipsStage({
 			runtime,
 			message: makeMessage(),
@@ -440,11 +440,15 @@ describe("runFactsAndRelationshipsStage", () => {
 	// degrade to no grounding, never crash the stage (error-policy:J7).
 	it("reports and degrades (no crash) when room-entity fetch fails (#13196)", async () => {
 		const runtime = makeRuntime(
-			JSON.stringify({ facts: ["the user's birthday is March 5"], relationships: [], thought: "ok" }),
+			JSON.stringify({
+				facts: ["the user's birthday is March 5"],
+				relationships: [],
+				thought: "ok",
+			}),
 		);
-		(runtime.getEntitiesForRoom as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-			new Error("boom"),
-		);
+		(
+			runtime.getEntitiesForRoom as ReturnType<typeof vi.fn>
+		).mockRejectedValueOnce(new Error("boom"));
 		const result = await runFactsAndRelationshipsStage({
 			runtime,
 			message: makeMessage(),

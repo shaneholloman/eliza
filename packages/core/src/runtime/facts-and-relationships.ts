@@ -182,11 +182,13 @@ export async function runFactsAndRelationshipsStage(
 		rel.subject,
 		rel.object,
 	]);
-	const [similarFacts, existingRelationships, roomEntities] = await Promise.all([
-		searchSimilarFacts(runtime, message, candidateFacts),
-		fetchExistingRelationships(runtime, message),
-		fetchRoomEntities(runtime, message, candidateEntityNames),
-	]);
+	const [similarFacts, existingRelationships, roomEntities] = await Promise.all(
+		[
+			searchSimilarFacts(runtime, message, candidateFacts),
+			fetchExistingRelationships(runtime, message),
+			fetchRoomEntities(runtime, message, candidateEntityNames),
+		],
+	);
 
 	const tools = [createFactsAndRelationshipsTool()];
 	const messages = buildFactsStageMessages({

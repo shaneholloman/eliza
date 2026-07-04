@@ -74,11 +74,7 @@ describe("AgentRuntime component precedence — undeclared collisions (first-win
 		// Incumbent (first) is authoritative.
 		const dup = matches[0];
 		expect(dup).toBeDefined();
-		const result = await dup!.get(
-			runtime,
-			{} as never,
-			{} as never,
-		);
+		const result = await dup!.get(runtime, {} as never, {} as never);
 		expect(result.text).toBe("first");
 		expect(warn).toHaveBeenCalledTimes(1);
 		expect(warn.mock.calls[0]?.[1]).toMatch(/name collision/i);
@@ -129,11 +125,7 @@ describe("AgentRuntime component precedence — declared override:true supersede
 		expect(matches).toHaveLength(1);
 		const ovr = matches[0];
 		expect(ovr).toBeDefined();
-		const result = await ovr!.get(
-			runtime,
-			{} as never,
-			{} as never,
-		);
+		const result = await ovr!.get(runtime, {} as never, {} as never);
 		expect(result.text).toBe("second");
 		// Declared override logs at info, never warns.
 		expect(info).toHaveBeenCalled();
@@ -205,9 +197,7 @@ describe("AgentRuntime component precedence — policy applies through registerP
 		await runtime.registerPlugin({
 			name: "override-plugin",
 			description: "attempts an intentional override across a plugin boundary",
-			actions: [
-				{ ...makeAction("PLUGIN_OVR", "from-plugin"), override: true },
-			],
+			actions: [{ ...makeAction("PLUGIN_OVR", "from-plugin"), override: true }],
 		});
 
 		const matches = runtime.actions.filter((a) => a.name === "PLUGIN_OVR");
@@ -229,7 +219,9 @@ describe("AgentRuntime component precedence — grep guard (silent dedupe remove
 		expect(runtimeSrc).not.toContain('"Skipping duplicate plugin action"');
 		expect(runtimeSrc).not.toContain('"Skipping duplicate plugin provider"');
 		expect(runtimeSrc).not.toContain('"Skipping duplicate plugin evaluator"');
-		expect(runtimeSrc).not.toContain('"Evaluator already registered, skipping"');
+		expect(runtimeSrc).not.toContain(
+			'"Evaluator already registered, skipping"',
+		);
 		// The single-authority collision resolver exists.
 		expect(runtimeSrc).toContain("resolveComponentCollision");
 	});

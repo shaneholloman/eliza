@@ -261,7 +261,9 @@ export function resolveActionContexts(action: Action): AgentContext[] {
 		return declared;
 	}
 
-	return LEGACY_ACTION_CONTEXT_FALLBACK[action.name.toUpperCase()] ?? ["general"];
+	return (
+		LEGACY_ACTION_CONTEXT_FALLBACK[action.name.toUpperCase()] ?? ["general"]
+	);
 }
 
 export function resolveProviderContexts(provider: Provider): AgentContext[] {
