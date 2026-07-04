@@ -82,6 +82,7 @@ function isNativePlatform(): boolean {
   try {
     return cap?.isNativePlatform?.() === true;
   } catch {
+    // error-policy:J3 an exotic host global shape reads as "not native".
     return false;
   }
 }
@@ -193,7 +194,8 @@ async function downloadViaAnchor(url: string, filename: string): Promise<void> {
       }
     }
   } catch {
-    // Network/CORS failure — fall back to linking the raw url directly.
+    // error-policy:J4 network/CORS failure on the blob prefetch — degrade to
+    // linking the raw url directly; the browser surfaces its own failure.
     href = url;
   }
 
@@ -261,11 +263,14 @@ async function downloadViaCapacitor(
       try {
         await share.share({ url: fileUri, title: filename, files: [fileUri] });
       } catch {
-        // user cancelled or share unavailable — file is still saved.
+        // error-policy:J4 user cancelled or share sheet unavailable — the
+        // file is already saved to the cache; nothing was lost.
       }
     }
     return true;
   } catch {
+    // error-policy:J4 `false` signals the caller to fall back to the web
+    // download path — the documented chain contract of this helper.
     return false;
   }
 }
@@ -311,9 +316,9 @@ export async function downloadAttachment(
         return;
       }
     } catch (err) {
-      // User cancelled the picker — do nothing further (don't double-download).
+      // error-policy:J4 user cancelled the picker → done (don't
+      // double-download); any other failure falls through to the anchor path.
       if (isAbortError(err)) return;
-      // Otherwise fall through to the anchor fallback.
     }
   }
 
@@ -341,8 +346,9 @@ export async function shareAttachment(
       await capShare.share({ url, title });
       return true;
     } catch (err) {
+      // error-policy:J4 cancel reads as "not shared"; other failures fall
+      // through to the web share path (documented chain contract).
       if (isAbortError(err)) return false;
-      // fall through to the web path.
     }
   }
 
@@ -355,6 +361,9 @@ export async function shareAttachment(
         await nav.share({ url, title });
         return true;
       } catch (err) {
+        // error-policy:J4 `false` signals the caller to fall back to a plain
+        // download (documented contract); cancel and failure both read as
+        // "not shared".
         if (isAbortError(err)) return false;
         return false;
       }

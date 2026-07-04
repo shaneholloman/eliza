@@ -225,6 +225,8 @@ export async function createImageThumbnail(
     if (commaIdx < 0 || !dataUrl.startsWith("data:image/")) return null;
     return { data: dataUrl.slice(commaIdx + 1), mimeType: "image/jpeg" };
   } catch {
+    // error-policy:J4 a thumbnail is optional enrichment — an undecodable
+    // image simply ships without one; the full attachment still uploads.
     return null;
   }
 }
@@ -289,6 +291,8 @@ export async function reencodeImageToChatCap(
   try {
     img = await readFileAsImageElement(file);
   } catch {
+    // error-policy:J2 translate the opaque decode failure into the
+    // user-facing UnsendableAttachmentError built above.
     throw undecodable;
   }
   const longest = Math.max(img.width, img.height);
@@ -348,8 +352,7 @@ async function fileToChatAttachment(file: File): Promise<ImageAttachment> {
   if (imageNeedsReencode(file.type, data.length)) {
     ({ data, mimeType } = await reencodeImageToChatCap(file));
   }
-  // error-policy:J4 the thumbnail is optional preview enrichment; null omits it
-  // while the full-resolution attachment (already read above) still sends.
+  // error-policy:J4 thumbnail is optional enrichment (see createImageThumbnail).
   const thumbnail = await createImageThumbnail(file).catch(() => null);
   return {
     data,

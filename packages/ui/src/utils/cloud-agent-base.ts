@@ -13,6 +13,7 @@ function normalizeHttpUrl(value: string): URL | null {
     const url = new URL(value);
     return url.protocol === "http:" || url.protocol === "https:" ? url : null;
   } catch {
+    // error-policy:J3 malformed URL input yields the explicit null signal.
     return null;
   }
 }
