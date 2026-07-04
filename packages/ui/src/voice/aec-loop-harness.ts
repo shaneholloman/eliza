@@ -240,6 +240,8 @@ async function postJson(path: string, body: unknown): Promise<unknown> {
   });
   // error-policy:J3 body parse is best-effort context for the thrown error;
   // non-2xx always throws below with the status either way
+  // error-policy:J3 parse-sanitize — an empty/non-JSON body becomes null; the
+  // HTTP status is the real signal (thrown below), the body is only diagnostic.
   const json: unknown = await res.json().catch(() => null);
   if (!res.ok) {
     throw new Error(`${path} -> ${res.status} ${JSON.stringify(json)}`);
@@ -253,6 +255,8 @@ async function getJson(path: string): Promise<unknown> {
   });
   // error-policy:J3 body parse is best-effort context for the thrown error;
   // non-2xx always throws below with the status either way
+  // error-policy:J3 parse-sanitize — an empty/non-JSON body becomes null; the
+  // HTTP status is the real signal (thrown below), the body is only diagnostic.
   const json: unknown = await res.json().catch(() => null);
   if (!res.ok) {
     throw new Error(`${path} -> ${res.status} ${JSON.stringify(json)}`);

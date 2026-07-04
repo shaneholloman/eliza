@@ -6,6 +6,7 @@
  * entry. Kept statically imported in App.tsx (not lazy) so first-run onboarding
  * can land here without a chunk fetch.
  */
+import { logger } from "@elizaos/logger";
 import { getStylePresets } from "@elizaos/shared";
 import { useAgentElement } from "../../agent-surface";
 import type { CharacterData } from "../../api/client";
@@ -743,7 +744,15 @@ export function CharacterEditor({
                 tts: persistedVoiceConfig,
               },
             })
-            .catch(() => {});
+            .catch((err) => {
+              // The voice switch already applied in-session (event above); this
+              // persists it. A silent failure would desync the next reload from
+              // what the user sees — surface it (Save re-persists on demand).
+              logger.error(
+                { err },
+                "[CharacterEditor] failed to persist voice config",
+              );
+            });
         }
       }
       if (applyDefaults) {

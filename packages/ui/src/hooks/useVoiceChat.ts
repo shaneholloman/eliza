@@ -421,6 +421,9 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
     if (!sharedAudioCtx) {
       sharedAudioCtx = new AudioContext({ latencyHint: "interactive" });
     }
+    // error-policy:J5 unhandled-rejection guard; resume() may reject on a context
+    // that re-suspended, but the unlock generation bump below still re-arms audio
+    // and the real playback path surfaces any persistent failure.
     void sharedAudioCtx.resume().catch(() => {});
     setVoiceUnlockedGeneration((g) => g + 1);
     setNeedsAudioUnlock(false);
@@ -909,6 +912,9 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
         await ensureTalkModeListeners();
         const talkMode = getTalkModePlugin();
         const browserSpeechSupported = !!getSpeechRecognitionCtor();
+        // error-policy:J4 designed degrade — a failed permission probe reads as
+        // null and is treated as "maybe supported", deferring the real decision
+        // to the actual speech attempt rather than falsely disabling voice.
         let permissions = await talkMode.checkPermissions().catch(() => null);
         const nativeSpeechSupported =
           permissions?.speechRecognition !== "not_supported";
@@ -1115,6 +1121,8 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
     // actually silences the agent. Without this the awaited TalkMode.speak()
     // plays to completion and the agent talks over the user.
     if (Capacitor.isNativePlatform()) {
+      // error-policy:J6 best-effort interrupt/teardown of in-flight native speak
+      // for barge-in; if the stop fails there is no further recourse here.
       void getTalkModePlugin()
         .stopSpeaking?.()
         .catch(() => {});
@@ -1368,6 +1376,8 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
       source.connect(analyser);
       analyser.connect(ctx.destination);
       audioSourceRef.current = source;
+      // error-policy:J6 best-effort visualizer tap; if attaching the frame pump
+      // fails, audio still plays — the tap only drives the waveform decoration.
       const playbackTap = await getPlaybackFramePump()
         .tapSource(ctx, source, audioBuffer)
         .catch(() => null);
@@ -1552,6 +1562,8 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
       source.connect(analyser);
       analyser.connect(ctx.destination);
       audioSourceRef.current = source;
+      // error-policy:J6 best-effort visualizer tap; if attaching the frame pump
+      // fails, audio still plays — the tap only drives the waveform decoration.
       const playbackTap = await getPlaybackFramePump()
         .tapSource(ctx, source, audioBuffer)
         .catch(() => null);

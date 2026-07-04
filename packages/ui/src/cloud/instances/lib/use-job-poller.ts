@@ -143,6 +143,8 @@ export function useJobPoller(options: UseJobPollerOptions = {}) {
               continue;
             }
 
+            // error-policy:J3 parse-sanitize — non-JSON/empty body becomes null;
+            // a missing status below simply skips this poll tick (continue).
             const data = await res.json().catch(() => null);
             const nextStatus = data?.data?.status as JobStatus | undefined;
             const nextError = data?.data?.error;

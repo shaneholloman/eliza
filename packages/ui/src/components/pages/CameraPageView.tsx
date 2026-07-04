@@ -75,6 +75,7 @@ export function CameraPageView(): React.JSX.Element {
           mirror: false,
         });
         if (cancelled) {
+          // error-policy:J6 best-effort teardown of a preview that raced an unmount.
           await Camera.stopPreview().catch(() => {});
           return;
         }
@@ -92,6 +93,8 @@ export function CameraPageView(): React.JSX.Element {
 
     return () => {
       cancelled = true;
+      // error-policy:J6 best-effort teardown on unmount; the preview is gone
+      // regardless and a failed stop has no further recourse.
       void Camera.stopPreview().catch(() => {});
     };
   }, []);

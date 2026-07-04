@@ -245,6 +245,9 @@ export async function runStartingRuntime(
       // error-policy:J4 boot poll — the API is expected to be unreachable
       // while the backend comes up; the loop's deadline surfaces a visible
       // startup error (setStartupError) when it never recovers
+      // error-policy:J4 bounded-retry-then-error — a transient probe failure
+      // reads as null and the loop retries; a persistent failure surfaces via the
+      // deadline check above (setStartupError), so it is not silently masked.
       const launchProgress = await client.getLaunchProgress().catch(() => null);
       if (launchProgress) {
         const launchStatus = mapLaunchProgressToAgentStatus(launchProgress);
@@ -303,6 +306,9 @@ export async function runStartingRuntime(
       }
 
       // error-policy:J4 boot poll — same deadline-guarded probe as above
+      // error-policy:J4 bounded-retry-then-error — same as the launch-progress
+      // probe above: null is retried within the deadline, a persistent failure
+      // surfaces via setStartupError, never a fabricated healthy state.
       const bootProgress = await client.getBootProgress().catch(() => null);
       if (bootProgress) {
         const bootStatus = mapBootProgressToAgentStatus(bootProgress);

@@ -8,6 +8,7 @@
  */
 
 import type { AgentRuntime } from "@elizaos/core";
+import { logger } from "@elizaos/logger";
 import { ActiveModelCoordinator } from "./active-model";
 import { readEffectiveAssignments, setAssignment } from "./assignments";
 import { registerBundledModels } from "./bundled-models";
@@ -67,7 +68,15 @@ export class LocalInferenceService {
     if (!this.bundledBootstrap) {
       this.bundledBootstrap = registerBundledModels()
         .then(() => undefined)
-        .catch(() => undefined);
+        .catch((err) => {
+          // Boot proceeds with the registry as-is, but a failed bundled-model
+          // registration means AOSP/manifest-staged models silently won't
+          // appear — surface it so on-device installs are debuggable.
+          logger.error(
+            { err },
+            "[LocalInferenceService] bundled-model registration failed",
+          );
+        });
     }
     return this.bundledBootstrap;
   }

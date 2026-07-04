@@ -158,6 +158,8 @@ export function BugReportModal() {
             : {}),
         }));
       })
+      // error-policy:J6 best-effort form prefill; on failure the reporter still
+      // types the environment fields manually (no fabricated/masked data).
       .catch(() => {});
     if (desktopRuntime) {
       loadDesktopBugReportDiagnostics()
@@ -177,6 +179,8 @@ export function BugReportModal() {
             }));
           }
         })
+        // error-policy:J6 best-effort desktop-diagnostics prefill; on failure the
+        // logs/environment fields stay empty for the reporter to fill manually.
         .catch(() => {});
     }
     setTimeout(() => descRef.current?.focus(), 50);
