@@ -42,16 +42,16 @@
       "pack": "A1",
       "tier": "T2",
       "surface": "scenario-runner",
-      "status": "authored",
-      "notes": "Live-only. Identical re-ask collapses to one reminder: definitionCountDelta{recycling, delta:1} proves capture, judge grades the no-duplicate nuance. Live-verify deferred to the key boundary (#12781)."
+      "status": "verified",
+      "notes": "Live provider run passed on 2026-07-04: explicit 9pm recycling reminder created once (definitionCountDelta{recycling, delta:1}); duplicate re-ask responded without creating a second reminder; judge score 1.00."
     },
     {
       "id": "adhd-search-not-create-yesterday-mention",
       "pack": "A1",
       "tier": "T2",
       "surface": "scenario-runner",
-      "status": "authored",
-      "notes": "Live-only. Half-remembered mention searches (actionCalled INBOX) instead of creating: paired with definitionCountDelta{dentist, delta:0} to beat the all-actionCalled ratchet and prove 'search, don't create'. Live-verify deferred (#12781)."
+      "status": "verified",
+      "notes": "Live provider run passed on 2026-07-04: model routed to INBOX_SEARCH, no dentist reminder was created (definitionCountDelta{dentist, delta:0}), and judge score was 1.00."
     },
     {
       "id": "adhd-task-initiation-two-minute-step",
@@ -59,7 +59,7 @@
       "tier": "T2",
       "surface": "scenario-runner",
       "status": "authored",
-      "notes": "Live-only. Stuck-on-starting -> one consented ~2-minute step, non-shaming tone (judge) + definitionCountDelta{expense, delta:1}. NOT a crisis guard: asserts no 988/crisis-guard effect (#12780 not-planned). Live-verify deferred (#12781)."
+      "notes": "Pending scenario-runner status. Live probe on 2026-07-04 wrote the scheduled expense micro-step on the confirmation turn, but the first turn fell back to a generic error after planner required_tool_misses on free-form record tool schemas (#12150/#13111). Keep authored but pending until that runtime blocker is fixed, then rerun live evidence."
     },
     {
       "id": "adhd-hyperfocus-guardrail-protects-standup",
