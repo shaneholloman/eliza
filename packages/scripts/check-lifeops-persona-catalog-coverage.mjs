@@ -102,10 +102,22 @@ function loadScenarioRunnerIds() {
 function loadLifeOpsBenchIds() {
   const ids = new Map();
   const files = walkFiles(PYTHON_SCENARIO_ROOT, (file) => file.endsWith(".py"));
-  const idPattern = /\bid\s*=\s*["']([^"']+)["']/g;
+  // Two id-declaration forms coexist in the bench corpus: the explicit
+  // `id="..."` keyword on inline `Scenario(...)` literals, and the positional
+  // first argument of the per-pack scenario factories (`_scenario(...)` /
+  // `_live(...)`) some packs use to build their `SCENARIOS` list (e.g.
+  // night_owl_anchored_day.py). Both resolve real, registered scenarios, so the
+  // coverage gate must see both — matching only `id=` silently under-counts the
+  // factory packs. `_anchor(...)`/`_definition(...)` helpers also take a leading
+  // string, so the factory pattern is scoped to the scenario-builder names.
+  const idKeywordPattern = /\bid\s*=\s*["']([^"']+)["']/g;
+  const factoryIdPattern = /\b_(?:scenario|live)\(\s*["']([^"']+)["']/g;
   for (const file of files) {
     const source = readFileSync(file, "utf8");
-    for (const match of source.matchAll(idPattern)) {
+    for (const match of source.matchAll(idKeywordPattern)) {
+      ids.set(match[1], toPosix(path.relative(REPO_ROOT, file)));
+    }
+    for (const match of source.matchAll(factoryIdPattern)) {
       ids.set(match[1], toPosix(path.relative(REPO_ROOT, file)));
     }
   }

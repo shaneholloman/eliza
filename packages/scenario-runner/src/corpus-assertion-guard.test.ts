@@ -260,6 +260,11 @@ const EXPECTED_PR_DETERMINISTIC_SCENARIO_IDS = [
   "adhd-distractor-storm-mid-capture",
   "adhd-hyperfocus-guardrail-protects-standup",
   "agent-orchestrator.list-agents",
+  // LifeOps persona pack B1 (night-owl-anchored-day, #12771). Same G1
+  // convention as A1: authored under the SCANNED root
+  // packages/test/scenarios/lifeops.personas and added here in the same commit.
+  "persona.night-owl-anchored-day",
+  "persona.night-owl-quiet-hours-sleep-protection",
   "ainex.stand",
   "anthropic-proxy.proxy-status",
   "benchmarks.osworld-action",
