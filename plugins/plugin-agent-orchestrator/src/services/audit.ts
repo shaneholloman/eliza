@@ -50,8 +50,16 @@ export async function emitTaskAudit(
   };
   try {
     await runtime.emitEvent(TASK_AUDIT_EVENT, envelope);
-  } catch {
-    // best-effort: audit emission must never break the action it audits
+  } catch (error) {
+    // error-policy:J7 audit emission is best-effort — it must never break the
+    // action it audits — but a dropped TASK_AUDIT event is a security-relevant
+    // gap, so surface it observably (log + ERROR_REPORTED + RECENT_ERRORS)
+    // rather than swallowing it silently.
+    runtime.reportError("[emitTaskAudit]", error, {
+      action: payload.action,
+      outcome: payload.outcome,
+      source: payload.source,
+    });
   }
 }
 
@@ -74,6 +82,7 @@ async function rotateIfTooLarge(path: string): Promise<void> {
     const st = await stat(path);
     size = st.size;
   } catch {
+    // error-policy:J4 stat failed → file absent → no rotation needed; first append creates it
     return; // file doesn't exist yet — first append creates it
   }
   if (size < AUDIT_LOG_MAX_BYTES) return;
@@ -82,6 +91,7 @@ async function rotateIfTooLarge(path: string): Promise<void> {
     // than two files. Anyone needing deeper history can ship logs elsewhere.
     await rename(path, `${path}.1`);
   } catch {
+    // error-policy:J4 rename/rotation failed → degrade to unrotated append (documented: prefer growth over losing audit entries)
     // best-effort: if rotation fails we still append; growing past the cap
     // is preferable to losing audit entries entirely.
   }
