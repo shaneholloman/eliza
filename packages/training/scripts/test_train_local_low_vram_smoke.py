@@ -98,8 +98,69 @@ def test_no_low_vram_smoke_leaves_registry_defaults_alone() -> None:
     assert args.batch_size == 1
     assert args.grad_accum == 16  # same as preset, coincidence at 2B
     assert args.memory_budget_gb == pytest.approx(15.5)
+    assert args.max_grad_norm == pytest.approx(1.0)
+    assert args.train_dtype == "bf16"
     assert args.max_samples == 0
     assert args.epochs == 3.0
+
+
+def test_large_registry_tier_sets_tighter_grad_clip() -> None:
+    """The 12B/31B tiers must not silently inherit HF's global clip default."""
+    args = _resolve(["--registry-key", "gemma4-12b"])
+    assert args.max_grad_norm == pytest.approx(0.5)
+
+
+def test_explicit_max_grad_norm_wins_over_registry() -> None:
+    args = _resolve(["--registry-key", "gemma4-12b", "--max-grad-norm", "0.25"])
+    assert args.max_grad_norm == pytest.approx(0.25)
+
+
+def test_explicit_train_dtype_wins_when_supported() -> None:
+    args = _resolve(["--registry-key", "gemma4-12b", "--train-dtype", "bf16"])
+    assert args.train_dtype == "bf16"
+
+
+def test_unsupported_train_dtype_fails_loud() -> None:
+    with pytest.raises(SystemExit, match="not implemented"):
+        _resolve(["--registry-key", "gemma4-e2b", "--train-dtype", "fp16"])
+
+
+def test_liger_arch_gate_allows_validated_gemma4() -> None:
+    assert train_local.resolve_liger_arch_gate(
+        use_liger=True,
+        requested_mode="auto",
+        model_type="gemma4",
+        architectures=["Gemma4ForCausalLM"],
+    ) is True
+
+
+def test_liger_arch_gate_disables_unsupported_auto() -> None:
+    assert train_local.resolve_liger_arch_gate(
+        use_liger=True,
+        requested_mode="auto",
+        model_type="qwen3",
+        architectures=["Qwen3ForCausalLM"],
+    ) is False
+
+
+def test_liger_arch_gate_fails_loud_for_requested_unsupported() -> None:
+    with pytest.raises(SystemExit, match="not allowlisted"):
+        train_local.resolve_liger_arch_gate(
+            use_liger=True,
+            requested_mode="on",
+            model_type="qwen3",
+            architectures=["Qwen3ForCausalLM"],
+        )
+
+
+def test_liger_arch_gate_fails_loud_for_requested_gemma4_unified() -> None:
+    with pytest.raises(SystemExit, match="gemma4_unified"):
+        train_local.resolve_liger_arch_gate(
+            use_liger=True,
+            requested_mode="on",
+            model_type="gemma4_unified",
+            architectures=["Gemma4UnifiedForCausalLM"],
+        )
 
 
 def test_low_vram_smoke_flag_lives_on_train_local_parser() -> None:
@@ -128,6 +189,7 @@ def test_low_vram_smoke_flag_lives_on_train_local_parser() -> None:
         ("--batch-size", "4", "batch_size", 4),
         ("--grad-accum", "8", "grad_accum", 8),
         ("--max-seq-len", "4096", "max_seq_len", 4096),
+        ("--max-grad-norm", "1.0", "max_grad_norm", 1.0),
     ],
 )
 def test_low_vram_smoke_respects_explicit_default_equal_value(

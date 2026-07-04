@@ -257,7 +257,10 @@ def build_dataset(
 _TRACKED_DESTS = (
     "model", "batch_size", "grad_accum", "max_seq_len", "optimizer",
     "apollo_rank", "max_samples", "epochs", "memory_budget_gb",
+    "max_grad_norm", "train_dtype",
 )
+_SUPPORTED_TRAIN_DTYPES = {"bf16"}
+_LIGER_SUPPORTED_MODEL_TYPES = {"gemma4"}
 
 _FALLBACK_DEFAULTS: dict[str, Any] = {
     "model": "google/gemma-4-E2B",
@@ -268,6 +271,8 @@ _FALLBACK_DEFAULTS: dict[str, Any] = {
     "apollo_rank": 256,
     "max_samples": 0,
     "epochs": 3.0,
+    "max_grad_norm": 1.0,
+    "train_dtype": "bf16",
     # memory_budget_gb intentionally stays None — downstream treats None
     # as "no enforcement", matching the original behavior.
 }
@@ -317,6 +322,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("--batch-size", type=int, default=None)
     ap.add_argument("--grad-accum", type=int, default=None)
+    ap.add_argument(
+        "--max-grad-norm", type=float, default=None,
+        help="Gradient clipping norm forwarded to TRL SFTConfig. Default "
+             "None falls back to the registry tier value, or 1.0 when no "
+             "registry key is set. Pass 0 to disable HF Trainer clipping."
+    )
+    ap.add_argument(
+        "--train-dtype", default=None,
+        help="Training dtype. Default None falls back to the registry tier "
+             "value, or bf16 when no registry key is set. Only bf16 is "
+             "implemented in this entrypoint; other values fail loud."
+    )
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument(
         "--max-seq-len", type=int, default=None,
@@ -442,9 +459,14 @@ def apply_resolved_defaults(args: argparse.Namespace) -> None:
             args.apollo_rank = entry.optimizer_rank
         if not user_passed["memory_budget_gb"]:
             args.memory_budget_gb = entry.train_mem_gb_budget
-        log.info("registry %s → model=%s batch=%d accum=%d seq=%d optimizer=%s budget=%.0fGB",
+        if not user_passed["max_grad_norm"]:
+            args.max_grad_norm = entry.max_grad_norm
+        if not user_passed["train_dtype"]:
+            args.train_dtype = entry.train_dtype
+        log.info("registry %s → model=%s batch=%d accum=%d seq=%d optimizer=%s budget=%.0fGB max_grad_norm=%.3g dtype=%s",
                  entry.short_name, args.model, args.batch_size, args.grad_accum,
-                 args.max_seq_len, args.optimizer, args.memory_budget_gb or 0)
+                 args.max_seq_len, args.optimizer, args.memory_budget_gb or 0,
+                 args.max_grad_norm, args.train_dtype)
 
     # --low-vram-smoke overrides applied AFTER the registry merge so the
     # preset wins regardless of which registry key was passed. The numbers
@@ -476,6 +498,14 @@ def apply_resolved_defaults(args: argparse.Namespace) -> None:
         if getattr(args, dest) is None:
             setattr(args, dest, fallback)
 
+    if args.train_dtype not in _SUPPORTED_TRAIN_DTYPES:
+        raise SystemExit(
+            f"--train-dtype {args.train_dtype!r} is not implemented in "
+            "train_local.py. Supported dtype(s): "
+            + ", ".join(sorted(_SUPPORTED_TRAIN_DTYPES))
+            + ". Update the dtype path before changing the registry."
+        )
+
     if args.low_vram_smoke:
         log.info(
             "low-vram-smoke preset → seq=%d batch=%d accum=%d max_samples=%d "
@@ -483,6 +513,39 @@ def apply_resolved_defaults(args: argparse.Namespace) -> None:
             args.max_seq_len, args.batch_size, args.grad_accum, args.max_samples,
             args.epochs, args.memory_budget_gb, args.batch_size * args.grad_accum,
         )
+
+
+def resolve_liger_arch_gate(
+    *,
+    use_liger: bool,
+    requested_mode: str,
+    model_type: str,
+    architectures: list[str],
+) -> bool:
+    """Apply the Gemma 4 Liger allowlist after model config is loaded."""
+    if not use_liger:
+        return False
+    normalized_model_type = model_type.lower()
+    if (
+        "gemma4_unified" in normalized_model_type
+        or any("Gemma4Unified" in arch for arch in architectures)
+    ):
+        reason = (
+            "Liger kernel is not validated for gemma4_unified; fused kernels "
+            "can corrupt the 12B/31B forward and produce NaN checkpoints."
+        )
+    elif normalized_model_type not in _LIGER_SUPPORTED_MODEL_TYPES:
+        reason = (
+            f"Liger kernel is not allowlisted for model_type={model_type!r}. "
+            "Add an explicit validation before enabling fused kernels for this arch."
+        )
+    else:
+        return True
+
+    if requested_mode == "on":
+        raise SystemExit(f"--use-liger=on requested but {reason}")
+    log.warning("%s Disabling Liger for this run.", reason)
+    return False
 
 
 def main() -> int:
@@ -620,8 +683,9 @@ def main() -> int:
     # to its own GPU before FSDP shards, causing avoidable OOM risk.
     in_distributed = "RANK" in os.environ
     use_device_map = device == "cuda" and not in_distributed
-    # MPS supports bfloat16 on PyTorch 2.x; cpu falls back to float32
-    train_dtype = torch.bfloat16 if device in ("cuda", "mps") else torch.float32
+    # bf16 is the only implemented training dtype; CPU still loads fp32 so the
+    # preflight/test path does not pretend to exercise bf16 kernels.
+    train_dtype = torch.bfloat16 if args.train_dtype == "bf16" and device in ("cuda", "mps") else torch.float32
     model_kwargs = dict(
         torch_dtype=train_dtype,
         trust_remote_code=True,
@@ -661,25 +725,14 @@ def main() -> int:
         else:
             log.warning(msg)
         use_liger = False
-    # Liger has no validated gemma4_unified (dense 12B/31B) kernel path. Its
-    # fused RMSNorm/RoPE/CE assume the Gemma2/3 layer layout and silently
-    # corrupt the gemma4_unified forward — which adds per-layer q_norm/k_norm,
-    # a layer_scalar, and logit softcapping the Gemma3 kernels don't model — so
-    # the loss NaNs within the first optimizer steps and the saved checkpoint is
-    # all-NaN. Force Liger off for this arch (E2B/E4B "gemma4" stay on). The
-    # generic finite-weights guard (make_finite_weights_callback) is the second
-    # line of defense; this is the specific known-arch prevention.
     _model_type = str(getattr(model.config, "model_type", "")).lower()
     _arch_names = getattr(model.config, "architectures", None) or []
-    if use_liger and (
-        "gemma4_unified" in _model_type
-        or any("Gemma4Unified" in a for a in _arch_names)
-    ):
-        log.warning(
-            "Liger kernel disabled for gemma4_unified arch (no validated fused "
-            "kernel path; avoids NaN divergence in 12B/31B SFT)."
-        )
-        use_liger = False
+    use_liger = resolve_liger_arch_gate(
+        use_liger=use_liger,
+        requested_mode=args.use_liger,
+        model_type=_model_type,
+        architectures=list(_arch_names),
+    )
     if use_liger and device == "cuda":
         try:
             from liger_kernel.transformers import _apply_liger_kernel_to_instance
@@ -767,11 +820,12 @@ def main() -> int:
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=max(1, args.batch_size // 2),
         gradient_accumulation_steps=args.grad_accum,
+        max_grad_norm=args.max_grad_norm,
         learning_rate=args.lr,
         lr_scheduler_type="cosine",
         warmup_ratio=0.03,
         weight_decay=0.0,
-        bf16=device == "cuda",
+        bf16=args.train_dtype == "bf16" and device == "cuda",
         logging_steps=10,
         save_steps=500,
         save_total_limit=3,
