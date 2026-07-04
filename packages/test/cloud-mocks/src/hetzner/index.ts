@@ -1,4 +1,4 @@
-/** Implements the index Hetzner Cloud mock used by tests against the real autoscaler client. */
+/** Public entry that starts the Hetzner Cloud mock server and re-exports its store and app builders. */
 import { startFetchServer } from "../fetch-server";
 import { buildHetznerMockApp } from "./server";
 import type { HetznerStore } from "./store";

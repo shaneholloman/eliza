@@ -1,4 +1,4 @@
-/** Implements the server control-plane mock used by tests against real container-control clients. */
+/** Builds the container control-plane mock HTTP app: route handlers over the in-memory mock store. */
 import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import {

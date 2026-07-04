@@ -1,4 +1,4 @@
-/** Implements the progression Hetzner Cloud mock used by tests against the real autoscaler client. */
+/** Action lifecycle progression (running → success) for the Hetzner Cloud mock. */
 import type { HetznerStore } from "./store";
 import type { MockAction, MockServer } from "./types";
 

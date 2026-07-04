@@ -1,4 +1,4 @@
-/** Implements the server Hetzner Cloud mock used by tests against the real autoscaler client. */
+/** Builds the Hetzner Cloud mock HTTP app: route handlers over the in-memory mock store. */
 import { type Context, Hono } from "hono";
 import { injectLatency } from "./latency";
 import {
