@@ -73,6 +73,15 @@ non-recognition, multi-speaker single-stream attribution, and shared-room
 uncertainty handling. Each operation must name evidence types, metrics, privacy
 controls, and the confidence policy used before applying speaker names.
 
+Real manifests must include speaker-name provenance cases for platform roster
+names, calendar attendees, self-introductions, user corrections, voice profile
+matches, recurring speaker memory after correction, same-first-name ambiguity,
+and borrowed-device guardrails. Each case must name the source, surface,
+evidence, signals, confidence, conflict policy, confidence policy, privacy
+policy, and expected resolution. Low-confidence inferred names cannot be
+reported as confirmed identities; they must request confirmation, withhold the
+name, or preserve an unknown speaker label.
+
 ## Fixture Manifest
 
 `fixtures/mock-meeting-manifest.json` describes the minimum canonical meeting

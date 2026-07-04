@@ -60,6 +60,64 @@ REQUIRED_SPEAKER_OPERATION_FIELDS = {
     "privacy_control",
     "confidence_policy",
 }
+REQUIRED_SPEAKER_NAME_PROVENANCE_CASES = {
+    "platform_roster_name",
+    "calendar_attendee_name",
+    "self_introduction_name",
+    "user_correction_name",
+    "voice_profile_match_name",
+    "recurring_speaker_memory",
+    "same_first_name_ambiguity",
+    "borrowed_device_guardrail",
+}
+REQUIRED_SPEAKER_NAME_PROVENANCE_FIELDS = {
+    "id",
+    "source",
+    "surface",
+    "evidence",
+    "signals",
+    "confidence",
+    "conflict_policy",
+    "confidence_policy",
+    "privacy_policy",
+    "expected_resolution",
+}
+REQUIRED_SPEAKER_NAME_SOURCES = {
+    "platform_roster",
+    "calendar_attendee",
+    "self_introduction",
+    "user_correction",
+    "voice_profile",
+    "speaker_memory",
+}
+REQUIRED_SPEAKER_NAME_SIGNALS = {
+    "platform_label",
+    "calendar_attendee",
+    "self_introduction",
+    "user_correction",
+    "voice_profile_match",
+    "recurring_meeting_memory",
+    "same_first_name_ambiguity",
+    "borrowed_device_guardrail",
+}
+REQUIRED_SPEAKER_NAME_RESOLUTIONS = {
+    "apply_name",
+    "withhold_name",
+    "request_confirmation",
+    "prefer_user_correction",
+    "preserve_unknown",
+}
+CONFIRMED_SPEAKER_NAME_RESOLUTIONS = {"apply_name", "prefer_user_correction"}
+FORBIDDEN_SPEAKER_NAME_POLICY_TERMS = {
+    "age",
+    "disability",
+    "ethnicity",
+    "gender",
+    "nationality",
+    "race",
+    "religion",
+    "sexual orientation",
+}
 REQUIRED_SCENARIOS = {
     "clean_single_speaker",
     "zoom_bot",
@@ -174,11 +232,15 @@ def _as_set(value: Any, *, field: str) -> set[str]:
 
 def _require_number(metrics: dict[str, Any], key: str) -> float:
     value = metrics.get(key)
+    return _require_ratio_value(f"metrics.{key}", value)
+
+
+def _require_ratio_value(field: str, value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ValueError(f"metrics.{key} must be numeric")
+        raise ValueError(f"{field} must be numeric")
     number = float(value)
     if number < 0 or number > 1:
-        raise ValueError(f"metrics.{key} must be in [0, 1]")
+        raise ValueError(f"{field} must be in [0, 1]")
     return number
 
 
@@ -488,6 +550,115 @@ def _validate_speaker_operations(manifest: dict[str, Any]) -> tuple[list[dict[st
     return sorted(normalized, key=lambda operation: operation["id"]), referenced_evidence
 
 
+def _reject_sensitive_name_policy(field: str, value: str) -> None:
+    lowered = value.lower()
+    for term in sorted(FORBIDDEN_SPEAKER_NAME_POLICY_TERMS):
+        if term in lowered:
+            raise ValueError(f"{field} must not use sensitive attributes for speaker naming: {term}")
+
+
+def _validate_speaker_name_provenance(manifest: dict[str, Any]) -> tuple[list[dict[str, Any]], set[str]]:
+    speaker_names = manifest.get("speaker_name_provenance")
+    if not isinstance(speaker_names, list) or not speaker_names:
+        raise ValueError("speaker_name_provenance must be a non-empty array")
+
+    case_ids: set[str] = set()
+    covered_sources: set[str] = set()
+    covered_signals: set[str] = set()
+    covered_resolutions: set[str] = set()
+    referenced_evidence: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for index, speaker_name in enumerate(speaker_names):
+        if not isinstance(speaker_name, dict):
+            raise ValueError(f"speaker_name_provenance[{index}] must be an object")
+        missing_fields = REQUIRED_SPEAKER_NAME_PROVENANCE_FIELDS - set(speaker_name)
+        if missing_fields:
+            raise ValueError(f"speaker_name_provenance[{index}] missing fields: {sorted(missing_fields)}")
+        case_id = speaker_name.get("id")
+        if not isinstance(case_id, str) or not case_id.strip():
+            raise ValueError(f"speaker_name_provenance[{index}].id must be a non-empty string")
+        case_ids.add(case_id)
+        source = speaker_name.get("source")
+        if not isinstance(source, str) or source not in REQUIRED_SPEAKER_NAME_SOURCES:
+            raise ValueError(
+                f"speaker_name_provenance[{index}].source must be one of {sorted(REQUIRED_SPEAKER_NAME_SOURCES)}"
+            )
+        covered_sources.add(source)
+        surface = speaker_name.get("surface")
+        if not isinstance(surface, str) or not surface.strip():
+            raise ValueError(f"speaker_name_provenance[{index}].surface must be a non-empty string")
+        evidence = _as_set(speaker_name.get("evidence"), field=f"speaker_name_provenance[{index}].evidence")
+        unknown_evidence = evidence - REQUIRED_EVIDENCE
+        if unknown_evidence:
+            raise ValueError(
+                f"speaker_name_provenance[{index}] references unknown evidence: {sorted(unknown_evidence)}"
+            )
+        signals = _as_set(speaker_name.get("signals"), field=f"speaker_name_provenance[{index}].signals")
+        unknown_signals = signals - REQUIRED_SPEAKER_NAME_SIGNALS
+        if unknown_signals:
+            raise ValueError(
+                f"speaker_name_provenance[{index}] references unknown signals: {sorted(unknown_signals)}"
+            )
+        confidence = _require_ratio_value(
+            f"speaker_name_provenance[{index}].confidence",
+            speaker_name.get("confidence"),
+        )
+        conflict_policy = speaker_name.get("conflict_policy")
+        if not isinstance(conflict_policy, str) or not conflict_policy.strip():
+            raise ValueError(f"speaker_name_provenance[{index}].conflict_policy must be a non-empty string")
+        confidence_policy = speaker_name.get("confidence_policy")
+        if not isinstance(confidence_policy, str) or not confidence_policy.strip():
+            raise ValueError(f"speaker_name_provenance[{index}].confidence_policy must be a non-empty string")
+        privacy_policy = speaker_name.get("privacy_policy")
+        if not isinstance(privacy_policy, str) or not privacy_policy.strip():
+            raise ValueError(f"speaker_name_provenance[{index}].privacy_policy must be a non-empty string")
+        _reject_sensitive_name_policy(f"speaker_name_provenance[{index}].conflict_policy", conflict_policy)
+        _reject_sensitive_name_policy(f"speaker_name_provenance[{index}].confidence_policy", confidence_policy)
+        expected_resolution = speaker_name.get("expected_resolution")
+        if not isinstance(expected_resolution, str) or expected_resolution not in REQUIRED_SPEAKER_NAME_RESOLUTIONS:
+            raise ValueError(
+                "speaker_name_provenance"
+                f"[{index}].expected_resolution must be one of {sorted(REQUIRED_SPEAKER_NAME_RESOLUTIONS)}"
+            )
+        if confidence < 0.85 and expected_resolution in CONFIRMED_SPEAKER_NAME_RESOLUTIONS:
+            raise ValueError(
+                "speaker_name_provenance"
+                f"[{index}] low-confidence inferred names cannot use confirmed resolution {expected_resolution}"
+            )
+
+        covered_signals.update(signals)
+        covered_resolutions.add(expected_resolution)
+        referenced_evidence.update(evidence)
+        normalized.append(
+            {
+                "id": case_id,
+                "source": source,
+                "surface": surface,
+                "evidence": sorted(evidence),
+                "signals": sorted(signals),
+                "confidence": confidence,
+                "conflict_policy": conflict_policy,
+                "confidence_policy": confidence_policy,
+                "privacy_policy": privacy_policy,
+                "expected_resolution": expected_resolution,
+            }
+        )
+
+    missing_cases = REQUIRED_SPEAKER_NAME_PROVENANCE_CASES - case_ids
+    if missing_cases:
+        raise ValueError(f"speaker_name_provenance missing cases: {sorted(missing_cases)}")
+    missing_sources = REQUIRED_SPEAKER_NAME_SOURCES - covered_sources
+    if missing_sources:
+        raise ValueError(f"speaker_name_provenance missing sources: {sorted(missing_sources)}")
+    missing_signals = REQUIRED_SPEAKER_NAME_SIGNALS - covered_signals
+    if missing_signals:
+        raise ValueError(f"speaker_name_provenance missing signals: {sorted(missing_signals)}")
+    missing_resolutions = REQUIRED_SPEAKER_NAME_RESOLUTIONS - covered_resolutions
+    if missing_resolutions:
+        raise ValueError(f"speaker_name_provenance missing expected resolutions: {sorted(missing_resolutions)}")
+    return sorted(normalized, key=lambda speaker_name: speaker_name["id"]), referenced_evidence
+
+
 def validate_manifest(manifest: dict[str, Any], *, lane: str, manifest_path: Path) -> dict[str, Any]:
     if lane not in LANES:
         raise ValueError(f"lane must be one of {sorted(LANES)}")
@@ -545,6 +716,7 @@ def validate_manifest(manifest: dict[str, Any], *, lane: str, manifest_path: Pat
     dataset_sources, dataset_evidence_types = _validate_dataset_sources(manifest)
     capture_paths, capture_evidence_types = _validate_capture_paths(manifest)
     speaker_operations, speaker_operation_evidence_types = _validate_speaker_operations(manifest)
+    speaker_name_provenance, speaker_name_evidence_types = _validate_speaker_name_provenance(manifest)
 
     metric_values = _validate_metrics(manifest.get("metrics"), lane=lane)
 
@@ -569,6 +741,9 @@ def validate_manifest(manifest: dict[str, Any], *, lane: str, manifest_path: Pat
         missing_speaker_operation_evidence = speaker_operation_evidence_types - set(evidence_files)
         if missing_speaker_operation_evidence:
             raise ValueError(f"speaker operation evidence files missing: {sorted(missing_speaker_operation_evidence)}")
+        missing_speaker_name_evidence = speaker_name_evidence_types - set(evidence_files)
+        if missing_speaker_name_evidence:
+            raise ValueError(f"speaker name evidence files missing: {sorted(missing_speaker_name_evidence)}")
 
     return {
         "surfaces": sorted(surfaces),
@@ -579,6 +754,7 @@ def validate_manifest(manifest: dict[str, Any], *, lane: str, manifest_path: Pat
         "dataset_sources": dataset_sources,
         "capture_paths": capture_paths,
         "speaker_operations": speaker_operations,
+        "speaker_name_provenance": speaker_name_provenance,
         "metrics": metric_values,
         "evidence_files": evidence_files,
         "provider_mode": provider_mode,

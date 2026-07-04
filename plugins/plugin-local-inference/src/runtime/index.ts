@@ -36,6 +36,21 @@ export {
 	warnIfMobileGateActiveWithoutPlatform,
 } from "./mobile-local-inference-gate.js";
 export {
+	type ExistingSpeakerEntity,
+	type InferSpeakerNameInput,
+	inferSpeakerName,
+	type SpeakerNameBindingAction,
+	type SpeakerNameBindingPlan,
+	type SpeakerNameCandidate,
+	type SpeakerNameEvidence,
+	type SpeakerNameEvidenceSource,
+	type SpeakerNameInference,
+	type SpeakerNameProvenance,
+	type SpeakerNameReasonCode,
+	type SpeakerNameResolution,
+	type SpeakerNameVoiceTurnBindingPlan,
+} from "./speaker-name-inference.js";
+export {
 	type EmitVoiceTurnObservedArgs,
 	emitVoiceTurnObserved,
 	getVoiceProfileStore,

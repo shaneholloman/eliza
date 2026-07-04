@@ -384,6 +384,104 @@
       "confidence_policy": "prefer room-level labels when visual or voice evidence is ambiguous"
     }
   ],
+  "speaker_name_provenance": [
+    {
+      "id": "platform_roster_name",
+      "source": "platform_roster",
+      "surface": "zoom",
+      "evidence": ["transcript_artifact", "speaker_profile_artifact"],
+      "signals": ["platform_label"],
+      "confidence": 0.91,
+      "conflict_policy": "apply only when roster, diarization, and profile context do not conflict",
+      "confidence_policy": "confirmed labels require high confidence and provenance in the transcript JSON",
+      "privacy_policy": "show source and confidence next to the displayed name",
+      "expected_resolution": "apply_name"
+    },
+    {
+      "id": "calendar_attendee_name",
+      "source": "calendar_attendee",
+      "surface": "google_meet",
+      "evidence": ["transcript_artifact", "screenshots"],
+      "signals": ["calendar_attendee"],
+      "confidence": 0.72,
+      "conflict_policy": "calendar-only matches stay tentative when roster or voice evidence is absent",
+      "confidence_policy": "medium confidence attendee matches ask the user before confirmed display",
+      "privacy_policy": "calendar attendee names remain scoped to the meeting artifact",
+      "expected_resolution": "request_confirmation"
+    },
+    {
+      "id": "self_introduction_name",
+      "source": "self_introduction",
+      "surface": "hybrid_local_cloud",
+      "evidence": ["audio", "transcript_artifact"],
+      "signals": ["self_introduction"],
+      "confidence": 0.9,
+      "conflict_policy": "self-introduction wins only for the diarized speaker segment that contains it",
+      "confidence_policy": "apply when transcript confidence and speaker attribution are both high",
+      "privacy_policy": "store the quote-backed provenance with the transcript segment",
+      "expected_resolution": "apply_name"
+    },
+    {
+      "id": "user_correction_name",
+      "source": "user_correction",
+      "surface": "hybrid_local_cloud",
+      "evidence": ["screenshots", "speaker_profile_artifact", "transcript_artifact"],
+      "signals": ["user_correction"],
+      "confidence": 0.99,
+      "conflict_policy": "manual correction overrides lower-priority inferred labels",
+      "confidence_policy": "user-confirmed correction becomes the binding source for future opted-in runs",
+      "privacy_policy": "correction history remains auditable and reversible",
+      "expected_resolution": "prefer_user_correction"
+    },
+    {
+      "id": "voice_profile_match_name",
+      "source": "voice_profile",
+      "surface": "on_device",
+      "evidence": ["audio", "speaker_profile_artifact", "metrics"],
+      "signals": ["voice_profile_match"],
+      "confidence": 0.94,
+      "conflict_policy": "voice profile labels apply only when false-accept controls pass",
+      "confidence_policy": "confirmed display requires a high-confidence profile match",
+      "privacy_policy": "profile provenance and confidence are visible before sharing",
+      "expected_resolution": "apply_name"
+    },
+    {
+      "id": "recurring_speaker_memory",
+      "source": "speaker_memory",
+      "surface": "hybrid_local_cloud",
+      "evidence": ["speaker_profile_artifact", "transcript_artifact"],
+      "signals": ["user_correction", "recurring_meeting_memory"],
+      "confidence": 0.96,
+      "conflict_policy": "previous user correction carries into recurring meetings unless new evidence conflicts",
+      "confidence_policy": "recurring Speaker 2 becomes Sarah only after correction-backed memory is present",
+      "privacy_policy": "recurring memory is attached to the meeting series and can be deleted",
+      "expected_resolution": "prefer_user_correction"
+    },
+    {
+      "id": "same_first_name_ambiguity",
+      "source": "calendar_attendee",
+      "surface": "google_meet",
+      "evidence": ["transcript_artifact", "speaker_profile_artifact", "screenshots"],
+      "signals": ["calendar_attendee", "same_first_name_ambiguity", "voice_profile_match"],
+      "confidence": 0.64,
+      "conflict_policy": "same-first-name cases with mixed signals must not choose a last name without review",
+      "confidence_policy": "ambiguous first-name matches are withheld until a stronger source disambiguates",
+      "privacy_policy": "candidate names are shown as review choices, not confirmed identity",
+      "expected_resolution": "withhold_name"
+    },
+    {
+      "id": "borrowed_device_guardrail",
+      "source": "platform_roster",
+      "surface": "zoom",
+      "evidence": ["audio", "transcript_artifact", "speaker_profile_artifact"],
+      "signals": ["platform_label", "borrowed_device_guardrail", "self_introduction"],
+      "confidence": 0.58,
+      "conflict_policy": "platform laptop owner labels do not bind when voice or self-introduction conflict",
+      "confidence_policy": "borrowed-device conflicts preserve unknown labels until user correction",
+      "privacy_policy": "avoid propagating the device owner's name onto another speaker",
+      "expected_resolution": "preserve_unknown"
+    }
+  ],
   "metrics": {
     "transcript_quality": 1.0,
     "diarization_quality": 1.0,
