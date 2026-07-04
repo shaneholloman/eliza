@@ -1062,6 +1062,10 @@ async function createMainWindow(rpc: ElizaDesktopRpc): Promise<BrowserWindow> {
   // empty region above the bar; on darwin it pairs with vibrancy. Win/Linux
   // transparency support varies, so the bar stays opaque there for now.
   const transparent = presentation.transparent;
+  // The pill spans the full work-area width but only the small bar is visible;
+  // OS-level click-through (passthrough) lets clicks on the transparent region
+  // land on the app underneath instead of being eaten by the invisible window.
+  const passthrough = bottomBar;
   const forceMainWindowCef = shouldForceMainWindowCef(
     process.env,
     process.platform,
@@ -1094,6 +1098,7 @@ async function createMainWindow(rpc: ElizaDesktopRpc): Promise<BrowserWindow> {
       renderer: resolveBootstrapShellRenderer(buildInfo),
       titleBarStyle,
       transparent,
+      passthrough,
     });
     win.webview.remove();
     const mainView = new BrowserView({
@@ -1111,6 +1116,9 @@ async function createMainWindow(rpc: ElizaDesktopRpc): Promise<BrowserWindow> {
       },
       windowId: win.id,
       rpc,
+      // Mirror the window's click-through onto the hosted view so the isolated
+      // (CEF) main-view path passes clicks through its transparent region too.
+      startPassthrough: passthrough,
     });
     win.webviewId = mainView.id;
     if (forceMainWindowCef) {
@@ -1127,6 +1135,7 @@ async function createMainWindow(rpc: ElizaDesktopRpc): Promise<BrowserWindow> {
       frame: windowFrame,
       titleBarStyle,
       transparent,
+      passthrough,
       rpc,
       ...(mainWindowPartition ? { partition: mainWindowPartition } : {}),
     });
@@ -1159,7 +1168,26 @@ async function createMainWindow(rpc: ElizaDesktopRpc): Promise<BrowserWindow> {
         `[main-window] bottom-bar setAlwaysOnTop() failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+    // Join the pill to every Space/desktop (macOS) so it follows the user
+    // across Space switches instead of stranding on the Space it was created
+    // on. No-op on Windows/Linux (the pill is per-desktop there — fork gap G4).
+    if (process.platform === "darwin") {
+      try {
+        (
+          win as typeof win & {
+            setVisibleOnAllWorkspaces?: (flag: boolean) => void;
+          }
+        ).setVisibleOnAllWorkspaces?.(true);
+      } catch (err) {
+        logger.warn(
+          `[main-window] bottom-bar setVisibleOnAllWorkspaces() failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     applyMacOSWindowEffects(win);
+    // Keep the bar pinned to the primary display's bottom edge across display
+    // plug/unplug + resolution changes (recompute on showWindow() + 5s poll).
+    getDesktopManager().enableBottomBarReanchor();
     return win;
   }
 
@@ -1202,10 +1230,11 @@ function attachMainWindow(
     transparent: presentation.transparent,
   });
   trackFocusedWindow(win);
-  // Reveal the Dock icon in tray-first mode whenever a main window is attached,
+  // Dockless mode: only a FULL main window (dashboard/kiosk) reveals the Dock
+  // icon — the chromeless bottom-bar pill never does. Declare which this is,
   // regardless of how it was opened (boot, tray "Show Window", Dock reopen, or
   // a direct restoreWindow() from a deep link that bypasses showWindow()).
-  getDesktopManager().markMainWindowShown();
+  getDesktopManager().setMainWindowFullWindow(presentation.mode !== "bottom-bar");
 
   win.webview.on("dom-ready", () => {
     injectApiBase(win);
@@ -2531,33 +2560,29 @@ async function main(): Promise<void> {
   // Create window first — on Windows (CEF) the UI message loop must be
   // running before any synchronous FFI calls like setApplicationMenu().
   // Calling setupApplicationMenu() before createMainWindow() deadlocks.
-  const trayFirst = shouldStartTrayFirst();
-  let mainWin: BrowserWindow | null = null;
-  if (trayFirst) {
-    // Tray-first (macOS, opt-in): no window at launch. The tray icon is the
-    // only surface; the main window is created lazily via restoreWindow() /
-    // DesktopManager.showWindow() on tray "Show Window", Dock reopen, or a
-    // deep link. setTrayFirstMode hides the Dock icon until a window is shown.
-    logger.info("[Main] Tray-first startup — deferring main window creation");
+  // Dockless (tray-first) mode is the macOS default (#12184): the resting
+  // experience is the pill + menu-bar icon with NO Dock icon. Unlike the old
+  // tray-first behavior we STILL create the pill window at boot — the pill is
+  // not a "full window" for Dock purposes, so setTrayFirstMode keeps the Dock
+  // icon hidden until a full window (dashboard/surface/settings/app) opens.
+  const dockless = shouldStartTrayFirst();
+  if (dockless) {
+    logger.info("[Main] Dockless startup — pill only, Dock icon hidden at rest");
     getDesktopManager().setTrayFirstMode(true);
-    recordStartupPhase("window_ready", {
-      pid: process.pid,
-    });
-  } else {
-    recordStartupPhase("creating_window", {
-      pid: process.pid,
-    });
-    const { rpc: mainRpc, sendToWebview: mainSendToWebview } =
-      createDesktopRpc("main");
-    mainWin = attachMainWindow(
-      await createMainWindow(mainRpc),
-      mainRpc,
-      mainSendToWebview,
-    );
-    recordStartupPhase("window_ready", {
-      pid: process.pid,
-    });
   }
+  recordStartupPhase("creating_window", {
+    pid: process.pid,
+  });
+  const { rpc: mainRpc, sendToWebview: mainSendToWebview } =
+    createDesktopRpc("main");
+  const mainWin: BrowserWindow | null = attachMainWindow(
+    await createMainWindow(mainRpc),
+    mainRpc,
+    mainSendToWebview,
+  );
+  recordStartupPhase("window_ready", {
+    pid: process.pid,
+  });
   seedFirstPartyRemotePluginsForStartup();
 
   // Per-window RPC tracking: surface windows each get their own typed
@@ -2595,6 +2620,11 @@ async function main(): Promise<void> {
     onRegistryChanged: () => {
       sendManagedWindowsChanged();
       setupApplicationMenu();
+      // Dockless mode: any open managed window (dashboard/surface/settings/app)
+      // reveals the Dock icon; closing the last one hides it again.
+      getDesktopManager().setManagedWindowsPresent(
+        (surfaceWindowManager?.listWindows().length ?? 0) > 0,
+      );
     },
     boundsStore: createAppWindowBoundsStore(),
   });
