@@ -258,8 +258,11 @@ if (!["text", "json"].includes(planFormat)) {
 // exits green and reads as coverage. `--min-tasks`/`MIN_TEST_TASKS` turns both
 // into a loud non-zero exit (3) so the exhaustive lane's proof job can rely on it.
 const minTasksRaw = minTasksFlag ?? process.env.MIN_TEST_TASKS ?? "0";
-const minTasks = Number.parseInt(minTasksRaw, 10);
-if (!Number.isInteger(minTasks) || minTasks < 0) {
+const minTasks =
+  typeof minTasksRaw === "string" && /^\d+$/.test(minTasksRaw)
+    ? Number(minTasksRaw)
+    : Number.NaN;
+if (!Number.isSafeInteger(minTasks)) {
   failUsage(
     `--min-tasks/MIN_TEST_TASKS must be a non-negative integer, got "${minTasksRaw}"`,
   );
@@ -728,10 +731,7 @@ function hasLocalTestFiles(dir) {
 }
 
 function isSingleVitestRunCommand(command) {
-  const commandWithoutEnv = command.replace(
-    /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)*/,
-    "",
-  );
+  const commandWithoutEnv = stripLeadingEnvAssignments(command);
   if (/[;&|]/.test(commandWithoutEnv)) {
     return false;
   }
@@ -741,12 +741,38 @@ function isSingleVitestRunCommand(command) {
   );
 }
 
+function stripLeadingEnvAssignments(command) {
+  return command.replace(
+    /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)*/,
+    "",
+  );
+}
+
+function isSingleBunTestCommand(command) {
+  const commandWithoutEnv = stripLeadingEnvAssignments(command);
+  if (/[;&|]/.test(commandWithoutEnv)) {
+    return false;
+  }
+  return /^bun\s+test\b/.test(commandWithoutEnv);
+}
+
+function isSingleNoTestSkippableCommand(command) {
+  return isSingleVitestRunCommand(command) || isSingleBunTestCommand(command);
+}
+
 function shouldSkipEmptyVitestScript(cwd, scriptName, scripts) {
   const command =
     resolveScriptCommand(scriptName, scripts) ||
     normalizeWhitespace(scripts?.[scriptName] ?? "");
 
   return isSingleVitestRunCommand(command) && !hasLocalTestFiles(cwd);
+}
+
+function canSkipWhenOutputHasNoTests(scriptName, scripts) {
+  const command =
+    resolveScriptCommand(scriptName, scripts) ||
+    normalizeWhitespace(scripts?.[scriptName] ?? "");
+  return isSingleNoTestSkippableCommand(command);
 }
 
 // ---------------------------------------------------------------------------
@@ -940,6 +966,7 @@ function runScript(
       },
     );
     let capturedOutput = "";
+    const canSkipNoTests = canSkipWhenOutputHasNoTests(scriptName, scripts);
 
     child.stdout?.on("data", (chunk) => {
       if (stream) {
@@ -966,7 +993,7 @@ function runScript(
         resolve({ skipped: false });
         return;
       }
-      if (outputIndicatesNoTests(capturedOutput)) {
+      if (canSkipNoTests && outputIndicatesNoTests(capturedOutput)) {
         resolve({ skipped: true });
         return;
       }
@@ -1025,13 +1052,6 @@ function runCloudTests() {
       if (code === 0) {
         console.log(`[eliza-test] PASS cloud#test (${durationMs}ms)`);
         resolve({ skipped: false });
-        return;
-      }
-      if (outputIndicatesNoTests(capturedOutput)) {
-        console.log(
-          `[eliza-test] SKIP cloud#test (${durationMs}ms, no test files found)`,
-        );
-        resolve({ skipped: true });
         return;
       }
       reject(
@@ -1128,11 +1148,6 @@ for (const packageJsonPath of packageJsonPaths) {
 
 const laneEnv = buildLaneEnv();
 
-if (planEnabled) {
-  printPlan(tasks);
-  process.exit(0);
-}
-
 // Collection-time vacuous-green floor. Evaluated before any task runs so a lane
 // that matched nothing fails immediately instead of "passing" with no work.
 if (minTasks > 0 && tasks.length < minTasks) {
@@ -1141,6 +1156,11 @@ if (minTasks > 0 && tasks.length < minTasks) {
       "A filter/shard/glob collapsed this lane to (near-)zero work. Failing loudly instead of reporting green.",
   );
   process.exit(3);
+}
+
+if (planEnabled) {
+  printPlan(tasks);
+  process.exit(0);
 }
 
 ensurePluginSqlPostgresEnv();
