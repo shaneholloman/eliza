@@ -69,5 +69,27 @@ empty object, non-string values, missing managedFiles, non-string hashes).
     $ bun run typecheck   # tsgo --noEmit
     EXIT: 0
 
+    $ bun run lint:check
+    Checked 42 files in 84ms. No fixes applied.
+    Checked 11 files in 6ms. No fixes applied.
+    Checked 63 files in 48ms. No fixes applied.
+    EXIT: 0
+
+    $ bun run build
+    EXIT: 0
+
+## Repo verify
+
+    $ bun run verify
+    PASS: check:agents-claude
+    PASS: audit:type-safety-ratchet
+    PASS: audit:error-policy-ratchet
+    BLOCKED: unrelated workspace lint:
+      - @elizaos/tui#lint control-character regex diagnostics in
+        packages/tui/src/keys.ts, packages/tui/src/terminal.ts, and
+        packages/tui/test/truncated-text.test.ts.
+      - @elizaos/electrobun#lint formatting diagnostics in
+        packages/electrobun/src/voice/voice-service.test.ts.
+
 N/A: model trajectory / screenshots - this slice is a CLI metadata boundary with
 no model interaction or UI surface.

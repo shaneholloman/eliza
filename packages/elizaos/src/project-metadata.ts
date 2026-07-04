@@ -18,7 +18,11 @@ const METADATA_FILE = "template.json";
 export class ProjectMetadataError extends Error {
   readonly metadataPath: string;
 
-  constructor(metadataPath: string, detail: string, options?: { cause?: unknown }) {
+  constructor(
+    metadataPath: string,
+    detail: string,
+    options?: { cause?: unknown },
+  ) {
     super(
       `Corrupt project metadata at ${metadataPath}: ${detail}. ` +
         "Fix or remove the file and re-run, or re-create the project.",
@@ -101,7 +105,9 @@ export function readProjectMetadata(
     parsed = JSON.parse(raw);
   } catch (error) {
     const detail =
-      error instanceof Error ? `invalid JSON (${error.message})` : "invalid JSON";
+      error instanceof Error
+        ? `invalid JSON (${error.message})`
+        : "invalid JSON";
     throw new ProjectMetadataError(metadataPath, detail, { cause: error });
   }
 

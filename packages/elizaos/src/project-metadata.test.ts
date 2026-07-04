@@ -110,7 +110,11 @@ describe("readProjectMetadata", () => {
     const projectRoot = makeProjectRoot();
     writeRawMetadata(
       projectRoot,
-      JSON.stringify({ templateId: "plugin", values: { n: 5 }, managedFiles: {} }),
+      JSON.stringify({
+        templateId: "plugin",
+        values: { n: 5 },
+        managedFiles: {},
+      }),
     );
     expect(() => readProjectMetadata(projectRoot)).toThrow(
       /missing or invalid 'values'/,
