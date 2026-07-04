@@ -18,6 +18,7 @@ import {
   normalizeDeploymentTargetConfig,
 } from "@elizaos/shared";
 import { loadElizaConfig } from "../config/config.ts";
+import { resolveAbsentPluginRouteStub } from "./absent-plugin-route-stubs.ts";
 
 type StreamingSettingsModule = {
   readStreamSettings: () => StreamVisualSettings;
@@ -315,41 +316,18 @@ export async function handleMobileOptionalRoutes(
     return true;
   }
 
-  if (method === "GET" && pathname === "/api/coding-agents/preflight") {
-    sendJson(res, { installed: [], available: false });
-    return true;
-  }
-
-  if (
-    method === "GET" &&
-    pathname === "/api/coding-agents/coordinator/status"
-  ) {
-    sendJson(res, {
-      supervisionLevel: "unavailable",
-      taskCount: 0,
-      tasks: [],
-      pendingConfirmations: 0,
-      taskThreadCount: 0,
-      taskThreads: [],
-      frameworks: [],
-    });
-    return true;
-  }
-
-  if (pathname === "/api/lifeops/activity-signals") {
-    if (method === "GET") {
-      sendJson(res, { signals: [] });
-      return true;
-    }
+  // coding-agents preflight/coordinator + lifeops activity-signals stubs are
+  // declared once in the absent-plugin route stub registry (shared with the
+  // host's handleBuiltinOptionalRoutes) so the two handlers cannot drift
+  // (arch-audit #12089 item 12 / #12662). Previously these were hand-mirrored
+  // here and had already diverged from server.ts (the lifeops POST `reason`).
+  const absentPluginStub = resolveAbsentPluginRouteStub(method, pathname);
+  if (absentPluginStub) {
     if (method === "POST") {
       await readRequestBody(req).catch(() => undefined);
-      sendJson(res, {
-        ok: true,
-        stored: false,
-        reason: "lifeops_unavailable_in_mobile_local_mode",
-      });
-      return true;
     }
+    sendJson(res, absentPluginStub.buildBody(req));
+    return true;
   }
 
   return false;
