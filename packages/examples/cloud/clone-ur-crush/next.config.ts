@@ -1,3 +1,4 @@
+// Configures Next.js runtime behavior for the Clone Ur Crush cloud example.
 import path from "node:path";
 import type { NextConfig } from "next";
 

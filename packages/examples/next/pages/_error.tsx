@@ -1,3 +1,4 @@
+// Renders the error boundary view for the Next example.
 import type { NextPageContext } from "next";
 
 interface ErrorProps {

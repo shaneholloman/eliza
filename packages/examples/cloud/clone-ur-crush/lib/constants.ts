@@ -1,3 +1,4 @@
+// Provides shared support logic for the Clone Ur Crush cloud example.
 export const APP_CONFIG = {
   name: "Fake Girlfriend",
   description: "Create your AI girlfriend and exchange texts",

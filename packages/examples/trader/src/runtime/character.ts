@@ -1,3 +1,4 @@
+// Defines the example character profile for the Trader agent.
 import { createCharacter } from "@elizaos/core";
 
 /**

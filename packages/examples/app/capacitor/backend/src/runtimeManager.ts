@@ -1,3 +1,4 @@
+// Manages runtime lifecycle for the Capacitor app example host.
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {

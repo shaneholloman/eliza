@@ -1,3 +1,4 @@
+// Renders a reusable UI component for the Farcaster Miniapp example.
 export function LoadingScreen() {
   return (
     <div className="loading-screen">

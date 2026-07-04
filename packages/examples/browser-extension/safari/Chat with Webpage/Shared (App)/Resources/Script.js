@@ -1,3 +1,4 @@
+// Supports the Safari browser extension example described in this package README.
 function _show(platform, enabled, useSettingsInsteadOfPreferences) {
   document.body.classList.add(`platform-${platform}`);
 

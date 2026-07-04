@@ -1,3 +1,4 @@
+// Provides shared support logic for the Code example.
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { config } from "dotenv";

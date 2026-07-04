@@ -1,3 +1,4 @@
+// Bridges renderer access to Electron APIs for the Electron app example.
 import { contextBridge, ipcRenderer } from "electron";
 import type { AppConfig, ChatMessage, ProviderMode } from "./types";
 

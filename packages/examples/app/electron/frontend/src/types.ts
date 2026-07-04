@@ -1,3 +1,4 @@
+// Defines shared TypeScript types for the Electron app example.
 export type ProviderMode =
   | "openai"
   | "anthropic"

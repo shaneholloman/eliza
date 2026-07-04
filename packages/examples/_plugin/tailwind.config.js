@@ -1,3 +1,4 @@
+// Configures Tailwind theme scanning for the Plugin example.
 import tailwindcssAnimate from "tailwindcss-animate";
 
 /** @type {import('tailwindcss').Config} */

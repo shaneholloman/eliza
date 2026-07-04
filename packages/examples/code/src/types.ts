@@ -1,3 +1,4 @@
+// Defines shared TypeScript types for the Code example.
 import type { Task as CoreTask, UUID } from "@elizaos/core";
 
 // ============================================================================

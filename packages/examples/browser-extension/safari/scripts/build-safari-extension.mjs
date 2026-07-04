@@ -1,3 +1,4 @@
+// Runs supporting automation for the Safari browser extension example.
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";

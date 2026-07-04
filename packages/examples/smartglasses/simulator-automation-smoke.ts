@@ -1,3 +1,4 @@
+// Supports the Smartglasses example described in this package README.
 import { Buffer } from "node:buffer";
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { dirname } from "node:path";

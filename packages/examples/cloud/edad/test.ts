@@ -1,3 +1,4 @@
+// Supports the Edad cloud example described in this package README.
 const port = 30_000 + Math.floor(Math.random() * 10_000);
 const baseUrl = `http://127.0.0.1:${port}`;
 const cloudPort = port + 2;

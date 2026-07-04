@@ -1,3 +1,4 @@
+// Supports the Code example described in this package README.
 import {
   type ActionEventPayload,
   type AgentRuntime,

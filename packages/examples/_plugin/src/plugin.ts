@@ -1,3 +1,4 @@
+// Supports the Plugin example described in this package README.
 import type {
   Action,
   ActionResult,

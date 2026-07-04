@@ -1,3 +1,4 @@
+// Supports the Elizagotchi example described in this package README.
 import {
   AgentRuntime,
   ChannelType,

@@ -1,3 +1,4 @@
+// Supports the Smartglasses example described in this package README.
 import { readFile } from "node:fs/promises";
 import {
   type HardwareEvidenceReport,
