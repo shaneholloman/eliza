@@ -135,6 +135,7 @@ describe("GatewayWeb", () => {
   });
 
   it("ignores malformed inbound frames and emits valid gateway events", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const gateway = new GatewayWeb();
     const events: unknown[] = [];
     await gateway.addListener("gatewayEvent", (event) => {
@@ -154,6 +155,7 @@ describe("GatewayWeb", () => {
     );
     await connected;
 
+    warn.mockClear();
     socket.message("not json");
     socket.message(JSON.stringify({ type: "event", event: "", payload: {} }));
     socket.message(
@@ -165,9 +167,75 @@ describe("GatewayWeb", () => {
       }),
     );
 
+    // Valid events still surface — we do not fabricate anything for the bad ones.
     expect(events).toEqual([
       { event: "chat.delta", payload: { n: 1 }, seq: 1 },
     ]);
+    // ...but the two dropped frames must be observable, not silent idle state.
+    const warnings = warn.mock.calls.map((c) => String(c[0]));
+    expect(warnings.some((m) => m.includes("unparseable frame"))).toBe(true);
+    expect(
+      warnings.some((m) => m.includes("missing/invalid `event` name")),
+    ).toBe(true);
+  });
+
+  it.each([
+    {
+      label: "unparseable payload",
+      raw: "not json",
+      needle: "unparseable frame",
+    },
+    { label: "non-object frame", raw: "42", needle: "non-object frame" },
+    {
+      label: "missing type",
+      raw: JSON.stringify({ event: "chat.delta" }),
+      needle: "missing/invalid `type`",
+    },
+    {
+      label: "unhandled type",
+      raw: JSON.stringify({ type: "mystery" }),
+      needle: "unhandled type",
+    },
+    {
+      label: "res without id",
+      raw: JSON.stringify({ type: "res", ok: true }),
+      needle: "res` frame with missing/invalid `id`",
+    },
+    {
+      label: "res for unknown id",
+      raw: JSON.stringify({ type: "res", id: "nope", ok: true }),
+      needle: "unknown request id",
+    },
+  ])("reports dropped inbound frame ($label) instead of swallowing it", async ({
+    raw,
+    needle,
+  }) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const gateway = new GatewayWeb();
+    const events: unknown[] = [];
+    await gateway.addListener("gatewayEvent", (event) => {
+      events.push(event);
+    });
+    const connected = gateway.connect({ url: "ws://localhost:1234" });
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    const connectFrame = parseSent(socket, 0);
+    socket.message(
+      JSON.stringify({
+        type: "res",
+        id: connectFrame.id,
+        ok: true,
+        payload: {},
+      }),
+    );
+    await connected;
+
+    warn.mockClear();
+    socket.message(raw);
+
+    expect(events).toEqual([]);
+    const warnings = warn.mock.calls.map((c) => String(c[0]));
+    expect(warnings.some((m) => m.includes(needle))).toBe(true);
   });
 
   it.each([
