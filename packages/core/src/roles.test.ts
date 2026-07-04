@@ -7,11 +7,22 @@
  * (never silently grant a higher role), and the connector-admin whitelist
  * matches an entity only on its stable platform id.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+	getConnectorIdentityMetadataMapping,
+	getConnectorWorldIdMetadataKeys,
+	LEGACY_DISCORD_CONNECTOR_SOURCE_METADATA,
+	registerConnectorSourceMetadata,
+	unregisterConnectorSourceMetadataOwner,
+} from "./connectors.ts";
+import { createUniqueUuid } from "./entities.ts";
 import {
 	CANONICAL_ROLE_RANK,
 	canModifyRole,
 	getEntityRole,
+	getLiveEntityMetadataFromMessage,
 	hasAtLeastRole,
 	hasRoleAccess,
 	isAdminRank,
@@ -21,6 +32,7 @@ import {
 	ROLE_RANK,
 	recordOwnerGrant,
 	recordRoleGrant,
+	resolveWorldForMessage,
 } from "./roles.ts";
 import {
 	roleRank as gateRoleRank,
@@ -336,5 +348,188 @@ describe("recordOwnerGrant (#9948 explicit auditable owner grant)", () => {
 				"owner-1"
 			],
 		).toBe("owner");
+	});
+});
+
+describe("connector metadata is registry-driven, not Discord-special-cased (#12090 item 22 / #12087)", () => {
+	// The two paths that used to carry a `source === "discord"` literal branch in
+	// core (identity projection + world-id derivation) now read a connector-owned
+	// mapping from the connector-source registry. Discord's legacy fields are
+	// registered as declared metadata in connectors.ts, so the coupling moved out
+	// of core's authorization code and the same generic path serves any connector.
+
+	it("keeps Discord's legacy flat->identity mapping declared in the registry", () => {
+		expect(getConnectorIdentityMetadataMapping("discord")).toEqual({
+			userIdField: "fromId",
+			nameField: "entityName",
+		});
+		expect(getConnectorWorldIdMetadataKeys("discord")).toEqual([
+			"discordServerId",
+			"discordChannelId",
+		]);
+		// The exported legacy default is the single source of those literals now.
+		expect(
+			LEGACY_DISCORD_CONNECTOR_SOURCE_METADATA.identityMetadataMapping,
+		).toEqual({ userIdField: "fromId", nameField: "entityName" });
+	});
+
+	it("projects flat Discord metadata into nested identity via the registry (behavior preserved)", () => {
+		const message = {
+			entityId: "e-1",
+			roomId: "room-1",
+			content: { text: "hi", source: "discord" },
+			metadata: { fromId: "user-123", entityName: "alice" },
+		} as unknown as Memory;
+
+		// Same nested identity object the old `source === "discord"` branch built.
+		expect(getLiveEntityMetadataFromMessage(message)).toEqual({
+			discord: {
+				userId: "user-123",
+				id: "user-123",
+				name: "alice",
+				username: "alice",
+			},
+		});
+	});
+
+	it("omits name/username when the declared name field is absent", () => {
+		const message = {
+			entityId: "e-1",
+			roomId: "room-1",
+			content: { text: "hi", source: "discord" },
+			metadata: { fromId: "user-123" },
+		} as unknown as Memory;
+		expect(getLiveEntityMetadataFromMessage(message)).toEqual({
+			discord: { userId: "user-123", id: "user-123" },
+		});
+	});
+
+	it("fails closed: no identity when the declared user-id field is missing/blank", () => {
+		const blank = {
+			entityId: "e-1",
+			roomId: "room-1",
+			content: { text: "hi", source: "discord" },
+			metadata: { fromId: "   ", entityName: "alice" },
+		} as unknown as Memory;
+		expect(getLiveEntityMetadataFromMessage(blank)).toBeUndefined();
+
+		const missing = {
+			entityId: "e-1",
+			roomId: "room-1",
+			content: { text: "hi", source: "discord" },
+			metadata: { entityName: "alice" },
+		} as unknown as Memory;
+		expect(getLiveEntityMetadataFromMessage(missing)).toBeUndefined();
+	});
+
+	it("still prefers an explicit nested metadata[source] object over the flat mapping", () => {
+		const message = {
+			entityId: "e-1",
+			roomId: "room-1",
+			content: { text: "hi", source: "discord" },
+			metadata: { discord: { userId: "nested-1" }, fromId: "flat-1" },
+		} as unknown as Memory;
+		expect(getLiveEntityMetadataFromMessage(message)).toEqual({
+			discord: { userId: "nested-1" },
+		});
+	});
+
+	it("yields no identity for a connector with no registered mapping", () => {
+		const message = {
+			entityId: "e-1",
+			roomId: "room-1",
+			content: { text: "hi", source: "telegram" },
+			metadata: { fromId: "user-123" },
+		} as unknown as Memory;
+		// Telegram declares no identityMetadataMapping default -> no fabricated identity.
+		expect(getLiveEntityMetadataFromMessage(message)).toBeUndefined();
+	});
+
+	it("works for a NEW connector purely by registering mapping metadata (no core edit)", () => {
+		const owner = "test:matrix-connector";
+		try {
+			registerConnectorSourceMetadata(
+				"matrix",
+				{
+					identityMetadataMapping: {
+						userIdField: "senderMxid",
+						nameField: "displayName",
+					},
+				},
+				owner,
+			);
+			const message = {
+				entityId: "e-1",
+				roomId: "room-1",
+				content: { text: "hi", source: "matrix" },
+				metadata: { senderMxid: "@bob:hs", displayName: "bob" },
+			} as unknown as Memory;
+			expect(getLiveEntityMetadataFromMessage(message)).toEqual({
+				matrix: {
+					userId: "@bob:hs",
+					id: "@bob:hs",
+					name: "bob",
+					username: "bob",
+				},
+			});
+		} finally {
+			unregisterConnectorSourceMetadataOwner(owner);
+		}
+	});
+
+	it("derives the world id from the declared world-id keys (first present wins)", async () => {
+		const runtime = {
+			agentId: "agent-1",
+			getRoom: async () => null,
+			getWorld: async (id: string) => ({ id, metadata: {} }),
+		} as unknown as IAgentRuntime;
+
+		const serverMsg = {
+			entityId: "e-1",
+			roomId: "room-1",
+			content: { text: "hi", source: "discord" },
+			metadata: { discordServerId: "srv-9", discordChannelId: "chan-9" },
+		} as unknown as Memory;
+		const resolvedServer = await resolveWorldForMessage(runtime, serverMsg);
+		// serverId is preferred (first key), matching the prior literal-branch order.
+		expect(resolvedServer?.world?.id).toBe(createUniqueUuid(runtime, "srv-9"));
+
+		const channelMsg = {
+			entityId: "e-1",
+			roomId: "room-1",
+			content: { text: "hi", source: "discord" },
+			metadata: { discordChannelId: "chan-9" },
+		} as unknown as Memory;
+		const resolvedChannel = await resolveWorldForMessage(runtime, channelMsg);
+		expect(resolvedChannel?.world?.id).toBe(
+			createUniqueUuid(runtime, "chan-9"),
+		);
+	});
+
+	it("derives no world id when none of the declared keys are present", async () => {
+		const runtime = {
+			agentId: "agent-1",
+			getRoom: async () => null,
+			getWorld: async (id: string) => ({ id, metadata: {} }),
+		} as unknown as IAgentRuntime;
+		const msg = {
+			entityId: "e-1",
+			roomId: "room-1",
+			content: { text: "hi", source: "discord" },
+			metadata: { unrelated: "x" },
+		} as unknown as Memory;
+		expect(await resolveWorldForMessage(runtime, msg)).toBeNull();
+	});
+
+	it('grep guard: no `source === "discord"` literal branch survives in roles.ts', () => {
+		const rolesSource = readFileSync(
+			fileURLToPath(new URL("./roles.ts", import.meta.url)),
+			"utf8",
+		);
+		// The Discord authorization coupling now lives in the connector-source
+		// registry (connectors.ts), not as a literal branch in core's roles.ts.
+		expect(rolesSource).not.toMatch(/source\s*===\s*["']discord["']/);
+		expect(rolesSource).not.toContain("discordServerId");
+		expect(rolesSource).not.toContain("discordChannelId");
 	});
 });
