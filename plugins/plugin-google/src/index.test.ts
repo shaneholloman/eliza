@@ -113,6 +113,7 @@ describe("google plugin", () => {
       "getMeetingSpace",
       "getConferenceRecord",
       "listMeetingParticipants",
+      "listMeetingParticipantSessions",
       "listMeetingTranscripts",
       "getMeetingTranscript",
       "listMeetingRecordings",
