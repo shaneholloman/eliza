@@ -743,10 +743,11 @@ export function makeScreenshotter(
   };
 }
 
-// The WidgetSection testIds each widget renders (read from source).
+// The WidgetSection testIds each widget renders (read from source). The
+// notification inbox is not a ranked tile: it renders in the pinned
+// NotificationsHomeCenter (`home-notification-center`), outside the WidgetHost.
 export const FINANCES_TESTID = "chat-widget-finances-alerts";
 export const GOALS_TESTID = "widget-goals-attention";
-export const NOTIFICATIONS_TESTID = "widget-notifications";
 
 // First-run runtime/provider buttons live in the real chat transcript. The
 // headless conductor seeds the ChoiceWidgets and the chat action channel routes
@@ -841,7 +842,7 @@ export async function expectOnboardingAutoCollapse(page: Page): Promise<void> {
 async function expectPopulatedHome(page: Page): Promise<Locator> {
   const host = page.getByTestId("widget-host-home");
   await expect(host).toBeVisible({ timeout: 30_000 });
-  for (const testId of [FINANCES_TESTID, GOALS_TESTID, NOTIFICATIONS_TESTID]) {
+  for (const testId of [FINANCES_TESTID, GOALS_TESTID]) {
     await expect(
       host.getByTestId(testId),
       `home widget ${testId} should render with seeded attention data`,
@@ -851,9 +852,16 @@ async function expectPopulatedHome(page: Page): Promise<Locator> {
   await expect(host.getByTestId(GOALS_TESTID)).toContainText(
     "Ship the release",
   );
-  await expect(host.getByTestId(NOTIFICATIONS_TESTID)).toContainText(
-    "Payment failed",
-  );
+  // The seeded urgent notification surfaces in the pinned dashboard center
+  // (below the time/weather base), not as a ranked WidgetHost tile.
+  const notificationCenter = page.getByTestId("home-notification-center");
+  await expect(
+    notificationCenter,
+    "the pinned notification center should render the seeded inbox",
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(
+    notificationCenter.getByTestId("notification-row"),
+  ).toContainText("Payment failed");
   const surface = page.getByTestId("home-launcher-surface");
   await expect(surface).toHaveAttribute("data-page", "home");
   return surface;
