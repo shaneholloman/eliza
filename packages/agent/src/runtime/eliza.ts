@@ -89,6 +89,7 @@ export {
 // add `as const` data only — never an `import * as` of these packages.
 import {
   AgentRuntime,
+  AUTONOMY_SERVICE_TYPE,
   AutonomyService,
   addLogListener,
   ChannelType,
@@ -102,6 +103,7 @@ import {
   type IAgentRuntime,
   type LogEntry,
   logger,
+  MESSAGE_SOURCE_CLIENT_CHAT,
   type Plugin,
   type Provider,
   type ServiceClass,
@@ -1649,7 +1651,7 @@ interface AutonomyServiceLike {
  * Uses a runtime property check to safely narrow the opaque Service return.
  */
 function getAutonomyService(runtime: AgentRuntime): AutonomyServiceLike | null {
-  const svc = runtime.getService("AUTONOMY") ?? runtime.getService("autonomy");
+  const svc = runtime.getService(AUTONOMY_SERVICE_TYPE);
   if (
     svc &&
     "enableAutonomy" in svc &&
@@ -1664,7 +1666,7 @@ async function startAndRegisterAutonomyService(
   runtime: AgentRuntime,
 ): Promise<AutonomyServiceLike> {
   const service = await AutonomyService.start(runtime);
-  runtime.services.set("AUTONOMY" as never, [service as never]);
+  runtime.services.set(AUTONOMY_SERVICE_TYPE as never, [service as never]);
   return service as AutonomyServiceLike;
 }
 
@@ -2868,11 +2870,6 @@ interface RuntimeWithMethodBindings extends AgentRuntime {
   __elizaEntityCreateMutex?: Promise<void>;
 }
 
-interface RuntimeWithActionAliases extends Omit<AgentRuntime, "actions"> {
-  __elizaActionAliasesInstalled?: boolean;
-  actions?: Array<{ name?: string; similes?: string[] }>;
-}
-
 type CreateEntitiesFn = (entities: Entity[]) => Promise<UUID[] | boolean>;
 type GetEntitiesByIdsFn = (entityIds: UUID[]) => Promise<Entity[]>;
 type EnsureEntityExistsFn = (entity: Entity) => Promise<boolean>;
@@ -3259,52 +3256,6 @@ export function installRuntimeMethodBindings(runtime: AgentRuntime): void {
   installProviderRoleGatingChokepoint(runtimeWithBindings);
 
   runtimeWithBindings.__elizaMethodBindingsInstalled = true;
-}
-
-function installActionAliases(runtime: AgentRuntime): void {
-  const runtimeWithAliases = runtime as RuntimeWithActionAliases;
-  if (runtimeWithAliases.__elizaActionAliasesInstalled) {
-    return;
-  }
-
-  const actions = Array.isArray(runtimeWithAliases.actions)
-    ? runtimeWithAliases.actions
-    : [];
-
-  // Keep compaction automatic-only; do not allow manual COMPACT_SESSION invokes.
-  const compactSessionIndex = actions.findIndex(
-    (action) => action?.name?.toUpperCase() === "COMPACT_SESSION",
-  );
-  if (compactSessionIndex !== -1) {
-    actions.splice(compactSessionIndex, 1);
-    logger.info(
-      "[eliza] Disabled manual COMPACT_SESSION action; auto-compaction remains enabled",
-    );
-  }
-
-  // Compatibility alias: older prompts/docs still reference CODE_TASK,
-  // while agent-orchestrator exposes START_CODING_TASK.
-  const codingTaskAction =
-    actions.find(
-      (action) => action?.name?.toUpperCase() === "START_CODING_TASK",
-    ) ??
-    actions.find((action) => action?.name?.toUpperCase() === "CREATE_TASK");
-  if (codingTaskAction) {
-    const similes = Array.isArray(codingTaskAction.similes)
-      ? codingTaskAction.similes
-      : [];
-    const hasCodeTaskAlias = similes.some(
-      (simile) => simile.toUpperCase() === "CODE_TASK",
-    );
-    if (!hasCodeTaskAlias) {
-      codingTaskAction.similes = [...similes, "CODE_TASK"];
-      logger.info(
-        "[eliza] Added action alias CODE_TASK -> START_CODING_TASK for agent-orchestrator",
-      );
-    }
-  }
-
-  runtimeWithAliases.__elizaActionAliasesInstalled = true;
 }
 
 async function registerSqlPluginWithRecovery(
@@ -4929,7 +4880,7 @@ export async function startEliza(
   const startAutonomyServiceIfEnabled = async (
     autonomyEnabled: boolean,
   ): Promise<void> => {
-    if (autonomyEnabled && !runtime.getService("AUTONOMY")) {
+    if (autonomyEnabled && !runtime.getService(AUTONOMY_SERVICE_TYPE)) {
       try {
         await startAndRegisterAutonomyService(runtime);
         logger.info("[eliza] AutonomyService started for trigger dispatch");
@@ -5353,10 +5304,6 @@ export async function startEliza(
     void ensureAgentWalletsLazy();
     bootTimer.lap("deferred:autonomy+warmup");
 
-    // Re-install action aliases now that deferred plugins have registered
-    // their actions; the initial pass after the essential boot only saw the
-    // core message-handler actions.
-    installActionAliases(runtime);
     // Same timing reason: validate the intent→action map only once the deferred
     // plugins have registered. Run during blocking init it would warn about
     // actions like TASKS (agent-orchestrator) that simply hadn't loaded yet.
@@ -5430,8 +5377,6 @@ export async function startEliza(
   startMemoryWatchdog();
   // #10203: a `ready`-point fault fires once the agent has reached steady boot.
   await maybeInjectFault("ready");
-
-  installActionAliases(runtime);
 
   // Kick off non-essential plugin loading in the background. The runtime is
   // already usable for chat; deferred capabilities register as they complete.
@@ -5770,7 +5715,7 @@ export async function startEliza(
           // Ensure AutonomyService survives hot-reload; the loop remains opt-in.
           const hotReloadAutonomyLoopEnabled = isAutonomyEnabled();
 
-          if (!newRuntime.getService("AUTONOMY")) {
+          if (!newRuntime.getService(AUTONOMY_SERVICE_TYPE)) {
             try {
               await startAndRegisterAutonomyService(newRuntime);
             } catch (err) {
@@ -5794,7 +5739,6 @@ export async function startEliza(
             }
           }
 
-          installActionAliases(newRuntime);
           runtime = newRuntime;
           logger.info("[eliza] Hot-reload: Runtime restarted successfully");
           return newRuntime;
@@ -6010,7 +5954,7 @@ export async function startEliza(
           roomId,
           content: {
             text,
-            source: "client_chat",
+            source: MESSAGE_SOURCE_CLIENT_CHAT,
             channelType: ChannelType.DM,
           },
         });

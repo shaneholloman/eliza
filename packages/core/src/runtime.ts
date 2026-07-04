@@ -151,6 +151,7 @@ import {
 	type ModelHandler,
 	type ModelParamsMap,
 	type ModelRegistrationInfo,
+	type ModelRegistrationMetadata,
 	type ModelResultMap,
 	ModelType,
 	type ModelTypeName,
@@ -195,6 +196,7 @@ import {
 	type TargetInfo,
 	type Task,
 	type TaskWorker,
+	TEXT_GENERATION_MODEL_TYPES,
 	type TextGenerationModelType,
 	type TextStreamResult,
 	type ThreadHandle,
@@ -368,18 +370,8 @@ export class EmbeddingDimensionProbeError extends Error {
 	}
 }
 
-const TEXT_GENERATION_MODEL_KEYS: readonly string[] = [
-	ModelType.TEXT_NANO,
-	ModelType.TEXT_SMALL,
-	ModelType.TEXT_MEDIUM,
-	ModelType.TEXT_LARGE,
-	ModelType.TEXT_MEGA,
-	ModelType.RESPONSE_HANDLER,
-	ModelType.ACTION_PLANNER,
-	ModelType.TEXT_REASONING_SMALL,
-	ModelType.TEXT_REASONING_LARGE,
-	ModelType.TEXT_COMPLETION,
-];
+const TEXT_GENERATION_MODEL_KEYS: readonly string[] =
+	TEXT_GENERATION_MODEL_TYPES;
 
 type StructuredResponseFormat = "JSON" | "TOON";
 
@@ -813,6 +805,7 @@ function timeoutAfter(ms: number): Promise<"timeout"> {
 
 interface ResolvedModelRegistration {
 	handler: ModelHandler["handler"];
+	metadata?: ModelRegistrationMetadata;
 	modelKey: string;
 	provider: string;
 }
@@ -2037,6 +2030,7 @@ export class AgentRuntime implements IAgentRuntime {
 					) => Promise<JsonValue | object>,
 					pluginToRegister.name,
 					pluginToRegister.priority,
+					pluginToRegister.modelMetadata?.[modelType],
 				);
 			}
 		}
@@ -4679,6 +4673,7 @@ export class AgentRuntime implements IAgentRuntime {
 		) => Promise<JsonValue | object>,
 		provider: string,
 		priority?: number,
+		metadata?: ModelRegistrationMetadata,
 	): void {
 		const modelKey = String(modelType);
 		if (!this.models.has(modelKey)) {
@@ -4690,6 +4685,7 @@ export class AgentRuntime implements IAgentRuntime {
 		if (modelsArray) {
 			modelsArray.push({
 				handler,
+				metadata,
 				provider,
 				priority: priority || 0,
 				registrationOrder,
@@ -4708,6 +4704,7 @@ export class AgentRuntime implements IAgentRuntime {
 		// is subscribed, and registry bookkeeping must never block boot.
 		void this.emitEvent(EventType.MODEL_REGISTERED, {
 			modelType: modelKey,
+			metadata,
 			provider,
 			priority: priority || 0,
 		});
@@ -4727,6 +4724,7 @@ export class AgentRuntime implements IAgentRuntime {
 			for (const h of handlers) {
 				out.push({
 					modelType,
+					metadata: h.metadata,
 					provider: h.provider,
 					priority: h.priority || 0,
 					registrationOrder: h.registrationOrder || 0,
@@ -4802,6 +4800,7 @@ export class AgentRuntime implements IAgentRuntime {
 
 				resolvedModels.push({
 					handler: resolvedModel.handler,
+					metadata: resolvedModel.metadata,
 					modelKey: candidateKey,
 					provider: resolvedModel.provider,
 				});

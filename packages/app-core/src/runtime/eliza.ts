@@ -30,6 +30,7 @@ export { CUSTOM_PLUGINS_DIRNAME, resolvePackageEntry, scanDropInPlugins };
 
 import {
   type AgentRuntime,
+  AUTONOMY_SERVICE_TYPE,
   AutonomyService,
   ChannelType,
   CONNECTOR_TARGET_SOURCE_REGISTRY_SERVICE,
@@ -42,6 +43,7 @@ import {
   stringToUuid,
   type TargetSource,
 } from "@elizaos/core";
+import { PGLITE_ERROR_CODES } from "@elizaos/plugin-sql";
 import {
   ensureRuntimeSqlCompatibility,
   formatError,
@@ -108,7 +110,6 @@ const AUTONOMY_MESSAGE_SERVER_ID = stringToUuid("autonomy-message-server");
 const require = createRequire(import.meta.url);
 const DIRECT_HELP_FLAGS = new Set(["-h", "--help", "help"]);
 const DIRECT_VERSION_FLAGS = new Set(["-v", "-V", "--version", "version"]);
-const ELIZA_AUTO_RESET_PGLITE_ERROR_CODE = "ELIZA_PGLITE_MANUAL_RESET_REQUIRED";
 
 export const shutdownRuntime = upstreamShutdownRuntime;
 
@@ -184,7 +185,8 @@ interface RuntimeAdapterAutonomyCompat {
 }
 
 function getAutonomyService(runtime: AgentRuntime): AutonomyServiceLike | null {
-  const svc = runtime.getService("AUTONOMY") ?? runtime.getService("autonomy");
+  const svc =
+    runtime.getService(AUTONOMY_SERVICE_TYPE) ?? runtime.getService("autonomy"); // Legacy lowercase serviceType fallback.
   if (isAutonomyService(svc)) {
     return svc;
   }
@@ -195,7 +197,7 @@ async function startAndRegisterAutonomyService(
   runtime: AgentRuntime,
 ): Promise<AutonomyServiceLike> {
   const service = await AutonomyService.start(runtime);
-  runtime.services.set("AUTONOMY" as never, [service as never]);
+  runtime.services.set(AUTONOMY_SERVICE_TYPE as never, [service as never]);
   return service;
 }
 
@@ -719,7 +721,7 @@ async function repairRuntimeAfterBoot(
     );
   }
 
-  if (!runtime.getService("AUTONOMY")) {
+  if (!runtime.getService(AUTONOMY_SERVICE_TYPE)) {
     try {
       await startAndRegisterAutonomyService(runtime);
       logger.info("[eliza] AutonomyService started and waiting");
@@ -1233,11 +1235,10 @@ function collectErrorMessages(err: unknown): string[] {
   return messages;
 }
 
-function isManualResetPgliteError(err: unknown): boolean {
-  if (getPgliteErrorCode(err) === ELIZA_AUTO_RESET_PGLITE_ERROR_CODE) {
-    return true;
-  }
-
+function hasLegacyManualResetPgliteMessage(err: unknown): boolean {
+  // Legacy fallback for pre-contract plugin-sql errors and raw WASM aborts that
+  // do not carry PGLITE_ERROR_CODES yet. The structured code path above owns
+  // current plugin-sql recovery.
   return collectErrorMessages(err).some((message) => {
     const normalized = message.toLowerCase();
     if (
@@ -1271,6 +1272,18 @@ function isManualResetPgliteError(err: unknown): boolean {
 
     return false;
   });
+}
+
+function isManualResetPgliteError(err: unknown): boolean {
+  const code = getPgliteErrorCode(err);
+  if (
+    code === PGLITE_ERROR_CODES.MANUAL_RESET_REQUIRED ||
+    code === PGLITE_ERROR_CODES.CORRUPT_DATA
+  ) {
+    return true;
+  }
+
+  return hasLegacyManualResetPgliteMessage(err);
 }
 
 function getPgliteDataDirFromError(err: unknown): string | null {
@@ -1358,7 +1371,7 @@ function normalizePgliteStartupError(err: unknown): unknown {
 
   if (
     err instanceof Error &&
-    getPgliteErrorCode(err) === ELIZA_AUTO_RESET_PGLITE_ERROR_CODE
+    getPgliteErrorCode(err) === PGLITE_ERROR_CODES.MANUAL_RESET_REQUIRED
   ) {
     return err;
   }
@@ -1372,7 +1385,7 @@ function normalizePgliteStartupError(err: unknown): unknown {
       : `PGlite initialization failed: ${detail}. Stop the app, then rename or delete only the managed PGlite data directory before retrying.`,
     { cause: err },
   ) as ErrorWithCause;
-  wrapped.code = ELIZA_AUTO_RESET_PGLITE_ERROR_CODE;
+  wrapped.code = PGLITE_ERROR_CODES.MANUAL_RESET_REQUIRED;
   if (dataDir) {
     wrapped.dataDir = dataDir;
   }

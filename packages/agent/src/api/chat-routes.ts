@@ -19,8 +19,11 @@ import {
   ChannelType,
   type Content,
   createMessageMemory,
+  EventType,
+  getSwarmCoordinatorService,
   isRateLimitError,
   logger,
+  MESSAGE_SOURCE_CLIENT_CHAT,
   ModelType,
   type RolesWorldMetadata,
   type RouteRequestContext,
@@ -643,7 +646,7 @@ async function maybeGenerateAndroidLocalDirectChatResponse(args: {
   } satisfies LocalInferenceChatMetadata;
   const responseContent = {
     text,
-    source: "client_chat",
+    source: MESSAGE_SOURCE_CLIENT_CHAT,
     actions: ["REPLY"],
     localInference,
   } satisfies Content;
@@ -1835,14 +1838,16 @@ export async function persistAssistantConversationMemory(
     typeof content === "string"
       ? ({
           text: content,
-          source: "client_chat",
+          source: MESSAGE_SOURCE_CLIENT_CHAT,
           channelType,
         } satisfies Content)
       : ({
           ...content,
           text: extractCompatTextContent(content),
           source:
-            typeof content.source === "string" ? content.source : "client_chat",
+            typeof content.source === "string"
+              ? content.source
+              : MESSAGE_SOURCE_CLIENT_CHAT,
           channelType:
             typeof content.channelType === "string"
               ? content.channelType
@@ -2238,7 +2243,7 @@ export async function generateChatResponse(
     // Emit inbound events so trajectory/session hooks run for API chat.
     try {
       if (typeof runtime.emitEvent === "function") {
-        await runtime.emitEvent("MESSAGE_RECEIVED", {
+        await runtime.emitEvent(EventType.MESSAGE_RECEIVED, {
           message,
           source: messageSource,
         });
@@ -2286,7 +2291,7 @@ export async function generateChatResponse(
             ),
           });
           memoryLike.metadata = message.metadata;
-          await runtime.emitEvent("MESSAGE_SENT", {
+          await runtime.emitEvent(EventType.MESSAGE_SENT, {
             message: memoryLike,
             source: messageSource,
           });
@@ -2391,7 +2396,7 @@ export async function generateChatResponse(
               | Record<string, unknown>
               | undefined;
             if (contentMetadata?.intent === "create_task") {
-              const coordinator = runtime.getService("SWARM_COORDINATOR");
+              const coordinator = getSwarmCoordinatorService(runtime);
               if (coordinator) {
                 const createTaskAction =
                   runtime.actions.find(
@@ -2469,7 +2474,7 @@ export async function generateChatResponse(
                 didRespond: true,
                 responseContent: {
                   text: localResult.text,
-                  source: "client_chat",
+                  source: MESSAGE_SOURCE_CLIENT_CHAT,
                   actions: ["REPLY"],
                   localInference: localResult.localInference as
                     | Record<string, unknown>
@@ -2592,7 +2597,7 @@ export async function generateChatResponse(
                     ),
                   });
                   memoryLike.metadata = message.metadata;
-                  await runtime.emitEvent("MESSAGE_SENT", {
+                  await runtime.emitEvent(EventType.MESSAGE_SENT, {
                     message: memoryLike,
                     source: messageSource,
                   });
@@ -3059,7 +3064,7 @@ async function ensureCompatChatConnection(
     roomId,
     worldId,
     userName: resolveAppUserName(state.config),
-    source: "client_chat",
+    source: MESSAGE_SOURCE_CLIENT_CHAT,
     channelId: `${channelIdPrefix}-${roomKey}`,
     type: ChannelType.DM,
     messageServerId,

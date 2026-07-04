@@ -78,6 +78,40 @@ export interface ElizaCloudStatusUpdatedDetail {
   cloudVoiceProxyAvailable: boolean;
 }
 
+// ── Navigation ──────────────────────────────────────────────────────────
+export const NAVIGATE_VIEW_EVENT = "eliza:navigate:view" as const;
+
+export type NavigateViewType = "gui" | "tui" | "xr";
+
+export interface NavigateViewDetail {
+  viewId?: string;
+  viewPath?: string | null;
+  viewLabel?: string;
+  viewType?: NavigateViewType;
+  action?: string;
+  /** Sub-section to deep-link within the target view (e.g. a Settings section id). */
+  subview?: string;
+  views?: string[];
+  layout?: string;
+  placement?: string;
+  alwaysOnTop?: boolean;
+  /** Opaque payload handed to the target view on navigation (deep-link state). */
+  payload?: unknown;
+}
+
+export type NavigateViewEvent = CustomEvent<NavigateViewDetail>;
+
+export function createNavigateViewEvent(
+  detail: NavigateViewDetail,
+): NavigateViewEvent {
+  return new CustomEvent(NAVIGATE_VIEW_EVENT, { detail });
+}
+
+export function dispatchNavigateViewEvent(detail: NavigateViewDetail): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(createNavigateViewEvent(detail));
+}
+
 // ── Avatar / VRM ─────────────────────────────────────────────────────────
 export const VRM_TELEPORT_COMPLETE_EVENT =
   "eliza:vrm-teleport-complete" as const;
@@ -87,6 +121,71 @@ export const FIRST_RUN_VOICE_PREVIEW_AWAIT_TELEPORT_EVENT =
 
 // ── Sidebar sync ─────────────────────────────────────────────────────────
 export const SELF_STATUS_SYNC_EVENT = "eliza:self-status-refresh" as const;
+
+// ── Agent WebSocket shell events ─────────────────────────────────────────
+export const SHELL_NAVIGATE_VIEW_WS_EVENT = "shell:navigate:view" as const;
+
+export type ShellNavigateViewType = "gui" | "tui" | "xr";
+
+export interface ShellNavigateViewPayload {
+  viewId?: string;
+  viewPath?: string | null;
+  viewLabel?: string;
+  viewType?: ShellNavigateViewType;
+  action?: string;
+  subview?: string;
+  views?: string[];
+  layout?: string;
+  placement?: string;
+  alwaysOnTop?: boolean;
+}
+
+export type ShellNavigateViewWsFrame = ShellNavigateViewPayload & {
+  type: typeof SHELL_NAVIGATE_VIEW_WS_EVENT;
+};
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readViewType(value: unknown): ShellNavigateViewType | undefined {
+  return value === "gui" || value === "tui" || value === "xr"
+    ? value
+    : undefined;
+}
+
+export function normalizeShellNavigateViewPayload(
+  data: Record<string, unknown>,
+): ShellNavigateViewPayload {
+  const views = Array.isArray(data.views)
+    ? data.views.filter(
+        (value): value is string =>
+          typeof value === "string" && value.length > 0,
+      )
+    : undefined;
+
+  return {
+    viewId: typeof data.viewId === "string" ? data.viewId : undefined,
+    viewPath: typeof data.viewPath === "string" ? data.viewPath : undefined,
+    viewLabel: typeof data.viewLabel === "string" ? data.viewLabel : undefined,
+    viewType: readViewType(data.viewType),
+    action: typeof data.action === "string" ? data.action : undefined,
+    subview: readNonEmptyString(data.subview),
+    views: views && views.length > 0 ? views : undefined,
+    layout: readNonEmptyString(data.layout),
+    placement: readNonEmptyString(data.placement),
+    alwaysOnTop: data.alwaysOnTop === true,
+  };
+}
+
+export function createShellNavigateViewWsFrame(
+  payload: ShellNavigateViewPayload,
+): ShellNavigateViewWsFrame {
+  return {
+    type: SHELL_NAVIGATE_VIEW_WS_EVENT,
+    ...payload,
+  };
+}
 
 export interface AppEmoteEventDetail {
   emoteId: string;
@@ -121,6 +220,7 @@ export type ElizaWindowEventName =
   | typeof FUSED_WAKE_EVENT
   | typeof APP_EMOTE_EVENT
   | typeof ELIZA_CLOUD_STATUS_UPDATED_EVENT
+  | typeof NAVIGATE_VIEW_EVENT
   | typeof VRM_TELEPORT_COMPLETE_EVENT
   | typeof FIRST_RUN_VOICE_PREVIEW_AWAIT_TELEPORT_EVENT
   | typeof SELF_STATUS_SYNC_EVENT;

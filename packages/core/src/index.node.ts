@@ -10,6 +10,7 @@ export * from "./access-context";
 export * from "./access-control/filter";
 // Export all core modules
 export * from "./account-pool-bridge";
+export * from "./action-names";
 export * from "./actions";
 export * from "./activity-plaintext";
 export * from "./api/http-helpers";
@@ -23,6 +24,7 @@ export * from "./capabilities";
 export * from "./character";
 // Export character utilities
 export * from "./character-utils";
+export * from "./cloud-auth-service";
 export * from "./cloud-routing";
 // Connection management (ensureConnection/ensureConnections) - standalone batch helpers
 export * from "./connection";
@@ -71,6 +73,12 @@ export {
 	updateRoleAction,
 } from "./features/advanced-capabilities/actions/role";
 export * from "./features/advanced-memory";
+export {
+	AUTONOMY_SERVICE_TYPE,
+	AUTONOMY_TASK_NAME,
+	AUTONOMY_TASK_TAGS,
+	AutonomyService,
+} from "./features/autonomy";
 // Export capabilities and plugin creation
 export * from "./features/basic-capabilities/index";
 export * from "./features/credential-proxy/index.ts";
@@ -278,6 +286,13 @@ export * from "./services/evaluator";
 export * from "./services/evaluator-priorities";
 export * from "./services/hook";
 export * from "./services/message";
+export {
+	CODING_DELEGATION_ACTION_TAGS,
+	findCodingDelegationActionName,
+	hasActionTags,
+	LEGACY_CODING_DELEGATION_ACTION_NAMES,
+	normalizeActionIdentifier,
+} from "./services/message/direct-action-heuristics";
 export * from "./services/notification";
 export * from "./services/optimized-prompt";
 export { resolveOptimizedPromptForRuntime } from "./services/optimized-prompt-resolver";
@@ -320,6 +335,7 @@ export {
 } from "./testing/live-provider";
 export * from "./trajectory-context";
 export * from "./trajectory-utils";
+export * from "./tunnel-service";
 export type { ConnectorAccountCapability, ConnectorAccountRef } from "./types";
 // Export everything from types
 export * from "./types";

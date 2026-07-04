@@ -20,6 +20,8 @@ export interface ServiceTypeRegistry {
 	BROWSER: "browser";
 	PDF: "pdf";
 	REMOTE_FILES: "aws_s3";
+	TUNNEL: "tunnel";
+	CLOUD_AUTH: "CLOUD_AUTH";
 	WEB_SEARCH: "web_search";
 	EMAIL: "email";
 	TEE: "tee";
@@ -47,6 +49,7 @@ export interface ServiceTypeRegistry {
 	RELATIONSHIPS: "relationships";
 	FOLLOW_UP: "follow_up";
 	TRAJECTORIES: "trajectories";
+	SWARM_COORDINATOR: "SWARM_COORDINATOR";
 	UNKNOWN: "unknown";
 }
 
@@ -121,6 +124,8 @@ export const ServiceType = {
 	BROWSER: "browser",
 	PDF: "pdf",
 	REMOTE_FILES: "aws_s3",
+	TUNNEL: "tunnel",
+	CLOUD_AUTH: "CLOUD_AUTH",
 	WEB_SEARCH: "web_search",
 	EMAIL: "email",
 	TEE: "tee",
@@ -151,6 +156,7 @@ export const ServiceType = {
 	RELATIONSHIPS: "relationships",
 	FOLLOW_UP: "follow_up",
 	TRAJECTORIES: "trajectories",
+	SWARM_COORDINATOR: "SWARM_COORDINATOR",
 	UNKNOWN: "unknown",
 } as const;
 

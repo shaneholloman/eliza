@@ -278,6 +278,8 @@ export const HOOK_MODES: readonly ActionMode[] = [
 /**
  * Represents an action the agent can perform
  */
+export const FOLLOW_UP_CAPABLE_ACTION_TAG = "follow-up-capable" as const;
+
 export interface Action {
 	/** Action name */
 	name: string;
@@ -382,6 +384,20 @@ export interface Action {
 	 * action's visible result text in task clipboard state.
 	 */
 	suppressActionResultClipboard?: boolean;
+
+	/**
+	 * Optional owner-declared short summary for planner fallback messages.
+	 *
+	 * The planner uses this only as a last-resort "what I did" projection when a
+	 * successful tool turn has no clean model/evaluator final text. Keep the
+	 * returned text terse and user-facing, e.g. "edited app.ts" or
+	 * "ran `bun test`". Return undefined when the action result should not
+	 * contribute to a synthesized fallback.
+	 */
+	summarize?: (
+		result: ActionResult | undefined,
+		params: Record<string, unknown>,
+	) => string | undefined;
 
 	/**
 	 * Optional input parameters for the action.

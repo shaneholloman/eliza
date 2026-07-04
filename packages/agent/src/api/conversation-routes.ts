@@ -24,6 +24,8 @@ import {
   type Content,
   createMessageMemory,
   logger,
+  MESSAGE_SOURCE_AGENT_GREETING,
+  MESSAGE_SOURCE_CLIENT_CHAT,
   type Memory,
   type RolesWorldMetadata,
   recordOwnerGrant,
@@ -801,7 +803,7 @@ async function ensureConversationRoom(
     roomId: conv.roomId,
     worldId,
     userName: caller.userName,
-    source: "client_chat",
+    source: MESSAGE_SOURCE_CLIENT_CHAT,
     channelId: `web-conv-${conv.id}`,
     type: ChannelType.DM,
     messageServerId,
@@ -1251,7 +1253,7 @@ async function ensureConversationGreetingStored(
     const content = memory.content as Record<string, unknown> | undefined;
     return (
       memory.entityId === runtime.agentId &&
-      content?.source === "agent_greeting" &&
+      content?.source === MESSAGE_SOURCE_AGENT_GREETING &&
       typeof content.text === "string" &&
       content.text.trim().length > 0
     );
@@ -1300,7 +1302,7 @@ async function ensureConversationGreetingStored(
         roomId: conv.roomId,
         content: {
           text: greeting,
-          source: "agent_greeting",
+          source: MESSAGE_SOURCE_AGENT_GREETING,
           channelType: ChannelType.DM,
         },
       }),
@@ -1664,7 +1666,7 @@ export async function handleConversationRoutes(
           const normalizedSource =
             typeof contentSource === "string" &&
             contentSource.length > 0 &&
-            contentSource !== "client_chat"
+            contentSource !== MESSAGE_SOURCE_CLIENT_CHAT
               ? contentSource
               : undefined;
           const actionName =
