@@ -202,6 +202,9 @@ async function resolveMcpRemoteUrlRejection(
   try {
     parsed = new URL(rawUrl);
   } catch {
+    // error-policy:J3 untrusted-input sanitizing — an unparseable URL is
+    // rejected (deny-by-default); returning a non-null reason blocks the
+    // MCP connection, never allows it.
     return "URL must be a valid absolute URL";
   }
 
@@ -232,6 +235,10 @@ async function resolveMcpRemoteUrlRejection(
     const resolved = await dnsLookup(hostname, { all: true });
     addresses = Array.isArray(resolved) ? resolved : [resolved];
   } catch {
+    // error-policy:J3 untrusted-input sanitizing — a host we cannot resolve is
+    // rejected rather than allowed: we cannot prove it is not a blocked
+    // private/link-local address, so deny-by-default (SSRF guard,
+    // GHSA-54rx-pcr9-hg9x).
     return `Could not resolve URL host "${hostname}"`;
   }
 

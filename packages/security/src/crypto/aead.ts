@@ -86,6 +86,9 @@ export function aeadDecrypt(
     ]);
     return new Uint8Array(pt);
   } catch (err) {
+    // error-policy:J2 context-adding rethrow — a GCM auth-tag failure (tampered
+    // ciphertext / wrong key / wrong AAD) must surface as a decrypt failure,
+    // never as fabricated plaintext. Fail closed.
     throw new AeadError(
       err instanceof Error
         ? `AEAD decrypt failed: ${err.message}`
