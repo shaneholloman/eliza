@@ -555,6 +555,7 @@ export class GatewayManager {
     // Release Eliza App bot leadership for faster failover
     if (this.isElizaAppLeader && this.redis) {
       logger.info("Releasing Eliza App bot leadership");
+      // error-policy:J6 best-effort teardown; the leader key carries a TTL so a failed release still expires.
       await this.redis.del(ELIZA_APP_LEADER_KEY).catch(() => {});
       if (this.elizaAppClient) {
         this.elizaAppClient.destroy();

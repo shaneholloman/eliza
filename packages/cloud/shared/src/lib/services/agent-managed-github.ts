@@ -108,7 +108,17 @@ export class ManagedAgentGithubService {
         organizationId: params.organizationId,
         userId: sandbox.user_id,
       });
-      void provisioningJobService.triggerImmediate().catch(() => {});
+      // The restart job is already enqueued above; triggerImmediate only nudges the
+      // daemon to pick it up now. A failed nudge delays the restart to the next poll,
+      // so it is logged rather than swallowed or thrown.
+      // error-policy:J7 nudge failure only delays an already-enqueued restart; logged, not fatal.
+      void provisioningJobService.triggerImmediate().catch((err) =>
+        logger.warn("[managed-github] provisioning triggerImmediate nudge failed", {
+          agentId: sandbox.id,
+          organizationId: params.organizationId,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
       restarted = true;
     }
 
@@ -172,7 +182,17 @@ export class ManagedAgentGithubService {
         organizationId: params.organizationId,
         userId: sandbox.user_id,
       });
-      void provisioningJobService.triggerImmediate().catch(() => {});
+      // The restart job is already enqueued above; triggerImmediate only nudges the
+      // daemon to pick it up now. A failed nudge delays the restart to the next poll,
+      // so it is logged rather than swallowed or thrown.
+      // error-policy:J7 nudge failure only delays an already-enqueued restart; logged, not fatal.
+      void provisioningJobService.triggerImmediate().catch((err) =>
+        logger.warn("[managed-github] provisioning triggerImmediate nudge failed", {
+          agentId: sandbox.id,
+          organizationId: params.organizationId,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
       restarted = true;
     }
 
