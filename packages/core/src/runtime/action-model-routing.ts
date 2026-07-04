@@ -52,11 +52,11 @@ export interface ModelCapabilityView {
  *
  * `modelType` is the model registration key to look up (one of `ModelType.*`).
  *
- * `providerFilter` is an optional predicate over the registered provider name.
- * For the `LOCAL` strategy this restricts resolution to local-provider
- * registrations (Ollama, LM Studio, MLX, llama.cpp, …) so that a `LOCAL`
- * request never silently calls a cloud provider that also happens to be
- * registered for `TEXT_SMALL`.
+ * `providerFilter` is an optional predicate over the registered provider's
+ * capability view. For the `LOCAL` strategy this restricts resolution to
+ * local-provider registrations (Ollama, LM Studio, MLX, llama.cpp, etc.) so
+ * that a `LOCAL` request never silently calls a cloud provider that also
+ * happens to be registered for `TEXT_SMALL`.
  */
 export interface ActionModelRoutingStep {
 	readonly modelType: string;
