@@ -27,6 +27,13 @@ import { logger } from "@/lib/utils/logger";
 import { isCommand } from "@/lib/utils/telegram-helpers";
 import type { AppEnv } from "@/types/cloud-worker-env";
 
+function allowUnverifiedTelegramDevWebhook(): boolean {
+  return (
+    process.env.NODE_ENV === "development" &&
+    process.env.TELEGRAM_WEBHOOK_ALLOW_UNVERIFIED_DEV === "1"
+  );
+}
+
 async function handleTelegramWebhook(
   request: Request,
   context?: RouteContext<{ orgId: string }>,
@@ -39,8 +46,6 @@ async function handleTelegramWebhook(
   const secretToken = request.headers.get("x-telegram-bot-api-secret-token");
   const storedSecret = await telegramAutomationService.getWebhookSecret(orgId);
 
-  // In production, require secret token verification
-  // In development, allow requests without secret for testing (but log a warning)
   if (storedSecret) {
     if (!secretToken) {
       logger.warn("[Telegram Webhook] Missing secret token header", { orgId });
@@ -57,12 +62,22 @@ async function handleTelegramWebhook(
       orgId,
     });
     return Response.json({ ok: true, status: "not_configured" });
+  } else if (!allowUnverifiedTelegramDevWebhook()) {
+    logger.warn("[Telegram Webhook] No webhook secret configured - rejecting", {
+      orgId,
+      hint: "Set TELEGRAM_WEBHOOK_ALLOW_UNVERIFIED_DEV=1 for local tunnel testing only.",
+    });
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  } else {
+    logger.warn("[Telegram Webhook] Accepting unverified development webhook", {
+      orgId,
+    });
   }
 
   let botToken = await telegramAutomationService.getBotToken(orgId);
 
-  // DEV ONLY: Fallback to env variable for testing
-  if (!botToken && process.env.NODE_ENV === "development") {
+  // DEV ONLY: explicit opt-in fallback for local tunnel testing.
+  if (!botToken && allowUnverifiedTelegramDevWebhook()) {
     botToken = process.env.TELEGRAM_BOT_TOKEN || null;
     if (botToken) {
       logger.info("[Telegram Webhook] Using fallback bot token from env", {
