@@ -186,6 +186,9 @@ export class CodexSdkSession {
 
   private enqueue<T>(fn: () => Promise<T>): Promise<T> {
     const run = this.chain.then(fn, fn);
+    // error-policy:J5 the chain tail only serializes turns; the REAL result/error
+    // is returned to the caller via `run`. Swallowing here just stops a settled
+    // tail from raising an unhandled rejection — the caller still sees the error.
     this.chain = run.catch(() => undefined);
     return run;
   }
@@ -219,7 +222,8 @@ export class CodexSdkSession {
       }
       return text;
     } catch (err) {
-      // Self-heal: a dead/erroring thread must not poison the next turn.
+      // error-policy:J2 context-adding rethrow — self-heal (a dead/erroring thread
+      // must not poison the next turn), then rethrow so the caller sees the failure.
       this.dispose();
       throw err instanceof Error ? err : new Error(`[cli-inference:codex-sdk] ${String(err)}`);
     }
@@ -234,8 +238,9 @@ export class CodexSdkSession {
     try {
       parsed = JSON.parse(text);
     } catch {
-      // Structured output should be valid JSON; if the model wrapped it, salvage
-      // the first {...} block rather than failing the turn.
+      // error-policy:J3 untrusted model output — structured output SHOULD be valid
+      // JSON; if wrapped, salvage the first {...} block, else throw a typed
+      // "non-JSON output" (does not fabricate a valid route).
       const match = text.match(/\{[\s\S]*\}/);
       if (!match) {
         throw new Error("[cli-inference:codex-sdk] route: non-JSON output");
@@ -254,7 +259,9 @@ export class CodexSdkSession {
         const p = JSON.parse(obj.params);
         if (p && typeof p === "object") params = p as Record<string, unknown>;
       } catch {
-        // malformed params string — keep {} rather than failing the turn
+        // error-policy:J3 untrusted model output — a malformed `params` JSON
+        // string degrades to {} (a valid "no params" route arg), the action
+        // itself is already validated above; not a swallowed required-data failure.
       }
     } else if (obj.params && typeof obj.params === "object") {
       params = obj.params as Record<string, unknown>;

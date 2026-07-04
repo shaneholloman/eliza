@@ -42,6 +42,11 @@ export async function handleTextEmbedding(
   const modelName = getEmbeddingModel(runtime);
 
   if (!modelName) {
+    // error-policy:J4 explicit degrade — no embedding model *configured* (not a
+    // failure): LM Studio only exposes embeddings when the user loads one. A
+    // text-only deployment stays alive with embeddings simply absent. This is the
+    // unset-config branch ONLY; a real embed *failure* below throws (never a
+    // fabricated zero vector — see the module header and #9324).
     logger.warn(
       "[LMStudio] LMSTUDIO_EMBEDDING_MODEL not set — returning zero vector. Set it to a loaded embedding model in LM Studio."
     );
@@ -77,6 +82,9 @@ export async function handleTextEmbedding(
     );
     return embedding;
   } catch (error) {
+    // error-policy:J2 context-adding rethrow — a *configured* embedding model that
+    // errors throws (never a fabricated zero vector, which would poison the vector
+    // store; see #9324). Distinct from the unset-config J4 degrade above.
     logger.error({ error }, "[LMStudio] Error generating embedding");
     throw error;
   }

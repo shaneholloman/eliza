@@ -130,6 +130,10 @@ export function parseJsonIfPossible(value: unknown): unknown {
   try {
     return JSON.parse(value);
   } catch {
+    // error-policy:J3 tool-argument fields arrive as either JSON text or an
+    // already-plain string; a non-JSON string is a valid literal argument, not a
+    // failure. Returning it unchanged is the designed "not JSON, keep as-is"
+    // signal, not a fabricated default for a failed parse of required data.
     return value;
   }
 }

@@ -287,6 +287,9 @@ export class ClaudeSdkSession {
     // Serialize so only one turn is in flight per warm session (the streaming
     // generator is a single conversation, and pendingDecision is shared).
     const run = this.chain.then(fn, fn);
+    // error-policy:J5 the chain tail only serializes turns; the REAL result/error
+    // is returned to the caller via `run`. Swallowing here just stops a settled
+    // tail from raising an unhandled rejection — the caller still sees the error.
     this.chain = run.catch(() => undefined);
     return run;
   }
@@ -306,7 +309,8 @@ export class ClaudeSdkSession {
     try {
       return await this.sendAndRead(body, mode);
     } catch (err) {
-      // Self-heal: a dead/erroring session must not poison the next turn.
+      // error-policy:J2 context-adding rethrow — self-heal (a dead/erroring session
+      // must not poison the next turn), then rethrow so the caller sees the failure.
       await this.dispose();
       throw err instanceof Error ? err : new Error(`[cli-inference:sdk] ${String(err)}`);
     }
@@ -440,6 +444,8 @@ export class ClaudeSdkSession {
         }),
       ]);
     } catch (error) {
+      // error-policy:J2 context-adding rethrow — dispose on a provider/timeout
+      // error, then rethrow the original error unchanged.
       if (error instanceof ProviderApiError) {
         await this.dispose();
       }
@@ -580,7 +586,8 @@ export class ClaudeSdkSession {
       try {
         await q.interrupt();
       } catch {
-        // best-effort
+        // error-policy:J6 best-effort teardown — interrupting an already-dead
+        // query on dispose; failure here does not matter (the session is discarded).
       }
     }
   }

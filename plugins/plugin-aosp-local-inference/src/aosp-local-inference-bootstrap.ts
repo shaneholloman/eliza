@@ -188,6 +188,8 @@ function writeAospActiveModelState(
       "utf8",
     );
   } catch (err) {
+    // error-policy:J7 the active-model-state file is a diagnostic sidecar (drives
+    // the route-status UI); a write failure is logged and must not fail model load.
     logger.warn(
       "[aosp-local-inference] Failed to write active model state:",
       err instanceof Error ? err.message : String(err),
@@ -204,6 +206,8 @@ function clearAospActiveModelState(): void {
     );
     if (existsSync(activeStatePath)) unlinkSync(activeStatePath);
   } catch (err) {
+    // error-policy:J7 diagnostic sidecar cleanup; a failure is logged and must not
+    // fail the unload it accompanies.
     logger.warn(
       "[aosp-local-inference] Failed to clear active model state:",
       err instanceof Error ? err.message : String(err),
@@ -309,6 +313,9 @@ export async function activateAospLocalInferenceModel(args: {
     );
     return activeSnapshotFromLoadArgs(args.modelId, loadedAt, args.loadArgs);
   } catch (err) {
+    // error-policy:J2 context-adding rethrow — record the load failure in the
+    // status sidecar (observable), then rethrow so the caller sees the error; the
+    // model is NOT reported as ready.
     writeAospActiveModelState({
       status: "error",
       role: "chat",
@@ -665,6 +672,9 @@ function readMtpTargetMeta(bundleDir: string): {
   try {
     return JSON.parse(readFileSync(metaPath, "utf8"));
   } catch (err) {
+    // error-policy:J4 explicit degrade — the MTP target-meta sidecar is optional;
+    // an absent/corrupt meta returns null (observable via the debug log) and the
+    // caller runs without MTP speculative decoding. Not a swallowed model failure.
     writeAospLlamaDebugLog("bootstrap:mtp:targetMetaReadFailed", {
       metaPath,
       error: err instanceof Error ? err.message : String(err),
@@ -742,6 +752,9 @@ function resolveMtpDrafterPath(modelPath: string): string | null {
       if (existsSync(candidate)) return candidate;
     }
   } catch {
+    // error-policy:J4 explicit degrade — filesystem probe for an optional draft
+    // model; any error means "not found here", the caller falls back. The two
+    // return-null branches are the same designed "absent" answer.
     return null;
   }
   return null;
@@ -1014,6 +1027,9 @@ function readJsonFile<T>(file: string): T | null {
     if (!existsSync(file)) return null;
     return JSON.parse(readFileSync(file, "utf8")) as T;
   } catch {
+    // error-policy:J4 explicit degrade — optional JSON sidecar; missing/corrupt
+    // returns null and the caller uses its next discovery source (assigned models
+    // / manifest / fallback-find). Not the sole model source.
     return null;
   }
 }
@@ -1080,6 +1096,9 @@ function findModelUnderDirectory(
     try {
       names = readdirSync(dir).sort();
     } catch {
+      // error-policy:J4 explicit degrade — an unreadable/absent dir yields "no
+      // model found in this tree" (null); the caller composes other discovery
+      // sources. Fabricates no path.
       return null;
     }
     for (const name of names) {
@@ -1088,6 +1107,9 @@ function findModelUnderDirectory(
       try {
         stats = statSync(abs);
       } catch {
+        // error-policy:J3 skip an unstattable entry during model-file discovery;
+        // the walk continues and either finds a real file or returns null. No
+        // fabricated match.
         continue;
       }
       if (stats.isFile() && matcher(abs)) return abs;
@@ -1179,6 +1201,10 @@ function readBundledModelManifest(modelsDir: string): {
     }
     return { chat, embedding };
   } catch (err) {
+    // error-policy:J4 explicit degrade — a corrupt manifest.json is logged at
+    // error (observable) and this ONE discovery source returns "found nothing";
+    // the caller then falls through to assigned-registry / fallback-find / the
+    // recommended-model auto-download. It does not report a model as ready.
     logger.error(
       "[aosp-local-inference] Could not parse manifest.json:",
       err instanceof Error ? err.message : String(err),
@@ -1243,7 +1269,9 @@ async function downloadRecommendedAospModel(
     );
     try {
       unlinkSync(finalPath);
-    } catch {}
+    } catch {
+      // error-policy:J6 best-effort teardown — unlink stale/mismatched model file.
+    }
   }
   const dedupKey = `${role}:${model.id}`;
   const existing = aospInflightDownloads.get(dedupKey);
@@ -1253,7 +1281,9 @@ async function downloadRecommendedAospModel(
     const stagingPath = `${finalPath}.part`;
     try {
       unlinkSync(stagingPath);
-    } catch {}
+    } catch {
+      // error-policy:J6 best-effort teardown — unlink stale staging file before download.
+    }
     logger.info(
       `[aosp-local-inference] Auto-downloading recommended ${role} model ${model.id} from ${url}`,
     );
@@ -1271,7 +1301,9 @@ async function downloadRecommendedAospModel(
     if (model.expectedSizeBytes && stagedSize !== model.expectedSizeBytes) {
       try {
         unlinkSync(stagingPath);
-      } catch {}
+      } catch {
+        // error-policy:J6 best-effort teardown — unlink bad-size staging artifact (real error thrown next).
+      }
       throw new Error(
         `[aosp-local-inference] Downloaded ${model.ggufFile} size ${stagedSize} != expected ${model.expectedSizeBytes}.`,
       );
@@ -1340,6 +1372,9 @@ function resolveAssignedChatTierSlug(): string {
     const chatModel = assigned.chat ?? manifest.chat ?? fallback.chat;
     return chatModel ? tierSlugFromModelName(path.basename(chatModel)) : "2b";
   } catch {
+    // error-policy:J4 explicit degrade — tier slug only picks the Kokoro voice
+    // URL; if discovery throws we default to the "2b" voice tier rather than
+    // failing chat load. Cosmetic fallback, not a model source.
     return "2b";
   }
 }
@@ -1387,6 +1422,9 @@ function ensureKokoroTtsAssetsInBackground(
       `[aosp-local-inference] Kokoro voice staged under ${kokoroDir}`,
     );
   })()
+    // error-policy:J4 explicit degrade — Kokoro voice is an optional enhancement;
+    // a failed background download logs + cleans staging and the agent uses the
+    // platform system TTS. Not a model/inference failure.
     .catch((err) => {
       logger.warn(
         `[aosp-local-inference] Kokoro voice auto-download failed (falling back to system TTS): ${
@@ -1448,6 +1486,8 @@ function fallbackFindBundledModels(modelsDir: string): {
         isDirectory = stats.isDirectory();
         isFile = stats.isFile();
       } catch {
+        // error-policy:J3 skip an unstattable dir entry while walking for staged
+        // voice assets; the walk continues, no fabricated result.
         continue;
       }
       if (isDirectory) {
@@ -1572,6 +1612,9 @@ function makeLoaderLifecycle(loader: AospLoader): {
           loadedAt: new Date().toISOString(),
         });
       } catch (err) {
+        // error-policy:J2 context-adding rethrow — record the per-role load failure
+        // in the status sidecar (observable), then rethrow; the role is not marked
+        // ready.
         writeAospActiveModelState({
           status: "error",
           role,
@@ -1694,6 +1737,10 @@ async function tryLocalGenerate(
     const text = await generateOnPriorityLane(loader, lifecycle, params);
     return { kind: "ok", text };
   } catch (err) {
+    // error-policy:J4 explicit degrade — classify the local-inference failure:
+    // non-fallbackable errors rethrow (surface to the caller); only errors the
+    // classifier marks as fallback-eligible degrade to the cloud path below. The
+    // fallback is a typed outcome, not a fabricated completion.
     const cls = classifyLocalError(err);
     if (!cls.fallback) {
       throw err;
@@ -1896,6 +1943,8 @@ export function prewarmAospKokoroTextToSpeechHandler(
           `[aosp-local-inference] Kokoro TEXT_TO_SPEECH pre-warm completed in ${Date.now() - started}ms (${bytes.byteLength} bytes)`,
         );
       })
+      // error-policy:J7 pre-warm is a latency optimization; a failure is logged
+      // and the first real TTS call re-attempts the load. Not a request path.
       .catch((err) => {
         logger.warn(
           "[aosp-local-inference] Kokoro TEXT_TO_SPEECH pre-warm failed: " +
@@ -1974,6 +2023,9 @@ function shouldEvictChatForVoiceLoad(): boolean {
       parseMemAvailableMb(readFileSync("/proc/meminfo", "utf8")),
     );
   } catch {
+    // error-policy:J4 explicit degrade — if /proc/meminfo is unreadable we cannot
+    // prove there is headroom, so fail SAFE by evicting chat before loading voice
+    // (avoids an OOM-kill of the whole agent). Conservative, not a swallow.
     return true;
   }
 }
@@ -2039,7 +2091,9 @@ export function makeAospFusedKokoroTextToSpeechHandler(): TextToSpeechHandler {
           const message = readFfiStringAndFree(ffi, symbols, errCreate);
           try {
             lib.close();
-          } catch {}
+          } catch {
+            // error-policy:J6 best-effort teardown — close lib on FFI create failure (error thrown next).
+          }
           throw new Error(
             `[aosp-local-inference] fused Kokoro create failed: ${message}`,
           );
@@ -2048,10 +2102,14 @@ export function makeAospFusedKokoroTextToSpeechHandler(): TextToSpeechHandler {
         if ((symbols.eliza_inference_kokoro_supported?.() as number) !== 1) {
           try {
             symbols.eliza_inference_destroy(ctx);
-          } catch {}
+          } catch {
+            // error-policy:J6 best-effort teardown — destroy ctx on unsupported-Kokoro (error thrown next).
+          }
           try {
             lib.close();
-          } catch {}
+          } catch {
+            // error-policy:J6 best-effort teardown — close lib on unsupported-Kokoro (error thrown next).
+          }
           throw new Error(
             "[aosp-local-inference] libelizainference.so does not export the Kokoro TTS engine (pre-v10 build); rebuild the fused lib with -DLLAMA_BUILD_KOKORO=ON.",
           );
@@ -2072,10 +2130,14 @@ export function makeAospFusedKokoroTextToSpeechHandler(): TextToSpeechHandler {
           const message = readFfiStringAndFree(ffi, symbols, errLoad);
           try {
             symbols.eliza_inference_destroy(ctx);
-          } catch {}
+          } catch {
+            // error-policy:J6 best-effort teardown — destroy ctx on Kokoro load failure (error thrown next).
+          }
           try {
             lib.close();
-          } catch {}
+          } catch {
+            // error-policy:J6 best-effort teardown — close lib on Kokoro load failure (error thrown next).
+          }
           throw new Error(
             `[aosp-local-inference] fused Kokoro load rc=${loadRc}: ${message}`,
           );
@@ -2096,6 +2158,8 @@ export function makeAospFusedKokoroTextToSpeechHandler(): TextToSpeechHandler {
           sampleRate,
         };
       })
+      // error-policy:J2 context-adding — on load failure clear the cached promise
+      // (so the next call retries a fresh load) and rethrow the original error.
       .catch((err) => {
         contextPromise = null;
         throw err;
@@ -2222,6 +2286,8 @@ function resolveAospFusedKokoroConfig(): AospFusedKokoroConfig | null {
   try {
     bundleRoot = resolveAssignedChatBundleRoot();
   } catch {
+    // error-policy:J4 explicit degrade — no resolvable chat bundle means the fused
+    // Kokoro TTS config is unavailable (null); the caller falls back to system TTS.
     return null;
   }
   // Ensure the on-device Kokoro voice is present (Kokoro is the only on-device
@@ -2264,6 +2330,8 @@ function ensureFusedTextBundleLayout(
     try {
       linkSync(modelPath, target);
     } catch {
+      // error-policy:J6 best-effort — hardlink failed (cross-device), fall back to
+      // a symlink so the flat GGUF still appears under <bundleRoot>/text/.
       symlinkSync(modelPath, target);
     }
     writeAospLlamaDebugLog("bootstrap:fusedText:flatBundleShim", {
@@ -2271,6 +2339,9 @@ function ensureFusedTextBundleLayout(
       target,
     });
   } catch (err) {
+    // error-policy:J4 explicit degrade — the flat-bundle shim is a convenience
+    // hardlink; on failure the debug log records it and the fused create/tokenize
+    // surfaces its own loud "no text GGUF found" diagnostic (documented above).
     writeAospLlamaDebugLog("bootstrap:fusedText:flatBundleShimFailed", {
       modelPath,
       error: err instanceof Error ? err.message : String(err),
@@ -2314,6 +2385,9 @@ export function aospAsrAssetsPresent(): boolean {
   try {
     return existsSync(path.join(resolveAssignedChatBundleRoot(), "asr"));
   } catch {
+    // error-policy:J4 explicit degrade — ASR/whisper is optional (a missing bundle
+    // is the normal case, see the doc above); any error means "no local
+    // TRANSCRIPTION", the honest absent-capability signal.
     return false;
   }
 }
@@ -2330,10 +2404,14 @@ function readFfiStringAndFree(
     text = ffi.CString
       ? new ffi.CString(Number(raw)).toString()
       : "(no CString)";
-  } catch {}
+  } catch {
+    // error-policy:J6 best-effort teardown — CString read of an FFI diagnostic; falls back to a marker.
+  }
   try {
     symbols.eliza_inference_free_string?.(raw);
-  } catch {}
+  } catch {
+    // error-policy:J6 best-effort teardown — free the FFI diagnostic string pointer.
+  }
   return text;
 }
 
@@ -2528,8 +2606,9 @@ async function transcribeWithAospElizaInference(
         "[aosp-local-inference] released chat model before fused ASR load to free memory",
       );
     } catch {
-      // Best-effort: a failed eviction just means ASR loads under the prior
-      // (possibly tight) memory conditions — no worse than before.
+      // error-policy:J6 best-effort — a failed pre-ASR eviction just means ASR
+      // loads under the prior (possibly tight) memory conditions; no worse than
+      // before, and not a load failure.
     }
   }
   const bundleRoot = resolveAssignedVoiceBundleRoot();
@@ -2559,7 +2638,9 @@ async function transcribeWithAospElizaInference(
     const message = readFfiStringAndFree(ffi, symbols, errCreate);
     try {
       lib.close();
-    } catch {}
+    } catch {
+      // error-policy:J6 best-effort teardown — close lib on ASR create failure (error thrown next).
+    }
     throw new Error(`[aosp-local-inference] ASR create failed: ${message}`);
   }
   try {
@@ -2602,10 +2683,14 @@ async function transcribeWithAospElizaInference(
   } finally {
     try {
       symbols.eliza_inference_destroy(ctx);
-    } catch {}
+    } catch {
+      // error-policy:J6 best-effort teardown — destroy ctx in finally teardown.
+    }
     try {
       lib.close();
-    } catch {}
+    } catch {
+      // error-policy:J6 best-effort teardown — close lib in finally teardown.
+    }
   }
 }
 
@@ -2666,11 +2751,15 @@ function makeFusedFfiHelpers(
       try {
         text = ffi.CString ? new ffi.CString(Number(raw)).toString() : null;
       } catch {
+        // error-policy:J6 best-effort — reading an FFI diagnostic C-string; if the
+        // read itself fails we return null (no diagnostic), never crash teardown.
         text = null;
       }
       try {
         symbols.eliza_inference_free_string?.(raw);
-      } catch {}
+      } catch {
+        // error-policy:J6 best-effort teardown — free the FFI diagnostic string pointer.
+      }
       return text;
     },
     cString,
@@ -2890,7 +2979,9 @@ export async function tryBuildAospFusedTextLoader(): Promise<AospLoader | null> 
     });
     try {
       lib.close();
-    } catch {}
+    } catch {
+      // error-policy:J6 best-effort teardown — close lib after fused-text ABI gate rejects (returns null next).
+    }
     logger.error(
       "[aosp-local-inference] fused libelizainference present but lacks streaming-LLM/MTP/KV-quant (ABI <v9); local text inference unavailable",
     );
@@ -2903,7 +2994,9 @@ export async function tryBuildAospFusedTextLoader(): Promise<AospLoader | null> 
     if (!state) return;
     try {
       state.symbols.eliza_inference_destroy?.(state.ctx);
-    } catch {}
+    } catch {
+      // error-policy:J6 best-effort teardown — destroy ctx during loader teardown.
+    }
     state = null;
   };
 
@@ -3043,6 +3136,10 @@ export async function tryBuildAospFusedTextLoader(): Promise<AospLoader | null> 
       try {
         return await runStream();
       } catch (err) {
+        // error-policy:J4 explicit degrade — ONLY the specific, recoverable
+        // "KV-quant cache rejected" error retries once with an f16 KV cache; any
+        // other error (or a second KV-quant rejection) rethrows and fails the
+        // generation. The retry is a typed recovery, not a swallowed failure.
         const message = err instanceof Error ? err.message : String(err);
         // Some fused-lib builds reject a quantized V cache without flash_attn
         // ("V cache quantization requires flash_attn" → llm_stream_open fails
@@ -3272,6 +3369,9 @@ export async function ensureAospLocalInferenceHandlers(
   // request handler bubble up a clear error instead of crashing the
   // boot. ensureChatLoaded is also memoized at the lifecycle layer, so
   // calling it here doesn't conflict with the first real request.
+  // error-policy:J7 chat pre-warm is a latency optimization; a failure is logged
+  // and the first real TEXT request re-attempts the load (makeGenerateHandler ->
+  // lifecycle.ensureChatLoaded). Not a request path.
   void lifecycle.ensureChatLoaded().catch((err) => {
     logger.warn(
       "[aosp-local-inference] Chat model pre-warm failed (will retry on first request): " +

@@ -126,6 +126,10 @@ export const ollamaPlugin: Plugin = {
         logger.warn(`Ollama API validation failed: ${response.statusText}`);
       }
     } catch (fetchError: unknown) {
+      // error-policy:J4 explicit degrade — `init` runs a connectivity probe; a
+      // daemon-down result must not crash plugin load (the agent can start with
+      // Ollama offline and the operator brings it up later). The failure is
+      // surfaced per-call by ensureModelAvailable (throws), not swallowed there.
       const message = fetchError instanceof Error ? fetchError.message : String(fetchError);
       logger.warn(`Ollama API validation error: ${message}`);
     }
@@ -203,6 +207,8 @@ export const ollamaPlugin: Plugin = {
                 logger.error(`Failed to validate Ollama API: ${response.statusText}`);
               }
             } catch (error) {
+              // error-policy:J7 plugin self-test diagnostic — a probe failure is logged
+              // as the test result; it must not throw out of the test harness.
               logger.error({ error }, "Error in ollama_test_url_validation");
             }
           },
@@ -217,6 +223,7 @@ export const ollamaPlugin: Plugin = {
               });
               logger.log({ embedding }, "Generated embedding");
             } catch (error) {
+              // error-policy:J7 plugin self-test diagnostic — logged as the test result.
               logger.error({ error }, "Error in test_text_embedding");
             }
           },
@@ -235,6 +242,7 @@ export const ollamaPlugin: Plugin = {
               }
               logger.log({ text }, "Generated with test_text_large");
             } catch (error) {
+              // error-policy:J7 plugin self-test diagnostic — logged as the test result.
               logger.error({ error }, "Error in test_text_large");
             }
           },
@@ -253,6 +261,7 @@ export const ollamaPlugin: Plugin = {
               }
               logger.log({ text }, "Generated with test_text_small");
             } catch (error) {
+              // error-policy:J7 plugin self-test diagnostic — logged as the test result.
               logger.error({ error }, "Error in test_text_small");
             }
           },
@@ -278,6 +287,7 @@ export const ollamaPlugin: Plugin = {
               });
               logger.log({ result }, "Generated structured output via TEXT_SMALL");
             } catch (error) {
+              // error-policy:J7 plugin self-test diagnostic — logged as the test result.
               logger.error({ error }, "Error in test_structured_output_via_text_small");
             }
           },
@@ -295,6 +305,7 @@ export const ollamaPlugin: Plugin = {
               });
               logger.log({ result }, "Generated structured output via TEXT_LARGE");
             } catch (error) {
+              // error-policy:J7 plugin self-test diagnostic — logged as the test result.
               logger.error({ error }, "Error in test_structured_output_via_text_large");
             }
           },

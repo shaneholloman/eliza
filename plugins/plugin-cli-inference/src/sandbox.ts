@@ -101,6 +101,10 @@ export function resolveSafeCwd(cwd: string, workspaceRoots: readonly string[]): 
       try {
         return realpathSync(root);
       } catch {
+        // error-policy:J3 path canonicalization — a workspace root that does not
+        // resolve (not yet created) falls back to its absolute form; the caller
+        // still enforces the containment check below, so this never widens the
+        // allow-set to an unverified path.
         return resolve(root);
       }
     });
@@ -155,6 +159,9 @@ export function resolveSafeBinary(binary: string, env: NodeJS.ProcessEnv = proce
         try {
           return realpathSync(dir);
         } catch {
+          // error-policy:J3 PATH-dir canonicalization — a non-resolvable PATH
+          // entry keeps its raw form; it is then matched against the whitelist
+          // (candidateDirs) so an unverified dir cannot slip the allow-list.
           return dir;
         }
       })();
