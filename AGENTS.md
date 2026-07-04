@@ -322,11 +322,13 @@ bun run --cwd packages/app audit:app
 
 This walks the app views (desktop + mobile, rest + hover), captures the
 populated UI, and auto-stubs `aesthetic-audit-output/manual-review/<slug>.md`
-per view. Fill in the verdict (`good` · `needs-work` · `needs-eyeball` ·
-`broken`) for every page you touched or can reach via shared
+per view. Use those Markdown files for human notes and eyeballing; CI enforces
+the computed verdicts in `report.json` / the Playwright run, not edited
+manual-review Markdown. Review every page you touched or can reach via shared
 layout/theme/components.
 
-- No page may stay `needs-work` / `broken` when a UI task is declared done.
+- No computed page verdict may stay `needs-work` / `broken` when a UI task is
+  declared done.
 - Iterate the loop ≥5× for any meaningful redesign.
 - Orange is accent only; no blue anywhere; orange-resting → darker-orange hover
   (never orange→black). Full package rules: `packages/app/AGENTS.md`.
