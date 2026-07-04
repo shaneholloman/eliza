@@ -178,7 +178,9 @@ describe("sub-agent session transcript redaction", () => {
       session_id: "session-fail",
       transcript_complete: false,
       // hash + byte count cover only the first, successfully-written line.
-      transcript_hash: createHash("sha256").update("first line\n").digest("hex"),
+      transcript_hash: createHash("sha256")
+        .update("first line\n")
+        .digest("hex"),
       transcript_bytes: Buffer.byteLength("first line\n"),
     });
     expect(
@@ -188,7 +190,39 @@ describe("sub-agent session transcript redaction", () => {
     removeTempRoot(sessionsRoot);
   });
 
-  it("surfaces a per-directory prune failure without aborting the sweep", () => {
+  it("surfaces audit emit failures without throwing out of finalize", async () => {
+    const sessionsRoot = mkTempRoot();
+    const auditDispatcher = {
+      emit: async () => {
+        throw new Error("audit sink offline");
+      },
+    } as unknown as AuditDispatcher;
+    const recorder = new SessionRecorder({
+      sessionId: "session-audit-fail",
+      actorId: "user-1",
+      sessionsRoot,
+      auditDispatcher,
+    });
+
+    recorder.record("line that landed");
+
+    const stderr = await captureStderrAsync(async () => {
+      await recorder.finalize();
+    });
+
+    expect(stderr).toContain("audit emit failed");
+    expect(stderr).toContain("audit sink offline");
+    expect(
+      readFileSync(
+        join(sessionsRoot, "session-audit-fail", "transcript.log"),
+        "utf8",
+      ),
+    ).toBe("line that landed\n");
+
+    removeTempRoot(sessionsRoot);
+  });
+
+  it("continues pruning old session directories across the sweep", () => {
     const sessionsRoot = mkTempRoot();
     const now = Date.parse("2026-01-31T00:00:00.000Z");
     const oldTime = new Date(now - 31 * 24 * 60 * 60 * 1000);
@@ -262,4 +296,21 @@ function removeTempRoot(root: string): void {
   execFileSync("node", [removePathRecursive, root], {
     stdio: ["ignore", "ignore", "ignore"],
   });
+}
+
+async function captureStderrAsync(fn: () => Promise<void>): Promise<string> {
+  const originalWrite = process.stderr.write;
+  const chunks: string[] = [];
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    chunks.push(
+      Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk),
+    );
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await fn();
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  return chunks.join("");
 }
