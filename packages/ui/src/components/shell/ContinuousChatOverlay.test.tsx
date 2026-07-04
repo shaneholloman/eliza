@@ -1332,7 +1332,6 @@ describe("ContinuousChatOverlay", () => {
         expect.objectContaining({ behavior: "smooth" }),
       );
     } finally {
-      // biome-ignore lint/performance/noDelete: restore the pristine jsdom prototype
       delete (Element.prototype as { scrollTo?: unknown }).scrollTo;
     }
   });

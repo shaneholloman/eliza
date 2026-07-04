@@ -109,6 +109,7 @@ export function createMobileBridges(ctx: MobileBridgeContext) {
         ? bridgeUrl
         : null;
     } catch {
+      // error-policy:J3 underivable/untrusted bridge URL — fail closed (no bridge)
       return null;
     }
   }
@@ -120,6 +121,8 @@ export function createMobileBridges(ctx: MobileBridgeContext) {
       const token = result?.token?.trim();
       return token ? token : undefined;
     } catch {
+      // error-policy:J4 bridge probe — tokenless config proceeds and the
+      // local agent's 401 surfaces through the request path
       return undefined;
     }
   }
@@ -165,6 +168,7 @@ export function createMobileBridges(ctx: MobileBridgeContext) {
         details,
       });
     } catch (error) {
+      // error-policy:J4 optional native module — absence logged, app degrades
       console.warn(
         `${ctx.logPrefix} Background runner unavailable:`,
         error instanceof Error ? error.message : error,
@@ -228,6 +232,7 @@ export function createMobileBridges(ctx: MobileBridgeContext) {
           },
         });
       } catch (error) {
+        // error-policy:J4 bounded retry below; absence after that is logged
         console.warn(
           `${ctx.logPrefix} Device bridge unavailable:`,
           error instanceof Error ? error.message : error,
@@ -306,6 +311,7 @@ export function createMobileBridges(ctx: MobileBridgeContext) {
           status.lastError ?? "",
         );
       } catch (error) {
+        // error-policy:J4 optional native module — absence logged, app degrades
         console.warn(
           `${ctx.logPrefix} Mobile agent tunnel unavailable:`,
           error instanceof Error ? error.message : error,
@@ -326,6 +332,7 @@ export function createMobileBridges(ctx: MobileBridgeContext) {
       );
       await MobileAgentBridge.stopInboundTunnel();
     } catch (error) {
+      // error-policy:J6 teardown — stop failure is logged
       console.warn(
         `${ctx.logPrefix} Mobile agent tunnel stop failed:`,
         error instanceof Error ? error.message : error,
@@ -334,7 +341,7 @@ export function createMobileBridges(ctx: MobileBridgeContext) {
     try {
       await agentTunnelListener?.remove();
     } catch {
-      // Native tunnel stop above is authoritative.
+      // error-policy:J6 teardown — native tunnel stop above is authoritative
     }
     agentTunnelListener = null;
   }

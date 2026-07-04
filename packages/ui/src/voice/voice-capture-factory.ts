@@ -242,18 +242,23 @@ export function createVoiceCapture(
       try {
         await handle.remove();
       } catch {
-        /* listener already gone — fine */
+        // error-policy:J6 teardown — listener already gone
       }
     }
   }
 
   async function startTalkMode(): Promise<void> {
     const talkMode = getTalkModePlugin();
+    // error-policy:J4 the permission probe returning null means "unknown" —
+    // start proceeds and the native start()/error listener below fails loudly
+    // if the mic is actually denied.
     let permissions = await talkMode.checkPermissions().catch(() => null);
     if (permissions?.speechRecognition === "not_supported") {
       throw new Error("Speech recognition is not available on this device");
     }
     if (permissions?.microphone === "prompt") {
+      // error-policy:J5 the request's outcome is observed by the re-check on
+      // the next line; a rejected prompt shows up there (or in start()).
       await talkMode.requestPermissions().catch(() => {});
       permissions = await talkMode.checkPermissions().catch(() => permissions);
     }
@@ -368,6 +373,8 @@ export function createVoiceCapture(
         startBrowser();
       }
     } catch (err) {
+      // error-policy:J1 capture boundary — the failure renders the voice
+      // error state and still propagates to the caller
       const error = err instanceof Error ? err : new Error(String(err));
       setState("error", error);
       throw error;
@@ -389,6 +396,7 @@ export function createVoiceCapture(
       if (finalizeOnStop && pending) {
         onTranscript({ text: pending, final: true, backend: "talkmode" });
       }
+      // error-policy:J6 teardown — the recognizer may already be stopped
       await getTalkModePlugin()
         .stop()
         .catch(() => {});
@@ -419,6 +427,8 @@ export function createVoiceCapture(
         });
         setState("stopped");
       } catch (err) {
+        // error-policy:J1 stop/transcribe boundary — the failure renders the
+        // voice error state and still propagates to the caller
         const error = err instanceof Error ? err : new Error(String(err));
         setState("error", error);
         throw error;
@@ -448,6 +458,7 @@ export function createVoiceCapture(
     disposed = true;
     if (talkModeHandles.length > 0) {
       void removeTalkModeHandles();
+      // error-policy:J6 teardown — dispose is best-effort by design
       void getTalkModePlugin()
         .stop?.()
         .catch(() => {});

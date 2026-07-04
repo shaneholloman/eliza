@@ -75,6 +75,8 @@ export function clearPersistedFirstRunState(): void {
   try {
     window.localStorage.removeItem(FIRST_RUN_STATE_STORAGE_KEY);
   } catch {
+    // error-policy:J6 best-effort cleanup of a legacy key — storage may be
+    // unavailable (private mode)
     return;
   }
 }
@@ -139,6 +141,7 @@ function looksLikeRemoteTarget(value: string): boolean {
         parsed.hostname.trim().length > 0
       );
     } catch {
+      // error-policy:J3 user-typed target — unparseable means "not a remote URL"
       return false;
     }
   }

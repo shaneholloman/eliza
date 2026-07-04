@@ -42,8 +42,8 @@ export function markCloudLoginPending(
       } satisfies CloudResumeMarker),
     );
   } catch {
-    // Storage unavailable → the flow still works in-session (in-memory refs);
-    // it just won't survive a WebView eviction. Non-fatal.
+    // error-policy:J6 storage unavailable → the flow still works in-session
+    // (in-memory refs); it just won't survive a WebView eviction.
   }
 }
 
@@ -67,6 +67,8 @@ export function readCloudLoginPending(): CloudResumeMarker | null {
       agentName: typeof parsed.agentName === "string" ? parsed.agentName : "",
     };
   } catch {
+    // error-policy:J3 corrupt persisted marker — treat as "no pending resume"
+    // so a bad blob can't wedge first-run
     return null;
   }
 }
@@ -76,7 +78,9 @@ export function clearCloudLoginPending(): void {
   try {
     window.localStorage.removeItem(CLOUD_RESUME_STORAGE_KEY);
   } catch {
-    // Non-fatal.
+    // error-policy:J6 best-effort cleanup — a storage that rejects removeItem
+    // also rejected the setItem in markCloudLoginPending, so there is no
+    // persisted marker to clear
   }
 }
 
