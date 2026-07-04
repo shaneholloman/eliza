@@ -207,6 +207,8 @@ export async function runHydrating(
         try {
           deps.setWalletAddresses(await client.getWalletAddresses());
         } catch (e: unknown) {
+          // error-policy:J4 post-ready shell decoration; the wallet view
+          // loads + surfaces its own error state on demand.
           warn("wallet addresses", e);
         }
       })();
@@ -229,6 +231,7 @@ export async function runHydrating(
           }
         }
       } catch (e: unknown) {
+        // error-policy:J4 avatar refinement step; localStorage index remains.
         warn("config avatar index", e);
       }
       try {
@@ -241,6 +244,7 @@ export async function runHydrating(
           }
         }
       } catch (e: unknown) {
+        // error-policy:J4 avatar refinement step; prior resolved index remains.
         warn("stream settings avatar", e);
       }
       // No avatar chosen by config/stream settings → fall back to the first
@@ -253,6 +257,8 @@ export async function runHydrating(
       try {
         await deps.fetchAutonomyReplay();
       } catch (e: unknown) {
+        // error-policy:J4 post-ready shell decoration; autonomy views load
+        // + surface their own error state on demand.
         warn("autonomy replay", e);
       }
     })();
@@ -345,13 +351,12 @@ export function bindReadyPhase(
         if (s?.tasks)
           depsRef.current?.setPtySessions(mapServerTasksToSessions(s.tasks));
       })
+      // error-policy:J4 periodic PTY-session refresh; a failed tick keeps the
+      // last-known sessions and the next poll/visibility tick retries.
       .catch((err: unknown) => {
-        // error-policy:J4 PTY-session hydration decorates the coding-agent
-        // panel; the panel's own load path surfaces hard failures. Logged so a
-        // persistently broken orchestrator route is not invisible.
-        logger.debug(
+        logger.warn(
           { err },
-          "[startup-phase-hydrate] coding-agent status hydrate failed",
+          "[startup-phase-hydrate] coding-agent status refresh failed",
         );
       });
   };
@@ -552,8 +557,9 @@ export function bindReadyPhase(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ requestId, ...body }),
         }).catch(() => {
-          // The switch already applied locally; a lost result callback only
-          // means the agent's HTTP call times out (it degrades to "no-shell").
+          // error-policy:J5 the switch already applied locally; the agent
+          // observes a lost result callback via its own HTTP timeout (it
+          // degrades to "no-shell").
         });
       };
 
@@ -631,6 +637,8 @@ export function bindReadyPhase(
         .then(({ dispatchViewInteract }) =>
           dispatchViewInteract(viewId, viewType, capability, params, requestId),
         )
+        // error-policy:J1 boundary translation — a failed dispatch returns a
+        // structured failure result to the requesting agent over WS.
         .catch(() => {
           client.sendWsMessage({
             type: "view:interact:result",
