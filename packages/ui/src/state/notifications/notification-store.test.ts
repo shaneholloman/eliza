@@ -254,7 +254,9 @@ describe("notification-store", () => {
     __ingestNotificationForTests(makeNotification({ id: "r1" }), 1);
     await markNotificationRead("r1");
     // Write failed → item must return to unread, not stay optimistically read.
-    const stored = __getStateForTests().notifications.find((n) => n.id === "r1");
+    const stored = __getStateForTests().notifications.find(
+      (n) => n.id === "r1",
+    );
     expect(stored?.readAt).toBeFalsy();
     expect(__getStateForTests().unreadCount).toBe(1);
   });
@@ -264,9 +266,9 @@ describe("notification-store", () => {
     __ingestNotificationForTests(makeNotification({ id: "r2" }), 1);
     await removeNotification("r2");
     // Failed delete must NOT leave the item visibly gone-but-still-on-server.
-    expect(
-      __getStateForTests().notifications.some((n) => n.id === "r2"),
-    ).toBe(true);
+    expect(__getStateForTests().notifications.some((n) => n.id === "r2")).toBe(
+      true,
+    );
     expect(__getStateForTests().unreadCount).toBe(1);
   });
 
@@ -285,8 +287,8 @@ describe("notification-store", () => {
     __ingestNotificationForTests(makeNotification({ id: "a2" }), 2);
     await markAllNotificationsRead();
     expect(__getStateForTests().unreadCount).toBe(2);
-    expect(
-      __getStateForTests().notifications.every((n) => !n.readAt),
-    ).toBe(true);
+    expect(__getStateForTests().notifications.every((n) => !n.readAt)).toBe(
+      true,
+    );
   });
 });
