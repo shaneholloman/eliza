@@ -68,7 +68,7 @@ bunx @biomejs/biome check \
 Result:
 
 ```text
-Checked 7 files in 22ms. No fixes applied.
+Checked 7 files in 15ms. No fixes applied.
 ```
 
 ```bash
@@ -144,6 +144,23 @@ Manual manifest inspection:
 }
 ```
 
+```bash
+bun run --cwd plugins/plugin-local-inference build
+```
+
+Result:
+
+```text
+Build complete
+```
+
+```bash
+bun run --cwd plugins/plugin-local-inference lint:check
+```
+
+Result: blocked by an unrelated existing fixture-format diagnostic in
+`src/services/voice/__fixtures__/voice-workbench-logic-baseline.json`.
+
 ## Full Plugin Test Status
 
 ```bash
@@ -160,6 +177,34 @@ Result: failed with 14 unrelated current-baseline failures:
   fallback, while current code throws `MissingMtpDrafterError`.
 
 The new focused stress-matrix/DSP/scenario tests passed before the full run.
+Final count: 3 failed files, 244 passed files, 14 failed tests, 2488 passed
+tests, 20 skipped tests.
+
+## Repo-Level Checks
+
+```bash
+bun run audit:type-safety-ratchet
+bun run audit:error-policy-ratchet
+git diff --check
+```
+
+Result: passed. The error-policy ratchet reported no new fallback-slop in the
+four touched production files:
+
+- `plugins/plugin-local-inference/src/services/voice/corpus-augment.ts`
+- `plugins/plugin-local-inference/src/services/voice/index.ts`
+- `plugins/plugin-local-inference/src/services/voice/meeting-acoustic-stress-matrix.ts`
+- `plugins/plugin-local-inference/src/services/voice/voice-scenario.ts`
+
+```bash
+bun run verify
+```
+
+Result: blocked after the CLAUDE/AGENTS check and both ratchets passed. Turbo
+stopped on unrelated current-baseline `@elizaos/tui#lint` diagnostics around
+Node protocol imports, non-null assertions, and control-character regexes. The
+same run also emitted unrelated `@elizaos/plugin-calendar#typecheck`
+dependency-resolution and implicit-any diagnostics.
 
 ## Artifact / Evidence Rows
 
