@@ -63,6 +63,8 @@ function filenameFromUrl(url: string): string {
     const segments = path.split("/").filter(Boolean);
     return segments[segments.length - 1] || "";
   } catch {
+    // error-policy:J3 display-name extraction only — an unparseable URL gets
+    // no derived filename; the item still renders with its media kind.
     return "";
   }
 }

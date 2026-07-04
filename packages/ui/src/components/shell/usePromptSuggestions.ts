@@ -52,6 +52,8 @@ function readPersistedModelSets(): [string, string[]][] {
         entry[1].every((item: unknown) => typeof item === "string"),
     );
   } catch {
+    // error-policy:J3 corrupt/unavailable session cache — suggestions rebuild
+    // from live data; the cache is a session-scoped optimization only.
     return [];
   }
 }

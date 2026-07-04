@@ -157,6 +157,8 @@ export function buildManagedDiscordSettingsReturnUrl(
   try {
     url = new URL(rawUrl);
   } catch {
+    // error-policy:J3 explicit invalid signal — no return URL is built from
+    // an unparseable location; the caller skips the redirect.
     return null;
   }
 

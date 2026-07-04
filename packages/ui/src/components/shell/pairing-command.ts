@@ -34,6 +34,8 @@ function parseRemoteUrlInput(value: string | undefined): URL | null {
     }
     return parsed.hostname ? parsed : null;
   } catch {
+    // error-policy:J3 explicit invalid signal — an unparseable pairing target
+    // reads as "no valid host"; the command surfaces the invalid input.
     return null;
   }
 }

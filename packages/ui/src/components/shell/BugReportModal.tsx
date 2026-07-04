@@ -92,6 +92,8 @@ function normalizeHttpsResultUrl(url?: string): string | null {
     const parsed = new URL(url);
     return parsed.protocol === "https:" ? parsed.toString() : null;
   } catch {
+    // error-policy:J3 unparseable result URL is dropped (fail-closed) —
+    // only verifiable https links are shown to the reporter.
     return null;
   }
 }

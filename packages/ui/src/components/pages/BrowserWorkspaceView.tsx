@@ -354,6 +354,8 @@ function isBrowserWorkspaceFrameBlockedUrl(url: string): boolean {
     const parsed = new URL(url);
     return /(^|\.)discord\.com$/i.test(parsed.hostname);
   } catch {
+    // error-policy:J3 unparseable URL cannot match the frame-blocked hosts;
+    // the iframe itself surfaces an unloadable address.
     return false;
   }
 }
