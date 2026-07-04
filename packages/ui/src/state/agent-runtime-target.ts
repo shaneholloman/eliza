@@ -42,6 +42,8 @@ export function isLocalAgentApiBase(value: string | null | undefined): boolean {
       hostname === "[::1]"
     );
   } catch {
+    // error-policy:J3 unparseable api base cannot be proven local — classify
+    // as non-local (fail-closed for local-only privileges).
     return false;
   }
 }

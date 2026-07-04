@@ -43,6 +43,8 @@ function migrateFromPersistedActiveServer(): AgentProfileRegistry | null {
   try {
     parsed = JSON.parse(raw) as PersistedActiveServer;
   } catch {
+    // error-policy:J3 corrupt persisted server entry — migration starts from
+    // an empty registry rather than wedging profile bootstrap.
     return null;
   }
 

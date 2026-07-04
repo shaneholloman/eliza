@@ -78,6 +78,8 @@ export function useMiscUiState() {
     try {
       return sessionStorage.getItem("eliza:activeGameRunId") ?? "";
     } catch {
+      // error-policy:J3 sessionStorage unavailable (privacy mode) — start
+      // with no resumable game run instead of wedging shell state.
       return "";
     }
   });
@@ -87,7 +89,8 @@ export function useMiscUiState() {
       if (id) sessionStorage.setItem("eliza:activeGameRunId", id);
       else sessionStorage.removeItem("eliza:activeGameRunId");
     } catch {
-      /* ignore */
+      // error-policy:J6 best-effort persist of a resume hint — the in-memory
+      // state above is authoritative for this session.
     }
   }, []);
   const [gameOverlayEnabled, setGameOverlayEnabled] = useState(false);

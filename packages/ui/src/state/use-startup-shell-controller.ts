@@ -34,6 +34,8 @@ export function isLoopbackGatewayHost(gatewayUrl: string): boolean {
       host.startsWith("127.")
     );
   } catch {
+    // error-policy:J3 unparseable gateway URL cannot be proven loopback —
+    // fail closed so the connect deep link requires user confirmation.
     return false;
   }
 }

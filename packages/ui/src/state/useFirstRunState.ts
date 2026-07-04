@@ -66,6 +66,8 @@ function isRemoteApiBase(baseUrl: string): boolean {
       parsed.hostname !== "::1"
     );
   } catch {
+    // error-policy:J3 unparseable base URL cannot be classified as remote —
+    // treat as local so the flow stays on the safe default.
     return false;
   }
 }

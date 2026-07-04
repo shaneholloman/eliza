@@ -567,6 +567,8 @@ export function useCloudState({
       let useDirectAuth = !hasBackend;
 
       if (hasBackend) {
+        // error-policy:J4 designed degrade — a proxy without cloud status
+        // routes login through the direct Cloud flow (null branch below).
         const cloudStatus = await client.getCloudStatus().catch(() => null);
         if (cloudStatus === null) {
           // Browser/dev shells can run on localhost without a local agent proxy.

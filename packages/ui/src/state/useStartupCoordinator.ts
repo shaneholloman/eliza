@@ -86,6 +86,9 @@ export async function recoverTerminalStartupError(
   try {
     status = await client.getStatus();
   } catch {
+    // error-policy:J4 recovery probe — a failed status check means the
+    // terminal startup error cannot be cleared; the visible error state the
+    // caller already rendered stays up, so nothing is swallowed.
     return false;
   }
   if (cancelled.current || status.state !== "running") return false;
@@ -95,6 +98,8 @@ export async function recoverTerminalStartupError(
     const firstRunStatus = await client.getFirstRunStatus();
     firstRunComplete = firstRunComplete || firstRunStatus.complete === true;
   } catch {
+    // error-policy:J4 recovery probe — without a first-run answer recovery
+    // cannot be declared; the existing startup error state remains visible.
     return false;
   }
   if (cancelled.current) return false;
