@@ -1,3 +1,4 @@
+/** Runs live core runtime smoke coverage against real provider or orchestration surfaces. */
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";

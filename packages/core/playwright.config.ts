@@ -1,3 +1,4 @@
+/** Configures Playwright e2e execution for @elizaos/core runtime smoke tests. */
 import { defineConfig } from "@playwright/test";
 
 process.env.ELIZA_PLAYWRIGHT_E2E = "1";

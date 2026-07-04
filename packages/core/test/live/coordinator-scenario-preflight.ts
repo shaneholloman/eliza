@@ -1,3 +1,4 @@
+/** Runs live core runtime smoke coverage against real provider or orchestration surfaces. */
 import { runCoordinatorPreflight } from "@elizaos/agent";
 
 try {
