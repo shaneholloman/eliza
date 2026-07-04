@@ -54,9 +54,9 @@ describe("fetchPolymarketJson fail-closed body handling", () => {
     // fell through to `return payload`, handing callers `null as T`. That
     // fabricated success then crashed downstream on the first property access.
     stubFetch(unparseableResponse({ status: 200 }));
-    await expect(
-      fetchPolymarketJson("/api/polymarket/status"),
-    ).rejects.toThrow(/unreadable response body/i);
+    await expect(fetchPolymarketJson("/api/polymarket/status")).rejects.toThrow(
+      /unreadable response body/i,
+    );
   });
 
   it("surfaces the API-provided error message on an error status with a JSON error body", async () => {
