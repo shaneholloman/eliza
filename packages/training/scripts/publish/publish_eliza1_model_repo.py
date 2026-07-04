@@ -882,13 +882,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--bundles-root", type=Path, default=DEFAULT_BUNDLES_ROOT)
     ap.add_argument("--tier", choices=TIERS, action="append", dest="tiers")
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--allow-missing", action="store_true")
     ap.add_argument("--strict-voice-policy", action="store_true")
-    ap.add_argument(
-        "--skip-hash-verify",
-        action="store_true",
-        help="Only check manifest file presence; do not hash large GGUF files.",
-    )
     ap.add_argument(
         "--large-folder-upload",
         action="store_true",
@@ -903,7 +897,7 @@ def main(argv: list[str] | None = None) -> int:
         args.bundles_root,
         tiers,
         strict_voice_policy=args.strict_voice_policy,
-        verify_hashes=not args.skip_hash_verify,
+        verify_hashes=True,
     )
     _print_summary(plans, repo_id=args.repo_id, dry_run=args.dry_run)
 
@@ -922,7 +916,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     blockers = [p for p in plans if not p.uploadable]
-    if blockers and not args.allow_missing:
+    if blockers:
         return 2
     if not args.dry_run:
         token = _token()
