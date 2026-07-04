@@ -27,9 +27,6 @@ export default scenario({
   title: "ADHD: stuck on starting → one consented two-minute step, no shame",
   domain: "lifeops.reminders",
   tags: ["lifeops", "adhd", "personas", "12283"],
-  // Pending until the free-form record tool-argument path no longer causes
-  // live planner required_tool_misses before the first-step response (#12150).
-  status: "pending",
   isolation: "per-scenario",
   requires: { plugins: ["@elizaos/plugin-personal-assistant"] },
   rooms: [

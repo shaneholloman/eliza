@@ -58,8 +58,8 @@
       "pack": "A1",
       "tier": "T2",
       "surface": "scenario-runner",
-      "status": "authored",
-      "notes": "Pending scenario-runner status. Live probe on 2026-07-04 wrote the scheduled expense micro-step on the confirmation turn, but the first turn fell back to a generic error after planner required_tool_misses on free-form record tool schemas (#12150/#13111). Keep authored but pending until that runtime blocker is fixed, then rerun live evidence."
+      "status": "verified",
+      "notes": "Live provider run passed on 2026-07-04 (runId 4df8ab23-626e-4b0f-ad9a-0c378078524c): first turn proposed exactly one tiny expense-report first step and asked before scheduling; consent turn scheduled Expense Report - Tiny First Step for 2:15pm; judge score 0.60; native export strict privacy attestation passed with 0 residual findings."
     },
     {
       "id": "adhd-hyperfocus-guardrail-protects-standup",
