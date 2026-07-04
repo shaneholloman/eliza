@@ -8,11 +8,9 @@ here, and ``tests/test_ci_coverage.py`` asserts the classification stays
 complete: adding a benchmark to the registry or exposing a new adapter without
 giving it a lane (or an explicit manual-only marker) fails CI.
 
-The registry currently declares **45** benchmarks (``registry/commands.py``);
-counting adapter-only ids, **54** benchmarks are publicly runnable and every
-one carries a lane below. Do not hardcode a benchmark count in prose — derive
-it from ``registry_benchmark_ids`` / ``public_benchmark_ids`` so it cannot
-drift, which is exactly what the test gate enforces.
+The registry and adapter counts are derived by ``registry_benchmark_ids`` /
+``public_benchmark_ids`` and every public id carries a lane below. Do not
+hardcode a benchmark count in prose; the test gate owns the live count.
 
 Lanes
 -----
@@ -100,6 +98,10 @@ CI_LANE_BY_BENCHMARK: dict[str, str] = {
     "voicebench": "manual",  # real audio assets
     "voicebench_quality": "manual",  # real audio inputs
     "voiceagentbench": "manual",  # real audio dataset
+    "meeting_voice": "smoke",  # no-key mocked plumbing alias; not product proof
+    "meeting_voice_real": "manual",  # real media/log/model evidence manifest
+    "meeting_voice_stress": "manual",  # acoustic stress real evidence manifest
+    "meeting_voice_av": "manual",  # audio-visual real evidence manifest
     "meeting_transcription_proof": "smoke",  # mocked plumbing lane in CI; real lane is evidence-gated
     "hermes_swe_env": "manual",  # hermes sandbox backend
     "hermes_tblite": "manual",  # hermes sandbox backend

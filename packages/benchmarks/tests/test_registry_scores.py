@@ -97,7 +97,7 @@ def test_meeting_transcription_mock_lane_cannot_claim_publishable() -> None:
 
 
 def test_meeting_transcription_real_lane_requires_complete_evidence() -> None:
-    with pytest.raises(ValueError, match="complete evidence"):
+    with pytest.raises(ValueError, match="named evidence"):
         _score_from_meeting_transcription_proof_json(
             {
                 "kind": "meeting_transcription_proof_report",
@@ -110,24 +110,81 @@ def test_meeting_transcription_real_lane_requires_complete_evidence() -> None:
         )
 
 
+def _meeting_transcription_real_metrics() -> dict[str, float]:
+    return {
+        "transcript_quality": 0.91,
+        "diarization_quality": 0.82,
+        "speaker_identity_quality": 0.77,
+        "consent_retention_quality": 1.0,
+        "wer": 0.09,
+        "cer": 0.04,
+        "speaker_attributed_wer": 0.13,
+        "der": 0.18,
+        "jer": 0.22,
+        "overlap_aware_wer": 0.2,
+        "active_speaker_accuracy": 0.84,
+        "voice_profile_false_accept_rate": 0.03,
+        "voice_profile_false_reject_rate": 0.08,
+        "end_of_turn_latency_ms": 280,
+        "barge_in_latency_ms": 190,
+        "p95_end_to_end_latency_ms": 1300,
+        "notes_factuality": 0.93,
+        "action_item_extraction": 0.89,
+    }
+
+
+def _meeting_transcription_real_evidence() -> dict[str, str]:
+    return {
+        "audio": "/tmp/audio.wav",
+        "video": "/tmp/video.mp4",
+        "backend_logs": "/tmp/backend.log",
+        "frontend_logs": "/tmp/frontend.log",
+        "screenshots": "/tmp/screenshots.zip",
+        "metrics": "/tmp/metrics.json",
+        "model_trajectories": "/tmp/trajectories.jsonl",
+        "transcript_artifact": "/tmp/transcript.json",
+        "speaker_profile_artifact": "/tmp/speaker-profile.json",
+        "consent_record": "/tmp/consent.json",
+        "retention_artifact": "/tmp/retention.json",
+    }
+
+
+def _meeting_transcription_real_report() -> dict[str, object]:
+    return {
+        "kind": "meeting_transcription_proof_report",
+        "lane": "real_product",
+        "publishable": True,
+        "provider_mode": "zoom-meet-live",
+        "score": 0.77,
+        "metrics": _meeting_transcription_real_metrics(),
+        "evidence_files": _meeting_transcription_real_evidence(),
+        "scenarios": [{"id": "zoom_bot_free"}],
+        "dataset_sources": [{"id": "ami"}],
+        "capture_paths": [{"id": "google_meet_bot_free"}],
+        "speaker_operations": [{"id": "speaker_name_correction"}],
+    }
+
+
+def test_meeting_transcription_real_lane_requires_metadata_sections() -> None:
+    report = _meeting_transcription_real_report()
+    report.pop("capture_paths")
+
+    with pytest.raises(ValueError, match="capture_paths"):
+        _score_from_meeting_transcription_proof_json(report)
+
+
+def test_meeting_transcription_real_lane_requires_detailed_metrics() -> None:
+    report = _meeting_transcription_real_report()
+    metrics = report["metrics"]
+    assert isinstance(metrics, dict)
+    metrics.pop("speaker_attributed_wer")
+
+    with pytest.raises(ValueError, match="detailed metrics"):
+        _score_from_meeting_transcription_proof_json(report)
+
+
 def test_meeting_transcription_real_lane_score_is_publishable_with_evidence() -> None:
-    evidence_files = {f"evidence_{index}": f"/tmp/evidence-{index}.txt" for index in range(11)}
-    extraction = _score_from_meeting_transcription_proof_json(
-        {
-            "kind": "meeting_transcription_proof_report",
-            "lane": "real_product",
-            "publishable": True,
-            "provider_mode": "zoom-meet-live",
-            "score": 0.77,
-            "metrics": {
-                "transcript_quality": 0.91,
-                "diarization_quality": 0.82,
-                "speaker_identity_quality": 0.77,
-                "consent_retention_quality": 1.0,
-            },
-            "evidence_files": evidence_files,
-        }
-    )
+    extraction = _score_from_meeting_transcription_proof_json(_meeting_transcription_real_report())
 
     assert extraction.score == pytest.approx(0.77)
     assert extraction.metrics["lane"] == "real_product"

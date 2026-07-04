@@ -82,6 +82,10 @@ or `gated`.
 | humaneval | smoke | 1.00 | 1.00 | 1.00 | 1.00 |
 | hyperliquid_bench | scheduled | gated | gated | gated | gated |
 | lifeops_bench | scheduled | 1.00 | 1.00 | 1.00 | 1.00 |
+| meeting_voice | smoke | not-run | not-run | not-run | gated |
+| meeting_voice_av | manual | gated | gated | gated | gated |
+| meeting_voice_real | manual | gated | gated | gated | gated |
+| meeting_voice_stress | manual | gated | gated | gated | gated |
 | meeting_transcription_proof | smoke | not-run | not-run | not-run | gated |
 | mind2web | smoke | not-run | not-run | not-run | gated |
 | mint | scheduled | 1.00 | 1.00 | 1.00 | 1.00 |
@@ -112,7 +116,7 @@ or `gated`.
 | webshop | smoke | not-run | not-run | not-run | gated |
 | woobench | smoke | 0.89 | 0.89 | 0.93 | 0.91 |
 
-**Registered totals:** 45 benchmarks. 15 have a real posted score (from the
+**Registered totals:** 49 benchmarks. 15 have a real posted score (from the
 2026-05-28 certification pass, `benchmark_results/latest/`); the rest are
 `not-run` (no committed graded run) or `gated` (infra/credentials required).
 
