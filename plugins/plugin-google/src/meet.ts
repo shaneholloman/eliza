@@ -10,12 +10,19 @@ import type { GoogleApiClientFactory } from "./client-factory.js";
 import type {
   GoogleAccountRef,
   GoogleMeetAccessType,
+  GoogleMeetCanonicalArtifact,
+  GoogleMeetCanonicalArtifactInput,
+  GoogleMeetCanonicalStream,
+  GoogleMeetCanonicalTranscriptSpan,
   GoogleMeetConferenceRecord,
   GoogleMeetConferenceRecordInput,
   GoogleMeetCreateMeetingInput,
   GoogleMeetGenerateReportInput,
   GoogleMeetMeeting,
+  GoogleMeetMissingArtifact,
   GoogleMeetParticipant,
+  GoogleMeetParticipantSession,
+  GoogleMeetParticipantSessionInput,
   GoogleMeetRecording,
   GoogleMeetRecordingInput,
   GoogleMeetReport,
@@ -32,6 +39,7 @@ export const GOOGLE_MEET_API_SURFACE = [
   { method: "getMeetingSpace", capabilities: ["meet.read"] },
   { method: "getConferenceRecord", capabilities: ["meet.read"] },
   { method: "listMeetingParticipants", capabilities: ["meet.read"] },
+  { method: "listMeetingParticipantSessions", capabilities: ["meet.read"] },
   { method: "listMeetingTranscripts", capabilities: ["meet.read"] },
   { method: "getMeetingTranscript", capabilities: ["meet.read"] },
   { method: "listMeetingRecordings", capabilities: ["meet.read"] },
@@ -115,6 +123,34 @@ export class GoogleMeetClient {
     } while (pageToken && (!params.limit || participants.length < params.limit));
 
     return params.limit ? participants.slice(0, params.limit) : participants;
+  }
+
+  async listMeetingParticipantSessions(
+    params: GoogleMeetParticipantSessionInput & { limit?: number }
+  ): Promise<GoogleMeetParticipantSession[]> {
+    const meet = await this.clientFactory.meet(
+      params,
+      ["meet.read"],
+      "meet.listMeetingParticipantSessions"
+    );
+    const sessions: GoogleMeetParticipantSession[] = [];
+    let pageToken: string | undefined;
+
+    do {
+      const response = await meet.conferenceRecords.participants.participantSessions.list({
+        parent: params.participantName,
+        pageSize: Math.min(params.limit ?? 100, 250),
+        pageToken,
+      });
+      sessions.push(
+        ...(response.data.participantSessions ?? []).map((session) =>
+          mapParticipantSession(session, params.participantName)
+        )
+      );
+      pageToken = response.data.nextPageToken ?? undefined;
+    } while (pageToken && (!params.limit || sessions.length < params.limit));
+
+    return params.limit ? sessions.slice(0, params.limit) : sessions;
   }
 
   async listMeetingTranscripts(
@@ -210,7 +246,9 @@ export class GoogleMeetClient {
       accountId: params.accountId,
       conferenceRecordName,
     });
-    const transcriptEntries = await this.collectTranscriptEntries(params, conferenceRecordName);
+    const participantSessions = await this.collectParticipantSessions(params, participants);
+    const transcriptArtifacts = await this.collectTranscriptArtifacts(params, conferenceRecordName);
+    const transcriptEntries = await this.collectTranscriptEntries(params, transcriptArtifacts);
     const summary = summarizeTranscript(transcriptEntries);
     const recordings =
       params.includeRecordings === false
@@ -219,6 +257,21 @@ export class GoogleMeetClient {
             accountId: params.accountId,
             conferenceRecordName,
           });
+    const canonicalArtifact = buildGoogleMeetCanonicalArtifact({
+      meetingId: params.meetingId ?? conferenceRecordName,
+      conferenceRecordName,
+      conference,
+      participants,
+      participantSessions,
+      transcriptArtifacts,
+      transcriptEntries,
+      recordings,
+      summary: params.includeSummary === false ? "" : summary.summary,
+      keyPoints: params.includeSummary === false ? [] : summary.keyPoints,
+      actionItems: params.includeActionItems === false ? [] : summary.actionItems,
+      googleDocsTranscriptText: params.googleDocsTranscriptText,
+      botFreeCapture: params.botFreeCapture,
+    });
 
     return {
       meetingId: params.meetingId ?? conferenceRecordName,
@@ -232,13 +285,34 @@ export class GoogleMeetClient {
       actionItems: params.includeActionItems === false ? [] : summary.actionItems,
       fullTranscript: params.includeTranscript === false ? [] : transcriptEntries,
       recordings,
+      participantSessions,
+      canonicalArtifact,
     };
   }
 
-  private async collectTranscriptEntries(
+  private async collectParticipantSessions(
+    params: GoogleMeetGenerateReportInput,
+    participants: readonly GoogleMeetParticipant[]
+  ): Promise<GoogleMeetParticipantSession[]> {
+    const sessionGroups = await Promise.all(
+      participants
+        .map((participant) => participant.id || participant.name)
+        .filter(Boolean)
+        .map((participantName) =>
+          this.listMeetingParticipantSessions({
+            accountId: params.accountId,
+            participantName,
+          })
+        )
+    );
+
+    return sessionGroups.flat();
+  }
+
+  private async collectTranscriptArtifacts(
     params: GoogleMeetGenerateReportInput,
     conferenceRecordName: string
-  ): Promise<GoogleMeetTranscript[]> {
+  ): Promise<GoogleMeetTranscriptArtifact[]> {
     if (
       params.includeSummary === false &&
       params.includeActionItems === false &&
@@ -247,14 +321,23 @@ export class GoogleMeetClient {
       return [];
     }
 
-    const transcriptNames = params.transcriptName
-      ? [params.transcriptName]
-      : (
-          await this.listMeetingTranscripts({
-            accountId: params.accountId,
-            conferenceRecordName,
-          })
-        ).map((transcript) => transcript.name);
+    if (params.transcriptName) {
+      return [{ id: params.transcriptName, name: params.transcriptName }];
+    }
+
+    return this.listMeetingTranscripts({
+      accountId: params.accountId,
+      conferenceRecordName,
+    });
+  }
+
+  private async collectTranscriptEntries(
+    params: GoogleMeetGenerateReportInput,
+    transcriptArtifacts: readonly GoogleMeetTranscriptArtifact[]
+  ): Promise<GoogleMeetTranscript[]> {
+    const transcriptNames = transcriptArtifacts
+      .map((transcript) => transcript.name)
+      .filter(Boolean);
 
     const transcriptGroups = await Promise.all(
       transcriptNames.map((transcriptName) =>
@@ -305,6 +388,23 @@ function mapParticipant(participant: meet_v2.Schema$Participant): GoogleMeetPart
     leaveTime: participant.latestEndTime ?? undefined,
     isActive: !participant.latestEndTime,
     userType: display.userType,
+  };
+}
+
+function mapParticipantSession(
+  session: meet_v2.Schema$ParticipantSession,
+  participantName: string
+): GoogleMeetParticipantSession {
+  const sessionName = session.name ?? "";
+
+  return {
+    id: sessionName,
+    name: sessionName,
+    participantId: participantName,
+    participantName,
+    startTime: session.startTime ?? undefined,
+    endTime: session.endTime ?? undefined,
+    isActive: !session.endTime,
   };
 }
 
@@ -443,4 +543,478 @@ function summarizeTranscript(entries: readonly GoogleMeetTranscript[]): {
     }));
 
   return { summary, keyPoints, actionItems };
+}
+
+export function buildGoogleMeetCanonicalArtifact(
+  input: GoogleMeetCanonicalArtifactInput
+): GoogleMeetCanonicalArtifact {
+  const participantById = new Map(
+    input.participants.map((participant) => [participant.id, participant])
+  );
+  const transcriptStreams = input.transcriptArtifacts.map((artifact) => ({
+    id: transcriptStreamId(artifact.name),
+    kind: "google_transcript_entries" as const,
+    artifactId: artifact.name,
+    uri: artifact.documentUri,
+    startedAt: artifact.startTime,
+    endedAt: artifact.endTime,
+    state: artifact.state,
+  }));
+  const docsStreams = input.transcriptArtifacts
+    .filter(
+      (artifact) => artifact.documentId || artifact.documentUri || input.googleDocsTranscriptText
+    )
+    .map((artifact) => ({
+      id: `${transcriptStreamId(artifact.name)}:docs`,
+      kind: "google_docs_transcript" as const,
+      artifactId: artifact.documentId ?? artifact.name,
+      uri: artifact.documentUri,
+      startedAt: artifact.startTime,
+      endedAt: artifact.endTime,
+      state: artifact.state,
+    }));
+  const recordingStreams = input.recordings.map((recording) => ({
+    id: `google-recording:${recording.name || recording.id}`,
+    kind: "google_recording" as const,
+    artifactId: recording.name || recording.id,
+    uri: recording.uri,
+    fileId: recording.fileId,
+    startedAt: recording.startTime,
+    endedAt: recording.endTime,
+    state: recording.state,
+  }));
+  const botFreeStreams = botFreeCaptureStreams(input.botFreeCapture);
+  const transcriptSpans = [
+    ...input.transcriptEntries.map((entry, index) =>
+      canonicalSpanFromEntry(entry, index, participantById)
+    ),
+    ...botFreeTranscriptSpans(input.botFreeCapture, participantById),
+  ];
+  const warnings = canonicalWarnings(input, participantById);
+  const missingArtifacts = canonicalMissingArtifacts(input);
+  const generatedNotes = canonicalGeneratedNotes({
+    summary: input.summary,
+    keyPoints: input.keyPoints,
+    actionItems: input.actionItems,
+    transcriptSpans,
+  });
+
+  return {
+    schemaVersion: "elizaos.meeting_artifact.v1",
+    source: "google_meet",
+    meeting: {
+      id: input.meetingId,
+      conferenceRecordName: input.conferenceRecordName,
+      spaceName: input.conference.spaceName,
+      startedAt: input.conference.startTime,
+      endedAt: input.conference.endTime,
+      expireTime: input.conference.expireTime,
+      durationMinutes: durationMinutes(input.conference),
+    },
+    streams: [...transcriptStreams, ...docsStreams, ...recordingStreams, ...botFreeStreams],
+    participants: input.participants.map((participant) => ({
+      id: participant.id,
+      displayName: participant.displayName ?? participant.name,
+      userType: participant.userType,
+      nameProvenance: participantNameProvenance(participant),
+    })),
+    participantSessions:
+      input.participantSessions?.map((session) => ({
+        id: session.id,
+        participantId: session.participantId,
+        startedAt: session.startTime,
+        endedAt: session.endTime,
+        isActive: session.isActive,
+      })) ?? [],
+    transcriptSpans,
+    generatedNotes,
+    recordings: [...input.recordings],
+    warnings,
+    missingArtifacts,
+    metrics: {
+      transcriptWordCount: transcriptSpans.reduce((count, span) => count + wordCount(span.text), 0),
+      participantCount: input.participants.length,
+      participantSessionCount: input.participantSessions?.length ?? 0,
+      transcriptSpanCount: transcriptSpans.length,
+      recordingCount: input.recordings.length,
+      missingArtifactCount: missingArtifacts.length,
+      warningCount: warnings.length,
+    },
+  };
+}
+
+export function classifyGoogleMeetImportError(error: unknown): GoogleMeetMissingArtifact | null {
+  const status = errorStatus(error);
+  const message = errorMessage(error);
+  const normalized = message.toLowerCase();
+
+  if (status === 401 || normalized.includes("invalid_grant") || normalized.includes("revoked")) {
+    return {
+      artifactType: "conference",
+      reason: "revoked_access",
+      message: message || "Google Meet access was revoked.",
+    };
+  }
+  if (status === 403) {
+    return {
+      artifactType: "conference",
+      reason: normalized.includes("organizer") ? "organizer_only_artifact" : "permission_denied",
+      message: message || "Google Meet artifacts are not visible to this account.",
+    };
+  }
+  if (status === 404) {
+    return {
+      artifactType: "conference",
+      reason: "meeting_not_found",
+      message: message || "Google Meet conference record was not found.",
+    };
+  }
+  if (status === 410 || normalized.includes("expired")) {
+    return {
+      artifactType: "recording",
+      reason: "expired_media_url",
+      message: message || "Google Meet media URL has expired.",
+    };
+  }
+
+  return null;
+}
+
+function canonicalSpanFromEntry(
+  entry: GoogleMeetTranscript,
+  index: number,
+  participantById: ReadonlyMap<string, GoogleMeetParticipant>
+): GoogleMeetCanonicalTranscriptSpan {
+  const participant = entry.speakerId ? participantById.get(entry.speakerId) : undefined;
+  const entryId = entry.id || `transcript-entry-${index + 1}`;
+
+  return {
+    id: entryId,
+    streamId: transcriptStreamId(transcriptNameFromEntry(entry.id)),
+    source: "google_meet_transcript_entry" as const,
+    text: entry.text,
+    participantId: entry.speakerId,
+    speakerLabel: participant?.displayName ?? participant?.name ?? entry.speakerName,
+    startedAt: entry.startTime ?? entry.timestamp,
+    endedAt: entry.endTime,
+    languageCode: entry.languageCode,
+    provenance: {
+      transcriptName: transcriptNameFromEntry(entry.id),
+      entryName: entry.id,
+      participantName: entry.speakerId,
+    },
+  };
+}
+
+function botFreeTranscriptSpans(
+  capture: GoogleMeetCanonicalArtifactInput["botFreeCapture"],
+  participantById: ReadonlyMap<string, GoogleMeetParticipant>
+): GoogleMeetCanonicalTranscriptSpan[] {
+  if (!capture?.transcriptSpans?.length) {
+    return [];
+  }
+  const streamId = capture.microphoneAudioUri
+    ? `bot-free:${capture.id}:microphone`
+    : `bot-free:${capture.id}:system-audio`;
+  return capture.transcriptSpans.map((span, index) => {
+    const participant = span.speakerId ? participantById.get(span.speakerId) : undefined;
+    return {
+      id: span.id || `bot-free-entry-${index + 1}`,
+      streamId,
+      source: "bot_free_capture" as const,
+      text: span.text,
+      participantId: span.speakerId,
+      speakerLabel: participant?.displayName ?? participant?.name ?? span.speakerName,
+      startedAt: span.startTime ?? span.timestamp,
+      endedAt: span.endTime,
+      languageCode: span.languageCode,
+      provenance: {
+        entryName: span.id,
+        participantName: span.speakerId,
+      },
+    };
+  });
+}
+
+function botFreeCaptureStreams(
+  capture: GoogleMeetCanonicalArtifactInput["botFreeCapture"]
+): GoogleMeetCanonicalStream[] {
+  if (!capture) {
+    return [];
+  }
+  const streams: GoogleMeetCanonicalStream[] = [];
+  if (capture.systemAudioUri) {
+    streams.push({
+      id: `bot-free:${capture.id}:system-audio`,
+      kind: "bot_free_system_audio",
+      artifactId: capture.id,
+      uri: capture.systemAudioUri,
+      startedAt: capture.startedAt,
+      endedAt: capture.endedAt,
+    });
+  }
+  if (capture.microphoneAudioUri) {
+    streams.push({
+      id: `bot-free:${capture.id}:microphone`,
+      kind: "bot_free_microphone",
+      artifactId: capture.id,
+      uri: capture.microphoneAudioUri,
+      startedAt: capture.startedAt,
+      endedAt: capture.endedAt,
+    });
+  }
+  if (capture.screenVideoUri) {
+    streams.push({
+      id: `bot-free:${capture.id}:screen-video`,
+      kind: "bot_free_screen_video",
+      artifactId: capture.id,
+      uri: capture.screenVideoUri,
+      startedAt: capture.startedAt,
+      endedAt: capture.endedAt,
+    });
+  }
+  return streams;
+}
+
+function canonicalWarnings(
+  input: GoogleMeetCanonicalArtifactInput,
+  participantById: ReadonlyMap<string, GoogleMeetParticipant>
+) {
+  const warnings = [];
+  const entriesText = normalizeText(input.transcriptEntries.map((entry) => entry.text).join(" "));
+  const docsText = normalizeText(input.googleDocsTranscriptText ?? "");
+  if (docsText && docsText !== entriesText) {
+    warnings.push({
+      code: "docs_transcript_mismatch" as const,
+      message:
+        "Google Meet transcript entries do not match the provided Google Docs transcript text.",
+    });
+  }
+  for (const artifact of input.transcriptArtifacts) {
+    if (artifact.documentId && !artifact.documentUri) {
+      warnings.push({
+        code: "organizer_only_artifact" as const,
+        message: "Google Docs transcript exists but no document URI was visible to this account.",
+        sourceName: artifact.name,
+      });
+    }
+  }
+  for (const recording of input.recordings) {
+    if (recording.fileId && !recording.uri) {
+      warnings.push({
+        code: "expired_media_url" as const,
+        message: "Google Meet recording file exists but no playback URI was visible.",
+        sourceName: recording.name,
+      });
+    }
+  }
+  for (const entry of input.transcriptEntries) {
+    if (!entry.text.trim()) {
+      warnings.push({
+        code: "transcript_entry_empty" as const,
+        message: "Google Meet transcript entry contained no text.",
+        sourceName: entry.id,
+      });
+    }
+    if (entry.speakerId && !participantById.has(entry.speakerId)) {
+      warnings.push({
+        code: "speaker_reference_missing" as const,
+        message: "Google Meet transcript entry referenced a participant not present in the roster.",
+        sourceName: entry.id,
+      });
+    }
+  }
+  return warnings;
+}
+
+function canonicalMissingArtifacts(input: GoogleMeetCanonicalArtifactInput) {
+  const missing: GoogleMeetMissingArtifact[] = [];
+  if (input.transcriptArtifacts.length === 0) {
+    missing.push({
+      artifactType: "transcript",
+      reason: input.conference.endTime ? "no_transcript" : "transcript_delayed",
+      message: input.conference.endTime
+        ? "No Google Meet transcript artifacts were available for the completed conference."
+        : "Google Meet transcript artifacts are not available yet for the active conference.",
+    });
+  }
+  for (const artifact of input.transcriptArtifacts) {
+    if (
+      artifact.state &&
+      artifact.state !== "FILE_GENERATED" &&
+      input.transcriptEntries.length === 0
+    ) {
+      missing.push({
+        artifactType: "transcript",
+        reason: "transcript_delayed",
+        message: "Google Meet transcript artifact exists but entries are not available yet.",
+        sourceName: artifact.name,
+      });
+    }
+    if (artifact.documentId && !artifact.documentUri) {
+      missing.push({
+        artifactType: "transcript",
+        reason: "organizer_only_artifact",
+        message: "Google Docs transcript is organizer-only or not visible to this account.",
+        sourceName: artifact.name,
+      });
+    }
+  }
+  if (input.recordings.length === 0) {
+    missing.push({
+      artifactType: "recording",
+      reason: "missing_recording",
+      message: "No Google Meet recording artifacts were available for this conference record.",
+    });
+  }
+  for (const recording of input.recordings) {
+    if (recording.fileId && !recording.uri) {
+      missing.push({
+        artifactType: "recording",
+        reason: "expired_media_url",
+        message: "Google Meet recording playback URI was unavailable or expired.",
+        sourceName: recording.name,
+      });
+    }
+  }
+  if (input.participants.length > 0 && !input.participantSessions?.length) {
+    missing.push({
+      artifactType: "participant_sessions",
+      reason: "permission_denied",
+      message: "Participants were available but no participant sessions were imported.",
+    });
+  }
+  return missing;
+}
+
+function canonicalGeneratedNotes(params: {
+  summary: string;
+  keyPoints: readonly string[];
+  actionItems: GoogleMeetCanonicalArtifactInput["actionItems"];
+  transcriptSpans: readonly GoogleMeetCanonicalTranscriptSpan[];
+}) {
+  const notes = [];
+  if (params.summary.trim()) {
+    notes.push({
+      id: "summary",
+      kind: "summary" as const,
+      text: params.summary,
+      sourceSpanIds: matchingSpanIds(params.transcriptSpans, params.summary),
+    });
+  }
+  params.keyPoints.forEach((keyPoint, index) => {
+    notes.push({
+      id: `key-point-${index + 1}`,
+      kind: "key_point" as const,
+      text: keyPoint,
+      sourceSpanIds: matchingSpanIds(params.transcriptSpans, keyPoint),
+    });
+  });
+  params.actionItems.forEach((actionItem, index) => {
+    notes.push({
+      id: `action-item-${index + 1}`,
+      kind: "action_item" as const,
+      text: actionItem.description,
+      sourceSpanIds: matchingSpanIds(params.transcriptSpans, actionItem.description),
+      assignee: actionItem.assignee,
+      dueDate: actionItem.dueDate,
+      priority: actionItem.priority,
+    });
+  });
+  return notes;
+}
+
+function matchingSpanIds(
+  spans: readonly GoogleMeetCanonicalTranscriptSpan[],
+  text: string
+): string[] {
+  const normalizedText = normalizeText(text);
+  const matches = spans
+    .filter((span) => {
+      const normalizedSpan = normalizeText(span.text);
+      return (
+        normalizedSpan &&
+        (normalizedText.includes(normalizedSpan) || normalizedSpan.includes(normalizedText))
+      );
+    })
+    .map((span) => span.id);
+  return matches.length > 0 ? matches : spans.map((span) => span.id);
+}
+
+function transcriptNameFromEntry(entryName: string | undefined): string {
+  if (!entryName) {
+    return "google-transcript";
+  }
+  const marker = "/entries/";
+  const markerIndex = entryName.indexOf(marker);
+  return markerIndex === -1 ? "google-transcript" : entryName.slice(0, markerIndex);
+}
+
+function transcriptStreamId(transcriptName: string): string {
+  return `google-transcript:${transcriptName || "unknown"}`;
+}
+
+function participantNameProvenance(
+  participant: GoogleMeetParticipant
+): GoogleMeetCanonicalArtifact["participants"][number]["nameProvenance"] {
+  if (participant.userType === "signed_in") {
+    return "google_signed_in";
+  }
+  if (participant.userType === "anonymous") {
+    return "google_anonymous";
+  }
+  if (participant.userType === "phone") {
+    return "phone";
+  }
+  return "unknown";
+}
+
+function normalizeText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function wordCount(value: string): number {
+  const normalized = normalizeText(value);
+  return normalized ? normalized.split(/\s+/).length : 0;
+}
+
+function errorStatus(error: unknown): number | null {
+  if (!isRecord(error)) {
+    return null;
+  }
+  const code = error.code;
+  if (typeof code === "number") {
+    return code;
+  }
+  const status = error.status;
+  if (typeof status === "number") {
+    return status;
+  }
+  const response = error.response;
+  if (isRecord(response) && typeof response.status === "number") {
+    return response.status;
+  }
+  return null;
+}
+
+function errorMessage(error: unknown): string {
+  if (!isRecord(error)) {
+    return String(error ?? "");
+  }
+  const message = error.message;
+  if (typeof message === "string") {
+    return message;
+  }
+  const response = error.response;
+  if (isRecord(response) && typeof response.statusText === "string") {
+    return response.statusText;
+  }
+  return "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
