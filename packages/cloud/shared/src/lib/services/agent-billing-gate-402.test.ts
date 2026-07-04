@@ -27,6 +27,28 @@ describe("insufficientCreditsBody", () => {
     expect(body.success).toBe(false);
     expect(body.code).toBe("insufficient_credits");
   });
+
+  test("explains a zero balance caused by a withheld welcome bonus", () => {
+    const body = insufficientCreditsBody(
+      { balance: 0, error: "Insufficient credits" },
+      {
+        welcomeBonusWithheldReason: "ip_daily_cap",
+        welcomeBonusWithheldMessage:
+          "Welcome credit unavailable because this network reached the daily free-credit limit. Add funds to start an agent.",
+      },
+    );
+
+    expect(body).toStrictEqual({
+      success: false,
+      code: "insufficient_credits",
+      error:
+        "Welcome credit unavailable because this network reached the daily free-credit limit. Add funds to start an agent.",
+      requiredBalance: AGENT_PRICING.MINIMUM_DEPOSIT,
+      currentBalance: 0,
+      welcomeBonusWithheld: true,
+      welcomeBonusWithheldReason: "ip_daily_cap",
+    });
+  });
 });
 
 describe("insufficientCredits402", () => {

@@ -11,6 +11,8 @@ interface GrantRow {
   ip: string;
 }
 
+type TxResult = boolean | { granted?: boolean };
+
 // Committed grant rows, visible to every new transaction's COUNT.
 let committedGrants: GrantRow[] = [];
 // Per-lock-key queue of waiters, enforcing FIFO mutual exclusion.
@@ -19,7 +21,7 @@ const lockHolders = new Map<string, Promise<void>>();
 let executedSql: string[] = [];
 
 function sqlText(query: unknown): string {
-  // drizzle `sql` template → the queryChunks carry the static text; we only need
+  // drizzle `sql` template -> the queryChunks carry the static text; we only need
   // to recognize which statement ran, so stringify and scan.
   return JSON.stringify(query);
 }
@@ -68,7 +70,7 @@ function extractIp(query: unknown, prefix: string): string | undefined {
 // Mock dbWrite.transaction with advisory-lock-aware serialization: a transaction
 // whose lock key is already held waits behind the current holder; on commit its
 // pending grant rows become visible and the lock is released to the next waiter.
-const transaction = mock(async (fn: (tx: FakeTx) => Promise<boolean>): Promise<boolean> => {
+const transaction = mock(async (fn: (tx: FakeTx) => Promise<TxResult>): Promise<TxResult> => {
   const tx = new FakeTx();
   // Run the body to discover the lock key (the advisory-lock execute sets tx.ip),
   // but gate the *grant + count* behind the lock by re-entering once acquired.
@@ -81,7 +83,7 @@ const transaction = mock(async (fn: (tx: FakeTx) => Promise<boolean>): Promise<b
 // Serialize transaction bodies that share a lock key. Because the ip isn't known
 // until the lock statement runs inside the body, we wrap the body so the first
 // `pg_advisory_xact_lock` call blocks until the prior same-ip tx has committed.
-async function runSerialized(tx: FakeTx, fn: (tx: FakeTx) => Promise<boolean>): Promise<boolean> {
+async function runSerialized(tx: FakeTx, fn: (tx: FakeTx) => Promise<TxResult>): Promise<TxResult> {
   let release!: () => void;
   const held = new Promise<void>((r) => {
     release = r;
@@ -110,10 +112,11 @@ async function runSerialized(tx: FakeTx, fn: (tx: FakeTx) => Promise<boolean>): 
   };
 
   try {
-    const granted = await fn(tx);
+    const result = await fn(tx);
     // Commit: a granted body's row becomes visible to subsequent counts.
+    const granted = result === true || (typeof result === "object" && result?.granted === true);
     if (granted && tx.ip) committedGrants.push({ ip: tx.ip });
-    return granted;
+    return result;
   } finally {
     release(); // release the advisory lock to the next same-ip waiter
   }
@@ -127,9 +130,41 @@ mock.module("../utils/logger", () => ({
   logger: { warn: () => {}, info: () => {}, error: () => {}, debug: () => {} },
 }));
 
-const { runWithSignupGrantIpCap, FREE_GRANT_IP_LIMITS } = await import("./signup-grant-guard");
+const { runWithSignupGrantIpCap, resolveSignupGrantIpLimits, FREE_GRANT_IP_LIMITS } = await import(
+  "./signup-grant-guard"
+);
 
 const CAP = FREE_GRANT_IP_LIMITS.MAX_FREE_GRANTS_PER_IP_DAILY;
+
+describe("resolveSignupGrantIpLimits", () => {
+  test("uses safe defaults when env is unset or invalid", () => {
+    expect(resolveSignupGrantIpLimits({})).toEqual({
+      MAX_FREE_GRANTS_PER_IP_DAILY: 3,
+      WINDOW_HOURS: 24,
+    });
+    expect(
+      resolveSignupGrantIpLimits({
+        MAX_FREE_GRANTS_PER_IP_DAILY: "0",
+        FREE_GRANT_IP_WINDOW_HOURS: "nope",
+      }),
+    ).toEqual({
+      MAX_FREE_GRANTS_PER_IP_DAILY: 3,
+      WINDOW_HOURS: 24,
+    });
+  });
+
+  test("accepts positive integer cap and window overrides", () => {
+    expect(
+      resolveSignupGrantIpLimits({
+        MAX_FREE_GRANTS_PER_IP_DAILY: "12",
+        FREE_GRANT_IP_WINDOW_HOURS: "6",
+      }),
+    ).toEqual({
+      MAX_FREE_GRANTS_PER_IP_DAILY: 12,
+      WINDOW_HOURS: 6,
+    });
+  });
+});
 
 describe("runWithSignupGrantIpCap (anti-sybil free-grant cap)", () => {
   beforeEach(() => {
@@ -182,7 +217,7 @@ describe("runWithSignupGrantIpCap (anti-sybil free-grant cap)", () => {
 
   // The regression: with the cap one slot below the limit, fire TWO simultaneous
   // same-IP grant attempts. The advisory lock must serialize them so the second
-  // sees the first's committed row and is denied — only ONE grant lands. The old
+  // sees the first's committed row and is denied -- only ONE grant lands. The old
   // count-then-insert guard (no lock) let both read `count < cap` and both grant.
   test("two concurrent same-IP attempts cannot both pass the cap (TOCTOU)", async () => {
     // Seed CAP-1 so exactly one more grant is permitted.

@@ -308,6 +308,11 @@ app.post("/", async (c) => {
       ok: true,
       userId: cloudUser.id,
       stewardUserId: claims.userId,
+      initialCreditsGranted: cloudUser.initialCreditsGranted,
+      initialFreeCreditsUsd: cloudUser.initialFreeCreditsUsd,
+      welcomeBonusWithheld: cloudUser.welcomeBonusWithheld === true,
+      welcomeBonusWithheldReason: cloudUser.welcomeBonusWithheldReason,
+      welcomeBonusWithheldMessage: cloudUser.welcomeBonusWithheldMessage,
     };
     return c.json(response);
   } catch {
