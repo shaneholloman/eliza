@@ -17,7 +17,6 @@
  */
 
 import { buildAppContainerSecurityFlags } from "./app-network-utils";
-import { shellQuote } from "./docker-sandbox-utils";
 
 /**
  * Build the ordered `docker create` capability/security flags for a hosted-agent
@@ -32,31 +31,4 @@ export function buildAgentContainerSecurityFlags(opts: {
     ...buildAppContainerSecurityFlags({ pidsLimit: opts.pidsLimit }),
     ...(opts.headscaleEnabled ? ["--cap-add=NET_ADMIN", "--device /dev/net/tun"] : []),
   ];
-}
-
-export function agentDefaultDenyNetworkName(baseNetwork: string): string {
-  return `${baseNetwork}-agent-deny`.replace(/[^A-Za-z0-9_.-]/g, "-").slice(0, 63);
-}
-
-export function buildAgentNetworkName(opts: {
-  baseNetwork: string;
-  headscaleEnabled: boolean;
-}): string {
-  return opts.headscaleEnabled ? opts.baseNetwork : agentDefaultDenyNetworkName(opts.baseNetwork);
-}
-
-export function buildAgentNetworkFlag(opts: {
-  baseNetwork: string;
-  headscaleEnabled: boolean;
-}): string {
-  return `--network ${shellQuote(buildAgentNetworkName(opts))}`;
-}
-
-export function buildEnsureAgentNetworkCmd(opts: {
-  baseNetwork: string;
-  headscaleEnabled: boolean;
-}): string {
-  const network = shellQuote(buildAgentNetworkName(opts));
-  const internalFlag = opts.headscaleEnabled ? "" : " --internal";
-  return `docker network inspect ${network} >/dev/null 2>&1 || docker network create --driver bridge${internalFlag} ${network} >/dev/null 2>&1 || docker network inspect ${network} >/dev/null`;
 }
