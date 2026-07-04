@@ -9,6 +9,31 @@ const WEBHOOK_GATEWAY_ENV_KEYS = [
   "GATEWAY_WEBHOOK_URL",
 ] as const;
 
+// Shared secret proving a request actually came from THIS BFF forwarder rather
+// than straight at the internal gateway. The forwarders are unauthenticated at
+// the edge (providers can't present a Cloud session), so without a local
+// signal the gateway has to trust its network boundary alone. Stamping a
+// shared secret on the forwarded call lets the gateway reject anything that
+// didn't transit the BFF. (finding L3, #12878 / #12227)
+//
+// This is a DEDICATED secret, deliberately NOT reusing `GATEWAY_INTERNAL_SECRET`
+// (which gates the gateway's `/internal/event` K8s path). Coupling the two would
+// force every direct provider webhook to present the internal-event secret the
+// moment internal events are enabled. Keeping it separate makes the
+// forwarder-only gate opt-in without touching existing traffic.
+const WEBHOOK_GATEWAY_SECRET_ENV_KEYS = [
+  "ELIZA_APP_WEBHOOK_GATEWAY_SECRET",
+] as const;
+
+// The header the gateway validates for BFF-forwarded webhooks
+// (`validateWebhookForwarderSecret` in
+// packages/cloud/services/gateway-webhook/src/internal-auth.ts). Any inbound
+// copy of this header from the original caller MUST be stripped before we
+// (re)stamp our own value — a client that could inject it would forge the
+// "came from the BFF" proof. It is stripped on EVERY proxied request (including
+// the Discord handler) and stamped ONLY on gateway forwards.
+const GATEWAY_SECRET_HEADER = "x-eliza-webhook-forwarder-secret";
+
 function readStringEnv(c: AppContext, keys: readonly string[]): string | null {
   for (const key of keys) {
     const value = c.env[key];
@@ -51,11 +76,18 @@ interface ForwardOptions {
   body?: BodyInit | null;
 }
 
+interface ProxyOptions extends ForwardOptions {
+  // When true, stamp the BFF forwarder secret (gateway forwards only). The
+  // trust header is ALWAYS stripped regardless, so a client can never inject it
+  // — even on the Discord path, which never stamps.
+  stampGatewaySecret?: boolean;
+}
+
 async function proxyRequest(
   c: AppContext,
   target: URL,
   serviceName: string,
-  options: ForwardOptions = {},
+  options: ProxyOptions = {},
 ): Promise<Response> {
   const headers = new Headers(c.req.raw.headers);
   headers.delete("host");
@@ -64,6 +96,20 @@ async function proxyRequest(
     "x-forwarded-proto",
     new URL(c.req.url).protocol.replace(":", ""),
   );
+
+  // L3: never let the original caller supply the forwarder trust header. Strip
+  // it unconditionally on EVERY proxied request (gateway AND Discord), so a
+  // client can never forge the "came from the BFF" proof.
+  headers.delete(GATEWAY_SECRET_HEADER);
+  // Stamp our own value ONLY on gateway forwards, and only when the dedicated
+  // secret is configured. The Discord handler (a potentially separate/public
+  // service) must never receive this credential.
+  if (options.stampGatewaySecret) {
+    const gatewaySecret = readStringEnv(c, WEBHOOK_GATEWAY_SECRET_ENV_KEYS);
+    if (gatewaySecret) {
+      headers.set(GATEWAY_SECRET_HEADER, gatewaySecret);
+    }
+  }
 
   try {
     const upstream = await fetch(target, {
@@ -134,7 +180,10 @@ export async function forwardToWebhookGateway(
   target.pathname = `/webhook/${encodeURIComponent(project)}/${platform}${suffix}`;
   target.search = sourceUrl.search;
 
-  return proxyRequest(c, target, "webhook gateway", options);
+  return proxyRequest(c, target, "webhook gateway", {
+    ...options,
+    stampGatewaySecret: true,
+  });
 }
 
 export async function forwardToDiscordWebhookHandler(

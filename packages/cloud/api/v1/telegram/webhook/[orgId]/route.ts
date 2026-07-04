@@ -10,6 +10,7 @@ import { Telegraf } from "telegraf";
 import type { ChatMemberUpdated, Message, Update } from "telegraf/types";
 import type { App } from "@/db/repositories/apps";
 import { telegramChatsRepository } from "@/db/repositories/telegram-chats";
+import { webhookEventsRepository } from "@/db/repositories/webhook-events";
 import { failureResponse } from "@/lib/api/cloud-worker-errors";
 import {
   nextStyleParams,
@@ -39,8 +40,12 @@ async function handleTelegramWebhook(
   const secretToken = request.headers.get("x-telegram-bot-api-secret-token");
   const storedSecret = await telegramAutomationService.getWebhookSecret(orgId);
 
-  // In production, require secret token verification
-  // In development, allow requests without secret for testing (but log a warning)
+  // Fail closed: a stored secret ALWAYS requires a matching, timing-safe token.
+  // When no secret is stored the org hasn't wired telegram up (or the webhook
+  // is orphaned) — we must not process an unauthenticated update. Previously the
+  // non-production branch fell through and handled the update with NO auth at
+  // all (finding L4). The only allowed bypass is an EXPLICIT, env-gated dev flag
+  // that logs loudly; it is never the silent default. (#12878 / #12227)
   if (storedSecret) {
     if (!secretToken) {
       logger.warn("[Telegram Webhook] Missing secret token header", { orgId });
@@ -50,13 +55,26 @@ async function handleTelegramWebhook(
       logger.warn("[Telegram Webhook] Invalid secret token", { orgId });
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
-  } else if (process.env.NODE_ENV === "production") {
-    // No secret configured - org doesn't have telegram set up
-    // Return 200 OK to stop Telegram from retrying (webhook was likely orphaned)
-    logger.warn("[Telegram Webhook] No webhook secret configured - ignoring", {
-      orgId,
-    });
-    return Response.json({ ok: true, status: "not_configured" });
+  } else {
+    // No secret stored for this org. Explicit opt-in required to process
+    // unauthenticated updates, and only outside production.
+    const insecureBypass =
+      process.env.NODE_ENV !== "production" &&
+      process.env.TELEGRAM_WEBHOOK_ALLOW_INSECURE === "true";
+    if (!insecureBypass) {
+      // Orphaned/unconfigured webhook. Return 200 so Telegram stops retrying,
+      // but do NOT process the update.
+      logger.warn(
+        "[Telegram Webhook] No webhook secret configured - ignoring update",
+        { orgId, env: process.env.NODE_ENV },
+      );
+      return Response.json({ ok: true, status: "not_configured" });
+    }
+    logger.warn(
+      "[Telegram Webhook] INSECURE dev bypass active - processing update " +
+        "WITHOUT secret verification (TELEGRAM_WEBHOOK_ALLOW_INSECURE=true)",
+      { orgId },
+    );
   }
 
   let botToken = await telegramAutomationService.getBotToken(orgId);
@@ -83,33 +101,85 @@ async function handleTelegramWebhook(
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  // Handle my_chat_member updates (bot added/removed from chats)
-  if ("my_chat_member" in update) {
-    await handleChatMemberUpdate(orgId, update.my_chat_member);
-    return Response.json({ ok: true });
-  }
-
-  // Also track chats from regular messages/posts (helps discover groups)
-  if ("message" in update && update.message) {
-    await trackChatFromMessage(orgId, update.message.chat, botToken);
-  } else if ("channel_post" in update && update.channel_post) {
-    await trackChatFromMessage(orgId, update.channel_post.chat, botToken);
-  }
-
-  const bot = new Telegraf(botToken);
-  const activeApps =
-    await telegramAppAutomationService.getAppsWithActiveAutomation(orgId);
-
-  setupBotHandlers(bot, orgId, activeApps);
-
-  try {
-    await bot.handleUpdate(update);
-  } catch (error) {
-    logger.error("[Telegram Webhook] Error processing update", {
-      orgId,
-      updateId: update.update_id,
-      error: error instanceof Error ? error.message : "Unknown error",
+  // Replay dedupe on Telegram's monotonic `update_id` (matches the crypto/
+  // stripe/bluebubbles webhooks). Telegram re-delivers an update until it gets a
+  // 200, so without this a slow handler causes the same message to be routed to
+  // the agent multiple times (duplicate reply + double credit spend). Scoped per
+  // org so two orgs' independent update_id sequences can't collide. (finding L4)
+  const dedupeEventId =
+    typeof update.update_id === "number"
+      ? `telegram:${orgId}:${update.update_id}`
+      : null;
+  if (dedupeEventId) {
+    const dedupe = await webhookEventsRepository.tryCreate({
+      event_id: dedupeEventId,
+      provider: "telegram",
+      event_type: "update",
+      payload_hash: String(update.update_id),
     });
+    if (!dedupe.created) {
+      logger.warn("[Telegram Webhook] Duplicate update ignored", {
+        orgId,
+        updateId: update.update_id,
+      });
+      return Response.json({ ok: true, status: "duplicate" });
+    }
+  }
+
+  // The dedupe marker is committed BEFORE processing, so if any handling step
+  // throws we must roll it back — otherwise the marker "poisons" this update_id
+  // and Telegram's retry is short-circuited as a duplicate, dropping the update
+  // forever. On failure: delete the marker and re-throw so the route returns a
+  // 5xx and the provider retry re-processes (matches the crypto/stripe/
+  // bluebubbles rollback-on-failed-enqueue pattern). (finding L4)
+  try {
+    // Handle my_chat_member updates (bot added/removed from chats)
+    if ("my_chat_member" in update) {
+      await handleChatMemberUpdate(orgId, update.my_chat_member);
+      return Response.json({ ok: true });
+    }
+
+    // Also track chats from regular messages/posts (helps discover groups)
+    if ("message" in update && update.message) {
+      await trackChatFromMessage(orgId, update.message.chat, botToken);
+    } else if ("channel_post" in update && update.channel_post) {
+      await trackChatFromMessage(orgId, update.channel_post.chat, botToken);
+    }
+
+    const bot = new Telegraf(botToken);
+    const activeApps =
+      await telegramAppAutomationService.getAppsWithActiveAutomation(orgId);
+
+    setupBotHandlers(bot, orgId, activeApps);
+
+    try {
+      await bot.handleUpdate(update);
+    } catch (error) {
+      // Telegraf handler errors are intentionally swallowed (a bad single
+      // handler shouldn't force endless provider retries); the update was still
+      // "seen", so the dedupe marker stays.
+      logger.error("[Telegram Webhook] Error processing update", {
+        orgId,
+        updateId: update.update_id,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  } catch (error) {
+    if (dedupeEventId) {
+      await webhookEventsRepository
+        .deleteByEventId(dedupeEventId, "telegram")
+        .catch((rollbackError) => {
+          logger.error("[Telegram Webhook] Dedupe rollback failed", {
+            orgId,
+            updateId: update.update_id,
+            error:
+              rollbackError instanceof Error
+                ? rollbackError.message
+                : String(rollbackError),
+          });
+        });
+    }
+    throw error;
   }
 
   return Response.json({ ok: true });
