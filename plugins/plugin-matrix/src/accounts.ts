@@ -4,7 +4,7 @@
  * `character.settings.matrix`, merging per field. Supplies the Matrix service
  * the homeserver, access token, and room list for each configured account.
  */
-import type { IAgentRuntime } from "@elizaos/core";
+import { ElizaError, type IAgentRuntime } from "@elizaos/core";
 import type { MatrixSettings } from "./types.js";
 
 export const DEFAULT_MATRIX_ACCOUNT_ID = "default";
@@ -46,11 +46,13 @@ function parseAccountsJson(runtime: IAgentRuntime): Record<string, MatrixAccount
     return parsed && typeof parsed === "object"
       ? (parsed as Record<string, MatrixAccountConfig>)
       : {};
-  } catch {
-    // error-policy:J3 malformed MATRIX_ACCOUNTS JSON is untrusted config input; the
-    // multi-account blob contributes no entries while single-account env settings
-    // still govern — a corrupt blob must not crash account discovery (accounts.test.ts).
-    return {};
+  } catch (error) {
+    throw new ElizaError("Matrix accounts config is not valid JSON.", {
+      code: "MATRIX_CONFIG_INVALID",
+      cause: error,
+      context: { setting: "MATRIX_ACCOUNTS" },
+      severity: "fatal",
+    });
   }
 }
 

@@ -2,7 +2,7 @@
  * Unit tests for Nostr multi-account resolution (`accounts.ts`) against an
  * in-memory `getSetting` stub — no relays, fully offline.
  */
-import type { IAgentRuntime } from "@elizaos/core";
+import { ElizaError, type IAgentRuntime } from "@elizaos/core";
 import { describe, expect, it, vi } from "vitest";
 import { resolveDefaultNostrAccountId, resolveNostrAccountSettings } from "../accounts.js";
 import { NostrService } from "../service.js";
@@ -40,6 +40,27 @@ describe("Nostr account config", () => {
     const settings = resolveNostrAccountSettings(rt);
     expect(settings.accountId).toBe("publishing");
     expect(settings.privateKey).toBe("b".repeat(64));
+  });
+
+  it("fails closed for malformed NOSTR_ACCOUNTS", () => {
+    const rt = runtime({
+      NOSTR_ACCOUNTS: "{not json",
+      NOSTR_PRIVATE_KEY: "a".repeat(64),
+    });
+
+    expect(() => resolveDefaultNostrAccountId(rt)).toThrow(ElizaError);
+    try {
+      resolveNostrAccountSettings(rt);
+      throw new Error("expected malformed NOSTR_ACCOUNTS to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElizaError);
+      expect((error as ElizaError).code).toBe("NOSTR_CONFIG_INVALID");
+      expect((error as ElizaError).context).toEqual({
+        setting: "NOSTR_ACCOUNTS",
+      });
+      expect((error as ElizaError).severity).toBe("fatal");
+      expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+    }
   });
 });
 

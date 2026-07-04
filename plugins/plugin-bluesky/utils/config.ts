@@ -7,7 +7,7 @@
  * `resolveDefaultBlueSkyAccountId`) plus the per-setting typed getters
  * (intervals, limits, feature flags) used by the service and agent manager.
  */
-import type { IAgentRuntime } from "@elizaos/core";
+import { ElizaError, type IAgentRuntime } from "@elizaos/core";
 import {
 	BLUESKY_ACTION_INTERVAL,
 	BLUESKY_MAX_ACTIONS,
@@ -84,11 +84,13 @@ function parseAccountsJson(
 		return parsed && typeof parsed === "object"
 			? (parsed as Record<string, RawBlueSkyAccountConfig>)
 			: {};
-	} catch {
-		// error-policy:J3 malformed BLUESKY_ACCOUNTS JSON is untrusted config input; the
-		// multi-account blob contributes no entries while single-account env settings
-		// still govern — a corrupt blob must not crash account discovery (accounts.test.ts).
-		return {};
+	} catch (error) {
+		throw new ElizaError("BlueSky accounts config is not valid JSON.", {
+			code: "BLUESKY_CONFIG_INVALID",
+			cause: error,
+			context: { setting: "BLUESKY_ACCOUNTS" },
+			severity: "fatal",
+		});
 	}
 }
 
