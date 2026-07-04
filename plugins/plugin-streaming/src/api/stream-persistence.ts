@@ -86,8 +86,17 @@ function getOverlayLayoutJson(destinationId?: string | null): string | null {
       if (fs.existsSync(f)) {
         return fs.readFileSync(f, "utf-8");
       }
-    } catch {
-      // Not available
+    } catch (error) {
+      // The file exists but could not be read (permissions, corruption, races).
+      // Swallowing this silently makes an unreadable overlay indistinguishable
+      // from a missing one, so the headless overlay seed fails invisibly.
+      // Surface it as a warning (matching readOverlayLayout below) and keep
+      // trying the remaining fallback files.
+      logger.warn(
+        `[stream] Failed to read overlay layout file ${f}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
   return null;
