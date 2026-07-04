@@ -1,12 +1,13 @@
 {
   "issue": 11632,
-  "generatedAt": "2026-07-03T20:43:37.390Z",
+  "generatedAt": "2026-07-04T10:26:43.255Z",
   "verdict": {
     "closeable": false,
     "reason": "This collector is read-only status evidence. #11632 still requires live OAuth/account/device artifacts unless a future run attaches those rows.",
-    "operatorReadyGroups": [],
+    "operatorReadyGroups": [
+      "model"
+    ],
     "blockedGroups": [
-      "model",
       "google",
       "discord",
       "telegram",
@@ -26,7 +27,7 @@
     {
       "id": "model",
       "label": "Live model provider",
-      "readyForOperatorRun": false,
+      "readyForOperatorRun": true,
       "requiredAll": [],
       "requiredAny": [
         "OPENAI_API_KEY",
@@ -35,14 +36,11 @@
         "ELIZA_LIVE_TEST_LOCAL_LLAMA_CPP_BASE_URL"
       ],
       "optional": [],
-      "present": [],
+      "present": [
+        "CEREBRAS_API_KEY"
+      ],
       "missingRequiredAll": [],
-      "missingRequiredAny": [
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "CEREBRAS_API_KEY",
-        "ELIZA_LIVE_TEST_LOCAL_LLAMA_CPP_BASE_URL"
-      ]
+      "missingRequiredAny": []
     },
     {
       "id": "google",
@@ -275,12 +273,14 @@
         "ANDROID_HOME"
       ],
       "present": [
-        "ANDROID_HOME"
+        "ANDROID_HOME",
+        "ANDROID_SERIAL"
       ],
       "missingRequiredAll": [],
       "missingRequiredAny": [
-        "ANDROID_SERIAL"
-      ]
+        "online adb device 27051JEGR10034"
+      ],
+      "deviceReady": false
     }
   ],
   "devices": {
@@ -289,21 +289,21 @@
       "available": true,
       "status": 0,
       "signal": null,
-      "summary": "List of devices attached\n27051JEGR10034         device usb:5-2 product:bluejay model:Pixel_6a device:bluejay transport_id:2"
+      "summary": "List of devices attached"
     },
     "xcrun": {
       "command": "xcrun",
-      "available": false,
-      "status": null,
+      "available": true,
+      "status": 0,
       "signal": null,
-      "summary": ""
+      "summary": "== Devices ==\n-- iOS 18.1 --\niPhone 16 Pro (F165C3A3-5069-4174-A40C-89F0BCC4B9FB) (Booted)\niPhone 16 Pro Max (F4F00A69-AA73-4AF7-9729-22B72088E2EC) (Shutdown)\niPhone 16 (39F890C2-072D-4BFE-9144-5327AF30B10A) (Shutdown)"
     },
     "devicectl": {
       "command": "devicectl",
-      "available": false,
-      "status": null,
+      "available": true,
+      "status": 0,
       "signal": null,
-      "summary": ""
+      "summary": "Name            Hostname                        Identifier                             State                Model\n-------------   -----------------------------   ------------------------------------   ------------------   ------------------------------\nMoonCycles      MoonCycles.coredevice.local     59EBB356-BC44-5AA2-91F1-E6AAE756BB86   available (paired)   iPhone 16 Pro Max (iPhone17,2)\nShaw’s iPhone   Shaws-iPhone.coredevice.local   C9130C48-48F1-5DC3-98E9-8BACE231D047   available (paired)   iPhone 15 Pro (iPhone16,1)\nFailed to load provisioning paramter list due to error: Error Domain=com.apple.dt.CoreDeviceError Code=1002 \"No provider was found.\" UserInfo={NSLocalizedDescription=No provider was found.}."
     }
   },
   "existingEvidence": [
@@ -331,8 +331,61 @@
     },
     {
       "path": ".github/issue-evidence/8833-lifeops-live-validation/11632-status/owner-agent-permission-matrix.txt",
-      "exists": false,
-      "matched": []
+      "exists": true,
+      "matched": [
+        "/20 passed/i"
+      ]
+    },
+    {
+      "path": ".github/issue-evidence/8833-lifeops-live-validation/11632-status/android-build-after-resolved-appdir.txt",
+      "exists": true,
+      "matched": [
+        "/BUILD SUCCESSFUL/i",
+        "/android sideload artifact audit passed/i"
+      ]
+    },
+    {
+      "path": ".github/issue-evidence/8833-lifeops-live-validation/11632-status/android-app-actions-test.txt",
+      "exists": true,
+      "matched": [
+        "/12 pass/i",
+        "/0 fail/i"
+      ]
+    },
+    {
+      "path": ".github/issue-evidence/8833-lifeops-live-validation/11632-status/biome-edited-files.txt",
+      "exists": true,
+      "matched": [
+        "/Checked \\d+ files/i"
+      ]
+    },
+    {
+      "path": ".github/issue-evidence/8833-lifeops-live-validation/11632-status/core-build-node.txt",
+      "exists": true,
+      "matched": [
+        "/Node-only build complete/i"
+      ]
+    },
+    {
+      "path": ".github/issue-evidence/8833-lifeops-live-validation/11632-status/core-typecheck.txt",
+      "exists": true,
+      "matched": [
+        "/tsgo --noEmit -p \\.\\/tsconfig\\.json/i"
+      ]
+    },
+    {
+      "path": ".github/issue-evidence/8833-lifeops-live-validation/11632-status/agent-typecheck.txt",
+      "exists": true,
+      "matched": [
+        "/tsgo --noEmit -p tsconfig\\.json/i"
+      ]
+    },
+    {
+      "path": ".github/issue-evidence/8833-lifeops-live-validation/11632-status/plugin-discord-typecheck.txt",
+      "exists": true,
+      "matched": [
+        "/tsgo --noEmit/i"
+      ]
     },
     {
       "path": ".github/issue-evidence/8833-lifeops-live-validation/11632-status/plugin-google-live.txt",
