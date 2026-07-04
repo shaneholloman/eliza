@@ -51,7 +51,7 @@ import { SaveCommandModal } from "./components/chat/SaveCommandModal";
 import { CustomActionEditor } from "./components/custom-actions/CustomActionEditor";
 import { CustomActionsPanel } from "./components/custom-actions/CustomActionsPanel";
 import { AppsPageView } from "./components/pages/AppsPageView";
-import { TutorialOverlay } from "./components/pages/tutorial/TutorialOverlay";
+import { TutorialConductorMount } from "./tutorial/TutorialConductor";
 import { PermissionPrimingOverlay } from "./components/permissions/PermissionPrimingOverlay";
 import { ActionBanner } from "./components/shell/ActionBanner";
 import { AssistantOverlay } from "./components/shell/AssistantOverlay";
@@ -248,10 +248,6 @@ const SettingsView = lazyNamedView(
 const TutorialView = lazyNamedView(
   () => import("./components/pages/tutorial/TutorialView"),
   "TutorialView",
-);
-const HelpView = lazyNamedView(
-  () => import("./components/pages/help/HelpView"),
-  "HelpView",
 );
 const StreamView = lazyNamedView(
   () => import("./components/pages/StreamView"),
@@ -1176,7 +1172,6 @@ function buildStaticTabRenderers(): Record<
   );
   return {
     tutorial: wrap(<TutorialView />),
-    help: wrap(<HelpView />),
     chat: () => <ViewUnavailableFallback />,
     browser: () => <BrowserWorkspaceView />,
     stream: () => <StreamView />,
@@ -2520,11 +2515,12 @@ export function App() {
             downloading/loading/missing/errored it seeds ONE live status turn
             with cancel / switch-to-cloud / retry controls. Renders null. */}
         <ModelStatusConductorMount />
-        {/* Interactive tutorial: a persistent spotlight overlay that survives
-            navigation (it sends the user to Settings, back home, …). Renders
-            only when the tutorial is active (launched from the home Tutorial
-            tile or the Help view). */}
-        <TutorialOverlay />
+        {/* In-chat tutorial conductor (headless) — while the tour is active it
+            seeds one conversational turn per step into the SAME live transcript
+            the overlay renders, narrates through the real voice engine, and
+            auto-advances on the user's real actions. No locks, no spotlight:
+            the user can ignore it freely. */}
+        <TutorialConductorMount />
         {/* Post-login permission priming: a one-time soft-ask modal that walks
             the user through the platform's onboarding permission set (voice,
             location, notifications) BEFORE any OS prompt. Self-gates on

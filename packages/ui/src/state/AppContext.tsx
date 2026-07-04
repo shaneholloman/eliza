@@ -29,6 +29,10 @@ import {
 } from "../first-run/mobile-runtime-mode";
 import { tryHandleModelAction } from "../first-run/model-action-channel";
 import {
+  tryHandleTutorialAction,
+  tryHandleTutorialText,
+} from "../tutorial/tutorial-action-channel";
+import {
   activeServerKindToFirstRunRuntimeTarget,
   type FirstRunRuntimeTarget,
 } from "../first-run/runtime-target";
@@ -1187,6 +1191,10 @@ function AppProviderInner({
       // to cloud / retry / download) are consumed by the model-status conductor
       // and NEVER reach the server — regardless of onboarding state.
       if (tryHandleModelAction(text)) return Promise.resolve();
+      // Tutorial choice picks (`__tutorial__:` prefix) are likewise consumed
+      // unconditionally — a tap on a leftover tour widget in an old transcript
+      // must never become a literal chat message to the agent.
+      if (tryHandleTutorialAction(text)) return Promise.resolve();
       switch (classifyActionMessage(text, firstRunComplete === true)) {
         case "first-run":
           tryHandleFirstRunAction(text);
@@ -1195,6 +1203,9 @@ function AppProviderInner({
           tryHandleFirstRunText(text);
           return Promise.resolve();
         case "send":
+          // Explicit "start/stop/restart tutorial" commands drive the tour
+          // locally; every other message flows to the real send untouched.
+          if (tryHandleTutorialText(text)) return Promise.resolve();
           return rawSendActionMessage(text);
       }
     },

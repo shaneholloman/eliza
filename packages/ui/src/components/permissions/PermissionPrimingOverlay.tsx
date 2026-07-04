@@ -5,7 +5,7 @@
 import * as React from "react";
 import { useIsAuthenticated } from "../../hooks/useAuthStatus";
 import { useAppSelector } from "../../state";
-import { useTutorial } from "../pages/tutorial/tutorial-controller";
+import { useTutorial } from "../../tutorial/tutorial-service";
 import { PermissionPrimingModal } from "./PermissionPrimingModal";
 import {
   hasPrimedPermissions,
