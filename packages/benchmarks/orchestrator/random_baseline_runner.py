@@ -652,6 +652,25 @@ def _gauntlet_payload(score: float) -> dict[str, Any]:
     }
 
 
+def _meeting_transcription_proof_payload(score: float) -> dict[str, Any]:
+    return {
+        "kind": "meeting_transcription_proof_report",
+        "version": 1,
+        "issue": 12486,
+        "lane": "mocked_plumbing",
+        "publishable": False,
+        "provider_mode": "synthetic-calibration",
+        "score": score,
+        "metrics": {
+            "transcript_quality": score,
+            "diarization_quality": score,
+            "speaker_identity_quality": score,
+            "consent_retention_quality": score,
+        },
+        "evidence_files": {},
+    }
+
+
 def _generic_payload(benchmark_id: str, harness: str, score: float) -> dict[str, Any]:
     return {
         "benchmark_id": benchmark_id,
@@ -702,6 +721,26 @@ _RESULT_TEMPLATES: dict[str, tuple[str, Any]] = {
     "hyperliquidbench": ("hyperliquid_bench-random_v1.json", _hyperliquid_payload),
     "interrupt_bench": ("report.json", _interrupt_payload),
     "lifeops_bench": ("lifeops-bench-random_v1.json", _lifeops_payload),
+    "meeting_transcription_proof": (
+        "meeting-transcription-proof-report-random_v1.json",
+        _meeting_transcription_proof_payload,
+    ),
+    "meeting_voice": (
+        "meeting-voice-report-random_v1.json",
+        _meeting_transcription_proof_payload,
+    ),
+    "meeting_voice_real": (
+        "meeting-voice-real-report-random_v1.json",
+        _meeting_transcription_proof_payload,
+    ),
+    "meeting_voice_stress": (
+        "meeting-voice-stress-report-random_v1.json",
+        _meeting_transcription_proof_payload,
+    ),
+    "meeting_voice_av": (
+        "meeting-voice-av-report-random_v1.json",
+        _meeting_transcription_proof_payload,
+    ),
     "mind2web": ("mind2web-results.json", _mind2web_payload),
     "mint": ("mint-benchmark-results.json", _mint_payload),
     "mmau": ("mmau_random_v1.json", _mmau_payload),
