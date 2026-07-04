@@ -19,6 +19,7 @@ import { logger } from "@elizaos/core";
 import type { MeetingParticipant, TranscriptSegment } from "@elizaos/shared";
 import {
   MEETING_AUDIO_SAMPLE_RATE,
+  isMeetingInsufficientCreditsError,
   type MeetingPipelineOptions,
   type MeetingTranscriptionPipeline,
   type PipelineTranscriptUpdate,
@@ -271,6 +272,20 @@ class MeetingPipeline implements MeetingTranscriptionPipeline {
 
     const task = (async () => {
       try {
+        if (this.options.billing) {
+          try {
+            await this.options.billing.ensureTranscriptionWindow(
+              Math.ceil(durationSec * 1000),
+            );
+          } catch (err) {
+            if (isMeetingInsufficientCreditsError(err)) {
+              this.options.onSpendCapReached?.(err);
+              this.manager.handleTranscriptionResult(speakerKey, "");
+              return;
+            }
+            throw err;
+          }
+        }
         const result = await this.backend.transcribe(wav, {
           ...(this.options.language ? { language: this.options.language } : {}),
           ...(prompt ? { prompt } : {}),
