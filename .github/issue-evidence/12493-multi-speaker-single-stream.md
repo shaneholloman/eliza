@@ -36,7 +36,7 @@ Result:
 
 ```text
 tests/test_single_stream_gate.py ......                                  [100%]
-6 passed, 1 warning in 0.03s
+6 passed, 1 warning in 0.18s
 ```
 
 The warning is the existing package config warning because `pytest-timeout` is
@@ -53,7 +53,7 @@ Result: passed.
 Generated artifact:
 
 ```text
-packages/benchmarks/voice-speaker-validation/artifacts/run-1783165016/single-stream-gate.json
+packages/benchmarks/voice-speaker-validation/artifacts/codex-12493-review/single-stream-gate.json
 ```
 
 The artifact is gitignored by the repo-wide `artifacts/` ignore rule and was
@@ -90,7 +90,9 @@ Manual inspection summary:
     "wder"
   ],
   "roomEvidence": ["room_feed_suspected", "multi_speaker_room"],
-  "platformIds": ["platform-room-tile-1"]
+  "platformIds": ["platform-room-tile-1"],
+  "detectedCounts": [2, 3, 5, 8],
+  "artifactBytes": 89898
 }
 ```
 
@@ -111,6 +113,26 @@ This is the existing package setup constraint documented in
 `packages/benchmarks/voice-speaker-validation/AGENTS.md`: live diarization tests
 need SpeechBrain/ECAPA dependencies and WAV fixtures. The new #12493 artifact
 gate intentionally runs without those live assets.
+
+## Repo-Level Checks
+
+```bash
+bun run audit:type-safety-ratchet
+bun run audit:error-policy-ratchet
+git diff --check
+```
+
+Result: passed. The error-policy ratchet reported `0 changed production source
+file(s)` for this Python benchmark slice.
+
+```bash
+bun run verify
+```
+
+Result: blocked after the CLAUDE/AGENTS check and both ratchets passed. Turbo
+stopped on unrelated current-baseline `@elizaos/electrobun#lint` diagnostics.
+The same run replayed unrelated `@elizaos/tui#lint` diagnostics around Node
+protocol imports, non-null assertions, and control-character regexes.
 
 ## Evidence Rows
 
