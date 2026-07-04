@@ -42,20 +42,16 @@ import {
 	resolveStoredModelPath,
 	toStoredModelPath,
 } from "../shared/local-inference-stored-path.ts";
+import {
+	createStdioBridge,
+	type StdioBridgeRequestFrame as BridgeRequest,
+	type StdioBridgeResponseFrame as BridgeResponse,
+} from "../shared/stdio-bridge.ts";
 import { runModelGrind } from "./model-grind.ts";
 
-interface BridgeRequest {
-	id?: unknown;
-	method?: unknown;
-	payload?: unknown;
-}
-
-interface BridgeResponse {
-	id: unknown;
-	ok: boolean;
-	result?: unknown;
-	error?: string;
-}
+// `BridgeRequest` / `BridgeResponse` are the shared stdio frame types
+// (imported above as aliases) — the single source of truth for the NDJSON
+// request/response envelope this bridge speaks.
 
 interface HostCallFrame {
 	type: "host_call";
@@ -4312,34 +4308,16 @@ export async function runIosBridgeCli(
 		// tears down the engine, so this timer intentionally keeps the process up.
 	}, 2_147_483_647);
 
-	const handleLine = async (line: string) => {
-		if (!line.trim()) return;
-		let parsed: BridgeRequest;
-		try {
-			parsed = JSON.parse(line) as BridgeRequest;
-		} catch (err) {
-			writeProtocolLine({
-				id: null,
-				ok: false,
-				error: err instanceof Error ? err.message : String(err),
-			});
-			return;
-		}
+	// Buffered NDJSON request/response framing is the platform-neutral half of
+	// this loop — delegate it to the shared kernel. iOS keeps ownership of the
+	// host-call interleaving (`tryHandleHostResultLine`) via `interceptLine`, the
+	// runtime host, stdout reservation, and the status/streaming shims above.
+	const stdioBridge = createStdioBridge({
+		request: (request) => dispatchBridgeRequest(host, request),
+		writeFrame: (frame) => writeProtocolLine(frame),
+		interceptLine: (line) => tryHandleHostResultLine(line),
+	});
 
-		const id = parsed.id ?? null;
-		try {
-			const result = await dispatchBridgeRequest(host, parsed);
-			writeProtocolLine({ id, ok: true, result });
-		} catch (err) {
-			writeProtocolLine({
-				id,
-				ok: false,
-				error: err instanceof Error ? err.message : String(err),
-			});
-		}
-	};
-
-	let pending = Promise.resolve();
 	let bufferedInput = "";
 	const stdin = process.stdin as typeof process.stdin & {
 		setEncoding?: (encoding: BufferEncoding) => void;
@@ -4353,25 +4331,14 @@ export async function runIosBridgeCli(
 			if (newline < 0) break;
 			const line = bufferedInput.slice(0, newline).replace(/\r$/, "");
 			bufferedInput = bufferedInput.slice(newline + 1);
-			if (tryHandleHostResultLine(line)) continue;
-			pending = pending
-				.then(() => handleLine(line))
-				.catch((err) => {
-					writeProtocolLine({
-						id: null,
-						ok: false,
-						error: err instanceof Error ? err.message : String(err),
-					});
-				});
+			void stdioBridge.handleLine(line);
 		}
 	});
 	stdin.once("end", () => {
 		if (bufferedInput.trim()) {
 			const line = bufferedInput;
 			bufferedInput = "";
-			if (!tryHandleHostResultLine(line)) {
-				pending = pending.then(() => handleLine(line));
-			}
+			void stdioBridge.handleLine(line);
 		}
 		stopBridge?.();
 	});
@@ -4387,7 +4354,7 @@ export async function runIosBridgeCli(
 
 	await stopPromise;
 	clearInterval(keepAlive);
-	await pending.catch(() => undefined);
+	await stdioBridge.drain();
 
 	restoreStdout();
 	await shutdown();
