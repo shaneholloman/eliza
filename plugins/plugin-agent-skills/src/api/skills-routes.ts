@@ -230,18 +230,18 @@ function shouldExposeBinanceSkillRecord(skill: {
 const SKILL_PREFS_CACHE_KEY = "eliza:skill-preferences";
 type SkillPreferencesMap = Record<string, boolean>;
 
+// An empty map means "none persisted yet" (the `?? {}` below); a cache read
+// *failure* propagates. Callers read-modify-write this map before saving it
+// back, so masking a transient DB error as `{}` would overwrite every other
+// skill's saved preference — the read failure must surface, not read as empty.
 async function loadSkillPreferences(
   runtime: AgentRuntime | null,
 ): Promise<SkillPreferencesMap> {
   if (!runtime) return {};
-  try {
-    const prefs = await runtime.getCache<SkillPreferencesMap>(
-      SKILL_PREFS_CACHE_KEY,
-    );
-    return prefs ?? {};
-  } catch {
-    return {};
-  }
+  const prefs = await runtime.getCache<SkillPreferencesMap>(
+    SKILL_PREFS_CACHE_KEY,
+  );
+  return prefs ?? {};
 }
 
 async function saveSkillPreferences(
@@ -268,17 +268,16 @@ type SkillAcknowledgmentMap = Record<
   { acknowledgedAt: string; findingCount: number }
 >;
 
+// Same contract as loadSkillPreferences: `{}` means "none acknowledged yet"; a
+// cache read failure propagates rather than being merged over and saved back as
+// an acknowledgment wipe.
 async function loadSkillAcknowledgments(
   runtime: AgentRuntime | null,
 ): Promise<SkillAcknowledgmentMap> {
   if (!runtime) return {};
-  try {
-    const acks =
-      await runtime.getCache<SkillAcknowledgmentMap>(SKILL_ACK_CACHE_KEY);
-    return acks ?? {};
-  } catch {
-    return {};
-  }
+  const acks =
+    await runtime.getCache<SkillAcknowledgmentMap>(SKILL_ACK_CACHE_KEY);
+  return acks ?? {};
 }
 
 async function saveSkillAcknowledgments(
