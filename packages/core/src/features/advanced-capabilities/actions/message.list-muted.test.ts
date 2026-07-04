@@ -1,8 +1,9 @@
 /**
  * Muted visibility in the MESSAGE list ops: list_channels carries a per-channel
- * `muted` flag and list_connections a `mutedRoomCount`, resolved from the same
- * participant/world state the ROOM action writes — making "which channels are
- * you muted in" answerable. Map-backed runtime + mock connectors.
+ * `muted` flag, list_servers a per-server `muted` flag, and list_connections a
+ * `mutedRoomCount`, resolved from the same participant/world state the ROOM
+ * action writes — making "which channels/servers are you muted in" answerable.
+ * Map-backed runtime + mock connectors.
  */
 import { describe, expect, it } from "vitest";
 import type { Room, World } from "../../../types/environment";
@@ -158,6 +159,99 @@ describe("MESSAGE op=list_channels — muted flag", () => {
 		const result = await runOp(runtime, { action: "list_channels" });
 		const data = result.data as { channels: { muted: boolean }[] };
 		expect(data.channels.every((c) => c.muted)).toBe(true);
+	});
+});
+
+describe("MESSAGE op=list_servers — muted flag", () => {
+	const MUTED_SERVER_WORLD_ID = "00000000-0000-0000-0000-0000000000e2" as UUID;
+	const OPEN_SERVER_WORLD_ID = "00000000-0000-0000-0000-0000000000e3" as UUID;
+
+	function serverConnector(worlds: World[]) {
+		return {
+			source: "discord",
+			label: "Discord",
+			capabilities: [],
+			supportedTargetKinds: [],
+			contexts: [],
+			listServers: async () => worlds,
+		};
+	}
+
+	it("resolves the server-wide mute from the persisted world when the connector lists a bare World", async () => {
+		// The connector fabricates Worlds without durable metadata (the discord
+		// listing builds them from the live guild cache) — the persisted world
+		// under the same id carries the mute.
+		const runtime = mockRuntime(
+			[
+				serverConnector([
+					{
+						id: MUTED_SERVER_WORLD_ID,
+						agentId: AGENT_ID,
+						name: "Muted Guild",
+						metadata: { source: "discord" },
+					} as World,
+					{
+						id: OPEN_SERVER_WORLD_ID,
+						agentId: AGENT_ID,
+						name: "Open Guild",
+						metadata: { source: "discord" },
+					} as World,
+				]),
+			],
+			{
+				worlds: [
+					{
+						id: MUTED_SERVER_WORLD_ID,
+						agentId: AGENT_ID,
+						metadata: { agentMuteState: "MUTED" },
+					} as World,
+				],
+			},
+		);
+		const result = await runOp(runtime, { action: "list_servers" });
+		const data = result.data as {
+			servers: { name?: string; muted: boolean }[];
+		};
+		expect(result.success).toBe(true);
+		expect(data.servers.find((s) => s.name === "Muted Guild")?.muted).toBe(
+			true,
+		);
+		expect(data.servers.find((s) => s.name === "Open Guild")?.muted).toBe(
+			false,
+		);
+		expect(result.text).toContain("(1 muted)");
+	});
+
+	it("trusts mute metadata the connector already carries, honoring timed expiry", async () => {
+		const runtime = mockRuntime([
+			serverConnector([
+				{
+					id: MUTED_SERVER_WORLD_ID,
+					agentId: AGENT_ID,
+					name: "Muted Guild",
+					metadata: { agentMuteState: "MUTED" },
+				} as World,
+				{
+					id: OPEN_SERVER_WORLD_ID,
+					agentId: AGENT_ID,
+					name: "Expired Guild",
+					metadata: {
+						agentMuteState: "MUTED",
+						agentMuteUntilIso: "2001-01-01T00:00:00.000Z",
+					},
+				} as World,
+			]),
+		]);
+		const result = await runOp(runtime, { action: "list_servers" });
+		const data = result.data as {
+			servers: { name?: string; muted: boolean }[];
+		};
+		expect(data.servers.find((s) => s.name === "Muted Guild")?.muted).toBe(
+			true,
+		);
+		expect(data.servers.find((s) => s.name === "Expired Guild")?.muted).toBe(
+			false,
+		);
 	});
 });
 
