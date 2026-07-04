@@ -462,6 +462,7 @@ import {
   parseEventCursor,
   selectReplayEvents,
 } from "./ws-event-replay.ts";
+import { resolveAbsentPluginRouteStub } from "./absent-plugin-route-stubs.ts";
 import { runtimeRoutesNeedX402Validation } from "./x402-route-validation.ts";
 
 type FirstRunRouteArg = Parameters<typeof handleFirstRunRoutes>[0];
@@ -975,131 +976,19 @@ async function handleBuiltinOptionalRoutes(
     return true;
   }
 
-  if (pathname === "/api/lifeops/activity-signals") {
-    if (method === "GET") {
-      json(res, { signals: [] });
-      return true;
-    }
+  // Pure-fabrication "capability unavailable" stubs are declared once in the
+  // absent-plugin route stub registry (see absent-plugin-route-stubs.ts /
+  // arch-audit #12089 item 12). Anything that reads live runtime state (wallet
+  // addresses, on-disk training config) is handled above and is intentionally
+  // NOT in the registry, because those are not fabrications.
+  const absentPluginStub = resolveAbsentPluginRouteStub(method, pathname);
+  if (absentPluginStub) {
+    // POST stubs still drain the request body so the socket is not left with a
+    // pending payload (matches the pre-registry behavior for activity-signals).
     if (method === "POST") {
       await readBody(req).catch(() => undefined);
-      json(res, {
-        ok: true,
-        stored: false,
-        reason: "lifeops_route_unavailable",
-      });
-      return true;
     }
-  }
-
-  if (method === "GET" && pathname === "/api/voice/profiles") {
-    json(res, { profiles: [] });
-    return true;
-  }
-
-  if (method === "GET" && pathname === "/api/discord-local/status") {
-    json(res, {
-      available: false,
-      connected: false,
-      authenticated: false,
-      currentUser: null,
-      subscribedChannelIds: [],
-      configuredChannelIds: [],
-      scopes: [],
-      lastError: null,
-      ipcPath: null,
-    });
-    return true;
-  }
-
-  if (
-    method === "GET" &&
-    pathname === "/api/lifeops/connectors/imessage/status"
-  ) {
-    json(res, {
-      available: false,
-      connected: false,
-      bridgeType: "none",
-      hostPlatform: process.platform,
-      diagnostics: [],
-      error: null,
-      chatDbAvailable: false,
-      sendOnly: false,
-      reason: "lifeops_route_unavailable",
-      permissionAction: null,
-    });
-    return true;
-  }
-
-  if (method === "GET" && pathname === "/api/signal/status") {
-    const requestUrl = new URL(req.url ?? pathname, "http://localhost");
-    const accountId = requestUrl.searchParams.get("accountId") || "default";
-    json(res, {
-      accountId,
-      status: "idle",
-      authExists: false,
-      serviceConnected: false,
-      qrDataUrl: null,
-      phoneNumber: null,
-      error: null,
-    });
-    return true;
-  }
-
-  if (method === "GET" && pathname === "/api/setup/telegram-account/status") {
-    json(res, {
-      connector: "telegram-account",
-      state: "idle",
-      detail: {
-        status: "idle",
-        configured: false,
-        sessionExists: false,
-        serviceConnected: false,
-        restartRequired: false,
-        hasAppCredentials: false,
-        phone: null,
-        isCodeViaApp: false,
-        account: null,
-        error: null,
-      },
-    });
-    return true;
-  }
-
-  if (method === "GET" && pathname === "/api/whatsapp/status") {
-    const requestUrl = new URL(req.url ?? pathname, "http://localhost");
-    const accountId = requestUrl.searchParams.get("accountId") || "default";
-    const authScope = requestUrl.searchParams.get("authScope");
-    json(res, {
-      accountId,
-      ...(authScope === "platform" || authScope === "lifeops"
-        ? { authScope }
-        : {}),
-      status: "idle",
-      authExists: false,
-      serviceConnected: false,
-      servicePhone: null,
-    });
-    return true;
-  }
-
-  if (method === "GET" && pathname === "/api/coding-agents/preflight") {
-    json(res, { installed: [], available: false });
-    return true;
-  }
-
-  if (
-    method === "GET" &&
-    pathname === "/api/coding-agents/coordinator/status"
-  ) {
-    json(res, {
-      supervisionLevel: "unavailable",
-      taskCount: 0,
-      tasks: [],
-      pendingConfirmations: 0,
-      taskThreadCount: 0,
-      taskThreads: [],
-      frameworks: [],
-    });
+    json(res, absentPluginStub.buildBody(req));
     return true;
   }
 
