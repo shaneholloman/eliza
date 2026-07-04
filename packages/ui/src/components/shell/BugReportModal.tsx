@@ -5,7 +5,6 @@
  * client. On the Electrobun desktop it can additionally attach local diagnostics
  * — collected via `../../utils/desktop-bug-report` — and open the logs folder.
  */
-import { logger } from "@elizaos/logger";
 import { ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { client } from "../../api";

@@ -325,13 +325,10 @@ export function useCloudState({
     if (elizaCloudDisconnectInFlightRef.current) {
       return lastElizaCloudPollConnectedRef.current;
     }
-    // error-policy:J4 a failed status poll preserves the last applied cloud
-    // snapshot across transient backend restarts so the UI does not flap into
-    // a false "disconnected" state; the warn keeps a broken endpoint visible.
-    const cloudStatus = await client.getCloudStatus().catch((err: unknown) => {
-      logger.warn({ err }, "[useCloudState] cloud status poll failed");
-      return null;
-    });
+    // error-policy:J4 transient poll failure degrades to the last known
+    // snapshot (below) rather than flapping the UI into a false "disconnected"
+    // state; a persistent failure surfaces via that stale-but-visible state.
+    const cloudStatus = await client.getCloudStatus().catch(() => null);
     if (elizaCloudDisconnectInFlightRef.current) {
       return lastElizaCloudPollConnectedRef.current;
     }
@@ -377,9 +374,10 @@ export function useCloudState({
     );
     if (cloudStatus.topUpUrl) setElizaCloudTopUpUrl(cloudStatus.topUpUrl);
     if (isConnected) {
-      // A transport failure fetching credits must not render as "no credits"
-      // with a clean error banner — carry the failure into the credits error
-      // state so the balance widget shows a real error, not healthy-empty.
+      // error-policy:J4 a transport failure fetching credits degrades to null
+      // (no fabricated balance) but is carried into the visible credits-error
+      // state below — the balance widget renders a real error, never
+      // healthy-empty; the next poll interval retries.
       let creditsFetchError: string | null = null;
       const credits = await client.getCloudCredits().catch((err: unknown) => {
         creditsFetchError = err instanceof Error ? err.message : String(err);
@@ -516,15 +514,10 @@ export function useCloudState({
           // 401s the agent picker in a loop. Only celebrate a verified session;
           // otherwise surface the re-auth path the login UI already renders.
           const connected = await pollCloudCredits();
-          await loadWalletConfig().catch((err: unknown) => {
-            // error-policy:J4 wallet config is a secondary panel; a failed
-            // load must not undo a verified login. The wallet section renders
-            // its own unavailable state from the empty config.
-            logger.warn(
-              { err },
-              "[useCloudState] wallet config refresh failed after steward login",
-            );
-          });
+          // error-policy:J4 wallet config is a secondary panel; a failed load
+          // must not undo a verified login. The wallet section renders its own
+          // unavailable state from the empty config.
+          await loadWalletConfig().catch(() => undefined);
           if (connected) {
             setElizaCloudConnected(true);
             setElizaCloudLoginError(null);
@@ -567,8 +560,9 @@ export function useCloudState({
       let useDirectAuth = !hasBackend;
 
       if (hasBackend) {
-        // error-policy:J4 designed degrade — a proxy without cloud status
-        // routes login through the direct Cloud flow (null branch below).
+        // error-policy:J4 a null status here is a designed branch: a
+        // browser/dev shell with no local agent proxy falls back to the direct
+        // Cloud auth flow (below), not an error state.
         const cloudStatus = await client.getCloudStatus().catch(() => null);
         if (cloudStatus === null) {
           // Browser/dev shells can run on localhost without a local agent proxy.
@@ -1022,10 +1016,9 @@ export function useCloudState({
       // No `exp` (opaque token / device-code session) → nothing to refresh.
       if (secs === null) return;
       if (secs >= STEWARD_REFRESH_AHEAD_SECS) return;
-      // error-policy:J4 a failed proactive refresh is recoverable — the token
-      // keeps working until `exp`, the next interval tick retries, and an
-      // actually-expired session surfaces through the status poll's re-auth
-      // path. Warn so repeated refresh failures are observable before expiry.
+      // error-policy:J4 pre-emptive token refresh; a failed refresh keeps the
+      // still-valid stored token until it actually expires (the next authed
+      // call then surfaces the re-auth path). No token rotation on failure.
       const result = await refreshCloudStewardSession({
         endpoint: resolveStewardRefreshEndpoint(),
       }).catch((err: unknown) => {
