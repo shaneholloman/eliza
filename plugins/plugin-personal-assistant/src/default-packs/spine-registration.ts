@@ -31,12 +31,12 @@
  * that have never seeded anywhere — flows through the spine registry.
  */
 
+import type { IAgentRuntime } from "@elizaos/core";
 import type {
   DefaultTaskPack,
   ScheduledTaskInput as SpineScheduledTaskInput,
 } from "@elizaos/plugin-scheduling";
 import { registerDefaultTaskPack } from "@elizaos/plugin-scheduling";
-import type { IAgentRuntime } from "@elizaos/core";
 import type {
   ConnectorRegistryContract,
   ScheduledTaskSeed,
@@ -167,7 +167,10 @@ export function toSpineTaskInput(
   };
 }
 
-function isFirstRunOwned(pack: DefaultPack, record: ScheduledTaskSeed): boolean {
+function isFirstRunOwned(
+  pack: DefaultPack,
+  record: ScheduledTaskSeed,
+): boolean {
   if (FIRST_RUN_OWNED_PACK_KEYS.has(pack.key)) return true;
   return (
     typeof record.idempotencyKey === "string" &&

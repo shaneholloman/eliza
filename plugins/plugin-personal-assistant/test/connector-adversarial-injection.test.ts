@@ -33,11 +33,11 @@
 
 import type { DispatchResult, ScheduledTask } from "@elizaos/plugin-scheduling";
 import { describe, expect, it } from "vitest";
+import type { InboundMessage } from "../src/inbox/types.js";
 import {
   normalizeInboxChannel,
   toInboxMessages,
 } from "../src/lifeops/domains/inbox-service.js";
-import type { InboundMessage } from "../src/inbox/types.js";
 import { createLifeOpsScheduledTaskSimulationHarness } from "./helpers/lifeops-scheduled-task-simulation.js";
 
 const WEDNESDAY_ISO = "2026-07-01T12:00:00.000Z";
@@ -152,7 +152,9 @@ describe("adversarial: prompt-injection cannot override structural routing", () 
     // Weekday_only allows on a Wednesday → structure fires regardless of text.
     expect(fired.state.status).toBe("fired");
     expect(h.dispatches).toHaveLength(1);
-    expect(h.dispatches[0]?.promptInstructions).toBe(ungated.promptInstructions);
+    expect(h.dispatches[0]?.promptInstructions).toBe(
+      ungated.promptInstructions,
+    );
   });
 
   it("injected payload is dispatched verbatim as inert data with a typed DispatchResult", async () => {
