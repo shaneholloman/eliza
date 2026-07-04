@@ -292,6 +292,15 @@ const EXPECTED_PR_DETERMINISTIC_SCENARIO_IDS = [
   "reminder.escalation.intensity-up",
   "reminder.escalation.silent-dismiss",
   "remote-desktop.list-sessions",
+  // LifeOps persona pack B2 (shift-rotation, marcus_shift, #12772). Convention
+  // (G1): pr-deterministic persona scenarios live in
+  // plugins/plugin-personal-assistant/test/scenarios — the one root scanned by
+  // BOTH this guard AND check-lifeops-persona-catalog-coverage.mjs — and are
+  // added here in the same commit so this toEqual stays green while the coverage
+  // ledger can still resolve their ids.
+  "shift-rotation-reanchor-protects-new-sleep-window",
+  "shift-rotation-sleep-protection-holds-low-priority-nudge",
+  "shift-rotation-wake-anchor-follows-shifted-window",
   "shopify.list-products",
   "suno.generate-music",
   "task-coordinator.orchestrator-status",
