@@ -14,12 +14,12 @@
  * - `t`                      — translation function, used for auth-rejected notice key
  */
 
+import { logger } from "@elizaos/logger";
 import {
   clearStoredStewardToken,
   readStoredStewardToken,
   writeStoredStewardToken,
 } from "@elizaos/shared/steward-session-client";
-import { logger } from "@elizaos/logger";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { client } from "../api";
 import { supportsFullAppShellRoutes } from "../api/app-shell-capabilities";

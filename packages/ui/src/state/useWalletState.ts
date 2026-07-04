@@ -16,6 +16,7 @@
  * - `confirmAction`   — confirmDesktopAction utility, used by handleExportKeys
  */
 
+import { logger } from "@elizaos/logger";
 import type {
   WalletAddresses,
   WalletBalancesResponse,
@@ -27,7 +28,6 @@ import type {
   WalletPrimaryMap,
   WalletSource,
 } from "@elizaos/shared";
-import { logger } from "@elizaos/logger";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   client,

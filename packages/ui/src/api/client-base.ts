@@ -1682,7 +1682,9 @@ export class ElizaClient {
           if (applyStreamChatDataLine(line, streamState, onToken, onStatus)) {
             buffer = "";
             // error-policy:J6 best-effort reader teardown after terminal done.
-            void reader.cancel("elizaos-sse-terminal-done").catch(() => undefined);
+            void reader
+              .cancel("elizaos-sse-terminal-done")
+              .catch(() => undefined);
             break;
           }
         }

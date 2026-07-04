@@ -530,7 +530,10 @@ export function useDesktopPermissionsState() {
       } catch (err) {
         // error-policy:J4 the snapshot re-render shows the unchanged state;
         // warn keeps the failed request observable and the user can retry.
-        logger.warn({ err, id }, "[permission-controls] permission request failed");
+        logger.warn(
+          { err, id },
+          "[permission-controls] permission request failed",
+        );
       }
     },
     [replaceSnapshot, scheduleSettingsRefreshes],

@@ -490,14 +490,19 @@ export function usePluginsSkillsState({
       // a failed editor-open must not be mislabeled by the outer catch as a
       // failed create — surface it as its own notice instead.
       if (result.path)
-        await client.openSkill(result.skill?.id ?? name).catch((err: unknown) => {
-          logger.warn({ err, name }, "[usePluginsSkillsState] openSkill failed");
-          setActionNotice(
-            `Skill "${name}" created, but opening it failed.`,
-            "error",
-            4200,
-          );
-        });
+        await client
+          .openSkill(result.skill?.id ?? name)
+          .catch((err: unknown) => {
+            logger.warn(
+              { err, name },
+              "[usePluginsSkillsState] openSkill failed",
+            );
+            setActionNotice(
+              `Skill "${name}" created, but opening it failed.`,
+              "error",
+              4200,
+            );
+          });
     } catch (err) {
       setActionNotice(
         `Failed to create skill: ${err instanceof Error ? err.message : "error"}`,
