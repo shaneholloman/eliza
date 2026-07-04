@@ -184,6 +184,7 @@ function isElizaCloudControlPlaneBase(
       new URL(normalized).hostname.toLowerCase(),
     );
   } catch {
+    // error-policy:J3 malformed base URL reads as "not the control plane".
     return false;
   }
 }
@@ -210,6 +211,8 @@ function parseStreamChatDataLine(line: string): StreamChatEvent | null {
     if (!parsed.type && typeof parsed.text === "string") parsed.type = "token";
     return parsed;
   } catch {
+    // error-policy:J3 an unparseable SSE data line is explicitly invalid and
+    // skipped; the terminal done/error events drive the turn outcome.
     return null;
   }
 }
@@ -324,6 +327,7 @@ function isSharedRuntimeRestAdapterBase(
     // the lost-connection overlay while REST chat remains usable.
     return /^\/api\/v1\/eliza\/agents\/[^/]+(?:\/bridge)?$/.test(url.pathname);
   } catch {
+    // error-policy:J3 malformed base URL reads as "not a shared-runtime base".
     return false;
   }
 }
@@ -358,6 +362,7 @@ function isDedicatedCloudAgentBase(value: string | null | undefined): boolean {
       !ELIZA_CLOUD_CONTROL_PLANE_HOSTS.has(host)
     );
   } catch {
+    // error-policy:J3 malformed base URL reads as "not a dedicated agent".
     return false;
   }
 }
@@ -913,6 +918,8 @@ export class ElizaClient {
       const transport = await this.rawRequestTransport(requestUrl);
       return await transport.request(requestUrl, requestInit, { timeoutMs });
     } catch (err) {
+      // error-policy:J2 context-adding rethrow — throwRawRequestError wraps
+      // the transport failure with path/timeout/abort context and throws.
       return this.throwRawRequestError(
         err,
         path,
@@ -1431,9 +1438,6 @@ export class ElizaClient {
           const parsed = JSON.parse(queued) as { type?: unknown };
           return parsed.type !== "active-conversation";
         } catch {
-          // error-policy:J3 an unparseable queued frame can't be classified as a
-          // superseded active-conversation update, so keep it in the send queue
-          // rather than silently dropping a message we failed to inspect.
           return true;
         }
       });
@@ -1605,8 +1609,8 @@ export class ElizaClient {
       // body and frees the connection) and returning whatever streamed so far as
       // an interrupted (`completed: false`) turn.
       if (signal?.aborted) {
-        // error-policy:J6 best-effort teardown of an already-aborted reader.
-        void reader.cancel("elizaos-sse-client-abort").catch(() => {});
+        // error-policy:J6 best-effort reader teardown on client abort.
+        void reader.cancel("elizaos-sse-client-abort").catch(() => undefined);
         break;
       }
       let done = false;
@@ -1647,8 +1651,8 @@ export class ElizaClient {
         // A client abort wins over everything else: cancel the reader and stop —
         // the partial streamed so far is returned as an interrupted turn.
         if (signal?.aborted) {
-          // error-policy:J6 best-effort teardown of an already-aborted reader.
-          void reader.cancel("elizaos-sse-client-abort").catch(() => {});
+          // error-policy:J6 best-effort reader teardown on client abort.
+          void reader.cancel("elizaos-sse-client-abort").catch(() => undefined);
           break;
         }
         // Only the 60s idle timeout sets `idleTimedOut`; a mid-stream network
@@ -1661,8 +1665,9 @@ export class ElizaClient {
           streamState.doneFailureKind =
             streamState.doneFailureKind ?? "provider_issue";
         }
-        // error-policy:J6 best-effort teardown after a stalled/dropped stream.
-        void reader.cancel("elizaos-sse-idle-timeout").catch(() => {});
+        // error-policy:J6 best-effort reader teardown; the stall itself is
+        // already stamped on the turn above.
+        void reader.cancel("elizaos-sse-idle-timeout").catch(() => undefined);
         break;
       }
       if (done || !value) break;
@@ -1676,8 +1681,8 @@ export class ElizaClient {
           if (!line.startsWith("data:")) continue;
           if (applyStreamChatDataLine(line, streamState, onToken, onStatus)) {
             buffer = "";
-            // error-policy:J6 best-effort teardown once the terminal event lands.
-            void reader.cancel("elizaos-sse-terminal-done").catch(() => {});
+            // error-policy:J6 best-effort reader teardown after terminal done.
+            void reader.cancel("elizaos-sse-terminal-done").catch(() => undefined);
             break;
           }
         }
