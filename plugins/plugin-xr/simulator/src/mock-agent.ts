@@ -24,6 +24,12 @@ export interface ReceivedControl {
   receivedAt: number;
 }
 
+export interface DecodeError {
+  kind: "text" | "binary";
+  error: Error;
+  receivedAt: number;
+}
+
 export interface MockAgentServerOptions {
   port?: number;
   /** Automatically send a transcript response after receiving N audio frames */
@@ -37,6 +43,13 @@ export class MockAgentServer {
 
   readonly receivedFrames: ReceivedFrame[] = [];
   readonly receivedControls: ReceivedControl[] = [];
+  /**
+   * Frames the client sent that failed to decode. Recorded rather than
+   * swallowed so a protocol regression in the real client encoder surfaces as a
+   * test-visible fact instead of vanishing — a mock that silently eats malformed
+   * frames hides exactly the bugs its tests exist to catch.
+   */
+  readonly decodeErrors: DecodeError[] = [];
   private waiters = new Map<string, Array<() => void>>();
 
   constructor(private readonly options: MockAgentServerOptions = {}) {}
@@ -114,6 +127,7 @@ export class MockAgentServer {
   reset(): void {
     this.receivedFrames.length = 0;
     this.receivedControls.length = 0;
+    this.decodeErrors.length = 0;
   }
 
   // ── Private ────────────────────────────────────────────────────────────
@@ -147,7 +161,13 @@ export class MockAgentServer {
       if (msg.type === "ping") {
         ws.send(JSON.stringify({ type: "pong" }));
       }
-    } catch {}
+    } catch (err) {
+      this.decodeErrors.push({
+        kind: "text",
+        error: err instanceof Error ? err : new Error(String(err)),
+        receivedAt: Date.now(),
+      });
+    }
   }
 
   private handleBinary(data: Buffer): void {
@@ -170,7 +190,13 @@ export class MockAgentServer {
           this.sendAgentText(`Agent response to: ${text}`);
         }, 50);
       }
-    } catch {}
+    } catch (err) {
+      this.decodeErrors.push({
+        kind: "binary",
+        error: err instanceof Error ? err : new Error(String(err)),
+        receivedAt: Date.now(),
+      });
+    }
   }
 
   private sendText(msg: object): void {

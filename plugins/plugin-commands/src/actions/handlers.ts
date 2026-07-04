@@ -211,6 +211,8 @@ async function runModelSwitchViaRoute(
 			`Couldn't switch the model: ${err instanceof Error ? err.message : String(err)}.`,
 		);
 	}
+	// error-policy:J3 non-JSON/empty response body -> null; the caller reads
+	// response.ok / fields defensively, so an unparseable body is a handled shape.
 	const body = (await response.json().catch(() => null)) as Record<
 		string,
 		unknown
