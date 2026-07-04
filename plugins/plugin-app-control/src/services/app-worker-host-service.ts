@@ -232,6 +232,8 @@ export class AppWorkerHostService extends Service {
 	override async stop(): Promise<void> {
 		const slugs = Array.from(this.workers.keys());
 		await Promise.all(
+			// error-policy:J6 best-effort teardown — one worker refusing to stop must
+			// not block stopping the rest during service shutdown.
 			slugs.map((slug) => this.stopWorker(slug).catch(() => {})),
 		);
 	}
@@ -405,6 +407,8 @@ export class AppWorkerHostService extends Service {
 			await spawned.readyPromise;
 		} catch (error) {
 			this.workers.delete(options.slug);
+			// error-policy:J6 best-effort teardown of the failed worker; the real
+			// spawn failure (`error`) is rethrown below and surfaces to the caller.
 			await worker.terminate().catch(() => undefined);
 			throw error;
 		}
@@ -524,6 +528,8 @@ export class AppWorkerHostService extends Service {
 				this.runtime as RuntimeWithServiceLoadPromise | undefined
 			)
 				?.getServiceLoadPromise?.(APP_REGISTRY_SERVICE_TYPE)
+				// error-policy:J4 best-effort auto-start of persisted worker apps — a
+				// not-yet-ready registry degrades to null (skipped below), never crashes boot.
 				.catch(() => null)) as AppRegistryService | null | undefined;
 		}
 		if (!registry?.list) return;

@@ -22,8 +22,14 @@ import { GoogleSpeakerIdentity } from "./speaker-identity.js";
 const TICK_MS = 1_000;
 const AUDIO_GRACE_MS = 120_000;
 
-/** Count non-bot participant tiles present in the meeting DOM. */
-async function countParticipants(page: Page): Promise<number> {
+/**
+ * Count non-bot participant tiles present in the meeting DOM. Returns `null`
+ * when the DOM query could not run (page mid-navigation / layout swap / detached
+ * execution context) — the caller must treat that as "unknown", never as zero:
+ * a fabricated `0` would accrue alone-time and trip a premature auto-leave. Only
+ * a successful evaluate returning `0` is a real "no other participants" reading.
+ */
+export async function countParticipants(page: Page): Promise<number | null> {
   try {
     return await page.evaluate(
       (selectors: string[]) => {
@@ -41,8 +47,14 @@ async function countParticipants(page: Page): Promise<number> {
       },
       [...googleParticipantSelectors],
     );
-  } catch {
-    return 0;
+  } catch (err) {
+    // error-policy:J4 transient DOM-eval failure is "unknown", not "zero" — the
+    // recording loop skips the tick so alone-detection never fires on a failed poll.
+    logger.warn(
+      { err },
+      "[GoogleMeetRecording] participant count query failed; treating as unknown",
+    );
+    return null;
   }
 }
 
@@ -89,6 +101,8 @@ export async function startGoogleRecording(
         return;
       }
       const others = await countParticipants(page);
+      // Unknown reading (poll failed): don't accrue alone-time this tick.
+      if (others === null) return;
       if (others > 0) speakersSeen = true;
 
       if (others > 0) {

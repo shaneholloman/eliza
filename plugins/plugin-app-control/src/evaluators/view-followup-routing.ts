@@ -147,6 +147,8 @@ async function resolveActiveViewForFamily(
 		}
 		return activeView;
 	} catch {
+		// error-policy:J4 loopback confirm failed -> can't route; the agent's normal
+		// reply stands (designed degrade, per the block comment above).
 		return null;
 	}
 }
