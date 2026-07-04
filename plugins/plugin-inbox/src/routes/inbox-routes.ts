@@ -67,6 +67,32 @@ function routeParams(
   };
 }
 
+/**
+ * Map a thrown inbox-operation error to an HTTP status. The operation throws
+ * for three distinct causes that must not collapse to one code: a missing/
+ * malformed parameter (the caller's bad input → 400), an addressed entry that
+ * does not exist (→ 404), and any other failure (repository/dispatch error →
+ * 500). Returning 400 for all three (the prior behaviour) hid genuine
+ * server-side failures behind a "bad request" the client cannot act on.
+ */
+function classifyInboxError(error: unknown): {
+  status: number;
+  message: string;
+} {
+  const message =
+    error instanceof Error ? error.message : "Inbox operation failed.";
+  if (error instanceof Error && /\bwas not found\b/.test(error.message)) {
+    return { status: 404, message };
+  }
+  if (
+    error instanceof Error &&
+    /\bis required\b|\bis not supported\b|\bhas no \b/.test(error.message)
+  ) {
+    return { status: 400, message };
+  }
+  return { status: 500, message };
+}
+
 async function runOperation(
   runtime: IAgentRuntime,
   operation: InboxRouteOperation,
@@ -80,10 +106,10 @@ async function runOperation(
       params,
     });
   } catch (error) {
-    return json(400, {
-      ok: false,
-      error: error instanceof Error ? error.message : "Inbox operation failed.",
-    });
+    // error-policy:J1 boundary translation — distinguish not-found (404) and
+    // genuine operation failure (500) from malformed input (400).
+    const { status, message } = classifyInboxError(error);
+    return json(status, { ok: false, error: message });
   }
   return json(result.success ? 200 : 409, {
     ok: result.success,

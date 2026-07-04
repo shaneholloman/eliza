@@ -50,6 +50,8 @@ async function readJsonBody(
       ? (parsed as Record<string, unknown>)
       : null;
   } catch {
+    // error-policy:J3 sanitizing boundary — an unparseable body is treated as
+    // "no valid body" (null); the caller rejects the missing field with a 400.
     return null;
   }
 }
@@ -109,6 +111,23 @@ function metadataToStatus(
   };
 }
 
+/**
+ * Error thrown by {@link validateToken}, carrying the HTTP status the route
+ * should return. `status: 400` means the submitted token is bad (the caller's
+ * fault); `status: 502` means GitHub itself was unreachable or misbehaved (an
+ * upstream fault) — the route must not collapse the two into one code.
+ */
+class TokenValidationError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "TokenValidationError";
+  }
+}
+
 async function validateToken(
   token: string,
   fetchImpl: typeof fetch,
@@ -125,27 +144,57 @@ async function validateToken(
       },
       signal: controller.signal,
     })) as GitHubValidationResponse;
+  } catch (err) {
+    // error-policy:J2 context-adding rethrow — a network failure or the
+    // validation timeout aborting the request is an upstream-reachability
+    // problem, not a bad token, so it rethrows typed as 502 with the cause.
+    throw new TokenValidationError(
+      "Could not reach GitHub to validate the token. Try again.",
+      502,
+      { cause: err },
+    );
   } finally {
     clearTimeout(timer);
   }
 
   if (response.status === 401) {
-    throw new Error("Token rejected by GitHub: bad credentials.");
+    throw new TokenValidationError(
+      "Token rejected by GitHub: bad credentials.",
+      400,
+    );
   }
   if (response.status === 403) {
-    throw new Error(
+    throw new TokenValidationError(
       "Token rejected by GitHub: forbidden. Check the token has at least `read:user` scope.",
+      400,
     );
   }
   if (!response.ok) {
-    throw new Error(
+    // A non-401/403 status is GitHub failing, not the token being invalid.
+    throw new TokenValidationError(
       `GitHub returned ${response.status} validating the token. Try again or generate a new token.`,
+      502,
     );
   }
 
-  const body = (await response.json()) as GitHubUserResponse;
+  let body: GitHubUserResponse;
+  try {
+    body = (await response.json()) as GitHubUserResponse;
+  } catch (err) {
+    // error-policy:J2 context-adding rethrow — a 2xx with an unparseable body is
+    // GitHub misbehaving, the same upstream fault class as the missing-login
+    // check below, so it surfaces as 502, not a token/client error.
+    throw new TokenValidationError(
+      "GitHub /user response was not valid JSON.",
+      502,
+      { cause: err },
+    );
+  }
   if (typeof body?.login !== "string" || body.login.length === 0) {
-    throw new Error("GitHub /user response was missing the login field.");
+    throw new TokenValidationError(
+      "GitHub /user response was missing the login field.",
+      502,
+    );
   }
 
   const scopesHeader = response.headers.get("x-oauth-scopes") ?? "";
@@ -176,9 +225,17 @@ async function handlePostToken(ctx: GitHubRouteContext): Promise<boolean> {
   try {
     validated = await validateToken(token, fetchImpl);
   } catch (err) {
+    // error-policy:J1 boundary translation — a bad token surfaces as 400
+    // (client input), an unreachable/misbehaving GitHub as 502 (upstream);
+    // TokenValidationError carries which. Unexpected error types default to
+    // 500 rather than masquerading as a client error.
+    const status =
+      err instanceof TokenValidationError ? err.status : 500;
     const message = err instanceof Error ? err.message : String(err);
-    logger.warn(`[github-routes] token validation failed: ${message}`);
-    sendJson(ctx, 400, { error: message });
+    logger.warn(
+      `[github-routes] token validation failed (${status}): ${message}`,
+    );
+    sendJson(ctx, status, { error: message });
     return true;
   }
 

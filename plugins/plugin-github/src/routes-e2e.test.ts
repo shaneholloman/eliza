@@ -302,6 +302,84 @@ describe("plugin-github routes (real dispatch)", () => {
     expect(await loadMetadata()).toBeNull();
   });
 
+  it("maps a GitHub upstream failure to 502, not a client 400", async () => {
+    // A 5xx from GitHub means GitHub is failing, not that the token is invalid.
+    // The route must surface that as an upstream error (502) so the client is
+    // told to retry rather than being blamed for a bad token.
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const target = typeof input === "string" ? input : String(input);
+      if (target !== "https://api.github.com/user") {
+        return realFetch(input, init);
+      }
+      return new Response("upstream boom", { status: 503 });
+    }) as typeof fetch;
+
+    const base = await startServer();
+    const res = await rawPost(
+      base,
+      "text/plain",
+      JSON.stringify({ token: "ghp_upstream_down" }),
+    );
+    expect(res.status).toBe(502);
+    // A transient upstream failure never persists a credential.
+    expect(await loadMetadata()).toBeNull();
+  });
+
+  it("maps a 2xx GitHub response with an unparseable body to 502, not 500", async () => {
+    // GitHub returning 200 with a non-JSON body is the same upstream-defect
+    // class as a missing login field — an upstream error (502), not an internal
+    // server error (500) and not a bad-token 400.
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const target = typeof input === "string" ? input : String(input);
+      if (target !== "https://api.github.com/user") {
+        return realFetch(input, init);
+      }
+      return new Response("<html>not json</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    }) as typeof fetch;
+
+    const base = await startServer();
+    const res = await rawPost(
+      base,
+      "text/plain",
+      JSON.stringify({ token: "ghp_bad_body" }),
+    );
+    expect(res.status).toBe(502);
+    expect(await loadMetadata()).toBeNull();
+  });
+
+  it("maps a network failure reaching GitHub to 502, not a client 400", async () => {
+    // A thrown fetch (DNS/connection failure) is an upstream-reachability
+    // problem; it must not be reported as a 400 bad token.
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const target = typeof input === "string" ? input : String(input);
+      if (target !== "https://api.github.com/user") {
+        return realFetch(input, init);
+      }
+      throw new Error("ECONNREFUSED");
+    }) as typeof fetch;
+
+    const base = await startServer();
+    const res = await rawPost(
+      base,
+      "text/plain",
+      JSON.stringify({ token: "ghp_no_route" }),
+    );
+    expect(res.status).toBe(502);
+    expect(await loadMetadata()).toBeNull();
+  });
+
   it("validates, persists, and reports a good token end to end (200)", async () => {
     globalThis.fetch = (async (
       input: RequestInfo | URL,

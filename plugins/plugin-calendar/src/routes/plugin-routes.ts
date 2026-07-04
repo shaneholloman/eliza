@@ -125,6 +125,10 @@ async function resolveCalendarService(
     const loaded = await runtime.getServiceLoadPromise(CALENDAR_SERVICE_TYPE);
     return isCalendarRouteService(loaded) ? loaded : null;
   } catch (error) {
+    // error-policy:J2 context-adding rethrow — a service-load failure is
+    // reported and rethrown as a typed ElizaError with the cause preserved;
+    // the route layer maps this to a 503 (distinct from a genuinely absent
+    // service, which returns null above without loading).
     runtime.reportError?.("CalendarRoutes.serviceLoad", error, {
       serviceType: CALENDAR_SERVICE_TYPE,
     });
@@ -266,6 +270,9 @@ async function runCalendarRoute(
     await fn(service);
     return true;
   } catch (error) {
+    // error-policy:J1 boundary translation — typed CalendarServiceError maps to
+    // its carried status; any other error is logged and rethrown to the outer
+    // server handler as a 5xx rather than being masked as a route success.
     if (error instanceof CalendarServiceError) {
       const logFn =
         error.status === 401

@@ -125,6 +125,49 @@ function serializeFireResult(
   }
 }
 
+/**
+ * Verb-precondition failures the runner throws as plain `Error` with a
+ * `<verb>: <reason>` prefix. These are caller-driven — the requested operation
+ * does not apply to the task's current state (e.g. reopening a non-terminal
+ * task, snoozing without a duration, editing a read-only field) — so they are
+ * a 409 conflict, not a 500. Kept as a message-prefix match because the runner
+ * does not yet throw typed errors for these; anything NOT matching stays a 500
+ * so a genuine store/transport failure is never downgraded.
+ */
+const RUNNER_INVALID_OPERATION_RE =
+  /^(snooze|skip|complete|dismiss|escalate|acknowledge|edit|reopen): /;
+
+/**
+ * Map a thrown `runner.fireWithResult`/`runner.apply` error to the route's
+ * status contract. The runner distinguishes shapes that must NOT all collapse
+ * to one client-error code:
+ *  - `ScheduledTaskValidationError`/`ChannelKeyError` — malformed task input
+ *    → 400 (J3 sanitized-input boundary).
+ *  - `<op>: task <id> not found` — the addressed task does not exist → 404.
+ *  - a verb-precondition failure (`<verb>: <reason>`) — the operation does not
+ *    apply to the task's current state → 409 conflict.
+ *  - anything else (transport/runtime/wiring failure) → 500, never masked as a
+ *    client error.
+ * Returning 400 for all of these (the prior behaviour) hid runner failures
+ * behind a "bad request" the client cannot act on.
+ */
+function classifyRunnerError(err: unknown): { status: number; message: string } {
+  const message = err instanceof Error ? err.message : String(err);
+  if (
+    err instanceof ScheduledTaskValidationError ||
+    err instanceof ChannelKeyError
+  ) {
+    return { status: 400, message };
+  }
+  if (err instanceof Error && /\btask .* not found\b/.test(err.message)) {
+    return { status: 404, message };
+  }
+  if (err instanceof Error && RUNNER_INVALID_OPERATION_RE.test(err.message)) {
+    return { status: 409, message };
+  }
+  return { status: 500, message };
+}
+
 function matchTaskHistory(pathname: string): { id: string } | null {
   const m = /^\/api\/lifeops\/scheduled-tasks\/([^/]+)\/history\/?$/.exec(
     pathname,
@@ -271,6 +314,9 @@ export function makeScheduledTasksRouteHandler(
         );
         json(res, { task }, 201);
       } catch (err) {
+        // error-policy:J1 boundary translation — only malformed task input
+        // degrades to 400; a genuine runner failure rethrows to the outer
+        // server handler as a 5xx rather than being masked here.
         if (
           err instanceof ScheduledTaskValidationError ||
           err instanceof ChannelKeyError
@@ -336,15 +382,11 @@ export function makeScheduledTasksRouteHandler(
         });
         json(res, { task, fire: serializeFireResult(result) }, 201);
       } catch (err) {
-        if (
-          err instanceof ScheduledTaskValidationError ||
-          err instanceof ChannelKeyError
-        ) {
-          error(res, err.message, 400);
-          return true;
-        }
-        const msg = err instanceof Error ? err.message : String(err);
-        error(res, msg, 400);
+        // error-policy:J1 boundary translation — malformed input → 400,
+        // not-found → 404, and a genuine schedule/fire failure → 500 instead
+        // of the prior blanket 400 that hid runner failures from the tester.
+        const { status, message } = classifyRunnerError(err);
+        error(res, message, status);
       }
       return true;
     }
@@ -366,8 +408,10 @@ export function makeScheduledTasksRouteHandler(
           });
           json(res, { fire: serializeFireResult(result) });
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          error(res, msg, 400);
+          // error-policy:J1 boundary translation — distinguish not-found (404)
+          // and runner failure (500) from client input error (400).
+          const { status, message } = classifyRunnerError(err);
+          error(res, message, status);
         }
         return true;
       }
@@ -422,8 +466,10 @@ export function makeScheduledTasksRouteHandler(
             );
             json(res, { task: updated });
           } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            error(res, msg, 400);
+            // error-policy:J1 boundary translation — not-found → 404, runner
+            // failure → 500; only malformed input degrades to 400.
+            const { status, message } = classifyRunnerError(err);
+            error(res, message, status);
           }
           return true;
         }

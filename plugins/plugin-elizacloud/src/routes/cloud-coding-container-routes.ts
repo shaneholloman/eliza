@@ -154,6 +154,9 @@ async function readJsonBody(
   try {
     parsed = JSON.parse(raw) as unknown;
   } catch {
+    // error-policy:J3 sanitizing boundary — an unparseable request body is an
+    // explicit 400 the caller maps to invalid input; null signals "already
+    // responded" to the handler.
     sendJsonError(res, "Invalid JSON body", 400);
     return null;
   }
@@ -171,6 +174,9 @@ async function sendServiceResponse(
   try {
     sendJson(res, await fn());
   } catch (error) {
+    // error-policy:J1 boundary translation — a typed error's carried statusCode
+    // is honoured, otherwise the failure surfaces as a 500; the route never
+    // fabricates a success payload on error.
     const status =
       typeof (error as { statusCode?: unknown })?.statusCode === "number"
         ? (error as { statusCode: number }).statusCode

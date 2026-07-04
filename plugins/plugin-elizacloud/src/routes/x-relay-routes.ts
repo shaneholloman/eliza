@@ -64,6 +64,10 @@ function buildAuthHeaders(
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
+  // error-policy:J3 sanitizing boundary — a non-JSON upstream body yields an
+  // explicit error-shaped result (`success` mirrors the HTTP status, `error`
+  // carries the raw text) rather than a fabricated valid payload; the caller
+  // forwards the upstream status alongside it, so the failure stays visible.
   return response.json().catch(async () => ({
     success: response.ok,
     error: await response.text().catch(() => "X relay request failed"),
@@ -140,6 +144,9 @@ export async function handleXRelayRoute(
   if (upstreamResponse.status === 402) {
     const wwwAuth = upstreamResponse.headers.get("www-authenticate");
     const contentType = upstreamResponse.headers.get("content-type");
+    // error-policy:J6 best-effort — the 402 challenge is defined by the
+    // WWW-Authenticate header and status, both already forwarded; a body-read
+    // failure only loses optional detail, so an empty body is acceptable here.
     const bodyText = await upstreamResponse.text().catch(() => "");
     if (wwwAuth) {
       res.setHeader("WWW-Authenticate", wwwAuth);

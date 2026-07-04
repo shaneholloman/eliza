@@ -20,6 +20,7 @@ import {
   registerBuiltInCompletionChecks,
   registerBuiltInGates,
   registerDefaultEscalationLadders,
+  type ScheduledTask,
   type ScheduledTaskRunnerHandle,
   TestNoopScheduledTaskDispatcher,
 } from "../scheduled-task/index.js";
@@ -282,7 +283,7 @@ describe("scheduled-tasks REST handler", () => {
     expect(payload.fire.task.state.status).toBe("fired");
   });
 
-  it("POST /:id/fire on an unknown task id does not fire and reports it (never a false 'fired')", async () => {
+  it("POST /:id/fire on an unknown task id reports 404, never a false 'fired'", async () => {
     const runner = makeRunner();
     const handler = makeScheduledTasksRouteHandler({
       resolveRunner: async () => runner,
@@ -292,14 +293,78 @@ describe("scheduled-tasks REST handler", () => {
       pathname: "/api/lifeops/scheduled-tasks/does-not-exist/fire",
     });
     await handler(ctx);
-    // Either a 400 error or a typed non-"fired" outcome is acceptable; a false
-    // "fired" for a missing row is not.
-    if (res.statusCode === 200) {
-      const payload = JSON.parse(res.body ?? "{}");
-      expect(payload.fire.kind).not.toBe("fired");
-    } else {
-      expect(res.statusCode).toBe(400);
-    }
+    // A missing row is a not-found, not a client bad-request: the runner throws
+    // `fire: task <id> not found`, which the route maps to 404 (never a false
+    // "fired" and never a misleading 400).
+    expect(res.statusCode).toBe(404);
+    const payload = JSON.parse(res.body ?? "{}");
+    expect(payload.error).toMatch(/not found/);
+  });
+
+  it("POST /:id/<verb> on an unknown task id reports 404 (apply not-found is distinct from bad input)", async () => {
+    const runner = makeRunner();
+    const handler = makeScheduledTasksRouteHandler({
+      resolveRunner: async () => runner,
+    });
+    const { ctx, res } = buildCtx({
+      method: "POST",
+      pathname: "/api/lifeops/scheduled-tasks/does-not-exist/complete",
+    });
+    await handler(ctx);
+    expect(res.statusCode).toBe(404);
+    const payload = JSON.parse(res.body ?? "{}");
+    expect(payload.error).toMatch(/not found/);
+  });
+
+  it("POST /:id/reopen on a non-terminal task is a 409 conflict, not 400 or 500", async () => {
+    // Reopening a task that is not in a terminal state is a caller error about
+    // the resource's current state (the runner throws `reopen: ... not in a
+    // terminal state`), which maps to 409 — not a masked 400 and not a 500.
+    const runner = makeRunner();
+    const handler = makeScheduledTasksRouteHandler({
+      resolveRunner: async () => runner,
+    });
+    const scheduled = await runner.schedule({
+      kind: "reminder",
+      promptInstructions: "still scheduled",
+      trigger: { kind: "manual" },
+      priority: "low",
+      respectsGlobalPause: true,
+      source: "user_chat",
+      createdBy: "tester",
+      ownerVisible: true,
+    } as Omit<ScheduledTask, "taskId" | "state">);
+    const { ctx, res } = buildCtx({
+      method: "POST",
+      pathname: `/api/lifeops/scheduled-tasks/${scheduled.taskId}/reopen`,
+    });
+    await handler(ctx);
+    expect(res.statusCode).toBe(409);
+    const payload = JSON.parse(res.body ?? "{}");
+    expect(payload.error).toMatch(/terminal state/);
+  });
+
+  it("POST /:id/fire surfaces a genuine runner failure as 500, not 400", async () => {
+    // A runner whose fire path throws a non-typed internal error must reach the
+    // caller as a server failure (500), not be masked as a client 400.
+    const runner = makeRunner();
+    const failing: ScheduledTaskRunnerHandle = {
+      ...runner,
+      fireWithResult: async () => {
+        throw new Error("transport exploded");
+      },
+    };
+    const handler = makeScheduledTasksRouteHandler({
+      resolveRunner: async () => failing,
+    });
+    const { ctx, res } = buildCtx({
+      method: "POST",
+      pathname: "/api/lifeops/scheduled-tasks/some-id/fire",
+    });
+    await handler(ctx);
+    expect(res.statusCode).toBe(500);
+    const payload = JSON.parse(res.body ?? "{}");
+    expect(payload.error).toMatch(/transport exploded/);
   });
 
   it("POST /test-probe seeds a due-now reminder and fires it in one call", async () => {

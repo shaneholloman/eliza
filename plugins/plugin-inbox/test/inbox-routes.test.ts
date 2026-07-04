@@ -3,10 +3,12 @@
  * InboxService and queue-operation dispatch mocked out (see the real-runtime
  * suite for end-to-end route coverage). Deterministic — no live model or DB.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const executeInboxQueueOperation = vi.fn();
 
 vi.mock("../src/actions/inbox.ts", () => ({
-  executeInboxQueueOperation: vi.fn(),
+  executeInboxQueueOperation,
 }));
 
 vi.mock("../src/inbox/service.ts", () => ({
@@ -48,5 +50,60 @@ describe("inbox HTTP routes", () => {
       status: 403,
       body: { ok: false, error: "Inbox routes are owner-only" },
     });
+  });
+});
+
+describe("inbox operation error mapping", () => {
+  beforeEach(() => {
+    executeInboxQueueOperation.mockReset();
+  });
+
+  async function runReply(): Promise<
+    { status?: number; body?: { ok?: boolean; error?: string } } | undefined
+  > {
+    const { inboxRoutes } = await import("../src/routes/inbox-routes.ts");
+    const route = inboxRoutes.find(
+      (candidate) =>
+        candidate.type === "POST" &&
+        candidate.path === "/api/lifeops/inbox/:id/reply",
+    );
+    return route?.routeHandler?.(
+      makeContext({
+        method: "POST",
+        path: "/api/lifeops/inbox/entry-1/reply",
+        params: { id: "entry-1" },
+        isTrustedLocal: true,
+      }),
+    ) as Promise<
+      { status?: number; body?: { ok?: boolean; error?: string } } | undefined
+    >;
+  }
+
+  it("maps a not-found entry to 404 (distinct from bad input)", async () => {
+    executeInboxQueueOperation.mockRejectedValueOnce(
+      new Error("inbox entry entry-1 was not found"),
+    );
+    const result = await runReply();
+    expect(result?.status).toBe(404);
+    expect(result?.body?.error).toMatch(/was not found/);
+  });
+
+  it("maps a malformed-input failure to 400", async () => {
+    executeInboxQueueOperation.mockRejectedValueOnce(
+      new Error("reply body is required"),
+    );
+    const result = await runReply();
+    expect(result?.status).toBe(400);
+  });
+
+  it("surfaces a genuine operation failure as 500, not 400", async () => {
+    // A repository/dispatch failure must reach the caller as a server error,
+    // not be masked behind a client 400 the caller cannot act on.
+    executeInboxQueueOperation.mockRejectedValueOnce(
+      new Error("database connection lost"),
+    );
+    const result = await runReply();
+    expect(result?.status).toBe(500);
+    expect(result?.body?.error).toMatch(/database connection lost/);
   });
 });
