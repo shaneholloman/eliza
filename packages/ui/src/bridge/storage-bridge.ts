@@ -81,6 +81,10 @@ const SYNCED_KEYS = new Set([
   "eliza:ios-full-bun-smoke:result",
   "eliza:ios-onboarding-smoke:request",
   "eliza:ios-onboarding-smoke:result",
+  "eliza:ios-onboarding-relaunch-smoke:request",
+  "eliza:ios-onboarding-relaunch-smoke:result",
+  "eliza:ios-mixed-content-smoke:request",
+  "eliza:ios-mixed-content-smoke:result",
   "eliza:ios-attachment-smoke:request",
   "eliza:ios-attachment-smoke:result",
   // Harness wallet for zero-interaction SIWE e2e (#13377): device harnesses
