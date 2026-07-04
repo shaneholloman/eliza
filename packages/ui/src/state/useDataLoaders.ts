@@ -328,12 +328,7 @@ export function useDataLoaders(deps: DataLoadersDeps) {
       const normalized = normalizeConversationList(c);
       setConversations(normalized);
       return normalized;
-    } catch (err) {
-      // error-policy:J4 `null` is this loader's explicit failure signal —
-      // callers keep the previously-rendered list rather than blanking it, and
-      // the log keeps a broken conversations endpoint observable (never
-      // conflated with an empty list, which returns `[]`).
-      logger.error({ err }, "[useDataLoaders] listConversations failed");
+    } catch {
       return null;
     }
   }, [setConversations]);
@@ -383,17 +378,16 @@ export function useDataLoaders(deps: DataLoadersDeps) {
         }
         const status = (err as { status?: number }).status;
         if (status === 404) {
-          // error-policy:J4 refresh-after-404 failure keeps the stale list (a
-          // later successful load corrects it) and still deactivates the gone
-          // conversation below; the overall load reports `{ ok: false }` so
-          // the failure is not silent. The warn keeps the refresh failure
-          // itself observable.
+          // error-policy:J4 the 404 already settled the thread's fate (gone);
+          // this refresh only re-syncs the sidebar list. Its failure degrades to
+          // the stale list + cleared selection below — logged so a broken
+          // list endpoint is not silent.
           const refreshed = await client
             .listConversations()
             .catch((refreshErr: unknown) => {
               logger.warn(
                 { err: refreshErr },
-                "[useDataLoaders] conversation list refresh after 404 failed",
+                "[useDataLoaders] conversation-list refresh after 404 failed",
               );
               return null;
             });

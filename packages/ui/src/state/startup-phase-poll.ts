@@ -62,7 +62,6 @@ function isCapacitorNative(): boolean {
       | undefined;
     return Boolean(cap?.isNativePlatform?.());
   } catch {
-    // error-policy:J3 an exotic host global shape reads as "not native".
     return false;
   }
 }
@@ -195,7 +194,6 @@ export function isRecoverableRemoteBase(args: {
       }
     }
   } catch {
-    // error-policy:J3 malformed client base URL fails closed (no recovery).
     return false;
   }
   return true;
@@ -412,8 +410,6 @@ export async function runPollingBackend(
       return readMobileRuntimeBuildTruth(isAndroid ? "android" : "ios")
         .hasLocalEngine;
     } catch {
-      // error-policy:J3 unreadable build truth fails closed — never flip the
-      // runtime mode to an on-device engine we cannot prove is shipped.
       return false;
     }
   };
@@ -473,7 +469,6 @@ export async function runPollingBackend(
     try {
       return new URL(base).origin === window.location.origin;
     } catch {
-      // error-policy:J3 malformed client base URL reads as not-same-origin.
       return false;
     }
   };
@@ -715,16 +710,9 @@ export async function runPollingBackend(
           try {
             const [options, config] = await Promise.all([
               client.getFirstRunOptions(),
-              // error-policy:J4 config only prefills first-run resume fields;
-              // options succeeding while config fails degrades to a blank
-              // resume — warn so the asymmetry stays observable.
-              client.getConfig().catch((err: unknown) => {
-                logger.warn(
-                  { err },
-                  "[startup-phase-poll] getConfig failed while first-run options loaded",
-                );
-                return null;
-              }),
+              // error-policy:J4 config only pre-fills resume fields; the
+              // required options fetch fails loudly via the loop's deadline
+              client.getConfig().catch(() => null),
             ]);
             // The effect may have been torn down (unmount / re-run) while the
             // fetch was in flight — bail before mutating state or dispatching,

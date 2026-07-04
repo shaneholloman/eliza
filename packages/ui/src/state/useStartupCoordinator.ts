@@ -86,9 +86,6 @@ export async function recoverTerminalStartupError(
   try {
     status = await client.getStatus();
   } catch {
-    // error-policy:J4 recovery probe — a failed status check means the
-    // terminal startup error cannot be cleared; the visible error state the
-    // caller already rendered stays up, so nothing is swallowed.
     return false;
   }
   if (cancelled.current || status.state !== "running") return false;
@@ -98,8 +95,6 @@ export async function recoverTerminalStartupError(
     const firstRunStatus = await client.getFirstRunStatus();
     firstRunComplete = firstRunComplete || firstRunStatus.complete === true;
   } catch {
-    // error-policy:J4 recovery probe — without a first-run answer recovery
-    // cannot be declared; the existing startup error state remains visible.
     return false;
   }
   if (cancelled.current) return false;
@@ -218,17 +213,15 @@ export function useStartupCoordinator(
     // local-agent transports stay policy-locked and boot hangs. No-op on
     // web/desktop and whenever the persisted mode is still usable.
     reconcilePersistedMobileRuntimeModeAtBoot();
-    // A rejection escaping the phase runner would otherwise wedge boot in this
-    // phase forever — route it into the machine's visible error state.
+    // error-policy:J5 expected failures are dispatched to the state machine
+    // inside the runner; this catch only keeps an unexpected runner bug from
+    // becoming an unhandled rejection, logged so a wedged boot phase is
+    // diagnosable instead of silent.
     runRestoringSession(d, dispatch, _ctx, cancelled).catch((err: unknown) => {
-      logger.error({ err }, "[useStartupCoordinator] restore phase crashed");
-      if (!cancelled.current) {
-        dispatch({
-          type: "AGENT_ERROR",
-          message:
-            err instanceof Error ? err.message : "Session restore failed",
-        });
-      }
+      logger.error(
+        { err },
+        "[useStartupCoordinator] restoring-session phase runner threw",
+      );
     });
 
     return () => {
@@ -262,16 +255,12 @@ export function useStartupCoordinator(
       cancelled,
       tidRef,
     ).catch((err: unknown) => {
-      // Same rationale as the restore phase: an escaped rejection must reach
-      // the visible error state, not silently stall the poll.
-      logger.error({ err }, "[useStartupCoordinator] backend poll crashed");
-      if (!cancelled.current) {
-        dispatch({
-          type: "AGENT_ERROR",
-          message:
-            err instanceof Error ? err.message : "Backend polling failed",
-        });
-      }
+      // error-policy:J5 expected failures are dispatched to the state machine
+      // inside the runner; log unexpected runner bugs instead of dropping them.
+      logger.error(
+        { err },
+        "[useStartupCoordinator] polling-backend phase runner threw",
+      );
     });
 
     return () => {
@@ -306,15 +295,12 @@ export function useStartupCoordinator(
       tidRef,
       startingRuntimeTarget,
     ).catch((err: unknown) => {
-      // Same rationale as the restore phase: an escaped rejection must reach
-      // the visible error state, not leave the runtime "starting" forever.
-      logger.error({ err }, "[useStartupCoordinator] runtime start crashed");
-      if (!cancelled.current) {
-        dispatch({
-          type: "AGENT_ERROR",
-          message: err instanceof Error ? err.message : "Runtime start failed",
-        });
-      }
+      // error-policy:J5 expected failures are dispatched to the state machine
+      // inside the runner; log unexpected runner bugs instead of dropping them.
+      logger.error(
+        { err },
+        "[useStartupCoordinator] starting-runtime phase runner threw",
+      );
     });
 
     return () => {
