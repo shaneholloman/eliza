@@ -4,11 +4,12 @@
  * Real rooms are not clean. The corpus generator produces dry speech; this
  * module degrades it the way a microphone actually hears it: additive room
  * noise at a target SNR, reverberation (near vs far), far-field attenuation,
- * a low-quality/telephone line, and competing background talkers. Every
- * function is PURE and DETERMINISTIC (seeded PRNG, no `Math.random`, no I/O), so
- * the same scenario + seed always yields byte-identical audio — a labeled,
- * reproducible corpus the real ASR/diarization/EOT models can be benchmarked
- * against, and the DSP itself is unit-testable in CI with no models.
+ * a low-quality/telephone line, compression/clip/dropout artifacts, and
+ * competing background talkers. Every function is PURE and DETERMINISTIC
+ * (seeded PRNG, no `Math.random`, no I/O), so the same scenario + seed always
+ * yields byte-identical audio — a labeled, reproducible corpus the real
+ * ASR/diarization/EOT models can be benchmarked against, and the DSP itself is
+ * unit-testable in CI with no models.
  *
  * Layering: this module knows nothing about scenarios. It operates on mono
  * `Float32Array` PCM at a given sample rate. `corpus-generator.ts` translates a
@@ -337,6 +338,59 @@ export function mixInto(
 	return out;
 }
 
+export function applyClipping(
+	pcm: Float32Array,
+	threshold: number,
+): Float32Array {
+	const clip = Math.max(0.01, Math.min(1, Math.abs(threshold)));
+	const out = new Float32Array(pcm.length);
+	for (let i = 0; i < pcm.length; i++) {
+		out[i] = Math.max(-clip, Math.min(clip, pcm[i]));
+	}
+	return out;
+}
+
+export function applyCompressionArtifacts(
+	pcm: Float32Array,
+	amount: number,
+): Float32Array {
+	const severity = Math.max(0, Math.min(1, amount));
+	if (severity === 0) return Float32Array.from(pcm);
+	const bits = Math.max(4, Math.round(16 - severity * 10));
+	const levels = 2 ** (bits - 1) - 1;
+	const hold = Math.max(1, Math.round(severity * 4));
+	const out = new Float32Array(pcm.length);
+	let held = 0;
+	for (let i = 0; i < pcm.length; i++) {
+		if (i % hold === 0) {
+			const clipped = Math.max(-1, Math.min(1, pcm[i]));
+			held = Math.round(clipped * levels) / levels;
+		}
+		out[i] = held;
+	}
+	return out;
+}
+
+export function applyPacketDropouts(
+	pcm: Float32Array,
+	sampleRate: number,
+	opts: { probability: number; dropoutMs?: number; seed?: number },
+): Float32Array {
+	const probability = Math.max(0, Math.min(1, opts.probability));
+	const windowSamples = Math.max(
+		1,
+		Math.round(((opts.dropoutMs ?? 35) / 1000) * sampleRate),
+	);
+	const rng = mulberry32(opts.seed ?? 0xd00d);
+	const out = Float32Array.from(pcm);
+	for (let start = 0; start < out.length; start += windowSamples) {
+		if (rng() > probability) continue;
+		const end = Math.min(out.length, start + windowSamples);
+		for (let i = start; i < end; i++) out[i] = 0;
+	}
+	return out;
+}
+
 /** Declarative degradation for one stream (the scenario's `environment`). */
 export interface AugmentationSpec {
 	/** Additive room-noise SNR (dB) relative to voiced speech. Lower = noisier. */
@@ -351,6 +405,14 @@ export interface AugmentationSpec {
 	farFieldDb?: number;
 	/** Band-limit + 8-bit companding (telephone / cheap-mic line). */
 	lowQuality?: boolean;
+	/** Hard clip to +/- this absolute amplitude. */
+	clipThreshold?: number;
+	/** Quantization/sample-hold compression artifact severity, 0..1. */
+	compressionArtifacts?: number;
+	/** Probability that each packet-sized window is zeroed, 0..1. */
+	dropoutProbability?: number;
+	/** Dropout window size in ms (default 35). */
+	dropoutMs?: number;
 	/** Competing background talkers, mixed this many dB BELOW the speech. */
 	backgroundTalkersDb?: number;
 	/** Deterministic seed for noise/babble. */
@@ -365,6 +427,9 @@ export function specIsClean(spec: AugmentationSpec | undefined): boolean {
 		spec.reverb === undefined &&
 		spec.farFieldDb === undefined &&
 		!spec.lowQuality &&
+		spec.clipThreshold === undefined &&
+		spec.compressionArtifacts === undefined &&
+		spec.dropoutProbability === undefined &&
 		spec.backgroundTalkersDb === undefined
 	);
 }
@@ -423,12 +488,31 @@ export function augmentPcm(
 		out = applyLowQualityLine(out, sampleRate);
 	}
 
+	if (
+		spec.compressionArtifacts !== undefined &&
+		spec.compressionArtifacts > 0
+	) {
+		out = applyCompressionArtifacts(out, spec.compressionArtifacts);
+	}
+
+	if (spec.dropoutProbability !== undefined && spec.dropoutProbability > 0) {
+		out = applyPacketDropouts(out, sampleRate, {
+			probability: spec.dropoutProbability,
+			...(spec.dropoutMs !== undefined ? { dropoutMs: spec.dropoutMs } : {}),
+			...(spec.seed !== undefined ? { seed: spec.seed } : {}),
+		});
+	}
+
 	if (spec.noiseSnrDb !== undefined) {
 		out = addNoise(out, {
 			snrDb: spec.noiseSnrDb,
 			...(spec.noiseKind ? { kind: spec.noiseKind } : {}),
 			...(spec.seed !== undefined ? { seed: spec.seed } : {}),
 		});
+	}
+
+	if (spec.clipThreshold !== undefined) {
+		out = applyClipping(out, spec.clipThreshold);
 	}
 
 	// Defensive de-clip: degradation chains can briefly exceed [-1, 1].

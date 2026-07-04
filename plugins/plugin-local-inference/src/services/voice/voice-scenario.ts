@@ -306,6 +306,36 @@ function validateEnvironment(
 	) {
 		errors.push(`${where}.backgroundTalkersDb must be a finite number`);
 	}
+	if (
+		env.clipThreshold !== undefined &&
+		(!Number.isFinite(env.clipThreshold) ||
+			env.clipThreshold <= 0 ||
+			env.clipThreshold > 1)
+	) {
+		errors.push(`${where}.clipThreshold must be in (0, 1]`);
+	}
+	if (
+		env.compressionArtifacts !== undefined &&
+		(!Number.isFinite(env.compressionArtifacts) ||
+			env.compressionArtifacts < 0 ||
+			env.compressionArtifacts > 1)
+	) {
+		errors.push(`${where}.compressionArtifacts must be in [0, 1]`);
+	}
+	if (
+		env.dropoutProbability !== undefined &&
+		(!Number.isFinite(env.dropoutProbability) ||
+			env.dropoutProbability < 0 ||
+			env.dropoutProbability > 1)
+	) {
+		errors.push(`${where}.dropoutProbability must be in [0, 1]`);
+	}
+	if (
+		env.dropoutMs !== undefined &&
+		(!Number.isFinite(env.dropoutMs) || env.dropoutMs <= 0)
+	) {
+		errors.push(`${where}.dropoutMs must be a positive number`);
+	}
 }
 
 /** Merge a turn's environment over the scenario's (turn wins, field by field). */
