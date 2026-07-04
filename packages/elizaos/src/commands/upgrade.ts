@@ -8,6 +8,7 @@ import pc from "picocolors";
 import { getTemplateById, getTemplatesDir } from "../manifest.js";
 import { getCliVersion } from "../package-info.js";
 import {
+  ProjectMetadataError,
   readProjectMetadata,
   writeProjectMetadata,
 } from "../project-metadata.js";
@@ -26,7 +27,18 @@ import type { UpgradeOptions } from "../types.js";
 
 export async function upgrade(options: UpgradeOptions): Promise<void> {
   const projectRoot = process.cwd();
-  const metadata = readProjectMetadata(projectRoot);
+  let metadata: ReturnType<typeof readProjectMetadata>;
+  try {
+    metadata = readProjectMetadata(projectRoot);
+  } catch (error) {
+    // J1 command boundary: corrupt required metadata must fail closed with a
+    // clear message and non-zero exit, never proceed on fabricated defaults.
+    if (error instanceof ProjectMetadataError) {
+      clack.cancel(error.message);
+      process.exit(1);
+    }
+    throw error;
+  }
   if (!metadata) {
     clack.cancel(
       "No .elizaos/template.json metadata found in the current directory.",
