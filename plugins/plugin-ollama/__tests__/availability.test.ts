@@ -13,7 +13,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { OllamaModelUnavailableError, ensureModelAvailable } from "../models/availability";
+import { ensureModelAvailable, OllamaModelUnavailableError } from "../models/availability";
 
 function okResponse(): Response {
   return { ok: true, status: 200, statusText: "OK" } as Response;
@@ -32,9 +32,9 @@ describe("ensureModelAvailable (#12796 bootstrap failure policy)", () => {
     ).resolves.toBeUndefined();
 
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(String((fetcher as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0])).toContain(
-      "/api/show"
-    );
+    expect(
+      String((fetcher as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0])
+    ).toContain("/api/show");
   });
 
   it("throws daemon-unreachable (not 'model absent') when /api/show cannot connect", async () => {
@@ -64,9 +64,9 @@ describe("ensureModelAvailable (#12796 bootstrap failure policy)", () => {
     ).resolves.toBeUndefined();
 
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(String((fetcher as unknown as { mock: { calls: unknown[][] } }).mock.calls[1][0])).toContain(
-      "/api/pull"
-    );
+    expect(
+      String((fetcher as unknown as { mock: { calls: unknown[][] } }).mock.calls[1][0])
+    ).toContain("/api/pull");
   });
 
   it("throws pull-failed (does NOT proceed) when the pull request is rejected by the daemon", async () => {
