@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "bun --bun vite",
     "build": "tsc && bun --bun vite build",
+    "clean": "rm -rf dist",
     "preview": "bun --bun vite preview",
     "start": "node server.js",
     "test": "bun test",

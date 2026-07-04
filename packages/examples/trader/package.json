@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "bun --bun vite",
     "build": "tsc && bun --bun vite build",
+    "clean": "rm -rf dist",
     "preview": "bun --bun vite preview",
     "test": "bun test",
     "lint": "bunx @biomejs/biome check --write --unsafe .",
