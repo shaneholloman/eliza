@@ -4194,7 +4194,15 @@
       "channels": [],
       "shortIds": [],
       "kind": "plugin",
-      "subtype": "ai-provider"
+      "subtype": "ai-provider",
+      "launch": {
+        "type": "server-launch",
+        "capabilities": [],
+        "bootHook": {
+          "specifier": "@elizaos/plugin-local-inference/runtime",
+          "exportName": "registerLocalInferenceBoot"
+        }
+      }
     },
     {
       "id": "local-storage",
