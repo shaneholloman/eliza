@@ -7,7 +7,7 @@
 - The engine now resolves turn detection as:
   1. explicit `opts.turnDetector`
   2. fused `CompositeEotClassifier`
-  3. explicitly enabled `Eliza1EotClassifier`
+  3. available `Eliza1EotClassifier` fallback when `useEliza1Eot` selection is not `off`
   4. `HeuristicEotClassifier`
 - Added classifier-specific commit thresholds:
   - `EOT_FUSED_COMMIT_THRESHOLD = 0.7`
@@ -49,6 +49,11 @@ Additional checks:
 
 ```bash
 bun run --cwd plugins/plugin-local-inference typecheck
+bun run --cwd plugins/plugin-local-inference build
+bun run --cwd packages/shared typecheck
+bun run --cwd packages/shared build:dist
+bun run audit:type-safety-ratchet
+bun run audit:error-policy-ratchet
 bunx @biomejs/biome check <10 changed TypeScript files>
 git diff --check
 ```
@@ -63,6 +68,8 @@ Checked 457 files in 254ms. No fixes applied.
 ```
 
 No changed-file lint issues remain.
+
+Repo-wide `bun run verify` is currently blocked outside this PR: the repo-level CLAUDE/AGENTS check and both ratchets pass, then Turbo stops on unrelated lint failures under `@elizaos/electrobun` / `@elizaos/tui`. Write-mode side effects from that run were restored.
 
 ## Workbench
 
