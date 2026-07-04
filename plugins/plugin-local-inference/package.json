@@ -147,7 +147,6 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.2",
-		"@elizaos/agent": "workspace:*",
 		"@types/node": "24.12.2",
 		"@types/ws": "^8.18.1",
 		"typescript": "^6.0.3",

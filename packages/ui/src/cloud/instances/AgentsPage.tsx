@@ -5,6 +5,7 @@
 import type { AgentListItemDto } from "@elizaos/cloud-shared/lib/types/cloud-api";
 import {
   ContainersSkeleton,
+  DashboardErrorState,
   DashboardLoadingState,
   DashboardPageContainer,
   ElizaAgentsPageWrapper,
@@ -70,32 +71,36 @@ export default function AgentsPage() {
   const creditBalance =
     typeof credits.data?.balance === "number" ? credits.data.balance : null;
   const showSkeleton = enabled && agentsQuery.isLoading;
+  const showAgentsError = enabled && agentsQuery.isError;
 
   return (
     <ElizaAgentsPageWrapper>
       <DashboardPageContainer className="space-y-6">
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2">
-            <span className="inline-block size-2 bg-[var(--accent)]" />
-            <p className="font-mono text-[11px] uppercase tracking-[0.32em] text-white/60">
-              {t("cloud.agents.eyebrow", { defaultValue: "Instances" })}
-            </p>
-          </div>
-          <h1 className="text-xl font-semibold text-white md:text-2xl">
-            {t("cloud.agents.title", { defaultValue: "Instances" })}
-          </h1>
-        </div>
-
-        <ElizaAgentPricingBanner
-          runningCount={runningCount}
-          idleCount={idleCount}
-          creditBalance={creditBalance}
-        />
-
+        {/* Page title is surfaced in the console top bar by
+            ElizaAgentsPageWrapper (DashboardRoutePage title="Instances" →
+            useSetPageHeader). No inline page-level heading here — a second
+            "Instances" title under the top bar read as a double title. */}
         {showSkeleton ? (
           <ContainersSkeleton />
+        ) : showAgentsError ? (
+          <DashboardErrorState
+            message={
+              agentsQuery.error instanceof Error
+                ? agentsQuery.error.message
+                : t("cloud.agents.loadFailed", {
+                    defaultValue: "Failed to load instances",
+                  })
+            }
+          />
         ) : (
-          <ElizaAgentsTable sandboxes={sandboxes} />
+          <>
+            <ElizaAgentPricingBanner
+              runningCount={runningCount}
+              idleCount={idleCount}
+              creditBalance={creditBalance}
+            />
+            <ElizaAgentsTable sandboxes={sandboxes} />
+          </>
         )}
       </DashboardPageContainer>
     </ElizaAgentsPageWrapper>
