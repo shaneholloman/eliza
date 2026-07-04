@@ -32,10 +32,14 @@
     "env": {}
   },
   "scripts": {
-    "lint": "bunx @biomejs/biome check .",
-    "lint:fix": "bunx @biomejs/biome check --write .",
+    "lint": "bunx @biomejs/biome check --write --unsafe .",
+    "lint:check": "bunx @biomejs/biome check .",
+    "lint:fix": "bunx @biomejs/biome check --write --unsafe .",
+    "format": "bunx @biomejs/biome format --write .",
+    "format:check": "bunx @biomejs/biome format .",
     "typecheck": "tsgo --noEmit",
     "build": "node ./scripts/build.mjs",
+    "clean": "rm -rf dist",
     "dev": "bunx pepr dev",
     "deploy:local": "ELIZA_OPERATOR_SKIP_CRD_REGISTER=1 PATH=./scripts:$PATH bunx pepr build && ./scripts/deploy-local.sh"
   },

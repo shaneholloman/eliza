@@ -41,12 +41,13 @@
     "generate": "bun run src/generate.ts",
     "generate:first-party": "bun run src/first-party/generate.ts",
     "generate:first-party:check": "bun run src/first-party/generate.ts --check",
-    "build": "bun run src/generate.ts && bun run src/first-party/generate.ts",
     "typecheck": "tsgo --noEmit -p tsconfig.json",
     "test": "node ../scripts/run-vitest.mjs run --config ./vitest.config.ts",
-    "lint": "bunx @biomejs/biome check src",
-    "lint:fix": "bunx @biomejs/biome check --write src",
-    "format": "bunx @biomejs/biome format src",
+    "lint": "bunx @biomejs/biome check --write --unsafe src",
+    "lint:check": "bunx @biomejs/biome check src",
+    "lint:fix": "bunx @biomejs/biome check --write --unsafe src",
+    "format": "bunx @biomejs/biome format --write src",
+    "format:check": "bunx @biomejs/biome format src",
     "format:fix": "bunx @biomejs/biome format --write src"
   },
   "dependencies": {

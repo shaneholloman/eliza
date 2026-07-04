@@ -1,3 +1,10 @@
+/**
+ * Input normalization for calendar create/update requests plus connector-grant
+ * and time-window derivation. Turns loosely-typed request payloads and provider
+ * grants into validated `LifeOpsCalendarEvent` / window-preset shapes, failing
+ * with `CalendarServiceError` on invalid input. Backs the CALENDAR action and
+ * the service's write path.
+ */
 import {
   type CreateLifeOpsCalendarEventRequest,
   LIFEOPS_CALENDAR_WINDOW_PRESETS,
@@ -14,7 +21,6 @@ import {
 } from "./constants.js";
 import { fail } from "./errors.js";
 import {
-  normalizeFiniteNumber,
   normalizeGoogleCapabilities,
   normalizeIsoString,
   normalizeOptionalBoolean,

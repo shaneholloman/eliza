@@ -1,11 +1,15 @@
+/**
+ * PulseAudio capture path — s16le-to-Float32 conversion and the PulsePcmCapture
+ * parecord lifecycle. Deterministic: a fake spawn plus stream, no PulseAudio.
+ */
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
-  PulsePcmCapture,
-  s16leToFloat32,
   type ChildProcessLike,
+  PulsePcmCapture,
   type SpawnFn,
+  s16leToFloat32,
 } from "../pulse-capture.js";
 
 class FakeChildProcess extends EventEmitter implements ChildProcessLike {
@@ -20,7 +24,9 @@ class FakeChildProcess extends EventEmitter implements ChildProcessLike {
 
 function s16leBuffer(samples: number[]): Buffer {
   const buf = Buffer.alloc(samples.length * 2);
-  samples.forEach((s, i) => buf.writeInt16LE(s, i * 2));
+  samples.forEach((s, i) => {
+    buf.writeInt16LE(s, i * 2);
+  });
   return buf;
 }
 

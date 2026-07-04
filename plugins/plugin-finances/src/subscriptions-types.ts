@@ -1,3 +1,7 @@
+/**
+ * Finance subscription types describe audit results, detected candidates, and
+ * cancellation workflow state.
+ */
 export type LifeOpsSubscriptionAuditStatus = "completed" | "failed";
 
 export type LifeOpsSubscriptionSource = "gmail" | "manual";

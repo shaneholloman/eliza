@@ -1,3 +1,7 @@
+/**
+ * Screen-time range helpers: label formatting, current and prior window
+ * computation, and history-day enumeration for a given range key.
+ */
 import type { LifeOpsScreenTimeRangeKey } from "../contracts/lifeops.js";
 
 export interface ScreenTimeWindow {
@@ -20,6 +24,18 @@ function addDays(date: Date, days: number): Date {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
   return next;
+}
+
+// The day key must come from the LOCAL calendar date, not toISOString():
+// local midnight in any UTC+ timezone maps to the previous UTC date, which
+// would shift every history bucket back a day (e.g. Tokyo 2026-06-01T00:00
+// local is 2026-05-31T15:00Z).
+function localDateKey(date: Date): string {
+  return `${date.getFullYear().toString().padStart(4, "0")}-${(
+    date.getMonth() + 1
+  )
+    .toString()
+    .padStart(2, "0")}-${date.getDate().toString().padStart(2, "0")}`;
 }
 
 export function screenTimeRangeLabel(range: LifeOpsScreenTimeRangeKey): string {
@@ -80,7 +96,7 @@ export function enumerateScreenTimeHistoryDays(
     const dayStart = cursor;
     const dayEnd = addDays(dayStart, 1);
     days.push({
-      date: dayStart.toISOString().slice(0, 10),
+      date: localDateKey(dayStart),
       since: dayStart.toISOString(),
       until: new Date(Math.min(dayEnd.getTime(), endMs)).toISOString(),
       label: new Intl.DateTimeFormat(undefined, {

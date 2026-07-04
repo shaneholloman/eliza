@@ -1,3 +1,11 @@
+/**
+ * Exercises `handleCloudPairRoute` — the `/pair` HTTP handler that redeems a
+ * cloud pairing token against the cloud API and returns an HTML handoff page
+ * that stores the returned apiKey in sessionStorage. Drives real
+ * http.IncomingMessage/ServerResponse fakes and stubs `globalThis.fetch` to
+ * simulate the cloud API; covers the missing-token, expired, unreachable, no-key,
+ * XSS-escaping, origin-forwarding, and per-IP rate-limit branches.
+ */
 import * as http from "node:http";
 import { Socket } from "node:net";
 import {
@@ -230,6 +238,35 @@ describe("handleCloudPairRoute", () => {
     expect(body).toContain('window.location.replace("/")');
     expect(harness.headers()["cache-control"]).toContain("no-store");
     expect(harness.headers()["x-frame-options"]).toBe("DENY");
+  });
+
+  it("emits a fail-visible handoff branch (console.error + message, guarded redirect) rather than a silent redirect on failure", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ apiKey: "agent_secret_value", agentName: "Nova" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ) as unknown as typeof globalThis.fetch;
+
+    const harness = fakeRes();
+    const req = fakeReq({ pathname: "/pair", search: "?token=abc" });
+    await handleCloudPairRoute(req, harness.res);
+    const body = harness.body();
+
+    // The catch is no longer empty: it logs and shows a visible failure.
+    expect(body).not.toMatch(/catch\s*\(e\)\s*\{\s*\}/);
+    expect(body).toContain("console.error(");
+    expect(body).toContain("Pairing failed.");
+    // The redirect is guarded behind an early return in the catch, so a failed
+    // handoff no longer lands the user at "/" unpaired.
+    const catchStart = body.indexOf("catch (e)");
+    const redirectPos = body.indexOf('window.location.replace("/")');
+    const returnPos = body.indexOf("return;", catchStart);
+    expect(catchStart).toBeGreaterThanOrEqual(0);
+    expect(returnPos).toBeGreaterThan(catchStart);
+    expect(returnPos).toBeLessThan(redirectPos);
   });
 
   it("safely escapes an apiKey containing </script>", async () => {

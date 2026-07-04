@@ -1,3 +1,13 @@
+/**
+ * Resolves the default text-to-speech provider from the first-party plugin
+ * registry. The default is data-driven: the owning voice plugin marks its
+ * registry entry `defaultTextToSpeech: true` (guarded by `subtype: "voice"`),
+ * and its `id`/`npmName` flow through as the provider name, config key, and
+ * disable-flag lookup — no plugin id is hard-coded in the resolution path.
+ * Entries are metadata-only (the concrete handler self-registers at plugin
+ * load); this module also exposes the config/env disable check for the resolved
+ * provider.
+ */
 import process from "node:process";
 import type { AgentRuntime } from "@elizaos/core";
 import firstPartyRegistry from "@elizaos/registry/first-party/generated.json" with {
@@ -39,26 +49,39 @@ type FirstPartyRegistryEntry = {
   id?: string;
   npmName?: string;
   subtype?: string;
+  defaultTextToSpeech?: boolean;
 };
 
-function findDefaultTtsPluginName(
+// The default TTS provider is chosen by data, not by a hard-coded plugin id:
+// the owning voice plugin marks its registry entry `defaultTextToSpeech: true`
+// (see packages/registry schema + plugin-edge-tts/registry-entry.json). Swapping
+// the default is a registry edit, not a code change here. The `subtype: "voice"`
+// check is an invariant guard — the flag is only meaningful on a voice plugin.
+function findDefaultTtsEntry(
   entries: FirstPartyRegistryEntry[] | undefined = (
     firstPartyRegistry as { entries?: FirstPartyRegistryEntry[] }
   ).entries,
-): string | null {
-  const entry = entries?.find(
-    (candidate) => candidate.id === "edge-tts" && candidate.subtype === "voice",
+): FirstPartyRegistryEntry | null {
+  return (
+    entries?.find(
+      (candidate) =>
+        candidate.defaultTextToSpeech === true && candidate.subtype === "voice",
+    ) ?? null
   );
-  return entry?.npmName ?? null;
 }
 
+// Config key + provider name flow from the resolved entry's own `id`, so a
+// registry that flags a different voice entry as default carries that entry's id
+// through to the disable-flag lookup and model registration — no id literal in
+// this resolution path.
 function createDefaultTextToSpeechProvider(
-  pluginName: string,
+  entry: FirstPartyRegistryEntry,
 ): TextToSpeechProviderRegistration {
+  const providerName = entry.id ?? "";
   return {
-    pluginName,
-    pluginConfigKey: "edge-tts",
-    providerName: "edge-tts",
+    pluginName: entry.npmName ?? "",
+    pluginConfigKey: providerName,
+    providerName,
     priority: 0,
     wrapHandler: (handler) =>
       wrapEdgeTtsHandlerWithFirstLineCache(handler as EdgeTtsHandler),
@@ -72,24 +95,24 @@ export function resolveDefaultTextToSpeechProvider(): TextToSpeechProviderRegist
 function resolveDefaultTextToSpeechProviderFromEntries(
   entries?: FirstPartyRegistryEntry[],
 ): TextToSpeechProviderRegistration {
-  const pluginName = findDefaultTtsPluginName(entries);
-  if (!pluginName) {
+  const entry = findDefaultTtsEntry(entries);
+  if (!entry?.npmName) {
     throw new Error(
-      "First-party registry entry edge-tts did not expose a voice plugin package name",
+      "First-party registry has no default voice plugin (defaultTextToSpeech + npmName)",
     );
   }
-  return createDefaultTextToSpeechProvider(pluginName);
+  return createDefaultTextToSpeechProvider(entry);
 }
 
 export function resolveDefaultTextToSpeechPluginName(): string | null {
-  return findDefaultTtsPluginName();
+  return findDefaultTtsEntry()?.npmName ?? null;
 }
 
 export const DEFAULT_TEXT_TO_SPEECH_PROVIDER: TextToSpeechProviderRegistration =
-  createDefaultTextToSpeechProvider(findDefaultTtsPluginName() ?? "");
+  createDefaultTextToSpeechProvider(findDefaultTtsEntry() ?? {});
 
 export const __ttsProviderRegistryTestHooks = {
-  findDefaultTtsPluginName,
+  findDefaultTtsEntry,
   resolveDefaultTextToSpeechProviderFromEntries,
 };
 

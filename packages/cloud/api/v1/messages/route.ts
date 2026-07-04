@@ -35,6 +35,7 @@ import {
   estimateTokens,
   getProviderFromModel,
   getSafeModelParams,
+  modelUsesReasoningTokens,
   normalizeModelName,
 } from "@/lib/pricing";
 import {
@@ -150,6 +151,36 @@ function normalizeModelId(model: string): string {
   if (model.includes("/")) return model;
   if (model.startsWith("claude-")) return `anthropic/${model}`;
   return model;
+}
+
+const MESSAGES_MIN_RESPONSE_TOKENS = 4096;
+
+/**
+ * Response-token budget for a /v1/messages generation. Mirrors the
+ * chat/completions floor: Anthropic CoT needs headroom for thinking PLUS the
+ * answer, and non-Anthropic reasoning models (cerebras zai-glm-4.7 /
+ * gpt-oss-120b / gemma-4-31b) spend hidden reasoning tokens — without a floor a
+ * small `max_tokens` is consumed by reasoning alone and the caller is billed
+ * for empty output. Non-reasoning models pass their requested budget through.
+ */
+export function messagesEffectiveMaxTokens(
+  requestMaxTokens: number | undefined,
+  cotBudget: number | null,
+  model: string,
+): number | undefined {
+  if (cotBudget != null) {
+    return Math.max(
+      requestMaxTokens ?? MESSAGES_MIN_RESPONSE_TOKENS,
+      cotBudget + MESSAGES_MIN_RESPONSE_TOKENS,
+    );
+  }
+  if (modelUsesReasoningTokens(model)) {
+    return Math.max(
+      requestMaxTokens ?? MESSAGES_MIN_RESPONSE_TOKENS,
+      MESSAGES_MIN_RESPONSE_TOKENS,
+    );
+  }
+  return requestMaxTokens;
 }
 
 function inferImageMediaType(urlOrType: string): string {
@@ -690,6 +721,18 @@ app.post("/", async (c) => {
     // valid `tools` array); keep it inside the settle-refunding try so a
     // conversion throw refunds the reservation instead of stranding the debit
     // the caller was just charged (refund-gap class, #11795).
+    // #11588: the billing requestId feeds the affiliate-earnings dedupe
+    // sourceId (getAffiliateEarningsSourceId → `ai_billing:<op>:<requestId>`,
+    // deduped on addEarnings) while the org charge is unconditional. It MUST
+    // NOT be client-controllable, or a caller pinning `x-request-id`/an
+    // idempotency key across two real billed requests could suppress the
+    // second affiliate/creator credit while still paying the org charge
+    // (mirrors chat/completions). Server-generate it once per request — it
+    // stays stable across this request's stream-finish/abort/non-stream
+    // settle contexts, so the single-flight billing dedupe is preserved. The
+    // client retry key remains ONLY the reservation idempotencyKey (#10423).
+    // Threaded into handleStream / handleNonStream.
+    const requestId = crypto.randomUUID();
     const messages = anthropicMessagesToModelMessages(request.messages);
     const tools = convertTools(request.tools);
     const toolChoice = mapToolChoice(request.tool_choice);
@@ -718,6 +761,7 @@ app.post("/", async (c) => {
         routeTimeoutMs,
         settleReservation,
         billingSource,
+        requestId,
       );
     }
 
@@ -737,6 +781,7 @@ app.post("/", async (c) => {
       routeTimeoutMs,
       settleReservation,
       billingSource,
+      requestId,
     );
   } catch (error) {
     await settleReservation?.(0);
@@ -787,6 +832,10 @@ async function handleNonStream(
     actualCost: number,
   ) => Promise<CreditReconciliationResult | null>,
   billingSource: PricingBillingSource,
+  // Stable per-request id → the getAffiliateEarningsSourceId dedupe key. Without
+  // it billUsage falls back to legacy_<uuid> and a retry double-accrues cashable
+  // affiliate earnings. Mirrors chat/completions (#11588).
+  requestId: string,
 ) {
   const provider = getProviderFromModel(model);
 
@@ -795,14 +844,11 @@ async function handleNonStream(
     cotBudget != null
       ? mergeAnthropicCotProviderOptions(model, process.env, cotBudget)
       : {};
-  const MIN_RESPONSE_BUFFER = 4096;
-  const effectiveMaxTokens =
-    cotBudget != null
-      ? Math.max(
-          request.max_tokens ?? MIN_RESPONSE_BUFFER,
-          cotBudget + MIN_RESPONSE_BUFFER,
-        )
-      : request.max_tokens;
+  const effectiveMaxTokens = messagesEffectiveMaxTokens(
+    request.max_tokens,
+    cotBudget,
+    model,
+  );
 
   try {
     const result = await generateText({
@@ -827,6 +873,7 @@ async function handleNonStream(
         provider,
         billingSource,
         affiliateCode,
+        requestId,
       },
       result.usage,
     );
@@ -997,6 +1044,7 @@ async function settleStreamingAbortReservation(params: {
   apiKey: { id: string } | null;
   affiliateCode: string | null;
   billingSource: PricingBillingSource;
+  requestId: string;
   estimatedInputTokens: number;
   deliveredText: string;
   steps: readonly FinishedStepUsageSource[];
@@ -1029,6 +1077,7 @@ async function settleStreamingAbortReservation(params: {
         provider: params.provider,
         billingSource: params.billingSource,
         affiliateCode: params.affiliateCode,
+        requestId: params.requestId,
       },
       {
         inputTokens,
@@ -1107,6 +1156,10 @@ async function handleStream(
     actualCost: number,
   ) => Promise<CreditReconciliationResult | null>,
   billingSource: PricingBillingSource,
+  // Stable per-request id → the getAffiliateEarningsSourceId dedupe key. Without
+  // it billUsage falls back to legacy_<uuid> and a retry double-accrues cashable
+  // affiliate earnings. Mirrors chat/completions (#11588).
+  requestId: string,
 ) {
   const provider = getProviderFromModel(model);
   const messageId = `msg_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
@@ -1123,10 +1176,12 @@ async function handleStream(
     factory: () => Promise<CreditReconciliationResult | null>,
   ): Promise<CreditReconciliationResult | null> => {
     if (!streamingSettlementPromise) {
-      streamingSettlementPromise = factory().catch((error) => {
-        streamingSettlementPromise = null;
-        throw error;
-      });
+      // Cache unconditionally — never reset on rejection. A racing settle path
+      // must not re-run a failed settlement (it would re-bill/re-record the
+      // abort). The inner reservation settler is first-call-wins idempotent and
+      // retries its reconcile legs safely, so the awaiting caller still sees the
+      // failure without a reset. Mirrors /v1/chat/completions (#11512).
+      streamingSettlementPromise = factory();
     }
     return streamingSettlementPromise;
   };
@@ -1146,6 +1201,7 @@ async function handleStream(
           apiKey,
           affiliateCode,
           billingSource,
+          requestId,
           estimatedInputTokens,
           deliveredText,
           steps,
@@ -1158,14 +1214,11 @@ async function handleStream(
     cotBudget != null
       ? mergeAnthropicCotProviderOptions(model, process.env, cotBudget)
       : {};
-  const MIN_RESPONSE_BUFFER = 4096;
-  const effectiveMaxTokens =
-    cotBudget != null
-      ? Math.max(
-          request.max_tokens ?? MIN_RESPONSE_BUFFER,
-          cotBudget + MIN_RESPONSE_BUFFER,
-        )
-      : request.max_tokens;
+  const effectiveMaxTokens = messagesEffectiveMaxTokens(
+    request.max_tokens,
+    cotBudget,
+    model,
+  );
 
   const result = streamText({
     model: getLanguageModel(model),
@@ -1190,6 +1243,7 @@ async function handleStream(
               provider,
               billingSource,
               affiliateCode,
+              requestId,
             },
             totalUsage,
           );

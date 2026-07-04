@@ -78,6 +78,29 @@ function resolveUrl(
   return appendQuery(url, query).toString();
 }
 
+/**
+ * A body the server labelled `application/json` but that failed to parse. The
+ * raw text is retained so error responses can still surface it in their message;
+ * on a 2xx response `request()` promotes this to a thrown failure rather than
+ * fabricating a success — a malformed JSON body is a broken response, not data.
+ */
+const malformedJsonBodyBrand = Symbol("MalformedJsonBody");
+
+interface MalformedJsonBody {
+  readonly [malformedJsonBodyBrand]: true;
+  readonly kind: "malformed-json";
+  readonly text: string;
+}
+
+function isMalformedJsonBody(value: unknown): value is MalformedJsonBody {
+  return (
+    isRecord(value) &&
+    (value as { [malformedJsonBodyBrand]?: unknown })[
+      malformedJsonBodyBrand
+    ] === true
+  );
+}
+
 async function parseResponseBody(response: Response): Promise<unknown> {
   const text = await response.text();
   if (!text) return undefined;
@@ -90,7 +113,13 @@ async function parseResponseBody(response: Response): Promise<unknown> {
   try {
     return JSON.parse(text);
   } catch {
-    return text;
+    // error-policy:J3 declared-JSON parse failure returns a typed marker; the
+    // caller surfaces it (error path) or throws (2xx), never a fake success.
+    return {
+      [malformedJsonBodyBrand]: true,
+      kind: "malformed-json",
+      text,
+    } satisfies MalformedJsonBody;
   }
 }
 
@@ -99,6 +128,12 @@ function normalizeErrorBody(
   statusText: string,
   body: unknown,
 ): CloudApiErrorBody {
+  if (isMalformedJsonBody(body)) {
+    return {
+      success: false,
+      error: `HTTP ${status}: ${body.text}`,
+    };
+  }
   if (isRecord(body)) {
     const rawError = body.error;
     const errorObject = isRecord(rawError) ? rawError : null;
@@ -288,6 +323,15 @@ export class ElizaCloudHttpClient {
       throw response.status === 402
         ? new InsufficientCreditsError(errorBody)
         : new CloudApiError(response.status, errorBody);
+    }
+
+    // A 2xx that promised JSON but delivered unparseable bytes is a broken
+    // response, not a success — surface it instead of fabricating one.
+    if (isMalformedJsonBody(body)) {
+      throw new CloudApiError(response.status, {
+        success: false,
+        error: `HTTP ${response.status}: malformed JSON response body: ${body.text}`,
+      });
     }
 
     if (body === undefined || typeof body === "string") {

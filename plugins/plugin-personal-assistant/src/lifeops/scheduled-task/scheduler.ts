@@ -1,3 +1,14 @@
+/**
+ * Core scheduled-task processor for the LifeOps family: given the persisted
+ * ScheduledTask records, decides which are due, fires them, evaluates completion
+ * checks and completion timeouts, advances recurrences, and emits pending
+ * prompts — the structural heart of the "one clock, two consumers" design.
+ *
+ * Firing is decided entirely on the tasks' structural fields (trigger,
+ * shouldFire, completionCheck, recurrence, due time), never on promptInstructions
+ * text. The always-loaded scheduling plugin owns the runner service; this module
+ * is the pure due/fire computation it drives.
+ */
 import { hasOwnerAccess } from "@elizaos/agent";
 import {
   type IAgentRuntime,
@@ -17,6 +28,7 @@ import {
 } from "@elizaos/plugin-scheduling";
 import {
   ownerFactsToView,
+  type ReminderIntensity,
   resolveOwnerFactStore,
 } from "../owner/fact-store.js";
 import {
@@ -24,6 +36,7 @@ import {
   resolvePendingPromptsStore,
 } from "../pending-prompts/store.js";
 import { LifeOpsRepository } from "../repository.js";
+import { applyReminderIntensityToNoReplyPolicy } from "./no-reply-intensity.js";
 import { getScheduledTaskRunner } from "./service.js";
 
 type NoReplyTerminalStatus = "skipped" | "expired" | "failed";
@@ -233,8 +246,20 @@ function defaultNoReplyPolicyFor(task: ScheduledTask): NoReplyPolicy | null {
   }
 }
 
-function resolveNoReplyPolicy(task: ScheduledTask): NoReplyPolicy | null {
-  const base = defaultNoReplyPolicyFor(task);
+function resolveNoReplyPolicy(
+  task: ScheduledTask,
+  intensity?: ReminderIntensity,
+): NoReplyPolicy | null {
+  const defaultPolicy = defaultNoReplyPolicyFor(task);
+  // Owner intensity shapes the DEFAULT ladder; an explicit per-task
+  // `metadata.noReplyPolicy` override (merged below) still wins field-by-field.
+  const base = defaultPolicy
+    ? applyReminderIntensityToNoReplyPolicy(
+        defaultPolicy,
+        intensity,
+        task.priority,
+      )
+    : null;
   const raw = readRecord(
     task.metadata?.noReplyPolicy,
   ) as StoredNoReplyPolicy | null;
@@ -329,9 +354,11 @@ export async function processDueScheduledTasks(
     agentId: request.agentId,
     now: () => request.now,
   });
-  const ownerFacts = ownerFactsToView(
-    await resolveOwnerFactStore(request.runtime).read(),
-  );
+  const ownerFactsRaw = await resolveOwnerFactStore(request.runtime).read();
+  const ownerFacts = ownerFactsToView(ownerFactsRaw);
+  // Owner-wide reminder intensity shapes how persistently the no-reply loop
+  // re-nudges (see `applyReminderIntensityToNoReplyPolicy`).
+  const reminderIntensity = ownerFactsRaw.reminderIntensity?.value;
   const dueContext = {
     now: request.now,
     ownerFacts,
@@ -422,6 +449,7 @@ export async function processDueScheduledTasks(
           runner,
           agentId: request.agentId,
           task,
+          reminderIntensity,
           now: request.now,
           reason: timeout.reason,
         });
@@ -486,8 +514,9 @@ async function handleCompletionTimeout(args: {
   task: ScheduledTask;
   now: Date;
   reason: string;
+  reminderIntensity?: ReminderIntensity;
 }): Promise<{ task: ScheduledTask; reason: string }> {
-  const policy = resolveNoReplyPolicy(args.task);
+  const policy = resolveNoReplyPolicy(args.task, args.reminderIntensity);
   if (!policy) {
     const skipped = await args.runner.apply(args.task.taskId, "skip", {
       reason: args.reason,
@@ -524,11 +553,17 @@ async function handleCompletionTimeout(args: {
       },
     };
     await args.repo.upsertScheduledTask(args.agentId, args.task);
+    // The snooze override (status back to `scheduled` + `state.firedAt` =
+    // untilIso) is the whole retry mechanism: `scheduledOverrideDue` fires the
+    // task AT the override instant for every trigger kind. The trigger itself
+    // must stay untouched — rewriting it to `once` here would permanently
+    // destroy a recurring trigger: once the retry settles (owner reply OR
+    // terminal no-reply), a `once` trigger with `firedAt` set resolves to a
+    // NULL next-fire, so a daily reminder would never fire again after a
+    // single unanswered occurrence.
     const snoozed = await args.runner.apply(args.task.taskId, "snooze", {
       untilIso: nextRetryAt,
     });
-    snoozed.trigger = { kind: "once", atIso: nextRetryAt };
-    delete snoozed.state.firedAt;
     snoozed.state.lastDecisionLog = `no_reply_retry_${state.retryCount + 1}: ${args.reason}`;
     await args.repo.upsertScheduledTask(args.agentId, snoozed);
     return {

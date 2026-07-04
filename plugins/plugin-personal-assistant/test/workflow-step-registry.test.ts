@@ -97,9 +97,13 @@ describe("WorkflowStepRegistry", () => {
   it("rejects duplicate registration", () => {
     const registry = createWorkflowStepRegistry();
     registerDefaultWorkflowStepPack(registry);
-    expect(() =>
-      registry.register(APP_LIFEOPS_WORKFLOW_STEP_CONTRIBUTIONS[0]!),
-    ).toThrow(/already registered/);
+    const firstContribution = APP_LIFEOPS_WORKFLOW_STEP_CONTRIBUTIONS[0];
+    if (!firstContribution) {
+      throw new Error("Expected at least one workflow step contribution.");
+    }
+    expect(() => registry.register(firstContribution)).toThrow(
+      /already registered/,
+    );
   });
 
   it("registers a synthetic third-party step kind and dispatches it via execute", async () => {
@@ -132,11 +136,11 @@ describe("WorkflowStepRegistry", () => {
 
     const contribution = registry.get("acme_step");
     expect(contribution).not.toBeNull();
-    const validated = contribution!.paramSchema.parse({
+    const validated = contribution?.paramSchema.parse({
       kind: "acme_step",
       payload: { greeting: "hi" },
     });
-    const result = await contribution!.execute(
+    const result = await contribution?.execute(
       validated,
       makeStubArgs(),
       makeStubCtx(),
@@ -171,12 +175,12 @@ describe("WorkflowStepRegistry", () => {
     const relock = registry.get("relock_website_access");
     expect(relock).not.toBeNull();
     expect(() =>
-      relock!.paramSchema.parse({
+      relock?.paramSchema.parse({
         kind: "relock_website_access",
         request: {},
       }),
     ).toThrow();
-    const ok = relock!.paramSchema.parse({
+    const ok = relock?.paramSchema.parse({
       kind: "relock_website_access",
       request: { groupKey: "social" },
     });
@@ -214,11 +218,11 @@ describe("WorkflowStepRegistry", () => {
       ...makeStubArgs(),
       previousStepValue: { count: 7 },
     };
-    const validated = summarize!.paramSchema.parse({
+    const validated = summarize?.paramSchema.parse({
       kind: "summarize",
       prompt: "stat",
     });
-    const result = (await summarize!.execute(
+    const result = (await summarize?.execute(
       validated,
       args,
       makeStubCtx(),
@@ -232,12 +236,12 @@ describe("WorkflowStepRegistry", () => {
     registerDefaultWorkflowStepPack(registry);
     const browser = registry.get("browser");
     expect(browser).not.toBeNull();
-    const validated = browser!.paramSchema.parse({
+    const validated = browser?.paramSchema.parse({
       kind: "browser",
       sessionTitle: "noop",
       actions: [{ kind: "open" }],
     });
-    const result = await browser!.execute(
+    const result = await browser?.execute(
       validated,
       makeStubArgs(),
       makeStubCtx(),

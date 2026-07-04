@@ -1,3 +1,7 @@
+/**
+ * Vitest configuration for form unit tests and post-merge-gated live extraction
+ * suites.
+ */
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -7,9 +11,7 @@ export default defineConfig({
     exclude: [
       "dist/**",
       "node_modules/**",
-      // #9310 §E: the guarded *.live.test.ts suite (self-skips keyless) is
-      // invocable only in the post-merge lane, where run-all-tests.mjs
-      // prints a named skip accounting.
+      // Live extraction tests self-skip keyless and only run in post-merge.
       ...(process.env.VITEST_LANE === "post-merge"
         ? []
         : ["src/**/*.live.test.ts", "test/**/*.live.test.ts"]),

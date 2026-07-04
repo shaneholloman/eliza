@@ -1,3 +1,7 @@
+/**
+ * Finance payment types describe payment sources, transactions, spending
+ * summaries, and recurring charges.
+ */
 export type LifeOpsPaymentSourceKind =
   | "csv"
   | "plaid"

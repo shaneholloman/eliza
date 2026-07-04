@@ -24,7 +24,6 @@ import type {
   CreateLifeOpsDefinitionRequest,
   CreateLifeOpsGmailReplyDraftRequest,
   CreateLifeOpsGoalRequest,
-  DisconnectLifeOpsMessagingConnectorRequest,
   GetLifeOpsGmailRecommendationsRequest,
   GetLifeOpsGmailSearchRequest,
   GetLifeOpsGmailSpamReviewRequest,
@@ -116,10 +115,6 @@ import type {
 } from "../lifeops/schedule-insight.js";
 
 type LifeOpsScheduleInspectionResponse = LifeOpsScheduleInspection;
-
-// Wave-2 W2-A removed `RoutineSeedTemplate`, `LifeOpsSeedTemplatesResponse`,
-// and `LifeOpsSeedRoutinesResponse`. The legacy seed-routines surface is
-// retired in favour of the FIRST_RUN customize path.
 
 type LifeOpsXPostRequest = {
   side?: LifeOpsConnectorSide;

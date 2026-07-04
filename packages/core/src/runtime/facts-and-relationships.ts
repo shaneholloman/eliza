@@ -1,3 +1,23 @@
+/**
+ * Stage that runs in parallel with the planner whenever Stage 1
+ * (messageHandler) extracts candidate facts or relationships from the user
+ * message. It does NOT block the user reply: planner + facts run concurrently.
+ *
+ * Responsibilities:
+ *   1. Keyword/BM25-search the `facts` table for memories similar to each
+ *      candidate so the model can see what's already known.
+ *   2. Pull existing relationships for the user/agent so duplicates can be
+ *      filtered.
+ *   3. Surface room entities so the model can ground subject/object names.
+ *   4. Ask the model which candidates are NEW + WORTH WRITING. The model emits
+ *      cleaned text and drops anything that's a near-duplicate of existing
+ *      facts/relationships.
+ *   5. Persist the kept entries via `runtime.createMemory` (facts table) and
+ *      `runtime.createRelationship` (relationships table).
+ *
+ * The trajectory recorder logs this as a `facts_and_relationships` stage so
+ * extraction quality can be reviewed offline.
+ */
 import {
 	buildFactKeywordsForStorage,
 	scoreFactKeywordRelevance,
@@ -22,27 +42,6 @@ import type { State } from "../types/state";
 import { isSyntheticConversationArtifactMemory } from "../utils/synthetic-conversation-artifact";
 import { parseJsonObject } from "./json-output";
 import { buildCanonicalSystemPrompt } from "./system-prompt";
-
-/**
- * Stage that runs in parallel with the planner whenever Stage 1
- * (messageHandler) extracts candidate facts or relationships from the user
- * message. It does NOT block the user reply: planner + facts run concurrently.
- *
- * Responsibilities:
- *   1. Keyword/BM25-search the `facts` table for memories similar to each
- *      candidate so the model can see what's already known.
- *   2. Pull existing relationships for the user/agent so duplicates can be
- *      filtered.
- *   3. Surface room entities so the model can ground subject/object names.
- *   4. Ask the model which candidates are NEW + WORTH WRITING. The model emits
- *      cleaned text and drops anything that's a near-duplicate of existing
- *      facts/relationships.
- *   5. Persist the kept entries via `runtime.createMemory` (facts table) and
- *      `runtime.createRelationship` (relationships table).
- *
- * The trajectory recorder logs this as a `facts_and_relationships` stage so
- * extraction quality can be reviewed offline.
- */
 
 export const FACTS_AND_RELATIONSHIPS_TOOL_NAME =
 	"FACTS_AND_RELATIONSHIPS_VALIDATE";
@@ -561,6 +560,7 @@ async function persistFactsAndRelationships(
 				runtime,
 				message,
 			);
+			const echoText = `${normalized.subject} ${normalized.predicate} ${normalized.object}`;
 			try {
 				await runtime.createMemory(
 					{
@@ -568,7 +568,7 @@ async function persistFactsAndRelationships(
 						agentId: runtime.agentId,
 						roomId: message.roomId,
 						content: {
-							text: `${normalized.subject} ${normalized.predicate} ${normalized.object}`,
+							text: echoText,
 							type: "relationship",
 							subject: normalized.subject,
 							predicate: normalized.predicate,
@@ -581,7 +581,18 @@ async function persistFactsAndRelationships(
 							sourceEntityId,
 							targetEntityId,
 							tags: ["relationship", "extracted", "stage1"],
+							keywords: buildFactKeywordsForStorage(echoText),
 							extractedAt: Date.now(),
+							// Same stage-1 classification as the fact branch above: this
+							// echo lands in the `facts` table, and the reader defaults a
+							// missing `kind` to `durable` — an unkinded echo therefore
+							// resurfaces as a permanent durable fact (live symptom: the
+							// same claim shown twice, once durable, once current).
+							kind: "current" as FactKind,
+							category: "relationship",
+							confidence: DEFAULT_STAGE_FACT_CONFIDENCE,
+							verificationStatus: "self_reported" as FactVerificationStatus,
+							validAt: new Date().toISOString(),
 						},
 					} as Memory,
 					"facts",

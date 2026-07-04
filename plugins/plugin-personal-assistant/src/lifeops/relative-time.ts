@@ -1,3 +1,8 @@
+/**
+ * Resolves owner-relative time anchors (wake, sleep, day boundaries) from
+ * circadian state and the owner's personal baseline, so reminders and check-ins
+ * can be scheduled against "after you wake" rather than a fixed clock time.
+ */
 import type {
   LifeOpsAwakeProbability,
   LifeOpsCircadianState,
@@ -32,7 +37,7 @@ type RelativeTimeScheduleFields = Pick<
   | "firstActiveAt"
 >;
 
-function defaultAwakeProbability(computedAt: string): LifeOpsAwakeProbability {
+function _defaultAwakeProbability(computedAt: string): LifeOpsAwakeProbability {
   return {
     pAwake: 0,
     pAsleep: 0,

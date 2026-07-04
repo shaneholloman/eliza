@@ -1,10 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { InMemoryDatabaseAdapter } from "../../database/inMemoryAdapter";
-import { AgentRuntime } from "../../runtime";
-import { type Character, ModelType } from "../../types";
-
 /**
- * Phase 5 — request-time chat-brain provider override.
+ * Request-time chat-brain provider override.
  *
  * `useModel(TEXT_LARGE)` with no pinned provider normally returns the
  * highest-priority registered handler. The `ELIZA_BRAIN_PROVIDER` setting lets
@@ -15,6 +10,11 @@ import { type Character, ModelType } from "../../types";
  *    (a stale/typo'd value must never strand the brain),
  *  - never override an explicitly-pinned provider.
  */
+import { describe, expect, it } from "vitest";
+import { InMemoryDatabaseAdapter } from "../../database/inMemoryAdapter";
+import { AgentRuntime } from "../../runtime";
+import { type Character, ModelType } from "../../types";
+
 function makeRuntime(settings: Record<string, string> = {}): AgentRuntime {
 	return new AgentRuntime({
 		character: {

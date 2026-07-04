@@ -1,3 +1,12 @@
+/**
+ * Android sideload OTA update checker. Active only on Android sideload builds:
+ * `check()` fetches the GitHub release update manifest for the requested
+ * channel (stable/beta), compares its `versionCode` against the installed
+ * build, and reports whether an update is available — throttled to once per 24h
+ * via `localStorage`. `promptIfUpdateAvailable()` confirms with the user and
+ * opens the APK download page through the Capacitor Browser. Best-effort: any
+ * network/parse failure degrades to no-update this cycle and never blocks boot.
+ */
 import { App } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
 import { Device } from "@capacitor/device";
@@ -38,6 +47,8 @@ export const AndroidUpdateChecker = {
       if (info.platform !== "android") return false;
       return import.meta.env.VITE_ANDROID_BUILD_VARIANT === "sideload";
     } catch {
+      // error-policy:J4 no Device bridge → not an Android sideload build; the
+      // OTA checker stays inert on web/desktop.
       return false;
     }
   },
@@ -92,6 +103,9 @@ export const AndroidUpdateChecker = {
 
       return { updateAvailable, manifest, currentVersion, currentVersionCode };
     } catch (err) {
+      // error-policy:J4 background OTA check is best-effort; a network/parse
+      // failure degrades to "no update this cycle" (null → no prompt) and the
+      // 24h cadence retries. It must never block app boot on a GitHub outage.
       console.warn("[AndroidUpdateChecker] check() error:", err);
       return null;
     }

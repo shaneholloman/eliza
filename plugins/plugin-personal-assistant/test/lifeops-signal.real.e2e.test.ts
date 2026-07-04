@@ -1,3 +1,7 @@
+/**
+ * Real e2e for the LifeOps Signal connector surface, including that legacy Signal setup
+ * routes are not exposed from LifeOps. Runs against a real HTTP server and runtime.
+ */
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import {
   createServer,
@@ -297,7 +301,7 @@ async function startLifeOpsRouteServer(
   });
 }
 
-async function waitFor<T>(
+async function _waitFor<T>(
   label: string,
   read: () => Promise<T>,
   predicate: (value: T) => boolean,

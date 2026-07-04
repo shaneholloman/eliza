@@ -1,3 +1,9 @@
+/**
+ * Covers the non-destructive `app_lifeops` to `app_inbox` table-copy migration
+ * through an injected in-memory SQL executor. The suite guards source-missing
+ * and target-non-empty skips, snooze-column repair, and the invariant that the
+ * source schema is never dropped or altered.
+ */
 import { describe, expect, it } from "vitest";
 import {
   MIGRATED_INBOX_TABLES,

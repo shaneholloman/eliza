@@ -1,3 +1,6 @@
+/**
+ * Vite build configuration for the scheduling live-test view bundle.
+ */
 import { createViewBundleConfig } from "../../packages/scripts/view-bundle-vite.config.ts";
 
 export default createViewBundleConfig({

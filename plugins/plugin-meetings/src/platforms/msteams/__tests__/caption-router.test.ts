@@ -1,3 +1,8 @@
+/**
+ * TeamsCaptionRouter — caption-authorship diarization of the single mixed Teams
+ * audio stream into per-speaker sink calls. Deterministic: a recording sink
+ * stub, no browser.
+ */
 import { describe, expect, it } from "vitest";
 import type { MeetingAudioSink } from "../../../types.js";
 import { TeamsCaptionRouter } from "../caption-router.js";
@@ -11,7 +16,8 @@ interface SinkCall {
 function makeSink() {
   const calls: SinkCall[] = [];
   const sink: MeetingAudioSink = {
-    pushSpeakerAudio: (key, samples) => calls.push({ method: "push", key, samples }),
+    pushSpeakerAudio: (key, samples) =>
+      calls.push({ method: "push", key, samples }),
     setSpeakerName: (key) => calls.push({ method: "setName", key }),
     flushSpeaker: (key) => calls.push({ method: "flush", key }),
     participantJoined: (p) => calls.push({ method: "joined", key: p.id }),
@@ -48,7 +54,9 @@ describe("TeamsCaptionRouter", () => {
     const pushes = calls.filter((c) => c.method === "push");
     expect(pushes).toHaveLength(2);
     expect(pushes.every((c) => c.key === "Alice")).toBe(true);
-    expect(calls.some((c) => c.method === "setName" && c.key === "Alice")).toBe(true);
+    expect(calls.some((c) => c.method === "setName" && c.key === "Alice")).toBe(
+      true,
+    );
     expect(router.currentSpeaker).toBe("Alice");
     expect(router.queuedChunks).toBe(0);
   });
@@ -72,7 +80,9 @@ describe("TeamsCaptionRouter", () => {
     expect(pushes.every((c) => c.key === "Bob")).toBe(true);
     expect(pushes[0].samples?.[0]).toBeCloseTo(0.2);
     expect(pushes[1].samples?.[0]).toBeCloseTo(0.3);
-    expect(calls.some((c) => c.method === "flush" && c.key === "Alice")).toBe(true);
+    expect(calls.some((c) => c.method === "flush" && c.key === "Alice")).toBe(
+      true,
+    );
     expect(router.currentSpeaker).toBe("Bob");
   });
 
@@ -151,7 +161,11 @@ describe("TeamsCaptionRouter", () => {
     router.onAudioChunk(chunk(0.5));
     calls.length = 0;
     router.finalize();
-    expect(calls.filter((c) => c.method === "push" && c.key === "Alice")).toHaveLength(1);
-    expect(calls.some((c) => c.method === "flush" && c.key === "Alice")).toBe(true);
+    expect(
+      calls.filter((c) => c.method === "push" && c.key === "Alice"),
+    ).toHaveLength(1);
+    expect(calls.some((c) => c.method === "flush" && c.key === "Alice")).toBe(
+      true,
+    );
   });
 });

@@ -1,3 +1,13 @@
+/**
+ * Public barrel for `@elizaos/agent` — the surface that sibling
+ * `@elizaos/plugin-*` packages and the app shell import. Re-exports the HTTP API,
+ * runtime boot and plugin resolution, long-lived services (including the TEE
+ * stack), config and character schemas, auth, security, triggers, providers, and
+ * diagnostics. Cloud route handlers are lazy wrappers that dynamically import
+ * `@elizaos/plugin-elizacloud`. Many re-exports are deliberately named rather
+ * than `export *` to dodge duplicate-symbol (TS2308) collisions and to keep
+ * heavy plugins lazy-loaded — read the inline notes before widening any of them.
+ */
 import type {
   AgentCloudBillingRouteHandler,
   AgentCloudCompatRouteHandler,
@@ -58,6 +68,7 @@ export async function validateCloudBaseUrl(
   const { validateCloudBaseUrl } = await loadElizaCloudRoutes();
   return validateCloudBaseUrl(value);
 }
+export * from "@elizaos/auth";
 export type { ElizaConfig, ReleaseChannel, RolesConfig } from "@elizaos/shared";
 export {
   CONNECTOR_PLUGINS,
@@ -178,7 +189,6 @@ export {
 export { getWalletAddresses, initStewardWalletCache } from "./api/wallet.ts";
 export * from "./api/wallet-capability.ts";
 export * from "./api/workbench-helpers.ts";
-export * from "@elizaos/auth";
 export * from "./awareness/index.ts";
 export { runBenchmark } from "./cli/benchmark.ts";
 export { CharacterSchema } from "./config/character-schema.ts";

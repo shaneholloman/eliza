@@ -1,3 +1,9 @@
+/**
+ * Test-runtime helpers for LifeOps: wraps createRealTestRuntime and provides an in-memory
+ * notification sink standing in for the production NotificationService, so in-app
+ * scheduled-task dispatches report honest DispatchResults and tests can assert what was
+ * delivered.
+ */
 import {
   createRealTestRuntime,
   type RealTestRuntimeOptions,
@@ -47,9 +53,8 @@ function injectNotificationSink(
     },
     async stop() {},
   };
-  const services = (
-    runtime as unknown as { services: Map<string, unknown[]> }
-  ).services;
+  const services = (runtime as unknown as { services: Map<string, unknown[]> })
+    .services;
   const list = services.get("notification") ?? [];
   list.push(sink);
   services.set("notification", list);
