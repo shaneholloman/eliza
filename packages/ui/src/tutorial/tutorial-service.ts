@@ -16,6 +16,7 @@
  * or stopped tour stays quiet across launches; the legacy one-bit
  * "eliza:tutorial-completed" flag is honored on first load.
  */
+import { logger } from "@elizaos/logger";
 import * as React from "react";
 import { TUTORIAL_STEP_IDS } from "./tutorial-script";
 
@@ -101,10 +102,11 @@ function readPersisted(): TutorialState {
     if (localStorage.getItem(LEGACY_COMPLETED_KEY) === "1") {
       return { ...IDLE_STATE, status: "completed" };
     }
-  } catch {
+  } catch (err) {
     // error-policy:J4 storage unavailable (private mode / SSR) or corrupt JSON
     // — the tutorial degrades to fresh in-memory state instead of crashing app
     // boot; nothing downstream depends on persistence existing.
+    logger.debug({ err }, "[TutorialService] persisted state unreadable");
   }
   return IDLE_STATE;
 }
@@ -136,9 +138,10 @@ function persist(state: TutorialState): void {
     if (state.status === "completed") {
       localStorage.setItem(LEGACY_COMPLETED_KEY, "1");
     }
-  } catch {
+  } catch (err) {
     // error-policy:J4 storage unavailable (private mode) — the tour still runs,
     // it just won't stay quiet across launches.
+    logger.debug({ err }, "[TutorialService] persist failed");
   }
 }
 
