@@ -42,7 +42,7 @@ python -m pytest tests -q
 Result:
 
 ```text
-7 passed in 0.02s
+7 passed in 0.17s
 ```
 
 ```bash
@@ -60,7 +60,29 @@ first_rttm: SPEAKER ami-synth-001 1 0.000 1.000 <NA> <NA> ami-a <NA> <NA>
 manifest_schema: eliza.meeting_corpus_manifest.v1
 missing_count: 10
 can_run_any: False
+licenses_present: True
+metrics_present: True
 ```
+
+## Repo-Level Checks
+
+```bash
+bun run audit:type-safety-ratchet
+bun run audit:error-policy-ratchet
+git diff --check
+```
+
+Result: passed. The error-policy ratchet reported `0 changed production source
+file(s)` for this Python benchmark package.
+
+```bash
+bun run verify
+```
+
+Result: blocked after the CLAUDE/AGENTS check and both ratchets passed. Turbo
+stopped on unrelated current-baseline `@elizaos/electrobun#lint` diagnostics.
+The same run replayed unrelated `@elizaos/tui#lint` diagnostics around Node
+protocol imports, non-null assertions, and control-character regexes.
 
 ## Evidence Rows
 
