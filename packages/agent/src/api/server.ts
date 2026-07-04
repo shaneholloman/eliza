@@ -1616,9 +1616,9 @@ import {
   getPairingExpiresAt as _getPairingExpiresAt,
   isAllowedHost as _isAllowedHost,
   isAuthorized as _isAuthorized,
+  isBoundaryRoleAuthorized as _isBoundaryRoleAuthorized,
   isSharedTerminalClientId as _isSharedTerminalClientId,
   isTrustedLocalRequest as _isTrustedLocalRequest,
-  isWaifuChatAuthorized as _isWaifuChatAuthorized,
   isWebSocketAuthorized as _isWebSocketAuthorized,
   normalizePairingCode as _normalizePairingCode,
   normalizeWsClientId as _normalizeWsClientId,
@@ -1636,7 +1636,6 @@ export {
   extractAuthToken,
   isAllowedHost,
   isAuthorized,
-  isWaifuChatAuthorized,
   normalizeWsClientId,
   resolveCorsOrigin,
   resolveTerminalRunClientId,
@@ -1646,12 +1645,17 @@ export {
   type WebSocketUpgradeRejection,
 } from "./server-helpers-auth.ts";
 
+// Back-compat re-export: the WaifuChat scheme now lives in its own resolver
+// module. Importing it here also self-registers the resolver with the trunk
+// boundary-role registry (#12087 item 12).
+export { isWaifuChatAuthorized } from "./waifu-chat-role-resolver.ts";
+
 const isAllowedHost = _isAllowedHost;
 const applyCors = _applyCors;
 const isAuthorized = _isAuthorized;
 const resolveBoundaryRole = _resolveBoundaryRole;
 const isTrustedLocalRequest = _isTrustedLocalRequest;
-const isWaifuChatAuthorized = _isWaifuChatAuthorized;
+const isBoundaryRoleAuthorized = _isBoundaryRoleAuthorized;
 const ensureApiTokenForBindHost = _ensureApiTokenForBindHost;
 const normalizeWsClientId = _normalizeWsClientId;
 const resolveTerminalRunClientId = _resolveTerminalRunClientId;
@@ -1986,7 +1990,7 @@ async function handleRequest(
       pathname,
     }) &&
     !isAuthorized(req) &&
-    !isWaifuChatAuthorized(req, method, pathname)
+    !isBoundaryRoleAuthorized(req, method, pathname)
   ) {
     json(res, { error: "Unauthorized" }, 401);
     return;
