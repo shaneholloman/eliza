@@ -6,7 +6,7 @@ import { rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, type Locator, test } from "@playwright/test";
 import {
-  expectNoPageDiagnostics,
+  expectOnlyAllowedPageDiagnostics,
   installPageDiagnosticsGuard,
   seedAppStorage,
 } from "./helpers";
@@ -58,7 +58,13 @@ test.describe("in-chat onboarding → home → launcher", () => {
   });
 
   test.afterEach(async ({ page }, testInfo) => {
-    await expectNoPageDiagnostics(page, testInfo.title);
+    // The chat-native tour narrates through the real voice engine the moment
+    // "Take the tutorial" completes onboarding; the keyless harness's stubbed
+    // TTS audio can't be decoded, and useVoiceChat's designed fail-closed path
+    // logs exactly that one error. Everything else must stay clean.
+    await expectOnlyAllowedPageDiagnostics(page, testInfo.title, [
+      /\[useVoiceChat\] .* TTS failed; failing closed/,
+    ]);
   });
 
   test("Local onboarding lands on the home and swipe-left opens the launcher", async ({

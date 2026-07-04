@@ -10,9 +10,11 @@
  *
  * The conductor owns NO presentation — the existing chat widget renderers
  * draw the CHOICE buttons for free from the seeded turn text. It registers
- * the tutorial action + text handlers so the chat's single send funnel
- * (`AppContext.sendActionMessage`) short-circuits tutorial picks and the
- * explicit "start/stop/restart tutorial" commands before they hit the server.
+ * the tutorial action + text handlers: choice picks are short-circuited by
+ * `AppContext.sendActionMessage`, and the explicit "start/stop/restart
+ * tutorial" commands by the composer's `submitText` (the post-onboarding
+ * composer sends through `controller.send`, not the action funnel) — neither
+ * ever reaches the server.
  *
  * Turn ids embed the run's `startedAt` nonce, so a restart re-seeds fresh
  * (unlocked) choice widgets instead of deduping into the previous run's
@@ -176,12 +178,18 @@ export function useTutorialConductor(): void {
   // The tour lives in the transcript, so BECOMING active must reveal the chat
   // — a "start tutorial" typed from the collapsed composer would otherwise
   // seed turns the user never sees. Transition-edged (not on mount) so a
-  // resumed-after-reload tour doesn't yank the chat open at boot.
+  // resumed-after-reload tour doesn't yank the chat open at boot. Deferred a
+  // tick: the first-run "Take the tutorial" pick flips firstRunComplete and
+  // starts the tour in the same commit, and the overlay's falling-edge effect
+  // collapses the sheet (and its CHAT_OPEN listener still sees firstRunOpen)
+  // during that commit's effects — a synchronous dispatch would be swallowed.
   const prevStatusRef = React.useRef(status);
   React.useEffect(() => {
     const prev = prevStatusRef.current;
     prevStatusRef.current = status;
-    if (status === "active" && prev !== "active") dispatchChatOpen();
+    if (status !== "active" || prev === "active") return;
+    const id = window.setTimeout(dispatchChatOpen, 0);
+    return () => window.clearTimeout(id);
   }, [status]);
 }
 
