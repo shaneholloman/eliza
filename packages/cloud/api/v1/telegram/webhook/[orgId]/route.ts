@@ -28,6 +28,13 @@ import { logger } from "@/lib/utils/logger";
 import { isCommand } from "@/lib/utils/telegram-helpers";
 import type { AppEnv } from "@/types/cloud-worker-env";
 
+function allowUnverifiedTelegramDevWebhook(): boolean {
+  return (
+    process.env.NODE_ENV === "development" &&
+    process.env.TELEGRAM_WEBHOOK_ALLOW_UNVERIFIED_DEV === "1"
+  );
+}
+
 async function handleTelegramWebhook(
   request: Request,
   context?: RouteContext<{ orgId: string }>,
@@ -44,8 +51,8 @@ async function handleTelegramWebhook(
   // When no secret is stored the org hasn't wired telegram up (or the webhook
   // is orphaned) — we must not process an unauthenticated update. Previously the
   // non-production branch fell through and handled the update with NO auth at
-  // all (finding L4). The only allowed bypass is an EXPLICIT, env-gated dev flag
-  // that logs loudly; it is never the silent default. (#12878 / #12227)
+  // all (finding L4). The only allowed bypass is an explicit, development-only
+  // env flag that logs loudly; it is never the silent default. (#12878 / #12227)
   if (storedSecret) {
     if (!secretToken) {
       logger.warn("[Telegram Webhook] Missing secret token header", { orgId });
@@ -56,31 +63,28 @@ async function handleTelegramWebhook(
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
   } else {
-    // No secret stored for this org. Explicit opt-in required to process
-    // unauthenticated updates, and only outside production.
-    const insecureBypass =
-      process.env.NODE_ENV !== "production" &&
-      process.env.TELEGRAM_WEBHOOK_ALLOW_INSECURE === "true";
-    if (!insecureBypass) {
+    if (!allowUnverifiedTelegramDevWebhook()) {
       // Orphaned/unconfigured webhook. Return 200 so Telegram stops retrying,
       // but do NOT process the update.
       logger.warn(
         "[Telegram Webhook] No webhook secret configured - ignoring update",
-        { orgId, env: process.env.NODE_ENV },
+        {
+          orgId,
+          env: process.env.NODE_ENV,
+          hint: "Set TELEGRAM_WEBHOOK_ALLOW_UNVERIFIED_DEV=1 for local tunnel testing only.",
+        },
       );
       return Response.json({ ok: true, status: "not_configured" });
     }
-    logger.warn(
-      "[Telegram Webhook] INSECURE dev bypass active - processing update " +
-        "WITHOUT secret verification (TELEGRAM_WEBHOOK_ALLOW_INSECURE=true)",
-      { orgId },
-    );
+    logger.warn("[Telegram Webhook] Accepting unverified development webhook", {
+      orgId,
+    });
   }
 
   let botToken = await telegramAutomationService.getBotToken(orgId);
 
-  // DEV ONLY: Fallback to env variable for testing
-  if (!botToken && process.env.NODE_ENV === "development") {
+  // DEV ONLY: explicit opt-in fallback for local tunnel testing.
+  if (!botToken && allowUnverifiedTelegramDevWebhook()) {
     botToken = process.env.TELEGRAM_BOT_TOKEN || null;
     if (botToken) {
       logger.info("[Telegram Webhook] Using fallback bot token from env", {

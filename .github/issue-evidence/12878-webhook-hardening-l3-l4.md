@@ -36,11 +36,27 @@ BFF secret stripping/stamping, Telegram missing/wrong secret rejection,
 not-configured fail-closed behavior, duplicate `update_id` suppression, and
 rollback of committed dedupe markers for outer handler failures.
 
+After consolidating the overlapping webhook-auth PR, the same security test
+lane also includes provider-native forwarder signature checks and Telegram
+auth-policy coverage:
+
+```bash
+bun test packages/cloud/api/__tests__/eliza-app-webhook-gateway-secret.test.ts \
+  packages/cloud/api/__tests__/eliza-app-webhook-suffix.test.ts \
+  'packages/cloud/api/v1/telegram/webhook/[orgId]/auth-policy.test.ts' \
+  'packages/cloud/api/v1/telegram/webhook/[orgId]/dedupe.test.ts' \
+  packages/cloud/services/gateway-webhook/__tests__/internal-auth.test.ts
+```
+
+Result: PASS after consolidation.
+
 Touched-file Biome check:
 
 ```bash
 bunx biome check packages/cloud/api/__tests__/eliza-app-webhook-gateway-secret.test.ts \
+  packages/cloud/api/__tests__/eliza-app-webhook-suffix.test.ts \
   packages/cloud/api/eliza-app/webhook/_forward.ts \
+  'packages/cloud/api/v1/telegram/webhook/[orgId]/auth-policy.test.ts' \
   'packages/cloud/api/v1/telegram/webhook/[orgId]/dedupe.test.ts' \
   'packages/cloud/api/v1/telegram/webhook/[orgId]/route.ts' \
   packages/cloud/services/gateway-webhook/__tests__/internal-auth.test.ts \
@@ -49,7 +65,7 @@ bunx biome check packages/cloud/api/__tests__/eliza-app-webhook-gateway-secret.t
   packages/cloud/shared/src/types/cloud-worker-env.ts
 ```
 
-Result: PASS, 8 files checked, no fixes applied.
+Result: PASS, 10 files checked, no fixes applied.
 
 Gateway webhook package typecheck:
 

@@ -6,7 +6,8 @@
  *   (L4a) dev fall-open: previously, when no webhook secret was stored for an
  *         org, any non-production request fell through and processed the update
  *         with NO auth. The route now fails closed everywhere; the only bypass
- *         is the explicit, loud, env-gated `TELEGRAM_WEBHOOK_ALLOW_INSECURE`.
+ *         is the explicit, loud, env-gated
+ *         `TELEGRAM_WEBHOOK_ALLOW_UNVERIFIED_DEV`.
  *   (L4b) no dedupe: Telegram re-delivers an update until it gets a 200. The
  *         route now dedupes on `update_id` (scoped per org) via
  *         `webhookEventsRepository.tryCreate`. A replayed `update_id` is a
@@ -156,14 +157,16 @@ function delivery(opts: DeliveryOptions = {}) {
 }
 
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
-const ORIGINAL_INSECURE = process.env.TELEGRAM_WEBHOOK_ALLOW_INSECURE;
+const ORIGINAL_ALLOW_UNVERIFIED =
+  process.env.TELEGRAM_WEBHOOK_ALLOW_UNVERIFIED_DEV;
 
 function restoreEnv() {
   process.env.NODE_ENV = ORIGINAL_NODE_ENV;
-  if (ORIGINAL_INSECURE === undefined) {
-    delete process.env.TELEGRAM_WEBHOOK_ALLOW_INSECURE;
+  if (ORIGINAL_ALLOW_UNVERIFIED === undefined) {
+    delete process.env.TELEGRAM_WEBHOOK_ALLOW_UNVERIFIED_DEV;
   } else {
-    process.env.TELEGRAM_WEBHOOK_ALLOW_INSECURE = ORIGINAL_INSECURE;
+    process.env.TELEGRAM_WEBHOOK_ALLOW_UNVERIFIED_DEV =
+      ORIGINAL_ALLOW_UNVERIFIED;
   }
 }
 
@@ -172,13 +175,14 @@ describe("Telegram webhook — fail-closed auth (L4a)", () => {
     handleUpdate.mockClear();
     getWebhookSecret.mockReset();
     getWebhookSecret.mockResolvedValue(null); // no secret stored for this org
+    delete process.env.TELEGRAM_WEBHOOK_ALLOW_UNVERIFIED_DEV;
     seen.clear();
   });
   afterEach(restoreEnv);
 
   test("no stored secret in dev is NOT processed (no silent fall-open)", async () => {
     process.env.NODE_ENV = "development";
-    delete process.env.TELEGRAM_WEBHOOK_ALLOW_INSECURE;
+    delete process.env.TELEGRAM_WEBHOOK_ALLOW_UNVERIFIED_DEV;
     const res = await delivery();
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
@@ -189,7 +193,7 @@ describe("Telegram webhook — fail-closed auth (L4a)", () => {
 
   test("no stored secret in production is NOT processed", async () => {
     process.env.NODE_ENV = "production";
-    delete process.env.TELEGRAM_WEBHOOK_ALLOW_INSECURE;
+    delete process.env.TELEGRAM_WEBHOOK_ALLOW_UNVERIFIED_DEV;
     const res = await delivery();
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
@@ -200,7 +204,7 @@ describe("Telegram webhook — fail-closed auth (L4a)", () => {
 
   test("explicit env bypass processes in dev (loud, opt-in)", async () => {
     process.env.NODE_ENV = "development";
-    process.env.TELEGRAM_WEBHOOK_ALLOW_INSECURE = "true";
+    process.env.TELEGRAM_WEBHOOK_ALLOW_UNVERIFIED_DEV = "1";
     const res = await delivery();
     expect(res.status).toBe(200);
     expect(handleUpdate).toHaveBeenCalledTimes(1);
@@ -208,7 +212,7 @@ describe("Telegram webhook — fail-closed auth (L4a)", () => {
 
   test("env bypass is refused in production even when set", async () => {
     process.env.NODE_ENV = "production";
-    process.env.TELEGRAM_WEBHOOK_ALLOW_INSECURE = "true";
+    process.env.TELEGRAM_WEBHOOK_ALLOW_UNVERIFIED_DEV = "1";
     const res = await delivery();
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
