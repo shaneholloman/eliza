@@ -4,6 +4,13 @@
  * voice-speaker types. The single source these sibling components import their
  * types from so their contracts stay in sync.
  */
+import type {
+  ChatFailureKind,
+  ChatTurnStatus,
+  ConversationSecretRequest,
+  MessageAttachment,
+} from "../../../api/client-types-chat";
+
 export type ChatVariant = "default" | "game-modal";
 
 export interface ChatLabelSet {
@@ -103,6 +110,32 @@ export interface ChatMessageData {
   text: string;
   /** Voice speaker attribution when this message arrived via voice (R10 §4.1). */
   voiceSpeaker?: ChatVoiceSpeaker;
+  /**
+   * Server failure tag for a failed assistant turn. The glass (overlay) row
+   * reads the recoverable kinds to offer its Retry pill; the panel surfaces
+   * render failure gates in their body renderer instead.
+   */
+  failureKind?: ChatFailureKind;
+  /** Media attached to this turn — read by body renderers and the in-flight
+   * (empty assistant) detection; the row itself renders no attachment chrome. */
+  attachments?: MessageAttachment[];
+  /** Agent reasoning for this turn — read by body renderers (ThinkingBlock).
+   * Transport-only on the row; the row renders no reasoning chrome itself. */
+  reasoning?: string;
+  /** Pending secret / OAuth request — read by body renderers (SensitiveRequestBlock). */
+  secretRequest?: ConversationSecretRequest;
+}
+
+/**
+ * Volatile per-row values ChatMessage forwards to `renderContent` so the body
+ * closure can stay referentially stable (identity changes in `renderContent`
+ * re-render EVERY row; these fields are compared per-row by the memo instead).
+ */
+export interface ChatMessageRenderContext {
+  /** Live phase status for the one in-flight (empty assistant) turn. */
+  turnStatus?: ChatTurnStatus | null;
+  /** Hide reasoning while this turn is still streaming. */
+  suppressReasoning?: boolean;
 }
 
 export interface ChatMessageLabels extends ChatLabelSet {}

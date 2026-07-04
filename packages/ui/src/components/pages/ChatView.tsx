@@ -50,7 +50,6 @@ import {
   saveContinuousChatMode,
 } from "../../state/persistence";
 import { deriveAgentReady } from "../../state/types";
-import { getVrmPreviewUrl } from "../../state/vrm";
 import type { TranslateFn } from "../../types";
 import {
   buildDroppedAttachmentNotice,
@@ -190,7 +189,6 @@ export function ChatView({
     analysisMode: s.analysisMode,
     shareIngestNotice: s.shareIngestNotice,
     chatAgentVoiceMuted: s.chatAgentVoiceMuted,
-    selectedVrmIndex: s.selectedVrmIndex,
     uiLanguage: s.uiLanguage,
     sendChatText: s.sendChatText,
     t: s.t,
@@ -218,7 +216,6 @@ export function ChatView({
     analysisMode,
     shareIngestNotice: rawShareIngestNotice,
     chatAgentVoiceMuted: agentVoiceMuted,
-    selectedVrmIndex,
     uiLanguage,
     sendChatText,
     t: appTranslate,
@@ -441,8 +438,6 @@ export function ChatView({
     isGameModal,
     visibleMsgs,
   });
-  const agentAvatarSrc =
-    selectedVrmIndex > 0 ? getVrmPreviewUrl(selectedVrmIndex) : null;
 
   useChatAvatarVoiceBridge({
     mouthOpen: voice.mouthOpen,
@@ -718,10 +713,7 @@ export function ChatView({
             isGameModal ? (
               <TypingIndicator variant="game-modal" agentName={agentName} />
             ) : (
-              <TypingIndicator
-                agentName={agentName}
-                agentAvatarSrc={agentAvatarSrc}
-              />
+              <TypingIndicator agentName={agentName} />
             )
           ) : null
         }

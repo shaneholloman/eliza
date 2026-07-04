@@ -1,7 +1,11 @@
 /**
  * Message bubble surface for a single chat line, toned for assistant vs user.
- * When a connector `source` is set it draws a source-colored outline so
- * cross-channel messages stay visually distinct without a repeated text badge.
+ * Two chromes: `panel` (theme-token fill, ChatView / detached windows /
+ * ChatSurface) and `glass` (the continuous overlay's floating dark-glass row —
+ * fixed light text + hairline edge + text shadow, never theme `--txt`, so it
+ * stays legible over any wallpaper). When a connector `source` is set the panel
+ * chrome draws a source-colored outline so cross-channel messages stay
+ * visually distinct without a repeated text badge.
  */
 import type * as React from "react";
 
@@ -11,10 +15,20 @@ import {
   normalizeChatSourceKey,
 } from "./chat-source.helpers";
 
+/** Soft text shadow for floating (un-scrimmed) glass text so it reads over
+ * bright views. Shared with the overlay's other floating chrome. */
+export const GLASS_FLOAT_SHADOW = "[text-shadow:0_1px_4px_rgba(0,0,0,0.7)]";
+
+/** The overlay's shared easing for cheap (opacity/translate-only) motion. */
+export const GLASS_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
+
 export type ChatBubbleTone = "assistant" | "user";
+export type ChatBubbleVariant = "panel" | "glass";
 
 export interface ChatBubbleProps extends React.HTMLAttributes<HTMLDivElement> {
   tone?: ChatBubbleTone;
+  /** Chrome: theme-token `panel` (default) or the overlay's floating `glass`. */
+  variant?: ChatBubbleVariant;
   /**
    * Source channel the message came from (e.g. "imessage", "telegram",
    * "discord", "whatsapp"). When set, the bubble renders a connector-
@@ -26,11 +40,35 @@ export interface ChatBubbleProps extends React.HTMLAttributes<HTMLDivElement> {
 
 export function ChatBubble({
   tone = "assistant",
+  variant = "panel",
   source,
   className,
   ...props
 }: ChatBubbleProps) {
   const normalizedSource = normalizeChatSourceKey(source) ?? undefined;
+
+  if (variant === "glass") {
+    return (
+      <div
+        className={cn(
+          // whitespace-pre-wrap keeps newlines; overflow-wrap breaks long URLs /
+          // hashes / paths so they can't blow out the bubble width on a phone.
+          "relative w-fit max-w-full whitespace-pre-wrap rounded-2xl px-3.5 py-2 text-[14px] leading-relaxed [overflow-wrap:anywhere]",
+          tone === "user" ? "rounded-br-md" : "rounded-bl-md",
+          // Message text must remain selectable for normal highlight/copy.
+          "select-text [-webkit-touch-callout:default]",
+          // No per-message fill — text floats on the overlay's one shared panel
+          // glass; the hairline edge defines the item boundary (#10698).
+          "border border-white/15 text-white",
+          GLASS_FLOAT_SHADOW,
+          className,
+        )}
+        data-chat-source={normalizedSource ?? undefined}
+        {...props}
+      />
+    );
+  }
+
   const sourceBorderClassName = normalizedSource
     ? getChatSourceMeta(normalizedSource).borderClassName
     : "border-transparent";
