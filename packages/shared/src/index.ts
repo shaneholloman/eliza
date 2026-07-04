@@ -201,6 +201,7 @@ export * from "./config/ui-spec.js";
 export * from "./config/wechat-config.js";
 export * from "./config/zod-schema.agent-runtime.js";
 export * from "./config/zod-schema.core.js";
+export * from "./connector-account-catalog.js";
 export * from "./connector-cred-types.js";
 export * from "./connectors.js";
 export {
