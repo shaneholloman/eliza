@@ -223,6 +223,10 @@ async function persistCloudLoginStatus(args: {
         "Ensure this file has restrictive permissions (chmod 600).",
     );
   } catch (saveErr) {
+    // error-policy:J6 best-effort — the config file is one of several
+    // persistence layers for the API key (sealed secrets + agent DB below
+    // also carry it); a config-write failure is logged loud but does not
+    // abort login, which continues via the other layers.
     logger.error(
       `[cloud-login] Failed to save cloud API key to config: ${
         saveErr instanceof Error ? saveErr.message : String(saveErr)
@@ -309,7 +313,9 @@ async function persistCloudLoginStatus(args: {
       secrets: { ...nextSecrets },
     });
   } catch (err) {
-    // Non-fatal: config/sealed secret persistence is enough for login continuity.
+    // error-policy:J6 best-effort — config/sealed-secret persistence is enough
+    // for login continuity; the agent-DB copy is a convenience layer, so its
+    // failure is warned (observable) but non-fatal.
     logger.warn(
       `[cloud-routes] Failed to persist cloud secrets to agent DB: ${String(
         err,
@@ -426,6 +432,9 @@ export async function handleCloudRoute(
         }),
       });
     } catch (error) {
+      // error-policy:J4 explicit degrade — the home-remote-runner access probe
+      // renders an `available: false` error state the UI shows directly; the
+      // reason is surfaced, not swallowed.
       sendJson(res, {
         available: false,
         status: "error",
@@ -446,6 +455,8 @@ export async function handleCloudRoute(
         saveConfig: services.saveElizaConfig,
       });
     } catch (err) {
+      // error-policy:J1 boundary translation — a disconnect failure surfaces as
+      // a 500 with the message, never a fabricated success.
       const message = err instanceof Error ? err.message : String(err);
       logger.error(`[cloud/disconnect] failed: ${message}`);
       sendJson(res, { ok: false, error: message }, 500);
@@ -478,6 +489,8 @@ export async function handleCloudRoute(
       });
       sendJson(res, { ok: true });
     } catch (err) {
+      // error-policy:J1 boundary translation — a persistence failure surfaces as
+      // a 500 with the message; the route never reports success it did not do.
       const msg = err instanceof Error ? err.message : String(err);
       logger.error(`[cloud/login/persist] Failed: ${msg}`);
       sendJson(res, { ok: false, error: msg }, 500);
@@ -515,6 +528,9 @@ export async function handleCloudRoute(
     let pollRes: Response;
     try {
       pollRes = await fetchCloudLoginStatus(sessionId, baseUrl);
+      // error-policy:J1 boundary translation — transport failure to Eliza Cloud
+      // maps to 504 (timeout) or 502 (unreachable); the error is reported on
+      // the telemetry span and returned as an explicit error status.
     } catch (fetchErr) {
       if (isTimeoutError(fetchErr)) {
         loginPollSpan.failure({ error: fetchErr, statusCode: 504 });
@@ -579,6 +595,8 @@ export async function handleCloudRoute(
         userId?: unknown;
       };
     } catch (parseErr) {
+      // error-policy:J3 sanitizing boundary — an unparseable upstream body is an
+      // explicit 502 "invalid JSON", never a fabricated authenticated result.
       loginPollSpan.failure({ error: parseErr, statusCode: pollRes.status });
       sendJson(res, {
         status: "error",

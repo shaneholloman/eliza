@@ -51,6 +51,11 @@ async function fetchCryptoStatusCached(
   if (cached && cached.expiresAt > now) {
     return cached.value;
   }
+  // error-policy:J4 explicit degrade — crypto/status is an advisory feature
+  // flag; a fetch failure or non-OK response degrades to the last cached value
+  // (or null, which `mapBillingSummary` reads as crypto-disabled). The failure
+  // is NOT cached, so a transient outage does not pin "disabled" for the full
+  // TTL and the next request retries upstream.
   const response = await fetchUpstream(
     `${baseUrl}/api/crypto/status`,
     "GET",
@@ -60,12 +65,21 @@ async function fetchCryptoStatusCached(
   if (!response?.ok) {
     return cached?.value ?? null;
   }
-  const value = await readJsonResponse(response).catch(() => ({}));
+  // A 200 with a body that fails to parse is a real upstream defect, not a
+  // healthy "empty status": degrade to the safe default for this response but
+  // do NOT cache it, so we re-fetch next time instead of serving a fabricated
+  // empty status for the whole TTL.
+  let parsed: unknown;
+  try {
+    parsed = await response.json();
+  } catch {
+    return cached?.value ?? null;
+  }
   cryptoStatusCache.set(cacheKey, {
-    value,
+    value: parsed,
     expiresAt: now + CRYPTO_STATUS_CACHE_MS,
   });
-  return value;
+  return parsed;
 }
 
 function resolveCloudBaseUrl(config: CloudProxyConfigLike): string {
@@ -222,6 +236,10 @@ async function fetchUpstream(
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
+  // error-policy:J3 sanitizing boundary — a non-JSON upstream body yields an
+  // explicit error-shaped result (`success` mirrors the HTTP status, `error`
+  // carries the raw text) rather than a fabricated valid payload; the caller
+  // forwards the upstream status alongside it, so the failure stays visible.
   return response.json().catch(async () => ({
     success: response.ok,
     error: await response.text().catch(() => "Billing request failed"),

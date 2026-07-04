@@ -60,7 +60,14 @@ function queryLimit(ctx: RouteHandlerContext, fallback: number): number {
   return clampLimit(raw === undefined ? undefined : Number(raw), fallback);
 }
 
-/** Map a thrown CLI error to the route error contract. */
+/**
+ * Map a thrown CLI error to the route error contract.
+ *
+ * error-policy:J1 boundary translation — the single outermost handler for the
+ * birdclaw CLI transport. It distinguishes not-installed (503 + `installed:
+ * false`, which drives the setup screen) from a CLI execution failure (502);
+ * neither case fabricates data.
+ */
 function cliFailure(err: unknown): RouteHandlerResult {
   if (err instanceof BirdclawCliError) {
     if (err.kind === "not-installed") {
@@ -117,6 +124,7 @@ async function tweetsHandler(
     });
     return json(200, { tweets });
   } catch (err) {
+    // error-policy:J1 boundary translation — see cliFailure.
     return cliFailure(err);
   }
 }
@@ -141,6 +149,7 @@ async function inboxHandler(
     const items = await svc.inbox({ kind, limit: queryLimit(ctx, 20) });
     return json(200, { items });
   } catch (err) {
+    // error-policy:J1 boundary translation — see cliFailure.
     return cliFailure(err);
   }
 }
@@ -167,6 +176,7 @@ async function syncHandler(
     logger.info(`[plugin-birdclaw] sync ${collection}: ${result.summary}`);
     return json(200, { result });
   } catch (err) {
+    // error-policy:J1 boundary translation — see cliFailure.
     return cliFailure(err);
   }
 }
@@ -192,6 +202,7 @@ async function digestHandler(
     const digest = await svc.digest(period);
     return json(200, { digest });
   } catch (err) {
+    // error-policy:J1 boundary translation — see cliFailure.
     return cliFailure(err);
   }
 }

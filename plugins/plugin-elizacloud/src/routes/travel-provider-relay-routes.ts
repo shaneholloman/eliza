@@ -71,6 +71,10 @@ function readBody(req: http.IncomingMessage): Promise<string | undefined> {
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
+  // error-policy:J3 sanitizing boundary — a non-JSON upstream body yields an
+  // explicit error-shaped result (`success` mirrors the HTTP status, `error`
+  // carries the raw text) rather than a fabricated valid payload; the caller
+  // forwards the upstream status alongside it, so the failure stays visible.
   return response.json().catch(async () => ({
     success: response.ok,
     error: await response
@@ -153,6 +157,8 @@ export async function handleTravelProviderRelayRoute(
     try {
       body = await readBody(req);
     } catch (err) {
+      // error-policy:J3 sanitizing boundary — a body that exceeds the size cap
+      // (or fails to read) is an explicit 413, not a silently-dropped request.
       const msg = err instanceof Error ? err.message : "Failed to read body";
       sendJsonError(res, msg, 413);
       return true;

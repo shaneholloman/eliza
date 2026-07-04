@@ -87,6 +87,10 @@ async function fetchCloudCreditsByApiKey(
     );
   }
 
+  // error-policy:J3 sanitizing boundary — parse defensively so a non-OK
+  // response with a malformed body still lets us surface any `error` field
+  // below; on an OK response a parse miss leaves `balance` unresolved and the
+  // caller throws rather than fabricating a credit figure.
   const creditResponse = (await response.json().catch(() => ({}))) as Record<
     string,
     unknown

@@ -114,6 +114,9 @@ export async function handleCloudRelayRoute(
       }),
     });
   } catch (err) {
+    // error-policy:J4 explicit degrade — the relay-status probe renders an
+    // `available: false` error state the UI shows directly; the reason is
+    // surfaced, not swallowed.
     helpers.json(res, {
       available: false,
       status: "error",
