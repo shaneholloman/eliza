@@ -3,15 +3,55 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { resolveMainAppDir } from "./lib/app-dir.mjs";
 import { resolveRepoRootFromImportMeta } from "./lib/repo-root.mjs";
 
-const repoRoot = resolveRepoRootFromImportMeta(import.meta.url, {
-  fallbackToCwd: true,
-});
-const appDir = resolveMainAppDir(repoRoot, "app");
+const IOS_AUTH_CALLBACK_SMOKE_REQUEST_KEY = "eliza:auth-callback-smoke:request";
+const IOS_AUTH_CALLBACK_SMOKE_RESULT_KEY = "eliza:auth-callback-smoke:result";
+const IOS_AUTH_CALLBACK_ATTEMPTS = Number.parseInt(
+  process.env.IOS_AUTH_CALLBACK_SMOKE_ATTEMPTS ?? "60",
+  10,
+);
+const IOS_AUTH_CALLBACK_DELAY_MS = Number.parseInt(
+  process.env.IOS_AUTH_CALLBACK_SMOKE_DELAY_MS ?? "1000",
+  10,
+);
 
-function parseArgs(argv) {
+// Resolve the app directory this smoke should target. When this elizaOS
+// checkout is nested inside a consumer monorepo that wraps it as `eliza/`,
+// `resolveRepoRootFromImportMeta` (by design for consumer wrappers) walks up
+// to the OUTER repo, so `resolveMainAppDir` audits the consumer's manifest
+// and fires the consumer's URL scheme (e.g. `milady://auth/callback`) instead
+// of this repo's `ai.elizaos.app` / `elizaos://`. Mirror the Android build
+// lane's `ELIZA_MOBILE_REPO_ROOT` pin (run-mobile-build.mjs) and add an
+// explicit `--app-dir` override so each repo's `test:sim:auth:*` lane
+// deterministically targets its own app. Precedence:
+//   --app-dir  >  ELIZA_MOBILE_REPO_ROOT  >  repo-root walk.
+export function resolveTargetAppDir(cliAppDir) {
+  if (cliAppDir) {
+    return { appDir: path.resolve(cliAppDir), source: "--app-dir" };
+  }
+  const pinned = process.env.ELIZA_MOBILE_REPO_ROOT?.trim();
+  if (pinned) {
+    const pinnedRoot = path.resolve(pinned);
+    return {
+      appDir: resolveMainAppDir(pinnedRoot, "app"),
+      source: "ELIZA_MOBILE_REPO_ROOT",
+      repoRoot: pinnedRoot,
+    };
+  }
+  const repoRoot = resolveRepoRootFromImportMeta(import.meta.url, {
+    fallbackToCwd: true,
+  });
+  return {
+    appDir: resolveMainAppDir(repoRoot, "app"),
+    source: "repo-root-walk",
+    repoRoot,
+  };
+}
+
+export function parseArgs(argv) {
   const options = {
     platform: "both",
     registrationOnly: false,
@@ -20,6 +60,7 @@ function parseArgs(argv) {
     path: "auth/callback",
     query: "state=simulator-oauth-state&code=simulator-oauth-code",
     url: "",
+    appDir: "",
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -46,6 +87,9 @@ function parseArgs(argv) {
       case "--url":
         options.url = argv[++index] ?? "";
         break;
+      case "--app-dir":
+        options.appDir = argv[++index] ?? "";
+        break;
       case "--help":
       case "-h":
         printUsageAndExit();
@@ -68,11 +112,13 @@ Options:
   --serial <adb-serial>         Android emulator/device serial
   --path <path>                 Callback path. Default: auth/callback
   --query <query>               Callback query. Default: state=...&code=...
-  --url <url>                   Full callback URL override`);
+  --url <url>                   Full callback URL override
+  --app-dir <dir>               Pin the target app directory (overrides
+                                ELIZA_MOBILE_REPO_ROOT and the repo-root walk)`);
   process.exit(0);
 }
 
-function readAppIdentity() {
+function readAppIdentity(appDir) {
   const cfgPath = path.join(appDir, "app.config.ts");
   if (!fs.existsSync(cfgPath)) {
     throw new Error(`app.config.ts not found at ${cfgPath}`);
@@ -97,7 +143,7 @@ function assertFileExists(filePath) {
   }
 }
 
-function assertIosRegistration(app) {
+function assertIosRegistration(app, appDir) {
   const plistPath = path.join(appDir, "ios", "App", "App", "Info.plist");
   assertFileExists(plistPath);
   const plist = fs.readFileSync(plistPath, "utf8");
@@ -114,7 +160,7 @@ function assertIosRegistration(app) {
   return { platform: "ios", file: plistPath, scheme: app.urlScheme };
 }
 
-function assertAndroidRegistration(app) {
+function assertAndroidRegistration(app, appDir) {
   const manifestPath = path.join(
     appDir,
     "android",
@@ -180,7 +226,7 @@ function requestedPlatforms(platform) {
   }
 }
 
-function buildCallbackUrl(app, options) {
+export function buildCallbackUrl(app, options) {
   if (options.url) return options.url;
   const callbackPath = options.path.replace(/^\/+/, "");
   const query = options.query.replace(/^\?/, "");
@@ -201,7 +247,204 @@ function runCommand(command, args, label) {
   }
 }
 
-function runIosSimulator(app, url, options) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function preferenceNativeKeys(key) {
+  return [`CapacitorStorage.${key}`, key];
+}
+
+function tryRunCommand(command, args) {
+  try {
+    return execFileSync(command, args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function iosPrefsDomainPath(device, appId) {
+  const container = tryRunCommand("xcrun", [
+    "simctl",
+    "get_app_container",
+    device,
+    appId,
+    "data",
+  ]);
+  if (!container) return null;
+  return path.join(container, "Library", "Preferences", appId);
+}
+
+function writeIosPreference(device, appId, key, value) {
+  for (const nativeKey of preferenceNativeKeys(key)) {
+    runCommand(
+      "xcrun",
+      [
+        "simctl",
+        "spawn",
+        device,
+        "defaults",
+        "write",
+        appId,
+        nativeKey,
+        "-string",
+        value,
+      ],
+      `iOS preference write for ${key}`,
+    );
+  }
+}
+
+function readIosPreference(device, appId, key) {
+  const domainPath = iosPrefsDomainPath(device, appId);
+  if (domainPath) {
+    const plist = `${domainPath}.plist`;
+    if (fs.existsSync(plist)) {
+      const json = tryRunCommand("plutil", [
+        "-convert",
+        "json",
+        "-o",
+        "-",
+        plist,
+      ]);
+      if (json) {
+        try {
+          const parsed = JSON.parse(json);
+          for (const nativeKey of preferenceNativeKeys(key)) {
+            if (typeof parsed[nativeKey] === "string") return parsed[nativeKey];
+          }
+        } catch {
+          // Fall through to defaults read.
+        }
+      }
+    }
+    for (const nativeKey of preferenceNativeKeys(key)) {
+      const value = tryRunCommand("defaults", ["read", domainPath, nativeKey]);
+      if (value !== null) return value;
+    }
+  }
+
+  for (const nativeKey of preferenceNativeKeys(key)) {
+    const value = tryRunCommand("xcrun", [
+      "simctl",
+      "spawn",
+      device,
+      "defaults",
+      "read",
+      appId,
+      nativeKey,
+    ]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function deleteIosPreference(device, appId, key) {
+  for (const nativeKey of preferenceNativeKeys(key)) {
+    tryRunCommand("xcrun", [
+      "simctl",
+      "spawn",
+      device,
+      "defaults",
+      "delete",
+      appId,
+      nativeKey,
+    ]);
+  }
+  const domainPath = iosPrefsDomainPath(device, appId);
+  if (domainPath) {
+    for (const nativeKey of preferenceNativeKeys(key)) {
+      tryRunCommand("defaults", ["delete", domainPath, nativeKey]);
+    }
+  }
+}
+
+function flushIosPreferences(device) {
+  tryRunCommand("xcrun", ["simctl", "spawn", device, "killall", "cfprefsd"]);
+}
+
+export function expectedAuthCallbackFromUrl(url) {
+  const parsed = new URL(url);
+  return {
+    path: [parsed.host, parsed.pathname.replace(/^\/+|\/+$/g, "")]
+      .filter(Boolean)
+      .join("/"),
+    state: parsed.searchParams.get("state") ?? "",
+    code: parsed.searchParams.get("code") ?? "",
+  };
+}
+
+function armIosAuthCallbackSmoke(device, app, url) {
+  const expected = expectedAuthCallbackFromUrl(url);
+  deleteIosPreference(device, app.appId, IOS_AUTH_CALLBACK_SMOKE_RESULT_KEY);
+  writeIosPreference(
+    device,
+    app.appId,
+    IOS_AUTH_CALLBACK_SMOKE_REQUEST_KEY,
+    JSON.stringify({
+      expected,
+      armedAt: new Date().toISOString(),
+    }),
+  );
+  writeIosPreference(
+    device,
+    app.appId,
+    IOS_AUTH_CALLBACK_SMOKE_RESULT_KEY,
+    JSON.stringify({
+      ok: false,
+      phase: "requested",
+      expected,
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+  flushIosPreferences(device);
+  return expected;
+}
+
+async function pollIosAuthCallbackSmoke(device, app, expected) {
+  let lastRaw = "";
+  for (let attempt = 1; attempt <= IOS_AUTH_CALLBACK_ATTEMPTS; attempt += 1) {
+    lastRaw =
+      readIosPreference(
+        device,
+        app.appId,
+        IOS_AUTH_CALLBACK_SMOKE_RESULT_KEY,
+      ) ?? "";
+    if (lastRaw) {
+      let parsed = null;
+      try {
+        parsed = JSON.parse(lastRaw);
+      } catch {
+        parsed = null;
+      }
+      if (parsed?.ok === true) {
+        if (parsed.path !== expected.path) {
+          throw new Error(
+            `iOS auth callback path mismatch: expected ${expected.path}, got ${parsed.path}`,
+          );
+        }
+        if (parsed.state !== expected.state || parsed.code !== expected.code) {
+          throw new Error(
+            `iOS auth callback query mismatch: expected state/code ${expected.state}/${expected.code}, got ${parsed.state}/${parsed.code}`,
+          );
+        }
+        return parsed;
+      }
+      if (parsed?.phase === "failed" || parsed?.error) {
+        throw new Error(`iOS auth callback smoke failed: ${lastRaw}`);
+      }
+    }
+    await sleep(IOS_AUTH_CALLBACK_DELAY_MS);
+  }
+  throw new Error(
+    `iOS auth callback smoke timed out after ${IOS_AUTH_CALLBACK_ATTEMPTS} attempts. Last result: ${lastRaw || "<none>"}`,
+  );
+}
+
+async function runIosSimulator(app, url, options) {
   const device = options.device || "booted";
   const appContainer = runCommand(
     "xcrun",
@@ -223,6 +466,7 @@ function runIosSimulator(app, url, options) {
       `Installed iOS app ${app.appId} does not include the ${app.urlScheme} URL scheme. Rebuild and reinstall the app on the simulator before rerunning this smoke test.`,
     );
   }
+  const expected = armIosAuthCallbackSmoke(device, app, url);
   runCommand(
     "xcrun",
     ["simctl", "launch", device, app.appId],
@@ -233,7 +477,13 @@ function runIosSimulator(app, url, options) {
     ["simctl", "openurl", device, url],
     `iOS callback openurl for ${url}`,
   );
-  return { platform: "ios", device, openedUrl: url };
+  const handled = await pollIosAuthCallbackSmoke(device, app, expected);
+  return {
+    platform: "ios",
+    device,
+    openedUrl: url,
+    handled,
+  };
 }
 
 function resolveAdb() {
@@ -279,9 +529,93 @@ function shellSingleQuote(value) {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+// Parse the winning component from `cmd package resolve-activity` output.
+// We invoke it with `--brief`, which prints the resolved component as a bare
+// `<package>/<activity>` line (e.g. `ai.elizaos.app/.MainActivity`), or
+// `No activity found` when nothing handles the intent. To stay robust across
+// Android/adb versions we also accept the verbose `ResolveInfo` form:
+//   `packageName=<pkg>` is the PACKAGE identity (preferred),
+//   `name=<...>` is the ACTIVITY CLASS (NOT the package — must not be mistaken
+//   for the package), and `<pkg>/<activity>` may also appear inline.
+// Returns the resolved package identity (bare `<pkg>` or `<pkg>/<activity>`),
+// or "" when unresolved. Pure so it is unit-testable without a device.
+export function parseResolvedActivity(output) {
+  const lines = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  // `--brief` line: a bare `<pkg>/<activity>` component (contains a `/`, no `=`).
+  for (const line of lines) {
+    if (
+      line.includes("/") &&
+      !line.includes("=") &&
+      !/\s/.test(line) &&
+      /^[A-Za-z0-9_.]+\//.test(line)
+    ) {
+      return line;
+    }
+  }
+  // Verbose form: packageName= is authoritative for the package identity.
+  const packageName = output.match(/\bpackageName=([^\s]+)/)?.[1];
+  if (packageName) return packageName;
+  // Verbose ResolveInfo often embeds the component as `<pkg>/<activity>` after
+  // the flags; capture that (but NOT a bare `name=` activity class).
+  const inlineComponent = output.match(
+    /\b([A-Za-z0-9_.]+\/[A-Za-z0-9_.$]+)/,
+  )?.[1];
+  if (inlineComponent) return inlineComponent;
+  return "";
+}
+
+// Whether a resolved component belongs to the expected package. Pure/testable.
+export function resolvedActivityMatchesApp(resolvedName, appId) {
+  return resolvedName.startsWith(`${appId}/`) || resolvedName === appId;
+}
+
+// Assert the deep link resolves to the EXPECTED package before we fire it.
+// Without this the callback leg is effectively fire-and-forget: `am start`
+// with a VIEW intent will happily launch whatever app claims the scheme, so
+// a wrong-target run (consumer app registering the same-shaped scheme, or a
+// nested-checkout mis-resolution) exits 0 silently. `cmd package
+// resolve-activity` names the winning component up front so a mismatch fails
+// loudly. Returns the resolved component string for the JSON result.
+function assertAndroidResolvesToPackage(adb, serial, app, url) {
+  const resolveCommand = [
+    "cmd",
+    "package",
+    "resolve-activity",
+    "--brief",
+    "-a",
+    "android.intent.action.VIEW",
+    "-d",
+    shellSingleQuote(url),
+  ].join(" ");
+  const output = runCommand(
+    adb,
+    ["-s", serial, "shell", resolveCommand],
+    `Android resolve-activity for ${url}`,
+  );
+  const resolvedName = parseResolvedActivity(output);
+  if (!resolvedActivityMatchesApp(resolvedName, app.appId)) {
+    throw new Error(
+      `Android deep link ${url} does not resolve to ${app.appId} ` +
+        `(resolved to "${resolvedName || "<none>"}"). resolve-activity output:\n${output}`,
+    );
+  }
+  return resolvedName;
+}
+
 function runAndroidSimulator(app, url, options) {
   const adb = resolveAdb();
   const serial = resolveAndroidSerial(adb, options.serial);
+  // Preflight: the scheme must resolve to OUR package, not a consumer app
+  // that also claims it. Fails loudly on a wrong-target topology.
+  const resolvedActivity = assertAndroidResolvesToPackage(
+    adb,
+    serial,
+    app,
+    url,
+  );
   runCommand(
     adb,
     [
@@ -320,54 +654,78 @@ function runAndroidSimulator(app, url, options) {
       `Android callback did not resolve to ${app.appId}. am start output:\n${output}`,
     );
   }
-  return { platform: "android", serial, openedUrl: url };
+  return {
+    platform: "android",
+    serial,
+    openedUrl: url,
+    resolvedActivity,
+  };
 }
 
-const options = parseArgs(process.argv.slice(2));
-const app = readAppIdentity();
-const platforms = requestedPlatforms(options.platform);
-const registrationResults = platforms.map((platform) =>
-  platform === "ios"
-    ? assertIosRegistration(app)
-    : assertAndroidRegistration(app),
-);
-const url = buildCallbackUrl(app, options);
+async function main() {
+  const options = parseArgs(process.argv.slice(2));
+  const { appDir, source: appDirSource } = resolveTargetAppDir(options.appDir);
+  const app = readAppIdentity(appDir);
+  const platforms = requestedPlatforms(options.platform);
+  const registrationResults = platforms.map((platform) =>
+    platform === "ios"
+      ? assertIosRegistration(app, appDir)
+      : assertAndroidRegistration(app, appDir),
+  );
+  const url = buildCallbackUrl(app, options);
 
-console.log(
-  `[mobile-auth-smoke] ${app.appName} (${app.appId}) callback URL: ${url}`,
-);
+  console.log(
+    `[mobile-auth-smoke] ${app.appName} (${app.appId}) scheme=${app.urlScheme} ` +
+      `appDir=${appDir} (${appDirSource}) callback URL: ${url}`,
+  );
 
-if (options.registrationOnly) {
+  if (options.registrationOnly) {
+    console.log(
+      JSON.stringify(
+        {
+          appDir,
+          appDirSource,
+          app,
+          registrationOnly: true,
+          registrations: registrationResults,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  const simulatorResults = [];
+  for (const platform of platforms) {
+    simulatorResults.push(
+      platform === "ios"
+        ? await runIosSimulator(app, url, options)
+        : runAndroidSimulator(app, url, options),
+    );
+  }
+
   console.log(
     JSON.stringify(
       {
         appDir,
+        appDirSource,
         app,
-        registrationOnly: true,
         registrations: registrationResults,
+        simulators: simulatorResults,
       },
       null,
       2,
     ),
   );
-  process.exit(0);
 }
 
-const simulatorResults = platforms.map((platform) =>
-  platform === "ios"
-    ? runIosSimulator(app, url, options)
-    : runAndroidSimulator(app, url, options),
-);
-
-console.log(
-  JSON.stringify(
-    {
-      appDir,
-      app,
-      registrations: registrationResults,
-      simulators: simulatorResults,
-    },
-    null,
-    2,
-  ),
-);
+if (
+  process.argv[1] &&
+  pathToFileURL(process.argv[1]).href === import.meta.url
+) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}
