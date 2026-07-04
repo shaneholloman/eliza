@@ -29,10 +29,10 @@ import {
 	isAgentSelf,
 	matchEntityToConnectorAdminWhitelist,
 	normalizeRole,
-	resolveWorldForMessage,
 	ROLE_RANK,
 	recordOwnerGrant,
 	recordRoleGrant,
+	resolveWorldForMessage,
 } from "./roles.ts";
 import {
 	roleRank as gateRoleRank,
@@ -492,9 +492,7 @@ describe("connector metadata is registry-driven, not Discord-special-cased (#120
 		} as unknown as Memory;
 		const resolvedServer = await resolveWorldForMessage(runtime, serverMsg);
 		// serverId is preferred (first key), matching the prior literal-branch order.
-		expect(resolvedServer?.world?.id).toBe(
-			createUniqueUuid(runtime, "srv-9"),
-		);
+		expect(resolvedServer?.world?.id).toBe(createUniqueUuid(runtime, "srv-9"));
 
 		const channelMsg = {
 			entityId: "e-1",
@@ -523,7 +521,7 @@ describe("connector metadata is registry-driven, not Discord-special-cased (#120
 		expect(await resolveWorldForMessage(runtime, msg)).toBeNull();
 	});
 
-	it("grep guard: no `source === \"discord\"` literal branch survives in roles.ts", () => {
+	it('grep guard: no `source === "discord"` literal branch survives in roles.ts', () => {
 		const rolesSource = readFileSync(
 			fileURLToPath(new URL("./roles.ts", import.meta.url)),
 			"utf8",

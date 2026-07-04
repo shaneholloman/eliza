@@ -282,13 +282,14 @@ export const LEGACY_DISCORD_CONNECTOR_SOURCE_OWNER =
  * generically. `fromId`/`entityName` were the flat Memory metadata keys Discord
  * stamps; `discordServerId`/`discordChannelId` were the world-id derivation keys.
  */
-export const LEGACY_DISCORD_CONNECTOR_SOURCE_METADATA: ConnectorSourceMetadata = {
-	identityMetadataMapping: {
-		userIdField: "fromId",
-		nameField: "entityName",
-	},
-	worldIdMetadataKeys: ["discordServerId", "discordChannelId"],
-};
+export const LEGACY_DISCORD_CONNECTOR_SOURCE_METADATA: ConnectorSourceMetadata =
+	{
+		identityMetadataMapping: {
+			userIdField: "fromId",
+			nameField: "entityName",
+		},
+		worldIdMetadataKeys: ["discordServerId", "discordChannelId"],
+	};
 
 registerConnectorSourceMetadata(
 	"discord",

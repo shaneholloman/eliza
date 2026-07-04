@@ -24,7 +24,7 @@ import {
 	getConnectorIdentityMetadataMapping,
 	getConnectorWorldIdMetadataKeys,
 	normalizeConnectorSource,
-} from "./connectors";
+} from "./connectors.ts";
 import { createUniqueUuid } from "./entities";
 import { logger } from "./logger";
 import type { IAgentRuntime, Memory, UUID, World } from "./types";
@@ -246,8 +246,7 @@ function getConnectorMetadataFromMemory(
 
 	const canonicalSource = normalizeConnectorSource(source) || source;
 	const displayName =
-		mapping.nameField &&
-		typeof memoryMetadata?.[mapping.nameField] === "string"
+		mapping.nameField && typeof memoryMetadata?.[mapping.nameField] === "string"
 			? (memoryMetadata[mapping.nameField] as string)
 			: undefined;
 
