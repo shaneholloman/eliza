@@ -28,6 +28,7 @@ pytest packages/benchmarks/meeting-transcription-proof/tests -q
 | Path | Role |
 | --- | --- |
 | `elizaos_meeting_transcription_proof/cli.py` | CLI, manifest validation, report writer |
+| `elizaos_meeting_transcription_proof/artifact_scoring.py` | Deterministic generated-artifact scoring |
 | `fixtures/mock-meeting-manifest.json` | Hermetic schema/capture/evidence fixture |
 | `tests/` | Lane separation and real evidence validation tests |
 
@@ -66,6 +67,16 @@ forbidden without an explicit opt-in identity source such as a voice profile,
 user correction, calendar participant, or platform roster. Sensitive-attribute
 shortcuts are always forbidden.
 
+The real lane also requires generated meeting intelligence scores:
+`summary_factuality`, `action_item_owner_date`, `decision_extraction`,
+`open_question_extraction`, `memory_entity_correctness`, `hallucination_rate`,
+`omission_rate`, and `source_grounding`. Each manifest row must include
+`observed_score`, `threshold`, `higher_is_better`, `passed`, `judge_mode`, and
+`proof`; the validator rejects rows whose `passed` flag does not match the
+threshold direction. `deterministic` rows require `score_report`, `live_model`
+rows require `model_trajectory_jsonl`, `raw_prompt`, `model_output`, and
+`judge_output`, and `manual` rows require `manual_review`.
+
 ## Dataset Contract
 
 The real lane requires external dataset sources covering speech over music,
@@ -101,6 +112,18 @@ signals, confidence, conflict policy, confidence policy, privacy policy, and the
 expected resolution. Low-confidence inferred names cannot be reported as
 confirmed identities; they must request confirmation, withhold the name, or
 preserve an unknown speaker label.
+
+## Baseline Comparison Contract
+
+The real lane requires baseline comparison rows for the current Eliza path,
+Otter-style bot transcription, Granola-style bot-free capture, Zoom native
+notes/transcripts, Google Meet/Gemini notes, WhisperX + pyannote, and NeMo
+Sortformer. Rows must mark each system as `run`, `imported`, or `not_run` with a
+reason for skipped systems; at least one open-source baseline must be run or
+imported, and the current Eliza production baseline must always be present.
+Rows track capture/privacy mode, covered meeting conditions, comparison
+metrics, artifact references, manual review status, evidence, and the failure
+policy.
 
 ## Evidence
 

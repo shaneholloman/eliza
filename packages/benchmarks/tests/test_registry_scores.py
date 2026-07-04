@@ -16,6 +16,52 @@ from registry.scores import (  # noqa: E402
 )
 
 
+GENERATED_ARTIFACT_SCORE_IDS = (
+    "summary_factuality",
+    "action_item_owner_date",
+    "decision_extraction",
+    "open_question_extraction",
+    "memory_entity_correctness",
+    "hallucination_rate",
+    "omission_rate",
+    "source_grounding",
+)
+
+
+def _meeting_generated_artifact_scores() -> list[dict[str, object]]:
+    return [
+        {
+            "id": score_id,
+            "observed_score": 0.0 if score_id in {"hallucination_rate", "omission_rate"} else 1.0,
+        }
+        for score_id in GENERATED_ARTIFACT_SCORE_IDS
+    ]
+
+
+def _meeting_baseline_comparisons() -> list[dict[str, object]]:
+    return [
+        {"id": "eliza_current_baseline", "comparison_type": "internal_baseline", "run_status": "run"},
+        {"id": "otter_product_baseline", "comparison_type": "external_product", "run_status": "not_run"},
+        {"id": "granola_product_baseline", "comparison_type": "external_product", "run_status": "not_run"},
+        {"id": "zoom_native_notes_baseline", "comparison_type": "external_product", "run_status": "imported"},
+        {
+            "id": "google_meet_gemini_notes_baseline",
+            "comparison_type": "external_product",
+            "run_status": "imported",
+        },
+        {
+            "id": "whisperx_pyannote_open_source_baseline",
+            "comparison_type": "open_source",
+            "run_status": "run",
+        },
+        {
+            "id": "nemo_sortformer_open_source_baseline",
+            "comparison_type": "open_source",
+            "run_status": "not_run",
+        },
+    ]
+
+
 def test_hermes_env_placeholder_only_score_is_not_publishable() -> None:
     with pytest.raises(ValueError, match="placeholder-only"):
         _score_from_hermes_env_json(
@@ -173,6 +219,8 @@ def _meeting_transcription_real_report() -> dict[str, object]:
         "speaker_operations": [{"id": "speaker_name_correction"}],
         "speaker_name_provenance": [{} for _ in range(8)],
         "audio_visual_cases": [{} for _ in range(7)],
+        "generated_artifact_scores": _meeting_generated_artifact_scores(),
+        "baseline_comparisons": _meeting_baseline_comparisons(),
     }
 
 
@@ -222,6 +270,45 @@ def test_meeting_transcription_real_lane_requires_audio_visual_metrics() -> None
         _score_from_meeting_transcription_proof_json(report)
 
 
+def test_meeting_transcription_real_lane_requires_generated_artifact_scores() -> None:
+    report = _meeting_transcription_real_report()
+    report["generated_artifact_scores"] = _meeting_generated_artifact_scores()[:-1]
+
+    with pytest.raises(ValueError, match="generated artifact scores"):
+        _score_from_meeting_transcription_proof_json(report)
+
+
+def test_meeting_transcription_real_lane_requires_baseline_comparisons() -> None:
+    report = _meeting_transcription_real_report()
+    report["baseline_comparisons"] = _meeting_baseline_comparisons()[:6]
+
+    with pytest.raises(ValueError, match="baseline comparisons"):
+        _score_from_meeting_transcription_proof_json(report)
+
+
+def test_meeting_transcription_real_lane_requires_open_source_baseline_run() -> None:
+    report = _meeting_transcription_real_report()
+    report["baseline_comparisons"] = [
+        {**row, "run_status": "not_run"}
+        if row.get("comparison_type") == "open_source"
+        else row
+        for row in _meeting_baseline_comparisons()
+    ]
+
+    with pytest.raises(ValueError, match="open-source baseline run"):
+        _score_from_meeting_transcription_proof_json(report)
+
+
+def test_meeting_transcription_real_lane_requires_current_eliza_baseline() -> None:
+    report = _meeting_transcription_real_report()
+    report["baseline_comparisons"] = [
+        row for row in _meeting_baseline_comparisons() if row["id"] != "eliza_current_baseline"
+    ] + [{"id": "replacement_internal", "comparison_type": "internal_baseline", "run_status": "run"}]
+
+    with pytest.raises(ValueError, match="current Eliza baseline"):
+        _score_from_meeting_transcription_proof_json(report)
+
+
 def test_meeting_transcription_real_lane_score_is_publishable_with_evidence() -> None:
     extraction = _score_from_meeting_transcription_proof_json(_meeting_transcription_real_report())
 
@@ -233,3 +320,8 @@ def test_meeting_transcription_real_lane_score_is_publishable_with_evidence() ->
     assert extraction.metrics["audio_visual_case_count"] == 7
     assert extraction.metrics["active_speaker_f1"] == pytest.approx(0.88)
     assert extraction.metrics["visual_acoustic_disagreement_rate"] == pytest.approx(0.12)
+    assert extraction.metrics["summary_factuality"] == pytest.approx(1.0)
+    assert extraction.metrics["hallucination_rate"] == pytest.approx(0.0)
+    assert extraction.metrics["baseline_comparison_count"] == 7
+    assert extraction.metrics["open_source_baseline_run_count"] == 1
+    assert extraction.metrics["internal_baseline_count"] == 1
