@@ -35,6 +35,11 @@ export {
 	shouldEnableMobileLocalInference,
 	warnIfMobileGateActiveWithoutPlatform,
 } from "./mobile-local-inference-gate.js";
+// Speaker-name provenance policy (#12498). `inferSpeakerName` is a pure policy
+// library validated by the meeting-transcription-proof benchmark's provenance
+// gate; its runtime consumer (actions/identify-speaker.ts) is deferred because
+// wiring it needs the full evidence context (calendar/self-intro/entity-graph)
+// the action does not yet gather — see #12498. Exposed here for that consumer.
 export {
 	type ExistingSpeakerEntity,
 	type InferSpeakerNameInput,
