@@ -1935,30 +1935,15 @@ export class AgentRuntime implements IAgentRuntime {
 			);
 		}
 		if (pluginToRegister.actions) {
-			const existingActionNames = new Set(
-				this.actions.map((action) => action.name),
-			);
+			// Delegate collision/override policy to registerAction() so a single
+			// authority (resolveComponentCollision) decides first-wins vs declared
+			// override and emits the observable WARN. Pre-filtering here would
+			// silently swallow duplicates before that policy could see them.
 			for (const action of pluginToRegister.actions) {
-				if (existingActionNames.has(action.name)) {
-					this.logger.debug(
-						{
-							src: "agent",
-							agentId: this.agentId,
-							action: action.name,
-							plugin: pluginToRegister.name,
-						},
-						"Skipping duplicate plugin action",
-					);
-					continue;
-				}
 				this.registerAction(action);
-				existingActionNames.add(action.name);
 			}
 		}
 		if (pluginToRegister.providers) {
-			const existingProviderNames = new Set(
-				this.providers.map((provider) => provider.name),
-			);
 			for (const provider of pluginToRegister.providers) {
 				if (provider.registerByDefault === false) {
 					this.logger.debug(
@@ -1972,41 +1957,14 @@ export class AgentRuntime implements IAgentRuntime {
 					);
 					continue;
 				}
-				if (existingProviderNames.has(provider.name)) {
-					this.logger.debug(
-						{
-							src: "agent",
-							agentId: this.agentId,
-							provider: provider.name,
-							plugin: pluginToRegister.name,
-						},
-						"Skipping duplicate plugin provider",
-					);
-					continue;
-				}
+				// Collision/override policy owned by registerProvider().
 				this.registerProvider(provider);
-				existingProviderNames.add(provider.name);
 			}
 		}
 		if (pluginToRegister.evaluators) {
-			const existingEvaluatorNames = new Set(
-				this.evaluators.map((evaluator) => evaluator.name),
-			);
+			// Collision/override policy owned by registerEvaluator().
 			for (const evaluator of pluginToRegister.evaluators) {
-				if (existingEvaluatorNames.has(evaluator.name)) {
-					this.logger.debug(
-						{
-							src: "agent",
-							agentId: this.agentId,
-							evaluator: evaluator.name,
-							plugin: pluginToRegister.name,
-						},
-						"Skipping duplicate plugin evaluator",
-					);
-					continue;
-				}
 				this.registerEvaluator(evaluator);
-				existingEvaluatorNames.add(evaluator.name);
 			}
 		}
 		if (pluginToRegister.shortcuts) {
@@ -3232,13 +3190,58 @@ export class AgentRuntime implements IAgentRuntime {
 		return null;
 	}
 
+	/**
+	 * Shared collision policy for the three primary component registries
+	 * (actions, providers, evaluators). Registration is deterministic first-wins:
+	 * the earliest-registered component of a given name is authoritative and the
+	 * order in which plugins register is stable across a boot.
+	 *
+	 * A later registrant of the same name is either:
+	 *  - a DECLARED override (`override: true`) — an intentional supersede. We log
+	 *    the takeover at INFO and instruct the caller to replace the incumbent.
+	 *  - an UNDECLARED collision — two plugins claimed the same name without one
+	 *    declaring precedence. This is the unsafe, order-sensitive case the
+	 *    arch-audit flagged: which component wins used to be decided by a silent
+	 *    first-wins dedupe. We now keep the incumbent (still deterministic) but
+	 *    surface a WARN so the drift is observable instead of silent.
+	 *
+	 * @returns `true` if the caller should REPLACE the incumbent (declared
+	 *   override), `false` if it should keep the incumbent and skip the newcomer.
+	 */
+	private resolveComponentCollision(
+		kind: "action" | "provider" | "evaluator",
+		name: string,
+		override: boolean | undefined,
+	): boolean {
+		if (override === true) {
+			this.logger.info(
+				{ src: "agent", agentId: this.agentId, [kind]: name },
+				`[AgentRuntime] ${kind} "${name}" declares override:true — superseding the already-registered ${kind} of the same name.`,
+			);
+			return true;
+		}
+		this.logger.warn(
+			{ src: "agent", agentId: this.agentId, [kind]: name },
+			`[AgentRuntime] ${kind} name collision: a ${kind} named "${name}" is already registered; keeping the first and skipping this one. Which one wins is load-order-dependent — give the two distinct names, or set override:true on the ${kind} that should intentionally supersede.`,
+		);
+		return false;
+	}
+
 	registerProvider(provider: Provider) {
 		const canonical = withCanonicalProviderDocs(provider);
-		if (this.providers.find((p) => p.name === canonical.name)) {
-			this.logger.warn(
-				{ src: "agent", agentId: this.agentId, provider: canonical.name },
-				"[AgentRuntime] Provider name collision: a provider with this name is already registered; keeping the first and skipping this one. The context the agent sees for this name is load-order-dependent — give the two providers distinct names.",
-			);
+		const existingIndex = this.providers.findIndex(
+			(p) => p.name === canonical.name,
+		);
+		if (existingIndex !== -1) {
+			if (
+				this.resolveComponentCollision(
+					"provider",
+					canonical.name,
+					canonical.override,
+				)
+			) {
+				this.providers[existingIndex] = canonical;
+			}
 			return;
 		}
 		this.providers.push(canonical);
@@ -3251,11 +3254,13 @@ export class AgentRuntime implements IAgentRuntime {
 	registerAction(action: Action) {
 		const canonical = withCanonicalActionDocs(action);
 		Object.assign(action, canonical);
-		if (this.actions.find((a) => a.name === action.name)) {
-			this.logger.warn(
-				{ src: "agent", agentId: this.agentId, action: action.name },
-				"[AgentRuntime] Action name collision: an action with this name is already registered; keeping the first and skipping this one. Which handler/role-gate wins is load-order-dependent — rename one of the colliding actions to disambiguate.",
-			);
+		const existingIndex = this.actions.findIndex((a) => a.name === action.name);
+		if (existingIndex !== -1) {
+			if (
+				this.resolveComponentCollision("action", action.name, action.override)
+			) {
+				this.actions[existingIndex] = action;
+			}
 		} else {
 			this.actions.push(action);
 			this.logger.debug(
@@ -3318,11 +3323,19 @@ export class AgentRuntime implements IAgentRuntime {
 	}
 
 	registerEvaluator(evaluator: RegisteredEvaluator) {
-		if (this.evaluators.find((item) => item.name === evaluator.name)) {
-			this.logger.debug(
-				{ src: "agent", agentId: this.agentId, evaluator: evaluator.name },
-				"Evaluator already registered, skipping",
-			);
+		const existingIndex = this.evaluators.findIndex(
+			(item) => item.name === evaluator.name,
+		);
+		if (existingIndex !== -1) {
+			if (
+				this.resolveComponentCollision(
+					"evaluator",
+					evaluator.name,
+					evaluator.override,
+				)
+			) {
+				this.evaluators[existingIndex] = evaluator;
+			}
 			return;
 		}
 		this.evaluators.push(evaluator);

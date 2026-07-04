@@ -267,6 +267,32 @@ function pushUniqueRef<T extends object>(items: T[], item: T): void {
 	}
 }
 
+/**
+ * Neutralizes a declared `override: true` on a component being registered
+ * through the plugin lifecycle (#12658).
+ *
+ * The explicit override contract lets a LATER registrant intentionally supersede
+ * an already-registered component of the same name. On the direct host/core
+ * registration path that is safe. Across `registerPlugin` boundaries it is NOT:
+ * an override replaces the incumbent in place, but hot plugin teardown
+ * (unloadPlugin / reloadPlugin / failed-registration rollback) removes owned
+ * components by reference and does not restore a displaced incumbent. So a
+ * plugin overriding another plugin's component and then unloading would leave
+ * the still-loaded original plugin without its action/provider/evaluator.
+ *
+ * Until incumbent save/restore is implemented, plugin-boundary overrides are
+ * downgraded to the safe deterministic first-wins policy (the incumbent is kept
+ * and the register method WARNs). Direct (non-plugin) registration keeps
+ * override.
+ */
+function withoutPluginOverride<T extends { override?: boolean }>(
+	component: T,
+): T {
+	return component.override === true
+		? { ...component, override: false }
+		: component;
+}
+
 function pushUniqueString(items: string[], value: string): void {
 	if (!items.includes(value)) {
 		items.push(value);
@@ -808,9 +834,12 @@ export function installRuntimePluginLifecycle(runtime: IAgentRuntime): void {
 	runtimeWithLifecycle.registerAction = ((action: RuntimeAction) => {
 		const capture = pluginRegistrationContext.getStore();
 		const actionsBefore = runtimeWithLifecycle.actions.length;
+		// Plugin-boundary overrides are unsafe for hot teardown (#12658); downgrade
+		// to first-wins so a plugin never destructively displaces another's action.
+		// Direct (non-plugin, no capture) registration keeps the override contract.
 		originalRegisterAction(
 			applyEffectiveActionAccess(
-				action,
+				capture ? withoutPluginOverride(action) : action,
 				capture?.ownership.plugin.contexts,
 				runtimeWithLifecycle.contexts,
 			),
@@ -829,7 +858,7 @@ export function installRuntimePluginLifecycle(runtime: IAgentRuntime): void {
 		const providersBefore = runtimeWithLifecycle.providers.length;
 		originalRegisterProvider(
 			applyEffectiveProviderContexts(
-				provider,
+				capture ? withoutPluginOverride(provider) : provider,
 				capture?.ownership.plugin.contexts,
 			),
 		);
@@ -845,7 +874,9 @@ export function installRuntimePluginLifecycle(runtime: IAgentRuntime): void {
 	runtimeWithLifecycle.registerEvaluator = ((evaluator: RuntimeEvaluator) => {
 		const capture = pluginRegistrationContext.getStore();
 		const evaluatorsBefore = runtimeWithLifecycle.evaluators.length;
-		originalRegisterEvaluator(evaluator);
+		originalRegisterEvaluator(
+			capture ? withoutPluginOverride(evaluator) : evaluator,
+		);
 		if (!capture || runtimeWithLifecycle.evaluators.length <= evaluatorsBefore)
 			return;
 		for (const registeredEvaluator of runtimeWithLifecycle.evaluators.slice(
