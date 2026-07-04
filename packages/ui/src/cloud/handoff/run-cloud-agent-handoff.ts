@@ -55,8 +55,9 @@ export function runCloudAgentHandoff(
       // the transcript is on it, and the client already repointed. Now — and
       // ONLY now — is the shared bridge safe to delete.
       void Promise.resolve(onSwitchSucceeded?.()).catch(() => {
-        // Fire-and-forget: a failed shared-delete leaks a row, never strands
-        // the (already switched) user. The supervisor logs the detail.
+        // error-policy:J5 fire-and-forget: a failed shared-delete leaks a
+        // row, never strands the (already switched) user; the supervisor
+        // logs the detail.
       });
     })
     .catch((err: unknown) => {

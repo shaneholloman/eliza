@@ -135,6 +135,8 @@ export function ElizaWalletSection({ agentId }: ElizaWalletSectionProps) {
         fetch(`${base}/balances`).then((r) =>
           r.ok ? r.json() : Promise.reject(r.statusText),
         ),
+        // error-policy:J4 steward status is an optional panel section — the
+        // addresses result (allSettled) drives the primary error rendering.
         fetch(`${base}/steward-status`)
           // error-policy:J4 steward status is an optional wallet sub-panel; a
           // failed/absent status degrades to null (the "no steward" render). The

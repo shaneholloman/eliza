@@ -129,9 +129,11 @@ function stewardSessionClearUrls(): string[] {
 
 export function clearServerStewardSessionCookies(): void {
   for (const url of stewardSessionClearUrls()) {
-    // error-policy:J6 best-effort logout teardown across every session endpoint;
-    // the authoritative local token is cleared separately by the caller.
-    fetch(url, { method: "DELETE", credentials: "include" }).catch(() => {});
+    // error-policy:J6 best-effort sign-out cookie clear across session hosts;
+    // the local token is already cleared and an expired cookie self-heals.
+    fetch(url, { method: "DELETE", credentials: "include" }).catch(
+      () => undefined,
+    );
   }
 }
 
