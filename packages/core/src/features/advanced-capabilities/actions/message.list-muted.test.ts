@@ -1,9 +1,12 @@
 /**
- * Muted visibility in the MESSAGE list ops: list_channels carries a per-channel
- * `muted` flag, list_servers a per-server `muted` flag, and list_connections a
- * `mutedRoomCount`, resolved from the same participant/world state the ROOM
- * action writes — making "which channels/servers are you muted in" answerable.
- * Map-backed runtime + mock connectors.
+ * Muted visibility and count integrity in the MESSAGE list ops: list_channels
+ * carries a per-channel `muted` flag, list_servers a per-server `muted`
+ * flag, and list_connections a `mutedRoomCount`, resolved from the same
+ * participant/world state the ROOM action writes — making "which channels or
+ * servers are you muted in" answerable. Counts must cover the connector's
+ * COMPLETE room set even when the rendered listing is capped, and a capped
+ * listing is annotated (truncated + channelCount) rather than posing as
+ * complete. Map-backed runtime + mock connectors.
  */
 import { describe, expect, it } from "vitest";
 import type { Room, World } from "../../../types/environment";
@@ -159,6 +162,63 @@ describe("MESSAGE op=list_channels — muted flag", () => {
 		const result = await runOp(runtime, { action: "list_channels" });
 		const data = result.data as { channels: { muted: boolean }[] };
 		expect(data.channels.every((c) => c.muted)).toBe(true);
+	});
+});
+
+describe("MESSAGE list ops — counts stay complete past the render cap", () => {
+	const roomId = (i: number): UUID =>
+		`00000000-0000-0000-0000-${String(i).padStart(12, "0")}` as UUID;
+	// 60 rooms; the muted ones sit past index 50 so a truncated fetch would
+	// miss them entirely.
+	const mutedIndexes = [55, 56, 57];
+	const bigConnector = () =>
+		mockConnector(
+			"discord",
+			"Discord",
+			Array.from({ length: 60 }, (_, i) => ({
+				name: `#chan-${i}`,
+				roomId: roomId(i),
+			})),
+		);
+	const seed = () => ({
+		states: Object.fromEntries(
+			mutedIndexes.map((i) => [`${roomId(i)}:${AGENT_ID}`, "MUTED" as const]),
+		),
+		rooms: mutedIndexes.map(
+			(i) => ({ id: roomId(i), source: "discord" }) as Room,
+		),
+	});
+
+	it("list_channels reports the full channel + muted counts and annotates the capped listing", async () => {
+		const runtime = mockRuntime([bigConnector()], seed());
+		const result = await runOp(runtime, { action: "list_channels" });
+		const data = result.data as {
+			channelCount: number;
+			truncated?: boolean;
+			channels: { label: string }[];
+		};
+		expect(result.success).toBe(true);
+		expect(data.channelCount).toBe(60);
+		expect(data.truncated).toBe(true);
+		expect(data.channels).toHaveLength(50);
+		expect(result.text).toContain("Listed 60 channels");
+		expect(result.text).toContain("(3 muted)");
+		expect(result.text).toContain("showing the first 50");
+	});
+
+	it("list_connections counts every room and every muted room, not just the first 50", async () => {
+		const runtime = mockRuntime([bigConnector()], seed());
+		const result = await runOp(runtime, { action: "list_connections" });
+		const data = result.data as {
+			connections: {
+				platform: string;
+				roomCount: number;
+				mutedRoomCount: number;
+			}[];
+		};
+		const discord = data.connections.find((c) => c.platform === "discord");
+		expect(discord?.roomCount).toBe(60);
+		expect(discord?.mutedRoomCount).toBe(3);
 	});
 });
 
