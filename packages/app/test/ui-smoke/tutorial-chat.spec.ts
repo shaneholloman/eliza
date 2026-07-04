@@ -172,9 +172,9 @@ test("the chat-native tour runs end to end in the live transcript", async ({
   await expect(choice(page, "restart", "done")).toBeVisible();
   await shot("03-wrap-up.png");
   await choice(page, "next", "done").click();
-  await expect.poll(() => tutorialStatus(page), { timeout: 10_000 }).toBe(
-    "completed",
-  );
+  await expect
+    .poll(() => tutorialStatus(page), { timeout: 10_000 })
+    .toBe("completed");
 
   // Narration went through the real voice engine (browser-TTS fallback spy).
   const spoken = await page.evaluate(

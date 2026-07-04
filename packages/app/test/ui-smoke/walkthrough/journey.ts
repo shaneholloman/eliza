@@ -864,9 +864,9 @@ export const JOURNEY_STEPS: readonly JourneyStep[] = [
       await box.click();
       await box.fill("restart tutorial");
       await page.getByTestId("chat-composer-action").click();
-      await expect(
-        tutorialChoice(page, "stop", "welcome").last(),
-      ).toBeVisible({ timeout: 15_000 });
+      await expect(tutorialChoice(page, "stop", "welcome").last()).toBeVisible({
+        timeout: 15_000,
+      });
 
       await box.click();
       await box.fill("stop tutorial");
