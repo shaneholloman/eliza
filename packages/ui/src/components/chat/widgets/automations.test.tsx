@@ -103,6 +103,21 @@ describe("AutomationsWidget", () => {
     expect(screen.getByText("Loading…")).toBeTruthy();
   });
 
+  it("labels the widget with the Automations glossary term, never Tasks", async () => {
+    listAutomationsMock.mockResolvedValue(
+      listResponse([automation({ id: "w-1", title: "Daily digest" })]),
+    );
+    render(<AutomationsWidget />);
+    await screen.findByText("Daily digest");
+    // The label is folded into the card's hover title + aria-label (icon-only
+    // card), never rendered as visible text — so assert the accessible name.
+    const card = screen.getByTestId("chat-widget-automations");
+    expect(card.getAttribute("title")).toBe("Automations");
+    const ariaLabel = card.getAttribute("aria-label") ?? "";
+    expect(ariaLabel).toContain("Running automations");
+    expect(ariaLabel).not.toContain("Running tasks");
+  });
+
   it("surfaces a boot-seeded scheduled task as the running task", async () => {
     // Fresh install: no workflows, but the seeded gm scheduled task exists.
     listAutomationsMock.mockResolvedValue(listResponse([]));
