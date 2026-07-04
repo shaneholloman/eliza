@@ -33,16 +33,16 @@ CDP-touch gestures and hard assertions. All three passed with `no page errors 0`
 
 | Runner | Proves | Log |
 |---|---|---|
-| `bun run --cwd packages/ui test:launcher-e2e` | read-only launcher grid: tap-launch telemetry, long-press = no edit mode, 1:1 rail drag, right-swipe rides home | `logs/launcher-walkthrough-e2e.log` |
-| `bun run --cwd packages/ui test:home-screen-e2e` | home dashboard, notification pull (mobile sheet + desktop panel), desktop fine-pointer edge buttons, single-page curation | `logs/home-screen-e2e-walkthrough.log` |
-| `bun run --cwd packages/ui test:launcher-loop-e2e` | seeded ≥N-action loop, every §D invariant after each action | `logs/*.log`, `launcher-loop-*.webm` |
+| `bun run --cwd packages/ui test:launcher-e2e` | read-only launcher grid: tap-launch telemetry, long-press = no edit mode, 1:1 rail drag, right-swipe rides home | `launcher-walkthrough-e2e.txt` |
+| `bun run --cwd packages/ui test:home-screen-e2e` | home dashboard, notification pull (mobile sheet + desktop panel), desktop fine-pointer edge buttons, single-page curation | `home-screen-e2e-walkthrough.txt` |
+| `bun run --cwd packages/ui test:launcher-loop-e2e` | seeded ≥N-action loop, every §D invariant after each action | `*.txt`, `launcher-loop-*.webm` |
 
 Per-page verdicts (all **good**) are in `manual-review/`:
 `launcher.md`, `home.md`, `developer-launcher-page.md`.
 
 ## Evidence index
 
-### Screenshots (`screenshots/`)
+### Screenshots (``)
 
 | File | Surface |
 |---|---|
@@ -63,7 +63,7 @@ Per-page verdicts (all **good**) are in `manual-review/`:
 | `home-launcher-flow.webm` | Home → launcher rail + notification flow |
 | `launcher-loop-gestures-sample.webm` | A batch of the seeded loop: real CDP-touch launcher gestures (rail swipes, tile taps, notification pulls, grid/widget scrolls, tab focus) with per-action invariant checks |
 
-### Loop failure reproducibility (`logs/`) — environment-limited on this host
+### Loop failure reproducibility (``) — environment-limited on this host
 
 The issue requires every loop failure to be reproducible by seed + shrunk command
 list. Both loop runs attempted here failed, and **both are host-environment
@@ -81,16 +81,16 @@ clause.
    OOM-killed mid-batch (application JS cannot close the Playwright browser). The
    isolated `ELIZA_LOOP_ONLY_BATCH=3` replay reproduced the same browser-closed
    crash.
-   - `logs/launcher-loop-batch4-browser-crash.json` — `runSeed`, `batchSeed`,
+   - `launcher-loop-batch4-browser-crash.json` — `runSeed`, `batchSeed`,
      `replay` command, full command list.
-   - `logs/launcher-loop-batch4-replay.log` — the isolated replay.
+   - `launcher-loop-batch4-replay.txt` — the isolated replay.
 2. **200-action `seed=424242`, batch 2** — a page/model desync
    (`data-page="home" but model expects "launcher"`). This is the documented
    flick-drop class (#12375 §status): under host load Chromium coalesces/drops a
    committing rail flick that the pure model counted, so the DOM lags the model.
    `Shrunk 0 time(s)` and failing on the first generated case is the signature of
    a timing flake, not a deterministic model bug.
-   - `logs/launcher-loop-seed424242-flick-drop-desync.json` / `.log`.
+   - `launcher-loop-seed424242-flick-drop-desync.json` / `.txt`.
 
 The green loop proof of record is the CI gate on a dedicated runner; on this
 loaded host the clean green run could not be reproduced. See **Residual risks**.
@@ -101,11 +101,11 @@ running before the environmental hiccup.
 
 | Evidence type | Status |
 |---|---|
-| Before/after full-page screenshots (desktop + mobile) | Present — `screenshots/`. Before == after (docs+test-only branch; renders identically to develop). |
+| Before/after full-page screenshots (desktop + mobile) | Present — ``. Before == after (docs+test-only branch; renders identically to develop). |
 | Video walkthrough | Present — `launcher-walkthrough.webm`, `home-launcher-flow.webm`, `launcher-loop-200action.webm`. |
-| Loop videos + seed-reproducible failures | Present — loop webm + `logs/launcher-loop-batch4-*`. |
-| Frontend console/network logs | Present — the `__e2e__` runners assert `no page errors 0` and dump console; captured in `logs/*.log`. |
-| iOS simulator capture | Present (rendering) — `screenshots/ios-sim-iphone16pro-*.png`, app running natively on the booted iPhone 16 Pro. Seeded gesture-loop VIDEO: run-on-demand via the committed `LauncherGestureLoopUITests.swift` / `GestureSemanticsUITests.swift` XCUITest lanes — producing it requires regenerating the gitignored `packages/app/ios` Xcode project (cap:sync) + a full Xcode build, whose renderer inputs this docs/test branch does not change. Getting past the "Open in Eliza?" URL-scheme dialog + permission-priming modal to a clean launcher requires an XCUITest tap (simctl cannot synthesize taps/gestures). |
+| Loop videos + seed-reproducible failures | Present — loop webm + `launcher-loop-batch4-*`. |
+| Frontend console/network logs | Present — the `__e2e__` runners assert `no page errors 0` and dump console; captured in `*.txt`. |
+| iOS simulator capture | Present (rendering) — `ios-sim-iphone16pro-*.png`, app running natively on the booted iPhone 16 Pro. Seeded gesture-loop VIDEO: run-on-demand via the committed `LauncherGestureLoopUITests.swift` / `GestureSemanticsUITests.swift` XCUITest lanes — producing it requires regenerating the gitignored `packages/app/ios` Xcode project (cap:sync) + a full Xcode build, whose renderer inputs this docs/test branch does not change. Getting past the "Open in Eliza?" URL-scheme dialog + permission-priming modal to a clean launcher requires an XCUITest tap (simctl cannot synthesize taps/gestures). |
 | Android capture | **N/A — pending hardware.** `emulator -list-avds` is empty on this host (no AVD installed); the committed `packages/app/test/android/launcher-gesture-loop.android.spec.ts` + `touch-gesture.android.spec.ts` run on a machine with an emulator/device. Not faked. |
 | Real-LLM trajectories | N/A — no agent/action/provider/prompt/model change; this is docs + a boot-free enforcement test. |
 | Backend structured logs | N/A — no server code path changed. |
