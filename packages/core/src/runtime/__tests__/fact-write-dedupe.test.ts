@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { InMemoryDatabaseAdapter } from "../../database/inMemoryAdapter";
 import { factsProvider } from "../../features/advanced-capabilities/providers/facts";
 import { AgentRuntime } from "../../runtime";
-import { type Character, ModelType } from "../../types";
+import { type Character, ChannelType, ModelType } from "../../types";
 import type { Memory } from "../../types/memory";
 import type { UUID } from "../../types/primitives";
 import type { State } from "../../types/state";
@@ -36,6 +36,27 @@ function makeRuntime(modelResponse?: string): AgentRuntime {
 		);
 	}
 	return runtime;
+}
+
+// The facts stage now sources room entities directly via getEntityDetails
+// (getRoom + getEntitiesForRoom) instead of scraping the Stage-1 provider
+// state (#13196). Seed the room + its participant entities so name->UUID
+// grounding (nubs, Jake) resolves through the real adapter, matching how it
+// works in production.
+async function seedRoomEntities(runtime: AgentRuntime): Promise<void> {
+	await runtime.createRooms([
+		{
+			id: ROOM,
+			agentId: runtime.agentId,
+			source: "test",
+			type: ChannelType.GROUP,
+		},
+	]);
+	await runtime.createEntities([
+		{ id: USER, agentId: runtime.agentId, names: ["nubs"], metadata: {} },
+		{ id: JAKE, agentId: runtime.agentId, names: ["Jake"], metadata: {} },
+	]);
+	await runtime.createRoomParticipants([USER, JAKE], ROOM);
 }
 
 function makeMessage(runtime: AgentRuntime, text: string): Memory {
@@ -136,6 +157,7 @@ describe("facts_and_relationships stage — no duplicate durable echo", () => {
 		// Live symptom: the fact row and the relationship-echo row landed 5ms
 		// apart with identical text — the echo must be structurally skipped.
 		const runtime = makeRuntime(GUITAR_OUTPUT);
+		await seedRoomEntities(runtime);
 		await runFactsAndRelationshipsStage({
 			runtime,
 			message: makeMessage(runtime, "i play guitar btw"),
@@ -155,6 +177,7 @@ describe("facts_and_relationships stage — no duplicate durable echo", () => {
 		// The per-turn LLM dedupe pool is advisory (the model can miss); the
 		// structural write guard must hold even when it does.
 		const runtime = makeRuntime(GUITAR_OUTPUT);
+		await seedRoomEntities(runtime);
 		for (let turn = 0; turn < 2; turn += 1) {
 			await runFactsAndRelationshipsStage({
 				runtime,
@@ -176,6 +199,7 @@ describe("facts_and_relationships stage — no duplicate durable echo", () => {
 				thought: "new rel",
 			}),
 		);
+		await seedRoomEntities(runtime);
 		await runFactsAndRelationshipsStage({
 			runtime,
 			message: makeMessage(runtime, "Jake is my brother"),

@@ -31,27 +31,16 @@ function makeMessage(): Memory {
 	};
 }
 
+// The facts stage no longer scrapes room entities off the Stage-1 provider
+// state (that path was dead — it read data.entities but the ENTITIES provider
+// publishes data.entitiesData, and #13195 defers the provider off Stage-1
+// entirely). Room entities are now fetched directly via getEntityDetails, which
+// the mock runtime backs with getRoom + getEntitiesForRoom below. State is
+// therefore just an empty carrier here.
 function makeState(): State {
 	return {
 		values: {},
-		data: {
-			providers: {
-				ENTITIES: {
-					data: {
-						entities: [
-							{
-								id: "00000000-0000-0000-0000-0000000000a1" as UUID,
-								names: ["Alice"],
-							},
-							{
-								id: "00000000-0000-0000-0000-0000000000b2" as UUID,
-								names: ["Bob"],
-							},
-						],
-					},
-				},
-			},
-		},
+		data: { providers: {} },
 		text: "",
 	};
 }
@@ -79,6 +68,27 @@ function makeRuntime(modelResponse: unknown): FactsRuntime {
 			} as Memory,
 		]),
 		getRelationships: vi.fn(async () => []),
+		// Backs getEntityDetails({ runtime, roomId }) — the facts stage now sources
+		// room entities here instead of scraping Stage-1 provider state (#13196).
+		getRoom: vi.fn(async () => ({
+			id: "00000000-0000-0000-0000-000000000003" as UUID,
+			source: "test",
+		})),
+		getEntitiesForRoom: vi.fn(async () => [
+			{
+				id: "00000000-0000-0000-0000-0000000000a1" as UUID,
+				names: ["Alice"],
+				components: [],
+				metadata: {},
+			},
+			{
+				id: "00000000-0000-0000-0000-0000000000b2" as UUID,
+				names: ["Bob"],
+				components: [],
+				metadata: {},
+			},
+		]),
+		reportError: vi.fn(),
 		createMemory: vi.fn(async () => "00000000-0000-0000-0000-00000000cccc"),
 		createRelationship: vi.fn(async () => true),
 		logger: {
@@ -290,6 +300,175 @@ describe("runFactsAndRelationshipsStage", () => {
 			"facts",
 			true,
 		);
+	});
+
+	// #13196: room-entity grounding must come from getEntityDetails, NOT from
+	// scraping the Stage-1 provider state. Two prior defects made the old path
+	// dead: (1) it read state...providers.ENTITIES.data.entities but the ENTITIES
+	// provider publishes data.entitiesData, and (2) #13195 deferred the ENTITIES
+	// provider off the Stage-1 execution path entirely, so the state has no
+	// ENTITIES entry to scrape. Prove the grounding survives an EMPTY Stage-1
+	// state as long as the room has participants.
+	it("grounds room_entities from getEntityDetails even when Stage-1 state carries no ENTITIES entry (#13196)", async () => {
+		const runtime = makeRuntime(
+			JSON.stringify({
+				facts: ["the user works with Alice"],
+				relationships: [
+					{ subject: "user", predicate: "works_with", object: "Alice" },
+				],
+				thought: "new",
+			}),
+		);
+		// Empty state: no providers.ENTITIES at all (matches post-#13195 Stage-1).
+		const emptyState: State = {
+			values: {},
+			data: { providers: {} },
+			text: "",
+		};
+		const result = await runFactsAndRelationshipsStage({
+			runtime,
+			message: makeMessage(),
+			state: emptyState,
+			extract: {
+				facts: ["the user works with Alice"],
+				relationships: [
+					{ subject: "user", predicate: "works_with", object: "Alice" },
+				],
+			},
+		});
+
+		// Room entities came from getEntityDetails, not state.
+		expect(runtime.getEntitiesForRoom).toHaveBeenCalledWith(
+			makeMessage().roomId,
+			true,
+		);
+		const validationCall = runtime.useModel.mock.calls.find(
+			(call) =>
+				typeof call[0] === "string" &&
+				(call[0] === ModelType.TEXT_LARGE || call[0] === "TEXT_LARGE"),
+		);
+		const params = validationCall?.[1] as {
+			messages?: Array<{ role: string; content: string }>;
+		};
+		// The room_entities: grounding block is present with the resolved UUID
+		// (the whole point of the audit's "prefer that UUID" rule).
+		expect(params.messages?.[1]?.content).toContain("room_entities:");
+		expect(params.messages?.[1]?.content).toContain(
+			"Alice (id: 00000000-0000-0000-0000-0000000000a1)",
+		);
+		// And persist-time name->UUID resolution used the room entity: the
+		// relationship edge's target resolves to Alice's UUID (not undefined).
+		expect(runtime.createMemory).toHaveBeenCalledWith(
+			expect.objectContaining({
+				metadata: expect.objectContaining({
+					sourceEntityId: makeMessage().entityId,
+					targetEntityId: "00000000-0000-0000-0000-0000000000a1",
+				}),
+			}),
+			"facts",
+			true,
+		);
+		expect(result.written.relationships).toBe(1);
+	});
+
+	// #13196 P2 (codex): getEntityDetails returns EVERY room participant (no
+	// display cap), so a busy room must not flood the room_entities: prompt
+	// block. The grounding set is bounded to 12, prioritizing entities whose
+	// names match a candidate relationship subject/object.
+	it("bounds room_entities to 12 and prioritizes candidate-named entities in a large room (#13196 P2)", async () => {
+		const runtime = makeRuntime(
+			JSON.stringify({
+				facts: [],
+				relationships: [
+					{ subject: "user", predicate: "works_with", object: "Zoey" },
+				],
+				thought: "new",
+			}),
+		);
+		// 40 participants; "Zoey" (candidate object) is intentionally last so a
+		// naive slice(0,12) would drop it. The bounding must still surface it.
+		const many = Array.from({ length: 39 }, (_, i) => ({
+			id: `00000000-0000-0000-0000-0000000${String(i).padStart(5, "0")}` as UUID,
+			names: [`Person${i}`],
+			components: [],
+			metadata: {},
+		}));
+		const zoe = {
+			id: "00000000-0000-0000-0000-0000000000a9" as UUID,
+			names: ["Zoey"],
+			components: [],
+			metadata: {},
+		};
+		(runtime.getEntitiesForRoom as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+			[...many, zoe],
+		);
+		await runFactsAndRelationshipsStage({
+			runtime,
+			message: makeMessage(),
+			state: { values: {}, data: { providers: {} }, text: "" },
+			extract: {
+				relationships: [
+					{ subject: "user", predicate: "works_with", object: "Zoey" },
+				],
+			},
+		});
+		const validationCall = runtime.useModel.mock.calls.find(
+			(call) =>
+				typeof call[0] === "string" &&
+				(call[0] === ModelType.TEXT_LARGE || call[0] === "TEXT_LARGE"),
+		);
+		const params = validationCall?.[1] as {
+			messages?: Array<{ role: string; content: string }>;
+		};
+		const content = params.messages?.[1]?.content ?? "";
+		// Isolate just the room_entities: block (blocks are separated by a blank
+		// line), so the candidate lines (also `- ` prefixed) aren't miscounted.
+		const roomBlock =
+			content
+				.split("\n\n")
+				.find((block) => block.startsWith("room_entities:")) ?? "";
+		const entityLines = roomBlock
+			.split("\n")
+			.filter((line) => line.startsWith("- "));
+		// Capped at 12 lines.
+		expect(entityLines.length).toBe(12);
+		// The candidate-named entity survived the cap.
+		expect(content).toContain("Zoey (id:");
+	});
+
+	// Fail-closed: a broken getEntityDetails must surface via reportError and
+	// degrade to no grounding, never crash the stage (error-policy:J7).
+	it("reports and degrades (no crash) when room-entity fetch fails (#13196)", async () => {
+		const runtime = makeRuntime(
+			JSON.stringify({ facts: ["the user's birthday is March 5"], relationships: [], thought: "ok" }),
+		);
+		(runtime.getEntitiesForRoom as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+			new Error("boom"),
+		);
+		const result = await runFactsAndRelationshipsStage({
+			runtime,
+			message: makeMessage(),
+			state: { values: {}, data: { providers: {} }, text: "" },
+			extract: { facts: ["the user's birthday is March 5"] },
+		});
+		// Stage still completed and persisted the fact.
+		expect(result.written.facts).toBe(1);
+		// Failure surfaced, not swallowed.
+		expect(runtime.reportError).toHaveBeenCalledWith(
+			"FactsAndRelationships.fetchRoomEntities",
+			expect.any(Error),
+			expect.objectContaining({ roomId: makeMessage().roomId }),
+		);
+		// No room_entities: block when grounding is unavailable.
+		const validationCall = runtime.useModel.mock.calls.find(
+			(call) =>
+				typeof call[0] === "string" &&
+				(call[0] === ModelType.TEXT_LARGE || call[0] === "TEXT_LARGE"),
+		);
+		const params = validationCall?.[1] as {
+			messages?: Array<{ role: string; content: string }>;
+		};
+		expect(params.messages?.[1]?.content).not.toContain("room_entities:");
 	});
 
 	it("persists relationships under the facts table and upserts resolved entity edges when kept", async () => {
