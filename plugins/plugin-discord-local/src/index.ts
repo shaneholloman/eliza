@@ -1510,6 +1510,17 @@ const discordLocalPlugin: Plugin = {
       aliases: ["discord", "discord-local"],
       sourceKind: "passive",
       isPassive: true,
+      // Connector-owned projection of the flat Discord fields stamped on inbound
+      // Memory metadata into the nested `metadata.discord` identity object and
+      // the world-id derivation keys. Declaring this here (and matching core's
+      // back-compat default) is what lets core's roles.ts read Discord identity
+      // generically instead of a `source === "discord"` literal branch
+      // (#12090 item 22 / #12087).
+      identityMetadataMapping: {
+        userIdField: "fromId",
+        nameField: "entityName",
+      },
+      worldIdMetadataKeys: ["discordServerId", "discordChannelId"],
     },
   ],
   services: [DiscordLocalService],
