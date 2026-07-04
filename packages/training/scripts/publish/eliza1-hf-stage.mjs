@@ -16,8 +16,8 @@
  *   node packages/training/scripts/publish/eliza1-hf-stage.mjs --tier 2b --tier 4b
  *
  * Exit codes mirror the Python publisher:
- *   0 - every tier uploadable (or --allow-missing was passed)
- *   2 - at least one tier has unresolved blockers (default behaviour)
+ *   0 - every tier uploadable
+ *   2 - at least one tier has unresolved blockers
  *   other - Python launch / interpreter failure
  */
 
@@ -42,9 +42,7 @@ function parseArgs(argv) {
     bundlesRoot: DEFAULT_BUNDLES_ROOT,
     tiers: [],
     report: null,
-    allowMissing: true,
     strictVoicePolicy: false,
-    skipHashVerify: false,
     extra: [],
   };
   for (let i = 0; i < argv.length; i++) {
@@ -59,17 +57,12 @@ function parseArgs(argv) {
       out.tiers.push(argv[++i]);
     } else if (arg === "--report") {
       out.report = argv[++i];
-    } else if (arg === "--no-allow-missing") {
-      out.allowMissing = false;
     } else if (arg === "--strict-voice-policy") {
       out.strictVoicePolicy = true;
-    } else if (arg === "--skip-hash-verify") {
-      out.skipHashVerify = true;
     } else if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         `Usage: node eliza1-hf-stage.mjs [--dry-run] [--bundles-root DIR] ` +
-          `[--tier TIER]... [--report PATH] [--strict-voice-policy] ` +
-          `[--skip-hash-verify] [--no-allow-missing]\n`,
+          `[--tier TIER]... [--report PATH] [--strict-voice-policy]\n`,
       );
       process.exit(0);
     } else {
@@ -113,9 +106,7 @@ function main() {
     args.push("--tier", tier);
   }
   if (opts.dryRun) args.push("--dry-run");
-  if (opts.allowMissing) args.push("--allow-missing");
   if (opts.strictVoicePolicy) args.push("--strict-voice-policy");
-  if (opts.skipHashVerify) args.push("--skip-hash-verify");
   if (opts.report) args.push("--report", opts.report);
   for (const extra of opts.extra) args.push(extra);
 
