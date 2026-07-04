@@ -427,6 +427,8 @@ export class DeviceBridge {
       try {
         listener(snapshot);
       } catch {
+        // error-policy:J4 a throwing subscriber is evicted so one broken
+        // listener cannot starve the rest of the fan-out.
         this.statusListeners.delete(listener);
       }
     }
