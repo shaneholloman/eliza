@@ -12,6 +12,7 @@ import { containersEnv } from "@elizaos/cloud-shared/lib/config/containers-env";
 import { runWithCloudBindingsAsync } from "@elizaos/cloud-shared/lib/runtime/cloud-bindings";
 import { WarmPoolManager } from "@elizaos/cloud-shared/lib/services/containers/agent-warm-pool";
 import { getHetznerPoolContainerCreator } from "@elizaos/cloud-shared/lib/services/containers/agent-warm-pool-creator";
+import { evaluateForwardedDatabaseUrl } from "@elizaos/cloud-shared/lib/services/containers/forwarded-database-url-guard";
 import {
   type ContainerBootstrapFile,
   type ContainerBootstrapSource,
@@ -498,13 +499,47 @@ function toCreateInput(
   };
 }
 
+/**
+ * SECURITY (H4, #12882): resolve the forwarded per-request database URL against
+ * pinned control-plane context and FAIL CLOSED. A caller-supplied
+ * `x-eliza-cloud-database-url` is only honored when its whole identity (scheme,
+ * credentials, host, port, database, query) matches the sidecar's own
+ * configured `DATABASE_URL` or the operator allowlist; anything else throws a
+ * 403 `Response` (caught by the handlers below). Returns the validated URL to
+ * bind, or `undefined` when no header was supplied.
+ */
+function resolveForwardedDatabaseUrl(c: Context): string | undefined {
+  const databaseUrl = c.req.header("x-eliza-cloud-database-url")?.trim();
+  if (!databaseUrl) return undefined;
+
+  const decision = evaluateForwardedDatabaseUrl(databaseUrl, {
+    configuredDatabaseUrl: containersEnv.containerControlPlaneDatabaseUrl(),
+    allowlistDatabaseUrls:
+      containersEnv.containerControlPlaneDatabaseUrlAllowlist(),
+  });
+  if (!decision.allowed) {
+    logger.error(
+      "[container-control-plane] rejected forwarded database URL (fail-closed)",
+      { reason: decision.reason },
+    );
+    throw new Response(
+      JSON.stringify({
+        success: false,
+        error: "Forwarded database identity is not trusted",
+      }),
+      { status: 403, headers: { "content-type": "application/json" } },
+    );
+  }
+  return databaseUrl;
+}
+
 async function handle(
   c: Context,
   fn: (auth: ForwardedAuth) => Promise<Response>,
 ) {
   try {
     const auth = requireForwardedAuth(c);
-    const databaseUrl = c.req.header("x-eliza-cloud-database-url")?.trim();
+    const databaseUrl = resolveForwardedDatabaseUrl(c);
     if (databaseUrl) {
       const controlPlaneNodes = await dockerNodesRepository.findAll();
       return await runWithCloudBindingsAsync(
@@ -528,7 +563,7 @@ async function handle(
 async function handleInternal(c: Context, fn: () => Promise<Response>) {
   try {
     requireInternalToken(c);
-    const databaseUrl = c.req.header("x-eliza-cloud-database-url")?.trim();
+    const databaseUrl = resolveForwardedDatabaseUrl(c);
     if (databaseUrl) {
       const controlPlaneNodes = await dockerNodesRepository.findAll();
       return await runWithCloudBindingsAsync(
