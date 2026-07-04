@@ -3,7 +3,8 @@
  * single-bot-per-meeting enforcement, roster, transcript persistence, and
  * listing. Deterministic: fake runtime plus scripted adapter/pipeline.
  */
-import { describe, expect, it } from "vitest";
+import { DEFAULT_MEETING_MAX_DURATION_MS } from "@elizaos/shared";
+import { describe, expect, it, vi } from "vitest";
 import { MeetingJoinError, MeetingService } from "./service.js";
 import {
   makeFakeRuntime,
@@ -120,6 +121,73 @@ describe("MeetingService.requestJoin — validation", () => {
     expect(service.listSessions({ active: true })).toHaveLength(1);
     expect(calls).toBe(2);
   });
+
+  it("rejects requested duration caps above the configured maximum before launch", async () => {
+    const adapter = new ScriptedAdapter("google_meet");
+    const { fake, service } = makeService([adapter]);
+    fake.settings.ELIZA_MEETINGS_MAX_DURATION_MS = "1000";
+
+    await expect(
+      service.requestJoin({
+        platform: "google_meet",
+        meetingUrl: MEET_URL,
+        maxDurationMs: 1001,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_duration_cap" });
+    expect(service.listSessions()).toHaveLength(0);
+    expect(adapter.session).toBeNull();
+  });
+
+  it("uses the production default 60-minute cap and accepts lower requested caps", async () => {
+    const { service } = makeService();
+
+    const defaulted = await service.requestJoin({
+      platform: "google_meet",
+      meetingUrl: MEET_URL,
+    });
+    expect(defaulted.maxDurationMs).toBe(60 * 60 * 1000);
+    expect(defaulted.maxDurationMs).toBe(DEFAULT_MEETING_MAX_DURATION_MS);
+
+    const lower = await service.requestJoin({
+      platform: "google_meet",
+      meetingUrl: "https://meet.google.com/aaa-bbbb-ccc",
+      maxDurationMs: 15 * 60 * 1000,
+    });
+    expect(lower.maxDurationMs).toBe(15 * 60 * 1000);
+  });
+
+  it("uses only strict decimal integers for the configured duration cap", async () => {
+    const hexAdapter = new ScriptedAdapter("google_meet");
+    const { fake: hexFake, service: hexService } = makeService([hexAdapter]);
+    hexFake.settings.ELIZA_MEETINGS_MAX_DURATION_MS = "0x10";
+
+    const hexDto = await hexService.requestJoin({
+      platform: "google_meet",
+      meetingUrl: MEET_URL,
+      maxDurationMs: 17,
+    });
+    expect(hexDto.maxDurationMs).toBe(17);
+    expect(hexAdapter.session).not.toBeNull();
+    await hexAdapter.started;
+    hexAdapter.end("normal_completion");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(hexService.getSession(hexDto.id as never)?.status).toBe("ended");
+
+    const decimalAdapter = new ScriptedAdapter("google_meet");
+    const { fake: decimalFake, service: decimalService } = makeService([
+      decimalAdapter,
+    ]);
+    decimalFake.settings.ELIZA_MEETINGS_MAX_DURATION_MS = "1000";
+
+    await expect(
+      decimalService.requestJoin({
+        platform: "google_meet",
+        meetingUrl: MEET_URL,
+        maxDurationMs: 1001,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_duration_cap" });
+    expect(decimalAdapter.session).toBeNull();
+  });
 });
 
 describe("MeetingService — session state machine", () => {
@@ -232,6 +300,59 @@ describe("MeetingService — session state machine", () => {
     // Unknown / already-terminal sessions return false.
     expect(service.stopSession(dto.id as never)).toBe(false);
     expect(service.stopSession(crypto.randomUUID() as never)).toBe(false);
+  });
+
+  it("stops and finalizes the session when the duration cap is reached", async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new ScriptedAdapter("google_meet");
+      const { service, pipelines } = makeService([adapter]);
+      const dto = await service.requestJoin({
+        platform: "google_meet",
+        meetingUrl: MEET_URL,
+        maxDurationMs: 25,
+      });
+      const botSession = await adapter.started;
+      adapter.report("active");
+      expect(botSession.signal.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      const session = service.getSession(dto.id as never);
+      expect(botSession.signal.aborted).toBe(true);
+      expect(session?.status).toBe("ended");
+      expect(session?.endReason).toBe("duration_cap_reached");
+      expect(pipelines[0].finalized).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the duration-cap reason when the adapter resolves on abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new ScriptedAdapter("google_meet");
+      const { service } = makeService([adapter]);
+      const dto = await service.requestJoin({
+        platform: "google_meet",
+        meetingUrl: MEET_URL,
+        maxDurationMs: 25,
+      });
+      const botSession = await adapter.started;
+      botSession.signal.addEventListener(
+        "abort",
+        () => adapter.end("requested_stop"),
+        { once: true },
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      const session = service.getSession(dto.id as never);
+      expect(session?.status).toBe("ended");
+      expect(session?.endReason).toBe("duration_cap_reached");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("ignores adapter status reports after a terminal state", async () => {
