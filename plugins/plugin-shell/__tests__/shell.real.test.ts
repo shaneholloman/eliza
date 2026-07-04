@@ -147,9 +147,7 @@ describePosixShell("shell plugin real local integration", () => {
 
     const errorLogs: unknown[] = [];
     const originalError = logger.error;
-    (logger as unknown as { error: (...a: unknown[]) => void }).error = (
-      ...args: unknown[]
-    ) => {
+    (logger as unknown as { error: (...a: unknown[]) => void }).error = (...args: unknown[]) => {
       errorLogs.push(args);
     };
 
