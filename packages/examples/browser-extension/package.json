@@ -7,11 +7,10 @@
     "safari"
   ],
   "scripts": {
-    "build": "node -e \"console.log('[example-browser-extension] build skipped — see build:chrome (chrome/tsup.config.ts has noExternal:[/.*/] which fails on workspaces with Node-only deps).')\"",
-    "build:chrome": "cd chrome && npm run build",
+    "build:chrome": "cd chrome && npm run build:tsup",
     "build:safari": "cd safari && npm run build",
     "dev": "cd chrome && npm run dev",
-    "clean": "node ../../../packages/scripts/rm-path-recursive.mjs chrome/dist",
+    "clean": "bun run --cwd chrome clean && bun run --cwd safari clean",
     "test": "bun test smoke.test.js && bun run --cwd chrome test && bun run --cwd safari test",
     "lint": "bunx @biomejs/biome check --write --unsafe .",
     "lint:check": "bunx @biomejs/biome check .",

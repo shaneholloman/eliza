@@ -12,7 +12,7 @@
     "./negative-fixtures": "./harness/negative-fixtures.ts"
   },
   "scripts": {
-    "test": "vitest run --config harness/vitest.config.ts --passWithNoTests",
+    "test": "vitest run --config harness/vitest.config.ts",
     "format": "bunx @biomejs/biome format --write package.json harness mocks",
     "format:check": "bunx @biomejs/biome format package.json harness mocks"
   },
