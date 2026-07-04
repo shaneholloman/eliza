@@ -1,0 +1,24 @@
+packages/os comment-only sweep
+
+110 source files changed
+111 insertions
+1 deletion
+
+Representative touched areas:
+- packages/os/android/system-ui/**/*.ts
+- packages/os/android/system-ui/**/*.tsx
+- packages/os/homepage/src/**/*.tsx
+- packages/os/homepage/tests/**/*.ts
+- packages/os/linux/scripts/*.mjs
+- packages/os/scripts/**/*.mjs
+- packages/os/setup/**/*.ts
+- packages/os/setup/**/*.tsx
+- packages/os/shared-system/src/index.ts
+- packages/os/usb-installer/**/*.ts
+- packages/os/usb-installer/**/*.tsx
+
+Validation summary:
+- Header/churn audit: 141 source files, 0 missing headers, 0 churn comments
+- bun run check:comment-only: passed
+- git diff --check: passed
+- bun run verify: attempted; failed in unrelated baseline lint, final failing task @elizaos/electrobun#lint

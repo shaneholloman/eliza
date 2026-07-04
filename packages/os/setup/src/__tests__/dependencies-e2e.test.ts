@@ -1,3 +1,4 @@
+// Exercises the AOSP setup flasher backend and dependency gates.
 import { createServer as createHttpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, describe, expect, it } from "vitest";

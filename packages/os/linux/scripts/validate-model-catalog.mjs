@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Supports Linux live-image build and release evidence automation.
 
 import crypto from "node:crypto";
 import fs from "node:fs";

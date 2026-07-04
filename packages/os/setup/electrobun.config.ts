@@ -1,3 +1,4 @@
+// Configures the AOSP setup flasher build and tests.
 import type { ElectrobunConfig } from "electrobun/bun";
 
 // The Electrobun bun process (src/main/electrobun-main.ts) starts the in-

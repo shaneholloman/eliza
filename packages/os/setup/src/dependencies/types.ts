@@ -1,3 +1,4 @@
+// Resolves host dependencies required by the AOSP setup flasher.
 export type DependencyId =
   | "adb"
   | "fastboot"

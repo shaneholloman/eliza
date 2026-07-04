@@ -1,3 +1,4 @@
+// Exercises USB installer server and dry-run application behavior.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_ELIZAOS_IMAGES,

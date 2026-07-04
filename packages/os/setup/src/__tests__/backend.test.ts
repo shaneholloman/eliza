@@ -1,3 +1,4 @@
+// Exercises the AOSP setup flasher backend and dependency gates.
 import { describe, expect, it, vi } from "vitest";
 import { MOCK_BUILDS } from "../backend/adb-backend";
 import type { AospFlasherBackend, ConnectedDevice } from "../backend/types";

@@ -1,3 +1,4 @@
+// Exercises Android SystemUI rendering behavior for the elizaOS image.
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { StatusBar } from "../components/StatusBar";

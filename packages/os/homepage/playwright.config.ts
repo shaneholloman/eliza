@@ -1,3 +1,4 @@
+// Configures build and browser automation for the OS homepage.
 import path from "node:path";
 import { defineConfig, devices } from "playwright/test";
 

@@ -1,3 +1,4 @@
+// Exercises USB installer server and dry-run application behavior.
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";

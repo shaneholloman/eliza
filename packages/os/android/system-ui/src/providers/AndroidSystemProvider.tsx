@@ -1,3 +1,4 @@
+// Supplies Android SystemUI state for real and mocked device providers.
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   type AndroidBridgeClient,

@@ -1,3 +1,4 @@
+// Implements backend device and HTTP operations for the AOSP setup flasher.
 export interface ConnectedDevice {
   serial: string;
   model: string;
