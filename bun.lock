@@ -744,7 +744,6 @@
         "@electric-sql/pglite": "^0.4.5",
         "@electric-sql/pglite-socket": "0.1.6",
         "@elevenlabs/elevenlabs-js": "^2.45.0",
-        "@elizaos/app-core": "workspace:*",
         "@elizaos/cloud-sdk": "workspace:*",
         "@elizaos/contracts": "workspace:*",
         "@elizaos/core": "workspace:*",
@@ -5428,13 +5427,9 @@
         "vitest": "^4.0.18",
       },
       "peerDependencies": {
-        "@elizaos/app-core": "workspace:*",
         "@elizaos/core": "workspace:*",
         "@elizaos/plugin-elizacloud": "workspace:*",
       },
-      "optionalPeers": [
-        "@elizaos/app-core",
-      ],
     },
     "plugins/plugin-wallet-ui": {
       "name": "@elizaos/plugin-wallet-ui",

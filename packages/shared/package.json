@@ -53,6 +53,16 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./automation-node-contributors": {
+      "types": "./dist/automation-node-contributors.d.ts",
+      "eliza-source": {
+        "types": "./src/automation-node-contributors.ts",
+        "import": "./src/automation-node-contributors.ts",
+        "default": "./src/automation-node-contributors.ts"
+      },
+      "import": "./dist/automation-node-contributors.js",
+      "default": "./dist/automation-node-contributors.js"
+    },
     "./connector-account-catalog": {
       "types": "./dist/connector-account-catalog.d.ts",
       "eliza-source": {

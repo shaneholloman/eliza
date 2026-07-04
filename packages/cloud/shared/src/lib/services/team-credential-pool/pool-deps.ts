@@ -23,7 +23,6 @@
  * metadata records; callers resolve ciphertext via SecretsService at use time.
  */
 
-import type { AccountPoolDeps, PoolProviderId } from "@elizaos/app-core/account-pool";
 import type { LinkedAccountConfig, LinkedAccountHealth } from "@elizaos/contracts";
 import {
   type PooledCredential,
@@ -31,6 +30,7 @@ import {
 } from "../../../db/repositories/pooled-credentials";
 import { logger } from "../../utils/logger";
 import { secretsService } from "../secrets/secrets";
+import type { AccountPoolDeps, PoolProviderId } from "./account-pool-contract";
 
 function poolRecordKey(providerId: string, accountId: string): string {
   return `${providerId}:${accountId}`;
