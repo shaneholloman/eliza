@@ -93,6 +93,8 @@ function isNativeAndroid(): boolean {
   try {
     return Capacitor.getPlatform() === "android";
   } catch {
+    // error-policy:J4 capability probe — no Capacitor runtime means not
+    // native Android; the transport stays on the HTTP path.
     return false;
   }
 }
@@ -160,6 +162,8 @@ async function resolveNativeAgentPlugin(): Promise<NativeAgentPlugin | null> {
     const agent = toNativeAgentPlugin(registeredAgent);
     if (agent) return agent;
   } catch {
+    // error-policy:J4 capability probe — a failed plugin registration means
+    // no native transport; callers degrade to the explicit unavailable path.
     return null;
   }
 
@@ -365,6 +369,9 @@ export async function androidNativeAgentTransportForUrl(
     .then((agent) =>
       agent?.request ? createAndroidNativeAgentTransport(agent) : null,
     )
+    // error-policy:J4 plugin-resolution failure degrades to the explicit
+    // "native transport unavailable" response below (IPC URLs) or to the
+    // normal HTTP transport (everything else) — never a silent success.
     .catch(() => null);
 
   const transport = await nativeTransportPromise;

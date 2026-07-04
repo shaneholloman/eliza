@@ -96,6 +96,8 @@ function resolveNativeStewardRefreshEndpoint(): string | undefined {
         : host;
     return `${url.protocol}//${apiHost}/api/auth/steward-refresh`;
   } catch {
+    // error-policy:J3 unparseable cloud base — no custom refresh endpoint;
+    // the refresh call uses its built-in default.
     return undefined;
   }
 }
@@ -270,8 +272,8 @@ export default function NativeAppsStudio(): React.JSX.Element {
       const token = readStoredStewardToken()?.trim() ?? null;
       if (shouldRefreshBeforeRender(token)) {
         const refreshed = await Promise.race([
-          // error-policy:J4 best-effort pre-render token refresh; on failure or
-          // timeout the page still boots with the existing token (below).
+          // error-policy:J4 a failed pre-render refresh keeps the stored
+          // token; expiry surfaces through the studio's own auth error path.
           refreshCloudStewardSession({
             endpoint: resolveNativeStewardRefreshEndpoint(),
           }).catch(() => null),
@@ -285,8 +287,7 @@ export default function NativeAppsStudio(): React.JSX.Element {
           try {
             window.dispatchEvent(new CustomEvent("steward-token-sync"));
           } catch {
-            // error-policy:J6 best-effort notify; token is already persisted, so
-            // a missing CustomEvent constructor (SSR/old runtime) is non-fatal.
+            // best-effort
           }
         }
       }

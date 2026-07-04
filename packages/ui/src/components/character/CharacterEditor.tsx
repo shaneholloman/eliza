@@ -738,19 +738,19 @@ export function CharacterEditor({
           dispatchWindowEvent(VOICE_CONFIG_UPDATED_EVENT, persistedVoiceConfig);
           // Persist the voice switch immediately so the next assistant line
           // uses the selected character's voice without waiting for Save.
+          // error-policy:J4 immediate persist is an optimization — Save
+          // remains the durable write path; error log keeps a failed early
+          // sync observable instead of silently speaking with the old voice.
           void client
             .updateConfig({
               messages: {
                 tts: persistedVoiceConfig,
               },
             })
-            .catch((err) => {
-              // The voice switch already applied in-session (event above); this
-              // persists it. A silent failure would desync the next reload from
-              // what the user sees — surface it (Save re-persists on demand).
+            .catch((err: unknown) => {
               logger.error(
                 { err },
-                "[CharacterEditor] failed to persist voice config",
+                "[CharacterEditor] voice config early persist failed",
               );
             });
         }
@@ -1019,6 +1019,8 @@ export function CharacterEditor({
     try {
       await handleSaveCharacter();
     } catch {
+      // error-policy:J5 handleSaveCharacter surfaces its own failure via
+      // characterSaveError state; false reports the combined save failed.
       return false;
     }
     // Mark the current selection as saved

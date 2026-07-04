@@ -74,6 +74,7 @@ function isNativeMobile(): boolean {
     const platform = Capacitor.getPlatform();
     return platform === "android" || platform === "ios";
   } catch {
+    // error-policy:J3 an exotic host global shape reads as "not native".
     return false;
   }
 }
@@ -122,13 +123,13 @@ async function serveRequest(request: CaptureRequest): Promise<void> {
     // (as null) instead of waiting out its timeout, and so this poller keeps
     // running for the next request.
     const reason = error instanceof Error ? error.message : String(error);
-    // error-policy:J6 this IS the error-reporting path (posting the capture
-    // failure back so the agent's request settles). If even the error post
-    // fails there is nothing further to do — swallow the terminal failure.
+    // error-policy:J5 best-effort failure report — if even the error POST
+    // fails, the agent still observes the failure via its own 30s capture
+    // timeout; the poller must keep running for the next request.
     await postScreenFrame({
       requestId: request.requestId,
       error: reason,
-    }).catch(() => {});
+    }).catch(() => undefined);
   }
 }
 
@@ -147,7 +148,8 @@ async function poll(): Promise<void> {
     const list = Array.isArray(data.requests) ? data.requests : [];
     requests = list.filter(isCaptureRequest);
   } catch {
-    // Agent not reachable yet (early boot) — count, next tick retries fast.
+    // error-policy:J4 agent not reachable yet (early boot) — count toward the
+    // designed exponential backoff; the next tick retries.
     consecutiveFailures += 1;
     return;
   }

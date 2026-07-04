@@ -31,6 +31,8 @@ function isExternalPlainHttpUrl(url: string): boolean {
       !isWildcardBindHost(parsed.hostname)
     );
   } catch {
+    // error-policy:J3 unparseable URL is not routed through the privileged
+    // desktop HTTP bridge (fail-closed).
     return false;
   }
 }

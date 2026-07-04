@@ -144,6 +144,8 @@ async function dirExists(dir: string): Promise<boolean> {
     const stat = await fs.stat(dir);
     return stat.isDirectory();
   } catch {
+    // error-policy:J4 optional scan-root probe — an unstat-able dir (ENOENT/
+    // permission) is simply not scanned for external models.
     return false;
   }
 }

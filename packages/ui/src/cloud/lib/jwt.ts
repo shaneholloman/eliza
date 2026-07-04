@@ -40,6 +40,8 @@ export function decodeJwtPayload(token: string): StewardTokenClaims | null {
     const json = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     return JSON.parse(json) as StewardTokenClaims;
   } catch {
+    // error-policy:J3 malformed JWT reads as the explicit "no claims" null —
+    // callers treat it as an invalid/expired token (fail-closed).
     return null;
   }
 }

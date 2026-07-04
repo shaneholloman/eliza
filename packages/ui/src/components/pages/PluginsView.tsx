@@ -254,6 +254,8 @@ function PluginListView({
       const stored = localStorage.getItem("pluginOrder");
       return stored ? JSON.parse(stored) : [];
     } catch {
+      // error-policy:J3 corrupt/unavailable persisted ordering — fall back to
+      // the catalog's natural order rather than wedging the plugins page.
       return [];
     }
   });

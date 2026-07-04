@@ -52,6 +52,8 @@ function loadAll(): LaunchAttemptRecord[] {
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isRecord);
   } catch {
+    // error-policy:J3 corrupt/unavailable launch-history store — start with
+    // an empty diagnostic history.
     return [];
   }
 }
@@ -62,7 +64,8 @@ function saveAll(records: LaunchAttemptRecord[]): void {
     const trimmed = records.slice(0, MAX);
     window.localStorage.setItem(KEY, JSON.stringify(trimmed));
   } catch {
-    /* ignore — sandboxed storage */
+    // error-policy:J7 diagnostics write — sandboxed storage must not break
+    // app launches; the in-memory history for this session is unaffected.
   }
 }
 

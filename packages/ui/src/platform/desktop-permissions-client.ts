@@ -92,6 +92,8 @@ async function queryRendererPermission(
     const status = mapRendererPermissionState(result.state);
     return status ? buildRendererPermissionState(id, status) : null;
   } catch {
+    // error-policy:J4 permissions.query unsupported for this name — null is
+    // the explicit "state unknown" the permissions UI renders as such.
     return null;
   }
 }

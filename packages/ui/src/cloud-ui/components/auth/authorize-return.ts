@@ -79,6 +79,8 @@ export function readStoredAppAuthorizeReturnTo(): string | null {
     if (url.pathname !== APP_AUTHORIZE_PATH) return null;
     return `${url.pathname}${url.search}${url.hash}`;
   } catch {
+    // error-policy:J3 unreadable storage or unparseable stored URL — no
+    // authorize return target is trusted (fail-closed).
     return null;
   }
 }

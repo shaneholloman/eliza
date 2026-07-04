@@ -32,6 +32,8 @@ function isNativeMobile(): boolean {
     const platform = Capacitor.getPlatform();
     return platform === "android" || platform === "ios";
   } catch {
+    // error-policy:J4 capability probe — no Capacitor runtime means no native
+    // OCR on this platform; the bridge simply stays off.
     return false;
   }
 }
@@ -70,6 +72,9 @@ async function serveRequest(request: OcrRequest): Promise<void> {
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
+    // error-policy:J5 best-effort failure report — if even the error POST
+    // fails, the agent still observes the failure via its own OCR request
+    // timeout; the poller must keep running for the next request.
     await postOcrResult({ requestId: request.requestId, error: reason }).catch(
       () => {},
     );
@@ -85,6 +90,8 @@ async function poll(): Promise<void> {
     const list = Array.isArray(data.requests) ? data.requests : [];
     requests = list.filter(isOcrRequest);
   } catch {
+    // error-policy:J4 agent not reachable yet (early boot) — the next
+    // interval tick retries; pending requests time out on the agent side.
     return;
   }
 

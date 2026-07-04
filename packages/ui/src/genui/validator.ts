@@ -56,6 +56,8 @@ function jsonByteLength(value: unknown): number | null {
   try {
     return new TextEncoder().encode(JSON.stringify(value)).length;
   } catch {
+    // error-policy:J3 unserializable payload (cycles/BigInt) reads as the
+    // explicit "size unknown" signal; the structural validators still run.
     return null;
   }
 }

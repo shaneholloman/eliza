@@ -670,7 +670,8 @@ export function InstallSheet({
           try {
             data = JSON.parse(event.data);
           } catch {
-            // Ignore malformed frames (heartbeats / proxy noise).
+            // error-policy:J3 malformed SSE frames (heartbeats / proxy noise)
+            // are skipped; real terminal events arrive as valid JSON.
             return;
           }
           if (data.type === "log") {

@@ -40,6 +40,8 @@ function readStoredAuthenticated(): boolean {
     const token = window.localStorage.getItem(STEWARD_TOKEN_KEY);
     return token ? tokenIsLive(token) : false;
   } catch {
+    // error-policy:J3 storage unavailable reads as unauthenticated
+    // (fail-closed) — the join flow prompts for login.
     return false;
   }
 }

@@ -354,6 +354,8 @@ function isBrowserWorkspaceFrameBlockedUrl(url: string): boolean {
     const parsed = new URL(url);
     return /(^|\.)discord\.com$/i.test(parsed.hostname);
   } catch {
+    // error-policy:J3 unparseable URL cannot match the frame-blocked hosts;
+    // the iframe itself surfaces an unloadable address.
     return false;
   }
 }
@@ -790,19 +792,19 @@ export function BrowserWorkspaceView(): React.JSX.Element {
 
   const loadBrowserWalletState = useCallback(async () => {
     try {
-      // error-policy:J4 each sub-load degrades independently so the wallet panel
-      // renders partial data: absent steward status → "not connected", absent
-      // wallet config → no config, unreadable approvals → 0. A hard failure is
-      // still caught below and rendered as a visible steward error state.
-      const stewardStatus = await getStewardStatusRef
-        .current()
-        .catch(() => null);
+      // Steward status / pending-approval failures propagate to the catch
+      // below, which renders an explicit error-carrying wallet state — a
+      // swallowed failure here would paint "0 pending approvals" over real
+      // pending transactions.
+      const stewardStatus = await getStewardStatusRef.current();
       const resolvedWalletConfig =
         walletConfigRef.current ??
+        // error-policy:J4 wallet config is optional decoration for this
+        // panel (absent when the wallet plugin isn't loaded).
         (await client.getWalletConfig().catch(() => null));
       const pendingApprovals =
         stewardStatus?.connected === true
-          ? (await getStewardPendingRef.current().catch(() => [])).length
+          ? (await getStewardPendingRef.current()).length
           : 0;
       const nextState = buildBrowserWorkspaceWalletState({
         pendingApprovals,
@@ -813,6 +815,8 @@ export function BrowserWorkspaceView(): React.JSX.Element {
       setBrowserWalletState(nextState);
       return nextState;
     } catch (error) {
+      // error-policy:J4 explicit degrade — the wallet panel renders an
+      // error-carrying "unavailable" state, never healthy-empty.
       const message = error instanceof Error ? error.message : String(error);
       const nextState = buildBrowserWorkspaceWalletState({
         pendingApprovals: 0,

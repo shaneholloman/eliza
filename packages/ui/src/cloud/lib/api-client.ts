@@ -153,6 +153,7 @@ function readStewardToken(): string | null {
   try {
     return window.localStorage.getItem(STEWARD_TOKEN_KEY);
   } catch {
+    // error-policy:J3 storage unavailable reads as signed-out (fail-closed).
     return null;
   }
 }
@@ -165,7 +166,8 @@ function clearStoredStewardTokenIfCurrent(token: string): void {
       window.dispatchEvent(new CustomEvent("steward-token-sync"));
     }
   } catch {
-    // ignore storage/event failures; the fallback token path can still proceed.
+    // error-policy:J6 best-effort drain of a rejected token — the fallback
+    // token path proceeds either way.
   }
 }
 

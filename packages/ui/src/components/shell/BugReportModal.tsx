@@ -5,6 +5,7 @@
  * client. On the Electrobun desktop it can additionally attach local diagnostics
  * — collected via `../../utils/desktop-bug-report` — and open the logs folder.
  */
+import { logger } from "@elizaos/logger";
 import { ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { client } from "../../api";
@@ -91,6 +92,8 @@ function normalizeHttpsResultUrl(url?: string): string | null {
     const parsed = new URL(url);
     return parsed.protocol === "https:" ? parsed.toString() : null;
   } catch {
+    // error-policy:J3 unparseable result URL is dropped (fail-closed) —
+    // only verifiable https links are shown to the reporter.
     return null;
   }
 }
@@ -158,9 +161,11 @@ export function BugReportModal() {
             : {}),
         }));
       })
-      // error-policy:J6 best-effort form prefill; on failure the reporter still
-      // types the environment fields manually (no fabricated/masked data).
-      .catch(() => {});
+      // error-policy:J4 environment prefill only — the form stays editable
+      // with blank defaults; warn keeps a broken info endpoint observable.
+      .catch((err: unknown) => {
+        logger.warn({ err }, "[BugReportModal] bug-report info prefill failed");
+      });
     if (desktopRuntime) {
       loadDesktopBugReportDiagnostics()
         .then((diagnostics) => {
@@ -179,9 +184,14 @@ export function BugReportModal() {
             }));
           }
         })
-        // error-policy:J6 best-effort desktop-diagnostics prefill; on failure the
-        // logs/environment fields stay empty for the reporter to fill manually.
-        .catch(() => {});
+        // error-policy:J4 diagnostics prefill only — the report still submits
+        // without the log tail; warn keeps the broken bridge observable.
+        .catch((err: unknown) => {
+          logger.warn(
+            { err },
+            "[BugReportModal] desktop diagnostics prefill failed",
+          );
+        });
     }
     setTimeout(() => descRef.current?.focus(), 50);
 

@@ -159,6 +159,7 @@ function originsMatch(left: string, right: string): boolean {
   try {
     return new URL(left).origin === new URL(right).origin;
   } catch {
+    // error-policy:J3 malformed URL input fails closed (no origin match).
     return false;
   }
 }
@@ -175,6 +176,7 @@ function isDirectCloudBase(client: ElizaClient): boolean {
     const host = new URL(baseUrl).hostname.toLowerCase();
     return DIRECT_ELIZA_CLOUD_API_BY_HOST.has(host);
   } catch {
+    // error-policy:J3 malformed base URL reads as "not a direct cloud base".
     return false;
   }
 }
@@ -254,6 +256,8 @@ function resolveBrowserCloudApiRequestUrl(url: string): string {
     }
     return `${parsed.pathname}${parsed.search}${parsed.hash}`;
   } catch {
+    // error-policy:J3 an unparseable URL is passed through unchanged — this
+    // helper only rewrites known cloud hosts to same-origin paths.
     return url;
   }
 }
@@ -355,6 +359,8 @@ export function cloudTokenSecsRemaining(token: string): number | null {
     if (typeof payload.exp !== "number") return null;
     return payload.exp - Date.now() / 1000;
   } catch {
+    // error-policy:J3 `null` is the explicit "no decodable exp" signal
+    // (opaque/device-code tokens); callers skip lifecycle refresh for it.
     return null;
   }
 }
@@ -406,9 +412,8 @@ export async function refreshCloudStewardSession(opts?: {
     credentials: "include",
   });
   if (!response.ok) return null;
-  // error-policy:J3 the refresh endpoint may return 200 with an empty body
-  // (rotation without a new access token); a non-JSON body parses to null and
-  // the caller treats "no token issued" as a valid outcome.
+  // error-policy:J3 an unparseable refresh body reads as "no refreshed
+  // session" (null) — callers keep/drop the stored token by its own expiry.
   return (await response.json().catch(() => null)) as {
     token?: string;
     expiresAt?: number;
@@ -438,6 +443,8 @@ function parseDirectCloudJsonSafe(data: unknown): unknown {
   try {
     return parseDirectCloudJson(data);
   } catch {
+    // error-policy:J3 non-JSON bodies (HTML error pages, plain text) are
+    // returned raw so directCloudResponseText can quote them in the error.
     return data;
   }
 }
@@ -3023,16 +3030,14 @@ export async function waitForCloudAgentRunning(
     "starting",
     "Starting your agent — a cold boot can take a few minutes...",
   );
-  // error-policy:J5 the resume is a wake kick; its outcome is observed by the
-  // poll loop below, which is the authority on readiness (and throws on a
-  // failed/timed-out boot). A failed kick simply means the loop waits.
+  // error-policy:J4 resume is an idempotent wake nudge — the status poll
+  // below is the authority and surfaces failed/timed-out boots as errors.
   await client.resumeCloudCompatAgent(agentId).catch(() => null);
 
   let lastStatus = "unknown";
   for (;;) {
-    // error-policy:J4 a transient status-fetch failure inside the bounded wake
-    // poll degrades to "not ready yet" (null) and retries next tick; a
-    // persistent failure surfaces as the loop's timeout throw below.
+    // error-policy:J4 a failed status read counts as an unknown tick inside
+    // this bounded poll; the deadline below throws with the last status.
     const detail = await client.getCloudCompatAgent(agentId).catch(() => null);
     const agent = detail?.success ? detail.data : null;
     if (agent) {
@@ -3195,9 +3200,8 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
     throw new Error(created.data.message || "Failed to create cloud agent");
   }
   const agentId = created.data.agentId;
-  // error-policy:J4 a failed detail fetch for the freshly-created agent degrades
-  // to starting on the shared REST adapter base (see the comment below), which
-  // is the intended fast-start path — not an error.
+  // error-policy:J4 detail is an optimization probe (warm-pool fast path);
+  // on failure the shared REST adapter base below is always usable.
   const detail = await this.getCloudCompatAgent(agentId).catch(() => null);
   const detailAgent = detail?.success ? detail.data : null;
   // A freshly-created dedicated agent's subdomain is populated immediately, but

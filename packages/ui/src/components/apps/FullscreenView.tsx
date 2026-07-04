@@ -1255,21 +1255,20 @@ export function FullscreenView() {
         }
       })
       .catch(() => {
-        // error-policy:J4 designed degrade — native canvas window unavailable,
-        // the iframe fallback is still rendered so the game stays playable.
+        // error-policy:J4 native game window unavailable — the iframe
+        // fallback is already rendered, so the game is still playable.
       });
 
     return () => {
       cancelled = true;
       // Close the game window when FullscreenView unmounts or the URL changes
       if (gameWindowIdRef.current) {
+        // error-policy:J6 best-effort teardown of the native game window.
         void invokeDesktopBridgeRequest({
           rpcMethod: "canvasDestroyWindow",
           ipcChannel: "canvas:destroyWindow",
           params: { id: gameWindowIdRef.current },
-          // error-policy:J6 best-effort teardown on unmount; the window is
-          // discarded regardless and a failed destroy has no further recourse.
-        }).catch(() => {});
+        }).catch(() => undefined);
         gameWindowIdRef.current = null;
         setGameWindowId(null);
       }

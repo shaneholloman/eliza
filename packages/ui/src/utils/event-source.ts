@@ -24,6 +24,8 @@ export function openEventSource(
   try {
     parsed = new URL(url, base);
   } catch {
+    // error-policy:J3 unparseable URL — callers degrade to their fetch/poll
+    // path (see header).
     return null;
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
@@ -32,6 +34,8 @@ export function openEventSource(
   try {
     return new EventSource(url, init);
   } catch {
+    // error-policy:J4 EventSource constructor rejected the URL (see header —
+    // the iOS IPC base case); callers degrade to their fetch/poll path.
     return null;
   }
 }

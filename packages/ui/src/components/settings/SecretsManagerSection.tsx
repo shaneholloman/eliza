@@ -341,9 +341,9 @@ function VaultBody({
         client.rawRequest("/api/secrets/routing", undefined, {
           allowNonOk: true,
         }),
-        // error-policy:J4 agents/apps are optional cross-reference enrichment;
-        // null degrades those columns while the core secrets panels below still
-        // fail hard on a bad backends/preferences/methods response.
+        // error-policy:J4 best-effort enrichment — these endpoints may not
+        // exist in headless/test shells; the Routing tab renders without them
+        // (documented at the consumers below).
         client
           .rawRequest("/api/agents", undefined, { allowNonOk: true })
           .catch(() => null),
@@ -394,8 +394,8 @@ function VaultBody({
         setApps([]);
       }
     } catch (err) {
-      // Boundary translation: a failed bulk load surfaces in a single
-      // banner; tabs that don't depend on the failed endpoint still
+      // error-policy:J1 boundary translation — a failed bulk load surfaces in
+      // a single banner; tabs that don't depend on the failed endpoint still
       // render usable empty states from their own state.
       setError(err instanceof Error ? err.message : "load failed");
     } finally {

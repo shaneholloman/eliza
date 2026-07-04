@@ -62,9 +62,8 @@ export async function ensureNativeReadGranted(
   request: (() => Promise<string>) | null,
 ): Promise<boolean> {
   if (!check) return true;
-  // error-policy:J4 a failed native permission check/request reads as "not
-  // granted" (fail-closed) — the function returns false and the caller renders
-  // the permission-required state rather than proceeding as if granted.
+  // error-policy:J3 a failed permission probe/request reads as "not granted"
+  // — the caller renders its designed permission-denied state.
   if ((await check().catch(() => null)) === "granted") return true;
   if (request && (await request().catch(() => null)) === "granted") return true;
   return false;
@@ -1632,9 +1631,16 @@ export function MessagesPageView() {
           },
           body: JSON.stringify(androidSmsGatewayPayload(incomingSms)),
         });
-        const cloudReply = (await response.json().catch(() => ({}))) as
-          | AndroidSmsGatewayReply
-          | Record<string, never>;
+        let cloudReply: AndroidSmsGatewayReply | Record<string, never> = {};
+        try {
+          cloudReply = (await response.json()) as AndroidSmsGatewayReply;
+        } catch {
+          // error-policy:J3 a non-ok body is only quoted in the error below;
+          // an OK response with an unparseable reply is a real failure.
+          if (response.ok) {
+            throw new Error("Cloud gateway returned an unparseable reply");
+          }
+        }
         if (!response.ok) {
           throw new Error(
             `Cloud gateway failed (${response.status}): ${JSON.stringify(cloudReply)}`,

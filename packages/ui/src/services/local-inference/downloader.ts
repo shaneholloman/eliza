@@ -274,6 +274,8 @@ async function partialSize(stagingPath: string): Promise<number> {
     const stat = await fsp.stat(stagingPath);
     return stat.isFile() ? stat.size : 0;
   } catch {
+    // error-policy:J3 a missing/unreadable staging file means "no resumable
+    // partial" — the download restarts from byte 0 by design.
     return 0;
   }
 }
@@ -379,10 +381,9 @@ export class Downloader {
     this.active.set(modelId, record);
 
     // Fire-and-forget; errors are captured and emitted as a "failed" event.
-    void this.runJob(catalogEntry, record).catch(() => {
-      // `runJob` handles its own failure telemetry; we only need to swallow
-      // the unhandled-rejection here.
-    });
+    // error-policy:J5 runJob captures failures and emits them as a "failed"
+    // download event; this catch only suppresses the unhandled rejection.
+    void this.runJob(catalogEntry, record).catch(() => undefined);
 
     this.emit({ type: "progress", job: { ...job } });
     return { ...job };
@@ -783,8 +784,8 @@ export class Downloader {
         // treated as invalid and replaced by the fresh bundle artifact.
       }
     } else {
-      // error-policy:J6 best-effort cleanup of a stale staging file before the
-      // fresh download re-creates it; force already ignores a missing path.
+      // error-policy:J6 best-effort staging cleanup; a survivor is treated
+      // as a resumable/invalid partial by the next run.
       await fsp.rm(stagingPath, { force: true }).catch(() => undefined);
     }
 

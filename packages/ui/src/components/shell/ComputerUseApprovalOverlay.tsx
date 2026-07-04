@@ -41,11 +41,11 @@ function approvalStreamUrl(): string | null {
       baseUrl || window.location.origin,
     );
   } catch {
-    // Non-http native IPC bases (eliza-local-agent://ipc) are not valid URL
-    // bases on Android WebView / WebKit — resolving a path against a
-    // non-special scheme throws, which crashed the whole shell at boot on
-    // on-device builds. EventSource cannot reach those bases anyway, so
-    // degrade to the polling path.
+    // error-policy:J4 non-http native IPC bases (eliza-local-agent://ipc) are
+    // not valid URL bases on Android WebView / WebKit — resolving a path
+    // against a non-special scheme throws, which crashed the whole shell at
+    // boot on on-device builds. EventSource cannot reach those bases anyway,
+    // so degrade to the polling path.
     return null;
   }
   if (restToken) {

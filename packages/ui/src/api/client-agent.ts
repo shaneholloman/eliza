@@ -1279,6 +1279,8 @@ ElizaClient.prototype.getBootProgress = async function (this: ElizaClient) {
       "bootProgress",
     );
   } catch {
+    // error-policy:J4 optional desktop RPC channel — null means "no boot
+    // progress available here"; the startup UI keeps its HTTP-derived state.
     return null;
   }
 };
@@ -1290,6 +1292,8 @@ ElizaClient.prototype.getLaunchProgress = async function (this: ElizaClient) {
       "launchProgress",
     );
   } catch {
+    // error-policy:J4 optional desktop RPC channel — null means "no launch
+    // snapshot available here"; callers fall back to HTTP status polling.
     return null;
   }
 };
@@ -3697,18 +3701,14 @@ ElizaClient.prototype.getCodingAgentStatus = async function (
       ? orchestratorStatus.taskCount
       : (taskThreads?.length ?? 0);
 
-  try {
-    return {
-      supervisionLevel: acpSessions ? "acp" : "orchestrator",
-      taskCount: tasks.length,
-      tasks,
-      pendingConfirmations: 0,
-      taskThreadCount,
-      taskThreads: taskThreads ?? [],
-    } satisfies CodingAgentStatus;
-  } catch {
-    return null;
-  }
+  return {
+    supervisionLevel: acpSessions ? "acp" : "orchestrator",
+    taskCount: tasks.length,
+    tasks,
+    pendingConfirmations: 0,
+    taskThreadCount,
+    taskThreads: taskThreads ?? [],
+  } satisfies CodingAgentStatus;
 };
 
 ElizaClient.prototype.listCodingAgentTaskThreads = async function (
@@ -4190,6 +4190,8 @@ ElizaClient.prototype.stopCodingAgent = async function (
     );
     return true;
   } catch {
+    // error-policy:J1 boundary translation — the typed contract is an
+    // explicit boolean failure the plugin callers render; never fake success.
     return false;
   }
 };
@@ -4197,13 +4199,9 @@ ElizaClient.prototype.stopCodingAgent = async function (
 ElizaClient.prototype.listCodingAgentScratchWorkspaces = async function (
   this: ElizaClient,
 ) {
-  try {
-    return await this.fetch<CodingAgentScratchWorkspace[]>(
-      "/api/coding-agents/scratch",
-    );
-  } catch {
-    return [];
-  }
+  return this.fetch<CodingAgentScratchWorkspace[]>(
+    "/api/coding-agents/scratch",
+  );
 };
 
 ElizaClient.prototype.keepCodingAgentScratchWorkspace = async function (
@@ -4217,6 +4215,8 @@ ElizaClient.prototype.keepCodingAgentScratchWorkspace = async function (
     );
     return true;
   } catch {
+    // error-policy:J1 boundary translation — the typed contract is an
+    // explicit boolean failure the plugin callers render; never fake success.
     return false;
   }
 };
@@ -4232,6 +4232,8 @@ ElizaClient.prototype.deleteCodingAgentScratchWorkspace = async function (
     );
     return true;
   } catch {
+    // error-policy:J1 boundary translation — the typed contract is an
+    // explicit boolean failure the plugin callers render; never fake success.
     return false;
   }
 };
@@ -4251,6 +4253,8 @@ ElizaClient.prototype.promoteCodingAgentScratchWorkspace = async function (
     });
     return response.scratch ?? null;
   } catch {
+    // error-policy:J1 boundary translation — null is the typed "promotion
+    // failed" signal in this contract; never fake a workspace record.
     return null;
   }
 };
@@ -4297,6 +4301,8 @@ ElizaClient.prototype.stopPtySession = async function (
     );
     return true;
   } catch {
+    // error-policy:J1 boundary translation — the typed contract is an
+    // explicit boolean failure the plugin callers render; never fake success.
     return false;
   }
 };
@@ -4384,7 +4390,8 @@ ElizaClient.prototype.getPtyBufferedOutput = async function (
     );
     return res.output ?? "";
   } catch {
-    // Older coding-agent PTY sessions keep their buffer behind the legacy route.
+    // error-policy:J4 older coding-agent PTY sessions keep their buffer
+    // behind the legacy route tried below.
   }
   try {
     const res = await this.fetch<{ output: string }>(
@@ -4392,6 +4399,8 @@ ElizaClient.prototype.getPtyBufferedOutput = async function (
     );
     return res.output ?? "";
   } catch {
+    // error-policy:J4 scrollback hydration only — an empty replay degrades
+    // the terminal history; live output still arrives via the PTY stream.
     return "";
   }
 };

@@ -84,6 +84,8 @@ function readableEntries(
       .filter((entry) => entry.startsWith(prefix))
       .map((entry) => `${dir}/${entry}`);
   } catch {
+    // error-policy:J3 an unreadable directory reads as "no matching device
+    // nodes" for this hardware probe.
     return [];
   }
 }
@@ -95,6 +97,7 @@ function pathExists(
   try {
     return existsSync(path);
   } catch {
+    // error-policy:J3 an unprobeable path reads as absent for this probe.
     return false;
   }
 }

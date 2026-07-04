@@ -141,6 +141,8 @@ function readStewardSessionFromStorage(): StewardSessionUser {
       walletAddress: decoded.walletAddress,
     };
   } catch {
+    // error-policy:J3 unreadable storage or undecodable token reads as
+    // signed-out (fail-closed) — never a fabricated session.
     return null;
   }
 }

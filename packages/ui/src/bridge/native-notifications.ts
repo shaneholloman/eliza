@@ -101,7 +101,8 @@ async function ensureAndroidChannel(
     });
     channelEnsured = true;
   } catch {
-    // Channel creation is best-effort; the default channel still delivers.
+    // error-policy:J4 channel creation is best-effort; the default channel
+    // still delivers the notification.
   }
 }
 
@@ -126,8 +127,8 @@ async function tryLocalNotifications(
         if (requested.display !== "granted") return false;
       }
     } catch {
-      // Permission probe failed — attempt to schedule anyway; the OS will
-      // drop it if ungranted, and we don't want to block the other sinks.
+      // error-policy:J4 permission probe failed — attempt to schedule anyway;
+      // the OS drops it if ungranted, and the other sinks must not be blocked.
     }
   }
 
@@ -185,12 +186,15 @@ function tryWebNotification(req: NativeNotificationRequest): boolean {
           // redirect). navigateDeepLink drops anything but app routes / http(s).
           navigateDeepLink(deepLink);
         } catch {
-          /* ignore navigation failure */
+          // error-policy:J6 best-effort tap navigation; the app is already
+          // focused and the in-app center still lists the notification.
         }
       };
     }
     return true;
   } catch {
+    // error-policy:J4 constructor failure reads as "web channel unavailable";
+    // the caller's chain returns "none" and the in-app center still has it.
     return false;
   }
 }
@@ -202,6 +206,9 @@ function tryWebNotification(req: NativeNotificationRequest): boolean {
 export async function showNativeNotification(
   req: NativeNotificationRequest,
 ): Promise<"local" | "intent" | "web" | "none"> {
+  // error-policy:J4 documented first-that-succeeds channel chain; a failed
+  // channel falls through and an all-failed dispatch returns "none" (the
+  // in-app notification center is the source of truth either way).
   try {
     if (await tryLocalNotifications(req)) return "local";
   } catch {
@@ -238,6 +245,7 @@ export async function requestNativeNotificationPermission(): Promise<boolean> {
       const status = await plugin.requestPermissions();
       return status.display === "granted";
     } catch {
+      // error-policy:J3 a failed permission request reads as "not granted".
       return false;
     }
   }

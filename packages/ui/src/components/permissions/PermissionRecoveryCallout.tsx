@@ -29,6 +29,8 @@ function isNativeMobileRuntime(): boolean {
   try {
     return Capacitor.isNativePlatform() && !isElectrobunRuntime();
   } catch {
+    // error-policy:J4 capability probe — no Capacitor runtime means the
+    // web-flavored recovery copy is shown.
     return false;
   }
 }
