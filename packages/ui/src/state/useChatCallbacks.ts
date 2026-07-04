@@ -36,7 +36,7 @@ import {
   type LoadConversationMessagesResult,
   loadActiveConversationId,
 } from "./internal";
-import { deriveAgentReady, type FirstRunMode, type SetupStep } from "./types";
+import { deriveAgentReady } from "./types";
 
 import { useChatLifecycle } from "./useChatLifecycle";
 import { useChatSend } from "./useChatSend";
@@ -498,25 +498,15 @@ export interface UseChatCallbacksDeps {
   setFirstRunUiRevealNonce: (fn: (n: number) => number) => void;
   setFirstRunLoading: (v: boolean) => void;
   setFirstRunComplete: (v: boolean) => void;
-  setSetupStep: (v: SetupStep) => void;
-  setFirstRunMode: (v: FirstRunMode) => void;
-  setFirstRunActiveGuide: (v: string | null) => void;
   setFirstRunDeferredTasks: (v: string[]) => void;
   setPostFirstRunChecklistDismissed: (v: boolean) => void;
   setFirstRunName: (v: string) => void;
   setFirstRunStyle: (v: string) => void;
   setFirstRunRuntimeTarget: (v: AppState["firstRunRuntimeTarget"]) => void;
   setFirstRunProvider: (v: string) => void;
-  setFirstRunApiKey: (v: string) => void;
-  setFirstRunVoiceProvider: (v: string) => void;
-  setFirstRunVoiceApiKey: (v: string) => void;
-  setFirstRunPrimaryModel: (v: string) => void;
-  setFirstRunOpenRouterModel: (v: string) => void;
   setFirstRunRemoteConnected: (v: boolean) => void;
   setFirstRunRemoteApiBase: (v: string) => void;
   setFirstRunRemoteToken: (v: string) => void;
-  setFirstRunSmallModel: (v: string) => void;
-  setFirstRunLargeModel: (v: string) => void;
   setFirstRunOptions: (v: FirstRunOptions | null) => void;
 
   // Character / avatar
@@ -607,25 +597,15 @@ export function useChatCallbacks(deps: UseChatCallbacksDeps) {
     setFirstRunUiRevealNonce,
     setFirstRunLoading,
     setFirstRunComplete,
-    setSetupStep,
-    setFirstRunMode,
-    setFirstRunActiveGuide,
     setFirstRunDeferredTasks,
     setPostFirstRunChecklistDismissed,
     setFirstRunName,
     setFirstRunStyle,
     setFirstRunRuntimeTarget,
     setFirstRunProvider,
-    setFirstRunApiKey,
-    setFirstRunVoiceProvider,
-    setFirstRunVoiceApiKey,
-    setFirstRunPrimaryModel,
-    setFirstRunOpenRouterModel,
     setFirstRunRemoteConnected,
     setFirstRunRemoteApiBase,
     setFirstRunRemoteToken,
-    setFirstRunSmallModel,
-    setFirstRunLargeModel,
     setFirstRunOptions,
     setSelectedVrmIndex,
     setCustomVrmUrl,
@@ -876,25 +856,15 @@ export function useChatCallbacks(deps: UseChatCallbacksDeps) {
     setFirstRunUiRevealNonce,
     setFirstRunLoading,
     setFirstRunComplete,
-    setSetupStep,
-    setFirstRunMode,
-    setFirstRunActiveGuide,
     setFirstRunDeferredTasks,
     setPostFirstRunChecklistDismissed,
     setFirstRunName,
     setFirstRunStyle,
     setFirstRunRuntimeTarget,
     setFirstRunProvider,
-    setFirstRunApiKey,
-    setFirstRunVoiceProvider,
-    setFirstRunVoiceApiKey,
-    setFirstRunPrimaryModel,
-    setFirstRunOpenRouterModel,
     setFirstRunRemoteConnected,
     setFirstRunRemoteApiBase,
     setFirstRunRemoteToken,
-    setFirstRunSmallModel,
-    setFirstRunLargeModel,
     setFirstRunOptions,
     setSelectedVrmIndex,
     setCustomVrmUrl,

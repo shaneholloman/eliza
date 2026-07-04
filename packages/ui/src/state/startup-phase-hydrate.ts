@@ -47,7 +47,6 @@ import {
 } from "./internal";
 import { shouldStartAtCharacterSelectOnLaunch } from "./shell-routing";
 import type { StartupEvent } from "./startup-coordinator";
-import type { FirstRunMode } from "./types";
 
 export interface HydratingDeps {
   setStartupError: (v: null) => void;
@@ -72,7 +71,6 @@ export interface HydratingDeps {
   setTabRaw: (t: Tab) => void;
   firstRunCompletionCommittedRef: React.MutableRefObject<boolean>;
   initialTabSetRef: React.MutableRefObject<boolean>;
-  firstRunMode: FirstRunMode;
 }
 
 export interface ReadyPhaseDeps {
@@ -261,7 +259,6 @@ export async function runHydrating(
     (deps.firstRunCompletionCommittedRef.current ||
       shouldStartAtCharacterSelectOnLaunch({
         firstRunNeedsOptions: false,
-        firstRunMode: deps.firstRunMode,
         navPath,
         urlTab,
       })) &&
