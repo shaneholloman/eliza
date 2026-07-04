@@ -1,3 +1,4 @@
+import { logger } from "@elizaos/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getDailySummary, getDataPoints } from "./health-bridge.js";
@@ -97,7 +98,12 @@ describe("googleFitDailySummary sleep sub-fetch failure (#12798)", () => {
   });
 
   it("marks the day sleepUnavailable when the sleep aggregation fails (does not fabricate sleepHours: 0)", async () => {
-    fetchSpy.mockImplementation((async (_url: FetchArgs[0], init: FetchArgs[1]) => {
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+    fetchSpy.mockImplementation((async (
+      _url: FetchArgs[0],
+      init: FetchArgs[1],
+    ) => {
       if (isSleepRequest(init)) {
         return failResponse(503);
       }
@@ -114,10 +120,22 @@ describe("googleFitDailySummary sleep sub-fetch failure (#12798)", () => {
     expect(summary.sleepHours).toBe(0);
     // The failure must have hit the aggregate endpoint twice (metrics + sleep).
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenCalledWith(
+      {
+        boundary: "lifeops",
+        integration: "google-fit",
+        date: "2026-07-01",
+        error: "Google Fit request failed: HTTP 503",
+      },
+      "[lifeops] Google Fit sleep aggregation failed; sleep marked unavailable for this day",
+    );
   });
 
   it("does NOT set sleepUnavailable and reports real sleep when the sleep call succeeds", async () => {
-    fetchSpy.mockImplementation((async (_url: FetchArgs[0], init: FetchArgs[1]) => {
+    fetchSpy.mockImplementation((async (
+      _url: FetchArgs[0],
+      init: FetchArgs[1],
+    ) => {
       if (isSleepRequest(init)) {
         return okResponse(sleepResponseBody());
       }
@@ -134,7 +152,10 @@ describe("googleFitDailySummary sleep sub-fetch failure (#12798)", () => {
     const emptySleepBody = JSON.stringify({
       bucket: [{ dataset: [{ point: [] }] }],
     });
-    fetchSpy.mockImplementation((async (_url: FetchArgs[0], init: FetchArgs[1]) => {
+    fetchSpy.mockImplementation((async (
+      _url: FetchArgs[0],
+      init: FetchArgs[1],
+    ) => {
       if (isSleepRequest(init)) {
         return okResponse(emptySleepBody);
       }
@@ -151,7 +172,10 @@ describe("googleFitDailySummary sleep sub-fetch failure (#12798)", () => {
   it("omits sleep-unavailable days from sleep data-point series (no fabricated points)", async () => {
     // Sleep aggregate fails for every day in the window -> no points emitted,
     // rather than a run of fabricated zero-sleep points.
-    fetchSpy.mockImplementation((async (_url: FetchArgs[0], init: FetchArgs[1]) => {
+    fetchSpy.mockImplementation((async (
+      _url: FetchArgs[0],
+      init: FetchArgs[1],
+    ) => {
       if (isSleepRequest(init)) {
         return failResponse(500);
       }
