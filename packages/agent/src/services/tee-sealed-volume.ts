@@ -1,3 +1,4 @@
+/** Manages sealed-volume helpers for agent TEE persistence and secret handoff boundaries. */
 import {
   createCipheriv,
   createDecipheriv,

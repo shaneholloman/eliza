@@ -1,3 +1,4 @@
+/** Installs deterministic package-wide test setup for the agent Vitest harness. */
 import {
   ReadableStream as NodeReadableStream,
   TransformStream as NodeTransformStream,

@@ -1,3 +1,4 @@
+/** Runs a live sandbox smoke path for agent plugin isolation and runtime launch behavior. */
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { IAgentRuntime, UUID } from "@elizaos/core";

@@ -1,3 +1,4 @@
+/** Configures the deterministic Vitest harness for packages/agent tests. */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";

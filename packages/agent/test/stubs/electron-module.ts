@@ -1,3 +1,4 @@
+/** Provides an Electron stub for agent tests that run outside a desktop shell. */
 export const __electronTestState = {
   appPath: "",
   isPackaged: true,

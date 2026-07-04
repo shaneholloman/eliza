@@ -1,3 +1,4 @@
+/** Exercises chat usage accounting routes with deterministic runtime and billing fixtures. */
 import {
   type AgentRuntime,
   ChannelType,

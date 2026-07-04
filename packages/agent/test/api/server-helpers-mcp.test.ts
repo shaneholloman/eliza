@@ -1,3 +1,4 @@
+/** Exercises MCP server helper routing with deterministic request and plugin fixtures. */
 import { describe, expect, it } from "vitest";
 import { validateMcpServerConfig } from "../../src/api/server-helpers-mcp.ts";
 
