@@ -24,6 +24,7 @@ Individual test modules:
 
 ```bash
 pytest tests/test_diarization.py -v         # DER and speaker-count assertions
+pytest tests/test_single_stream_gate.py -v  # #12493 artifact gate, no WAV fixtures
 pytest tests/test_speaker_id.py -v          # intra/inter cosine thresholds
 pytest tests/test_entity_creation.py -v    # Jill scenario end-to-end
 pytest tests/test_owner_lru_cache.py -v    # hot-profile latency < 50 ms
@@ -36,6 +37,7 @@ pytest tests/test_async_search.py -v       # async profile search
 | --- | --- |
 | `tests/conftest.py` | SpeechBrain ECAPA-TDNN encoder, energy-VAD diarizer, InMemoryVoiceProfileStore fixtures |
 | `tests/test_diarization.py` | DER ≤ 0.45 and speaker-count correctness across all 5 fixtures |
+| `tests/test_single_stream_gate.py` | Single-platform-participant room-mic gate for 2/3/5/8 speaker artifacts; no WAV fixtures required |
 | `tests/test_speaker_id.py` | Intra-cluster cosine ≥ 0.40, inter-cluster ≤ 0.46 (ECAPA-TDNN on TTS) |
 | `tests/test_entity_creation.py` | Full Jill scenario: 2 entities, partner_of edge, no duplicates |
 | `tests/test_owner_lru_cache.py` | Owner hot-profile lookup latency < 50 ms |
@@ -50,6 +52,8 @@ pytest tests/test_async_search.py -v       # async profile search
 - Fixtures (f1–f5 WAV files) are **not committed** — they must be generated or
   provided before running. The manifest defines expected paths and ground-truth
   boundaries.
+- `tests/test_single_stream_gate.py` is an artifact-level smoke/gate for #12493
+  and does not require WAV fixtures or model downloads.
 - The diarizer in tests uses energy-VAD + ECAPA-TDNN clustering (no Hugging Face
   token required). Production uses pyannote; thresholds differ.
 - Artifacts are written to `artifacts/<W3_6_RUN_ID>/` (set env var to name the
