@@ -142,6 +142,7 @@ export function readStoredToken(): string | null {
   try {
     return localStorage.getItem(STEWARD_TOKEN_KEY);
   } catch {
+    // error-policy:J3 storage unavailable reads as signed-out (fail-closed).
     return null;
   }
 }

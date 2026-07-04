@@ -82,6 +82,8 @@ export function CreateAppDialog({ open, onOpenChange }: CreateAppDialogProps) {
       new URL(appUrl);
       return true;
     } catch {
+      // error-policy:J3 form validation — an unparseable URL disables submit
+      // as the explicit invalid signal.
       return false;
     }
   })();

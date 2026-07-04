@@ -106,6 +106,8 @@ export function dedicatedSubdomainBase(apiBase: string): string | null {
     // adapter path — that is the full-runtime origin.
     return `${url.protocol}//${url.host}`;
   } catch {
+    // error-policy:J3 unparseable api base cannot be proven a dedicated
+    // subdomain — fall back to the control-plane origin (fail-closed).
     return null;
   }
 }

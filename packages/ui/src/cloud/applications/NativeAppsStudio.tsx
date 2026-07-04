@@ -96,6 +96,8 @@ function resolveNativeStewardRefreshEndpoint(): string | undefined {
         : host;
     return `${url.protocol}//${apiHost}/api/auth/steward-refresh`;
   } catch {
+    // error-policy:J3 unparseable cloud base — no custom refresh endpoint;
+    // the refresh call uses its built-in default.
     return undefined;
   }
 }

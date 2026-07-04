@@ -52,6 +52,8 @@ function readLastActiveCloudAgentId(): string | null {
       ? parsed.id.slice("cloud:".length).trim() || null
       : null;
   } catch {
+    // error-policy:J3 corrupt persisted server entry — no reusable agent id;
+    // the join flow provisions from scratch.
     return null;
   }
 }

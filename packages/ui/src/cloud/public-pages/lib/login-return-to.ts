@@ -73,6 +73,8 @@ function safeConsume(storage: Storage): string | null {
     storage.removeItem(PENDING_OAUTH_RETURN_TO_KEY);
     return parseStoredReturnTo(value);
   } catch {
+    // error-policy:J3 unreadable storage — losing returnTo lands the user on
+    // the default post-login page instead of failing the login.
     return null;
   }
 }
