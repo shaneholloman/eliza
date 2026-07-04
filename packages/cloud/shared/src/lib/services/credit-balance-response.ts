@@ -19,11 +19,7 @@ export async function getCreditBalanceResponse(
   // balance (#12268 fallback-slop sweep).
   const balance = Number.parseFloat(String(organization.credit_balance ?? ""));
   if (!Number.isFinite(balance)) {
-    throw new ApiError(
-      500,
-      "internal_error",
-      "Unable to read credit balance for organization",
-    );
+    throw new ApiError(500, "internal_error", "Unable to read credit balance for organization");
   }
 
   return { balance };

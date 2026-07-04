@@ -9,17 +9,16 @@
  *     gate and is written back as a KV balance hint.
  *   - `getCreditBalanceResponse` — the DTO returned to the dashboard / API.
  *
- * `Number(null)` / `Number("not-a-number")` is `NaN`, which is a FAILED read
- * masquerading as a success-shaped value: it serializes to `balance: null` over
- * JSON and pollutes the gate hint. These tests assert both paths now fail loudly
- * on a non-finite balance instead of returning a wrong-but-plausible number, and
- * that the happy path + documented missing-org fail-safe still behave.
+ * `Number(null)` becomes a fake $0 and `Number("not-a-number")` becomes `NaN`
+ * that serializes to `balance: null` over JSON. These tests assert both paths
+ * now fail loudly on corrupt reads instead of returning a wrong-but-plausible
+ * number, and that the happy path + documented missing-org fail-safe still
+ * behave.
  */
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-
-import type { Organization } from "../../../db/schemas/organizations";
 import { organizationsRepository } from "../../../db/repositories";
+import type { Organization } from "../../../db/schemas/organizations";
 import { ApiError } from "../../api/cloud-worker-errors";
 import { getCreditBalanceResponse } from "../credit-balance-response";
 import { creditsService } from "../credits";
@@ -40,9 +39,7 @@ afterEach(() => {
 
 describe("CreditsService.getOrganizationBalanceUsd fail-closed", () => {
   test("parses a well-formed numeric-string balance", async () => {
-    const s = spyOn(organizationsRepository, "findById").mockResolvedValue(
-      orgWithBalance("12.5"),
-    );
+    const s = spyOn(organizationsRepository, "findById").mockResolvedValue(orgWithBalance("12.5"));
     spies.push(s);
     expect(await creditsService.getOrganizationBalanceUsd(ORG_ID)).toBe(12.5);
   });
@@ -54,9 +51,7 @@ describe("CreditsService.getOrganizationBalanceUsd fail-closed", () => {
   });
 
   test("present org with null balance THROWS instead of coercing to NaN", async () => {
-    const s = spyOn(organizationsRepository, "findById").mockResolvedValue(
-      orgWithBalance(null),
-    );
+    const s = spyOn(organizationsRepository, "findById").mockResolvedValue(orgWithBalance(null));
     spies.push(s);
     await expect(creditsService.getOrganizationBalanceUsd(ORG_ID)).rejects.toThrow(
       /credit_balance/,
@@ -76,9 +71,7 @@ describe("CreditsService.getOrganizationBalanceUsd fail-closed", () => {
 
 describe("getCreditBalanceResponse fail-closed", () => {
   test("returns the parsed balance for a well-formed row", async () => {
-    const s = spyOn(organizationsService, "getById").mockResolvedValue(
-      orgWithBalance("42.000000"),
-    );
+    const s = spyOn(organizationsService, "getById").mockResolvedValue(orgWithBalance("42.000000"));
     spies.push(s);
     expect(await getCreditBalanceResponse(ORG_ID)).toEqual({ balance: 42 });
   });
@@ -92,9 +85,7 @@ describe("getCreditBalanceResponse fail-closed", () => {
   });
 
   test("null balance throws a 500 internal_error, not a fake $0 (Number(null)===0)", async () => {
-    const s = spyOn(organizationsService, "getById").mockResolvedValue(
-      orgWithBalance(null),
-    );
+    const s = spyOn(organizationsService, "getById").mockResolvedValue(orgWithBalance(null));
     spies.push(s);
     let thrown: unknown;
     try {
