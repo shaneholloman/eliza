@@ -55,9 +55,12 @@ import {
 } from "./auth.ts";
 import { handleAutomationsCompatRoutes } from "./automations-compat-routes";
 import {
+  type CompatRouteChainEntry,
+  type CompatRouteContext,
   type CompatRuntimeState,
   clearCompatRuntimeRestart,
   getConfiguredCompatAgentName,
+  runCompatRouteChain,
 } from "./compat-route-shared";
 import { sendJson as sendJsonResponse } from "./response";
 import { enforceCompatRouteAuthPolicy } from "./route-auth-policy";
@@ -699,237 +702,362 @@ async function handleCompatRouteInner(
   if (authPolicyDecision === "denied") return true;
   if (authPolicyDecision === "unmanaged") return false;
 
-  // Runtime mode introspection — UI shells hit this on boot for the
-  // useRuntimeMode() hook.
-  if (await handleRuntimeModeRoute(req, res, state)) return true;
-
-  // First-paint UI language suggestion. Public/advisory only; the client
-  // falls back to English when it is absent, but serving it avoids noisy 404s.
-  if (handleI18nLocaleRoute(req, res)) return true;
-
-  // Eliza Cloud thin-client proxy (compat agents, jobs, OAuth, …). Keep this
-  // before the local /api/cloud handler so /api/cloud/v1/* forwards to Cloud.
-  if (
-    url.pathname.startsWith("/api/cloud/compat/") ||
-    url.pathname.startsWith("/api/cloud/v1/")
-  ) {
-    if (!(await ensureRouteAuthorized(req, res, state))) {
-      return true;
-    }
-    return handleCloudCompatRoute(req, res, url.pathname, method, {
-      config: resolveCloudConfig(state.current),
-      runtime: state.current,
-    });
-  }
-
-  // Cloud billing routes — handle with fresh config from disk so a cloud
-  // API key persisted during login is always available, even if the
-  // upstream's in-memory state.config hasn't been refreshed.
-  if (url.pathname.startsWith("/api/cloud/billing/")) {
-    if (!(await ensureRouteAuthorized(req, res, state))) {
-      return true;
-    }
-    return handleCloudBillingRoute(req, res, url.pathname, method, {
-      config: resolveCloudConfig(state.current),
-      runtime: state.current,
-    });
-  }
-
-  // Dev observability routes.
-  if (await handleDevCompatRoutes(req, res, state)) return true;
-
-  // Cloud SSO popup landing — `/pair?token=X` calls cloud-api server-side,
-  // serves HTML that pins the API token on the SPA's window global. Mounted
-  // before any other auth handler so it owns the root `/pair` URL.
-  if (await handleCloudPairRoute(req, res)) return true;
-
-  // Must precede the auth-pairing handler so the rate-limited route owns /api/auth/bootstrap/exchange.
-  if (await handleAuthBootstrapRoutes(req, res, state)) return true;
-
-  // Cookie + CSRF session lifecycle (setup, login, logout, me, sessions).
-  if (await handleAuthSessionRoutes(req, res, state)) return true;
-
-  // Auth / pairing / first-run status.
-  if (await handleAuthPairingCompatRoutes(req, res, state)) return true;
-  // Embedded-app launch verification (Discord Activity / Telegram Mini App).
-  if (await handleEmbedAuthRoutes(req, res, state)) return true;
-  // Sensitive-request REST surface (create/get/submit/cancel) for owner secret
-  // collection — e.g. orchestrator provider keys land in the shared vault
-  // instead of plain config. Each branch self-authorizes via
-  // ensureCallerAuthorized (trusted-local, API token, or session), matching the
-  // sibling compat handlers, so mounting it does not widen the unauth surface.
-  if (await handleSensitiveRequestRoutes(req, res, state)) return true;
-  if (await handleCredentialTunnelRoute(req, res, state)) return true;
-  if (await handleBackgroundTasksRoute(req, res, state)) return true;
-  // Internal wake route called by Capacitor BackgroundRunner JSContexts on
-  // iOS/Android. Bearer-authed via the device secret; not part of the
-  // cookie session pipeline.
-  if (await handleInternalWakeRoute(req, res, state)) return true;
-  // Local-inference compat routes — loaded via lazy getter to avoid a static
-  // boundary violation (app-core must not statically import plugin packages).
-  {
-    const {
-      handleLiveDiarizationRoute,
-      handleLocalInferenceAsrRoute,
-      handleLocalInferenceCompatRoutes,
-      handleLocalInferenceTtsRoute,
-    } = await getLocalInferenceRoutes();
-    if (await handleLocalInferenceCompatRoutes(req, res, state)) return true;
-    if (await handleLocalInferenceAsrRoute(req, res, state)) return true;
-    if (await handleLocalInferenceTtsRoute(req, res, state)) return true;
-    // WebView → agent PCM transport for live on-device speaker diarization.
-    if (await handleLiveDiarizationRoute(req, res, state)) return true;
-  }
-  if (await handleAutomationsCompatRoutes(req, res, state)) return true;
-
-  // Workbench todos CRUD is owned by @elizaos/plugin-workflow and served on the
-  // runtime plugin route system (`/api/workbench/todos*`).
-
-  if (url.pathname.startsWith("/api/secrets/")) {
-    // #12087 Item 4: each secrets handler self-gates at OWNER (ensureRouteMinRole
-    // in the handler), so the auth no longer lives only in this dispatch prefix.
-    if (
-      await handleSecretsInventoryRoute(req, res, url.pathname, method, state)
-    ) {
-      return true;
-    }
-    if (
-      await handleSecretsManagerRoute(req, res, url.pathname, method, state)
-    ) {
-      return true;
-    }
-  }
-
-  // `/api/cloud/compat/*` and `/api/cloud/billing/*` dispatch above this
-  // point through @elizaos/agent — thin proxies to Eliza Cloud, not local
-  // cloud-connection management. `/api/cloud/*` connection management is
-  // served by elizaCloudRoutePlugin.routes on the runtime plugin route system.
-
-  if (handleDropStatusCompatRoute(req, res, method, url.pathname)) return true;
-
-  if (method === "POST" && url.pathname === "/api/agent/reset") {
-    if (!ensureCompatSensitiveRouteAuthorized(req, res)) {
-      logger.warn(
-        "[eliza][reset] POST /api/agent/reset rejected (sensitive route not authorized)",
-      );
-      return true;
-    }
-
-    try {
-      logger.info(
-        "[eliza][reset] POST /api/agent/reset: loading config, will clear first-run state, persisted provider config, and cloud keys (GGUF / MODELS_DIR untouched)",
-      );
-      const config = loadElizaConfig();
-      logger.info(
-        "[eliza][reset] Skipping loopback API cleanup; runtime stop plus PGlite data-dir removal clears conversations, knowledge, and trajectories without re-entering the HTTP server.",
-      );
-      await clearCompatPgliteDataDir(state.current, config);
-      state.current = null;
-      clearPersistedFirstRunConfig(config);
-      saveElizaConfig(config);
-      clearCloudSecrets();
-      try {
-        await deleteWalletSecretsFromOsStore();
-      } catch (osErr) {
-        logger.warn(
-          `[eliza][reset] OS wallet store cleanup: ${osErr instanceof Error ? osErr.message : String(osErr)}`,
-        );
-      }
-      logger.info(
-        "[eliza][reset] POST /api/agent/reset: eliza.json saved — renderer should restart API process if embedded/external dev",
-      );
-      sendJsonResponse(res, 200, { ok: true });
-    } catch (err) {
-      logger.warn(
-        `[eliza][reset] POST /api/agent/reset failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      sendJsonResponse(res, 500, {
-        error: err instanceof Error ? err.message : "Reset failed",
-      });
-    }
+  // #12089 item 5: the compat route surface below used to be a ~30-branch
+  // order-dependent if-chain (each branch `if (await handleX(...)) return true`)
+  // with the plugin-local-inference handlers hardwired inline. It is now an
+  // ORDERED registry (see `COMPAT_ROUTE_CHAIN`) that route modules/plugins
+  // register entries into; `runCompatRouteChain` walks it in array order,
+  // short-circuiting on the first entry that reports it handled the request.
+  // Ordering is data (array order), not source line order, and the
+  // local-inference coupling is a single registered entry that loads via the
+  // lazy boundary getter instead of an inline special-case block.
+  const ctx: CompatRouteContext = { req, res, state, method, url };
+  if (await runCompatRouteChain(COMPAT_ROUTE_CHAIN, ctx)) {
     return true;
   }
 
-  // Plugin routes load @elizaos/plugin-registry lazily: that package pulls in
-  // heavyweight registry/install code, so keep it out of the startup path and
-  // only load it for plugin-management requests.
-  if (url.pathname.startsWith("/api/plugins")) {
-    const { handlePluginsCompatRoutes } = await getPluginRegistryApi();
-    if (await handlePluginsCompatRoutes(req, res, state)) return true;
-  }
-
-  // Catalog routes — registry SoT projections (apps, plugins, connectors)
-  if (await handleCatalogRoutes(req, res, state)) return true;
-
-  if (await handleFirstRunRoute(req, res, state)) return true;
-
-  // GET /api/plugins/:id/ui-spec — generate a UiSpec for plugin configuration.
-  // Used by the agent to spawn interactive config forms in chat.
-  const uiSpecMatch =
-    method === "GET" &&
-    url.pathname.match(/^\/api\/plugins\/([^/]+)\/ui-spec$/);
-  if (uiSpecMatch) {
-    if (!(await ensureRouteAuthorized(req, res, state))) return true;
-    const pluginId = decodeURIComponent(uiSpecMatch[1]);
-    const { buildPluginConfigUiSpec } = await import(
-      "@elizaos/shared/config/plugin-ui-spec"
-    );
-    const { buildPluginListResponse } = await getPluginRegistryApi();
-    const pluginList = buildPluginListResponse(state.current);
-    const plugin = pluginList.plugins.find(
-      (p: { id: string }) => p.id === pluginId,
-    );
-    if (!plugin) {
-      sendJsonResponse(res, 404, { error: `Plugin "${pluginId}" not found` });
-      return true;
-    }
-    const spec = buildPluginConfigUiSpec(
-      plugin as Parameters<typeof buildPluginConfigUiSpec>[0],
-    );
-    sendJsonResponse(res, 200, { spec });
-    return true;
-  }
-
-  // GET /api/agents — return the running agent's info.
-  // The app runs a single agent; expose it under an `agents` array so older
-  // health probes and desktop callers can use the same response shape.
-  if (method === "GET" && url.pathname === "/api/agents") {
-    if (!(await ensureRouteAuthorized(req, res, state))) {
-      return true;
-    }
-    const config = loadElizaConfig();
-    const character = buildCharacterFromConfig(config);
-    const agentId =
-      state.current?.agentId ??
-      character.id ??
-      "00000000-0000-0000-0000-000000000000";
-    sendJsonResponse(res, 200, {
-      agents: [
-        {
-          id: agentId,
-          name: character.name,
-          status: state.current ? "running" : "stopped",
-        },
-      ],
-    });
-    return true;
-  }
-
-  if (method === "GET" && url.pathname === "/api/config") {
-    if (!(await ensureRouteAuthorized(req, res, state))) {
-      return true;
-    }
-
-    sendJsonResponse(
-      res,
-      200,
-      _filterConfigEnvForResponse(loadElizaConfig() as Record<string, unknown>),
-    );
-    return true;
-  }
-
+  // Terminal fallthrough: database-rows compat surface owns any request the
+  // ordered chain declined. Kept as the explicit chain terminator (not a
+  // registry entry) because it never falls through: it always resolves the
+  // request (200/404/503), so it must run last and unconditionally.
   return handleDatabaseRowsCompatRoute(req, res, state);
 }
+
+// Ordered compat-route registry (#12089 item 5). Replaces the former fixed
+// if-chain in `handleCompatRouteInner`. Entries run in ARRAY ORDER
+// (data-driven), first `true` wins. Preserves the exact legacy ordering and
+// per-route auth gating; the only behavioral change is that order is now an
+// explicit, testable list instead of source-line ordering, and the
+// plugin-local-inference handlers are one lazily-loaded entry rather than an
+// inline hardwired block. Route modules and plugins that need to mount ahead of
+// or behind a given surface splice into this array instead of editing the
+// dispatcher body.
+const COMPAT_ROUTE_CHAIN: readonly CompatRouteChainEntry[] = [
+  {
+    // Runtime mode introspection: UI shells hit this on boot for the
+    // useRuntimeMode() hook.
+    id: "runtime-mode",
+    handler: ({ req, res, state }) => handleRuntimeModeRoute(req, res, state),
+  },
+  {
+    // First-paint UI language suggestion. Public/advisory only; the client
+    // falls back to English when it is absent, but serving it avoids noisy 404s.
+    id: "i18n-locale",
+    handler: ({ req, res }) => handleI18nLocaleRoute(req, res),
+  },
+  {
+    // Eliza Cloud thin-client proxy (compat agents, jobs, OAuth). Keep this
+    // before the local /api/cloud handler so /api/cloud/v1/* forwards to Cloud.
+    id: "cloud-compat-proxy",
+    handler: async ({ req, res, state, method, url }) => {
+      if (
+        !(
+          url.pathname.startsWith("/api/cloud/compat/") ||
+          url.pathname.startsWith("/api/cloud/v1/")
+        )
+      ) {
+        return false;
+      }
+      if (!(await ensureRouteAuthorized(req, res, state))) {
+        return true;
+      }
+      return handleCloudCompatRoute(req, res, url.pathname, method, {
+        config: resolveCloudConfig(state.current),
+        runtime: state.current,
+      });
+    },
+  },
+  {
+    // Cloud billing routes: handle with fresh config from disk so a cloud
+    // API key persisted during login is always available, even if the
+    // upstream's in-memory state.config hasn't been refreshed.
+    id: "cloud-billing",
+    handler: async ({ req, res, state, method, url }) => {
+      if (!url.pathname.startsWith("/api/cloud/billing/")) {
+        return false;
+      }
+      if (!(await ensureRouteAuthorized(req, res, state))) {
+        return true;
+      }
+      return handleCloudBillingRoute(req, res, url.pathname, method, {
+        config: resolveCloudConfig(state.current),
+        runtime: state.current,
+      });
+    },
+  },
+  {
+    // Dev observability routes.
+    id: "dev-compat",
+    handler: ({ req, res, state }) => handleDevCompatRoutes(req, res, state),
+  },
+  {
+    // Cloud SSO popup landing: `/pair?token=X` calls cloud-api server-side,
+    // serves HTML that pins the API token on the SPA's window global. Mounted
+    // before any other auth handler so it owns the root `/pair` URL.
+    id: "cloud-pair",
+    handler: ({ req, res }) => handleCloudPairRoute(req, res),
+  },
+  {
+    // Must precede the auth-pairing handler so the rate-limited route owns
+    // /api/auth/bootstrap/exchange.
+    id: "auth-bootstrap",
+    handler: ({ req, res, state }) =>
+      handleAuthBootstrapRoutes(req, res, state),
+  },
+  {
+    // Cookie + CSRF session lifecycle (setup, login, logout, me, sessions).
+    id: "auth-session",
+    handler: ({ req, res, state }) => handleAuthSessionRoutes(req, res, state),
+  },
+  {
+    // Auth / pairing / first-run status.
+    id: "auth-pairing",
+    handler: ({ req, res, state }) =>
+      handleAuthPairingCompatRoutes(req, res, state),
+  },
+  {
+    // Embedded-app launch verification (Discord Activity / Telegram Mini App).
+    id: "embed-auth",
+    handler: ({ req, res, state }) => handleEmbedAuthRoutes(req, res, state),
+  },
+  {
+    // Sensitive-request REST surface (create/get/submit/cancel) for owner
+    // secret collection: e.g. orchestrator provider keys land in the shared
+    // vault instead of plain config. Each branch self-authorizes via
+    // ensureCallerAuthorized (trusted-local, API token, or session), matching
+    // the sibling compat handlers, so mounting it does not widen the unauth
+    // surface.
+    id: "sensitive-request",
+    handler: ({ req, res, state }) =>
+      handleSensitiveRequestRoutes(req, res, state),
+  },
+  {
+    id: "credential-tunnel",
+    handler: ({ req, res, state }) =>
+      handleCredentialTunnelRoute(req, res, state),
+  },
+  {
+    id: "background-tasks",
+    handler: ({ req, res, state }) =>
+      handleBackgroundTasksRoute(req, res, state),
+  },
+  {
+    // Internal wake route called by Capacitor BackgroundRunner JSContexts on
+    // iOS/Android. Bearer-authed via the device secret; not part of the
+    // cookie session pipeline.
+    id: "internal-wake",
+    handler: ({ req, res, state }) => handleInternalWakeRoute(req, res, state),
+  },
+  {
+    // Local-inference compat routes. Single ordered entry that loads the plugin
+    // route handlers via the lazy getter to avoid a static boundary violation
+    // (app-core must not statically import plugin packages). This replaces the
+    // former inline hardwired block that enumerated the four plugin handlers
+    // directly in the dispatcher body (#12089 item 5).
+    id: "local-inference",
+    handler: async ({ req, res, state }) => {
+      const {
+        handleLiveDiarizationRoute,
+        handleLocalInferenceAsrRoute,
+        handleLocalInferenceCompatRoutes,
+        handleLocalInferenceTtsRoute,
+      } = await getLocalInferenceRoutes();
+      if (await handleLocalInferenceCompatRoutes(req, res, state)) return true;
+      if (await handleLocalInferenceAsrRoute(req, res, state)) return true;
+      if (await handleLocalInferenceTtsRoute(req, res, state)) return true;
+      // WebView -> agent PCM transport for live on-device speaker diarization.
+      return handleLiveDiarizationRoute(req, res, state);
+    },
+  },
+  {
+    id: "automations",
+    handler: ({ req, res, state }) =>
+      handleAutomationsCompatRoutes(req, res, state),
+  },
+  {
+    // Workbench todos CRUD is owned by @elizaos/plugin-workflow and served on
+    // the runtime plugin route system (`/api/workbench/todos*`).
+    //
+    // Secrets inventory/manager. #12087 Item 4: each secrets handler self-gates
+    // at OWNER (ensureRouteMinRole in the handler), so the auth no longer lives
+    // only in this dispatch prefix.
+    id: "secrets",
+    handler: async ({ req, res, state, method, url }) => {
+      if (!url.pathname.startsWith("/api/secrets/")) {
+        return false;
+      }
+      if (
+        await handleSecretsInventoryRoute(req, res, url.pathname, method, state)
+      ) {
+        return true;
+      }
+      return handleSecretsManagerRoute(req, res, url.pathname, method, state);
+    },
+  },
+  {
+    // `/api/cloud/compat/*` and `/api/cloud/billing/*` dispatch through the
+    // cloud entries above: thin proxies to Eliza Cloud, not local
+    // cloud-connection management. `/api/cloud/*` connection management is
+    // served by elizaCloudRoutePlugin.routes on the runtime plugin route system.
+    id: "drop-status",
+    handler: ({ req, res, method, url }) =>
+      handleDropStatusCompatRoute(req, res, method, url.pathname),
+  },
+  {
+    id: "agent-reset",
+    handler: async ({ req, res, state, method, url }) => {
+      if (!(method === "POST" && url.pathname === "/api/agent/reset")) {
+        return false;
+      }
+      if (!ensureCompatSensitiveRouteAuthorized(req, res)) {
+        logger.warn(
+          "[eliza][reset] POST /api/agent/reset rejected (sensitive route not authorized)",
+        );
+        return true;
+      }
+
+      try {
+        logger.info(
+          "[eliza][reset] POST /api/agent/reset: loading config, will clear first-run state, persisted provider config, and cloud keys (GGUF / MODELS_DIR untouched)",
+        );
+        const config = loadElizaConfig();
+        logger.info(
+          "[eliza][reset] Skipping loopback API cleanup; runtime stop plus PGlite data-dir removal clears conversations, knowledge, and trajectories without re-entering the HTTP server.",
+        );
+        await clearCompatPgliteDataDir(state.current, config);
+        state.current = null;
+        clearPersistedFirstRunConfig(config);
+        saveElizaConfig(config);
+        clearCloudSecrets();
+        try {
+          await deleteWalletSecretsFromOsStore();
+        } catch (osErr) {
+          logger.warn(
+            `[eliza][reset] OS wallet store cleanup: ${osErr instanceof Error ? osErr.message : String(osErr)}`,
+          );
+        }
+        logger.info(
+          "[eliza][reset] POST /api/agent/reset: eliza.json saved; renderer should restart API process if embedded/third-party dev",
+        );
+        sendJsonResponse(res, 200, { ok: true });
+      } catch (err) {
+        logger.warn(
+          `[eliza][reset] POST /api/agent/reset failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        sendJsonResponse(res, 500, {
+          error: err instanceof Error ? err.message : "Reset failed",
+        });
+      }
+      return true;
+    },
+  },
+  {
+    // Plugin routes load @elizaos/plugin-registry lazily: that package pulls in
+    // heavyweight registry/install code, so keep it out of the startup path and
+    // only load it for plugin-management requests.
+    id: "plugins",
+    handler: async ({ req, res, state, url }) => {
+      if (!url.pathname.startsWith("/api/plugins")) {
+        return false;
+      }
+      const { handlePluginsCompatRoutes } = await getPluginRegistryApi();
+      return handlePluginsCompatRoutes(req, res, state);
+    },
+  },
+  {
+    // Catalog routes: registry SoT projections (apps, plugins, connectors).
+    id: "catalog",
+    handler: ({ req, res, state }) => handleCatalogRoutes(req, res, state),
+  },
+  {
+    id: "first-run",
+    handler: ({ req, res, state }) => handleFirstRunRoute(req, res, state),
+  },
+  {
+    // GET /api/plugins/:id/ui-spec: generate a UiSpec for plugin configuration.
+    // Used by the agent to spawn interactive config forms in chat. Registered
+    // AFTER the `/api/plugins` handler; the generic handler declines the
+    // ui-spec path (its matcher does not claim it), so this more specific
+    // entry still resolves it, matching the legacy line ordering.
+    id: "plugin-ui-spec",
+    handler: async ({ req, res, state, method, url }) => {
+      const uiSpecMatch =
+        method === "GET" &&
+        url.pathname.match(/^\/api\/plugins\/([^/]+)\/ui-spec$/);
+      if (!uiSpecMatch) {
+        return false;
+      }
+      if (!(await ensureRouteAuthorized(req, res, state))) return true;
+      const pluginId = decodeURIComponent(uiSpecMatch[1]);
+      const { buildPluginConfigUiSpec } = await import(
+        "@elizaos/shared/config/plugin-ui-spec"
+      );
+      const { buildPluginListResponse } = await getPluginRegistryApi();
+      const pluginList = buildPluginListResponse(state.current);
+      const plugin = pluginList.plugins.find(
+        (p: { id: string }) => p.id === pluginId,
+      );
+      if (!plugin) {
+        sendJsonResponse(res, 404, { error: `Plugin "${pluginId}" not found` });
+        return true;
+      }
+      const spec = buildPluginConfigUiSpec(
+        plugin as Parameters<typeof buildPluginConfigUiSpec>[0],
+      );
+      sendJsonResponse(res, 200, { spec });
+      return true;
+    },
+  },
+  {
+    // GET /api/agents: return the running agent's info. The app runs a single
+    // agent; expose it under an `agents` array so older health probes and
+    // desktop callers can use the same response shape.
+    id: "agents",
+    handler: async ({ req, res, state, method, url }) => {
+      if (!(method === "GET" && url.pathname === "/api/agents")) {
+        return false;
+      }
+      if (!(await ensureRouteAuthorized(req, res, state))) {
+        return true;
+      }
+      const config = loadElizaConfig();
+      const character = buildCharacterFromConfig(config);
+      const agentId =
+        state.current?.agentId ??
+        character.id ??
+        "00000000-0000-0000-0000-000000000000";
+      sendJsonResponse(res, 200, {
+        agents: [
+          {
+            id: agentId,
+            name: character.name,
+            status: state.current ? "running" : "stopped",
+          },
+        ],
+      });
+      return true;
+    },
+  },
+  {
+    id: "config",
+    handler: async ({ req, res, state, method, url }) => {
+      if (!(method === "GET" && url.pathname === "/api/config")) {
+        return false;
+      }
+      if (!(await ensureRouteAuthorized(req, res, state))) {
+        return true;
+      }
+      sendJsonResponse(
+        res,
+        200,
+        _filterConfigEnvForResponse(
+          loadElizaConfig() as Record<string, unknown>,
+        ),
+      );
+      return true;
+    },
+  },
+];
 
 export async function handleElizaCompatRoute(
   req: http.IncomingMessage,
