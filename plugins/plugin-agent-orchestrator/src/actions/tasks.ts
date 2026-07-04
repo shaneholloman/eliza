@@ -3,8 +3,8 @@
  * task-agent lifecycle, workspace lifecycle, GitHub issue management, and
  * coding-task archive/reopen surface.
  *
- * Old leaf actions live as similes; their handlers were folded into per-action
- * runners on this file.
+ * Each sub-action is exposed as a simile of the parent and dispatched to a
+ * per-action runner in this file.
  *
  * Actions:
  *   create               — CREATE_AGENT_TASK / START_CODING_TASK
@@ -37,7 +37,12 @@ import type {
   State,
   UUID,
 } from "@elizaos/core";
-import { ChannelType, logger as coreLogger, stringToUuid } from "@elizaos/core";
+import {
+  ChannelType,
+  logger as coreLogger,
+  MESSAGE_SOURCE_SUB_AGENT,
+  stringToUuid,
+} from "@elizaos/core";
 import type { IssueInfo, PullRequestInfo } from "git-workspace-service";
 import {
   detectTaskType,
@@ -327,9 +332,9 @@ function connectorMessageIdFromMemory(
  * On the FIRST spawn it is the connector message id (Discord/connectors) or,
  * when none exists (dashboard/web), the user message id. SubAgentRouter stamps
  * this id back onto every synthetic re-spawn inbound as `spawnRootMessageId`,
- * so a request that re-spawns resolves the SAME id on EVERY transport — the
- * connector-less dashboard/web path previously produced no key at all, so the
- * cap silently never fired there. Kept as a pure exported fn so the record
+ * so a request that re-spawns resolves the SAME id on EVERY transport. The
+ * connector-less dashboard/web path falls back to the user message id, so the
+ * per-origin cap fires there too. Kept as a pure exported fn so the record
  * (SubAgentRouter) and enforce (this action) sides can be proven to agree.
  */
 export function spawnRootIdFor(
@@ -1067,9 +1072,9 @@ async function runSpawnAgent(
     // Backend routing (see resolveCodingBackend): an explicit user ask wins,
     // then declared `character.routing.coding` policy, then the operator pin
     // (ELIZA_ACP_DEFAULT_AGENT), then the planner's heuristic `agentType` guess.
-    // The pin no longer unconditionally overrides — declaring character routing
-    // or naming a backend now takes effect, while a bare planner guess still
-    // sits below the pin (it routinely guesses from context tokens).
+    // The pin does not unconditionally override: declared character routing or
+    // an explicitly named backend takes precedence over it, while a bare
+    // planner guess sits below the pin (it routinely guesses from context tokens).
     const routed = resolveCodingBackendLogged({
       runtime,
       explicit: pickString(params, content, "requestedBackend"),
@@ -1136,7 +1141,8 @@ async function runSpawnAgent(
       resolvedTaskRoomId,
     );
     const inheritedRoute =
-      content.source === "sub_agent" && extraMetadata.subAgent === true
+      content.source === MESSAGE_SOURCE_SUB_AGENT &&
+      extraMetadata.subAgent === true
         ? inheritedResolvedWorkdirRoute(extraMetadata)
         : undefined;
     const effectiveRoute = route ?? inheritedRoute;
@@ -1169,7 +1175,7 @@ async function runSpawnAgent(
         ? ((content.metadata as Record<string, unknown>).originSource as string)
         : undefined;
     const resolvedSpawnSource =
-      content.source === "sub_agent" && inboundOriginSource
+      content.source === MESSAGE_SOURCE_SUB_AGENT && inboundOriginSource
         ? inboundOriginSource
         : content.source;
 
@@ -1400,7 +1406,7 @@ async function runSend(
 function routedSubAgentCompletion(
   content: Record<string, unknown>,
 ): { completionText: string; sessionId: string } | undefined {
-  if (content.source !== "sub_agent") return undefined;
+  if (content.source !== MESSAGE_SOURCE_SUB_AGENT) return undefined;
   const metadata =
     content.metadata !== null && typeof content.metadata === "object"
       ? (content.metadata as Record<string, unknown>)
@@ -2166,8 +2172,7 @@ async function runControl(
 
   // Archive / reopen / pause are durable task-lifecycle operations, not ACP
   // session controls — route them to the durable task service (see
-  // runTaskLifecycleControl). Previously this branch hard-failed with
-  // UNSUPPORTED_OPERATION even though the service supports all three.
+  // runTaskLifecycleControl), which supports all three.
   if (action === "archive" || action === "reopen" || action === "pause") {
     return runTaskLifecycleControl(runtime, params, content, callback, action);
   }
@@ -3113,6 +3118,7 @@ export const tasksAction: Action & {
     "CREATE_AGENT_TASK",
     "CREATE_TASK",
     "START_CODING_TASK",
+    "CODE_TASK",
     "LAUNCH_CODING_TASK",
     "RUN_CODING_TASK",
     "START_AGENT_TASK",
@@ -3632,7 +3638,7 @@ export const tasksAction: Action & {
       metadata?: unknown;
       source?: unknown;
     };
-    if (messageContent.source === "sub_agent") {
+    if (messageContent.source === MESSAGE_SOURCE_SUB_AGENT) {
       const metadata =
         messageContent.metadata !== null &&
         typeof messageContent.metadata === "object"

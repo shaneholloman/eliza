@@ -1,3 +1,7 @@
+/**
+ * Unit coverage for the iOS local-agent transport, including native-plugin
+ * availability. Capacitor state mocked, no real device.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const capacitorState = vi.hoisted(() => ({
@@ -150,7 +154,11 @@ describe("iOS local agent transport (ui copy)", () => {
     expect(call).toHaveBeenCalledWith(
       expect.objectContaining({ method: "http_request" }),
     );
-  }, 30_000);
+    // Generous ceiling: the deadlock guard above is deterministic (a regression
+    // rejects instantly via the hostile `then`), so this timeout only has to
+    // outlast the in-test `await import` transform of the transport graph,
+    // which can exceed 30s when the full parallel suite saturates the machine.
+  }, 120_000);
 
   it("records boot progress phases for the startup poll's progress-aware budget", async () => {
     const start = vi.fn(async () => ({ ok: true }));
@@ -196,5 +204,30 @@ describe("iOS local agent transport (ui copy)", () => {
     expect(start).toHaveBeenCalledTimes(1);
     expect(getIosNativeAgentBootProgress().phase).toBe("ready");
     expect(isIosNativeAgentBootInProgress()).toBe(true);
-  }, 30_000);
+  }, 120_000);
+
+  it("allows explicit simulator loopback fetches in cloud mode on non-local-agent ports", async () => {
+    vi.stubEnv("VITE_ELIZA_IOS_ALLOW_SIMULATOR_LOOPBACK", "1");
+    const originalFetch = vi.fn(async () => new Response('{"ready":true}'));
+    vi.stubGlobal("fetch", originalFetch);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) =>
+        key === "eliza:mobile-runtime-mode" ? "cloud-hybrid" : null,
+    });
+    vi.stubGlobal("window", {
+      __ELIZA_API_BASE__: "https://www.elizacloud.ai",
+      location: { href: "capacitor://localhost/" },
+      navigator: { userAgent: "vitest" },
+    });
+
+    const { installIosLocalAgentFetchBridge } = await import(
+      "./ios-local-agent-transport"
+    );
+    installIosLocalAgentFetchBridge();
+
+    const response = await fetch("http://127.0.0.1:31338/api/health");
+
+    await expect(response.json()).resolves.toEqual({ ready: true });
+    expect(originalFetch).toHaveBeenCalledTimes(1);
+  });
 });

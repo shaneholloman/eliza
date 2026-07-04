@@ -5,6 +5,7 @@ import {
   ELIZA_1_ON_DEVICE_TIER_IDS,
   ELIZA_1_TIER_IDS,
   ELIZA_1_VISION_TIER_IDS,
+  eliza1TierPublishStatus,
   isOnDeviceTier,
   MODEL_CATALOG,
 } from "./catalog.js";
@@ -25,12 +26,54 @@ const EXPECTED_CHAT_PARAMS: Record<string, string> = {
 };
 
 describe("Eliza-1 runtime quant metadata", () => {
+  it("pins the canonical tier set (three-file agreement)", () => {
+    // The Eliza-1 tier set is declared in THREE places that must stay in sync:
+    // catalog.ts::ELIZA_1_TIER_IDS (here), eliza1_manifest.py::ELIZA_1_TIERS,
+    // and publish_all_eliza1.sh::TIERS. Renaming a tier means updating all
+    // three together (the Python + shell surfaces are enforced in
+    // packages/training/scripts/manifest/test_eliza1_manifest.py::
+    // test_catalog_manifest_publish_tiers_agree). The runtime catalog uses the
+    // full `eliza-1-<tier>` slugs; the bare tier ids are what the manifest and
+    // publish matrix key on.
+    expect(ELIZA_1_TIER_IDS).toEqual([
+      "eliza-1-2b",
+      "eliza-1-4b",
+      "eliza-1-9b",
+      "eliza-1-27b",
+      "eliza-1-27b-256k",
+    ]);
+    const bareTiers = ELIZA_1_TIER_IDS.map((id) => id.slice("eliza-1-".length));
+    expect(bareTiers).toEqual(["2b", "4b", "9b", "27b", "27b-256k"]);
+  });
+
   it("keeps stable ids but exposes requested size-cased display names", () => {
     for (const id of ELIZA_1_TIER_IDS) {
       const entry = MODEL_CATALOG.find((model) => model.id === id);
       expect(entry?.displayName).toBe(EXPECTED_DISPLAY_NAMES[id]);
       expect(entry?.params).toBe(EXPECTED_CHAT_PARAMS[id]);
       expect(entry?.ggufFile).toContain(id);
+    }
+  });
+
+  it("does not allow env overrides to publish pending qwen tiers", () => {
+    const previous = process.env.ELIZA_PUBLISH_STATUS_OVERRIDES;
+    process.env.ELIZA_PUBLISH_STATUS_OVERRIDES = JSON.stringify({
+      "eliza-1-9b": "published",
+      "eliza-1-27b": "published",
+      "eliza-1-27b-256k": "published",
+    });
+    try {
+      expect(eliza1TierPublishStatus("eliza-1-2b")).toBe("published");
+      expect(eliza1TierPublishStatus("eliza-1-4b")).toBe("published");
+      expect(eliza1TierPublishStatus("eliza-1-9b")).toBe("pending");
+      expect(eliza1TierPublishStatus("eliza-1-27b")).toBe("pending");
+      expect(eliza1TierPublishStatus("eliza-1-27b-256k")).toBe("pending");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.ELIZA_PUBLISH_STATUS_OVERRIDES;
+      } else {
+        process.env.ELIZA_PUBLISH_STATUS_OVERRIDES = previous;
+      }
     }
   });
 

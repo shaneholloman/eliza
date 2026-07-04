@@ -1,7 +1,15 @@
+/**
+ * Runtime wiring entry point (`registerTrainingRuntimeHooks`): registers the
+ * OptimizedPromptService, the training-config and training-trigger services, and
+ * the nightly trajectory-export and skill-scoring crons on an AgentRuntime. The
+ * host must call this at agent boot — the plugin does not auto-enable. Cron
+ * registration is skipped when `ELIZA_DISABLE_TRAINING_CRONS` is set.
+ */
 import type { AgentRuntime, Service } from "@elizaos/core";
 import { logger, OptimizedPromptService } from "@elizaos/core";
 import { registerSkillScoringCron } from "./core/skill-scoring-cron.js";
 import { registerTrajectoryExportCron } from "./core/trajectory-export-cron.js";
+import { registerTrainingConfigService } from "./services/training-config-service.js";
 import {
   bootstrapOptimizationFromAccumulatedTrajectories,
   registerTrainingTriggerService,
@@ -51,6 +59,11 @@ export async function registerTrainingRuntimeHooks(
     await registerTrajectoryExportCron(runtime);
     await registerSkillScoringCron(runtime);
   }
+  // Contribute the settings extension the host SETTINGS action dispatches
+  // `toggle_training` to (looked up by TRAINING_CONFIG_SERVICE name; the host
+  // does not import this plugin).
+  registerTrainingConfigService(runtime);
+
   const triggerService = registerTrainingTriggerService(runtime);
   logger.info(
     skipCronRegistration

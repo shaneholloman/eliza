@@ -1,3 +1,17 @@
+/**
+ * SubAgentRouter service: subscribes to `AcpService` session events and routes a
+ * sub-agent's terminal output back into the elizaOS runtime as synthetic inbound
+ * memories, so the planner reacts to sub-agent progress and completion as if it
+ * were a normal inbound message. Owns completion synthesis — diff capture,
+ * screenshot delivery, built-app registration, and SSRF-guarded URL
+ * verification — and the loop backstops that stop runaway ping-pong and respawn
+ * cascades (see router-loop-guard.ts).
+ *
+ * On a lost or crashed session it recovers inside the router (respawn,
+ * verify-retry, or account failover) and suppresses the dead session's
+ * narration, so one task yields one user-facing completion rather than one per
+ * lineage generation.
+ */
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -8,7 +22,7 @@ import type {
   Memory,
   UUID,
 } from "@elizaos/core";
-import { Service, ServiceType } from "@elizaos/core";
+import { MESSAGE_SOURCE_SUB_AGENT, Service, ServiceType } from "@elizaos/core";
 import type { AcpService } from "./acp-service.js";
 import { registerBuiltAppsForCompletion } from "./built-apps-registry.js";
 import {
@@ -52,7 +66,7 @@ type RuntimeWithSendTarget = IAgentRuntime & {
   ) => Promise<Memory | undefined>;
 };
 
-const ACPX_ROUTER_SOURCE = "sub_agent";
+const ACPX_ROUTER_SOURCE = MESSAGE_SOURCE_SUB_AGENT;
 const SUB_AGENT_ENTITY_NAMESPACE = "acpx:sub-agent";
 // Metadata key the router stamps on a session it hands off to a successor
 // (verify-retry, state-lost respawn, or account failover) before that session

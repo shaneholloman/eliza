@@ -24,6 +24,10 @@
 
 import type { Memory } from "../../types/memory";
 import {
+	MESSAGE_SOURCE_CLIENT_CHAT,
+	MESSAGE_SOURCE_SUB_AGENT,
+} from "../../types/message-source";
+import {
 	type GenerateTextParams,
 	type GenerateTextResult,
 	ModelType,
@@ -47,10 +51,10 @@ const TRIAGE_CHANNEL_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /** Sub-agent completion relays are routed by their own evaluator — never gate. */
-const SUB_AGENT_SOURCE = "sub_agent";
+const SUB_AGENT_SOURCE = MESSAGE_SOURCE_SUB_AGENT;
 
 /** Sources that bypass should-respond entirely (mirrors the deterministic gate). */
-const ALWAYS_RESPOND_SOURCES: readonly string[] = ["client_chat"];
+const ALWAYS_RESPOND_SOURCES: readonly string[] = [MESSAGE_SOURCE_CLIENT_CHAT];
 
 const MAX_HISTORY_MESSAGES = 8;
 const MAX_HISTORY_LINE_CHARS = 160;
@@ -100,6 +104,16 @@ export function isTriagableBotNoiseMessage(
 	const topLevelMetadata = metadataRecord(message.metadata);
 
 	// Positively bot/webhook-authored only (connector-stamped `fromBot`).
+	// NOTE: `fromBot` here is a COST proxy, not behavioral special-handling. This
+	// gate never suppresses a response — it only ROUTES high-volume automated
+	// relay traffic (the ~1000 IGNOREs/day webhook floods of #11944) to the cheap
+	// TEXT_SMALL tier, and fails OPEN on every uncertain path. The precondition
+	// SCOPES that cost route to where the volume problem actually is; dropping it
+	// to gate on addressing alone would widen triage to all unaddressed human
+	// group chatter — a strictly worse cost/quality trade #11944 does not justify.
+	// So a future "handle all messages uniformly" pass must NOT uniformize this
+	// away: behavior (respond vs not) still branches only on the model verdict +
+	// addressing, never on bot-ness.
 	const fromBot =
 		contentMetadata?.fromBot === true || topLevelMetadata?.fromBot === true;
 	if (!fromBot) return false;

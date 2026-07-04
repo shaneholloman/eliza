@@ -16,10 +16,11 @@
  * declared, so the whole set hides together in production.
  *
  * Curation is a blocklist + canonical dedup, not a fixed allow-list: known apps
- * are ordered, removed apps are hidden, duplicate registrations collapse to one
- * tile, and everything else that is genuinely loaded and visible still appears
- * so installing a new plugin app keeps working. Native-OS tiles (phone/messages/
- * contacts/camera/files) only appear on the AOSP ElizaOS fork.
+ * are ordered, removed apps are hidden, grouped sub-pages collapse under their
+ * parent tile, duplicate registrations collapse to one tile, and everything else
+ * that is genuinely loaded and visible still appears so installing a new plugin
+ * app keeps working. Native-OS tiles (phone/messages/contacts/camera/files) only
+ * appear on the AOSP ElizaOS fork.
  */
 
 import {
@@ -28,7 +29,7 @@ import {
   resolveViewKind,
 } from "@elizaos/core";
 import type { ViewEntry } from "../../hooks/view-catalog";
-import { pathForTab } from "../../navigation";
+import { LAUNCHER_AOSP_ONLY_VIEW_IDS, pathForTab } from "../../navigation";
 
 /** Everyday apps, in display order. They lead the single launcher page; other
  *  loaded apps append after (alphabetically). */
@@ -78,22 +79,18 @@ export const LAUNCHER_PREVIEW_IDS: ReadonlySet<string> = new Set([
 /**
  * Native-OS surfaces that only belong on the AOSP ElizaOS fork. Appended to the
  * end of the launcher page when the AOSP shell is active; hidden on web,
- * desktop, iOS, and stock Play-Store Android.
+ * desktop, iOS, and stock Play-Store Android. Sourced from the canonical
+ * `LAUNCHER_AOSP_ONLY_VIEW_IDS` in `../../navigation` so this launcher gate and
+ * the router-level `NATIVE_OS_VIEW_IDS` filter never drift.
  */
-export const LAUNCHER_AOSP_ONLY_IDS: readonly string[] = [
-  "phone",
-  "messages",
-  "contacts",
-  "camera",
-  "files",
-];
+export const LAUNCHER_AOSP_ONLY_IDS: readonly string[] =
+  LAUNCHER_AOSP_ONLY_VIEW_IDS;
 
 /**
  * Views that never appear in the launcher grid:
  *  - shell surfaces reached another way (views/apps launchers; background +
  *    voice are set from Settings/chat; character-select is inline),
- *  - removed apps (companion, model tester, shopify, wearables),
- *  - wallet sub-views (hyperliquid/polymarket open from inside the Wallet app).
+ *  - removed apps (companion, model tester, shopify, wearables).
  */
 export const LAUNCHER_HIDDEN_IDS: ReadonlySet<string> = new Set([
   "views",
@@ -109,15 +106,6 @@ export const LAUNCHER_HIDDEN_IDS: ReadonlySet<string> = new Set([
   "shopify",
   "facewear",
   "smartglasses",
-  // Wallet sub-views — reached from inside the Wallet app, not the launcher.
-  "hyperliquid",
-  "polymarket",
-  // Legacy alias for the relationships/contact-graph surface: `rolodex` is a
-  // routable tab (TAB_PATHS "/rolodex") with a launcher tile but NO directViews
-  // branch in renderStaticViewRouterTab, so tapping it lands on the
-  // ViewUnavailableFallback (bounces the user back to the launcher). The real
-  // contact surface is `relationships`; hide this dead alias.
-  "rolodex",
 ]);
 
 /**
@@ -179,6 +167,13 @@ function launcherViewKind(canonicalId: string, entry: ViewEntry) {
   return resolveViewKind(entry);
 }
 
+function isGroupedLauncherSubPage(
+  canonicalId: string,
+  entry: ViewEntry,
+): boolean {
+  return entry.group === "wallet" && canonicalId !== "wallet";
+}
+
 /**
  * Score competing registrations for the same canonical id so the richest one
  * wins the single tile (a loaded standalone view beats an app-shell alias beats
@@ -231,21 +226,23 @@ function comparator(indexes: Array<Map<string, number>>) {
 }
 
 /**
- * Curate raw launcher entries into a SINGLE page of tiles. Entries are deduped
- * by canonical id; hidden/removed apps are dropped; native-OS tiles are
- * AOSP-gated; developer + preview views (including the curated developer TOOLS)
- * are hidden unless their kind is enabled. Ordering: curated apps first, then
- * developer tools (when shown), then AOSP tiles, then any other loaded app
- * alphabetically. Returns `[page]`, or `[]` when nothing is visible.
+ * Curate raw launcher entries into the ordered list of tiles the launcher's
+ * single scrolling page renders. Entries are deduped by canonical id;
+ * hidden/removed apps are dropped; native-OS tiles are AOSP-gated; developer +
+ * preview views (including the curated developer TOOLS) are hidden unless their
+ * kind is enabled. Ordering: curated apps first, then developer tools (when
+ * shown), then AOSP tiles, then any other loaded app alphabetically. Returns
+ * `[]` when nothing is visible.
  */
 export function curateLauncherPages(
   entries: ViewEntry[],
   { isAosp, enabledKinds, cloudActive }: CurateLauncherOptions,
-): ViewEntry[][] {
+): ViewEntry[] {
   const byCanonical = new Map<string, ViewEntry>();
   for (const entry of entries) {
     const canonicalId = canonicalLauncherId(entry.id);
     if (LAUNCHER_HIDDEN_IDS.has(canonicalId)) continue;
+    if (isGroupedLauncherSubPage(canonicalId, entry)) continue;
     // Cloud-only tiles (e.g. the Cloud Applications dashboard) never surface
     // unless the user is signed into Eliza Cloud.
     if (LAUNCHER_CLOUD_IDS.has(canonicalId) && !cloudActive) continue;
@@ -287,5 +284,5 @@ export function curateLauncherPages(
   // One combined order: curated apps, then developer tools, then AOSP tiles,
   // then uncurated apps alphabetically (the comparator falls through to label).
   page.sort(comparator([APPS_INDEX, DEVELOPER_INDEX, AOSP_INDEX]));
-  return page.length > 0 ? [page] : [];
+  return page;
 }

@@ -136,7 +136,7 @@ describe("iOS local agent transport bridge", () => {
     } = await import("./ios-local-agent-transport");
     installIosLocalAgentNativeRequestBridge();
 
-    const handler = window.__ELIZA_IOS_LOCAL_AGENT_REQUEST__;
+    const handler = window.__ELIZA_BRIDGE__?.iosLocalAgentRequest;
     expect(handler).toBe(handleIosLocalAgentNativeRequest);
   });
 
@@ -480,8 +480,10 @@ describe("iOS local agent transport bridge", () => {
       throw new Error("direct fetch should not run");
     });
     vi.stubGlobal("fetch", originalFetch);
+    vi.stubGlobal("__ELIZAOS_APP_BOOT_CONFIG__", {
+      apiBase: "eliza-local-agent://ipc",
+    });
     vi.stubGlobal("window", {
-      __ELIZA_API_BASE__: "eliza-local-agent://ipc",
       location: { href: "capacitor://localhost/" },
       navigator: { userAgent: "vitest" },
     });
@@ -507,8 +509,10 @@ describe("iOS local agent transport bridge", () => {
       throw new Error("direct fetch should not run");
     });
     vi.stubGlobal("fetch", originalFetch);
+    vi.stubGlobal("__ELIZAOS_APP_BOOT_CONFIG__", {
+      apiBase: "https://www.elizacloud.ai",
+    });
     vi.stubGlobal("window", {
-      __ELIZA_API_BASE__: "https://www.elizacloud.ai",
       location: { href: "capacitor://localhost/" },
       navigator: { userAgent: "vitest" },
     });
@@ -528,8 +532,10 @@ describe("iOS local agent transport bridge", () => {
     vi.stubEnv("VITE_ELIZA_IOS_RUNTIME_MODE", "cloud");
     const originalFetch = vi.fn(async () => new Response('{"ok":true}'));
     vi.stubGlobal("fetch", originalFetch);
+    vi.stubGlobal("__ELIZAOS_APP_BOOT_CONFIG__", {
+      apiBase: "https://www.elizacloud.ai",
+    });
     vi.stubGlobal("window", {
-      __ELIZA_API_BASE__: "https://www.elizacloud.ai",
       location: { href: "capacitor://localhost/" },
       navigator: { userAgent: "vitest" },
     });
@@ -557,8 +563,10 @@ describe("iOS local agent transport bridge", () => {
       getItem: (key: string) =>
         key === "eliza:mobile-runtime-mode" ? "cloud" : null,
     });
+    vi.stubGlobal("__ELIZAOS_APP_BOOT_CONFIG__", {
+      apiBase: "https://www.elizacloud.ai",
+    });
     vi.stubGlobal("window", {
-      __ELIZA_API_BASE__: "https://www.elizacloud.ai",
       location: { href: "capacitor://localhost/" },
       navigator: { userAgent: "vitest" },
     });
@@ -574,6 +582,32 @@ describe("iOS local agent transport bridge", () => {
     expect(originalFetch).not.toHaveBeenCalled();
   });
 
+  it("allows explicit simulator loopback fetches in cloud mode on non-local-agent ports", async () => {
+    vi.stubEnv("VITE_ELIZA_IOS_ALLOW_SIMULATOR_LOOPBACK", "1");
+    const originalFetch = vi.fn(async () => new Response('{"ready":true}'));
+    vi.stubGlobal("fetch", originalFetch);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) =>
+        key === "eliza:mobile-runtime-mode" ? "cloud-hybrid" : null,
+    });
+    vi.stubGlobal("window", {
+      __ELIZA_API_BASE__: "https://www.elizacloud.ai",
+      location: { href: "capacitor://localhost/" },
+      navigator: { userAgent: "vitest" },
+    });
+
+    const { installIosLocalAgentFetchBridge } = await import(
+      "./ios-local-agent-transport"
+    );
+    installIosLocalAgentFetchBridge();
+
+    const response = await fetch("http://127.0.0.1:31338/api/health");
+
+    await expect(response.json()).resolves.toEqual({ ready: true });
+    expect(originalFetch).toHaveBeenCalledTimes(1);
+    expect(kernelMock.handleIosLocalAgentRequest).not.toHaveBeenCalled();
+  });
+
   it("allows local-inference IPC in iOS cloud mode", async () => {
     const originalFetch = vi.fn(async () => {
       throw new Error("direct fetch should not run");
@@ -583,8 +617,10 @@ describe("iOS local agent transport bridge", () => {
       getItem: (key: string) =>
         key === "eliza:mobile-runtime-mode" ? "cloud" : null,
     });
+    vi.stubGlobal("__ELIZAOS_APP_BOOT_CONFIG__", {
+      apiBase: "https://www.elizacloud.ai",
+    });
     vi.stubGlobal("window", {
-      __ELIZA_API_BASE__: "https://www.elizacloud.ai",
       location: { href: "capacitor://localhost/" },
       navigator: { userAgent: "vitest" },
     });
@@ -622,8 +658,10 @@ describe("iOS local agent transport bridge", () => {
       getItem: (key: string) =>
         key === "eliza:mobile-runtime-mode" ? "cloud" : null,
     });
+    vi.stubGlobal("__ELIZAOS_APP_BOOT_CONFIG__", {
+      apiBase: "https://www.elizacloud.ai",
+    });
     vi.stubGlobal("window", {
-      __ELIZA_API_BASE__: "https://www.elizacloud.ai",
       location: { href: "capacitor://localhost/" },
       navigator: { userAgent: "vitest" },
     });
@@ -745,8 +783,10 @@ describe("iOS local agent transport bridge", () => {
 
   it("uses the ITTP compatibility transport in local iOS builds without a full Bun engine", async () => {
     capacitorState.pluginAvailable = true;
+    vi.stubGlobal("__ELIZAOS_APP_BOOT_CONFIG__", {
+      apiBase: "eliza-local-agent://ipc",
+    });
     vi.stubGlobal("window", {
-      __ELIZA_API_BASE__: "eliza-local-agent://ipc",
       location: { href: "capacitor://localhost/" },
       navigator: { userAgent: "vitest" },
     });
@@ -785,8 +825,10 @@ describe("iOS local agent transport bridge", () => {
       throw new Error("direct fetch should not run");
     });
     vi.stubGlobal("fetch", originalFetch);
+    vi.stubGlobal("__ELIZAOS_APP_BOOT_CONFIG__", {
+      apiBase: "http://127.0.0.1:31337",
+    });
     vi.stubGlobal("window", {
-      __ELIZA_API_BASE__: "http://127.0.0.1:31337",
       location: { href: "capacitor://localhost/" },
       navigator: { userAgent: "vitest" },
     });
@@ -809,8 +851,10 @@ describe("iOS local agent transport bridge", () => {
       throw new Error("direct fetch should not run");
     });
     vi.stubGlobal("fetch", originalFetch);
+    vi.stubGlobal("__ELIZAOS_APP_BOOT_CONFIG__", {
+      apiBase: "eliza-local-agent://ipc",
+    });
     vi.stubGlobal("window", {
-      __ELIZA_API_BASE__: "eliza-local-agent://ipc",
       location: { href: "capacitor://localhost/" },
       navigator: { userAgent: "vitest" },
     });

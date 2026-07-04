@@ -1,4 +1,17 @@
-import type { RoleName } from "../roles";
+/**
+ * Read-side access-control filter for memories: maps an {@link AccessContext}
+ * to a scope-ladder actor, decides whether that actor may read a memory of a
+ * given {@link MemoryScope}, and subtractively filters a memory array down to
+ * the readable set.
+ *
+ * Composes with — never duplicates — Postgres RLS: RLS gates on
+ * `entity_id`/`server_id`, this gates on `metadata.scope`. For the four
+ * document scopes the ladder is byte-identical to the documents plugin's
+ * `canReadDocumentMemory`, so that plugin can delegate here without behavior
+ * change; keep the two in lockstep. An unresolved role fails closed to the
+ * least-privileged `USER` tier.
+ */
+import { isAdminRank, type RoleName } from "../roles";
 import type { AccessContext, Memory, MemoryScope, UUID } from "../types";
 
 /**
@@ -29,7 +42,7 @@ export function actorFromAccessContext(
 	if (ctx.requesterEntityId === agentId) {
 		return { entityId: agentId, role: "AGENT" };
 	}
-	if (ctx.isOwner || ctx.role === "OWNER" || ctx.role === "ADMIN") {
+	if (ctx.isOwner || isAdminRank(ctx.role)) {
 		return { entityId: ctx.requesterEntityId, role: "OWNER" };
 	}
 	return { entityId: ctx.requesterEntityId, role: "USER" };

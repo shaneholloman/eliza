@@ -19,7 +19,13 @@
  * module has no interact export.
  */
 
-import { resolveAppBranding } from "@elizaos/shared";
+import {
+  HOST_EXTERNAL_RUNTIME_PARAM,
+  HOST_EXTERNAL_SPECIFIERS_PARAM,
+  type HostExternalBundleFactory,
+  type HostModuleImporter,
+  resolveAppBranding,
+} from "@elizaos/shared";
 import {
   type ComponentType,
   memo,
@@ -37,9 +43,16 @@ import {
   getViewRegistry,
   handleAgentSurfaceCapability,
   isAgentSurfaceCapability,
+  isSensitiveAgentElement,
+  SENSITIVE_AGENT_ELEMENT_REASON,
   type ViewAgentRegistry,
 } from "../../agent-surface";
 import { client } from "../../api/index.ts";
+import {
+  type HostExternalImporter,
+  registeredHostExternalSpecifiers,
+  resolveRegisteredHostExternalImporter,
+} from "../../app-shell-registry";
 import {
   type EvictReason,
   emitModuleCacheTelemetry,
@@ -328,8 +341,6 @@ function isReactComponentExport(
   );
 }
 
-type HostExternalImporter = () => Promise<Record<string, unknown>>;
-
 function importHostExternal(
   specifier: string,
 ): Promise<Record<string, unknown>> {
@@ -374,6 +385,13 @@ async function importUiRootCompat(): Promise<Record<string, unknown>> {
   return import("../../index.ts");
 }
 
+// Framework + host modules the shell always provides to every view bundle:
+// react, three, `@elizaos/ui/*`, the `@elizaos/app-core` view compat surface,
+// `@elizaos/shared`, and the native capacitor bridges. This map is
+// FRAMEWORK-ONLY — it must never list a plugin-specific specifier. A plugin (or
+// a build-variant entrypoint) contributes its own specifiers through
+// `registerHostExternalImporter` so adding a host-external plugin never edits
+// this shared UI module.
 const HOST_EXTERNAL_IMPORTERS: Record<string, HostExternalImporter> = {
   "@elizaos/app-core": importAppCoreViewCompat,
   "@elizaos/app-core/browser": importAppCoreViewCompat,
@@ -390,14 +408,6 @@ const HOST_EXTERNAL_IMPORTERS: Record<string, HostExternalImporter> = {
     importHostExternal("@elizaos/capacitor-system"),
   "@elizaos/shared": () => importHostExternal("@elizaos/shared"),
   "@elizaos/ui": importUiRootCompat,
-  "@elizaos/plugin-browser": () =>
-    importHostExternal("@elizaos/plugin-browser"),
-  "@elizaos/plugin-health/screen-time/mobile-signal-setup": () =>
-    importHostExternal(
-      "@elizaos/plugin-health/screen-time/mobile-signal-setup",
-    ),
-  "@elizaos/plugin-training": () =>
-    importHostExternal("@elizaos/plugin-training"),
   "@elizaos/ui/agent-surface": async () => AgentSurfaceHost,
   "@elizaos/ui/app-navigate-view": () => import("../../app-navigate-view.ts"),
   "@elizaos/ui/api": () => import("../../api/index.ts"),
@@ -447,7 +457,6 @@ const HOST_EXTERNAL_IMPORTERS: Record<string, HostExternalImporter> = {
   "@pixiv/three-vrm": () => import("@pixiv/three-vrm"),
   "@pixiv/three-vrm/nodes": () => import("@pixiv/three-vrm/nodes"),
   react: () => import("react"),
-  "react-plaid-link": () => import("react-plaid-link"),
   "react/jsx-dev-runtime": async () => {
     const devRuntime = await import("react/jsx-dev-runtime");
     if (typeof devRuntime.jsxDEV === "function") {
@@ -472,29 +481,69 @@ const HOST_EXTERNAL_IMPORTERS: Record<string, HostExternalImporter> = {
     import("three/examples/jsm/loaders/GLTFLoader.js"),
 };
 
-const HOST_EXTERNAL_IMPORTER_SPECIFIERS = Object.keys(HOST_EXTERNAL_IMPORTERS);
+/**
+ * Resolve a view-bundle external specifier to its importer: the framework trunk
+ * map first, then the specifiers plugins/build variants contributed through
+ * `registerHostExternalImporter`.
+ */
+function resolveHostExternalImporter(
+  specifier: string,
+): HostExternalImporter | undefined {
+  return (
+    HOST_EXTERNAL_IMPORTERS[specifier] ??
+    resolveRegisteredHostExternalImporter(specifier)
+  );
+}
+
+/**
+ * Every specifier the shell can rewrite for a view bundle — the framework trunk
+ * map plus the registered extension specifiers. Computed per bundle load so a
+ * plugin registered after this module evaluated is still honored.
+ */
+function hostExternalSpecifiers(): string[] {
+  return [
+    ...Object.keys(HOST_EXTERNAL_IMPORTERS),
+    ...registeredHostExternalSpecifiers(),
+  ];
+}
 
 declare global {
   interface Window {
-    __ELIZA_DYNAMIC_VIEW_IMPORT__?: (
-      specifier: string,
-    ) => Promise<Record<string, unknown>>;
     __ELIZA_DYNAMIC_VIEW_BUNDLE_IMPORT__?: (
       bundleUrl: string,
     ) => Promise<Record<string, unknown>>;
   }
 }
 
-if (typeof window !== "undefined" && !window.__ELIZA_DYNAMIC_VIEW_IMPORT__) {
-  window.__ELIZA_DYNAMIC_VIEW_IMPORT__ = async (specifier) => {
-    const importer = HOST_EXTERNAL_IMPORTERS[specifier];
-    if (!importer) {
-      throw new Error(
-        `DynamicViewLoader: unsupported host external "${specifier}"`,
-      );
-    }
-    return importer();
-  };
+/**
+ * Resolve one host-external specifier to the host shell's live singleton (the
+ * framework trunk map first, then registered plugin/build-variant specifiers).
+ * Passed to a served view bundle's factory (its default export) as the {@link
+ * HostModuleImporter} it resolves its externals through — no `globalThis` bridge.
+ * Exported so tests can exercise the resolver the factory receives.
+ */
+export const hostImport: HostModuleImporter = async (specifier) => {
+  const importer = resolveHostExternalImporter(specifier);
+  if (!importer) {
+    throw new Error(
+      `DynamicViewLoader: unsupported host external "${specifier}"`,
+    );
+  }
+  return importer();
+};
+
+/**
+ * A served view bundle's default export is a `HostExternalBundleFactory`: call
+ * it with {@link hostImport} to get the view's export namespace. Test/dev bundle
+ * modules injected through `__ELIZA_DYNAMIC_VIEW_BUNDLE_IMPORT__` already return
+ * a namespace directly, so a non-function default passes through unchanged.
+ */
+async function resolveBundleNamespace(
+  mod: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const factory = mod.default;
+  if (typeof factory !== "function") return mod;
+  return (factory as HostExternalBundleFactory)(hostImport);
 }
 
 /** Dev-mode polling interval in ms. Not used in production builds. */
@@ -525,6 +574,9 @@ async function importViewBundle(
   bundleUrl: string,
 ): Promise<Record<string, unknown>> {
   if (
+    (import.meta.env.DEV ||
+      import.meta.env.MODE === "test" ||
+      process.env.NODE_ENV === "test") &&
     typeof window !== "undefined" &&
     window.__ELIZA_DYNAMIC_VIEW_BUNDLE_IMPORT__
   ) {
@@ -539,7 +591,9 @@ async function importViewBundle(
 
   const hostExternalUrl = buildHostExternalBundleUrl(bundleUrl);
   if (hostExternalUrl) {
-    return import(/* @vite-ignore */ hostExternalUrl);
+    return resolveBundleNamespace(
+      await import(/* @vite-ignore */ hostExternalUrl),
+    );
   }
 
   try {
@@ -557,7 +611,7 @@ async function importViewBundle(
       `DynamicViewLoader: bundle at ${bundleUrl} could not use host externals`,
     );
   }
-  return import(/* @vite-ignore */ rewrittenUrl);
+  return resolveBundleNamespace(await import(/* @vite-ignore */ rewrittenUrl));
 }
 
 function buildHostExternalBundleUrl(bundleUrl: string): string | null {
@@ -565,10 +619,10 @@ function buildHostExternalBundleUrl(bundleUrl: string): string | null {
   const rewrittenUrl = new URL(bundleUrl, window.location.href);
   if (rewrittenUrl.origin !== window.location.origin) return null;
   if (!rewrittenUrl.pathname.startsWith("/api/views/")) return null;
-  rewrittenUrl.searchParams.set("hostExternalRuntime", "1");
+  rewrittenUrl.searchParams.set(HOST_EXTERNAL_RUNTIME_PARAM, "1");
   rewrittenUrl.searchParams.set(
-    "hostExternalSpecifiers",
-    HOST_EXTERNAL_IMPORTER_SPECIFIERS.join(","),
+    HOST_EXTERNAL_SPECIFIERS_PARAM,
+    hostExternalSpecifiers().join(","),
   );
   return rewrittenUrl.href;
 }
@@ -781,12 +835,20 @@ function readElementValue(el: HTMLElement): unknown {
 function snapshotDomAgentElement(el: HTMLElement) {
   const rect = el.getBoundingClientRect();
   const role = el.getAttribute("data-agent-role") || "region";
-  return {
+  const descriptor = {
     id: el.getAttribute("data-agent-id") || "",
-    role,
     label: el.getAttribute("data-agent-label") || "",
+    sensitive: el.getAttribute("data-agent-sensitive") === "true",
+  };
+  const sensitive = isSensitiveAgentElement(descriptor, el);
+  return {
+    id: descriptor.id,
+    role,
+    label: descriptor.label,
     status: el.getAttribute("data-state") || undefined,
-    value: readElementValue(el),
+    ...(sensitive
+      ? { sensitive: true, valueRedacted: true }
+      : { value: readElementValue(el) }),
     fillable: DOM_FILLABLE_AGENT_ROLES.has(role),
     clickable: DOM_CLICKABLE_AGENT_ROLES.has(role),
     focused:
@@ -877,6 +939,18 @@ function handleDomAgentSurfaceCapability(
       }
       const el = getAgentElementById(containerEl, id);
       if (!el) return { ok: false, id, reason: "element not found" };
+      if (
+        isSensitiveAgentElement(
+          {
+            id,
+            label: el.getAttribute("data-agent-label") || "",
+            sensitive: el.getAttribute("data-agent-sensitive") === "true",
+          },
+          el,
+        )
+      ) {
+        return { ok: false, id, reason: SENSITIVE_AGENT_ELEMENT_REASON };
+      }
       if (
         el instanceof HTMLInputElement ||
         el instanceof HTMLTextAreaElement ||
@@ -988,7 +1062,12 @@ async function handleStandardCapability(
       const id = agentIdParam(params);
       if (id && registry) {
         const result = registry.fill(id, value);
-        return { filled: result.ok, id, reason: result.reason, value };
+        return {
+          filled: result.ok,
+          id,
+          reason: result.reason,
+          ...(result.ok ? { value } : {}),
+        };
       }
       const { target, selector } = resolveInteractTarget(containerEl, params);
       if (!target) {
@@ -999,6 +1078,27 @@ async function handleStandardCapability(
         target instanceof HTMLTextAreaElement ||
         target instanceof HTMLSelectElement
       ) {
+        if (
+          isSensitiveAgentElement(
+            {
+              id:
+                target.getAttribute("data-agent-id") ||
+                target.id ||
+                target.name ||
+                selector ||
+                "",
+              label: target.getAttribute("data-agent-label") || "",
+              sensitive: target.getAttribute("data-agent-sensitive") === "true",
+            },
+            target,
+          )
+        ) {
+          return {
+            filled: false,
+            selector,
+            reason: SENSITIVE_AGENT_ELEMENT_REASON,
+          };
+        }
         setNativeInputValue(target, value);
         return { filled: true, selector, value };
       }

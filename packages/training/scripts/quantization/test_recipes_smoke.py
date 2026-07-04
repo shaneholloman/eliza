@@ -29,6 +29,10 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+_CANONICAL_LLAMA_CPP_SUFFIX = (
+    Path("plugins") / "plugin-local-inference" / "native" / "llama.cpp"
+)
+
 
 def test_polarquant_recipe_serializes_with_paper_metadata():
     from polarquant_apply import PolarQuantRecipe
@@ -212,8 +216,8 @@ def test_legacy_push_model_to_hf_redirects_to_canonical_publishers():
 # Kernel-vs-recipe parity tests
 #
 # These tests pin the recipes to the canonical kernel references in
-# eliza/packages/inference/{reference,verify}/ and
-# eliza/packages/native-plugins/{qjl-cpu,polarquant-cpu}/.
+# eliza/plugins/plugin-local-inference/native/{reference,verify}/ and
+# eliza/packages/native/plugins/{qjl-cpu,polarquant-cpu}/.
 #
 # Per packages/training/AGENTS.md §3:
 #   "Bit-exact with kernels — when a quantization recipe and a kernel
@@ -227,17 +231,16 @@ def test_legacy_push_model_to_hf_redirects_to_canonical_publishers():
 
 
 # _HERE = .../eliza/packages/training/scripts/quantization
-# parents: [0]=quantization, [1]=scripts, [2]=training, [3]=packages
-_KERNEL_PACKAGES_DIR = _HERE.parents[2]
-_REF_C = _KERNEL_PACKAGES_DIR / "inference" / "verify" / "qjl_polar_ref.c"
-_REF_H = _KERNEL_PACKAGES_DIR / "inference" / "verify" / "qjl_polar_ref.h"
-_TURBO_C = _KERNEL_PACKAGES_DIR / "inference" / "reference" / "turbo_kernels.c"
-_TURBO_H = _KERNEL_PACKAGES_DIR / "inference" / "reference" / "turbo_kernels.h"
+_REPO_ROOT = _HERE.parents[3]
+_REF_C = _REPO_ROOT / "plugins" / "plugin-local-inference" / "native" / "verify" / "qjl_polar_ref.c"
+_REF_H = _REPO_ROOT / "plugins" / "plugin-local-inference" / "native" / "verify" / "qjl_polar_ref.h"
+_TURBO_C = _REPO_ROOT / "plugins" / "plugin-local-inference" / "native" / "reference" / "turbo_kernels.c"
+_TURBO_H = _REPO_ROOT / "plugins" / "plugin-local-inference" / "native" / "reference" / "turbo_kernels.h"
 
 
 # Canonical 4-bit Lloyd-Max centroids for N(0,1), bit-exact match required
-# against eliza/packages/native-plugins/polarquant-cpu/include/polarquant/polar_centroids.h
-# and eliza/packages/inference/verify/qjl_polar_ref.c.
+# against eliza/packages/native/plugins/polarquant-cpu/include/polarquant/polar_centroids.h
+# and eliza/plugins/plugin-local-inference/native/verify/qjl_polar_ref.c.
 _C_POLAR_Q4_CENTROIDS = (
     -2.754354807, -2.093562707, -1.643041510, -1.279739752,
     -0.962640978, -0.672392117, -0.397897103, -0.131757782,
@@ -340,6 +343,7 @@ def test_recipe_sidecar_manifest_fragment_complete():
         assert required_keys <= set(frag), (
             f"{method}: manifest fragment missing keys {required_keys - set(frag)}"
         )
+        assert frag["target_class"] in {"weights", "kv-cache"}
         assert frag["kernel_target"], f"{method}: empty kernel_target"
         for target in frag["kernel_target"]:
             assert frag["block_layout_version"][target], (
@@ -348,9 +352,70 @@ def test_recipe_sidecar_manifest_fragment_complete():
             assert frag["codebook_hash"][target], (
                 f"{method}/{target}: empty codebook_hash"
             )
+            assert frag["codebook_hash"][target].startswith("sha256:")
+            assert len(frag["codebook_hash"][target]) == len("sha256:") + 64
+            assert frag["codebook_hash_source"][target], (
+                f"{method}/{target}: empty codebook_hash_source"
+            )
             assert frag["per_block_tolerance"][target] > 0, (
                 f"{method}/{target}: non-positive per_block_tolerance"
             )
+
+
+def test_kernel_manifest_hashes_verify_real_source_files():
+    """The manifest `codebook_hash` pins are sha256 values of real kernel
+    source files, not descriptive labels. Drift must be caught before a recipe
+    sidecar is published."""
+    from _kernel_manifest import (
+        KERNEL_CODEBOOK_HASHES,
+        PINNED_KERNEL_CODEBOOK_SHA256,
+        verify_kernel_codebook_hashes,
+    )
+
+    actual = verify_kernel_codebook_hashes()
+    assert actual == PINNED_KERNEL_CODEBOOK_SHA256
+    for target, digest in KERNEL_CODEBOOK_HASHES.items():
+        assert digest == f"sha256:{actual[target]}"
+
+
+def test_kernel_manifest_hash_verification_fails_on_drift(monkeypatch):
+    """A changed native centroid/layout source must fail the recipe gate until
+    the pin is deliberately updated in the same change."""
+    import _kernel_manifest as km
+
+    monkeypatch.setitem(km.PINNED_KERNEL_CODEBOOK_SHA256, "polar_q4", "0" * 64)
+    with pytest.raises(RuntimeError, match="polar_q4"):
+        km.verify_kernel_codebook_hashes(("polar_q4",))
+
+
+def test_agents_quantization_section_matches_recipe_target_classes():
+    """Doc parity for the Stage 3 recipe-reality contract."""
+    from _kernel_manifest import KERNEL_RECIPE_TARGET_CLASSES
+
+    agents = (_REPO_ROOT / "packages" / "training" / "AGENTS.md").read_text(
+        encoding="utf-8"
+    )
+    assert KERNEL_RECIPE_TARGET_CLASSES["turboquant"] == "kv-cache"
+    assert "TurboQuant is a runtime KV-cache compressor" in agents
+    assert KERNEL_RECIPE_TARGET_CLASSES["qjl"] == "kv-cache"
+    assert "QJL is a runtime K-cache compressor" in agents
+    assert KERNEL_RECIPE_TARGET_CLASSES["polarquant"] == "weights"
+    assert "PolarQuant is a weight quantizer" in agents
+    assert "The shipping Gemma weight quant is stock\n`llama-quantize` Q4_K_M" in agents
+
+
+def test_llama_cpp_default_resolves_to_plugin_local_inference(monkeypatch):
+    """Converter callers with no LLAMA_CPP_DIR must search the canonical fork
+    submodule under plugins/plugin-local-inference/native/llama.cpp."""
+    from _common import DEFAULT_LLAMA_CPP_DIR, LLAMA_CPP_RELATIVE_DIR
+
+    monkeypatch.delenv("LLAMA_CPP_DIR", raising=False)
+    assert LLAMA_CPP_RELATIVE_DIR.as_posix() == (
+        "plugins/plugin-local-inference/native/llama.cpp"
+    )
+    assert DEFAULT_LLAMA_CPP_DIR == (
+        _REPO_ROOT / "plugins" / "plugin-local-inference" / "native" / "llama.cpp"
+    )
 
 
 def test_kernel_manifest_fragment_rejects_unknown_method():
@@ -800,25 +865,25 @@ _KQUANT_SIBLINGS = (
 )
 
 
+def _load_quantization_module(module_basename: str):
+    import importlib.util
+
+    importable = module_basename.replace("-", "_")
+    spec_path = Path(__file__).resolve().parent / f"{module_basename}.py"
+    assert spec_path.exists(), f"missing quantization module: {spec_path}"
+    spec = importlib.util.spec_from_file_location(importable, spec_path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 @pytest.mark.parametrize("module_basename,expected_level", _KQUANT_SIBLINGS)
 def test_kquant_sibling_exports_constant(module_basename: str, expected_level: str):
     """Every K-quant ladder sibling exports a `QUANT_LEVEL` constant matching
     its filename. The publish path keys on this constant to pick the
     llama-quantize target type."""
-    import importlib
-
-    # Module names use hyphens on disk; importlib needs the underscore form.
-    importable = module_basename.replace("-", "_")
-    # Add the quantization dir to sys.path so the modules import on their
-    # own (they do `from _common import ...`).
-    quant_dir = Path(__file__).resolve().parent
-    spec_path = quant_dir / f"{module_basename}.py"
-    assert spec_path.exists(), f"missing K-quant sibling: {spec_path}"
-
-    spec = importlib.util.spec_from_file_location(importable, spec_path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    mod = _load_quantization_module(module_basename)
     assert getattr(mod, "QUANT_LEVEL") == expected_level
 
 
@@ -829,16 +894,7 @@ def test_kquant_sibling_dry_run_prints_quant_level(
     """Every K-quant sibling supports the same --dry-run surface as the
     Q4_K_M baseline. Output is JSON and contains the recipe-level
     metadata."""
-    import importlib
-
-    importable = module_basename.replace("-", "_")
-    quant_dir = Path(__file__).resolve().parent
-    spec_path = quant_dir / f"{module_basename}.py"
-
-    spec = importlib.util.spec_from_file_location(importable, spec_path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    mod = _load_quantization_module(module_basename)
     rc = mod.main([
         "--model", "google/gemma-4-E2B",
         "--output", str(tmp_path),
@@ -848,6 +904,165 @@ def test_kquant_sibling_dry_run_prints_quant_level(
     payload = json.loads(capsys.readouterr().out)
     assert payload["quant_level"] == _expected_level
     assert payload["dry_run"] is True
+
+
+@pytest.mark.parametrize("module_basename,expected_level", _KQUANT_SIBLINGS)
+def test_kquant_sibling_fails_when_artifact_load_smoke_fails(
+    module_basename: str, expected_level: str, monkeypatch, tmp_path
+):
+    mod = _load_quantization_module(module_basename)
+    fake_llama = tmp_path / "llama.cpp"
+    fake_llama.mkdir()
+    fake_convert = fake_llama / "convert_hf_to_gguf.py"
+    fake_convert.write_text("# fake\n", encoding="utf-8")
+    fake_quantize = fake_llama / "llama-quantize"
+    fake_quantize.write_text("# fake\n", encoding="utf-8")
+    fake_quantize.chmod(0o755)
+
+    def fake_run(cmd):
+        cmd = [str(part) for part in cmd]
+        if "--outfile" in cmd:
+            Path(cmd[cmd.index("--outfile") + 1]).write_bytes(b"f16")
+        elif cmd[-1] == expected_level:
+            Path(cmd[-2]).write_bytes(b"quantized")
+
+    monkeypatch.setattr(mod, "_find_convert_script", lambda _dir: fake_convert)
+    monkeypatch.setattr(mod, "_find_quantize_binary", lambda _dir: fake_quantize)
+    monkeypatch.setattr(mod, "_run", fake_run)
+    monkeypatch.setattr(
+        mod,
+        "_smoke_load_gguf",
+        lambda _gguf, _quantize: {"ok": False, "error": "synthetic load failure"},
+    )
+
+    rc = mod.main([
+        "--model", "google/gemma-4-E2B",
+        "--output", str(tmp_path / "out"),
+    ])
+
+    assert rc == 2
+    assert not list((tmp_path / "out").glob("gguf_*.json"))
+
+
+@pytest.mark.parametrize("module_basename,_expected_level", _KQUANT_SIBLINGS)
+def test_kquant_sibling_no_smoke_marks_artifact_not_release_eligible(
+    module_basename: str, _expected_level: str, monkeypatch, tmp_path
+):
+    mod = _load_quantization_module(module_basename)
+    fake_llama = tmp_path / "llama.cpp"
+    fake_llama.mkdir()
+    fake_convert = fake_llama / "convert_hf_to_gguf.py"
+    fake_convert.write_text("# fake\n", encoding="utf-8")
+    fake_quantize = fake_llama / "llama-quantize"
+    fake_quantize.write_text("# fake\n", encoding="utf-8")
+    fake_quantize.chmod(0o755)
+
+    def fake_run(cmd):
+        cmd = [str(part) for part in cmd]
+        if "--outfile" in cmd:
+            Path(cmd[cmd.index("--outfile") + 1]).write_bytes(b"f16")
+        else:
+            Path(cmd[-2]).write_bytes(b"quantized")
+
+    monkeypatch.setattr(mod, "_find_convert_script", lambda _dir: fake_convert)
+    monkeypatch.setattr(mod, "_find_quantize_binary", lambda _dir: fake_quantize)
+    monkeypatch.setattr(mod, "_run", fake_run)
+
+    out_dir = tmp_path / "out"
+    rc = mod.main([
+        "--model", "google/gemma-4-E2B",
+        "--output", str(out_dir),
+        "--no-smoke-load",
+    ])
+
+    assert rc == 0
+    sidecar = json.loads(next(out_dir.glob("gguf_*.json")).read_text())
+    assert sidecar["smoke_load"] == {
+        "ok": False,
+        "skipped": True,
+        "release_eligible": False,
+        "error": "--no-smoke-load was used; no real-artifact recipe test ran",
+    }
+
+
+@pytest.mark.parametrize(
+    "module_basename",
+    (
+        "gguf-q3_k_m_apply",
+        "gguf-q4_k_m_apply",
+        "gguf-q5_k_m_apply",
+        "gguf-q6_k_apply",
+        "gguf_asr_apply",
+        "gguf_kokoro_apply",
+    ),
+)
+def test_gguf_wrappers_default_to_runtime_llama_cpp_submodule(module_basename: str):
+    """Converter wrappers must default to the real in-repo llama.cpp fork.
+
+    The old `packages/inference/llama.cpp` path no longer exists; resolving it
+    made publish recipes fail unless callers remembered to set LLAMA_CPP_DIR.
+    """
+    source = (Path(__file__).resolve().parent / f"{module_basename}.py").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        _CANONICAL_LLAMA_CPP_SUFFIX.as_posix() in source
+        or '"plugins" / "plugin-local-inference" / "native" / "llama.cpp"' in source
+        or (
+            "DEFAULT_LLAMA_CPP_DIR" in source
+            and "find_llama_convert_script" in source
+        )
+    )
+    assert '"packages" / "inference" / "llama.cpp"' not in source
+    assert "packages/inference/llama.cpp" not in source
+
+
+def test_eliza_typed_gguf_resolver_uses_runtime_llama_cpp_submodule():
+    source = (Path(__file__).resolve().parent / "gguf_eliza1_apply.py").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        _CANONICAL_LLAMA_CPP_SUFFIX.as_posix() in source
+        or '"plugins" / "plugin-local-inference" / "native" / "llama.cpp"' in source
+    )
+    assert '"packages" / "inference" / "llama.cpp"' not in source
+    assert "packages/inference/llama.cpp" not in source
+
+
+def test_q4_k_m_apply_records_passing_recipe_test(monkeypatch, tmp_path):
+    """A passing Q4_K_M load-smoke is recorded as the publish-consumable recipe
+    gate result."""
+    mod = _load_quantization_module("gguf-q4_k_m_apply")
+    fake_quantize = tmp_path / "llama-quantize"
+    fake_quantize.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    def fake_run(cmd):
+        cmd = [str(part) for part in cmd]
+        if "--outfile" in cmd:
+            Path(cmd[cmd.index("--outfile") + 1]).write_bytes(b"f16")
+        else:
+            Path(cmd[-2]).write_bytes(b"quant")
+
+    monkeypatch.setattr(mod, "_find_convert_script", lambda _path: tmp_path / "convert.py")
+    monkeypatch.setattr(mod, "_find_quantize_binary", lambda _path: fake_quantize)
+    monkeypatch.setattr(mod, "_run", fake_run)
+    monkeypatch.setattr(
+        mod,
+        "_smoke_load_gguf",
+        lambda gguf, _quantize: {
+            "ok": True,
+            "output": "The capital of France is Paris.",
+            "cmd": f"llama-cli -m {gguf}",
+        },
+    )
+
+    rc = mod.main(["--model", "local/final", "--output", str(tmp_path)])
+
+    assert rc == 0
+    sidecar = json.loads((tmp_path / "gguf_q4_k_m.json").read_text(encoding="utf-8"))
+    assert sidecar["recipe_test"]["status"] == "passed"
+    assert sidecar["recipe_test"]["release_eligible"] is True
+    assert sidecar["recipe_test"]["artifact"].endswith("final-Q4_K_M.gguf")
 
 
 def test_gguf_asr_apply_dry_run_single_quant(capsys, tmp_path):

@@ -1,8 +1,18 @@
+/** Barrel for the plugin's runtime services: backend detection, training config, trigger, TrainingService, Vast orchestration, and the active-service registry. */
 export {
   type BackendAvailability,
   clearBackendCache,
   detectAvailableBackends,
 } from "./training-backend-check.js";
+export {
+  type AutoTrainToggleInput,
+  registerTrainingConfigService,
+  TRAINING_CONFIG_SERVICE,
+  type TrainingConfigCapability,
+  TrainingConfigService,
+  type TrainingConfigServiceOptions,
+  type TrainingConfigSummary,
+} from "./training-config-service.js";
 export {
   isNotImplementedError,
   NotImplementedError,

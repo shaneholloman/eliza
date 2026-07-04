@@ -27,15 +27,17 @@
  * the whole point of the pattern. The BROWSER action stays one action.
  */
 
-import { type IAgentRuntime, logger, Service } from "@elizaos/core";
+import { ElizaError, type IAgentRuntime, logger, Service } from "@elizaos/core";
 import {
   BROWSER_BRIDGE_ROUTE_SERVICE_TYPE,
   type BrowserBridgeRouteService,
 } from "./service.js";
 import { maybeCreateStagehandTarget } from "./targets/stagehand-target.js";
+import { getBrowserWorkspaceSnapshot } from "./workspace/browser-workspace.js";
 import type {
   BrowserWorkspaceCommand,
   BrowserWorkspaceCommandResult,
+  BrowserWorkspaceSnapshot,
 } from "./workspace/browser-workspace-types.js";
 
 export const BROWSER_SERVICE_TYPE = "browser";
@@ -158,6 +160,15 @@ export class BrowserService extends Service {
   }
 
   /**
+   * Read-only live workspace snapshot (bridge mode + open tabs). Hosts query
+   * this through the runtime service registry so no caller needs a static
+   * import edge into this plugin.
+   */
+  getWorkspaceSnapshot(): Promise<BrowserWorkspaceSnapshot> {
+    return getBrowserWorkspaceSnapshot();
+  }
+
+  /**
    * Resolve the active target for a command. If `preferredId` is given,
    * returns that target only if available; otherwise scores registered
    * targets and returns the best available one.
@@ -180,8 +191,19 @@ export class BrowserService extends Service {
       if (!target) return [];
       try {
         return (await target.available()) ? [target] : [];
-      } catch {
-        return [];
+      } catch (error) {
+        throw new ElizaError(
+          `Browser target "${preferredId}" availability check failed.`,
+          {
+            code: "BROWSER_TARGET_UNAVAILABLE",
+            cause: error,
+            context: {
+              targetId: preferredId,
+              subaction: command.subaction,
+            },
+            severity: "ephemeral",
+          },
+        );
       }
     }
 

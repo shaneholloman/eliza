@@ -1,11 +1,12 @@
 import type http from "node:http";
+import { ElizaError } from "@elizaos/core";
 import {
   executeRawSql,
   quoteIdent,
   sanitizeIdentifier,
   sqlLiteral,
 } from "@elizaos/shared";
-import { ensureRouteAuthorized } from "./auth.ts";
+import { ensureRouteMinRole } from "./auth.ts";
 import {
   type CompatRuntimeState,
   DATABASE_UNAVAILABLE_MESSAGE,
@@ -20,6 +21,10 @@ interface TableIntrospection {
   resolvedSchema: string;
   columns: string[];
   expiresAt: number;
+}
+
+interface DatabaseRowsCompatRouteDeps {
+  ensureOwner?: typeof ensureRouteMinRole;
 }
 
 // Resolved schema + column list for a (schema, table) — stable unless a
@@ -53,6 +58,7 @@ export async function handleDatabaseRowsCompatRoute(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   state: CompatRuntimeState,
+  deps: DatabaseRowsCompatRouteDeps = {},
 ): Promise<boolean> {
   const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
   const match = /^\/api\/database\/tables\/([^/]+)\/rows$/.exec(pathname);
@@ -60,7 +66,11 @@ export async function handleDatabaseRowsCompatRoute(
     return false;
   }
 
-  if (!(await ensureRouteAuthorized(req, res, state))) {
+  const ensureOwner = deps.ensureOwner ?? ensureRouteMinRole;
+  // Raw table reads expose arbitrary tables (secrets, sessions, identities),
+  // so this must require OWNER - matching the sibling `/api/secrets/*` routes -
+  // rather than accepting any active session.
+  if (!(await ensureOwner(req, res, state, "OWNER"))) {
     return true;
   }
 
@@ -205,10 +215,15 @@ export async function handleDatabaseRowsCompatRoute(
     runtime,
     `SELECT count(*)::int AS total FROM ${qualifiedTable} ${whereClause}`,
   );
-  const total =
-    typeof countResult.rows[0]?.total === "number"
-      ? countResult.rows[0].total
-      : Number(countResult.rows[0]?.total ?? 0);
+  const rawTotal = countResult.rows[0]?.total;
+  const total = typeof rawTotal === "number" ? rawTotal : Number(rawTotal);
+  if (!Number.isFinite(total)) {
+    throw new ElizaError("Database row count is unavailable.", {
+      code: "DB_COUNT_UNAVAILABLE",
+      context: { table: qualifiedTable },
+      severity: "ephemeral",
+    });
+  }
 
   const rowsResult = await executeRawSql(
     runtime,

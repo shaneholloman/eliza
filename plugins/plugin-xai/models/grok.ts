@@ -1,4 +1,13 @@
+/**
+ * xAI Grok model handlers for text generation (small/large) and embeddings,
+ * calling the xAI OpenAI-compatible chat/embeddings endpoints (api.x.ai/v1).
+ * Normalizes base URL and model-name settings, emits MODEL_USED events, and
+ * records LLM calls for usage accounting. Consumed by the plugin in
+ * ../index.ts.
+ */
 import {
+  buildCanonicalSystemPrompt,
+  dropDuplicateLeadingSystemMessage,
   type EventPayload,
   EventType,
   type GenerateTextParams,
@@ -7,6 +16,7 @@ import {
   ModelType,
   type ModelTypeName,
   recordLlmCall,
+  resolveEffectiveSystemPrompt,
   type TextEmbeddingParams,
   type TextStreamResult,
 } from "@elizaos/core";
@@ -481,9 +491,24 @@ async function generateText(
       paramsWithNative.responseSchema,
   );
 
-  const messages: ChatMessage[] = paramsWithNative.messages?.length
+  // xAI's chat API carries the system instruction as a leading system message;
+  // dropping it here would strip both caller-provided `params.system` and the
+  // character identity from every request.
+  const systemPrompt = resolveEffectiveSystemPrompt({
+    params: paramsWithNative,
+    fallback: buildCanonicalSystemPrompt({ character: runtime.character }),
+  });
+  const rawMessages: ChatMessage[] = paramsWithNative.messages?.length
     ? (paramsWithNative.messages as ChatMessage[])
     : [{ role: "user", content: promptText }];
+  const wireMessages = systemPrompt
+    ? (dropDuplicateLeadingSystemMessage(rawMessages, systemPrompt) ??
+      rawMessages)
+    : rawMessages;
+  const messages: ChatMessage[] =
+    systemPrompt && wireMessages[0]?.role !== "system"
+      ? [{ role: "system", content: systemPrompt }, ...wireMessages]
+      : wireMessages;
 
   const body: Record<string, unknown> = {
     model,
@@ -542,7 +567,7 @@ async function generateText(
     runtime,
     {
       model,
-      systemPrompt: "",
+      systemPrompt: systemPrompt ?? "",
       userPrompt: promptText,
       temperature: params.temperature ?? 0,
       maxTokens: params.maxTokens ?? 0,

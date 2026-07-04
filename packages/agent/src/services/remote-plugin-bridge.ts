@@ -250,6 +250,8 @@ const RouteDescriptorSchema = z
     type: RouteTypeSchema.optional(),
     name: z.string().optional(),
     public: z.boolean().optional(),
+    publicReason: z.string().optional(),
+    publicWrite: z.string().optional(),
     isMultipart: z.boolean().optional(),
   })
   .passthrough();
@@ -861,10 +863,19 @@ export class RemotePluginBridge {
           `[RemotePluginBridge] public route ${descriptor.path} must declare a name`,
         );
       }
+      if (!descriptor.publicReason?.trim()) {
+        throw new Error(
+          `[RemotePluginBridge] public route ${descriptor.path} must declare publicReason`,
+        );
+      }
       return {
         ...routeBase,
         public: true,
         name: descriptor.name,
+        publicReason: descriptor.publicReason,
+        ...(descriptor.publicWrite
+          ? { publicWrite: descriptor.publicWrite }
+          : {}),
       };
     }
     return {

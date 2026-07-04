@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 
-// The in-chat first-run conductor, driven through its REAL public seams: the
-// hook is mounted (registering its handler on the first-run action channel),
-// picks arrive via `tryHandleFirstRunAction` exactly as the chat send funnel
-// delivers them, and the REAL finish use case (`first-run-finish.ts`) runs
-// underneath. Mocks sit only at the network boundary (the shared `client`
-// singleton + the background model download).
+/**
+ * The in-chat first-run conductor, driven through its REAL public seams: the
+ * hook is mounted (registering its handler on the first-run action channel),
+ * picks arrive via `tryHandleFirstRunAction` exactly as the chat send funnel
+ * delivers them, and the REAL finish use case (`first-run-finish.ts`) runs
+ * underneath. Mocks sit only at the network boundary (the shared `client`
+ * singleton + the background model download).
+ */
 
 import { renderHook, waitFor } from "@testing-library/react";
 import * as React from "react";
@@ -61,7 +63,10 @@ import {
   type ConversationMessagesValue,
 } from "../state/ConversationMessagesContext.hooks";
 import type { AppContextValue } from "../state/internal";
-import { tryHandleFirstRunAction } from "./first-run-action-channel";
+import {
+  tryHandleFirstRunAction,
+  tryHandleFirstRunText,
+} from "./first-run-action-channel";
 import {
   clearCloudLoginPending,
   markCloudLoginPending,
@@ -207,15 +212,13 @@ beforeEach(() => {
     success: true,
     data: [],
   });
-  (globalThis as Record<string, unknown>).__ELIZA_CLOUD_AUTH_TOKEN__ =
-    "cloud-token";
+  localStorage.setItem("steward_session_token", "cloud-token");
 });
 
 afterEach(() => {
   __setAppValueForTests(null);
   resetTutorialState();
   ensureLocalStorage().clear();
-  delete (globalThis as Record<string, unknown>).__ELIZA_CLOUD_AUTH_TOKEN__;
 });
 
 describe("useFirstRunConductor", () => {
@@ -835,7 +838,7 @@ describe("useFirstRunConductor", () => {
   });
 
   it("re-offers an UNLOCKED runtime choice when cloud login does not land, and the LOCAL escape completes", async () => {
-    delete (globalThis as Record<string, unknown>).__ELIZA_CLOUD_AUTH_TOKEN__;
+    localStorage.removeItem("steward_session_token");
     mocks.client.getCloudStatus.mockResolvedValue({ connected: false });
     seedAppStore({ elizaCloudConnected: false });
     const { turn, unmount } = renderConductor();
@@ -864,7 +867,7 @@ describe("useFirstRunConductor", () => {
   });
 
   it("auto-resumes the interrupted cloud flow when the cloud connection lands", async () => {
-    delete (globalThis as Record<string, unknown>).__ELIZA_CLOUD_AUTH_TOKEN__;
+    localStorage.removeItem("steward_session_token");
     mocks.client.getCloudStatus.mockResolvedValue({ connected: false });
     seedAppStore({ elizaCloudConnected: false });
     const { turn, unmount } = renderConductor();
@@ -880,8 +883,7 @@ describe("useFirstRunConductor", () => {
 
     // The user connects from the OAuth block instead of re-picking: the token
     // lands and the store learns the connection — the flow resumes by itself.
-    (globalThis as Record<string, unknown>).__ELIZA_CLOUD_AUTH_TOKEN__ =
-      "cloud-token";
+    localStorage.setItem("steward_session_token", "cloud-token");
     mocks.client.getCloudStatus.mockResolvedValue({ connected: true });
     seedAppStore({ elizaCloudConnected: true });
 
@@ -1115,5 +1117,68 @@ describe("persistFirstRun (driven through runFirstRunFinish)", () => {
     const retried = await runFirstRunFinish(draft, ports);
     expect(retried.kind).toBe("done");
     expect(mocks.client.submitFirstRun).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useFirstRunConductor — free-text replies (#12178 composer unlock)", () => {
+  it("echoes typed text as a local user turn + a friendly not-ready reply, never touching the server", async () => {
+    seedAppStore();
+    const { transcript, turn, unmount } = renderConductor();
+    await waitForTurn(turn, "first-run:greeting");
+
+    // Before any runtime is picked, typing is answered with the "choosing"
+    // persona. The conductor renders the user's text as a real user turn.
+    expect(tryHandleFirstRunText("will this work yet?")).toBe(true);
+    await waitFor(() => {
+      expect(
+        transcript.current.some(
+          (m) => m.role === "user" && m.text === "will this work yet?",
+        ),
+      ).toBe(true);
+    });
+    const reply = transcript.current.find(
+      (m) => m.role === "assistant" && m.id.startsWith("first-run:reply:"),
+    );
+    expect(reply?.text).toContain("pick one of the options above");
+    // The hard rule: no first-run POST happened just from typing.
+    expect(mocks.client.submitFirstRun).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("varies the reply by flow position: wrap-up copy once provisioning is done", async () => {
+    seedAppStore();
+    const { transcript, turn, unmount } = renderConductor();
+    await waitForTurn(turn, "first-run:greeting");
+
+    // Drive the LOCAL path to completion so the wrap-up (tutorial) step is live.
+    expect(tryHandleFirstRunAction("__first_run__:runtime:local")).toBe(true);
+    await waitForTurn(turn, "first-run:provider");
+    expect(tryHandleFirstRunAction("__first_run__:provider:on-device")).toBe(
+      true,
+    );
+    await waitForTurn(turn, "first-run:tutorial");
+
+    expect(tryHandleFirstRunText("what now?")).toBe(true);
+    await waitFor(() => {
+      expect(
+        transcript.current.some(
+          (m) =>
+            m.role === "assistant" &&
+            m.id.startsWith("first-run:reply:") &&
+            m.text.includes("Almost there"),
+        ),
+      ).toBe(true);
+    });
+    unmount();
+  });
+
+  it("consumes blank text as a no-op (no empty turn, no reply)", async () => {
+    seedAppStore();
+    const { transcript, turn, unmount } = renderConductor();
+    await waitForTurn(turn, "first-run:greeting");
+    const before = transcript.current.length;
+    expect(tryHandleFirstRunText("   ")).toBe(true);
+    expect(transcript.current.length).toBe(before);
+    unmount();
   });
 });

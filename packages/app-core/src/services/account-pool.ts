@@ -24,11 +24,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import type { AccountCredentialRecord } from "@elizaos/agent/auth/account-storage";
+import type { AccountCredentialRecord } from "@elizaos/auth/account-storage";
 import {
   getAccessToken as getAccountAccessToken,
   listProviderAccounts,
-} from "@elizaos/agent/auth/credentials";
+} from "@elizaos/auth/credentials";
 import {
   ACCOUNT_CREDENTIAL_PROVIDER_IDS,
   DIRECT_ACCOUNT_PROVIDER_ENV,
@@ -36,8 +36,13 @@ import {
   type DirectAccountProvider,
   isSubscriptionProvider,
   type SubscriptionProvider,
-} from "@elizaos/agent/auth/types";
-import { logger, resolveStateDir } from "@elizaos/core";
+} from "@elizaos/auth/types";
+import {
+  type AnthropicAccountPoolBridge,
+  logger,
+  resolveStateDir,
+  setAnthropicAccountPoolBridge,
+} from "@elizaos/core";
 import type {
   LinkedAccountConfig,
   LinkedAccountHealth,
@@ -46,6 +51,7 @@ import type {
   LinkedAccountsConfig,
   LinkedAccountUsage,
 } from "@elizaos/shared/contracts/service-routing";
+import { isLinkedAccountProviderId } from "@elizaos/shared/contracts/service-routing";
 import {
   pollAnthropicUsage,
   pollCodexUsage,
@@ -589,23 +595,6 @@ function metadataFile(): string {
   return path.join(authRoot(), "_pool-metadata.json");
 }
 
-function isPoolProviderId(value: string): value is PoolProviderId {
-  return (
-    value === "anthropic-subscription" ||
-    value === "openai-codex" ||
-    value === "gemini-cli" ||
-    value === "zai-coding" ||
-    value === "kimi-coding" ||
-    value === "deepseek-coding" ||
-    value === "anthropic-api" ||
-    value === "openai-api" ||
-    value === "deepseek-api" ||
-    value === "zai-api" ||
-    value === "moonshot-api" ||
-    value === "cerebras-api"
-  );
-}
-
 function readMetaStore(): PoolMetaStore {
   const file = metadataFile();
   if (!existsSync(file)) {
@@ -687,7 +676,7 @@ function loadAllAccounts(): Record<string, LinkedAccountConfig> {
 }
 
 async function persistAccount(account: LinkedAccountConfig): Promise<void> {
-  if (!isPoolProviderId(account.providerId)) return;
+  if (!isLinkedAccountProviderId(account.providerId)) return;
   const store = readMetaStore();
   if (!store[account.providerId]) {
     store[account.providerId] = {};
@@ -716,46 +705,6 @@ async function deleteAccountMeta(
   if (!(accountId in bucket)) return;
   delete bucket[accountId];
   writeMetaStore(store);
-}
-
-/**
- * Symbol-keyed bridge contract consumed by plugin-anthropic's
- * `credential-store.ts`. Kept narrow so the plugin doesn't have to import
- * the full pool surface (or the rest of `@elizaos/app-core`).
- */
-const ANTHROPIC_POOL_BRIDGE_SYMBOL: unique symbol = Symbol.for(
-  "eliza.account-pool.anthropic.v1",
-);
-
-interface AnthropicPoolBridge {
-  selectAnthropicSubscription(opts?: {
-    sessionKey?: string;
-    exclude?: string[];
-  }): Promise<{ id: string; expiresAt: number } | null>;
-  getAccessToken(
-    providerId: "anthropic-subscription",
-    accountId: string,
-  ): Promise<string | null>;
-  markInvalid(accountId: string, detail?: string): Promise<void>;
-  markRateLimited(
-    accountId: string,
-    untilMs: number,
-    detail?: string,
-  ): Promise<void>;
-}
-
-/**
- * Bridge used by `applySubscriptionCredentials` in `@elizaos/agent` to pick
- * the active Codex account when applying `OPENAI_API_KEY`. Lives behind
- * a symbol so the agent package doesn't need to depend on app-core.
- */
-const SUBSCRIPTION_SELECTOR_BRIDGE_SYMBOL: unique symbol = Symbol.for(
-  "eliza.account-pool.subscription-selector.v1",
-);
-
-interface SubscriptionSelectorBridge {
-  /** Pick an enabled, healthy account; returns its id or null. */
-  pickAccountId(providerId: SubscriptionProvider): Promise<string | null>;
 }
 
 let cachedDefaultPool: AccountPool | null = null;
@@ -803,7 +752,13 @@ function routeTargetsProvider(
   return providerId === "openai-codex" && route.backend === "openai";
 }
 
-function selectionForProvider(providerId: PoolProviderId): {
+/**
+ * Live read of the configured per-provider selection (the app's
+ * `config.accountStrategies` picker plus any llmText service-routing pin).
+ * Every account-selecting bridge resolves through this so the picker steers
+ * all of them — including the coding-agent bridge.
+ */
+export function selectionForProvider(providerId: PoolProviderId): {
   strategy?: Strategy;
   accountIds?: string[];
 } {
@@ -820,15 +775,6 @@ function selectionForProvider(providerId: PoolProviderId): {
       normalizeStrategy(defaultSelectionConfig.accountStrategies?.[providerId]),
     accountIds: routeSelection.accountIds,
   };
-}
-
-export function __getDefaultAccountPoolSelectionForTests(
-  providerId: PoolProviderId,
-): {
-  strategy?: Strategy;
-  accountIds?: string[];
-} {
-  return selectionForProvider(providerId);
 }
 
 export function configureDefaultAccountPoolSelection(
@@ -854,7 +800,6 @@ export function getDefaultAccountPool(): AccountPool {
       deleteAccount: deleteAccountMeta,
     });
     installAnthropicBridge(cachedDefaultPool);
-    installSubscriptionSelectorBridge(cachedDefaultPool);
     installCodingAgentSelectorBridge(cachedDefaultPool);
   }
   return cachedDefaultPool;
@@ -1054,8 +999,7 @@ export function stopAccountPoolKeepAliveForTests(): void {
  * previous bridge.
  */
 function installAnthropicBridge(pool: AccountPool): void {
-  if (typeof globalThis === "undefined") return;
-  const bridge: AnthropicPoolBridge = {
+  const bridge: AnthropicAccountPoolBridge = {
     selectAnthropicSubscription: async (opts) => {
       const account = await pool.select({
         providerId: "anthropic-subscription",
@@ -1081,23 +1025,7 @@ function installAnthropicBridge(pool: AccountPool): void {
         providerId: "anthropic-subscription",
       }),
   };
-  (globalThis as Record<symbol, unknown>)[ANTHROPIC_POOL_BRIDGE_SYMBOL] =
-    bridge;
-}
-
-function installSubscriptionSelectorBridge(pool: AccountPool): void {
-  if (typeof globalThis === "undefined") return;
-  const bridge: SubscriptionSelectorBridge = {
-    pickAccountId: async (providerId) => {
-      const account = await pool.select({
-        providerId,
-        ...selectionForProvider(providerId),
-      });
-      return account?.id ?? null;
-    },
-  };
-  (globalThis as Record<symbol, unknown>)[SUBSCRIPTION_SELECTOR_BRIDGE_SYMBOL] =
-    bridge;
+  setAnthropicAccountPoolBridge(bridge);
 }
 
 /**

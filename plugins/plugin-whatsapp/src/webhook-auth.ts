@@ -1,3 +1,9 @@
+/**
+ * X-Hub-Signature-256 verification for Meta webhook POSTs. Resolves the app
+ * secret (runtime setting then env) and validates the HMAC-SHA256 signature over
+ * the raw request body, so unsigned or tampered webhook events are rejected
+ * before the connector processes them.
+ */
 import crypto from "node:crypto";
 import type { IAgentRuntime, RouteRequest } from "@elizaos/core";
 
@@ -38,6 +44,9 @@ export function verifyWhatsAppWebhookSignature(
     }
     return crypto.timingSafeEqual(expectedBuffer, computedBuffer);
   } catch {
+    // error-policy:J3 untrusted webhook signature; a malformed/non-hex header cannot
+    // pass verification, so any decode failure is an explicit "signature invalid" (false),
+    // not a swallowed error.
     return false;
   }
 }

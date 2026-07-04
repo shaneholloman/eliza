@@ -1,3 +1,9 @@
+/**
+ * SHELL_HISTORY provider — injects recent shell activity into agent context: the
+ * last commands with stdout/stderr/exit codes, the current and allowed working
+ * directories, and recent file operations. Fires only in terminal/code contexts
+ * and reads its state from ShellService.
+ */
 import {
   addHeader,
   type IAgentRuntime,
@@ -25,6 +31,9 @@ export const shellHistoryProvider: Provider = {
   contextGate: { anyOf: ["terminal", "code"] },
   cacheStable: false,
   cacheScope: "turn",
+  // Shell history / cwd / file ops are host-operator context — admin+ only.
+  // (#12094 item 3: the gate lives on the provider so it can't drift.)
+  roleGate: { minRole: "ADMIN" },
   dynamic: true,
   get: async (runtime: IAgentRuntime, message: Memory, _state: State) => {
     try {

@@ -300,14 +300,20 @@ export function TaskListHeader({
   title,
   counts,
   action,
+  leading,
 }: {
   icon: ReactNode;
   title: string;
   counts: ReactNode;
   action?: ReactNode;
+  /** Optional control rendered flush-left before the icon — the full-page
+   *  Tasks view passes the shared back-to-launcher button here so its header
+   *  chrome matches the other top-level views. */
+  leading?: ReactNode;
 }) {
   return (
     <header className="flex items-center gap-2 px-1 py-0.5">
+      {leading ? <span className="shrink-0">{leading}</span> : null}
       <span className="shrink-0 text-accent">{icon}</span>
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
         <h1 className="truncate text-base font-semibold text-txt-strong">

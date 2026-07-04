@@ -1,3 +1,11 @@
+/**
+ * JSON-RPC-over-stdio client for the optional `imsg` CLI. Spawns the CLI as a
+ * long-lived child, frames newline-delimited JSON-RPC requests/responses over
+ * its stdin/stdout, tracks pending requests by id with per-request timeouts,
+ * and surfaces server-initiated notifications via the `onNotification` callback.
+ * Used as an alternative send/receive transport when a CLI path is configured
+ * instead of the AppleScript + chat.db path.
+ */
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { resolve as resolvePath } from "node:path";
@@ -406,6 +414,8 @@ export async function probeIMessageRpc(params: {
     await client.stop();
     return { ok: true };
   } catch (err) {
+    // error-policy:J6 best-effort teardown after a failed probe; the real failure is
+    // returned as the structured result below, so a stop() error here is irrelevant.
     await client.stop().catch(() => {});
     return {
       ok: false,

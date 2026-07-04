@@ -1,3 +1,14 @@
+/**
+ * `PGliteClientManager` owns the lifecycle of a single embedded PGlite
+ * (WASM Postgres) instance: WASM extension loading, a cross-process data-dir
+ * lock (with PID/boot-id/proc-start-tick reuse detection so a recycled PID or
+ * an unclean container shutdown can't permanently brick boot), optional
+ * Electric Sync bootstrapping for the local-cloud read path, and forwarding
+ * local writes to `WriteBackService` for the cloud write path. Mobile
+ * embedded runtimes (iOS/Android local backend) are single-tenant and get a
+ * carve-out from the liveness heuristics since a leftover lock there is
+ * always stale.
+ */
 import {
   closeSync,
   existsSync,
@@ -247,18 +258,29 @@ export class PGliteClientManager implements IDatabaseClientManager<PGlite> {
     if (this.writeBack.enabled) {
       try {
         await this.writeBack.flush();
-      } catch {}
+      } catch (error) {
+        // error-policy:J6 best-effort teardown — a failed final flush must not
+        // abort close(); log at debug and continue tearing down.
+        logger.debug({ src: "plugin:sql", error: String(error) }, "close: write-back flush failed");
+      }
     }
     // Drain any in-progress startSync before we tear down.
     if (this.startSyncMutex) {
       try {
         await this.startSyncMutex;
-      } catch {}
+      } catch (error) {
+        // error-policy:J6 best-effort teardown — a rejected in-flight startSync
+        // is irrelevant once we're closing; log at debug and continue.
+        logger.debug({ src: "plugin:sql", error: String(error) }, "close: startSync drain failed");
+      }
     }
     if (this.syncUnsubscribe) {
       try {
         this.syncUnsubscribe();
-      } catch {}
+      } catch (error) {
+        // error-policy:J6 best-effort teardown — unsubscribe failure is non-fatal.
+        logger.debug({ src: "plugin:sql", error: String(error) }, "close: sync unsubscribe failed");
+      }
       this.syncUnsubscribe = null;
     }
     // Allow the sync extension's async teardown (network abort handlers,
@@ -269,7 +291,11 @@ export class PGliteClientManager implements IDatabaseClientManager<PGlite> {
     if (this.client) {
       try {
         await this.client.close();
-      } catch {}
+      } catch (error) {
+        // error-policy:J6 best-effort teardown — a failed client close still
+        // proceeds to release the data-dir lock so the writer slot is freed.
+        logger.debug({ src: "plugin:sql", error: String(error) }, "close: client close failed");
+      }
     }
     this.releaseDataDirLock();
   }
@@ -356,11 +382,16 @@ export class PGliteClientManager implements IDatabaseClientManager<PGlite> {
           : null;
       return { pid, createdAt, bootId, processStartTicks };
     } catch {
+      // error-policy:J3 untrusted-input parse — a missing/corrupt lock file
+      // yields the typed all-null "unknown" struct; the liveness check treats
+      // unknown conservatively (does not reclaim on guesswork).
       return { pid: null, createdAt: null, bootId: null, processStartTicks: null };
     }
   }
 
   private readLinuxBootId(): string | null {
+    // error-policy:J3 optional-source probe — /proc is Linux-only and may be
+    // unreadable; null is the designed "couldn't determine" signal.
     try {
       const bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf-8").trim();
       return bootId.length > 0 ? bootId : null;
@@ -370,6 +401,8 @@ export class PGliteClientManager implements IDatabaseClientManager<PGlite> {
   }
 
   private readLinuxUptimeSeconds(): number | null {
+    // error-policy:J3 optional-source probe — /proc/uptime is Linux-only; null
+    // means "unavailable", not zero uptime.
     try {
       const raw = readFileSync("/proc/uptime", "utf-8").trim().split(/\s+/)[0];
       const uptimeSeconds = Number.parseFloat(raw ?? "");
@@ -380,6 +413,8 @@ export class PGliteClientManager implements IDatabaseClientManager<PGlite> {
   }
 
   private readLinuxProcStartTicks(pid: number | "self"): string | null {
+    // error-policy:J3 optional-source probe — /proc/<pid>/stat is Linux-only and
+    // absent once the process exits; null is the designed "unknown" signal.
     try {
       const stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
       const commEnd = stat.lastIndexOf(")");
@@ -582,14 +617,22 @@ export class PGliteClientManager implements IDatabaseClientManager<PGlite> {
     if (this.lockFd !== null) {
       try {
         closeSync(this.lockFd);
-      } catch {}
+      } catch (error) {
+        // error-policy:J6 best-effort teardown — a stale fd or double-close is
+        // harmless during lock release; drop the handle regardless.
+        logger.debug({ src: "plugin:sql", error: String(error) }, "lock: closeSync failed");
+      }
       this.lockFd = null;
     }
 
     if (this.lockPath) {
       try {
         unlinkSync(this.lockPath);
-      } catch {}
+      } catch (error) {
+        // error-policy:J6 best-effort teardown — an already-removed lock file is
+        // fine; clear the path regardless.
+        logger.debug({ src: "plugin:sql", error: String(error) }, "lock: unlinkSync failed");
+      }
       this.lockPath = null;
     }
   }
@@ -611,7 +654,11 @@ export class PGliteClientManager implements IDatabaseClientManager<PGlite> {
         if (json && json !== "{}") {
           return json;
         }
-      } catch {}
+      } catch {
+        // error-policy:J3 untrusted-input sanitizing — a non-serializable value
+        // (circular ref, throwing getter) just means JSON isn't a usable
+        // representation; fall through to the toString/String strategies below.
+      }
       if (typeof obj.toString === "function") {
         const stringified = obj.toString.call(error);
         if (stringified && stringified !== "[object Object]") {
@@ -628,16 +675,9 @@ export class PGliteClientManager implements IDatabaseClientManager<PGlite> {
       return "missing";
     }
 
-    // iOS embedded mode is single-tenant: Bun runs as a thread inside the
-    // host app process, and ElizaBunRuntime serializes engine starts. Any
-    // leftover postmaster.pid is by definition stale — either from a prior
-    // app launch, or from a prior Bun thread in this same process that
-    // already exited. The standard `process.kill(pid, 0)` heuristic
-    // produces false positives here because the recorded PID matches the
-    // current iOS app PID.
     // Mobile embedded modes (iOS and Android) are single-tenant: each app
     // launch spawns a fresh Bun process, so any leftover postmaster.pid is
-    // always stale.  The process.kill(pid, 0) heuristic below can produce
+    // always stale. The process.kill(pid, 0) heuristic below can produce
     // false positives on both platforms (iOS: same-process PID; Android:
     // EPERM instead of ESRCH for cross-UID pids), so clear unconditionally.
     if (
@@ -821,7 +861,11 @@ export class PGliteClientManager implements IDatabaseClientManager<PGlite> {
     if (this.syncUnsubscribe) {
       try {
         this.syncUnsubscribe();
-      } catch {}
+      } catch (error) {
+        // error-policy:J6 best-effort teardown — unsubscribe failure is non-fatal
+        // to a resync; we drop the handle and rebuild the stream below.
+        logger.debug({ src: "plugin:sql", error: String(error) }, "resync: unsubscribe failed");
+      }
       this.syncUnsubscribe = null;
       // Let the sync extension drain in-flight network operations before we
       // drop the schema it depends on. A single setTimeout(0) is insufficient
@@ -1122,7 +1166,15 @@ export class PGliteClientManager implements IDatabaseClientManager<PGlite> {
         );
         try {
           await this.client.close();
-        } catch {}
+        } catch (error) {
+          // error-policy:J6 best-effort teardown — closing the failed client
+          // before recreating it is best-effort; a close error must not block
+          // the retry that follows.
+          logger.debug(
+            { src: "plugin:sql", error: String(error) },
+            "retry: stale client close failed"
+          );
+        }
         this.client = this.createClient(this.options);
 
         try {

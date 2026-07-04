@@ -1,3 +1,9 @@
+/**
+ * Edge TTS plugin: registers a TEXT_TO_SPEECH ModelType handler backed by
+ * Microsoft Edge's online voices via the node-edge-tts library (no API key).
+ * Synthesizes to a temp file, reads the bytes back, and cleans up; voice, lang,
+ * output format, and SSML-style rate/pitch/volume are resolved from settings.
+ */
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -207,11 +213,24 @@ function removeEdgeTempDir(tempDir: string, tempRoot = tmpdir()): boolean {
   try {
     rootRealPath = realpathSync(tempRoot);
     tempRealPath = realpathSync(tempDir);
-  } catch {
+  } catch (error) {
+    // error-policy:J6 best-effort teardown — resolving the temp dir failed
+    // (already gone, or unreadable); we cannot safely delete it. Surface a warn
+    // so a repeatedly-leaking temp dir is observable instead of vanishing.
+    logger.warn(
+      { tempDir, error: error instanceof Error ? error.message : String(error) },
+      "[EdgeTTS] Could not resolve temp dir for cleanup; leaving it in place"
+    );
     return false;
   }
 
   if (!isSubpath(tempRealPath, rootRealPath)) {
+    // error-policy:J6 best-effort teardown — refuse to rmSync a path that
+    // resolved outside the temp root (symlink-escape guard); warn on the leak.
+    logger.warn(
+      { tempDir: tempRealPath, tempRoot: rootRealPath },
+      "[EdgeTTS] Refusing to remove temp dir resolved outside the temp root"
+    );
     return false;
   }
 
@@ -256,11 +275,17 @@ async function generateSpeech(settings: EdgeTTSSettings, params: EdgeTTSParams):
     const audioBuffer = readFileSync(outputPath);
     return audioBuffer;
   } finally {
-    // Cleanup temp directory
     try {
       removeEdgeTempDir(tempDir);
-    } catch {
-      // Ignore cleanup errors
+    } catch (error) {
+      // error-policy:J6 best-effort teardown — cleanup runs in `finally` and must
+      // not mask the synthesized audio result (or the real failure) from the try
+      // body. removeEdgeTempDir already warns on the paths it declines; this
+      // catches only an unexpected rmSync throw and records it at debug.
+      logger.debug(
+        { tempDir, error: error instanceof Error ? error.message : String(error) },
+        "[EdgeTTS] Temp dir cleanup threw; ignoring to preserve the result"
+      );
     }
   }
 }

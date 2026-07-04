@@ -1,3 +1,9 @@
+/**
+ * Vitest setup file that stubs @elizaos/core with a deterministic in-memory
+ * double — no-op trajectory hooks, a byte-capped `captureSkillInvocationIO`,
+ * and a minimal Service base class — so unit tests run without the full runtime.
+ */
+
 import { vi } from "vitest";
 
 vi.mock("@elizaos/core", () => {
@@ -77,6 +83,15 @@ vi.mock("@elizaos/core", () => {
 		annotateActiveTrajectoryStep: vi.fn(async () => true),
 		getTrajectoryContext: vi.fn(() => undefined),
 		captureSkillInvocationIO,
+		Service: class {
+			constructor(public runtime?: unknown) {}
+			static serviceType = "mock-service";
+			capabilityDescription = "mock service";
+			static async start() {
+				return new this();
+			}
+			async stop() {}
+		},
 		logger,
 	};
 });

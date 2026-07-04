@@ -13,6 +13,27 @@
 
 ## Verify status as of 2026-05-12 (post multi-agent wave)
 
+### 2026-07-04 Stage 6 contract update — Gemma runtime path
+
+The 8/8 QJL / PolarQuant / `turbo3_tcq` fixture gates remain valuable
+regression coverage for legacy head_dim=128 KV-cache routes and shared FFI
+symbols, but they are **not** evidence that the shipped Gemma 4 product graph
+runs those KV kernels. The Gemma path is now represented separately in the
+machine-readable contract (`kernel-contract.json` `gemmaRuntimeDispatch`) and
+in code by
+`plugins/plugin-local-inference/src/services/active-model.ts::assertGemmaRuntimeDispatchContract`:
+managed Eliza-1 bundles must resolve to `turboquant_q4` in the manifest,
+flash-attention on, stock KV (`q8_0` / f16 headroom upgrade), and drafter-backed
+`draft-mtp` whenever the manifest/catalog claims MTP.
+
+Current MTP artifact coverage is partial: `eliza-1-2b` and `eliza-1-4b` host
+`mtp/drafter-<tier>.gguf`; `9b`, `27b`, and `27b-256k` still need hosted
+Gemma drafter GGUFs plus non-zero acceptance evidence. `runMtpDoctor()` now
+fails the "Gemma MTP drafter coverage" check until all five tiers are hosted.
+Android Adreno/Mali, iOS weight-backed, native Windows, ROCm, linux-aarch64,
+and LiteRT NPU rows remain real-device blockers until recordable JSON evidence
+with `passRecordable: true` is produced on those targets.
+
 Re-ran the full integration verify matrix on this box (Intel Arrow Lake CPU +
 Intel ARL/ANV Vulkan + RTX 5080 / sm_120 CUDA, with a full-corpus SFT job
 holding ~12 GB VRAM concurrently — no OOM contention on the short verify runs):
@@ -134,6 +155,21 @@ packages/training/benchmarks` is 140 passed / 1 skipped.
 | Target | Build | Kernel verify | Bench | Status | Prereq if not done |
 | --- | --- | --- | --- | --- | --- |
 | `linux-x64-rocm` | `…/build-llama-cpp-mtp.mjs --target linux-x64-rocm` (needs `hipcc` + ROCm) | `make -C …/verify hip-verify` — the standalone fixture-parity harness (NEW this wave): `hip_verify.cu` is a thin shim that `#include`s `cuda_verify.cu` (which now guards its backend headers on `__HIP_PLATFORM_AMD__` and aliases the `cuda*` runtime calls to `hip*`), so it runs the EXACT same ~25 device kernels + fixture loader + reference cross-check the NVIDIA `cuda-verify` does, compiled by `hipcc` against a `gfx*` GPU. Plus `verify/rocm_runner.sh --report …` (refuses without `hipcc` + `rocminfo` `gfx*` agent + a smoke GGUF; builds the fork, then `runtime_graph_smoke.sh --gen-check` → `llama-bench` + `llama-completion` on the HIP backend). | `make hip-verify`; `rocm_runner.sh`; `llama-bench -ngl 99` on the HIP backend | **authored-pending-hardware** — `hip_verify.cu` + the `hip-verify` Makefile target are authored + buildable (no `hipcc` on the authoring box → clean "install ROCm / see rocm_runner.sh" message); the fork's *production* `.cu` kernels (turboquant.cuh/qjl.cu/polarquant.cu/turbo-tcq.cu) are not yet `__HIP_PLATFORM_AMD__`-clean — until that lands the ROCm runtime story is the `hip-verify` numeric gate + the documented reduced-optimization local mode (`ELIZA_LOCAL_ALLOW_STOCK_KV=1`, loud warning, not publishable) for production inference. | An AMD ROCm host (RDNA2/RDNA3 or CDNA, `gfx*` agent — e.g. a vast.ai MI300 box). |
+
+## LiteRT-LM (Android NPU) — dispatcher code exists, no hardware verify yet
+
+The `litert` backend is real in-process dispatcher code — the `.litertlm`
+single-file loader (`services/engine.ts` `stagedLitertModelPath`,
+`services/backend.ts` selection, `litertBackendSupported`, the `litert`
+lifecycle component in `local-model-lifecycle-matrix.ts`, and the manifest
+`litert-lm` runtime in `manifest/schema.ts`). It is the compiled-in NPU path
+described in §11 of the AGENTS.md contract (an owned backend behind the same
+FFI, NOT a subprocess). It has **zero rows anywhere else in this matrix** and no
+hardware run — recorded here honestly instead of silently omitted.
+
+| Target | Build | Kernel verify | Bench | Status | Prereq if not done |
+| --- | --- | --- | --- | --- | --- |
+| `android-arm64-litertlm` | LiteRT-LM runtime compiled into `libelizainference` for the Android NPU path (AICore/QNN-class delegate); staged as a `.litertlm` bundle file. | No LiteRT parity harness under `verify/` yet — the numeric-parity gate for the `.litertlm` forward is unwritten. | `adb`-pushed decode/latency on a physical NPU-class device (e.g. Pixel Tensor / Snapdragon Hexagon). | **authored-pending-hardware** — dispatcher + loader + manifest runtime + lifecycle component exist and are unit-tested (`backend-selector.precedence.test.ts`, `engine-direct-bundle.test.ts`), but no real NPU device has ever run a `.litertlm` bundle, and there is no kernel-parity gate. | A physical Android NPU device + a converted `.litertlm` bundle + a `verify/`-side parity harness. |
 
 ## Quick "one command for everything I can run here" line
 

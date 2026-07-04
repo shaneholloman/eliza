@@ -5,8 +5,6 @@
  * their current status. This provider reads from the workspace service and ACP
  * service to build a live context summary that's always
  * available in the prompt.
- *
- * @module providers/active-workspace-context
  */
 
 import type { IAgentRuntime, Memory, Provider, State } from "@elizaos/core";
@@ -41,6 +39,9 @@ export const activeWorkspaceContextProvider: Provider = {
   contextGate: { anyOf: ["code", "tasks", "agent_internal"] },
   cacheStable: false,
   cacheScope: "turn",
+  // Live coding-workspace / task-agent state is operator context — admin+ only
+  // (#12094 item 3).
+  roleGate: { minRole: "ADMIN" },
 
   get: async (runtime: IAgentRuntime, _message: Memory, _state: State) => {
     const acpService = getAcpService(runtime);

@@ -223,7 +223,6 @@ export * from "./pages/DatabaseView";
 export * from "./pages/DocumentsView";
 export * from "./pages/ElizaCloudDashboard";
 export * from "./pages/FilesView";
-export * from "./pages/HeartbeatsView";
 export * from "./pages/LogsView";
 export * from "./pages/MediaGalleryView";
 export * from "./pages/MemoryDetailPanel";
@@ -239,6 +238,7 @@ export * from "./pages/SecretsView";
 export * from "./pages/TaskEditor";
 export * from "./pages/TasksPageView";
 export * from "./pages/TrajectoryDetailView";
+export * from "./pages/TriggersView";
 // VectorBrowserView lives in @elizaos/plugin-vector-browser — it is a heavy
 // three.js (WebGL) surface loaded dynamically so neither it nor three ship in
 // the always-loaded @elizaos/ui barrel. Its pure layout/parse helpers remain
@@ -246,7 +246,11 @@ export * from "./pages/TrajectoryDetailView";
 export * from "./pages/WorkflowEditor";
 export * from "./pages/workflow-graph-events";
 // DesktopWorkspaceSection omitted — App.tsx lazy-loads it.
+export * from "./permissions/PermissionPrimingModal";
+export * from "./permissions/PermissionPrimingOverlay";
 export * from "./permissions/PermissionRecoveryCallout";
+export * from "./permissions/permission-priming";
+export * from "./permissions/use-permission-priming";
 export * from "./RoleGate.tsx";
 export * from "./ShellModalityProvider.tsx";
 export * from "./ShellRoleProvider.tsx";
@@ -262,6 +266,7 @@ export * from "./shared/confirm-delete-control";
 export * from "./shared/LanguageDropdown";
 export * from "./shared/LanguageDropdown.helpers";
 export * from "./shared/ThemeToggle";
+export * from "./shared/ViewHeader";
 export * from "./shell/BugReportModal";
 export * from "./shell/CommandPalette";
 export * from "./shell/ConnectionFailedBanner";

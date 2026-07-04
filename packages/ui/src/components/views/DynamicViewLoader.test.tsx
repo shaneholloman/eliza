@@ -1,6 +1,14 @@
 // @vitest-environment jsdom
-
+//
+// DynamicViewLoader: the same-origin bundle-URL gate (the RCE guard), that the
+// test-only import hook is stripped from minified production builds, and the
+// runtime load/cache/error behavior. The origin gate and the production-strip
+// check compile the REAL DynamicViewLoader.tsx source with esbuild rather than
+// asserting against a mock.
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { transform } from "esbuild";
 import { type ReactElement, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -11,6 +19,7 @@ import { APP_PAUSE_EVENT } from "../../events";
 import {
   __resetDynamicViewLoaderCacheForTests,
   DynamicViewLoader,
+  hostImport,
   isSameOriginBundleUrl,
 } from "./DynamicViewLoader";
 
@@ -29,6 +38,62 @@ describe("isSameOriginBundleUrl (view-bundle origin gate)", () => {
     expect(isSameOriginBundleUrl("http://evil.example/x.js")).toBe(false);
     // A protocol-relative URL resolves to a different origin → rejected.
     expect(isSameOriginBundleUrl("//evil.example/x.js")).toBe(false);
+  });
+
+  it("erases the test import hook from production builds before the origin gate", async () => {
+    const source = await readFile(
+      resolve(process.cwd(), "src/components/views/DynamicViewLoader.tsx"),
+      "utf8",
+    );
+    const output = await transform(source, {
+      loader: "tsx",
+      format: "esm",
+      minify: true,
+      treeShaking: true,
+      define: {
+        "import.meta.env.DEV": "false",
+        "import.meta.env.MODE": '"production"',
+        "process.env.NODE_ENV": '"production"',
+      },
+    });
+
+    expect(output.code).not.toContain("__ELIZA_DYNAMIC_VIEW_BUNDLE_IMPORT__");
+    expect(output.code).toContain("isSameOriginBundleUrl");
+  });
+});
+
+describe("host-external importer resolution (factory hostImport)", () => {
+  // The served view-bundle factory receives `hostImport` as its parameter; it
+  // resolves a specifier to the host shell's live singleton with no globalThis
+  // bridge. Exercise that resolver directly here.
+  const resolveHostExternal = (
+    specifier: string,
+  ): Promise<Record<string, unknown>> => hostImport(specifier);
+
+  it("consults an importer contributed through registerHostExternalImporter", async () => {
+    const { registerHostExternalImporter } = await import(
+      "../../app-shell-registry"
+    );
+    const marker = { __registered: true };
+    registerHostExternalImporter(
+      "@test/plugin-registered-external",
+      async () => marker,
+    );
+
+    await expect(
+      resolveHostExternal("@test/plugin-registered-external"),
+    ).resolves.toBe(marker);
+  });
+
+  it("still resolves a framework module from the trunk map", async () => {
+    const react = await resolveHostExternal("react");
+    expect(typeof react.useState).toBe("function");
+  });
+
+  it("throws for an unknown specifier that is neither framework nor registered", async () => {
+    await expect(
+      resolveHostExternal("@test/never-registered-external"),
+    ).rejects.toThrow(/unsupported host external/);
   });
 });
 
@@ -409,6 +474,91 @@ describe("DynamicViewLoader", () => {
       requestId: "req-fill-bad-value",
       success: true,
       result: { filled: false, reason: "value must be a string" },
+    });
+  });
+
+  it("redacts and refuses raw DOM sensitive fields", async () => {
+    const bundleUrl = "https://capability.example.test/assets/sensitive.js";
+    window.__ELIZA_DYNAMIC_VIEW_BUNDLE_IMPORT__ = vi.fn(async () => ({
+      default: function SensitivePanel() {
+        return (
+          <section>
+            <input
+              data-agent-id="owner-password"
+              data-agent-role="text-input"
+              data-agent-label="Owner password"
+              type="password"
+              defaultValue="existing-secret"
+            />
+          </section>
+        );
+      },
+    }));
+
+    render(<DynamicViewLoader bundleUrl={bundleUrl} viewId="sensitive.view" />);
+    await screen.findByDisplayValue("existing-secret");
+
+    const { dispatchViewInteract } = await import("./view-interact-registry");
+    await dispatchViewInteract(
+      "sensitive.view",
+      "gui",
+      "list-elements",
+      undefined,
+      "req-list-sensitive",
+    );
+    await dispatchViewInteract(
+      "sensitive.view",
+      "gui",
+      "agent-fill",
+      { id: "owner-password", value: "changed-secret" },
+      "req-fill-sensitive-agent",
+    );
+    await dispatchViewInteract(
+      "sensitive.view",
+      "gui",
+      "fill-input",
+      { selector: "[data-agent-id='owner-password']", value: "changed-secret" },
+      "req-fill-sensitive-selector",
+    );
+
+    expect(screen.getByDisplayValue("existing-secret")).toBeTruthy();
+    expect(sendWsMessage).toHaveBeenCalledWith({
+      type: "view:interact:result",
+      requestId: "req-list-sensitive",
+      success: true,
+      result: [
+        expect.objectContaining({
+          id: "owner-password",
+          sensitive: true,
+          valueRedacted: true,
+        }),
+      ],
+    });
+    const listCall = vi
+      .mocked(sendWsMessage)
+      .mock.calls.find(
+        ([message]) =>
+          message.type === "view:interact:result" &&
+          message.requestId === "req-list-sensitive",
+      );
+    expect(JSON.stringify(listCall?.[0])).not.toContain("existing-secret");
+    expect(sendWsMessage).toHaveBeenCalledWith({
+      type: "view:interact:result",
+      requestId: "req-fill-sensitive-agent",
+      success: true,
+      result: expect.objectContaining({
+        ok: false,
+        id: "owner-password",
+      }),
+    });
+    expect(sendWsMessage).toHaveBeenCalledWith({
+      type: "view:interact:result",
+      requestId: "req-fill-sensitive-selector",
+      success: true,
+      result: expect.objectContaining({
+        filled: false,
+        selector: "[data-agent-id='owner-password']",
+      }),
     });
   });
 

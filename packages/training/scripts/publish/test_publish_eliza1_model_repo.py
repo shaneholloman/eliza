@@ -387,7 +387,7 @@ def test_plan_bundle_accepts_mtp_weight_claim_for_mtp_tier(tmp_path: Path):
     assert not any("weights lists MTP path" in e for e in plan.errors)
 
 
-def test_dry_run_allows_missing_with_report(tmp_path: Path, capsys):
+def test_dry_run_blocks_missing_with_report(tmp_path: Path, capsys):
     report = tmp_path / "report.json"
 
     rc = P.main(
@@ -397,12 +397,11 @@ def test_dry_run_allows_missing_with_report(tmp_path: Path, capsys):
             "--tier",
             "2b",
             "--dry-run",
-            "--allow-missing",
             "--report",
             str(report),
         ]
     )
 
-    assert rc == 0
+    assert rc == 2
     assert "Eliza-1 model repo publish plan" in capsys.readouterr().out
     assert json.loads(report.read_text())["plans"][0]["tier"] == "2b"

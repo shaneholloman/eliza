@@ -1,7 +1,17 @@
+/**
+ * Role-based access control for the TASKS surface. `requireTaskAgentAccess`
+ * gates create/interact abilities per connector against the caller's role,
+ * reading operator-declared policy over a conservative default that only lets
+ * admins spawn or drive agents from third-party connectors.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { IAgentRuntime, Memory } from "@elizaos/core";
+import {
+  type IAgentRuntime,
+  MESSAGE_SOURCE_CLIENT_CHAT,
+  type Memory,
+} from "@elizaos/core";
 
 type RoleName = "OWNER" | "ADMIN" | "USER" | "GUEST";
 type TaskAgentAbility = "create" | "interact";
@@ -148,7 +158,8 @@ async function resolveConnectorSource(
 ): Promise<string | null> {
   const content = message.content as Record<string, unknown> | undefined;
   const directSource =
-    typeof content?.source === "string" && content.source !== "client_chat"
+    typeof content?.source === "string" &&
+    content.source !== MESSAGE_SOURCE_CLIENT_CHAT
       ? content.source
       : null;
   if (directSource) return directSource;

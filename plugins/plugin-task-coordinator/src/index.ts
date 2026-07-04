@@ -1,3 +1,15 @@
+/**
+ * Plugin definition for the coding-agent task coordinator: the view manifest,
+ * the orchestrator view's typed capability descriptors, and `init()`.
+ *
+ * Declares three views (`task-coordinator`, `orchestrator`, `cockpit`) with
+ * their bundle path + component exports, and the capability list the TUI layer
+ * uses to drive the orchestrator workbench. `init()` registers the
+ * view-scoped `/orchestrator-status` slash command into the per-runtime
+ * command registry; the deterministic handler action is the only server-side
+ * runtime contribution. All task/session state is owned by
+ * `@elizaos/plugin-agent-orchestrator` — this plugin is display + control only.
+ */
 import type { Plugin, ViewCapability } from "@elizaos/core";
 import {
   orchestratorStatusCommandAction,
@@ -210,6 +222,7 @@ const taskCoordinatorPlugin: Plugin = {
       modalities: ["gui", "xr", "tui"],
       bundlePath: "dist/views/bundle.js",
       componentExport: "TaskCoordinatorView",
+      relatedActions: ["TASKS"],
       capabilities: [
         {
           id: "list-sessions",
@@ -268,6 +281,7 @@ const taskCoordinatorPlugin: Plugin = {
       modalities: ["gui", "xr", "tui"],
       bundlePath: "dist/views/bundle.js",
       componentExport: "OrchestratorView",
+      relatedActions: ["TASKS"],
       capabilities: ORCHESTRATOR_CAPABILITIES,
       tags: ["developer", "coding-agent", "orchestrator"],
       visibleInManager: true,

@@ -1,3 +1,11 @@
+/**
+ * Top-level workspace for the Relationships page: a master/detail layout with a
+ * searchable people sidebar, the force-directed graph panel, and the selected
+ * person's detail panels. Owns people/graph data loading, selection state, and
+ * group filtering; delegates rendering to RelationshipsSidebar,
+ * RelationshipsGraphPanel, and the person panels. Mounted by RelationshipsView.
+ */
+
 import { Filter, Network } from "lucide-react";
 import {
   type ReactNode,
@@ -432,6 +440,7 @@ export function RelationshipsWorkspaceView({
           graph={graph}
           selectedPersonId={selectedPersonId}
           onSelectPersonId={setSelectedPersonId}
+          mobileTitle={t("relationships.people", { defaultValue: "People" })}
         />
       }
       contentHeader={contentHeader}

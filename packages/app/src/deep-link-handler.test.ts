@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { NAVIGATE_VIEW_EVENT } from "@elizaos/ui/events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDeepLinkHandler,
@@ -109,11 +110,11 @@ describe("createDeepLinkHandler — top-level-surface navigation intents", () =>
     const onNavigate = (event: Event) => {
       seen.push((event as CustomEvent).detail);
     };
-    window.addEventListener("eliza:navigate:view", onNavigate);
+    window.addEventListener(NAVIGATE_VIEW_EVENT, onNavigate);
     try {
       handle("elizaos://apps/deploy");
     } finally {
-      window.removeEventListener("eliza:navigate:view", onNavigate);
+      window.removeEventListener(NAVIGATE_VIEW_EVENT, onNavigate);
     }
     expect(seen).toEqual([{ viewId: "cloud-apps", viewPath: "/cloud-apps" }]);
     expect(window.location.hash).toBe("");
@@ -163,5 +164,32 @@ describe("createDeepLinkHandler — universal (https) app links", () => {
     const { handle } = makeHandler({ appLinkHosts: undefined });
     handle("https://eliza.app/wallet");
     expect(window.location.hash).toBe("");
+  });
+});
+
+describe("createDeepLinkHandler — iOS keyboard app-handoff dictation (#12185)", () => {
+  it("dispatches keyboard-dictation links into the injected dictation session", () => {
+    const startKeyboardDictation = vi.fn();
+    const { handle } = makeHandler({ startKeyboardDictation });
+    handle("elizaos://keyboard-dictation?source=ios-keyboard&session=abc-123");
+    expect(startKeyboardDictation).toHaveBeenCalledTimes(1);
+    const params = startKeyboardDictation.mock.calls[0][0] as URLSearchParams;
+    expect(params.get("source")).toBe("ios-keyboard");
+    expect(params.get("session")).toBe("abc-123");
+    // Dictation is an in-app session, not a hash route.
+    expect(window.location.hash).toBe("");
+  });
+
+  it("warns loudly instead of silently dropping the link when no handler is wired", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { handle } = makeHandler();
+      handle("elizaos://keyboard-dictation?source=ios-keyboard");
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("keyboard-dictation deep link received"),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

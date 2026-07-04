@@ -1,10 +1,11 @@
+/**
+ * Unit tests for `curateLauncherPages` / `canonicalLauncherId` — the pure
+ * launcher-page composition (system + release always, developer + preview gated
+ * by their toggles) that `LauncherSurface` feeds into `Launcher`.
+ */
 import { describe, expect, it } from "vitest";
 import type { ViewEntry } from "../../hooks/view-catalog";
-import {
-  canonicalLauncherId,
-  curateLauncherPages,
-  LAUNCHER_HIDDEN_IDS,
-} from "./launcher-curation";
+import { canonicalLauncherId, curateLauncherPages } from "./launcher-curation";
 
 const ENABLED = { developer: true, preview: true } as const;
 
@@ -23,15 +24,15 @@ function entry(id: string, over: Partial<ViewEntry> = {}): ViewEntry {
   };
 }
 
-function ids(pages: ViewEntry[][]): string[][] {
-  return pages.map((page) => page.map((e) => e.id));
+function ids(page: ViewEntry[]): string[] {
+  return page.map((e) => e.id);
 }
 
 const APPS_ONLY = { developer: false, preview: false } as const;
 
 describe("curateLauncherPages", () => {
   it("puts apps then developer tools on ONE page when Developer Mode is on", () => {
-    const pages = curateLauncherPages(
+    const page = curateLauncherPages(
       [
         entry("wallet"),
         entry("browser"),
@@ -47,25 +48,23 @@ describe("curateLauncherPages", () => {
     );
 
     // Single page: curated apps first, then the developer tools in their order.
-    expect(ids(pages)).toEqual([
-      [
-        "settings",
-        "wallet",
-        "browser",
-        "trajectories",
-        "database",
-        "runtime",
-        "logs",
-        "skills",
-        "plugins",
-      ],
+    expect(ids(page)).toEqual([
+      "settings",
+      "wallet",
+      "browser",
+      "trajectories",
+      "database",
+      "runtime",
+      "logs",
+      "skills",
+      "plugins",
     ]);
   });
 
   it("hides ALL developer tools when Developer Mode is off (default)", () => {
     // runtime/skills/plugins carry no viewKind here, but DEVELOPER_INDEX
     // membership makes them developer-kind, so the whole set hides together.
-    const pages = curateLauncherPages(
+    const page = curateLauncherPages(
       [
         entry("wallet"),
         entry("settings"),
@@ -78,11 +77,11 @@ describe("curateLauncherPages", () => {
       ],
       { isAosp: false, enabledKinds: APPS_ONLY, cloudActive: true },
     );
-    expect(ids(pages)).toEqual([["settings", "wallet"]]);
+    expect(ids(page)).toEqual(["settings", "wallet"]);
   });
 
   it("drops removed apps and non-launcher shell surfaces", () => {
-    const pages = curateLauncherPages(
+    const page = curateLauncherPages(
       [
         entry("wallet"),
         entry("chat"),
@@ -99,15 +98,27 @@ describe("curateLauncherPages", () => {
       { isAosp: false, enabledKinds: ENABLED, cloudActive: true },
     );
 
-    expect(ids(pages)).toEqual([["chat", "wallet"]]);
+    expect(ids(page)).toEqual(["chat", "wallet"]);
   });
 
-  it("keeps hyperliquid/polymarket out of the launcher (wallet sub-views)", () => {
-    const pages = curateLauncherPages(
-      [entry("wallet"), entry("hyperliquid"), entry("polymarket")],
+  it("keeps wallet-group sub-pages out of the launcher", () => {
+    const page = curateLauncherPages(
+      [
+        entry("wallet"),
+        entry("perps", { group: "wallet" }),
+        entry("predictions", { group: "wallet" }),
+      ],
       { isAosp: false, enabledKinds: ENABLED, cloudActive: true },
     );
-    expect(ids(pages)).toEqual([["wallet"]]);
+    expect(ids(page)).toEqual(["wallet"]);
+  });
+
+  it("shows the same pages as ordinary apps when they do not declare a group", () => {
+    const page = curateLauncherPages(
+      [entry("wallet"), entry("perps"), entry("predictions")],
+      { isAosp: false, enabledKinds: ENABLED, cloudActive: true },
+    );
+    expect(ids(page)).toEqual(["wallet", "perps", "predictions"]);
   });
 
   it("gates native-OS tiles to the AOSP fork", () => {
@@ -128,7 +139,7 @@ describe("curateLauncherPages", () => {
           cloudActive: true,
         }),
       ),
-    ).toEqual([["wallet"]]);
+    ).toEqual(["wallet"]);
     expect(
       ids(
         curateLauncherPages(views, {
@@ -137,7 +148,7 @@ describe("curateLauncherPages", () => {
           cloudActive: true,
         }),
       ),
-    ).toEqual([["wallet", "phone", "messages", "contacts", "camera", "files"]]);
+    ).toEqual(["wallet", "phone", "messages", "contacts", "camera", "files"]);
   });
 
   it("gates cloud-only tiles behind an active Eliza Cloud connection (#10725)", () => {
@@ -153,7 +164,7 @@ describe("curateLauncherPages", () => {
           cloudActive: false,
         }),
       ),
-    ).toEqual([["wallet"]]);
+    ).toEqual(["wallet"]);
     // Signed in: it surfaces on the apps page.
     expect(
       ids(
@@ -163,11 +174,11 @@ describe("curateLauncherPages", () => {
           cloudActive: true,
         }),
       ),
-    ).toEqual([["wallet", "cloud-apps"]]);
+    ).toEqual(["wallet", "cloud-apps"]);
   });
 
   it("collapses duplicate wallet + automations registrations, keeping Tasks its own tile", () => {
-    const pages = curateLauncherPages(
+    const page = curateLauncherPages(
       [
         entry("inventory", { builtin: true }),
         entry("wallet.inventory", { kind: "view", state: "loaded" }),
@@ -183,7 +194,7 @@ describe("curateLauncherPages", () => {
     // `triggers`/`todos` fold into `automations`; `tasks`/`task-coordinator`
     // collapse to the standalone Tasks orchestrator tile (no longer folded into
     // automations). Order follows LAUNCHER_APPS_ORDER: wallet, tasks, automations.
-    expect(ids(pages)).toEqual([["wallet", "tasks", "automations"]]);
+    expect(ids(page)).toEqual(["wallet", "tasks", "automations"]);
   });
 
   it("re-points an alias-winning tile at the canonical route (not the alias path)", () => {
@@ -191,22 +202,22 @@ describe("curateLauncherPages", () => {
     // `automations`. The tile carries the canonical id AND the canonical tab's
     // route, so handleLaunch navigates to /automations — never /todos and never
     // the bogus /apps/automations fallback that used to open the old apps view.
-    const pages = curateLauncherPages([entry("todos", { path: "/todos" })], {
+    const page = curateLauncherPages([entry("todos", { path: "/todos" })], {
       isAosp: false,
       enabledKinds: ENABLED,
       cloudActive: true,
     });
-    const tile = pages[0][0];
+    const tile = page[0];
     expect(tile.id).toBe("automations");
     expect(tile.path).toBe("/automations");
   });
 
   it("keeps a non-aliased winner's real path intact", () => {
-    const pages = curateLauncherPages(
+    const page = curateLauncherPages(
       [entry("wallet", { path: "/wallet", kind: "view", state: "loaded" })],
       { isAosp: false, enabledKinds: ENABLED, cloudActive: true },
     );
-    const tile = pages[0][0];
+    const tile = page[0];
     expect(tile.id).toBe("wallet");
     expect(tile.path).toBe("/wallet");
   });
@@ -221,7 +232,7 @@ describe("curateLauncherPages", () => {
           cloudActive: true,
         }),
       ),
-    ).toEqual([["wallet"]]);
+    ).toEqual(["wallet"]);
     expect(
       ids(
         curateLauncherPages(views, {
@@ -230,11 +241,11 @@ describe("curateLauncherPages", () => {
           cloudActive: true,
         }),
       ),
-    ).toEqual([["wallet", "labs"]]);
+    ).toEqual(["wallet", "labs"]);
   });
 
   it("appends other loaded apps after the curated order on the page", () => {
-    const pages = curateLauncherPages(
+    const page = curateLauncherPages(
       [
         entry("browser"),
         entry("zebra-app"),
@@ -243,9 +254,7 @@ describe("curateLauncherPages", () => {
       ],
       { isAosp: false, enabledKinds: ENABLED, cloudActive: true },
     );
-    expect(ids(pages)).toEqual([
-      ["wallet", "browser", "alpha-app", "zebra-app"],
-    ]);
+    expect(ids(page)).toEqual(["wallet", "browser", "alpha-app", "zebra-app"]);
   });
 
   it("hides uncurated developer views unless Developer Mode is enabled", () => {
@@ -258,7 +267,7 @@ describe("curateLauncherPages", () => {
           cloudActive: true,
         }),
       ),
-    ).toEqual([["wallet"]]);
+    ).toEqual(["wallet"]);
     // vector-browser-style dev views join the single page (after apps) when on.
     expect(
       ids(
@@ -268,7 +277,7 @@ describe("curateLauncherPages", () => {
           cloudActive: true,
         }),
       ),
-    ).toEqual([["wallet", "secret"]]);
+    ).toEqual(["wallet", "secret"]);
   });
 });
 
@@ -292,12 +301,12 @@ describe("curateLauncherPages — full realistic view set", () => {
     entry("shopify"),
     entry("facewear", { viewKind: "preview" }),
     entry("smartglasses", { viewKind: "preview" }),
-    // Wallet + duplicate registrations + sub-views.
+    // Wallet + duplicate registrations + grouped sub-views.
     entry("wallet", { viewKind: "system" }),
     entry("inventory", { builtin: true, viewKind: "system" }),
     entry("wallet.inventory"),
-    entry("hyperliquid"),
-    entry("polymarket"),
+    entry("perps", { group: "wallet" }),
+    entry("predictions", { group: "wallet" }),
     // Automations + duplicates folded to one.
     entry("automations", { viewKind: "system" }),
     entry("triggers", { builtin: true }),
@@ -308,6 +317,8 @@ describe("curateLauncherPages — full realistic view set", () => {
     entry("browser"),
     entry("character", { viewKind: "system" }),
     entry("documents", { viewKind: "system" }),
+    entry("character-skills", { viewKind: "system" }),
+    entry("experience", { viewKind: "system" }),
     entry("transcripts", { viewKind: "system" }),
     entry("relationships", { viewKind: "system" }),
     entry("memories", { viewKind: "system" }),
@@ -343,28 +354,28 @@ describe("curateLauncherPages — full realistic view set", () => {
         }),
       ),
     ).toEqual([
-      [
-        "chat",
-        "settings",
-        "wallet",
-        "tasks",
-        "automations",
-        "browser",
-        "character",
-        "relationships",
-        "documents",
-        "transcripts",
-        "memories",
-        "feed",
-        "stream",
-        "trajectories",
-        "database",
-        "runtime",
-        "logs",
-        "skills",
-        "plugins",
-        "fine-tuning",
-      ],
+      "chat",
+      "settings",
+      "wallet",
+      "tasks",
+      "automations",
+      "browser",
+      "character",
+      "relationships",
+      "documents",
+      "character-skills",
+      "experience",
+      "transcripts",
+      "memories",
+      "feed",
+      "stream",
+      "trajectories",
+      "database",
+      "runtime",
+      "logs",
+      "skills",
+      "plugins",
+      "fine-tuning",
     ]);
   });
 
@@ -378,19 +389,19 @@ describe("curateLauncherPages — full realistic view set", () => {
         }),
       ),
     ).toEqual([
-      [
-        "chat",
-        "settings",
-        "wallet",
-        "tasks",
-        "automations",
-        "browser",
-        "character",
-        "relationships",
-        "documents",
-        "transcripts",
-        "memories",
-      ],
+      "chat",
+      "settings",
+      "wallet",
+      "tasks",
+      "automations",
+      "browser",
+      "character",
+      "relationships",
+      "documents",
+      "character-skills",
+      "experience",
+      "transcripts",
+      "memories",
     ]);
   });
 
@@ -405,7 +416,7 @@ describe("curateLauncherPages — full realistic view set", () => {
         enabledKinds: { developer: false, preview: true },
         cloudActive: true,
       }),
-    ).flat();
+    );
     for (const id of ["feed", "stream", "relationships"]) {
       expect(previewOnly).toContain(id);
     }
@@ -421,7 +432,7 @@ describe("curateLauncherPages — full realistic view set", () => {
         enabledKinds: { developer: true, preview: false },
         cloudActive: true,
       }),
-    ).flat();
+    );
     expect(developerOnly).toContain("fine-tuning");
     expect(developerOnly).toContain("relationships");
     for (const id of ["feed", "stream"]) {
@@ -430,7 +441,7 @@ describe("curateLauncherPages — full realistic view set", () => {
   });
 
   it("appends the native-OS tiles to the single page on the AOSP fork", () => {
-    const [appsPage] = ids(
+    const appsPage = ids(
       curateLauncherPages(REAL_VIEWS, {
         isAosp: true,
         enabledKinds: ENABLED,
@@ -448,17 +459,18 @@ describe("curateLauncherPages — full realistic view set", () => {
 });
 
 describe("launcher dead-tile guard", () => {
-  it("hides the legacy 'rolodex' alias (no directViews branch → would land on the fallback)", () => {
-    // rolodex is a routable tab with a launcher tile but no renderStaticViewRouterTab
-    // branch, so tapping it bounced the user back to the launcher fallback. The
-    // real contact surface is `relationships`.
-    expect(LAUNCHER_HIDDEN_IDS.has("rolodex")).toBe(true);
-    const pages = curateLauncherPages(
+  it("collapses the legacy 'rolodex' alias into relationships (no standalone dead tile)", () => {
+    // `rolodex` is a routable tab with a launcher tile but no
+    // renderStaticViewRouterTab branch, so a standalone tile bounced the user
+    // back to the launcher fallback. The canonical dedup rewrites it onto
+    // `relationships` (the real contact surface) before it can tile on its own.
+    expect(canonicalLauncherId("rolodex")).toBe("relationships");
+    const page = curateLauncherPages(
       [entry("chat"), entry("rolodex"), entry("relationships")],
       { isAosp: false, enabledKinds: ENABLED, cloudActive: true },
     );
-    expect(pages.flat().map((e) => e.id)).not.toContain("rolodex");
-    expect(pages.flat().map((e) => e.id)).toContain("relationships");
+    expect(ids(page)).not.toContain("rolodex");
+    expect(ids(page)).toContain("relationships");
   });
 });
 

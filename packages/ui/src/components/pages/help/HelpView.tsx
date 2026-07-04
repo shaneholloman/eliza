@@ -1,7 +1,15 @@
+/**
+ * Help — a knowledge base searched through the floating chat. There's no search
+ * box of its own: while Help is open it takes over the chat composer (placeholder
+ * "Ask a question about Eliza…") and receives the live draft, pulling up the best
+ * matching answer here as you type. You can also browse the common questions and
+ * deep-link straight to the relevant screen.
+ */
 import { LifeBuoy } from "lucide-react";
 import * as React from "react";
 
 import { useAgentElement } from "../../../agent-surface";
+import { dispatchNavigateViewEvent } from "../../../events";
 import { useAppSelector } from "../../../state";
 import { useRegisterViewChatBinding } from "../../../state/view-chat-binding";
 import { ChatEmptyStateWithRecommendations } from "../../composites/chat";
@@ -14,14 +22,6 @@ import {
   type HelpDeepLink,
   type HelpEntry,
 } from "./help-content";
-
-/**
- * Help — a knowledge base searched through the floating chat. There's no search
- * box of its own: while Help is open it takes over the chat composer (placeholder
- * "Ask a question about Eliza…") and receives the live draft, pulling up the best
- * matching answer here as you type. You can also browse the common questions and
- * deep-link straight to the relevant screen.
- */
 
 function scoreEntry(entry: HelpEntry, q: string): number {
   if (!q) return 1;
@@ -190,15 +190,11 @@ function HelpViewBody(): React.ReactElement {
         // SettingsView mounts and reads it — so the user landed on the generic
         // Settings hub instead of the promised section.
         if (typeof window !== "undefined") {
-          window.dispatchEvent(
-            new CustomEvent("eliza:navigate:view", {
-              detail: {
-                viewId: "settings",
-                viewPath: "/settings",
-                subview: link.settingsSection,
-              },
-            }),
-          );
+          dispatchNavigateViewEvent({
+            viewId: "settings",
+            viewPath: "/settings",
+            subview: link.settingsSection,
+          });
         }
         return;
       }

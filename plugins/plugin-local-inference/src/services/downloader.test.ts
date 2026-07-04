@@ -1,3 +1,4 @@
+/** Exercises the curated Eliza-1 `Downloader`: disk preflight, gated-repo handling, and registry writes on completion, against a real temp state dir with a fake HardwareProbe. No network. */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -5,7 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readAssignments } from "./assignments";
 import { findCatalogModel } from "./catalog";
-import { Downloader } from "./downloader";
+import { Downloader, GatedRepoError } from "./downloader";
 import type { Eliza1DeviceCaps } from "./manifest";
 import { registryPath } from "./paths";
 import { listInstalledModels } from "./registry";
@@ -917,6 +918,134 @@ describe("local inference downloader status", () => {
 		expect(fs.existsSync(finalPath)).toBe(false);
 	});
 
+	it("retries a transient 429 with backoff and completes (C8)", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "eliza-download-test-"));
+		process.env.ELIZA_STATE_DIR = root;
+		const base = findCatalogModel("eliza-1-2b");
+		if (!base) throw new Error("missing test catalog model");
+		const singleFileSpec: CatalogModel = {
+			...base,
+			hfRepo: "test/single-file",
+			ggufFile: "model.gguf",
+			sizeGb: 0.000001,
+			bundleManifestFile: undefined,
+			bundleManifestSha256: undefined,
+			companionModelIds: [],
+			runtimeRole: undefined,
+		};
+
+		const ggufBody = Buffer.concat([Buffer.from("GGUF"), Buffer.alloc(60, 0)]);
+		// 429 twice, then 200 — a rate-limited artifact still exists.
+		let attempts = 0;
+		const fetchSpy = vi.fn(async () => {
+			attempts += 1;
+			if (attempts <= 2) {
+				return new Response("rate limited", {
+					status: 429,
+					headers: { "retry-after": "0" },
+				});
+			}
+			return new Response(ggufBody, {
+				status: 200,
+				headers: { "content-length": String(ggufBody.length) },
+			});
+		});
+		globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+		const sleeps: number[] = [];
+		const downloader = new Downloader({
+			probeDeviceCaps: async () => cpuOnlyCaps,
+			probeHardware: async () => fakeProbe(100),
+			// Deterministic, instant backoff — record the calls to bound the retry.
+			sleep: async (ms) => {
+				sleeps.push(ms);
+			},
+		});
+		const completed = new Promise<DownloadJob>((resolve) => {
+			const unsub = downloader.subscribe((event) => {
+				if (event.job.modelId === base.id && event.type === "completed") {
+					unsub();
+					resolve(event.job);
+				}
+			});
+		});
+
+		await downloader.start(singleFileSpec);
+		const job = await completed;
+
+		expect(job.state).toBe("completed");
+		// Exactly two transient retries preceded the successful third fetch —
+		// the retry count is bounded, not unbounded.
+		expect(attempts).toBe(3);
+		expect(sleeps).toHaveLength(2);
+	});
+
+	it("throws a typed GatedRepoError on a 403 gated repo (C9)", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "eliza-download-test-"));
+		process.env.ELIZA_STATE_DIR = root;
+		const base = findCatalogModel("eliza-1-2b");
+		if (!base) throw new Error("missing test catalog model");
+		const singleFileSpec: CatalogModel = {
+			...base,
+			hfRepo: "test/single-file",
+			ggufFile: "model.gguf",
+			sizeGb: 0.000001,
+			bundleManifestFile: undefined,
+			bundleManifestSha256: undefined,
+			companionModelIds: [],
+			runtimeRole: undefined,
+		};
+
+		// A gated repo answers 403 with an HF-shaped JSON error body.
+		globalThis.fetch = vi.fn(
+			async () =>
+				new Response(
+					JSON.stringify({ error: "Access to this repo is gated." }),
+					{ status: 403, headers: { "content-type": "application/json" } },
+				),
+		) as unknown as typeof fetch;
+
+		const downloaderErr = new Downloader({
+			probeDeviceCaps: async () => cpuOnlyCaps,
+			probeHardware: async () => fakeProbe(100),
+		});
+		// Capture the whole failed DownloadJob at the CONSUMER boundary (the
+		// emitted event / status snapshot the UI reads) — not just at the throw
+		// site. C9 is only real if the structured code survives to here.
+		const failedJob = new Promise<DownloadJob>((resolve) => {
+			const unsub = downloaderErr.subscribe((event) => {
+				if (event.job.modelId === base.id && event.type === "failed") {
+					unsub();
+					resolve(event.job);
+				}
+			});
+		});
+
+		// GatedRepoError carries the machine-readable code + HTTP status.
+		const gated = new GatedRepoError("probe", 403);
+		expect(gated.code).toBe("HF_GATED_REPO");
+		expect(gated.httpStatus).toBe(403);
+
+		await downloaderErr.start(singleFileSpec);
+		const job = await failedJob;
+		// The typed code reaches the consumer as a structured field, not just as
+		// a stringified message the UI would have to pattern-match.
+		expect(job.errorCode).toBe("HF_GATED_REPO");
+		expect(job.errorHttpStatus).toBe(403);
+		expect(job.error).toContain("gated or private");
+		expect(job.error).toContain("403");
+
+		// And it survives the terminal-status persistence round-trip: a fresh
+		// Downloader reading the on-disk status still exposes the coded failure.
+		const rehydrated = new Downloader({
+			probeDeviceCaps: async () => cpuOnlyCaps,
+		})
+			.snapshot()
+			.find((j) => j.modelId === base.id);
+		expect(rehydrated?.errorCode).toBe("HF_GATED_REPO");
+		expect(rehydrated?.errorHttpStatus).toBe(403);
+	});
+
 	it("forwards the Eliza Cloud bearer on a single-file download when cloud-linked", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "eliza-download-test-"));
 		process.env.ELIZA_STATE_DIR = root;
@@ -973,6 +1102,110 @@ describe("local inference downloader status", () => {
 			if (savedKey === undefined) delete process.env.ELIZAOS_CLOUD_API_KEY;
 			else process.env.ELIZAOS_CLOUD_API_KEY = savedKey;
 		}
+	});
+
+	it("fails over from an explicit mirror to direct HuggingFace on transient 5xx", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "eliza-download-test-"));
+		process.env.ELIZA_STATE_DIR = root;
+		process.env.ELIZA_HF_BASE_URLS = "https://mirror.example.com";
+
+		const base = findCatalogModel("eliza-1-2b");
+		if (!base) throw new Error("missing test catalog model");
+		const singleFileSpec: CatalogModel = {
+			...base,
+			hfRepo: "test/single-file",
+			ggufFile: "model.gguf",
+			sizeGb: 0.000001,
+			bundleManifestFile: undefined,
+			bundleManifestSha256: undefined,
+			companionModelIds: [],
+			runtimeRole: undefined,
+		};
+
+		const ggufBody = Buffer.concat([Buffer.from("GGUF"), Buffer.alloc(60, 0)]);
+		const hosts: string[] = [];
+		globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+			const href =
+				typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+			const host = new URL(href).host;
+			hosts.push(host);
+			if (host === "mirror.example.com") {
+				return new Response("temporary mirror failure", { status: 503 });
+			}
+			return new Response(ggufBody, {
+				status: 200,
+				headers: { "content-length": String(ggufBody.length) },
+			});
+		}) as unknown as typeof fetch;
+
+		const downloader = new Downloader({
+			probeDeviceCaps: async () => cpuOnlyCaps,
+			probeHardware: async () => fakeProbe(100),
+		});
+		const completed = new Promise<DownloadJob>((resolve) => {
+			const unsub = downloader.subscribe((event) => {
+				if (event.job.modelId === base.id && event.type === "completed") {
+					unsub();
+					resolve(event.job);
+				}
+			});
+		});
+
+		await downloader.start(singleFileSpec);
+		await completed;
+		expect(hosts).toContain("mirror.example.com");
+		expect(hosts.at(-1)).toBe("huggingface.co");
+	});
+
+	it("turns structured HF_GATED proxy errors into authorize guidance", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "eliza-download-test-"));
+		process.env.ELIZA_STATE_DIR = root;
+		process.env.ELIZAOS_CLOUD_API_KEY = "secret-token";
+
+		const base = findCatalogModel("eliza-1-2b");
+		if (!base) throw new Error("missing test catalog model");
+		const singleFileSpec: CatalogModel = {
+			...base,
+			hfRepo: "private/gated-model",
+			ggufFile: "model.gguf",
+			sizeGb: 0.000001,
+			bundleManifestFile: undefined,
+			bundleManifestSha256: undefined,
+			companionModelIds: [],
+			runtimeRole: undefined,
+		};
+
+		globalThis.fetch = vi.fn(
+			async () =>
+				new Response(
+					JSON.stringify({ code: "HF_GATED", repo: "private/gated-model" }),
+					{
+						status: 403,
+						headers: { "content-type": "application/json" },
+					},
+				),
+		) as unknown as typeof fetch;
+
+		const downloader = new Downloader({
+			probeDeviceCaps: async () => cpuOnlyCaps,
+			probeHardware: async () => fakeProbe(100),
+		});
+		const failed = new Promise<DownloadJob>((resolve) => {
+			const unsub = downloader.subscribe((event) => {
+				if (event.job.modelId === base.id && event.type === "failed") {
+					unsub();
+					resolve(event.job);
+				}
+			});
+		});
+
+		await downloader.start(singleFileSpec);
+		const job = await failed;
+
+		expect(job.error).toContain("private/gated-model");
+		expect(job.error).toContain(
+			"Link or authorize this device with Eliza Cloud",
+		);
 	});
 
 	it("blocks a download that does not fit on the models volume", async () => {

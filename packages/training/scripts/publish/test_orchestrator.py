@@ -27,16 +27,19 @@ if str(_TRAINING_ROOT) not in sys.path:
     sys.path.insert(0, str(_TRAINING_ROOT))
 
 from scripts.publish.orchestrator import (  # noqa: E402
+    DEFAULT_RAM_BUDGET_MB,
     ELIZA_1_HF_REPO,
     EXIT_BUNDLE_LAYOUT_FAIL,
     EXIT_EVAL_GATE_FAIL,
     EXIT_KERNEL_VERIFY_FAIL,
     EXIT_MISSING_FILE,
     EXIT_OK,
+    EXIT_HF_AUDIT_FAIL,
     EXIT_RELEASE_EVIDENCE_FAIL,
     EXIT_USAGE,
     OrchestratorError,
     PublishContext,
+    TIER_TAGLINES,
     run,
     validate_bundle_layout,
 )
@@ -688,6 +691,17 @@ def _disable_mtp_for_tier(bundle: Path, tier: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_orchestrator_tier_maps_cover_release_matrix() -> None:
+    expected = ("2b", "4b", "9b", "27b", "27b-256k")
+
+    assert tuple(TIER_TAGLINES) == expected
+    assert tuple(DEFAULT_RAM_BUDGET_MB) == expected
+    for tier in expected:
+        ram_min, ram_rec = DEFAULT_RAM_BUDGET_MB[tier]
+        assert TIER_TAGLINES[tier]
+        assert 0 < ram_min <= ram_rec
+
+
 def test_layout_rejects_empty_mtp_dir_on_mtp_enabled_tier(tmp_path: Path) -> None:
     bundle = _build_fixture_bundle(
         tmp_path,
@@ -1277,6 +1291,7 @@ def test_real_publish_finalizes_and_uploads_hf_evidence(
     bundle = _build_fixture_bundle(tmp_path)
     metal = _metal_report(tmp_path)
     final_uploads: list[tuple[str, str]] = []
+    audit_calls: list[str] = []
 
     def fake_push_to_hf(
         ctx: PublishContext,
@@ -1313,12 +1328,18 @@ def test_real_publish_finalizes_and_uploads_hf_evidence(
         "push_final_release_evidence",
         fake_push_final_release_evidence,
     )
+    monkeypatch.setattr(
+        orchestrator,
+        "run_hf_release_audit",
+        lambda ctx: audit_calls.append(ctx.repo_id),
+    )
     monkeypatch.setattr(orchestrator, "tag_training_repo", lambda *args: "tagged")
 
     rc = run(_ctx("4b", bundle, metal=metal, dry_run=False))
 
     assert rc == EXIT_OK
     assert final_uploads == [("evidence/release.json", "checksums/SHA256SUMS")]
+    assert audit_calls == [ELIZA_1_HF_REPO]
     release = json.loads((bundle / "evidence" / "release.json").read_text())
     assert release["releaseState"] == "final"
     assert release["hf"]["status"] == "uploaded"
@@ -1401,11 +1422,60 @@ def test_real_base_v1_publish_rejects_retired_qwen_asr_provenance(
         "push_final_release_evidence",
         lambda *args: None,
     )
+    monkeypatch.setattr(orchestrator, "run_hf_release_audit", lambda *args: None)
     monkeypatch.setattr(orchestrator, "tag_training_repo", lambda *args: "tagged")
 
     rc = run(_ctx("4b", bundle, metal=metal, dry_run=False))
 
     assert rc == EXIT_RELEASE_EVIDENCE_FAIL
+
+
+def test_real_publish_blocks_when_hf_release_audit_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import scripts.publish.orchestrator as orchestrator  # noqa: PLC0415
+
+    bundle = _build_fixture_bundle(tmp_path)
+    metal = _metal_report(tmp_path)
+    tag_calls: list[str] = []
+
+    def fake_push_to_hf(
+        ctx: PublishContext,
+        manifest_path: Path,
+        readme_path: Path,
+        upload_pairs: list[tuple[Path, str]],
+    ) -> dict[str, Any]:
+        return {
+            "repoId": ctx.repo_id,
+            "status": "uploaded",
+            "commit": "payload123",
+            "url": f"https://huggingface.co/{ctx.repo_id}/commit/payload123",
+            "uploadedPaths": [
+                "bundles/4b/eliza-1.manifest.json",
+                "bundles/4b/README.md",
+                *(target for _, target in upload_pairs),
+            ],
+        }
+
+    def failing_audit(ctx: PublishContext) -> None:
+        raise orchestrator.OrchestratorError(
+            "HF release audit failed after upload; refusing to tag this publish.",
+            EXIT_HF_AUDIT_FAIL,
+        )
+
+    monkeypatch.setattr(orchestrator, "push_to_hf", fake_push_to_hf)
+    monkeypatch.setattr(orchestrator, "push_final_release_evidence", lambda *args: None)
+    monkeypatch.setattr(orchestrator, "run_hf_release_audit", failing_audit)
+    monkeypatch.setattr(
+        orchestrator,
+        "tag_training_repo",
+        lambda *args: tag_calls.append("tagged") or "tagged",
+    )
+
+    rc = run(_ctx("4b", bundle, metal=metal, dry_run=False))
+
+    assert rc == EXIT_HF_AUDIT_FAIL
+    assert tag_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -1543,44 +1613,22 @@ def test_dry_run_tag_is_printed_not_executed(tmp_path: Path, caplog) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_missing_e2e_loop_ok_blocks_publish_without_opt_in(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_missing_e2e_loop_ok_blocks_publish(tmp_path: Path, monkeypatch) -> None:
     """The orchestrator refuses to silently alias e2e_loop_ok ← thirty_turn_ok.
 
     AGENTS.md §6 declares the two manifest fields as independent
-    contract gates; without the explicit ``ELIZA_PUBLISH_ALLOW_GATE_ALIAS``
-    opt-in, a missing ``e2e_loop_ok`` is publish-blocking.
+    contract gates; a missing ``e2e_loop_ok`` is publish-blocking even
+    if the retired alias env var is set.
     """
-    blob = _passing_eval_blob()
-    blob["results"].pop("e2e_loop_ok")
-    bundle = _build_fixture_bundle(tmp_path, eval_blob=blob)
-    metal = _metal_report(tmp_path)
-    monkeypatch.delenv("ELIZA_PUBLISH_ALLOW_GATE_ALIAS", raising=False)
-
-    rc = run(_ctx("4b", bundle, metal=metal, dry_run=True))
-    assert rc == EXIT_EVAL_GATE_FAIL
-    assert not (bundle / "eliza-1.manifest.json").is_file()
-
-
-def test_alias_opt_in_allows_publish_with_warning(
-    tmp_path: Path, monkeypatch, caplog
-) -> None:
-    """With the opt-in env var, e2e_loop_ok aliases thirty_turn_ok and warns."""
     blob = _passing_eval_blob()
     blob["results"].pop("e2e_loop_ok")
     bundle = _build_fixture_bundle(tmp_path, eval_blob=blob)
     metal = _metal_report(tmp_path)
     monkeypatch.setenv("ELIZA_PUBLISH_ALLOW_GATE_ALIAS", "1")
 
-    with caplog.at_level(logging.WARNING, logger="publish.orchestrator"):
-        rc = run(_ctx("4b", bundle, metal=metal, dry_run=True))
-
-    assert rc == EXIT_OK
-    assert "aliasing results.e2e_loop_ok" in caplog.text
-    manifest = json.loads((bundle / "eliza-1.manifest.json").read_text())
-    assert manifest["evals"]["e2eLoopOk"] is True
-    assert manifest["evals"]["thirtyTurnOk"] is True
+    rc = run(_ctx("4b", bundle, metal=metal, dry_run=True))
+    assert rc == EXIT_EVAL_GATE_FAIL
+    assert not (bundle / "eliza-1.manifest.json").is_file()
 
 
 def test_cli_help(monkeypatch, capsys) -> None:

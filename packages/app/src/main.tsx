@@ -64,6 +64,7 @@ import {
   AGENT_READY_EVENT,
   COMMAND_PALETTE_EVENT,
   CONNECT_EVENT,
+  createNavigateViewEvent,
   dispatchAppEvent,
   MOBILE_RUNTIME_MODE_CHANGED_EVENT,
   SHARE_TARGET_EVENT,
@@ -84,7 +85,7 @@ import { createTranslator } from "@elizaos/ui/i18n";
 import {
   getWindowNavigationPath,
   isAppWindowRoute,
-} from "@elizaos/ui/navigation/index";
+} from "@elizaos/ui/navigation";
 import type { ShareTargetPayload } from "@elizaos/ui/platform";
 import {
   applyLaunchConnection,
@@ -140,12 +141,16 @@ import {
   type DeepLinkNavigationIntent,
   resolveDeepLinkNavigationIntent,
 } from "./deep-link-routing";
+import { decideChatOverlayToggle } from "./desktop-hotkey";
 import { runEmbedHandshake } from "./embed-bootstrap";
+import { registerAppHostExternalImporters } from "./host-externals";
+import { runIosAttachmentSmokeIfRequested } from "./ios-attachment-smoke";
 import {
   apiBaseToDeviceBridgeUrl,
   type IosRuntimeConfig,
   resolveIosRuntimeConfig,
 } from "./ios-runtime";
+import { startKeyboardDictationSession } from "./keyboard-dictation";
 import {
   createMobileLifecycle,
   type MobileLifecycle,
@@ -182,6 +187,11 @@ let deferredAppModuleLoadsScheduled = false;
 // earliest renderer-JS checkpoint after the import graph evaluates.
 initStartupTrace();
 markStartup("module-eval", { platform: Capacitor.getPlatform() });
+
+// Contribute this build's plugin-owned host-external importers to
+// DynamicViewLoader before any view can load. Synchronous + idempotent, so it
+// is safe to run at the earliest renderer checkpoint.
+registerAppHostExternalImporters();
 
 function cachedDynamicImport<T>(
   key: string,
@@ -706,7 +716,7 @@ function renderIosFullBunSmokeStatus(message: string): void {
 function parseIosOnboardingSmokeRequest(raw: string | null): {
   apiBase: string;
 } {
-  const fallback = { apiBase: "http://127.0.0.1:31337" };
+  const fallback = { apiBase: "http://127.0.0.1:31338" };
   if (!raw || raw === "1") return fallback;
   try {
     const parsed = JSON.parse(raw) as { apiBase?: unknown };
@@ -765,6 +775,24 @@ function readIosOnboardingSmokeStorageSnapshot(): Record<
   );
 }
 
+async function waitForIosOnboardingSmokeStorageSnapshot(
+  apiBase: string,
+): Promise<Record<string, string | null>> {
+  const deadline = Date.now() + IOS_ONBOARDING_SMOKE_TIMEOUT_MS;
+  let snapshot = readIosOnboardingSmokeStorageSnapshot();
+  while (Date.now() < deadline) {
+    const activeServer = snapshot["elizaos:active-server"];
+    if (typeof activeServer === "string" && activeServer.includes(apiBase)) {
+      return snapshot;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    snapshot = readIosOnboardingSmokeStorageSnapshot();
+  }
+  throw new Error(
+    `Timed out waiting for iOS onboarding active server ${apiBase}: ${JSON.stringify(snapshot)}`,
+  );
+}
+
 async function runIosOnboardingSmokeIfRequested(): Promise<boolean> {
   if (!isIOS || iosOnboardingSmokeStarted) return iosOnboardingSmokeStarted;
   let rawRequest: string | null = null;
@@ -787,11 +815,15 @@ async function runIosOnboardingSmokeIfRequested(): Promise<boolean> {
     apiBase: request.apiBase,
   });
   try {
-    // The harness fires the `<scheme>://first-run/runtime/remote?api=…` deep
-    // link after launch; the app connects to the remote and completes first-run
-    // on its own (CONNECT_EVENT → adopt → startup re-poll). This verifier only
-    // proves the post-connect surface, so it is decoupled from the onboarding
-    // DOM — no remote-address field to fill, resilient to the in-chat redesign.
+    // WKWebView is not CDP-drivable, and recent iOS simulators can stop
+    // `simctl openurl` behind a system "Open in <app>?" confirmation. Drive the
+    // same hardened remote-connect handler that the OS deep-link route uses,
+    // after React has had a chance to install its CONNECT_EVENT listener.
+    await new Promise((resolve) => window.setTimeout(resolve, 750));
+    connectFirstRunRemoteDeepLink(request.apiBase);
+
+    // Prove the post-connect surface, decoupled from the onboarding DOM — no
+    // remote-address field to fill, resilient to the in-chat redesign.
     const home = await waitForIosOnboardingElement<HTMLElement>(
       '[data-testid="home-launcher-surface"][data-page="home"]',
       { visible: true },
@@ -804,6 +836,9 @@ async function runIosOnboardingSmokeIfRequested(): Promise<boolean> {
     const onboardingHidden = !document.querySelector(
       '[data-testid="first-run-chat"], [data-testid="startup-first-run-background"]',
     );
+    const storage = await waitForIosOnboardingSmokeStorageSnapshot(
+      request.apiBase,
+    );
 
     await writeIosOnboardingSmokeResult({
       ok: true,
@@ -813,7 +848,7 @@ async function runIosOnboardingSmokeIfRequested(): Promise<boolean> {
       homeVisible: Boolean(home),
       composerVisible: Boolean(composer),
       onboardingHidden,
-      storage: readIosOnboardingSmokeStorageSnapshot(),
+      storage,
     });
   } catch (error) {
     await writeIosOnboardingSmokeResult({
@@ -1006,7 +1041,7 @@ async function runIosFullBunSmokeIfRequested(): Promise<boolean> {
       phase: "running",
       step: "bridge-installed",
       hasNativeRequest:
-        typeof window.__ELIZA_IOS_LOCAL_AGENT_REQUEST__ === "function",
+        typeof window.__ELIZA_BRIDGE__?.iosLocalAgentRequest === "function",
     });
 
     const { ElizaBunRuntime } = await import("@elizaos/capacitor-bun-runtime");
@@ -1016,7 +1051,7 @@ async function runIosFullBunSmokeIfRequested(): Promise<boolean> {
       phase: "running",
       step: "plugin-imported",
       hasNativeRequest:
-        typeof window.__ELIZA_IOS_LOCAL_AGENT_REQUEST__ === "function",
+        typeof window.__ELIZA_BRIDGE__?.iosLocalAgentRequest === "function",
     });
 
     const started = await withIosFullBunSmokeTimeout(
@@ -1433,6 +1468,16 @@ async function initializePlatform(): Promise<void> {
   initializeCapacitorBridge();
   void runIosFullBunSmokeIfRequested();
   void runIosOnboardingSmokeIfRequested();
+  void runIosAttachmentSmokeIfRequested({
+    isIOS,
+    getApiBaseUrl: () => client.getBaseUrl(),
+    getPreference: boundedPreferenceGet,
+    removePreference: (key) =>
+      boundedPreferenceWrite(() => Preferences.remove({ key })),
+    writeResult: writeIosPreferenceSmokeResult,
+    waitForElement: waitForIosOnboardingElement,
+    readStorageSnapshot: readIosOnboardingSmokeStorageSnapshot,
+  });
 
   if (isIOS || isAndroid) {
     await initializeStatusBar();
@@ -1519,25 +1564,32 @@ async function initializeStatusBar(): Promise<void> {
 async function initializeKeyboard(): Promise<void> {
   if (keyboardListenersRegistered) return;
 
-  if (isIOS) {
-    await Keyboard.setResizeMode({ mode: KeyboardResize.None });
-    await Keyboard.setScroll({ isDisabled: true });
-    await Keyboard.setAccessoryBarVisible({ isVisible: true });
+  // A Keyboard-bridge throw (pod/plugin skew) must not reject and strand the
+  // rest of bootstrap (deep links, hardware back, pause/resume, network) —
+  // guard it exactly like the sibling initializeStatusBar.
+  try {
+    if (isIOS) {
+      await Keyboard.setResizeMode({ mode: KeyboardResize.None });
+      await Keyboard.setScroll({ isDisabled: true });
+      await Keyboard.setAccessoryBarVisible({ isVisible: true });
+    }
+
+    keyboardListenersRegistered = true;
+    Keyboard.addListener("keyboardWillShow", (info) => {
+      document.body.style.setProperty(
+        "--keyboard-height",
+        `${info.keyboardHeight}px`,
+      );
+      document.body.classList.add("keyboard-open");
+    });
+
+    Keyboard.addListener("keyboardWillHide", () => {
+      document.body.style.setProperty("--keyboard-height", "0px");
+      document.body.classList.remove("keyboard-open");
+    });
+  } catch (error) {
+    logNativePluginUnavailable("Keyboard", error);
   }
-
-  keyboardListenersRegistered = true;
-  Keyboard.addListener("keyboardWillShow", (info) => {
-    document.body.style.setProperty(
-      "--keyboard-height",
-      `${info.keyboardHeight}px`,
-    );
-    document.body.classList.add("keyboard-open");
-  });
-
-  Keyboard.addListener("keyboardWillHide", () => {
-    document.body.style.setProperty("--keyboard-height", "0px");
-    document.body.classList.remove("keyboard-open");
-  });
 }
 
 /**
@@ -1624,9 +1676,13 @@ function connectFirstRunRemoteDeepLink(rawApiBase: string): void {
     label: validatedUrl.hostname || "Remote agent",
     apiBase: connection.apiBase,
   });
-  void setStorageValue("elizaos:active-server", activeServer).finally(
-    dispatchConnect,
-  );
+  void setStorageValue("elizaos:active-server", activeServer).catch((error) => {
+    console.warn(
+      `${APP_LOG_PREFIX} Failed to persist first-run remote active server:`,
+      error,
+    );
+  });
+  dispatchConnect();
 }
 
 function handleDeepLink(url: string): void {
@@ -1709,6 +1765,12 @@ function handleDeepLink(url: string): void {
       // On-device AEC acoustic-loop evidence harness (#11373): the hash route
       // is consumed by installAecLoopHarness's hashchange watcher.
       setHashRoute("aec-loop", parsed.searchParams);
+      break;
+    case "keyboard-dictation":
+      // iOS keyboard app-handoff dictation (#12185): extensions have no mic,
+      // so the ElizaKeyboard extension opens the app; record + transcribe
+      // here, publish the transcript to the App Group, keyboard inserts it.
+      startKeyboardDictationSession(parsed.searchParams);
       break;
     case "connect": {
       const gatewayUrl = parsed.searchParams.get("url");
@@ -1809,11 +1871,7 @@ function setHashRoute(route: string, params: URLSearchParams): void {
  * tab on the mobile/Capacitor entrypoint (see `resolveDeepLinkNavigationIntent`).
  */
 function dispatchDeepLinkNavigation(intent: DeepLinkNavigationIntent): void {
-  window.dispatchEvent(
-    new CustomEvent<DeepLinkNavigationIntent>("eliza:navigate:view", {
-      detail: intent,
-    }),
-  );
+  window.dispatchEvent(createNavigateViewEvent(intent));
 }
 
 async function initializeDesktopShell(): Promise<void> {
@@ -1844,7 +1902,19 @@ async function initializeDesktopShell(): Promise<void> {
     });
   }
 
+  // Toggle semantics (#12184): a focused + visible overlay is dismissed
+  // (focus returns to the previously active app via the macOS orderOut path);
+  // otherwise summon + focus it. Blur does NOT hide the pill — it is a resting
+  // surface (unlike the tray popover).
   const summonChatOverlay = async (): Promise<void> => {
+    const [{ focused }, { visible }] = await Promise.all([
+      Desktop.isWindowFocused(),
+      Desktop.isWindowVisible(),
+    ]);
+    if (decideChatOverlayToggle({ focused, visible }) === "hide") {
+      await Desktop.hideWindow();
+      return;
+    }
     await Desktop.showWindow();
     await Desktop.focusWindow();
   };
@@ -1958,12 +2028,20 @@ const CloudRouterShell = lazy(async () => {
   }
   // Populate the cloud-route + settings-section registries before the shell
   // mounts and reads `listCloudRoutes()`; without this the registry is empty and
-  // no cloud/auth/payment route resolves.
-  const [{ registerAllCloudSurfaces }, mod] = await Promise.all([
-    import("@elizaos/ui/cloud/register-all"),
-    import("@elizaos/ui/cloud/shell/CloudRouterShell"),
-  ]);
+  // no cloud/auth/payment route resolves. Cloud product surfaces come from two
+  // sources that register into the SAME process-global registries: the trunk
+  // `@elizaos/ui` cloud modules and the standalone `@elizaos/cloud-ui` package
+  // (arch #12092 item 23 — the cloud UI's own home). Both imports live inside
+  // this `__ELIZA_WEB_SHELL__`-guarded factory, so a cloud-free build drops
+  // them statically with no stub alias.
+  const [{ registerAllCloudSurfaces }, { registerCloudUiSurfaces }, mod] =
+    await Promise.all([
+      import("@elizaos/ui/cloud/register-all"),
+      import("@elizaos/cloud-ui"),
+      import("@elizaos/ui/cloud/shell/CloudRouterShell"),
+    ]);
   registerAllCloudSurfaces();
+  registerCloudUiSurfaces();
   return { default: mod.CloudRouterShell };
 });
 
@@ -2133,6 +2211,22 @@ function usesStrictIosNetworkPolicy(): boolean {
   return isNativeIosStoreBuild() || isNativeIosCloudRuntimeMode();
 }
 
+function isTruthyBuildFlag(value: string | boolean | undefined): boolean {
+  return value === true || value === "1" || value === "true";
+}
+
+function allowsIosSimulatorLoopbackApiBase(parsed: URL): boolean {
+  return (
+    isNative &&
+    isIOS &&
+    !isNativeIosStoreBuild() &&
+    isTruthyBuildFlag(
+      import.meta.env.VITE_ELIZA_IOS_ALLOW_SIMULATOR_LOOPBACK,
+    ) &&
+    isLoopbackApiHost(parsed.hostname)
+  );
+}
+
 function canUseIosLocalAgentIpc(): boolean {
   return isNative && isIOS && getCurrentIosRuntimeConfig().mode === "local";
 }
@@ -2156,6 +2250,7 @@ function isTrustedApiBaseUrl(parsed: URL): boolean {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
   const host = parsed.hostname;
   if (usesStrictIosNetworkPolicy()) {
+    if (allowsIosSimulatorLoopbackApiBase(parsed)) return true;
     if (parsed.protocol !== "https:" || isPrivateOrLoopbackApiHost(host)) {
       return false;
     }
@@ -2180,6 +2275,7 @@ function isTrustedDeepLinkApiBaseUrl(parsed: URL): boolean {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
   const host = parsed.hostname;
   if (usesStrictIosNetworkPolicy()) {
+    if (allowsIosSimulatorLoopbackApiBase(parsed)) return true;
     if (parsed.protocol !== "https:" || isPrivateOrLoopbackApiHost(host)) {
       return false;
     }

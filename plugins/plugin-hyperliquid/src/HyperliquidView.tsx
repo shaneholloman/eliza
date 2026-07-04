@@ -13,6 +13,7 @@
 
 import { useAgentElement } from "@elizaos/ui/agent-surface";
 import { Button } from "@elizaos/ui/components/ui/button";
+import { dispatchNavigateViewEvent } from "@elizaos/ui/events";
 import { type CSSProperties, useCallback } from "react";
 import {
   type HyperliquidSnapshot,
@@ -23,11 +24,7 @@ import { useHyperliquidState } from "./useHyperliquidState.ts";
 /** Return to the apps/home surface via the navigation bus. */
 function navigateHome(): void {
   if (typeof window === "undefined") return;
-  window.dispatchEvent(
-    new CustomEvent("eliza:navigate:view", {
-      detail: { viewId: "home", viewPath: "/" },
-    }),
-  );
+  dispatchNavigateViewEvent({ viewId: "home", viewPath: "/" });
 }
 
 const AGENT_TOOLBAR_STYLE: CSSProperties = {
