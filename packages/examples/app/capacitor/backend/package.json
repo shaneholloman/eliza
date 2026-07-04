@@ -10,6 +10,7 @@
     "lint:check": "bunx @biomejs/biome check .",
     "typecheck": "tsc --noEmit",
     "build": "bun build src/server.ts --outdir=dist --target=bun --format=esm --packages=external",
+    "clean": "rm -rf dist",
     "format": "bunx @biomejs/biome format --write .",
     "format:check": "bunx @biomejs/biome format ."
   },
