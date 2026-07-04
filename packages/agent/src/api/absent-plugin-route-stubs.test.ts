@@ -51,6 +51,21 @@ describe("absent-plugin route stub registry", () => {
     });
   });
 
+  it("produces the browser-bridge companions unavailable snapshot", () => {
+    // A pure fabrication (no live plugin state) that used to live inline in
+    // server.ts next to the live-state `/packages` probe; moved here so the
+    // registry owns every fabricated absent-capability snapshot. The live
+    // `/api/browser-bridge/packages` probe stays in the host handler.
+    const stub = resolveAbsentPluginRouteStub(
+      "GET",
+      "/api/browser-bridge/companions",
+    );
+    expect(stub?.capabilityId).toBe("browser-bridge-companions");
+    expect(stub?.buildBody(req("/api/browser-bridge/companions"))).toEqual({
+      companions: [],
+    });
+  });
+
   it("produces the discord-local unavailable snapshot", () => {
     const stub = resolveAbsentPluginRouteStub(
       "GET",
@@ -216,6 +231,7 @@ describe("grep guard: inline absent-plugin stubs removed from host handlers", ()
       'connector: "telegram-account"',
       'supervisionLevel: "unavailable"',
       'bridgeType: "none"',
+      '{ companions: [] }',
     ]) {
       expect(
         serverSrc.includes(marker),

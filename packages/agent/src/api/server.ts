@@ -1004,11 +1004,6 @@ async function handleBuiltinOptionalRoutes(
     return true;
   }
 
-  if (method === "GET" && pathname === "/api/browser-bridge/companions") {
-    json(res, { companions: [] });
-    return true;
-  }
-
   if (method === "GET" && pathname === "/api/browser-bridge/packages") {
     const browserPlugin = await getBrowserBridgePlugin();
     json(res, {
