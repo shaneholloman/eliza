@@ -4101,6 +4101,14 @@ export class AgentRuntime implements IAgentRuntime {
 		);
 		const providerNames = new Set<string>();
 		if (filterList && filterList.length > 0) {
+			// The onlyInclude path honors the explicit name list without enforcing
+			// provider roleGates: the Stage-1 response state deliberately
+			// force-includes recall providers like FACTS for every sender, and
+			// unassigned senders (ordinary humans AND relay/webhook bridges
+			// carrying human conversation) resolve to GUEST by default (roles.ts
+			// getEntityRole), so gate enforcement here would silently strip
+			// cross-turn recall from exactly the turns that need it. Callers that
+			// name a provider explicitly own that inclusion decision.
 			for (const name of filterList) {
 				providerNames.add(name);
 			}
