@@ -52,7 +52,7 @@ bunx @biomejs/biome check \
 Result:
 
 ```text
-Checked 3 files in 20ms. No fixes applied.
+Checked 3 files in 14ms. No fixes applied.
 ```
 
 ```bash
@@ -70,6 +70,40 @@ Result:
 ```text
 8 passed
 ```
+
+```bash
+bun run --cwd plugins/plugin-local-inference build
+```
+
+Result:
+
+```text
+Build complete
+```
+
+```bash
+bun run --cwd plugins/plugin-local-inference lint:check
+```
+
+Result: blocked by an unrelated existing fixture-format diagnostic in
+`src/services/voice/__fixtures__/voice-workbench-logic-baseline.json`.
+
+```bash
+bun run audit:type-safety-ratchet
+bun run audit:error-policy-ratchet
+git diff --check
+```
+
+Result: passed. The type-safety ratchet reported that the baseline can shrink;
+the error-policy ratchet found no new fallback-slop in touched production files.
+
+```bash
+bun run verify
+```
+
+Result: blocked after repo-level CLAUDE/AGENTS and both ratchets passed. Turbo
+stopped at unrelated `@elizaos/electrobun#lint` formatting diagnostics in
+`src/voice/voice-service.test.ts`.
 
 ```bash
 python -m elizaos_meeting_transcription_proof \
@@ -127,7 +161,8 @@ Result: failed with 14 unrelated current-baseline failures:
   fallback, while current code throws `MissingMtpDrafterError`.
 
 The new `src/runtime/speaker-name-inference.test.ts` suite passed in the full
-run.
+run. Final count: 3 failed files, 244 passed files, 14 failed tests, 2488
+passed tests, 20 skipped tests.
 
 ## Artifact / Evidence Rows
 
