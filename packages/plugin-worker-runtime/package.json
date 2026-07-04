@@ -13,10 +13,12 @@
     "clean": "node ../scripts/rm-path-recursive.mjs dist",
     "build": "node ../scripts/rm-path-recursive.mjs dist tsconfig.build.tsbuildinfo && tsc --noCheck -p tsconfig.build.json",
     "typecheck": "tsgo --noEmit -p tsconfig.json",
-    "test": "bun test src/ --pass-with-no-tests",
-    "lint": "bunx @biomejs/biome check src",
-    "lint:fix": "bunx @biomejs/biome check --write src",
-    "format": "bunx @biomejs/biome format src",
+    "test": "bun test src/",
+    "lint": "bunx @biomejs/biome check --write --unsafe src",
+    "lint:check": "bunx @biomejs/biome check src",
+    "lint:fix": "bunx @biomejs/biome check --write --unsafe src",
+    "format": "bunx @biomejs/biome format --write src",
+    "format:check": "bunx @biomejs/biome format src",
     "format:fix": "bunx @biomejs/biome format --write src"
   },
   "dependencies": {
