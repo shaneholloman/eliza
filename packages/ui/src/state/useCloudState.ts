@@ -576,7 +576,14 @@ export function useCloudState({
         if (alreadyAuthenticated) {
           closePrePoppedWindow();
           await pollCloudCredits();
-          await loadWalletConfig();
+          await loadWalletConfig().catch((err: unknown) => {
+            // error-policy:J4 already-authenticated login has succeeded; a
+            // wallet config refresh failure must not wedge the login button.
+            logger.warn(
+              { err },
+              "[useCloudState] wallet config refresh failed after cloud login",
+            );
+          });
           setElizaCloudLoginError(null);
           setActionNotice("Already connected to Eliza Cloud.", "info", 4000);
           elizaCloudLoginBusyRef.current = false;
