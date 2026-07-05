@@ -6,7 +6,13 @@
  * calls `useSetPageHeader` gets its title surfaced in the top bar.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -19,12 +25,24 @@ const sessionState = {
   } | null,
 };
 let storedToken = false;
+const stewardSessionMock = vi.hoisted(() => ({
+  clearStaleStewardSession: vi.fn(),
+}));
 vi.mock("../lib/steward-session", () => ({
   hasHydratableStewardToken: () => storedToken,
+}));
+vi.mock("./StewardProviderShared", () => ({
+  clearStaleStewardSession: stewardSessionMock.clearStaleStewardSession,
 }));
 
 vi.mock("../lib/use-session-auth", () => ({
   useSessionAuth: () => sessionState,
+}));
+
+// The header's account menu reads the credit balance; give it a stubbed value
+// so the console renders without a live QueryClient.
+vi.mock("../instances/lib/data/credits", () => ({
+  useCreditsBalance: () => ({ data: { balance: 12.5 } }),
 }));
 
 import {
@@ -37,7 +55,6 @@ import { ConsoleShell } from "./ConsoleShell";
 const NAV_HREFS = [
   "/dashboard",
   "/dashboard/agents",
-  "/dashboard/apps",
   "/dashboard/billing",
   "/dashboard/api-keys",
   "/dashboard/account",
@@ -46,6 +63,8 @@ const NAV_HREFS = [
 
 /** De-navved surfaces — routable, but must NOT appear in the sidebar. */
 const CULLED_HREFS = [
+  // Apps moved into the Eliza app; the console route now redirects.
+  "/dashboard/apps",
   "/dashboard/my-agents",
   "/dashboard/mcps",
   "/dashboard/analytics",
@@ -86,6 +105,7 @@ describe("ConsoleShell", () => {
     sessionState.ready = true;
     sessionState.authenticated = true;
     storedToken = false;
+    stewardSessionMock.clearStaleStewardSession.mockReset();
   });
 
   it("renders the sidebar directory, the page body, and the captured page title", () => {
@@ -152,6 +172,49 @@ describe("ConsoleShell", () => {
     expect(
       screen.getByRole("link", { name: /Account/i }).getAttribute("href"),
     ).toBe("/dashboard/account");
+  });
+
+  it("uses the hardened Steward cleanup path when signing out from the header menu", async () => {
+    render(
+      <MemoryRouter initialEntries={["/dashboard"]}>
+        <Routes>
+          <Route path="/login" element={<div data-testid="login-page" />} />
+          <Route
+            path="*"
+            element={
+              <ConsoleShell>
+                <TitledPage />
+              </ConsoleShell>
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const accountMenu = screen.getByRole("button", { name: /qa@e\.test/i });
+    expect(accountMenu.getAttribute("aria-label")).toBe(
+      "Account menu for qa@e.test",
+    );
+    fireEvent.pointerDown(accountMenu, { button: 0, pointerId: 1 });
+    fireEvent.click(await screen.findByRole("menuitem", { name: /sign out/i }));
+
+    expect(stewardSessionMock.clearStaleStewardSession).toHaveBeenCalledTimes(
+      1,
+    );
+    await waitFor(() => expect(screen.getByTestId("login-page")).toBeTruthy());
+  });
+
+  it("keeps a visible keyboard focus treatment on the account menu trigger", () => {
+    render(
+      <MemoryRouter initialEntries={["/dashboard"]}>
+        <ConsoleShell>
+          <TitledPage />
+        </ConsoleShell>
+      </MemoryRouter>,
+    );
+
+    const accountMenu = screen.getByRole("button", { name: /qa@e\.test/i });
+    expect(accountMenu.className).toContain("focus-visible:ring-2");
   });
 
   it("redirects to /login (returnTo preserved) when the session dies — never a fake-empty console (#13709)", () => {
