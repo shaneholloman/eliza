@@ -9,6 +9,12 @@
  * unbound (undefined), preserving today's per-session workdir re-resolution.
  * Realpath is used on both sides so symlinked / non-canonical paths that point
  * at the same directory still match.
+ *
+ * Binding also stamps the task's memory world ({@link deriveProjectWorldId}):
+ * this is the live implementation of #13776 design D3's per-project memory
+ * partition — subagents on project B never see project A's injected context.
+ * The derivation is deterministic in the project id, so it is the source of
+ * truth even though the core `ProjectRecord.worldId` also persists it for CRUD.
  */
 
 import { realpathSync } from "node:fs";
@@ -16,8 +22,11 @@ import { resolve } from "node:path";
 import {
   getProjectById,
   logger,
+  PROJECT_WORLD_ID_PREFIX,
   type ProjectRecord,
   readProjectRegistry,
+  stringToUuid,
+  type UUID,
 } from "@elizaos/core";
 
 /** Canonicalize a path for identity comparison; falls back to a resolved
@@ -63,6 +72,17 @@ export function resolveTaskProjectId(
     return getProjectById(explicit, env) ? explicit : undefined;
   }
   return findProjectByWorkdir(input.workdir, env)?.id;
+}
+
+/**
+ * The memory world a project partitions into — `stringToUuid('project:' + id)`.
+ * Deterministic so the agent runtime, desktop picker, and this bind seam all
+ * derive the same world for a project id without coordinating through disk. This
+ * is #13776 design D3's cheaper option: a dedicated free partition in the
+ * existing memory schema, no column change.
+ */
+export function deriveProjectWorldId(projectId: string): UUID {
+  return stringToUuid(`${PROJECT_WORLD_ID_PREFIX}${projectId}`);
 }
 
 /** The localPath of the registered project a bound task targets, or `null` when
