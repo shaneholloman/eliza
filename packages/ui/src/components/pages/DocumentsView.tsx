@@ -365,6 +365,21 @@ export function DocumentsView({
   // (codex P2). Rendered as an approximate marker so the numbers aren't passed
   // off as authoritative.
   const [facetCountsApproximate, setFacetCountsApproximate] = useState(false);
+  // Counts are scope-specific: on a scope change, drop the previous scope's
+  // server counts and reseed from THAT scope's cache (or null) so a subsequent
+  // count-fetch failure can never leave the control showing another scope's
+  // stale counts as authoritative (codex P2). Skips the first render since the
+  // initial state already seeded from the mount scope's cache.
+  const previousScopeRef = useRef(scopeFilter);
+  useEffect(() => {
+    if (previousScopeRef.current === scopeFilter) return;
+    previousScopeRef.current = scopeFilter;
+    const cached = getCached<Record<KnowledgeFacet, number>>(
+      `documents:facets:${scopeFilter}`,
+    )?.data;
+    setServerFacetCounts(cached ?? null);
+    setFacetCountsApproximate(false);
+  }, [scopeFilter]);
   const [searchResults, setSearchResults] = useState<
     DocumentSearchResult[] | null
   >(null);
