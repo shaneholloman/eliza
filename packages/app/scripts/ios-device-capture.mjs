@@ -37,9 +37,13 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readDevicectlDeviceList } from "./ios-device-devicectl.mjs";
+import {
+  readDevicectlDeviceList,
+  readDevicectlDeviceLockState,
+} from "./ios-device-devicectl.mjs";
 import {
   buildIosXcuitestShardPlan,
+  assertDeviceUnlocked,
   buildPlistXml,
   classifyCodesignPreflight,
   classifyIsolatedReruns,
@@ -50,6 +54,7 @@ import {
   findDeviceRecord,
   findUncoveredIosXcuitestEntries,
   isBenignIosAppAbsence,
+  normalizeDeviceLockState,
   parseCliArgs,
   parseFailedTestIdentifiers,
   parsePlist,
@@ -260,6 +265,21 @@ function runInherit(command, args, options = {}) {
       `${command} ${args.slice(0, 4).join(" ")} … exited with ${result.status}`,
     );
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForDeviceUnlocked(device, phase) {
+  await assertDeviceUnlocked({
+    device,
+    probeLockState: () => readDevicectlDeviceLockState(device.identifier),
+    sleep,
+    waitSeconds: process.env.ELIZA_IOS_DEVICE_UNLOCK_WAIT_SECONDS ?? 120,
+    pollIntervalSeconds: process.env.ELIZA_IOS_DEVICE_UNLOCK_POLL_SECONDS ?? 5,
+    notify: (message) => log(`${phase}: ${message}`),
+  });
 }
 
 function runResetCommand(command, args, { label, allowAbsentApp = false }) {
@@ -695,6 +715,7 @@ async function main() {
   // 4. Destination for the run.
   let destination;
   let simUdid = null;
+  let physicalDevice = null;
   let deviceControlId = null;
   const installableBundles = extractXctestrunAppPaths(parsed, testRoot).filter(
     (bundle) => bundle.endsWith(".app") && fs.existsSync(bundle),
@@ -722,6 +743,8 @@ async function main() {
     if (!deviceId)
       fail("device platform needs --device or ELIZA_IOS_DEVICE_ID.");
     const record = resolvePhysicalDeviceUdid(deviceId);
+    physicalDevice = record;
+    await waitForDeviceUnlocked(record, "preflight");
     deviceControlId = record.identifier;
     destination = `platform=iOS,id=${record.udid}`;
   }
@@ -1125,6 +1148,20 @@ async function main() {
     `${JSON.stringify(aggregate, null, 2)}\n`,
   );
 
+  const failedShards = shardSummaries.filter((shard) => !shard.passed);
+  if (failedShards.length > 0 && physicalDevice) {
+    const lockState = normalizeDeviceLockState(
+      readDevicectlDeviceLockState(physicalDevice.identifier),
+    );
+    if (lockState.locked) {
+      fail(
+        `device locked during run (${lockState.reason ?? "lockState reported locked"}). ` +
+          `Unlock ${physicalDevice.name} and set Settings > Display & Brightness > Auto-Lock > Never for lane devices. ` +
+          `Review shard artifacts under ${shardsRoot}.`,
+      );
+    }
+  }
+
   if (aggregateChatSkipAccounting.message) {
     log(aggregateChatSkipAccounting.message);
   }
@@ -1137,7 +1174,6 @@ async function main() {
     fail(`--require-chat failed: ${requireChatDecision.reason}.`);
   }
 
-  const failedShards = shardSummaries.filter((shard) => !shard.passed);
   if (failedShards.length > 0) {
     fail(
       `iOS capture failed: ${failedShards.length}/${shardSummaries.length} shard(s) failed ` +

@@ -13,6 +13,7 @@ import {
   summarizeChatSkipAccounting,
 } from "./ios-device-capture.mjs";
 import {
+  assertDeviceUnlocked,
   buildCodesignPlan,
   buildIosXcuitestShardPlan,
   buildOnlyTestingIdentifier,
@@ -29,6 +30,8 @@ import {
   findDeviceRecord,
   findUncoveredIosXcuitestEntries,
   isBenignIosAppAbsence,
+  formatDeviceUnlockWaitMessage,
+  normalizeDeviceLockState,
   normalizeProvisioningProfile,
   PlistData,
   parseCliArgs,
@@ -765,6 +768,91 @@ describe("device resolution", () => {
     }
     expect(findDeviceRecord(payload, "nope")).toBeNull();
     expect(findDeviceRecord({}, "anything")).toBeNull();
+  });
+});
+
+describe("device lock-state preflight", () => {
+  const device = {
+    identifier: "59EBB356-BC44-5AA2-91F1-E6AAE756BB86",
+    name: "MoonCycles",
+  };
+
+  it("normalizes top-level and nested lockState payloads", () => {
+    expect(
+      normalizeDeviceLockState({
+        passcodeRequired: true,
+        unlockedSinceBoot: true,
+      }),
+    ).toMatchObject({ locked: true, reason: "passcode required" });
+    expect(
+      normalizeDeviceLockState({
+        result: {
+          lockState: { passcodeRequired: false, unlockedSinceBoot: false },
+        },
+      }),
+    ).toMatchObject({ locked: true, reason: "not unlocked since boot" });
+    expect(
+      normalizeDeviceLockState({
+        result: { passcodeRequired: false, unlockedSinceBoot: true },
+      }),
+    ).toMatchObject({ locked: false, reason: null });
+  });
+
+  it("formats an operator-visible unlock instruction", () => {
+    expect(
+      formatDeviceUnlockWaitMessage({
+        device,
+        timeoutSeconds: 30,
+        reason: "passcode required",
+      }),
+    ).toBe(
+      "MoonCycles (59EBB356-BC44-5AA2-91F1-E6AAE756BB86) is locked (passcode required); unlock the phone and keep it awake. Waiting up to 30s.",
+    );
+  });
+
+  it("waits until lockState becomes usable", async () => {
+    const states = [
+      { passcodeRequired: true, unlockedSinceBoot: true },
+      { passcodeRequired: false, unlockedSinceBoot: true },
+    ];
+    const notifications = [];
+    const sleeps = [];
+    let nowMs = 0;
+    const result = await assertDeviceUnlocked({
+      device,
+      probeLockState: () => states.shift(),
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        nowMs += ms;
+      },
+      now: () => nowMs,
+      notify: (message) => notifications.push(message),
+      waitSeconds: 30,
+      pollIntervalSeconds: 5,
+    });
+    expect(result.locked).toBe(false);
+    expect(sleeps).toEqual([5000]);
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toContain("unlock the phone");
+  });
+
+  it("times out distinctly when the phone stays locked", async () => {
+    let nowMs = 0;
+    await expect(
+      assertDeviceUnlocked({
+        device,
+        probeLockState: () => ({
+          passcodeRequired: true,
+          unlockedSinceBoot: true,
+        }),
+        sleep: async (ms) => {
+          nowMs += ms;
+        },
+        now: () => nowMs,
+        waitSeconds: 1,
+        pollIntervalSeconds: 1,
+      }),
+    ).rejects.toThrow(/Timed out before the device became usable/);
   });
 });
 

@@ -71,7 +71,11 @@ bun run --cwd packages/app test:e2e:walkthrough:device       # detects the tethe
   `ios/build/device-deploy-stage/App.app` produced by `ios:device:deploy`
   (rebuild-before-capture rule — the lane refuses to capture without it). Target
   a specific device with `--ios-device <id>` or `ELIZA_IOS_DEVICE_ID` (matched on
-  the devicectl identifier, hardware UDID, or device name).
+  the devicectl identifier, hardware UDID, or device name). Lane phones must
+  stay on power with Settings > Display & Brightness > Auto-Lock set to Never;
+  the device scripts preflight `devicectl device info lockState` and wait for an
+  unlock, but a mid-suite idle lock still invalidates the run and is reported
+  distinctly.
 - **Detection (real, not hardcoded):** the lane runs
   `xcrun devicectl list devices`, picks a `connected`/`available` device
   (honoring the requested id), then invokes the proven on-device capture
