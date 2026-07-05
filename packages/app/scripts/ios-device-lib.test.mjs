@@ -5,6 +5,8 @@
  * (`bun run --cwd packages/app test`), i.e. the root test:client lane.
  */
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildRequireChatDecision,
@@ -21,6 +23,7 @@ import {
   CONSOLE_SIGTRAP_SIGNATURE,
   classifyCodesignPreflight,
   classifyConsoleExit,
+  classifyXcresultSummaryForGate,
   classifyIsolatedReruns,
   DEFAULT_IOS_XCUITEST_SHARDS,
   deriveSigningEntitlements,
@@ -699,6 +702,77 @@ describe("extractXctestrunAppPaths", () => {
     expect(
       extractXctestrunAppPaths({ __xctestrun_metadata__: {} }, "/products"),
     ).toEqual([]);
+  });
+});
+
+describe("classifyXcresultSummaryForGate", () => {
+  it("passes a summary with at least one passed test", () => {
+    const verdict = classifyXcresultSummaryForGate({
+      result: "Passed",
+      passedTests: 2,
+      skippedTests: 1,
+      failedTests: 0,
+    });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.reason).toBeNull();
+  });
+
+  it("fails an explicit zero-passed summary", () => {
+    const verdict = classifyXcresultSummaryForGate({
+      result: "Passed",
+      passedTests: 0,
+      skippedTests: 4,
+      failedTests: 0,
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.reason).toMatch(/passedTests=0/);
+  });
+
+  it("fails a recursively all-skipped summary", () => {
+    const verdict = classifyXcresultSummaryForGate({
+      testNodes: [
+        {
+          name: "AppUITests",
+          result: "Skipped",
+          children: [{ name: "BootCaptureUITests", result: "Skipped" }],
+        },
+      ],
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.reason).toMatch(/Skipped/);
+  });
+
+  it("handles Xcode-style wrapped numeric values", () => {
+    const verdict = classifyXcresultSummaryForGate({
+      metrics: {
+        testsCount: { _value: "3" },
+        passedTests: { _value: "1" },
+        skippedTests: { _value: "2" },
+      },
+    });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.stats.total).toBe(3);
+    expect(verdict.stats.passed).toBe(1);
+  });
+});
+
+describe("ios-device-capture strict summary gate", () => {
+  it("keeps test-summary classification behind --strict-gate", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "scripts", "ios-device-capture.mjs"),
+      "utf8",
+    );
+    const summaryWriteIndex = source.indexOf("test-summary.json");
+    const strictGateIndex = source.indexOf(
+      "if (strictGate)",
+      summaryWriteIndex,
+    );
+    const classifierIndex = source.indexOf(
+      "classifyXcresultSummaryForGate",
+      summaryWriteIndex,
+    );
+    expect(strictGateIndex).toBeGreaterThan(summaryWriteIndex);
+    expect(classifierIndex).toBeGreaterThan(strictGateIndex);
   });
 });
 

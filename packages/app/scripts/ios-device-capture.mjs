@@ -45,6 +45,7 @@ import {
   buildIosXcuitestShardPlan,
   assertDeviceUnlocked,
   buildPlistXml,
+  classifyXcresultSummaryForGate,
   classifyCodesignPreflight,
   classifyIsolatedReruns,
   DEFAULT_APP_BUNDLE_ID,
@@ -444,6 +445,7 @@ async function main() {
   const args = parseCliArgs(process.argv.slice(2), {
     booleans: [
       "skip-build",
+      "strict-gate",
       "allow-stale-runner",
       "no-retry-isolation",
       "require-chat",
@@ -452,7 +454,7 @@ async function main() {
   });
   if (args.help) {
     console.log(
-      "Usage: node scripts/ios-device-capture.mjs --platform sim|device [--device <udid>] [--skip-build] [--allow-stale-runner] [--no-retry-isolation] [--require-chat] [--output <dir>] [--app-path <App.app>] [--boot-timeout <sec>] [--interval <sec>] [--agent-ready-timeout <sec>] [--derived-data <dir>] [--only-testing <id>] [--bundle-id <id>]",
+      "Usage: node scripts/ios-device-capture.mjs --platform sim|device [--device <udid>] [--skip-build] [--strict-gate] [--allow-stale-runner] [--no-retry-isolation] [--require-chat] [--output <dir>] [--app-path <App.app>] [--boot-timeout <sec>] [--interval <sec>] [--agent-ready-timeout <sec>] [--derived-data <dir>] [--only-testing <id>] [--bundle-id <id>]",
     );
     return;
   }
@@ -856,10 +858,15 @@ async function main() {
   // 5. Run the harness. TEST_RUNNER_-prefixed env vars are forwarded by
   //    xcodebuild into the test-runner process (how the Swift side reads
   //    ELIZA_BOOT_TIMEOUT_SECONDS / ELIZA_BOOT_SCREENSHOT_INTERVAL_SECONDS).
+  const strictGate =
+    Boolean(args["strict-gate"]) ||
+    process.env.ELIZA_IOS_STRICT_BOOT_GATE === "1";
   //    Default = a deterministic shard list with a fresh app container before
   //    every shard (#13686); narrow with --only-testing AppUITests/<Class>[/<test>].
   const shardPlan = buildIosXcuitestShardPlan({
-    onlyTesting: args["only-testing"] || "AppUITests",
+    onlyTesting:
+      args["only-testing"] ||
+      (strictGate ? "AppUITests/BootCaptureUITests" : "AppUITests"),
   });
   if (!args["only-testing"]) {
     const uncovered = findUncoveredIosXcuitestEntries({
@@ -903,6 +910,14 @@ async function main() {
       : {}),
     ...(process.env.ELIZA_LOOP_ACTIONS
       ? { TEST_RUNNER_ELIZA_LOOP_ACTIONS: process.env.ELIZA_LOOP_ACTIONS }
+      : {}),
+    ...(strictGate
+      ? {
+          TEST_RUNNER_ELIZA_REQUIRE_HOME: "1",
+          TEST_RUNNER_ELIZA_REQUIRE_REPLY: "1",
+          TEST_RUNNER_ELIZA_REQUIRE_NO_SKIPS: "1",
+          TEST_RUNNER_ELIZA_FAIL_ON_SKIP: "1",
+        }
       : {}),
   };
 
@@ -1050,6 +1065,17 @@ async function main() {
         agentProbe.verdict,
       ),
     };
+    if (strictGate) {
+      const verdict = classifyXcresultSummaryForGate(artifacts.summaryJson);
+      shardSummary.strictGate = verdict;
+      if (!verdict.ok) {
+        shardSummary.passed = false;
+        log(
+          `strict summary gate failed (${shard.resultName}): ${verdict.reason}; ` +
+            `stats=${JSON.stringify(verdict.stats)}`,
+        );
+      }
+    }
     log(
       `shard ${shard.resultName}: exit=${testResult.status} attachments=${artifacts.attachmentCount}`,
     );

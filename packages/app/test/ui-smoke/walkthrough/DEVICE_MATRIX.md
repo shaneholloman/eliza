@@ -44,6 +44,7 @@ bun run --cwd packages/app test:e2e:walkthrough:live     # real backend + model
 ```bash
 bun run --cwd packages/app build:ios:local:sim           # rebuild from this tree FIRST
 bun run --cwd packages/app test:e2e:walkthrough:ios
+bun run --cwd packages/app test:e2e:ios:boot-gate        # strict boot/chat gate
 ```
 
 - **Prereqs (macOS only):** a booted simulator
