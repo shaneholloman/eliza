@@ -194,6 +194,29 @@ function checkWorkflowText(fileName, text, problems) {
           "test.yml: 'stale-base-preflight' must be PR-only so non-PR ci-ok lanes keep using merge-quality-gate",
         );
       }
+      if (!/actions\/setup-node@/.test(preflight)) {
+        problems.push(
+          "test.yml: 'stale-base-preflight' must set up Node before running the stale-base guard scripts",
+        );
+      }
+      if (
+        !/HEAD_REPO:[\s\S]*github\.event\.pull_request\.head\.repo\.full_name/.test(
+          preflight,
+        )
+      ) {
+        problems.push(
+          "test.yml: 'stale-base-preflight' must fetch the PR head from the head repository so fork PRs are supported",
+        );
+      }
+      if (
+        !/https:\/\/github\.com\/\$\{HEAD_REPO\}\.git[\s\S]*"\$HEAD_SHA"/.test(
+          preflight,
+        )
+      ) {
+        problems.push(
+          "test.yml: 'stale-base-preflight' fetch must use the PR head repository URL for HEAD_SHA",
+        );
+      }
       if (!/stale-base-guard\.mjs[\s\S]*--head "\$HEAD_SHA"/.test(preflight)) {
         problems.push(
           "test.yml: 'stale-base-preflight' is missing the PR-head stale-base guard step",
@@ -282,8 +305,12 @@ function selfTest() {
     name: PR stale-base preflight
     if: github.event_name == 'pull_request'
     runs-on: \${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
+    env:
+      HEAD_REPO: \${{ github.event.pull_request.head.repo.full_name }}
     steps:
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
       - run: node packages/scripts/stale-base-guard.mjs --base "refs/remotes/origin/\${BASE_REF}" --head "$HEAD_SHA"
+      - run: git fetch "https://github.com/\${HEAD_REPO}.git" "$HEAD_SHA"
   changes:
     name: Classify changed paths
     needs: stale-base-preflight
@@ -353,6 +380,28 @@ function selfTest() {
     {
       name: "preflight not PR-only",
       text: good.replace("if: github.event_name == 'pull_request'", ""),
+    },
+    {
+      name: "preflight missing node setup",
+      text: good.replace(
+        "      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e\n",
+        "",
+      ),
+    },
+    {
+      name: "preflight missing head repo env",
+      text: good.replace(
+        "      HEAD_REPO: $" +
+          "{{ github.event.pull_request.head.repo.full_name }}\n",
+        "",
+      ),
+    },
+    {
+      name: "preflight fetches head from origin",
+      text: good.replace(
+        'git fetch "https://github.com/$' + '{HEAD_REPO}.git" "$HEAD_SHA"',
+        'git fetch origin "$HEAD_SHA"',
+      ),
     },
     {
       name: "changes missing preflight need",

@@ -47,6 +47,7 @@ jobs:
     timeout-minutes: 10
     env:
       BASE_REF: ${{ github.event.pull_request.base.ref }}
+      HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       ACK: ${{ contains(github.event.pull_request.labels.*.name, 'stale-base-ack') && '1' || '' }}
     steps:
@@ -57,11 +58,17 @@ jobs:
           fetch-depth: 1
           submodules: false
 
+      - name: Setup Node.js for stale-base guard
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Fetch PR head + bounded history (blobless)
         run: |
           set -euo pipefail
+          git fetch --quiet --no-tags --filter=blob:none --depth=1500 \
+            "https://github.com/${HEAD_REPO}.git" "$HEAD_SHA"
           git fetch --quiet --no-tags --filter=blob:none --depth=1500 origin \
-            "$HEAD_SHA" \
             "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
 
       - name: Self-test the guard on fixture repos
