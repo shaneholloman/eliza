@@ -63,7 +63,7 @@ const defaultDeps: PushRegistrationDeps = {
   navigate: navigateDeepLink,
 };
 
-let started = false;
+let startPromise: Promise<void> | null = null;
 /** The most recent token we POSTed, so a re-fired `registration` is a no-op. */
 let registeredToken: string | null = null;
 
@@ -106,10 +106,22 @@ async function onRegistration(
 export async function initPushRegistration(
   deps: PushRegistrationDeps = defaultDeps,
 ): Promise<void> {
-  if (started) return;
+  startPromise ??= startPushRegistration(deps)
+    .then((didStart) => {
+      if (!didStart) startPromise = null;
+    })
+    .catch((error: unknown) => {
+      startPromise = null;
+      throw error;
+    });
+  await startPromise;
+}
 
+async function startPushRegistration(
+  deps: PushRegistrationDeps,
+): Promise<boolean> {
   const platform = pushPlatform(deps.getPlatform());
-  if (!platform) return;
+  if (!platform) return false;
 
   const plugin = deps.getPlugin();
   if (
@@ -117,16 +129,14 @@ export async function initPushRegistration(
     typeof plugin.addListener !== "function"
   ) {
     // Native build without the push plugin — nothing to register against.
-    return;
+    return false;
   }
 
   // Gate on an already-granted permission; never prompt from here.
   if (typeof plugin.checkPermissions === "function") {
     const status = await plugin.checkPermissions();
-    if (status.receive !== "granted") return;
+    if (status.receive !== "granted") return false;
   }
-
-  started = true;
 
   await plugin.addListener("registration", (token: PushRegistrationToken) => {
     void onRegistration(deps, platform, token).catch((error: unknown) => {
@@ -158,6 +168,7 @@ export async function initPushRegistration(
   );
 
   await plugin.register();
+  return true;
 }
 
 /** Drop this device's token server-side and locally (logout / revoke). */
@@ -172,6 +183,6 @@ export async function unregisterPushToken(
 
 /** Test-only reset of the module-level registration guards. */
 export function __resetPushRegistrationForTests(): void {
-  started = false;
+  startPromise = null;
   registeredToken = null;
 }

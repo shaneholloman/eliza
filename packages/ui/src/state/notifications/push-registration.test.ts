@@ -120,6 +120,37 @@ describe("initPushRegistration", () => {
     expect(deps.registerToken).not.toHaveBeenCalled();
   });
 
+  it("retries after permission is granted later", async () => {
+    let permission: "granted" | "denied" = "denied";
+    const plugin = makePlugin(permission);
+    plugin.checkPermissions = async () => ({ receive: permission });
+    const deps = makeDeps(plugin, "ios");
+
+    await initPushRegistration(deps);
+    permission = "granted";
+    await initPushRegistration(deps);
+
+    expect(plugin.__registerCalls).toBe(1);
+  });
+
+  it("retries when native register() fails before the OS accepts the request", async () => {
+    const plugin = makePlugin("granted");
+    plugin.register = async function (this: FakePlugin) {
+      this.__registerCalls++;
+      if (this.__registerCalls === 1) {
+        throw new Error("native bridge unavailable");
+      }
+    };
+    const deps = makeDeps(plugin, "ios");
+
+    await expect(initPushRegistration(deps)).rejects.toThrow(
+      "native bridge unavailable",
+    );
+    await initPushRegistration(deps);
+
+    expect(plugin.__registerCalls).toBe(2);
+  });
+
   it("no-ops on non-native platforms (web/desktop)", async () => {
     const plugin = makePlugin("granted");
     const deps = makeDeps(plugin, "web");
