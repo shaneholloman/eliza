@@ -163,6 +163,30 @@ const FALLBACK_RATE_ENV_BY_CHARGE_TYPE: Record<"input" | "output", string> = {
   output: "AI_PRICING_FALLBACK_OUTPUT_USD_PER_M",
 };
 
+function assertBillableQuantity(params: {
+  quantity: number;
+  scope: string;
+  provider: string;
+  model: string;
+  productFamily: PricingProductFamily;
+  chargeType: string;
+}) {
+  if (Number.isFinite(params.quantity) && params.quantity >= 0) {
+    return;
+  }
+  logger.error("ai-pricing: refusing to bill an invalid quantity", {
+    provider: params.provider,
+    model: params.model,
+    productFamily: params.productFamily,
+    chargeType: params.chargeType,
+    scope: params.scope,
+    quantity: params.quantity,
+  });
+  throw new Error(
+    `Corrupt billing quantity for ${params.productFamily}:${params.chargeType} ${params.provider}/${params.model}; refusing to bill an invalid quantity`,
+  );
+}
+
 /** Env-configured default rate (USD per million tokens) → per-token unit price. */
 function envFallbackTokenUnitPrice(chargeType: "input" | "output"): number | null {
   const envName = FALLBACK_RATE_ENV_BY_CHARGE_TYPE[chargeType];
@@ -298,6 +322,14 @@ function computeCostFromEntry(entry: PreparedPricingEntry, quantity: number): Fl
       `Corrupt catalog price for ${entry.productFamily}:${entry.chargeType} ${entry.provider}/${entry.model}; refusing to bill an invalid rate`,
     );
   }
+  assertBillableQuantity({
+    quantity,
+    scope: "flat",
+    provider: entry.provider,
+    model: entry.model,
+    productFamily: entry.productFamily,
+    chargeType: entry.chargeType,
+  });
 
   const baseCost = asDecimal(entry.unitPrice).mul(quantity);
   const markedUp = applyPlatformMarkup(baseCost);
@@ -364,6 +396,22 @@ export async function calculateTextCostFromCatalog(params: {
   const productFamily: PricingProductFamily = params.model.includes("embedding")
     ? "embedding"
     : "language";
+  assertBillableQuantity({
+    quantity: params.inputTokens,
+    scope: "inputTokens",
+    provider: params.provider,
+    model: canonicalModel,
+    productFamily,
+    chargeType: "input",
+  });
+  assertBillableQuantity({
+    quantity: params.outputTokens,
+    scope: "outputTokens",
+    provider: params.provider,
+    model: canonicalModel,
+    productFamily,
+    chargeType: "output",
+  });
   // Both lookups degrade to null on a catalog miss. A missing INPUT price used
   // to throw uncaught here (the OUTPUT lookup was already guarded), and the
   // throw propagated through calculateCost → the chat-completions reserve →

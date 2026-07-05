@@ -78,6 +78,7 @@ const seedCatalog: CatalogRow[] = [
   row("anthropic/claude-opus-4-8", "output", "language", "token", String(25 / USD_PER_M)),
   // a corrupt flat (image:generation) row with NO valid sibling -> flat boundary
   row("anthropic/corrupt-image", "generation", "image", "image", "NaN"),
+  row("anthropic/valid-image", "generation", "image", "image", "0.05"),
 ];
 
 function matchProviderModelPairs(filters: {
@@ -195,11 +196,10 @@ test("token path: corrupt exact price + NO valid fallback + no env default => fa
   }
 });
 
-test("flat path: a corrupt-only image price fails closed at the cost boundary (never NaN)", async () => {
-  // The flat cost path resolves the corrupt image row (no valid sibling), which
-  // is dropped at selection -> resolvePreparedPricingEntry throws "Pricing
-  // unavailable". Even if a corrupt entry reached computeCostFromEntry, the
-  // defense-in-depth guard throws rather than billing NaN. Either way: no NaN.
+test("flat path: a corrupt-only image price fails closed before billing (never NaN)", async () => {
+  // The corrupt image row is dropped at selection, so
+  // resolvePreparedPricingEntry throws "Pricing unavailable" before any ledger
+  // math. The selected-row test below covers the cost-boundary quantity guard.
   await expect(
     calculateImageGenerationCostFromCatalog({
       model: "corrupt-image",
@@ -207,6 +207,38 @@ test("flat path: a corrupt-only image price fails closed at the cost boundary (n
       imageCount: 1,
     }),
   ).rejects.toThrow(/Pricing unavailable|non-finite rate/);
+});
+
+test("token path: a corrupt input token quantity fails closed before multiplication", async () => {
+  await expect(
+    calculateTextCostFromCatalog({
+      model: "corrupt-priced-model",
+      provider: "anthropic",
+      inputTokens: Number.NaN,
+      outputTokens: 1,
+    }),
+  ).rejects.toThrow("refusing to bill an invalid quantity");
+});
+
+test("token path: a negative output token quantity fails closed before multiplication", async () => {
+  await expect(
+    calculateTextCostFromCatalog({
+      model: "corrupt-priced-model",
+      provider: "anthropic",
+      inputTokens: 1,
+      outputTokens: -1,
+    }),
+  ).rejects.toThrow("refusing to bill an invalid quantity");
+});
+
+test("flat path: a selected image row with a corrupt quantity fails closed at the cost boundary", async () => {
+  await expect(
+    calculateImageGenerationCostFromCatalog({
+      model: "valid-image",
+      provider: "anthropic",
+      imageCount: Number.NaN,
+    }),
+  ).rejects.toThrow("refusing to bill an invalid quantity");
 });
 
 test("REGRESSION: cost is never returned as NaN for a corrupt catalog price", async () => {
