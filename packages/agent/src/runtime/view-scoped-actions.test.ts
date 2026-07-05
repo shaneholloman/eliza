@@ -12,7 +12,7 @@
 import type http from "node:http";
 import { Readable } from "node:stream";
 import type { Action, IAgentRuntime } from "@elizaos/core";
-import { ElizaError, isElizaError } from "@elizaos/core";
+import { type ElizaError, isElizaError } from "@elizaos/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   registerPluginViews,
@@ -70,9 +70,7 @@ function makeInteractiveView(id: string, mountedIds: Set<string>) {
         {
           name: `VIEW_${id.toUpperCase()}_MISSING_TARGET`,
           description: "Drives an element that is not mounted",
-          steps: [
-            { kind: "agent-click" as const, target: "ghost-button" },
-          ],
+          steps: [{ kind: "agent-click" as const, target: "ghost-button" }],
         },
       ],
       serverInteract: async (
@@ -122,18 +120,30 @@ async function navigateTo(id: string): Promise<void> {
  * validate()/handler() the mechanism built.
  */
 function makeRuntime(): {
-  runtime: Pick<IAgentRuntime, "registerAction" | "unregisterAction">;
+  runtime: Pick<
+    IAgentRuntime,
+    "actions" | "registerAction" | "unregisterAction"
+  >;
   actions: Map<string, Action>;
 } {
   const actions = new Map<string, Action>();
+  const actionList: Action[] = [];
   return {
     actions,
     runtime: {
+      actions: actionList,
       registerAction: (action: Action) => {
+        if (actions.has(action.name)) return;
         actions.set(action.name, action);
+        actionList.push(action);
       },
-      unregisterAction: (name: string) => actions.delete(name),
-    } as Pick<IAgentRuntime, "registerAction" | "unregisterAction">,
+      unregisterAction: (name: string) => {
+        const removed = actions.delete(name);
+        const index = actionList.findIndex((action) => action.name === name);
+        if (index >= 0) actionList.splice(index, 1);
+        return removed;
+      },
+    } as Pick<IAgentRuntime, "actions" | "registerAction" | "unregisterAction">,
   };
 }
 
@@ -231,7 +241,10 @@ describe("view-scoped action handler drives the interact protocol", () => {
   });
 
   it("throws a typed missing-element error when a target useAgentElement id is not mounted", async () => {
-    const settings = makeInteractiveView("settings", new Set(["provider-select"]));
+    const settings = makeInteractiveView(
+      "settings",
+      new Set(["provider-select"]),
+    );
     await registerPluginViews(
       {
         name: TEST_PLUGIN,
@@ -328,9 +341,7 @@ describe("view-scoped action registration reconciliation", () => {
       settings.view,
     ]);
 
-    expect(registered).toEqual(
-      scopedActionNames(settings.view.scopedActions),
-    );
+    expect(registered).toEqual(scopedActionNames(settings.view.scopedActions));
     expect(actions.has("VIEW_SETTINGS_SET_PROVIDER")).toBe(true);
     expect(actions.has("VIEW_SETTINGS_MISSING_TARGET")).toBe(true);
 
@@ -372,5 +383,27 @@ describe("view-scoped action registration reconciliation", () => {
       a.view.scopedActions[0].description,
     );
     void warn;
+  });
+
+  it("does not unregister an incumbent action when a scoped action collides by name", () => {
+    const { runtime, actions } = makeRuntime();
+    const incumbent: Action = {
+      name: "VIEW_SETTINGS_SET_PROVIDER",
+      description: "global incumbent",
+      handler: async () => undefined,
+    };
+    runtime.registerAction(incumbent);
+    const settings = makeInteractiveView("settings", new Set());
+
+    const registered = registerViewScopedActions(runtime, TEST_PLUGIN, [
+      settings.view,
+    ]);
+
+    expect(registered).toEqual(["VIEW_SETTINGS_MISSING_TARGET"]);
+    expect(actions.get("VIEW_SETTINGS_SET_PROVIDER")).toBe(incumbent);
+
+    unregisterViewScopedActions(runtime, TEST_PLUGIN);
+    expect(actions.get("VIEW_SETTINGS_SET_PROVIDER")).toBe(incumbent);
+    expect(actions.has("VIEW_SETTINGS_MISSING_TARGET")).toBe(false);
   });
 });
