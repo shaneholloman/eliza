@@ -10,7 +10,10 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "../../..");
 const VISUAL_MATRIX_SPEC = path.join(HERE, "ui-smoke", "plugin-view-cases.ts");
 const HMR_SPEC = path.join(HERE, "hmr", "hmr-dependency-levels.spec.ts");
-const CI_WORKFLOW = path.join(REPO_ROOT, ".github/workflows/ci.yaml");
+const DEV_SMOKE_WORKFLOW = path.join(
+  REPO_ROOT,
+  ".github/workflows/dev-smoke.yml",
+);
 const ROOT_PACKAGE_JSON = path.join(REPO_ROOT, "package.json");
 const APP_PACKAGE_JSON = path.join(REPO_ROOT, "packages/app/package.json");
 
@@ -50,7 +53,11 @@ function normalizedHmrViewId(name: string): string {
   }
 }
 
-function readHmrViewLevels(): Array<{ id: string; file: string }> {
+function readHmrViewLevels(): Array<{
+  id: string;
+  name: string;
+  file: string;
+}> {
   const source = readFileSync(HMR_SPEC, "utf8");
   return Array.from(
     source.matchAll(/name:\s*"plugin view ([^"]+)",\s*file:\s*"([^"]+)"/g),
@@ -58,14 +65,49 @@ function readHmrViewLevels(): Array<{ id: string; file: string }> {
     const rawId = match[1];
     const file = match[2];
     if (!rawId || !file) return [];
-    return [{ id: normalizedHmrViewId(rawId), file }];
+    return [
+      {
+        id: normalizedHmrViewId(rawId),
+        name: `plugin view ${rawId}`,
+        file,
+      },
+    ];
   });
+}
+
+function readHmrRootGraphPluginViewNames(): Set<string> {
+  const source = readFileSync(HMR_SPEC, "utf8");
+  const match = source.match(
+    /const PLUGIN_VIEWS_IN_ROOT_GRAPH = new Set<string>\(\[([\s\S]*?)\]\);/,
+  );
+  expect(
+    match?.[1],
+    "PLUGIN_VIEWS_IN_ROOT_GRAPH declaration was not found",
+  ).toBeTruthy();
+  const rootGraphSource = match?.[1] ?? "";
+  return new Set(
+    Array.from(rootGraphSource.matchAll(/"([^"]+)"/g)).map((entry) => entry[1]),
+  );
+}
+
+function readWorkflowJobBlock(workflow: string, jobName: string): string {
+  const match = workflow.match(
+    new RegExp(
+      `\\n  ${jobName}:\\n([\\s\\S]*?)(?=\\n  [a-zA-Z0-9_-]+:\\n|\\n*$)`,
+    ),
+  );
+  expect(
+    match?.[1],
+    `${jobName} job was not found in dev-smoke.yml`,
+  ).toBeTruthy();
+  return match?.[1] ?? "";
 }
 
 describe("plugin view HMR coverage", () => {
   it("keeps the HMR source-probe matrix in lockstep with every GUI view", () => {
     const guiCases = readGuiVisualCases();
     const hmrLevels = readHmrViewLevels();
+    const rootGraphPluginViews = readHmrRootGraphPluginViewNames();
     const guiById = new Map(guiCases.map((view) => [view.id, view]));
     const hmrById = new Map(hmrLevels.map((level) => [level.id, level]));
 
@@ -76,6 +118,7 @@ describe("plugin view HMR coverage", () => {
       .filter((level) => !guiById.has(level.id))
       .map((level) => `${level.id} ${level.file}`);
     const missingFiles = hmrLevels
+      .filter((level) => rootGraphPluginViews.has(level.name))
       .filter((level) => !existsSync(path.join(REPO_ROOT, level.file)))
       .map((level) => `${level.id} ${level.file}`);
 
@@ -94,7 +137,8 @@ describe("plugin view HMR coverage", () => {
     const appPackage = JSON.parse(readFileSync(APP_PACKAGE_JSON, "utf8")) as {
       scripts?: Record<string, string>;
     };
-    const workflow = readFileSync(CI_WORKFLOW, "utf8");
+    const workflow = readFileSync(DEV_SMOKE_WORKFLOW, "utf8");
+    const hmrJob = readWorkflowJobBlock(workflow, "hmr");
 
     expect(rootPackage.scripts?.["test:hmr"]).toContain(
       "packages/app test:hmr",
@@ -102,6 +146,14 @@ describe("plugin view HMR coverage", () => {
     expect(appPackage.scripts?.["test:hmr"]).toContain(
       "playwright.hmr.config.ts",
     );
-    expect(workflow).toContain("bun run test:hmr");
+    expect(hmrJob).toContain("name: Vite HMR dependency-level smoke");
+    expect(hmrJob).toContain("needs: changes");
+    expect(hmrJob).toContain(
+      "if: github.event_name != 'pull_request' || needs.changes.outputs.dev_smoke == 'true'",
+    );
+    expect(hmrJob).toContain("run: bun run test:hmr");
+    expect(hmrJob).toContain("name: hmr-results");
+    expect(hmrJob).toContain("packages/app/playwright-report/");
+    expect(hmrJob).toContain("packages/app/test-results/hmr/");
   });
 });
