@@ -6,12 +6,9 @@ name: Tests
 # build+core-test gate; this workflow adds the broader integration surface.
 
 on:
-  pull_request:
-    branches: [develop]
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
-  merge_group:
-    branches: [develop]
-    types: [checks_requested]
+  # Post-merge integration surface. PRs to `develop` run the lightweight
+  # lint/typecheck/build gate (develop-pr.yml); the full suite runs here once
+  # changes land on `develop`, plus nightly and on demand.
   push:
     branches: [develop]
   workflow_dispatch:
@@ -137,6 +134,9 @@ jobs:
 
       - name: Validate CI Bun version pin contract
         run: node packages/scripts/ci-bun-version-contract.mjs
+
+      - name: Validate zero-key command ownership contract
+        run: node packages/scripts/ci-zero-key-command-ownership-contract.mjs
 
       - name: Install alias-read guard parser dependency
         run: npm install --prefix "$RUNNER_TEMP/alias-read-guard-deps" --no-save --no-package-lock --ignore-scripts typescript@6.0.3
@@ -396,20 +396,6 @@ jobs:
 
       - name: XR sim Playwright coverage
         run: bun run --cwd packages/ui test:xr-sim
-
-      # Tutorial spotlight e2e (#9957): per-frame themed-accent color + glow
-      # framing + Z_TUTORIAL + nav-lock assertions under dark/light/gold, in
-      # headless chromium. Previously ran in no workflow.
-      - name: Tutorial spotlight e2e (#9957)
-        run: bun run --cwd packages/ui test:tutorial-e2e
-
-      - name: Upload tutorial e2e artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: tutorial-e2e-artifacts
-          path: packages/ui/src/components/pages/tutorial/__e2e__/output-tutorial/
-          if-no-files-found: ignore
 
       # Immersive WebGL e2e (#10722): the REAL enterImmersiveScene() production
       # export against an IWER emulated Quest 3 in headless-chromium WebGL2 —

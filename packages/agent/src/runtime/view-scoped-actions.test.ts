@@ -11,11 +11,7 @@
  */
 import type http from "node:http";
 import { Readable } from "node:stream";
-import type {
-  Action,
-  IAgentRuntime,
-  ViewScopedAction,
-} from "@elizaos/core";
+import type { Action, IAgentRuntime, ViewScopedAction } from "@elizaos/core";
 import { type ElizaError, isElizaError } from "@elizaos/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUILTIN_VIEWS } from "../api/builtin-views.ts";
@@ -39,6 +35,7 @@ import {
 } from "./view-scoped-actions.ts";
 
 const TEST_PLUGIN = "@test/view-scoped-actions";
+const INTERACTIVE_VIEW_ID = "settings_fixture";
 
 /**
  * Mounted view whose serverInteract stands in for the shell's agent-surface
@@ -56,6 +53,7 @@ function makeInteractiveView(id: string, mountedIds: Set<string>) {
       id,
       label: `${id} view`,
       path: `/${id}`,
+      surface: { capabilities: ["agent-surface"] },
       relatedActions: [] as string[],
       scopedActions: [
         {
@@ -174,7 +172,7 @@ afterEach(() => {
 
 describe("view-scoped action validate() gating on the active view", () => {
   it("returns false when the declaring view is not active and true when it is", async () => {
-    const settings = makeInteractiveView("settings", new Set());
+    const settings = makeInteractiveView(INTERACTIVE_VIEW_ID, new Set());
     await registerPluginViews(
       {
         name: TEST_PLUGIN,
@@ -184,7 +182,7 @@ describe("view-scoped action validate() gating on the active view", () => {
       process.cwd(),
     );
     const action = buildViewScopedAction(
-      "settings",
+      INTERACTIVE_VIEW_ID,
       settings.view.scopedActions[0],
     );
 
@@ -196,7 +194,7 @@ describe("view-scoped action validate() gating on the active view", () => {
     expect(await action.validate({} as IAgentRuntime, fakeMessage)).toBe(false);
 
     // Switch INTO the declaring view via the real navigate route → open.
-    await navigateTo("settings");
+    await navigateTo(INTERACTIVE_VIEW_ID);
     expect(await action.validate({} as IAgentRuntime, fakeMessage)).toBe(true);
 
     // Switch away again → closes without any restart.
@@ -208,7 +206,7 @@ describe("view-scoped action validate() gating on the active view", () => {
 describe("view-scoped action handler drives the interact protocol", () => {
   it("resolves a named action to the real agent-fill/click sequence", async () => {
     const settings = makeInteractiveView(
-      "settings",
+      INTERACTIVE_VIEW_ID,
       new Set(["provider-select", "save-button"]),
     );
     await registerPluginViews(
@@ -219,10 +217,10 @@ describe("view-scoped action handler drives the interact protocol", () => {
       },
       process.cwd(),
     );
-    await navigateTo("settings");
+    await navigateTo(INTERACTIVE_VIEW_ID);
 
     const action = buildViewScopedAction(
-      "settings",
+      INTERACTIVE_VIEW_ID,
       settings.view.scopedActions[0],
     );
     const result = await action.handler(
@@ -247,7 +245,7 @@ describe("view-scoped action handler drives the interact protocol", () => {
 
   it("throws a typed missing-element error when a target useAgentElement id is not mounted", async () => {
     const settings = makeInteractiveView(
-      "settings",
+      INTERACTIVE_VIEW_ID,
       new Set(["provider-select"]),
     );
     await registerPluginViews(
@@ -258,11 +256,11 @@ describe("view-scoped action handler drives the interact protocol", () => {
       },
       process.cwd(),
     );
-    await navigateTo("settings");
+    await navigateTo(INTERACTIVE_VIEW_ID);
 
     // The MISSING_TARGET action clicks "ghost-button", which is never mounted.
     const action = buildViewScopedAction(
-      "settings",
+      INTERACTIVE_VIEW_ID,
       settings.view.scopedActions[1],
     );
 
@@ -281,7 +279,7 @@ describe("view-scoped action handler drives the interact protocol", () => {
 
   it("throws a typed param-missing error when a {{param}} value is not supplied", async () => {
     const settings = makeInteractiveView(
-      "settings",
+      INTERACTIVE_VIEW_ID,
       new Set(["provider-select", "save-button"]),
     );
     await registerPluginViews(
@@ -292,10 +290,10 @@ describe("view-scoped action handler drives the interact protocol", () => {
       },
       process.cwd(),
     );
-    await navigateTo("settings");
+    await navigateTo(INTERACTIVE_VIEW_ID);
 
     const action = buildViewScopedAction(
-      "settings",
+      INTERACTIVE_VIEW_ID,
       settings.view.scopedActions[0],
     );
     // No `provider` param → the {{provider}} fill step must fail loudly, not
@@ -311,7 +309,7 @@ describe("view-scoped action handler drives the interact protocol", () => {
 
   it("throws VIEW_SCOPED_ACTION_VIEW_INACTIVE when invoked while its view is not active", async () => {
     const settings = makeInteractiveView(
-      "settings",
+      INTERACTIVE_VIEW_ID,
       new Set(["provider-select", "save-button"]),
     );
     await registerPluginViews(
@@ -327,7 +325,7 @@ describe("view-scoped action handler drives the interact protocol", () => {
     await navigateTo("chat");
 
     const action = buildViewScopedAction(
-      "settings",
+      INTERACTIVE_VIEW_ID,
       settings.view.scopedActions[0],
     );
     await expect(
@@ -428,6 +426,7 @@ const CHARACTER_MOUNTED_IDS = new Set([
   "example-add-conversation",
   "post-example-add",
 ]);
+const CHARACTER_TEST_VIEW_ID = "character_fixture";
 
 function characterView() {
   const source = BUILTIN_VIEWS.find((v) => v.id === "character");
@@ -439,11 +438,14 @@ function characterView() {
     clicked,
     scopedActions: (source.scopedActions ?? []) as ViewScopedAction[],
     view: {
-      id: "character",
+      id: CHARACTER_TEST_VIEW_ID,
       label: "Character view",
-      path: "/character",
+      path: `/${CHARACTER_TEST_VIEW_ID}`,
       relatedActions: [] as string[],
       scopedActions: source.scopedActions,
+      // Preserve the real view's agent-surface grant so the mutating
+      // agent-fill/agent-click steps clear the route/dispatch surface gate.
+      surface: source.surface,
       serverInteract: async (
         capability: string,
         params?: Record<string, unknown>,
@@ -493,14 +495,15 @@ describe("character view scoped actions (#14155)", () => {
 
     // FILL_BIO / ADD_STYLE_RULE take their text from a param; ADD_MESSAGE_EXAMPLE
     // is a pure click with no params.
-    expect(findAction(scopedActions, "VIEW_CHARACTER_FILL_BIO").parameters).toEqual([
-      "bio",
-    ]);
+    expect(
+      findAction(scopedActions, "VIEW_CHARACTER_FILL_BIO").parameters,
+    ).toEqual(["bio"]);
     expect(
       findAction(scopedActions, "VIEW_CHARACTER_ADD_STYLE_RULE").parameters,
     ).toEqual(["rule"]);
     expect(
-      findAction(scopedActions, "VIEW_CHARACTER_ADD_MESSAGE_EXAMPLE").parameters,
+      findAction(scopedActions, "VIEW_CHARACTER_ADD_MESSAGE_EXAMPLE")
+        .parameters,
     ).toBeUndefined();
   });
 
@@ -527,12 +530,12 @@ describe("character view scoped actions (#14155)", () => {
     const fillBio = actions.get("VIEW_CHARACTER_FILL_BIO");
     expect(fillBio).toBeDefined();
 
-    // Gated closed everywhere but the character view.
+    // Gated closed everywhere but the declaring view.
     await navigateTo("chat");
     expect(await fillBio?.validate?.({} as IAgentRuntime, fakeMessage)).toBe(
       false,
     );
-    await navigateTo("character");
+    await navigateTo(CHARACTER_TEST_VIEW_ID);
     expect(await fillBio?.validate?.({} as IAgentRuntime, fakeMessage)).toBe(
       true,
     );
@@ -548,10 +551,10 @@ describe("character view scoped actions (#14155)", () => {
       },
       process.cwd(),
     );
-    await navigateTo("character");
+    await navigateTo(CHARACTER_TEST_VIEW_ID);
 
     const action = buildViewScopedAction(
-      "character",
+      CHARACTER_TEST_VIEW_ID,
       findAction(char.scopedActions, "VIEW_CHARACTER_FILL_BIO"),
     );
     const result = await action.handler(
@@ -577,10 +580,10 @@ describe("character view scoped actions (#14155)", () => {
       },
       process.cwd(),
     );
-    await navigateTo("character");
+    await navigateTo(CHARACTER_TEST_VIEW_ID);
 
     const action = buildViewScopedAction(
-      "character",
+      CHARACTER_TEST_VIEW_ID,
       findAction(char.scopedActions, "VIEW_CHARACTER_ADD_STYLE_RULE"),
     );
     const result = await action.handler(
@@ -610,10 +613,10 @@ describe("character view scoped actions (#14155)", () => {
       },
       process.cwd(),
     );
-    await navigateTo("character");
+    await navigateTo(CHARACTER_TEST_VIEW_ID);
 
     const action = buildViewScopedAction(
-      "character",
+      CHARACTER_TEST_VIEW_ID,
       findAction(char.scopedActions, "VIEW_CHARACTER_ADD_MESSAGE_EXAMPLE"),
     );
     const result = await action.handler(
@@ -635,12 +638,18 @@ describe("character view scoped actions (#14155)", () => {
     // missing-element error — never a silent no-op.
     const source = BUILTIN_VIEWS.find((v) => v.id === "character");
     const bareView = {
-      id: "character",
+      id: CHARACTER_TEST_VIEW_ID,
       label: "Character view",
-      path: "/character",
+      path: `/${CHARACTER_TEST_VIEW_ID}`,
       relatedActions: [] as string[],
       scopedActions: source?.scopedActions,
-      serverInteract: async (_cap: string, params?: Record<string, unknown>) => ({
+      // Grant agent-surface (as the real view does) so the step clears the
+      // surface gate and reaches the mounted-element check under test.
+      surface: source?.surface,
+      serverInteract: async (
+        _cap: string,
+        params?: Record<string, unknown>,
+      ) => ({
         ok: false,
         id: typeof params?.id === "string" ? params.id : "",
         reason: "element not found",
@@ -654,10 +663,10 @@ describe("character view scoped actions (#14155)", () => {
       },
       process.cwd(),
     );
-    await navigateTo("character");
+    await navigateTo(CHARACTER_TEST_VIEW_ID);
 
     const action = buildViewScopedAction(
-      "character",
+      CHARACTER_TEST_VIEW_ID,
       findAction(
         (source?.scopedActions ?? []) as ViewScopedAction[],
         "VIEW_CHARACTER_ADD_STYLE_RULE",

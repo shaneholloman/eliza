@@ -1039,13 +1039,15 @@ function appShellMetadataPlugin(): Plugin {
 }
 
 function productionBuildStampGuardPlugin(): Plugin {
-  let viteMode = process.env.MODE ?? "";
+  let viteProductionBuild = false;
   const shouldRemoveStamp = () =>
-    shouldSkipBuildStamp(process.env, { viteMode });
+    shouldSkipBuildStamp(process.env, { viteProductionBuild });
+
   return {
     name: "eliza-production-build-stamp-guard",
     configResolved(config) {
-      viteMode = config.mode;
+      viteProductionBuild =
+        config.command === "build" && config.mode === "production";
     },
     buildStart() {
       if (!shouldRemoveStamp()) return;

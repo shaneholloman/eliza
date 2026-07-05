@@ -55,12 +55,54 @@ describe("shouldSkipBuildStamp", () => {
     ).toBe(false);
   });
 
+  it("skips the stamp for bare Vite production builds", () => {
+    expect(shouldSkipBuildStamp(env(), { viteProductionBuild: true })).toBe(
+      true,
+    );
+  });
+
+  it("keeps the stamp for explicitly non-production Vite builds", () => {
+    expect(
+      shouldSkipBuildStamp(env({ VITE_ENVIRONMENT: "staging" }), {
+        viteProductionBuild: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipBuildStamp(env({ ELIZA_BUILD_VARIANT: "direct" }), {
+        viteProductionBuild: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipBuildStamp(
+        env({ ELIZA_RELEASE_AUTHORITY: "developer-toolchain" }),
+        { viteProductionBuild: true },
+      ),
+    ).toBe(false);
+  });
+
   it("allows forced stamp debugging even in production", () => {
     expect(
       shouldSkipBuildStamp(
         env({ ELIZA_BUILD_STAMP: "1", VITE_ENVIRONMENT: "production" }),
       ),
     ).toBe(false);
+    expect(
+      shouldSkipBuildStamp(env({ ELIZA_BUILD_STAMP: "1" }), {
+        viteProductionBuild: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("removes emitted build-info assets from Vite production bundles", () => {
+    const bundle = {
+      "assets/app.js": { type: "chunk" },
+      "build-info.json": { type: "asset" },
+      "/build-info.json": { type: "asset" },
+    };
+
+    removeEmittedBuildStamp(bundle);
+
+    expect(bundle).toEqual({ "assets/app.js": { type: "chunk" } });
   });
 
   it("removes emitted build-info assets from Vite production bundles", () => {

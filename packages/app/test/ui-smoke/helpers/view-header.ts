@@ -27,15 +27,20 @@ export async function assertSharedViewHeaderContract(
   {
     requireTapTarget = false,
     within,
-  }: { requireTapTarget?: boolean; within?: string } = {},
+    title,
+  }: { requireTapTarget?: boolean; within?: string; title?: string } = {},
 ): Promise<void> {
-  // A route can float its view over the ambient home, so the page may carry more
-  // than one `view-header`. When the caller knows the routed view's shell
-  // (`within`), scope to the header INSIDE it so we assert the routed view's
-  // header, not whichever one paints first in the DOM.
-  const header = within
-    ? page.locator(within).getByTestId(VIEW_HEADER_TESTID).first()
-    : page.getByTestId(VIEW_HEADER_TESTID).first();
+  // A route can float its view over the ambient home, so the page may carry
+  // more than one `view-header` — an unscoped .first() could assert the
+  // AMBIENT header and mask a routed view that lost its own. Callers scope by
+  // the routed view's shell (`within`) or by the header's own title text
+  // (`title`) so the assertion binds to the routed view's header.
+  const scoped = within
+    ? page.locator(within).getByTestId(VIEW_HEADER_TESTID)
+    : page.getByTestId(VIEW_HEADER_TESTID);
+  const header = (
+    title ? scoped.filter({ hasText: title }) : scoped
+  ).first();
   await expect(
     header,
     "a normal view must render the shared ViewHeader ([data-testid=view-header])",
@@ -60,20 +65,20 @@ export async function assertSharedViewHeaderContract(
   ).toBe("");
 
   if (requireTapTarget) {
+    // The BUTTON's own box is the hit target (h-11 w-11 with a 36px visual
+    // chip inside — ViewBackButton). Measure the button, no borrowing from
+    // surrounding rows and no clamping: a shrunken control must fail here.
     const box = await back.boundingBox();
     expect(box, "the back control has a measurable box").not.toBeNull();
     if (box) {
-      // The icon glyph is 20px but the hit target (h-9 w-9 = 36px) plus the
-      // header's min-h-14 row give a ≥44px effective tap height on mobile.
-      const effectiveHeight = Math.max(box.height, 44);
       expect(
-        effectiveHeight,
-        `the back control tap target is at least 44px (got ${box.height})`,
+        box.height,
+        `the back control's own tap target is at least 44px tall (got ${box.height})`,
       ).toBeGreaterThanOrEqual(44);
       expect(
         box.width,
-        `the back control tap target is at least 32px wide (got ${box.width})`,
-      ).toBeGreaterThanOrEqual(32);
+        `the back control's own tap target is at least 44px wide (got ${box.width})`,
+      ).toBeGreaterThanOrEqual(44);
     }
   }
 }

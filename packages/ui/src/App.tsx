@@ -53,7 +53,6 @@ import { SaveCommandModal } from "./components/chat/SaveCommandModal";
 import { CustomActionEditor } from "./components/custom-actions/CustomActionEditor";
 import { CustomActionsPanel } from "./components/custom-actions/CustomActionsPanel";
 import { AppsPageView } from "./components/pages/AppsPageView";
-import { TutorialOverlay } from "./components/pages/tutorial/TutorialOverlay";
 import { PermissionPrimingOverlay } from "./components/permissions/PermissionPrimingOverlay";
 import { ActionBanner } from "./components/shell/ActionBanner";
 import { AssistantOverlay } from "./components/shell/AssistantOverlay";
@@ -126,6 +125,7 @@ import {
 import { isShellPaintable } from "./state/startup-coordinator";
 import { firstRunOwnsLoginSurface } from "./state/top-level-auth-gate";
 import { isLoopbackGatewayHost } from "./state/use-startup-shell-controller";
+import { TutorialConductorMount } from "./tutorial/TutorialConductor";
 import { confirmDesktopAction } from "./utils/desktop-dialogs";
 import { VoiceSelfTestShell } from "./voice/voice-selftest/VoiceSelfTestShell";
 import { VoiceWorkbenchShell } from "./voice/voice-selftest/VoiceWorkbenchShell";
@@ -225,9 +225,12 @@ const BrowserWorkspaceView = lazyNamedView(
   () => import("./components/pages/BrowserWorkspaceView"),
   "BrowserWorkspaceView",
 );
-const TranscriptsPageView = lazyNamedView(
-  () => import("./components/transcripts/TranscriptsPage"),
-  "TranscriptsPage",
+// #13594: `/apps/transcripts` is now the chrome-minimal LIVE-meeting affordance
+// only — recordings were folded into the Knowledge hub. The full recordings
+// browser (TranscriptsPage) is no longer routed.
+const LiveMeetingPageView = lazyNamedView(
+  () => import("./components/transcripts/LiveMeetingPage"),
+  "LiveMeetingPage",
 );
 const CameraPageView = lazyNamedView(
   () => import("./components/pages/CameraPageView"),
@@ -256,10 +259,6 @@ const SettingsView = lazyNamedView(
 const TutorialView = lazyNamedView(
   () => import("./components/pages/tutorial/TutorialView"),
   "TutorialView",
-);
-const HelpView = lazyNamedView(
-  () => import("./components/pages/help/HelpView"),
-  "HelpView",
 );
 const StreamView = lazyNamedView(
   () => import("./components/pages/StreamView"),
@@ -1195,7 +1194,6 @@ function buildStaticTabRenderers(): Record<
   );
   return {
     tutorial: wrap(<TutorialView />),
-    help: wrap(<HelpView />),
     chat: () => <ViewUnavailableFallback />,
     browser: () => <BrowserWorkspaceView />,
     stream: () => <StreamView />,
@@ -1204,7 +1202,7 @@ function buildStaticTabRenderers(): Record<
     plugins: wrap(<PluginsPageView />),
     skills: wrap(<SkillsView />),
     trajectories: wrap(<TrajectoriesView />),
-    transcripts: wrap(<TranscriptsPageView />),
+    transcripts: wrap(<LiveMeetingPageView />),
     // Relationships is a Character-family section: the shared CharacterSectionNav
     // (passed as `nav`) owns the "Character" header + strip, so the view renders
     // headerless.
@@ -2579,11 +2577,12 @@ export function App() {
             downloading/loading/missing/errored it seeds ONE live status turn
             with cancel / switch-to-cloud / retry controls. Renders null. */}
         <ModelStatusConductorMount />
-        {/* Interactive tutorial: a persistent spotlight overlay that survives
-            navigation (it sends the user to Settings, back home, …). Renders
-            only when the tutorial is active (launched from the home Tutorial
-            tile or the Help view). */}
-        <TutorialOverlay />
+        {/* In-chat tutorial conductor (headless) — while the tour is active it
+            seeds one conversational turn per step into the SAME live transcript
+            the overlay renders, narrates through the real voice engine, and
+            auto-advances on the user's real actions. No locks, no spotlight:
+            the user can ignore it freely. */}
+        <TutorialConductorMount />
         {/* Post-login permission priming: a one-time soft-ask modal that walks
             the user through the platform's onboarding permission set (voice,
             location, notifications) BEFORE any OS prompt. Self-gates on

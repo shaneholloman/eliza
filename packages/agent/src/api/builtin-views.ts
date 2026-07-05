@@ -15,27 +15,12 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
     viewKind: "system",
     label: "Tutorial",
     description:
-      "Interactive guided tour — learn the chat, switching views, and Settings in 90 seconds",
+      "Conversational walkthrough of the basics — runs right in the chat",
     icon: "GraduationCap",
     heroImagePath: "assets/view-heroes/tutorial.png",
     path: "/tutorial",
     order: 0,
     tags: ["tutorial", "onboarding", "learn", "guide", "help"],
-    visibleInManager: true,
-    desktopTabEnabled: true,
-    platforms: ["web", "desktop", "ios", "android"],
-  },
-  {
-    id: "help",
-    viewKind: "system",
-    label: "Help",
-    description:
-      "Searchable FAQ and knowledge base — what Eliza is and how everything works",
-    icon: "LifeBuoy",
-    heroImagePath: "assets/view-heroes/help.png",
-    path: "/help",
-    order: 2,
-    tags: ["help", "faq", "knowledge", "support", "questions"],
     visibleInManager: true,
     desktopTabEnabled: true,
     platforms: ["web", "desktop", "ios", "android"],
@@ -85,6 +70,12 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
     tags: ["identity", "personality", "character"],
     anticipatoryIntent:
       "Offer to refine the agent's identity, personality, or style from the current character state, and point out the highest-leverage next edit.",
+    // The scoped actions below expand into mutating `agent-fill`/`agent-click`
+    // interactions, which the route/dispatch gate denies unless the view opts
+    // into agent control via the `agent-surface` grant (read-only introspection
+    // stays open without it). This is the only built-in view driving the agent
+    // surface, so it is the only one that declares the grant.
+    surface: { capabilities: ["agent-surface"] },
     // Named actions the agent can invoke ONLY while the Character view is the
     // foreground view (#14155, deferred step 8 of #13591/#14123). Each targets
     // a `useAgentElement` id in the Character editor (`CharacterEditor` /
@@ -146,9 +137,7 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
           "add conversation example",
           "create a new example conversation",
         ],
-        steps: [
-          { kind: "agent-click", target: "example-add-conversation" },
-        ],
+        steps: [{ kind: "agent-click", target: "example-add-conversation" }],
       },
     ],
     visibleInManager: true,
@@ -158,12 +147,25 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
     id: "documents",
     viewKind: "system",
     label: "Knowledge",
-    description: "Agent knowledge documents, uploads, and retrieval sources",
+    description:
+      "The multimedia knowledge hub — documents, images, audio, video, and transcripts, filtered by media type and scope, with a unified reader",
     icon: "FileText",
     heroImagePath: "assets/view-heroes/character.png",
     path: "/character/documents",
     order: 51,
-    tags: ["documents", "knowledge", "files", "uploads", "retrieval"],
+    tags: [
+      "documents",
+      "knowledge",
+      "files",
+      "uploads",
+      "retrieval",
+      "transcripts",
+      "audio",
+      "video",
+      "images",
+      "media",
+      "attachments",
+    ],
     relatedActions: ["OWNER_DOCUMENTS"],
     anticipatoryIntent:
       "Offer to triage the newest ingested attachments/documents — summarize, tag, or file them — grounded in the recent-attachment counts.",
@@ -221,19 +223,23 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
     visibleInManager: true,
   },
   {
+    // Folded into the Knowledge hub (#13594): transcript records read in the hub
+    // under its Transcripts media-format facet + word-synced reader. This entry
+    // stays only as the chrome-minimal LIVE-meeting affordance (#11856) — a
+    // deep-link surface, not a separate manager view or launcher tile.
     id: "transcripts",
     viewKind: "system",
-    label: "Transcripts",
+    label: "Live meeting",
     description:
-      "Recorded voice transcripts — play, scrub, and read with word sync",
+      "Join a live meeting and capture its transcript; recorded transcripts read in the Knowledge hub",
     icon: "AudioLines",
     heroImagePath: "assets/view-heroes/transcripts.png",
     path: "/apps/transcripts",
     order: 71,
-    tags: ["transcript", "voice", "recording", "audio"],
+    tags: ["transcript", "voice", "recording", "audio", "meeting"],
     anticipatoryIntent:
       "Offer to summarize or extract action items from the most recent voice transcripts, grounded in the recent-transcript count.",
-    visibleInManager: true,
+    visibleInManager: false,
   },
   {
     id: "memories",

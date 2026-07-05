@@ -32,6 +32,7 @@ import { basename, dirname, join } from "node:path";
 import {
   getTrajectoryContext,
   type IAgentRuntime,
+  projectWorldId,
   type RecordedTrajectory,
   resolveStateDir,
   resolveTrajectoryGate,
@@ -149,7 +150,6 @@ import {
   PARENT_AGENT_BROKER_MANIFEST_ENTRY,
 } from "./parent-agent-broker.js";
 import {
-  deriveProjectWorldId,
   resolveBoundProjectCloudAppId,
   resolveTaskProjectId,
   resolveTaskSpawnWorkdir,
@@ -438,6 +438,54 @@ const SESSION_ERROR_STATUSES: ReadonlySet<string> = new Set([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+const ADMISSION_PRIORITIES: readonly OrchestratorTaskPriority[] = [
+  "low",
+  "normal",
+  "high",
+  "urgent",
+];
+
+function isAdmissionPriority(
+  value: unknown,
+): value is OrchestratorTaskPriority {
+  return ADMISSION_PRIORITIES.includes(value as OrchestratorTaskPriority);
+}
+
+// Every SerializableSpawnOpts field is an optional string, so a persisted value
+// is a valid spawn-opts payload iff each present key is a string.
+function isSerializableSpawnOpts(
+  value: unknown,
+): value is SerializableSpawnOpts {
+  if (!isRecord(value)) return false;
+  for (const key of [
+    "framework",
+    "model",
+    "workdir",
+    "repo",
+    "label",
+    "task",
+    "approvalPreset",
+    "providerSource",
+  ] as const) {
+    const field = value[key];
+    if (field !== undefined && typeof field !== "string") return false;
+  }
+  return true;
+}
+
+/** Structural guard for a durable admission record read back off task metadata,
+ * replacing the former `as unknown as AdmissionRecord` double cast with a real
+ * narrowing so a malformed persisted payload is rejected instead of trusted. */
+function isAdmissionRecord(value: unknown): value is AdmissionRecord {
+  return (
+    isRecord(value) &&
+    value.state === "queued" &&
+    typeof value.enqueuedAt === "string" &&
+    isAdmissionPriority(value.priorityAtEnqueue) &&
+    isSerializableSpawnOpts(value.spawnOpts)
+  );
 }
 
 function nowIso(): string {
@@ -2186,16 +2234,20 @@ export class OrchestratorTaskService extends Service {
    * persisted on the record — only the resolved `projectId` is. No match leaves
    * the task unbound, preserving per-session workdir re-resolution.
    *
-   * A bound task is also stamped with the project's memory world (#13776 D3), so
-   * its subagents are partitioned to the project and never see another project's
-   * injected context. A caller-supplied `worldId` is authoritative and wins —
-   * only an unset one is filled from the binding.
+   * A bound task is also stamped with the project's memory world (#13776 D3),
+   * derived per-agent via core's `projectWorldId(agentId, projectId)` — the
+   * single source of truth (#14171); Worlds are agent-scoped, so the runtime's
+   * agentId is part of the derivation. Its subagents are thus partitioned to the
+   * project and never see another project's injected context. A caller-supplied
+   * `worldId` is authoritative and wins — only an unset one is filled from the
+   * binding.
    */
   private bindProject(input: CreateTaskInput): CreateTaskInput {
     const projectId = resolveTaskProjectId(input);
     const { workdir: _workdir, ...rest } = input;
     const worldId =
-      rest.worldId ?? (projectId ? deriveProjectWorldId(projectId) : undefined);
+      rest.worldId ??
+      (projectId ? projectWorldId(this.runtime.agentId, projectId) : undefined);
     return { ...rest, projectId, worldId };
   }
 
@@ -4353,13 +4405,8 @@ export class OrchestratorTaskService extends Service {
     task: OrchestratorTaskRecord,
   ): AdmissionRecord | null {
     const admission = task.metadata?.admission;
-    if (
-      isRecord(admission) &&
-      admission.state === "queued" &&
-      typeof admission.enqueuedAt === "string" &&
-      isRecord(admission.spawnOpts)
-    ) {
-      return admission as unknown as AdmissionRecord;
+    if (isAdmissionRecord(admission)) {
+      return admission;
     }
     return null;
   }
