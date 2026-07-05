@@ -19,13 +19,9 @@
  * second project is registered. In the hidden case it reports a `null`
  * projectId to the host so the task list stays unfiltered exactly like today.
  */
-import {
-  Button,
-  client,
-  type ProjectSummary,
-  useAppSelectorShallow,
-} from "@elizaos/ui";
+import { Button, client } from "@elizaos/ui";
 import { useAgentElement } from "@elizaos/ui/agent-surface";
+import type { ProjectSummary } from "@elizaos/ui/api/client-types-cloud";
 // Direct subpath (mirrors the sibling panels): the browser barrel doesn't
 // reliably re-export the newer dropdown-menu primitives.
 import {
@@ -34,6 +30,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@elizaos/ui/components/ui/dropdown-menu";
+import { useAppSelectorShallow } from "@elizaos/ui/state";
 import { Check, FolderGit2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 

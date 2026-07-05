@@ -1547,9 +1547,9 @@ export abstract class BaseDrizzleAdapter extends DatabaseAdapter<DrizzleDatabase
         type: string;
         createdAt: Date;
         content: unknown;
-        entityId: string;
+        entityId: string | null;
         agentId: string;
-        roomId: string;
+        roomId: string | null;
         worldId: string | null;
         unique: boolean;
         metadata: unknown;
@@ -1768,9 +1768,9 @@ export abstract class BaseDrizzleAdapter extends DatabaseAdapter<DrizzleDatabase
         id: string;
         createdAt: Date;
         content: unknown;
-        entityId: string;
+        entityId: string | null;
         agentId: string;
-        roomId: string;
+        roomId: string | null;
         worldId: string | null;
         unique: boolean;
         metadata: unknown;

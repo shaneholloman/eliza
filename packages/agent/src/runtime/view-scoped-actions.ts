@@ -235,7 +235,7 @@ export function buildViewScopedAction(
           viewId,
           capability,
           stepParams,
-          broadcastWs ?? undefined,
+          broadcastWs ? { broadcastWs } : {},
           SCOPED_ACTION_STEP_TIMEOUT_MS,
         );
 
@@ -299,9 +299,7 @@ export function scopedActionNames(
   scopedActions: readonly ViewScopedAction[] | undefined,
 ): string[] {
   if (!scopedActions) return [];
-  return [
-    ...new Set(scopedActions.map((a) => a.name.trim()).filter(Boolean)),
-  ];
+  return [...new Set(scopedActions.map((a) => a.name.trim()).filter(Boolean))];
 }
 
 /** A view (any modality) that can carry scoped-action declarations. */

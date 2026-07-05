@@ -102,6 +102,9 @@
       "@elizaos/plugin-coding-tools": [
         "../../plugins/plugin-coding-tools/src/index.ts"
       ],
+      "@elizaos/plugin-commands": [
+        "../../plugins/plugin-commands/src/index.ts"
+      ],
       "@elizaos/plugin-browser": ["../../plugins/plugin-browser/src/index.ts"],
       "@elizaos/plugin-computeruse": [
         "../../plugins/plugin-computeruse/src/index.ts"
@@ -145,11 +148,17 @@
       "@elizaos/plugin-elizacloud/*": ["../../plugins/plugin-elizacloud/src/*"],
       "@elizaos/plugin-mcp": ["../../plugins/plugin-mcp/src/index.ts"],
       "@elizaos/plugin-mcp/*": ["../../plugins/plugin-mcp/src/*"],
+      "@elizaos/plugin-meetings": [
+        "../../plugins/plugin-meetings/src/index.ts"
+      ],
       "@elizaos/plugin-local-inference": [
         "../../plugins/plugin-local-inference/src/index.ts"
       ],
       "@elizaos/plugin-local-inference/*": [
         "../../plugins/plugin-local-inference/src/*"
+      ],
+      "@elizaos/plugin-aosp-local-inference": [
+        "../../plugins/plugin-aosp-local-inference/src/index.ts"
       ],
       "@elizaos/plugin-capacitor-bridge": [
         "../../plugins/plugin-capacitor-bridge/src/index.ts"

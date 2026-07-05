@@ -35,6 +35,7 @@ export interface TrajectoryListOptions {
 	source?: string;
 	status?: TrajectoryStatus;
 	runId?: string;
+	traceId?: string;
 	startDate?: string;
 	endDate?: string;
 	search?: string;

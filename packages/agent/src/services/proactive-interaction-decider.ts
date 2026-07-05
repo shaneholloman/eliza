@@ -256,7 +256,7 @@ export function buildProactiveJudgePrompt(
 /** True when a view switch carries a declared anticipatory intent (#13587). */
 function hasDeclaredIntent(payload: InteractionPayload): boolean {
   return (
-    "viewId" in payload &&
+    "anticipatoryIntent" in payload &&
     typeof payload.anticipatoryIntent === "string" &&
     payload.anticipatoryIntent.trim().length > 0
   );
