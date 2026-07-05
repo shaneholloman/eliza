@@ -8,12 +8,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { isAncestor } from "../cloud/deploy-freshness-guard-cli.mjs";
 import {
   decideDeployFreshness,
   fetchServedCommit,
   parseServedCommit,
 } from "../cloud/deploy-freshness-guard.mjs";
+import { isAncestor } from "../cloud/deploy-freshness-guard-cli.mjs";
 
 const RUN = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SERVED = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -267,5 +267,5 @@ describe("isAncestor — shallow checkout hydration", () => {
       process.chdir(previousCwd);
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 60000);
 });

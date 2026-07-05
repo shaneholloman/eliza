@@ -843,7 +843,7 @@ jobs:
       # bypasses for intentional rollbacks.
       - name: Deploy freshness guard
         id: freshness
-        if: steps.cf.outputs.configured == 'true'
+        if: steps.cf.outputs.configured == 'true' && github.event_name != 'pull_request'
         working-directory: ${{ env.CHECKOUT_DIR }}
         env:
           SERVED_URL: ${{ ((github.event_name == 'workflow_dispatch' && inputs.environment == 'production') || github.ref == 'refs/heads/main') && 'https://elizacloud.ai' || 'https://staging.elizacloud.ai' }}
@@ -855,7 +855,7 @@ jobs:
             $([ "$FORCE" = "true" ] && echo --force)
 
       - name: Deploy to Cloudflare Pages
-        if: steps.cf.outputs.configured == 'true' && steps.freshness.outputs.should_deploy == 'true'
+        if: steps.cf.outputs.configured == 'true' && (github.event_name == 'pull_request' || steps.freshness.outputs.should_deploy == 'true')
         working-directory: ${{ env.CHECKOUT_DIR }}/packages/app
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -1218,7 +1218,7 @@ jobs:
       # bypasses for rollbacks. See the console job for the full rationale.
       - name: Deploy freshness guard
         id: freshness
-        if: steps.cf.outputs.configured == 'true'
+        if: steps.cf.outputs.configured == 'true' && github.event_name != 'pull_request'
         working-directory: ${{ env.CHECKOUT_DIR }}
         env:
           SERVED_URL: ${{ ((github.event_name == 'workflow_dispatch' && inputs.environment == 'production') || github.ref == 'refs/heads/main') && 'https://app.elizacloud.ai' || 'https://app-staging.elizacloud.ai' }}
@@ -1230,7 +1230,7 @@ jobs:
             $([ "$FORCE" = "true" ] && echo --force)
 
       - name: Deploy to Cloudflare Pages
-        if: steps.cf.outputs.configured == 'true' && steps.freshness.outputs.should_deploy == 'true'
+        if: steps.cf.outputs.configured == 'true' && (github.event_name == 'pull_request' || steps.freshness.outputs.should_deploy == 'true')
         working-directory: ${{ env.CHECKOUT_DIR }}/packages/app
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

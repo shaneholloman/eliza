@@ -104,32 +104,53 @@ function hydrateHistoryForAncestry() {
   }
 }
 
-/**
- * Best-effort fetch a commit into the local repo so ancestry can be computed off
- * a shallow deploy checkout. Returns true if the commit is resolvable afterward.
- * @param {string} sha
- */
-function ensureCommit(sha) {
-  try {
-    git(["cat-file", "-e", `${sha}^{commit}`]);
-    return true;
-  } catch {
-    // not present locally — fetch it (unshallow-friendly, bounded)
-  }
-  try {
-    execFileSync("git", ["fetch", "--no-tags", "--depth=50", "origin", sha], {
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 120000,
-    });
-  } catch {
-    // ignore — resolvability re-checked below
-  }
+function commitExists(sha) {
   try {
     git(["cat-file", "-e", `${sha}^{commit}`]);
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Best-effort fetch a commit into the local repo so ancestry can be computed off
+ * a shallow deploy checkout. Returns true if the commit is resolvable afterward.
+ * @param {string} sha
+ */
+function ensureCommit(sha) {
+  if (commitExists(sha)) return true;
+  for (const depth of [50, 200, 1000]) {
+    try {
+      execFileSync(
+        "git",
+        ["fetch", "--no-tags", `--depth=${depth}`, "origin", sha],
+        {
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 120000,
+        },
+      );
+    } catch {
+      // ignore — resolvability re-checked below
+    }
+    if (commitExists(sha)) return true;
+  }
+  try {
+    execFileSync("git", ["fetch", "--no-tags", "--unshallow", "origin"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 180000,
+    });
+  } catch {
+    try {
+      execFileSync("git", ["fetch", "--no-tags", "origin"], {
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 180000,
+      });
+    } catch {
+      // ignore — resolvability re-checked below
+    }
+  }
+  return commitExists(sha);
 }
 
 /**
