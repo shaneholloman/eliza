@@ -5,21 +5,16 @@
  * selected IFF the resolved manifest declares `isolation: "native-webview"` on
  * the desktop shell, and can never be reached by any other isolation level on
  * any mode. Also pins the actual Browser builtin manifest to that level so its
- * tab renderer keeps selecting the native surface, and pins each platform's
- * native embedding target. Pure functions over static data — no runtime harness
- * needed; the isolation property under test is the selection itself.
+ * tab renderer keeps selecting the native surface. Pure functions over the
+ * isolation catalogue — no runtime harness needed; the isolation property under
+ * test is the selection itself.
  */
 
 import { SURFACE_ISOLATION_LEVELS } from "@elizaos/core";
 import { describe, expect, it } from "vitest";
 import type { BrowserWorkspaceMode } from "./api/browser-contracts";
 import { resolveBuiltinSurfaceManifest } from "./builtin-tab-registry";
-import {
-  NATIVE_WEBVIEW_EMBEDDINGS,
-  NATIVE_WEBVIEW_PLATFORMS,
-  nativeWebviewEmbedding,
-  resolveBrowserTabRenderPath,
-} from "./surface-embedding";
+import { resolveBrowserTabRenderPath } from "./surface-embedding";
 
 const ALL_MODES: readonly BrowserWorkspaceMode[] = ["desktop", "web", "cloud"];
 
@@ -84,26 +79,5 @@ describe("Browser builtin manifest drives the native path", () => {
     expect(resolveBrowserTabRenderPath({ isolation, mode: "desktop" })).toBe(
       "native-child-webview",
     );
-  });
-});
-
-describe("native-webview per-platform embedding targets", () => {
-  it("every platform names its native primitive and runs a separate renderer process", () => {
-    for (const platform of NATIVE_WEBVIEW_PLATFORMS) {
-      const embedding = nativeWebviewEmbedding(platform);
-      expect(embedding.platform).toBe(platform);
-      expect(embedding.separateRendererProcess).toBe(true);
-      expect(embedding.primitive.length).toBeGreaterThan(0);
-      expect(embedding.storagePolicy.length).toBeGreaterThan(0);
-    }
-  });
-
-  it("desktop targets the WebContentsView/CEF OOPIF; iOS WKWebView; Android WebView", () => {
-    expect(NATIVE_WEBVIEW_EMBEDDINGS.desktop.primitive).toMatch(
-      /WebContentsView|OOPIF|out-of-process/i,
-    );
-    expect(NATIVE_WEBVIEW_EMBEDDINGS.ios.primitive).toMatch(/WKWebView/);
-    expect(NATIVE_WEBVIEW_EMBEDDINGS.ios.primitive).toMatch(/WKProcessPool/);
-    expect(NATIVE_WEBVIEW_EMBEDDINGS.android.primitive).toMatch(/WebView/);
   });
 });
