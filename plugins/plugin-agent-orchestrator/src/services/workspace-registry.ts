@@ -19,7 +19,7 @@
  */
 import type { Dirent } from "node:fs";
 import { readdir, rm, stat, statfs } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export type WorkspaceKind = "acp-scratch" | "git-workspace";
 
@@ -118,14 +118,31 @@ export async function measureDirBytes(dir: string): Promise<number> {
  * cannot report it. `undefined` is an explicit "unknown" (never fabricated as
  * plenty-of-space): the caller treats an unknown reading as a hard refusal when
  * a floor is configured, so a broken `statfs` fails closed, not open.
+ *
+ * The backpressure gate measures a workspace root BEFORE that root (or its
+ * `task-*` child) is created, and `statfs` throws `ENOENT` on a path that does
+ * not exist yet — so a not-yet-created target is measured against the nearest
+ * existing ancestor, which is on the same filesystem that will host it. Without
+ * this walk, the very first spawn on a cold machine (where `$TMPDIR/eliza-acp`
+ * has never been created) would be refused as if the disk were full. A
+ * genuinely unreadable filesystem still yields `undefined` (every ancestor up
+ * to the root throws), preserving the fail-closed contract.
  */
 export async function freeBytesFor(path: string): Promise<number | undefined> {
-  try {
-    const st = await statfs(path);
-    // bavail is blocks available to unprivileged users; bsize the block size.
-    return st.bavail * st.bsize;
-  } catch {
-    return undefined;
+  let current = resolve(path);
+  for (;;) {
+    try {
+      const st = await statfs(current);
+      // bavail is blocks available to unprivileged users; bsize the block size.
+      return st.bavail * st.bsize;
+    } catch {
+      const parent = dirname(current);
+      // `dirname` is a fixed point at the filesystem root ("/" → "/", "C:\" →
+      // "C:\"): once we can climb no further and still cannot stat, the reading
+      // is genuinely unknown.
+      if (parent === current) return undefined;
+      current = parent;
+    }
   }
 }
 

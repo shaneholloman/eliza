@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_WORKSPACE_DISK_CAP_BYTES,
   DEFAULT_WORKSPACE_MIN_FREE_BYTES,
+  freeBytesFor,
   getSharedWorkspaceRegistry,
   measureDirBytes,
   parseByteSetting,
@@ -181,6 +182,24 @@ describe("WorkspaceRegistry free-disk precheck", () => {
     const root = tmpRoot("wsreg-df-ok-");
     const registry = new WorkspaceRegistry();
     const decision = await registry.checkDiskBudget(root, { minFreeBytes: 1 });
+    expect(decision.allowed).toBe(true);
+    expect(decision.freeBytes).toBeGreaterThan(0);
+  });
+
+  it("measures a not-yet-created root against its nearest existing ancestor", async () => {
+    const root = tmpRoot("wsreg-df-cold-");
+    // The cold-first-spawn case: the backpressure gate runs BEFORE the scratch
+    // root (or its task-* child) is created, so `statfs` on the target ENOENTs.
+    // It must measure the existing parent filesystem, not fail closed as if the
+    // disk were full — otherwise the very first spawn on a fresh machine is
+    // refused with used=0/free=0.
+    const notCreated = join(root, "eliza-acp", "task-cold");
+    const free = await freeBytesFor(notCreated);
+    expect(free).toBeGreaterThan(0);
+    const registry = new WorkspaceRegistry();
+    const decision = await registry.checkDiskBudget(notCreated, {
+      minFreeBytes: 1,
+    });
     expect(decision.allowed).toBe(true);
     expect(decision.freeBytes).toBeGreaterThan(0);
   });
