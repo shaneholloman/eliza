@@ -18,7 +18,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { type IAgentRuntime, Service } from "@elizaos/core";
@@ -119,7 +119,10 @@ import {
   TERMINAL_TASK_STATUSES,
   type UsageState,
 } from "./orchestrator-task-types.js";
-import { PARENT_AGENT_BROKER_MANIFEST_ENTRY } from "./parent-agent-broker.js";
+import {
+  isParentAgentBrokerWired,
+  PARENT_AGENT_BROKER_MANIFEST_ENTRY,
+} from "./parent-agent-broker.js";
 import { buildSkillsManifest } from "./skill-manifest.js";
 import {
   configureSpendLedger,
@@ -2964,6 +2967,7 @@ export class OrchestratorTaskService extends Service {
     const capabilityProfile = coerceGoalCapabilityProfile(
       doc.task.metadata?.capabilityProfile,
     );
+    const brokerWired = isParentAgentBrokerWired(this.runtime);
     const goalPrompt = buildGoalPrompt({
       agentName,
       goal: doc.task.goal,
@@ -2976,6 +2980,7 @@ export class OrchestratorTaskService extends Service {
       // doesn't repeat them (#8899).
       attemptReflections: readAttemptReflections(doc.task.metadata),
       ...(capabilityProfile ? { capabilityProfile } : {}),
+      brokerWired,
     });
 
     // Economics tasks drive the monetized-app loop through the parent-agent
@@ -3024,6 +3029,18 @@ export class OrchestratorTaskService extends Service {
         initialTask: goalPrompt,
         model: opts.model ?? policy.model,
         approvalPreset: opts.approvalPreset,
+        // Economics tasks drive the monetized-app loop; enrich the always-written
+        // SKILLS.md with the Cloud app-build skills and the ViewKind contract so a
+        // deploying sub-agent categorizes any view it ships (#8917). The broker
+        // skill entry itself is added by spawnSession when the router is wired.
+        ...(capabilityProfile === "economics"
+          ? {
+              skillsManifest: {
+                recommendedSlugs: ["build-monetized-app", "eliza-cloud"],
+                includeViewKindContract: true,
+              },
+            }
+          : {}),
         metadata: {
           taskId,
           roomId: doc.task.taskRoomId ?? doc.task.roomId,

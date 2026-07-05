@@ -130,7 +130,9 @@ export class SessionCapError extends Error {
     maxSessions: number,
     activeCount: number,
   ) {
-    super(`acp ${slotClass} session cap reached (${activeCount}/${maxSessions})`);
+    super(
+      `acp ${slotClass} session cap reached (${activeCount}/${maxSessions})`,
+    );
     this.name = "SessionCapError";
     this.slotClass = slotClass;
     this.maxSessions = maxSessions;
@@ -172,6 +174,19 @@ export interface SpawnOptions {
   skipAdapterAutoResponse?: boolean;
   timeoutMs?: number;
   model?: string;
+  /**
+   * Task-specific enrichment for the SKILLS.md manifest that `spawnSession`
+   * writes into every bare workspace. The base manifest (enabled skills + the
+   * broker skill when wired) is always written; these fields only add a
+   * "recommended" highlight and the Cloud ViewKind contract for app-building /
+   * economics tasks. Omit for a plain coding spawn.
+   */
+  skillsManifest?: {
+    /** Slugs to surface in a "Recommended for this task" section. */
+    recommendedSlugs?: string[];
+    /** Append the Cloud ViewKind contract (for view-shipping app builds). */
+    includeViewKindContract?: boolean;
+  };
 }
 
 export interface SpawnResult {
