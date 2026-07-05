@@ -268,6 +268,14 @@ export interface SpawnAgentForTaskOptions {
    * the max-nesting-depth cap so self-spawning can't run away.
    */
   nestingDepth?: number;
+  /**
+   * Internal: the admission-queue drain sets this false so a cap race during a
+   * replayed dispatch RETHROWS SessionCapError instead of self-parking. The
+   * drain then re-parks the task at the head with its ORIGINAL admission record
+   * (seniority + aging preserved); self-parking here would mint a fresh
+   * enqueuedAt and push the task to the back of its band.
+   */
+  parkOnCap?: boolean;
 }
 
 /**
@@ -3295,6 +3303,7 @@ export class OrchestratorTaskService extends Service {
         err instanceof SessionCapError &&
         err.slotClass === "worker" &&
         nestingDepth === 0 &&
+        opts.parkOnCap !== false &&
         this.admissionQueueEnabled()
       ) {
         return this.enqueueAdmission(taskId, doc.task.priority, {
@@ -3373,6 +3382,12 @@ export class OrchestratorTaskService extends Service {
     // session's events even if the durable write below degrades.
     this.sessionTaskIndex.set(result.sessionId, taskId);
     try {
+      // A task can be spawned directly (API/action) while it is still parked in
+      // the admission queue — e.g. a slot freed silently and the user beat the
+      // reconcile tick. Clear the parked state now the spawn succeeded, or the
+      // next drain would replay the stale admission record and dispatch a
+      // DUPLICATE agent for the same goal. No-op for non-parked tasks.
+      await this.dequeueAdmission(taskId);
       await this.store.addSession(session);
       // Pin (or re-pin, on explicit override) the durable workdir/repo binding
       // from the workdir the session actually landed in, so subsequent
@@ -4015,6 +4030,10 @@ export class OrchestratorTaskService extends Service {
     for (const task of open) {
       const admission = OrchestratorTaskService.admissionOf(task);
       if (!admission) continue;
+      // A paused task keeps its durable admission record (pauseTask passes
+      // clearMetadata=false so resume can replay the original spawn) but must
+      // NOT re-enter the dispatch order — resumeTask re-seeds it explicitly.
+      if (task.paused) continue;
       entries.push({
         taskId: task.id,
         enqueuedAt: admission.enqueuedAt,
@@ -4115,10 +4134,12 @@ export class OrchestratorTaskService extends Service {
    * Dispatch parked tasks into freed worker slots, most-eligible first.
    * Serialized via a promise-chain lock so a terminal-event drain and the
    * reconcile tick never double-dispatch. For each free slot it re-reads the
-   * head task's live state (dropping terminal/paused entries — starvation guard
-   * #2 is covered by idle-reclaim below), clears the admission record, and
-   * replays the saved spawn. A fresh SessionCapError re-parks the head and stops
-   * the pass (another spawn raced us). When no slot is free but the queue is
+   * head task's live state (terminal entries are dropped with their record;
+   * paused entries are dropped from the order but KEEP the record for resume),
+   * clears the admission record, and replays the saved spawn with
+   * `parkOnCap: false`. A fresh SessionCapError re-parks the head with its
+   * original record and stops the pass (another spawn raced us). When no slot
+   * is free but the queue is
    * non-empty, one idle keepAlive session whose task is already terminal is
    * reclaimed to unblock the queue.
    */
@@ -4162,10 +4183,14 @@ export class OrchestratorTaskService extends Service {
       const doc = await this.store.getTask(head.taskId);
       const admission = doc && OrchestratorTaskService.admissionOf(doc.task);
       if (!doc || !admission) continue;
-      if (TERMINAL_TASK_STATUSES.has(doc.task.status) || doc.task.paused) {
+      if (TERMINAL_TASK_STATUSES.has(doc.task.status)) {
         await this.writeAdmission(head.taskId, null);
         continue;
       }
+      // A pause that raced this pass: drop the task from the dispatch order but
+      // KEEP the durable record — pauseTask retained it so resume can replay
+      // the original spawn (clearing it here would make resume a silent no-op).
+      if (doc.task.paused) continue;
       await this.writeAdmission(head.taskId, null);
       try {
         await this.spawnAgentForTask(head.taskId, {
@@ -4173,6 +4198,9 @@ export class OrchestratorTaskService extends Service {
           approvalPreset: admission.spawnOpts.approvalPreset as
             | ApprovalPreset
             | undefined,
+          // A cap race must RETHROW so the catch below re-parks with the
+          // original record; the spawn's own self-park would reset seniority.
+          parkOnCap: false,
         });
       } catch (err) {
         if (err instanceof SessionCapError) {
