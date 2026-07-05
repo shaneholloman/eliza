@@ -23,7 +23,11 @@
  * non-negative bounds for accumulated resource totals and rates.
  */
 
-export class CorruptActiveBillingNumberError extends Error {
+import { ElizaError } from "@elizaos/core";
+
+export class CorruptActiveBillingNumberError extends ElizaError {
+  override readonly name = "CorruptActiveBillingNumberError";
+
   constructor(
     readonly fieldName: string,
     readonly rawValue: unknown,
@@ -32,8 +36,12 @@ export class CorruptActiveBillingNumberError extends Error {
       `Unable to read active-billing ${fieldName}: value is not a finite number (raw=${String(
         rawValue,
       )})`,
+      {
+        code: "CORRUPT_ACTIVE_BILLING_NUMBER",
+        context: { fieldName, rawValue },
+        severity: "fatal",
+      },
     );
-    this.name = "CorruptActiveBillingNumberError";
   }
 }
 

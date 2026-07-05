@@ -33,6 +33,9 @@ import * as realDbClient from "../../db/client";
 let containerRows: Array<Record<string, unknown>> = [];
 let agentRows: Array<Record<string, unknown>> = [];
 let ledgerRows: Array<Record<string, unknown>> = [];
+let dbWriteUpdateCalls = 0;
+let containerInfrastructureCalls = 0;
+let agentInfrastructureCalls = 0;
 
 // Identify which fixture a `.from(table)` call wants without importing the real
 // drizzle table objects: the schema modules export named tables, and the real
@@ -82,6 +85,46 @@ mock.module("../../db/client", () => ({
   ...realDbClient,
   dbRead: {
     select: () => makeBuilder(),
+  },
+  dbWrite: {
+    update() {
+      dbWriteUpdateCalls += 1;
+      const builder = {
+        set() {
+          return builder;
+        },
+        where() {
+          return builder;
+        },
+        returning() {
+          return Promise.resolve([...containerRows, ...agentRows]);
+        },
+      };
+      return builder;
+    },
+  },
+}));
+
+mock.module("./containers/hetzner-client", () => ({
+  getHetznerContainersClient: () => ({
+    stopContainer: async () => {
+      containerInfrastructureCalls += 1;
+    },
+    deleteContainer: async () => {
+      containerInfrastructureCalls += 1;
+    },
+  }),
+}));
+
+mock.module("./provisioning-jobs", () => ({
+  provisioningJobService: {
+    enqueueAgentSuspendOnce: async () => {
+      agentInfrastructureCalls += 1;
+    },
+    enqueueAgentDeleteOnce: async () => {
+      agentInfrastructureCalls += 1;
+    },
+    triggerImmediate: async () => {},
   },
 }));
 
@@ -146,6 +189,9 @@ beforeEach(() => {
   containerRows = [];
   agentRows = [];
   ledgerRows = [];
+  dbWriteUpdateCalls = 0;
+  containerInfrastructureCalls = 0;
+  agentInfrastructureCalls = 0;
 });
 
 // ── Parser boundary (exhaustive) ─────────────────────────────────────────────
@@ -207,6 +253,12 @@ describe("parseActiveBillingNumber", () => {
       expect(e).toBeInstanceOf(CorruptActiveBillingNumberError);
       expect((e as Error).message).toContain("credit_transaction.amount");
       expect((e as Error).message).toContain("NaN");
+      expect((e as CorruptActiveBillingNumberError).code).toBe("CORRUPT_ACTIVE_BILLING_NUMBER");
+      expect((e as CorruptActiveBillingNumberError).context).toEqual({
+        fieldName: "credit_transaction.amount",
+        rawValue: "NaN",
+      });
+      expect((e as CorruptActiveBillingNumberError).severity).toBe("fatal");
     }
   });
 });
@@ -298,5 +350,38 @@ describe("listLedger fail-closed", () => {
     await expect(activeBillingService.listLedger(ORG)).rejects.toBeInstanceOf(
       CorruptActiveBillingNumberError,
     );
+  });
+});
+
+// ── cancelResource pre-mutation gate ────────────────────────────────────────
+describe("cancelResource fail-closed before side effects", () => {
+  test("corrupt container.total_billed throws before infra stop or billing suspension", async () => {
+    containerRows = [baseContainer({ total_billed: "NaN" })];
+
+    await expect(
+      activeBillingService.cancelResource({
+        organizationId: ORG,
+        resourceId: "container-1",
+        resourceType: "container",
+      }),
+    ).rejects.toBeInstanceOf(CorruptActiveBillingNumberError);
+
+    expect(containerInfrastructureCalls).toBe(0);
+    expect(dbWriteUpdateCalls).toBe(0);
+  });
+
+  test("corrupt agent_sandbox.total_billed throws before enqueueing infra or suspending billing", async () => {
+    agentRows = [baseAgent({ total_billed: "NaN" })];
+
+    await expect(
+      activeBillingService.cancelResource({
+        organizationId: ORG,
+        resourceId: "agent-100000",
+        resourceType: "agent_sandbox",
+      }),
+    ).rejects.toBeInstanceOf(CorruptActiveBillingNumberError);
+
+    expect(agentInfrastructureCalls).toBe(0);
+    expect(dbWriteUpdateCalls).toBe(0);
   });
 });

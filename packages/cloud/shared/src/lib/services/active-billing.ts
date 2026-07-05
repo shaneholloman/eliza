@@ -257,16 +257,20 @@ class ActiveBillingService {
         .limit(1);
 
       if (container) {
-        const infrastructureAction = await cancelContainerInfrastructure(
-          container.id,
-          organizationId,
-          mode,
-        );
         const unitPrice = calculateDailyContainerCost({
           desiredCount: container.desired_count,
           cpu: container.cpu,
           memory: container.memory,
         });
+        const totalBilled = parseActiveBillingNonNegativeNumber(
+          container.total_billed,
+          "container.total_billed",
+        );
+        const infrastructureAction = await cancelContainerInfrastructure(
+          container.id,
+          organizationId,
+          mode,
+        );
 
         if (mode === "delete" && infrastructureAction.status === "deleted") {
           return {
@@ -284,10 +288,7 @@ class ActiveBillingService {
               lastBilledAt: iso(container.last_billed_at),
               nextBillingAt: null,
               estimatedNextBillingAt: null,
-              totalBilled: parseActiveBillingNonNegativeNumber(
-                container.total_billed,
-                "container.total_billed",
-              ),
+              totalBilled,
               cancelEndpoint: cancelEndpoint("container", container.id),
               cancelAction: "stop",
               metadata: {
@@ -338,10 +339,7 @@ class ActiveBillingService {
             lastBilledAt: iso(updated.last_billed_at),
             nextBillingAt: iso(updated.next_billing_at),
             estimatedNextBillingAt: null,
-            totalBilled: parseActiveBillingNonNegativeNumber(
-              updated.total_billed,
-              "updated.total_billed",
-            ),
+            totalBilled,
             cancelEndpoint: cancelEndpoint("container", updated.id),
             cancelAction: "stop",
             metadata: {
@@ -369,6 +367,14 @@ class ActiveBillingService {
         .limit(1);
 
       if (agent) {
+        const unitPrice =
+          agent.status === "running"
+            ? AGENT_PRICING.RUNNING_HOURLY_RATE
+            : AGENT_PRICING.IDLE_HOURLY_RATE;
+        const totalBilled = parseActiveBillingNonNegativeNumber(
+          agent.total_billed,
+          "agent_sandbox.total_billed",
+        );
         const infrastructureAction = await cancelAgentInfrastructure(
           agent.id,
           organizationId,
@@ -376,10 +382,6 @@ class ActiveBillingService {
           mode,
           triggerEnv,
         );
-        const unitPrice =
-          agent.status === "running"
-            ? AGENT_PRICING.RUNNING_HOURLY_RATE
-            : AGENT_PRICING.IDLE_HOURLY_RATE;
 
         if (mode === "delete" && infrastructureAction.status === "deleted") {
           return {
@@ -397,10 +399,7 @@ class ActiveBillingService {
               lastBilledAt: iso(agent.last_billed_at),
               nextBillingAt: null,
               estimatedNextBillingAt: null,
-              totalBilled: parseActiveBillingNonNegativeNumber(
-                agent.total_billed,
-                "agent_sandbox.total_billed",
-              ),
+              totalBilled,
               cancelEndpoint: cancelEndpoint("agent_sandbox", agent.id),
               cancelAction: "suspend_billing",
               metadata: {
@@ -448,10 +447,7 @@ class ActiveBillingService {
             lastBilledAt: iso(updated.last_billed_at),
             nextBillingAt: null,
             estimatedNextBillingAt: null,
-            totalBilled: parseActiveBillingNonNegativeNumber(
-              updated.total_billed,
-              "updated.total_billed",
-            ),
+            totalBilled,
             cancelEndpoint: cancelEndpoint("agent_sandbox", updated.id),
             cancelAction: "suspend_billing",
             metadata: {
