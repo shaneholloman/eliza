@@ -5,7 +5,7 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveElizaAssetBaseUrls } from "../../../packages/app-core/scripts/lib/asset-cdn.mjs";
 import { normalizeEnvPrefix } from "../src/env-prefix.js";
 
@@ -106,12 +106,16 @@ function run(command, args, cwd) {
 // the build's declared environment instead — production/store builds delete
 // any prior stamp so a stale local file can never ship. ELIZA_BUILD_STAMP=1
 // force-enables for debugging the badge itself.
-function stampBuildInfo() {
+export function shouldSkipBuildStamp(env = process.env) {
   const isProductionBuild =
-    process.env.VITE_ENVIRONMENT === "production" ||
-    Boolean(process.env.ELIZA_RELEASE_AUTHORITY) ||
-    process.env.ELIZA_BUILD_VARIANT === "store";
-  if (isProductionBuild && process.env.ELIZA_BUILD_STAMP !== "1") {
+    env.VITE_ENVIRONMENT === "production" ||
+    env.ELIZA_RELEASE_AUTHORITY === "apple-app-store" ||
+    env.ELIZA_BUILD_VARIANT?.toLowerCase() === "store";
+  return isProductionBuild && env.ELIZA_BUILD_STAMP !== "1";
+}
+
+function stampBuildInfo() {
+  if (shouldSkipBuildStamp()) {
     fs.rmSync(path.join(appDir, "public", "build-info.json"), { force: true });
     return;
   }
@@ -144,24 +148,37 @@ function stampBuildInfo() {
   }
 }
 
-if (fullSetup) {
-  await run(bunExecutable, ["install", "--ignore-scripts"], repoRoot);
-  await run(process.execPath, [repoSetupScript], repoRoot);
+async function main() {
+  if (fullSetup) {
+    await run(bunExecutable, ["install", "--ignore-scripts"], repoRoot);
+    await run(process.execPath, [repoSetupScript], repoRoot);
+  }
+
+  stampBuildInfo();
+
+  await run(
+    process.execPath,
+    [path.join(__dirname, "plugin-build.mjs")],
+    appDir,
+  );
+
+  if (fullSetup) {
+    await run(bunExecutable, ["install", "--ignore-scripts"], appDir);
+  }
+
+  await run(
+    bunExecutable,
+    ["--bun", "vite", "build", "--configLoader", "runner"],
+    appDir,
+  );
+  if (resolveElizaAssetBaseUrls().appAssetBaseUrl) {
+    await run(process.execPath, [pruneCdnAssetsScript], repoRoot);
+  }
 }
 
-stampBuildInfo();
-
-await run(process.execPath, [path.join(__dirname, "plugin-build.mjs")], appDir);
-
-if (fullSetup) {
-  await run(bunExecutable, ["install", "--ignore-scripts"], appDir);
-}
-
-await run(
-  bunExecutable,
-  ["--bun", "vite", "build", "--configLoader", "runner"],
-  appDir,
-);
-if (resolveElizaAssetBaseUrls().appAssetBaseUrl) {
-  await run(process.execPath, [pruneCdnAssetsScript], repoRoot);
+const invokedPath = process.argv[1]
+  ? pathToFileURL(path.resolve(process.argv[1])).href
+  : "";
+if (import.meta.url === invokedPath) {
+  await main();
 }
