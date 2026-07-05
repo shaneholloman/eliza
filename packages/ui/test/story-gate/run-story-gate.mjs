@@ -43,6 +43,7 @@ import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { determinismShim, FROZEN_EPOCH_MS } from "./determinism-shim.mjs";
+import { attachLogCapture } from "./log-capture.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = resolve(here, "../..");
@@ -288,6 +289,36 @@ function normalizeConsole(text) {
  * @param {Record<string, unknown>} params.brokenBaseline allowlisted known-broken story ids
  * @param {boolean} [params.updateBaseline] when true, skip console/a11y failures (regeneration mode)
  */
+/**
+ * Pure derivation of the network-failure signal from a log-capture snapshot.
+ * Failed / erroring network RESPONSES + request failures during a story render
+ * are a real fault the reduced inline console/pageerror capture used to drop.
+ * Gate them only for stories that actually rendered or threw — a `needs-runtime`
+ * story's network errors are just the symptom of a missing live app context.
+ *
+ * Extracted from renderStory so it is unit-testable headlessly (no Playwright).
+ * #13624
+ *
+ * @param {{ failedResponses?: Array<{status:number,url:string}>,
+ *           requestFailures?: Array<{failure:string,url:string}> }} cap
+ *   the attachLogCapture instance (or its snapshot) to read.
+ * @param {string} verdict the story's current verdict.
+ * @returns {{ escalate: boolean, issues: string[] }}
+ */
+export function deriveNetworkFailureIssues(cap, verdict) {
+  if (verdict === "needs-runtime") return { escalate: false, issues: [] };
+  const failedResponses = cap?.failedResponses ?? [];
+  const requestFailures = cap?.requestFailures ?? [];
+  const raw = [
+    ...failedResponses.map((r) => `net-response ${r.status}: ${r.url}`),
+    ...requestFailures.map((r) => `net-request ${r.failure}: ${r.url}`),
+  ];
+  return {
+    escalate: raw.length > 0,
+    issues: raw.map((n) => `network-failure: ${n.slice(0, 300)}`),
+  };
+}
+
 export function classifyStoryGateFailures({
   results,
   consoleBaseline,
@@ -352,14 +383,19 @@ export function classifyStoryGateFailures({
 // ---------------------------------------------------------------------------
 async function renderStory(context, baseUrl, story, axeSource, opts) {
   const page = await context.newPage();
-  const consoleErrors = [];
-  const pageErrors = [];
-  const onConsole = (m) => {
-    if (m.type() === "error") consoleErrors.push(m.text());
-  };
-  const onPageError = (e) => pageErrors.push(e.message ?? String(e));
-  page.on("console", onConsole);
-  page.on("pageerror", onPageError);
+  // Shared, richer log capture: console + uncaught page errors **and** failed /
+  // erroring network responses + request failures, with a durable JSON
+  // snapshot (see log-capture.mjs). Previously the gate wired a reduced inline
+  // console/pageerror capture and left the shared helper orphaned — so a story
+  // that rendered but fired a failing network request (a real fault) went
+  // completely unsignalled and the doc-claimed helper was dead code. #13624
+  const cap = attachLogCapture(page, { label: story.id });
+  // Preserve the exact prior console-error signal (every console message of
+  // type "error") for the console-baseline ratchet — the helper's own
+  // consoleErrors() additionally allow-lists dev noise, which we apply only to
+  // the durable snapshot, not to the baseline-gating list, to avoid silently
+  // shifting the committed console baseline.
+  const rawConsoleError = (m) => m.type === "error";
 
   await page.addInitScript(determinismShim, FROZEN_EPOCH_MS);
 
@@ -370,6 +406,7 @@ async function renderStory(context, baseUrl, story, axeSource, opts) {
     verdict: "good",
     issues: [],
     consoleErrors: [],
+    logCapture: null,
     a11y: [],
     play: {
       expected: Boolean(story.tags?.includes("play-fn")),
@@ -498,10 +535,12 @@ async function renderStory(context, baseUrl, story, axeSource, opts) {
       );
     }
 
-    if (pageErrors.length) {
+    if (cap.pageErrors.length) {
       result.verdict = "broken";
       result.issues.push(
-        ...pageErrors.map((e) => `pageerror: ${e.slice(0, 300)}`),
+        ...cap.pageErrors.map(
+          (e) => `pageerror: ${(e.message ?? String(e)).slice(0, 300)}`,
+        ),
       );
     }
 
@@ -544,21 +583,34 @@ async function renderStory(context, baseUrl, story, axeSource, opts) {
       }
     }
 
+    // Failed / erroring network responses + request failures during render are
+    // a real fault signal the reduced inline capture missed. #13624
+    const netFailure = deriveNetworkFailureIssues(cap, result.verdict);
+    if (netFailure.escalate) {
+      result.verdict = "broken";
+      result.issues.push(...netFailure.issues);
+    }
+
     // Console errors are only an independent signal for stories that actually
     // rendered (good) or that threw (broken). A `needs-runtime` story's console
     // errors are just the symptom of missing app context — don't gate on them.
     result.consoleErrors =
       result.verdict === "needs-runtime"
         ? []
-        : consoleErrors.map((t) => t.slice(0, 300));
+        : cap.consoleMessages
+            .filter(rawConsoleError)
+            .map((m) => m.text.slice(0, 300));
   } catch (err) {
     result.verdict = "broken";
     result.issues.push(
       `runner-error: ${(err?.message ?? String(err)).slice(0, 300)}`,
     );
   } finally {
-    page.off("console", onConsole);
-    page.off("pageerror", onPageError);
+    // Durable, richer per-story snapshot (console/network/errors) for the
+    // output/ artifact; needs-runtime stories carry their raw capture too so
+    // triage can see why they never mounted.
+    result.logCapture = cap.snapshot();
+    cap.detach();
     await page.close();
   }
   return result;
@@ -830,25 +882,35 @@ async function writeContactSheet(dir, results) {
 }
 
 /**
- * Durable frontend-logs artifact (PR_EVIDENCE convention): every console error
- * and page error captured across the catalog, keyed by story.
+ * Durable frontend-logs artifact (PR_EVIDENCE convention): every console error,
+ * page error, **and failed/erroring network response + request failure**
+ * captured across the catalog via the shared attachLogCapture helper, keyed by
+ * story. The network legs are what the reduced inline capture used to drop; now
+ * they land in output/ so the doc-claimed log-capture.mjs is actually wired.
  */
 async function writeFrontendLogs(dir, results) {
+  const netCount = (r) =>
+    (r.logCapture?.summary?.failedResponses ?? 0) +
+    (r.logCapture?.summary?.requestFailures ?? 0);
   const withLogs = results
-    .filter((r) => r.consoleErrors.length || r.issues.length)
+    .filter((r) => r.consoleErrors.length || r.issues.length || netCount(r))
     .map((r) => ({
       id: r.id,
       title: `${r.title}/${r.name}`,
       verdict: r.verdict,
       consoleErrors: r.consoleErrors,
       issues: r.issues,
+      // Richer, structured capture (console + network + errors) from the
+      // shared helper — the durable JSON the README/AGENTS.md promise.
+      capture: r.logCapture,
     }));
   const artifact = {
-    schema: "eliza_story_gate_frontend_logs_v1",
+    schema: "eliza_story_gate_frontend_logs_v2",
     capturedAt: new Date().toISOString(),
     summary: {
       stories: results.length,
       withConsoleErrors: results.filter((r) => r.consoleErrors.length).length,
+      withNetworkFailures: results.filter((r) => netCount(r) > 0).length,
       broken: results.filter((r) => r.verdict === "broken").length,
     },
     stories: withLogs,
