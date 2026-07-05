@@ -16,11 +16,11 @@ import {
   hasArtifactReference,
   hasNaWithReason,
   isChecked,
-  parseLabels,
-  requiresSurfaceArtifacts,
   isRowSatisfied,
   isRowSatisfiedForContext,
+  parseLabels,
   REQUIRED_EVIDENCE_ROWS,
+  requiresSurfaceArtifacts,
   SURFACE_ARTIFACT_ROW_IDS,
 } from "./check-pr-evidence.mjs";
 
@@ -154,7 +154,10 @@ describe("check-pr-evidence parser", () => {
 
   it("reports a required row as missing when its marker is absent", () => {
     const body = REQUIRED_EVIDENCE_ROWS.slice(1)
-      .map(({ id }) => `<!-- evidence-row:${id} -->\n- [ ] N/A - covered elsewhere`)
+      .map(
+        ({ id }) =>
+          `<!-- evidence-row:${id} -->\n- [ ] N/A - covered elsewhere`,
+      )
       .join("\n\n");
     const { ok, findings } = evaluatePrEvidence(body);
     assert.equal(ok, false);
@@ -233,10 +236,9 @@ describe("check-pr-evidence row primitives", () => {
       false,
     );
     assert.equal(
-      isRowSatisfiedForContext(
-        "- [ ] .github/issue-evidence/13622-ui.png",
-        { artifactRequired: true },
-      ),
+      isRowSatisfiedForContext("- [ ] .github/issue-evidence/13622-ui.png", {
+        artifactRequired: true,
+      }),
       true,
     );
   });

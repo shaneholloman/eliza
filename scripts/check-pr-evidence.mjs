@@ -285,7 +285,10 @@ function runSelfTest() {
 
   {
     const body = REQUIRED_EVIDENCE_ROWS.slice(1)
-      .map(({ id }) => `<!-- evidence-row:${id} -->\n- [ ] N/A - covered elsewhere`)
+      .map(
+        ({ id }) =>
+          `<!-- evidence-row:${id} -->\n- [ ] N/A - covered elsewhere`,
+      )
       .join("\n\n");
     const { ok, findings } = evaluatePrEvidence(body);
     const missing = findings.find(
