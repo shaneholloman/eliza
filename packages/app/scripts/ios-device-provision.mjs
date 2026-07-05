@@ -261,6 +261,16 @@ export function profileCoversRequest(
   );
 }
 
+export function profileIsUsable(profile, now = new Date()) {
+  const state = profile?.attributes?.profileState;
+  if (state && state !== "ACTIVE") return false;
+  const expiration = profile?.attributes?.expirationDate;
+  if (expiration && new Date(expiration).getTime() <= now.getTime()) {
+    return false;
+  }
+  return true;
+}
+
 export async function mintDevelopmentProfile(
   asc,
   { name, bundleIdRef, deviceIds, certificateIds },
@@ -274,8 +284,20 @@ export async function mintDevelopmentProfile(
     if (
       profileCoversRequest(profile, { bundleIdRef, deviceIds, certificateIds })
     ) {
+      if (!profileIsUsable(profile)) {
+        throw new Error(
+          `Existing development profile "${name}" covers the requested bundle/device/certificate set, ` +
+            "but is expired or inactive. Remove or rename that profile in ASC, then rerun.",
+        );
+      }
       if (profile.attributes?.profileContent) return profile;
       const fetched = await asc("GET", `/v1/profiles/${profile.id}`);
+      if (!profileIsUsable(fetched.data)) {
+        throw new Error(
+          `Existing development profile "${name}" covers the requested bundle/device/certificate set, ` +
+            "but is expired or inactive. Remove or rename that profile in ASC, then rerun.",
+        );
+      }
       if (fetched.data?.attributes?.profileContent) return fetched.data;
       throw new Error(
         `Existing development profile "${name}" covers the requested bundle/device/certificate set, ` +

@@ -13,6 +13,7 @@ import {
   makeAscClient,
   mintDevelopmentProfile,
   profileCoversRequest,
+  profileIsUsable,
   provision,
   resolveAscCredentials,
   validateBundleIds,
@@ -272,6 +273,46 @@ describe("mintDevelopmentProfile", () => {
     ]);
   });
 
+  it("fails closed when a same-named profile is expired even if it covers the request", async () => {
+    const fetchImpl = mockFetch({
+      "GET /v1/profiles": {
+        body: {
+          data: [
+            {
+              id: "OLD",
+              attributes: {
+                name: "n",
+                uuid: "U",
+                profileContent: "AA==",
+                profileState: "EXPIRED",
+                expirationDate: "2026-01-01T00:00:00.000Z",
+              },
+              relationships: {
+                bundleId: { data: { type: "bundleIds", id: "B1" } },
+                devices: { data: [{ type: "devices", id: "DEV1" }] },
+                certificates: {
+                  data: [{ type: "certificates", id: "C1" }],
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+    const asc = makeAscClient({ jwt: "t", fetchImpl });
+    await expect(
+      mintDevelopmentProfile(asc, {
+        name: "n",
+        bundleIdRef: "B1",
+        deviceIds: ["DEV1"],
+        certificateIds: ["C1"],
+      }),
+    ).rejects.toThrow(/expired or inactive/);
+    expect(fetchImpl.calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      "GET /v1/profiles",
+    ]);
+  });
+
   it("mints a new development profile when no same-named profile exists", async () => {
     const fetchImpl = mockFetch({
       "GET /v1/profiles": { body: { data: [] } },
@@ -342,6 +383,32 @@ describe("profileCoversRequest", () => {
         deviceIds: ["DEV1"],
         certificateIds: ["C1", "C3"],
       }),
+    ).toBe(false);
+  });
+});
+
+describe("profileIsUsable", () => {
+  it("accepts active unexpired profiles and rejects inactive or expired ones", () => {
+    const now = new Date("2026-07-05T00:00:00.000Z");
+    expect(
+      profileIsUsable(
+        {
+          attributes: {
+            profileState: "ACTIVE",
+            expirationDate: "2026-07-06T00:00:00.000Z",
+          },
+        },
+        now,
+      ),
+    ).toBe(true);
+    expect(
+      profileIsUsable({ attributes: { profileState: "EXPIRED" } }, now),
+    ).toBe(false);
+    expect(
+      profileIsUsable(
+        { attributes: { expirationDate: "2026-07-04T00:00:00.000Z" } },
+        now,
+      ),
     ).toBe(false);
   });
 });

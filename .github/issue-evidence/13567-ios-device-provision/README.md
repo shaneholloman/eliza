@@ -40,7 +40,7 @@ network:
 ```
 $ bunx vitest run packages/app/scripts/ios-device-provision.test.mjs
  Test Files  1 passed (1)
-      Tests  23 passed (23)
+      Tests  25 passed (25)
 ```
 
 Coverage: credential fail-fast (names every missing var; inline PEM vs .p8 path);
@@ -50,9 +50,10 @@ rejected; ASC error bodies surfaced verbatim (fail fast, no swallow); device /
 bundle-id **idempotency** (existing → reused, no POST); profile minting with
 the correct `IOS_APP_DEVELOPMENT` + device/cert relationships; reuse of an
 existing valid same-device profile without DELETE/POST; fail-closed handling for
-an invalid same-name profile; device-scoped profile names that prevent
-provisioning device B from deleting device A's profile; base64 `profileContent`
-decoded to `<uuid>.mobileprovision`; appex
+an invalid same-name profile; fail-closed handling for expired/inactive
+same-name profiles; device-scoped profile names that prevent provisioning device
+B from deleting device A's profile; base64 `profileContent` decoded to
+`<uuid>.mobileprovision`; appex
 `CFBundleIdentifier` discovery (de-duped); dry-run/bundle validation that fails
 on zero resolved bundle ids; and the full `provision()` flow writing a profile
 per bundle id with the bearer JWT on every request.
@@ -103,5 +104,5 @@ $ node scripts/ios-device-provision.mjs --device TEST --bundle-id ai.elizaos.app
 
 - Live `ios:device:provision` run against the real ASC team + device
   registration + on-device install — **N/A here**: no ASC credentials and no
-  physical iOS device on this host. Proven by the 23-test contract suite +
+  physical iOS device on this host. Proven by the 25-test contract suite +
   inspection; the live run is the device-lane verification step.
