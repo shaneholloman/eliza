@@ -1155,7 +1155,7 @@ export class ElizaClient {
         try {
           body = JSON.parse(raw);
         } catch {
-          /* non-JSON 202 progress body — mapper defaults it */
+          // error-policy:J3 untrusted 202 progress body defaults to an explicit starting progress state.
         }
       }
       return options.on202(body);
