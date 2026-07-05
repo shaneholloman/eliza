@@ -22,7 +22,9 @@ export function shouldSkipBuildStamp(env = process.env, options = {}) {
     variant === "direct";
   const isProductionBuild =
     isDeclaredProduction ||
-    (options.viteProductionBuild === true && !isDeclaredNonProduction);
+    ((options.viteMode === "production" ||
+      options.viteProductionBuild === true) &&
+      !isDeclaredNonProduction);
   return isProductionBuild && env.ELIZA_BUILD_STAMP !== "1";
 }
 

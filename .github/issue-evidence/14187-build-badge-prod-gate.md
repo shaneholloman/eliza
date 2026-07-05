@@ -15,6 +15,7 @@ Pages, or a direct `vite build`) instead of `packages/app/scripts/build.mjs`.
 - `git diff --check` — passed.
 - `VITE_ENVIRONMENT=production ELIZA_DISABLE_WEB_SHELL=1 bun run --cwd packages/app build:web` with a deliberately stale `packages/app/public/build-info.json` present — passed after generating the shared i18n artifact required by this fresh worktree.
 - Post-build file check: `packages/app/dist/build-info.json` absent and `packages/app/public/build-info.json` absent.
+- Direct Vite production mode with no `VITE_ENVIRONMENT`: `ELIZA_DISABLE_WEB_SHELL=1 node ../../node_modules/@elizaos/vitest-vite/bin/vite.js build` from `packages/app` with a deliberately stale `public/build-info.json` present — passed; `dist/build-info.json` and `public/build-info.json` were both absent.
 - Production preview at `http://127.0.0.1:4173/`: page status 200, `[data-testid="build-badge"]` count 0, full-page screenshot captured at `14187-build-badge-prod-gate.png`.
 - Direct request to `/build-info.json` in Vite preview returned the SPA fallback HTML (`content-type: text/html`); the actual evidence is the absent dist/public files plus the DOM check showing the badge did not render.
 
