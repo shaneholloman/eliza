@@ -13,6 +13,8 @@
  * untouched by the rename.
  */
 
+import { getCookieValueFromHeader } from "../http/cookie-header";
+
 export interface StewardCookieNames {
   token: string;
   refreshToken: string;
@@ -58,4 +60,36 @@ export function stewardCookieNames(environment: string | undefined): StewardCook
     refreshToken: `${BASE_REFRESH}-${environment}`,
     authed: `${BASE_AUTHED}-${environment}`,
   };
+}
+
+/**
+ * Bounded read-only migration window for non-production environments to accept
+ * the historical unsuffixed access cookie. This closes on 2026-08-04, one
+ * 30-day refresh-cookie Max-Age after the 2026-07-05 scoped-cookie rollout.
+ */
+export const LEGACY_STEWARD_COOKIE_FALLBACK_EXPIRES_AT_MS = Date.UTC(2026, 7, 4);
+
+/**
+ * Read this environment's Steward access cookie, then the historical unsuffixed
+ * cookie only during the bounded migration window. The fallback is read-only:
+ * callers verify the access JWT but must not rotate or clear legacy cookies in
+ * non-production.
+ */
+export function readStewardAccessCookieFromHeader(
+  cookieHeader: string | null,
+  environment: string | undefined,
+  nowMs = Date.now(),
+): string | undefined {
+  const names = stewardCookieNames(environment);
+  const ownCookie = getCookieValueFromHeader(cookieHeader, names.token);
+  if (ownCookie) return ownCookie;
+
+  if (
+    names.token === LEGACY_STEWARD_COOKIES.token ||
+    nowMs >= LEGACY_STEWARD_COOKIE_FALLBACK_EXPIRES_AT_MS
+  ) {
+    return undefined;
+  }
+
+  return getCookieValueFromHeader(cookieHeader, LEGACY_STEWARD_COOKIES.token);
 }
