@@ -28,6 +28,7 @@ const IOS_VOICE_SELFTEST_RESULT_KEY = "eliza:ios-voice-selftest:result";
 const IOS_ONBOARDING_SMOKE_RESULT_KEY = "eliza:ios-onboarding-smoke:result";
 const IOS_VOICE_SELFTEST_ONBOARDING_WAIT_MS = 180_000;
 const IOS_VOICE_SELFTEST_RUN_TIMEOUT_MS = 240_000;
+const DEFAULT_IOS_VOICE_SELFTEST_API_BASE = "http://127.0.0.1:31338";
 
 /** The three stages every real voice round-trip must clear. */
 const REQUIRED_VOICE_STAGES: ReadonlyArray<"asr" | "send" | "tts"> = [
@@ -54,7 +55,7 @@ let iosVoiceSelfTestStarted = false;
 function parseIosVoiceSelfTestRequest(
   raw: string | null,
 ): IosVoiceSelfTestRequest {
-  const fallback = { apiBase: "http://127.0.0.1:31338" };
+  const fallback = { apiBase: DEFAULT_IOS_VOICE_SELFTEST_API_BASE };
   if (!raw || raw === "1") return fallback;
   try {
     const parsed = JSON.parse(raw) as { apiBase?: unknown };
@@ -230,16 +231,19 @@ export async function runIosVoiceSelfTestSmokeIfRequested({
   if (!rawRequest) return false;
 
   iosVoiceSelfTestStarted = true;
-  const request = parseIosVoiceSelfTestRequest(rawRequest);
-  await writeResult(IOS_VOICE_SELFTEST_RESULT_KEY, {
-    ok: false,
-    phase: "running",
-    startedAt: new Date().toISOString(),
-    apiBase: request.apiBase,
-  });
-
+  let request: IosVoiceSelfTestRequest = {
+    apiBase: DEFAULT_IOS_VOICE_SELFTEST_API_BASE,
+  };
   let audioCtx: AudioContext | null = null;
   try {
+    request = parseIosVoiceSelfTestRequest(rawRequest);
+    await writeResult(IOS_VOICE_SELFTEST_RESULT_KEY, {
+      ok: false,
+      phase: "running",
+      startedAt: new Date().toISOString(),
+      apiBase: request.apiBase,
+    });
+
     await waitForOnboardingSmokeResultIfPresent(getPreference);
 
     audioCtx = getAudioCtx();
