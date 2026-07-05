@@ -181,6 +181,7 @@ import {
 	type MessageConnectorCreateThreadParams,
 	type MessageConnectorMetadata,
 	type MessageConnectorRegistration,
+	type MessageSearchHit,
 	type Metadata,
 	type ModelHandler,
 	type ModelParamsMap,
@@ -9017,6 +9018,16 @@ ${section_end}`;
 		accessContext?: AccessContext;
 	}): Promise<Memory[]> {
 		return this.adapter.getMemoriesByRoomIds(params);
+	}
+	async searchMessages(params: {
+		roomIds: UUID[];
+		query: string;
+		tableName?: string;
+		limit?: number;
+		offset?: number;
+		accessContext?: AccessContext;
+	}): Promise<MessageSearchHit[]> {
+		return this.adapter.searchMessages(params);
 	}
 
 	async getCachedEmbeddings(params: {
