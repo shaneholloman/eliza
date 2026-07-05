@@ -66,6 +66,9 @@ let schemas: {
   managedDomains: typeof import("../../../db/schemas/managed-domains").managedDomains;
 };
 
+const SOLO_ORG_CREDITS_BLOCK_MESSAGE =
+  "You cannot join another organization while your current organization holds credits beyond the signup grant. Contact support to transfer them first.";
+
 let seq = 0;
 function uid(): string {
   seq += 1;
@@ -250,9 +253,9 @@ describe("acceptInvite solo-org vacate — corrupt credit_balance fails closed (
       // guard is bypassed, the accept succeeds, and the org is DELETED. The
       // fail-closed parse throws instead, so the accept is rejected and the org
       // (with its unreadable balance) is preserved.
-      await expect(
-        invitesService.acceptInvite(seeded.token, seeded.inviteeUserId),
-      ).rejects.toThrow();
+      await expect(invitesService.acceptInvite(seeded.token, seeded.inviteeUserId)).rejects.toThrow(
+        SOLO_ORG_CREDITS_BLOCK_MESSAGE,
+      );
 
       expect((await readUser(seeded.inviteeUserId)).organization_id).toBe(seeded.inviteeOrgId);
       expect(await orgExists(seeded.inviteeOrgId)).toBe(true);

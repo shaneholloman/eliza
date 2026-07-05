@@ -22,6 +22,9 @@ import { managedDomainsService } from "./managed-domains";
 import { organizationsService } from "./organizations";
 import { usersService } from "./users";
 
+const SOLO_ORG_CREDITS_BLOCK_MESSAGE =
+  "You cannot join another organization while your current organization holds credits beyond the signup grant. Contact support to transfer them first.";
+
 /**
  * Parameters for creating an organization invite.
  */
@@ -274,14 +277,19 @@ export class InvitesService {
       // `organizationsService.delete`), silently destroying the balance. Parsing
       // fail-closed makes a corrupt balance BLOCK the vacate (surfaced as the
       // same "contact support" boundary) instead of silently losing credits.
-      const creditBalance = parseOrganizationCreditBalance(
-        organization.credit_balance,
-        "credit_balance",
-      );
-      if (creditBalance > getInitialCredits()) {
-        throw new Error(
-          "You cannot join another organization while your current organization holds credits beyond the signup grant. Contact support to transfer them first.",
+      let creditBalance: number;
+      try {
+        creditBalance = parseOrganizationCreditBalance(
+          organization.credit_balance,
+          "credit_balance",
         );
+      } catch (error) {
+        // error-policy:J4 corrupt balance data blocks the user-visible invite
+        // vacate path instead of falling through as a generic storage failure.
+        throw new Error(SOLO_ORG_CREDITS_BLOCK_MESSAGE, { cause: error });
+      }
+      if (creditBalance > getInitialCredits()) {
+        throw new Error(SOLO_ORG_CREDITS_BLOCK_MESSAGE);
       }
     }
   }
@@ -322,6 +330,8 @@ export class InvitesService {
       await this.assertOwnerCanVacateSoloOrganization(userId, previousOrganizationId);
       await organizationsService.delete(previousOrganizationId);
     } catch (error) {
+      // error-policy:J6 the invite accept already moved the user; cleanup is
+      // best-effort and must leave a warn breadcrumb for manual recovery.
       logger.warn("[InvitesService] Failed to clean up vacated solo organization", {
         previousOrganizationId,
         userId,
