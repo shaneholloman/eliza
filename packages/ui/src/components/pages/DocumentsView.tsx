@@ -407,7 +407,14 @@ export function DocumentsView({
           setServerFacetCounts(facetsRes.counts);
           setCached(`documents:facets:${scopeFilter}`, facetsRes.counts);
         }
-        onDocumentsChange?.(docsRes.documents);
+        // Only surface the WHOLE list to an embedder's shared cache (e.g.
+        // CharacterHubView). When a facet is active the rows are server-filtered
+        // to that facet, so publishing them would overwrite the embedder's full
+        // list with a partial one (codex P2). The `all` facet holds the whole
+        // store, so the embedder stays whole across facet switches.
+        if (facet === "all") {
+          onDocumentsChange?.(docsRes.documents);
+        }
         setIsServiceLoading(false);
         setDocumentsUnavailable(false);
         serviceRetryRef.current = 0;
@@ -1045,6 +1052,25 @@ export function DocumentsView({
       );
   } else if (loading && documents.length === 0) {
     listBody = <ListSkeleton rows={6} />;
+  } else if (documents.length === 0 && facet !== "all") {
+    // Facet-empty (#13594): the list is server-filtered to this facet, so an
+    // empty page here means "no items of THIS media type" — not an empty
+    // store. Showing the global "No knowledge yet" would be misleading when
+    // other facets are populated, so render a per-facet no-matches state.
+    listBody = (
+      <PagePanel.Empty
+        variant="inset"
+        className="min-h-[12rem] px-0 py-10"
+        title={t("knowledgehub.facetEmptyTitle", {
+          defaultValue: "No {{facet}} here",
+          facet: knowledgeFacetLabel(facet, t).toLowerCase(),
+        })}
+        description={t("knowledgehub.facetEmptyHint", {
+          defaultValue:
+            "Switch facets above, or drop a file / ask in chat to add one.",
+        })}
+      />
+    );
   } else if (documents.length === 0) {
     // Calm designed-empty (#13594): no recommendation chips — the agent
     // proposes next steps in chat. Quiet drag-drop/paste + the "Add" input
