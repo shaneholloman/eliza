@@ -5,6 +5,8 @@
  * bind host, ports, and CORS/auth posture, so bind-mode classification
  * (loopback vs wildcard) and dev's API/UI port split live here.
  */
+
+import { getBootConfig } from "./config/boot-config.js";
 import { isTruthyEnvValue } from "./env-utils.js";
 
 const DEFAULT_API_BIND_HOST = "127.0.0.1";
@@ -79,8 +81,8 @@ function firstNonEmpty(
   keys: readonly string[],
 ): string | null {
   for (const key of keys) {
-    const value = env[key]?.trim();
-    if (value) return value;
+    const entry = resolveEnvEntry(env, key);
+    if (entry) return entry.value;
   }
   return null;
 }
@@ -91,10 +93,40 @@ export function firstWinningEnvString(
   keys: readonly string[],
 ): { key: string; value: string } | null {
   for (const key of keys) {
-    const value = env[key]?.trim();
-    if (value) return { key, value };
+    const entry = resolveEnvEntry(env, key);
+    if (entry) return entry;
   }
   return null;
+}
+
+function presentEnvValue(value: string | undefined): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function resolveEnvEntry(
+  env: RuntimeEnvRecord,
+  key: string,
+): { key: string; value: string } | null {
+  const direct = presentEnvValue(env[key]);
+  if (direct !== undefined) return { key, value: direct };
+
+  for (const [brandKey, elizaKey] of getBootConfig().envAliases ?? []) {
+    const partner =
+      key === brandKey ? elizaKey : key === elizaKey ? brandKey : null;
+    if (!partner) continue;
+    const value = presentEnvValue(env[partner]);
+    if (value !== undefined) return { key: partner, value };
+  }
+  return null;
+}
+
+function resolveEnvValue(
+  env: RuntimeEnvRecord,
+  key: string,
+): string | undefined {
+  return resolveEnvEntry(env, key)?.value;
 }
 
 export interface PortPreferenceResolution {
@@ -109,13 +141,15 @@ export function resolveDesktopApiPortPreference(
   env: RuntimeEnvRecord = process.env,
 ): PortPreferenceResolution {
   for (const key of DESKTOP_API_PORT_KEYS) {
-    const p = parsePositivePort(env[key]);
+    const entry = resolveEnvEntry(env, key);
+    if (!entry) continue;
+    const p = parsePositivePort(entry.value);
     if (p !== null) {
       return {
         port: p,
-        sourceLabel: `env set — ${key}=${p}`,
-        changeLabel: `unset ${key} or set ELIZA_API_PORT / ELIZA_PORT (first wins); built-in ${DEFAULT_DESKTOP_API_PORT}`,
-        winningKey: key,
+        sourceLabel: `env set — ${entry.key}=${p}`,
+        changeLabel: `unset ${entry.key} or set ELIZA_API_PORT / ELIZA_PORT (first wins); built-in ${DEFAULT_DESKTOP_API_PORT}`,
+        winningKey: entry.key,
       };
     }
   }
@@ -133,13 +167,15 @@ export function resolveDesktopUiPortPreference(
   env: RuntimeEnvRecord = process.env,
 ): PortPreferenceResolution {
   for (const key of DESKTOP_UI_PORT_KEYS) {
-    const p = parsePositivePort(env[key]);
+    const entry = resolveEnvEntry(env, key);
+    if (!entry) continue;
+    const p = parsePositivePort(entry.value);
     if (p !== null) {
       return {
         port: p,
-        sourceLabel: `env set — ${key}=${p}`,
-        changeLabel: `unset ${key} for built-in ${DEFAULT_DESKTOP_UI_PORT}`,
-        winningKey: key,
+        sourceLabel: `env set — ${entry.key}=${p}`,
+        changeLabel: `unset ${entry.key} for built-in ${DEFAULT_DESKTOP_UI_PORT}`,
+        winningKey: entry.key,
       };
     }
   }
@@ -227,15 +263,16 @@ export function resolveRuntimePorts(
 ): ResolvedRuntimePorts {
   return {
     serverOnlyPort:
-      parsePositivePort(env.ELIZA_PORT) ??
-      parsePositivePort(env.ELIZA_UI_PORT) ??
+      parsePositivePort(resolveEnvValue(env, "ELIZA_PORT")) ??
+      parsePositivePort(resolveEnvValue(env, "ELIZA_UI_PORT")) ??
       DEFAULT_SERVER_ONLY_PORT,
     desktopApiPort:
-      parsePositivePort(env.ELIZA_API_PORT) ??
-      parsePositivePort(env.ELIZA_PORT) ??
+      parsePositivePort(resolveEnvValue(env, "ELIZA_API_PORT")) ??
+      parsePositivePort(resolveEnvValue(env, "ELIZA_PORT")) ??
       DEFAULT_DESKTOP_API_PORT,
     desktopUiPort:
-      parsePositivePort(env.ELIZA_UI_PORT) ?? DEFAULT_DESKTOP_UI_PORT,
+      parsePositivePort(resolveEnvValue(env, "ELIZA_UI_PORT")) ??
+      DEFAULT_DESKTOP_UI_PORT,
   };
 }
 
@@ -293,6 +330,17 @@ export function resolveApiToken(
   env: RuntimeEnvRecord = process.env,
 ): string | null {
   return resolveApiSecurityConfig(env).token;
+}
+
+export function isDevApiWatchEnabled(
+  env: RuntimeEnvRecord = process.env,
+  execArgv: readonly string[] = process.execArgv,
+): boolean {
+  return (
+    execArgv.includes("--watch") ||
+    env.ELIZA_DESKTOP_API_WATCH === "1" ||
+    env.ELIZA_DEV_SOURCE_WATCH === "1"
+  );
 }
 
 export function resolveConfiguredApiToken(
@@ -394,13 +442,31 @@ export function syncResolvedApiPort(
 const MOBILE_PLATFORM_VALUES = new Set(["android", "ios"]);
 
 export function isMobilePlatform(env: RuntimeEnvRecord = process.env): boolean {
-  const raw = env.ELIZA_PLATFORM?.trim().toLowerCase();
+  const raw = resolvePlatform(env);
   if (!raw) return false;
   return MOBILE_PLATFORM_VALUES.has(raw);
 }
 
 export function isAndroidMobile(env: RuntimeEnvRecord = process.env): boolean {
-  return env.ELIZA_PLATFORM?.trim().toLowerCase() === "android";
+  return resolvePlatform(env) === "android";
+}
+
+export function isIosMobile(env: RuntimeEnvRecord = process.env): boolean {
+  return resolvePlatform(env) === "ios";
+}
+
+/**
+ * The normalized `ELIZA_PLATFORM` value (trimmed + lowercased), resolved through
+ * the brand<->eliza alias table so a rebranded `<PREFIX>_PLATFORM` is honoured
+ * from the alias table with nothing written back to `process.env` (arch-audit
+ * #12251). Returns `undefined` when neither the canonical key nor a branded
+ * alias is set — callers that only care about the mobile embeddings should
+ * prefer {@link isMobilePlatform} / {@link isAndroidMobile} / {@link isIosMobile}.
+ */
+export function resolvePlatform(
+  env: RuntimeEnvRecord = process.env,
+): string | undefined {
+  return resolveEnvValue(env, "ELIZA_PLATFORM")?.trim().toLowerCase();
 }
 
 export function resolveElizaRuntimeEnv(

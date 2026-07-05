@@ -108,6 +108,7 @@ export class ProcessTerminal implements Terminal {
     this.stdinBuffer = new StdinBuffer({ timeout: 10 });
 
     // Kitty protocol response pattern: \x1b[?<flags>u
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the Kitty protocol query response begins with a literal ESC (\x1b) control character.
     const kittyResponsePattern = /^\x1b\[\?(\d+)u$/;
 
     // Forward individual sequences to the input handler

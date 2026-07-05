@@ -17,6 +17,8 @@ name: Keyless Harness E2E
 # least one per-plugin proof participates in the required `test-status` gate.
 
 on:
+  # Reusable entry for the scheduled exhaustive develop lane (#12342).
+  workflow_call:
   pull_request:
     branches: [main, develop]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -24,7 +26,7 @@ on:
 
 concurrency:
   group: keyless-harness-e2e-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -51,7 +53,7 @@ env:
 jobs:
   keyless-harness:
     name: Deterministic mock-LLM connector loops (no secret)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 15
     steps:
       - name: Checkout

@@ -3,9 +3,9 @@
  * terminal editors.
  */
 import { spawnSync } from "node:child_process";
-import { readdirSync, statSync } from "fs";
-import { homedir } from "os";
-import { basename, dirname, join } from "path";
+import { readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import { fuzzyFilter } from "./fuzzy.js";
 
 const PATH_DELIMITERS = new Set([" ", "\t", '"', "'", "="]);

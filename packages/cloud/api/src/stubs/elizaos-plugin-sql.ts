@@ -1,4 +1,12 @@
-// Provides workerd-safe src stubs elizaos plugin sql stubs for Cloudflare Worker bundling.
+/**
+ * Workerd-safe stand-in for @elizaos/plugin-sql, wired via the wrangler.toml
+ * alias so the Worker bundle never pulls node-only adapter code. The Drizzle
+ * tables below are REAL query surfaces: cloud-shared repositories build SQL
+ * from them, so table/column names must stay in sync with
+ * plugins/plugin-sql/src/schema (the source the cloud migrations were
+ * generated from). Drift here 500s the deployed Worker (42703/42P01, #13406);
+ * __tests__/plugin-sql-stub-mirror.test.ts enforces the sync mechanically.
+ */
 import {
   boolean,
   jsonb,
@@ -15,23 +23,43 @@ const updated = () =>
   timestamp("updated_at", { withTimezone: true }).defaultNow().notNull();
 const meta = () => jsonb("metadata").$type<Record<string, unknown>>();
 
+// Full column mirror of plugins/plugin-sql/src/schema/agent.ts. The Worker's
+// agents repository selects `system` and `settings` explicitly, so a partial
+// stub here turns those drizzle column refs into `undefined` at bundle time
+// and crashes the query builder — the same 500 class as #13406.
 const agents = pgTable("agents", {
   id: id(),
-  name: text("name"),
-  username: text("username"),
   enabled: boolean("enabled").default(true),
-  bio: jsonb("bio"),
+  server_id: text("server_id"),
   createdAt: created(),
   updatedAt: updated(),
+  name: text("name"),
+  username: text("username"),
+  system: text("system"),
+  bio: jsonb("bio"),
+  messageExamples: jsonb("message_examples"),
+  postExamples: jsonb("post_examples"),
+  topics: jsonb("topics"),
+  adjectives: jsonb("adjectives"),
+  knowledge: jsonb("knowledge"),
+  plugins: jsonb("plugins"),
+  settings: jsonb("settings"),
+  style: jsonb("style"),
 });
 
+// Column names MUST mirror plugins/plugin-sql/src/schema/* (the source the
+// cloud migrations were generated from): repositories in cloud-shared build
+// real SQL from these tables, so a drifted column here (e.g. the old
+// `server_id`, renamed upstream to `message_server_id`) makes every
+// `select().from(...)` fail with 42703 in the deployed Worker (#13406).
 const rooms = pgTable("rooms", {
   id: id(),
   agentId: text("agent_id"),
   source: text("source"),
   type: text("type"),
-  serverId: text("server_id"),
+  messageServerId: text("message_server_id"),
   worldId: text("world_id"),
+  name: text("name"),
   channelId: text("channel_id"),
   metadata: meta(),
   createdAt: created(),
@@ -99,10 +127,13 @@ const tasks = pgTable("tasks", {
   id: id(),
   name: text("name"),
   description: text("description"),
-  agentId: text("agent_id"),
   roomId: text("room_id"),
   worldId: text("world_id"),
-  tags: jsonb("tags").$type<string[]>(),
+  entityId: text("entity_id"),
+  agentId: text("agent_id"),
+  // text[] in the real schema (and the deployed DB) — jsonb here would
+  // misdecode reads and break writes.
+  tags: text("tags").array(),
   metadata: meta(),
   createdAt: created(),
   updatedAt: updated(),
@@ -130,13 +161,8 @@ const worlds = pgTable("worlds", {
   agentId: text("agent_id"),
   name: text("name"),
   metadata: meta(),
-  serverId: text("server_id"),
+  messageServerId: text("message_server_id"),
   createdAt: created(),
-});
-
-const serverAgents = pgTable("server_agents", {
-  serverId: text("server_id"),
-  agentId: text("agent_id"),
 });
 
 const messageServerAgents = pgTable(
@@ -148,7 +174,9 @@ const messageServerAgents = pgTable(
   (table) => [primaryKey({ columns: [table.messageServerId, table.agentId] })],
 );
 
-const messages = pgTable("messages", {
+// The real table is `central_messages` (plugin-sql message.ts); a stub named
+// `messages` points every query at a table that doesn't exist (42P01).
+const messages = pgTable("central_messages", {
   id: id(),
   channelId: text("channel_id"),
   authorId: text("author_id"),
@@ -174,7 +202,7 @@ const messageServers = pgTable("message_servers", {
 
 const channels = pgTable("channels", {
   id: id(),
-  serverId: text("server_id"),
+  messageServerId: text("message_server_id"),
   name: text("name"),
   type: text("type"),
   sourceType: text("source_type"),
@@ -187,7 +215,7 @@ const channels = pgTable("channels", {
 
 const channelParticipants = pgTable("channel_participants", {
   channelId: text("channel_id"),
-  userId: text("user_id"),
+  entityId: text("entity_id"),
 });
 
 export const schema = {
@@ -203,7 +231,6 @@ export const schema = {
   logTable: logs,
   cacheTable: cache,
   worldTable: worlds,
-  serverAgentsTable: serverAgents,
   messageServerAgentsTable: messageServerAgents,
   messageTable: messages,
   messageServerTable: messageServers,
@@ -251,7 +278,6 @@ export {
   participants as participantTable,
   relationships as relationshipTable,
   rooms as roomTable,
-  serverAgents as serverAgentsTable,
   tasks as taskTable,
   worlds as worldTable,
 };

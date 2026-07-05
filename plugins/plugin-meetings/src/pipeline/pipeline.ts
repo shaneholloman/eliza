@@ -19,6 +19,7 @@ import { logger } from "@elizaos/core";
 import type { MeetingParticipant, TranscriptSegment } from "@elizaos/shared";
 import {
   MEETING_AUDIO_SAMPLE_RATE,
+  isMeetingInsufficientCreditsError,
   type MeetingPipelineOptions,
   type MeetingTranscriptionPipeline,
   type PipelineTranscriptUpdate,
@@ -101,8 +102,13 @@ class MeetingPipeline implements MeetingTranscriptionPipeline {
       now: () => Date.now() - this.sessionEpochMs,
     });
 
-    this.manager.onSegmentReady = (speakerKey, _speakerName, audio) => {
-      this.transcribeWindow(speakerKey, audio);
+    this.manager.onSegmentReady = (
+      speakerKey,
+      _speakerName,
+      audio,
+      purpose,
+    ) => {
+      this.transcribeWindow(speakerKey, audio, purpose);
     };
 
     this.manager.onSegmentConfirmed = (event) => {
@@ -255,16 +261,35 @@ class MeetingPipeline implements MeetingTranscriptionPipeline {
     return fallback;
   }
 
-  private transcribeWindow(speakerKey: string, audio: Float32Array): void {
+  private transcribeWindow(
+    speakerKey: string,
+    audio: Float32Array,
+    purpose: "interim" | "final",
+  ): void {
     const wav = float32ToWav(audio, MEETING_AUDIO_SAMPLE_RATE);
     const prompt = this.manager.getLastConfirmedText(speakerKey);
     const durationSec = audio.length / MEETING_AUDIO_SAMPLE_RATE;
 
     const task = (async () => {
       try {
+        if (this.options.billing) {
+          try {
+            await this.options.billing.ensureTranscriptionWindow(
+              Math.ceil(durationSec * 1000),
+            );
+          } catch (err) {
+            if (isMeetingInsufficientCreditsError(err)) {
+              this.options.onSpendCapReached?.(err);
+              this.manager.handleTranscriptionResult(speakerKey, "");
+              return;
+            }
+            throw err;
+          }
+        }
         const result = await this.backend.transcribe(wav, {
           ...(this.options.language ? { language: this.options.language } : {}),
           ...(prompt ? { prompt } : {}),
+          purpose,
         });
         const segments =
           result.words && result.words.length > 0

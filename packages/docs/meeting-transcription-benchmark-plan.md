@@ -55,6 +55,25 @@ attribution, and shared-room uncertainty handling. Each operation must declare
 evidence, metrics, privacy controls, and the confidence policy for when speaker
 names are applied or withheld.
 
+Every manifest must also enumerate baseline comparisons against external
+products, open-source baselines, and the current elizaOS production path. The
+required comparison rows are Otter-style bot transcription, Granola-style
+bot-free capture, Zoom native notes/transcripts, Google Meet/Gemini notes,
+WhisperX + pyannote, NeMo Sortformer, and `eliza_current_baseline`. Commercial
+systems that cannot be run are `not_run` with a reason, never counted as pass.
+At least one open-source row must be run or imported.
+
+Every manifest must also enumerate adversarial cases and QA review checklist
+rows. The adversarial section covers canonical artifact schema fuzzing,
+transcript/span alignment, RTTM/diarization parsing, speaker profile lifecycle,
+capture-source state machines, ASR media references, meeting-note grounding,
+and importer response shapes. Required scenario classes include prompt
+injection, negated action items, side conversations, duplicate names, borrowed
+laptops, permission revocation, audio deletion, false VAD, overlapping similar
+voices, and malformed artifacts. QA checklist rows cover permission denied,
+capture stopped, speaker correction, delete audio, and share/privacy state with
+machine-readable verdicts.
+
 ## Registry Contract
 
 The integrated benchmark id is `meeting_transcription_proof`.
@@ -81,6 +100,13 @@ The real lane refuses non-evidence reports. It requires:
 - speaker operation coverage for enrollment, recognition, unknown speaker
   creation, naming correction, merge/split, deletion, post-deletion replay,
   multi-speaker single-stream attribution, and shared-room uncertainty;
+- baseline comparison coverage for required external product, open-source, and
+  internal baseline rows, with at least one open-source run/import and the
+  current Eliza production baseline;
+- adversarial case coverage for required fuzz targets and scenario classes,
+  including minimized seeds and failure policies;
+- QA checklist coverage for permission denied, capture stopped, correction,
+  delete audio, and share/privacy state with machine-readable verdicts;
 - all required scenario coverage IDs;
 - each scenario's evidence references are valid and covered by the manifest's
   evidence inventory;
@@ -130,3 +156,8 @@ without reading code:
   consent/retention pass status.
 - dataset manifests/checksums/license notes showing the public or controlled
   corpus inputs behind the acoustic stress cases.
+- baseline comparison artifacts for each compared system, including terms/usage
+  notes for commercial imports and manual review notes for at least one
+  transcript and one notes artifact per compared system.
+- fuzz reports with seeds, minimized repro inputs, and manual QA checklist
+  output with reviewed artifact links.

@@ -43,6 +43,7 @@ export function wordWrapLine(line: string, maxWidth: number): TextChunk[] {
   let wrapOppWidth = 0;
 
   for (let i = 0; i < segments.length; i++) {
+    // biome-ignore lint/style/noNonNullAssertion: i < segments.length bounds the index, so segments[i] is always defined.
     const seg = segments[i]!;
     const grapheme = seg.segment;
     const gWidth = visibleWidth(grapheme);

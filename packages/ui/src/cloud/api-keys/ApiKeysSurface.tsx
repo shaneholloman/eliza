@@ -1,12 +1,12 @@
 /**
  * API-keys surface. Gates on the Steward session, fetches the keys with
  * {@link useApiKeys}, maps the server records to the cloud-ui display shape,
- * and renders {@link ApiKeysView}. Mounted by the `cloud-api-keys` Settings
- * section (`/settings#cloud-api-keys`); legacy `/dashboard/api-keys` deep
- * links resolve there via the CloudRouterShell compat redirect.
+ * and renders {@link ApiKeysView}. Mounted twice: by the `cloud-api-keys`
+ * Settings section (`/settings#cloud-api-keys`) in the app, and by the
+ * standalone `dashboard/api-keys` console page (the apex-console home for
+ * key management).
  */
 
-import { useContext } from "react";
 import {
   DashboardErrorState,
   DashboardLoadingState,
@@ -17,8 +17,8 @@ import type {
   ApiKeysSummaryData,
 } from "../../cloud-ui/components/data-list";
 import { useDocumentTitle } from "../lib/use-document-title";
+import { useSessionAuth } from "../lib/use-session-auth";
 import { useCloudT } from "../shell/CloudI18nProvider";
-import { LocalStewardAuthContext } from "../shell/StewardProvider";
 import { ApiKeysView } from "./ApiKeysView";
 import { type ApiKeyRecord, useApiKeys } from "./use-api-keys";
 
@@ -59,9 +59,11 @@ function deriveSummary(keys: ApiKeyDisplay[]): ApiKeysSummaryData {
 /** The API-keys surface, rendered by the Settings → Developer section. */
 export function ApiKeysSurface() {
   const t = useCloudT();
-  const auth = useContext(LocalStewardAuthContext);
-  const ready = auth ? !auth.isLoading : false;
-  const authenticated = auth?.isAuthenticated ?? false;
+  // Canonical session hook: provider context when mounted, persisted-JWT
+  // fallback otherwise. The previous raw context read treated "provider not
+  // mounted" and "signed out" as loading, so the page skeletoned forever
+  // instead of ever resolving.
+  const { ready, authenticated } = useSessionAuth();
 
   const { data: keys, isLoading, isError, error } = useApiKeys();
 
@@ -71,8 +73,19 @@ export function ApiKeysSurface() {
     defaultValue: "Loading API keys",
   });
 
-  if (!ready || !authenticated) {
+  if (!ready) {
     return <DashboardLoadingState label={loadingLabel} />;
+  }
+
+  if (!authenticated) {
+    // Signed-out is a designed state, never an eternal skeleton.
+    return (
+      <DashboardErrorState
+        message={t("cloud.apiKeys.signInRequired", {
+          defaultValue: "Sign in to manage API keys.",
+        })}
+      />
+    );
   }
 
   if (isLoading) {

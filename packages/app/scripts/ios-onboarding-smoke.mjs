@@ -11,6 +11,15 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  DEFAULT_HOST_AGENT_PORT,
+  startDeviceE2eHostAgent,
+} from "./lib/host-agent.mjs";
+import {
+  assertCandidateIosAppRendererFresh,
+  assertInstalledIosAppRendererFresh,
+} from "./lib/ios-renderer-stamp.mjs";
+import { clearIosSmokeDefaults } from "./lib/ios-sim-defaults-hygiene.mjs";
+import {
   captureIosSimulatorScreenshot,
   startIosSimulatorVideo,
 } from "./lib/ios-simulator-capture.mjs";
@@ -26,9 +35,13 @@ const cleanupHelperScript = path.join(
 );
 const REQUEST_KEY = "eliza:ios-onboarding-smoke:request";
 const RESULT_KEY = "eliza:ios-onboarding-smoke:result";
+const RELAUNCH_REQUEST_KEY = "eliza:ios-onboarding-relaunch-smoke:request";
+const RELAUNCH_RESULT_KEY = "eliza:ios-onboarding-relaunch-smoke:result";
+const MIXED_CONTENT_REQUEST_KEY = "eliza:ios-mixed-content-smoke:request";
+const MIXED_CONTENT_RESULT_KEY = "eliza:ios-mixed-content-smoke:result";
 const ATTACHMENT_REQUEST_KEY = "eliza:ios-attachment-smoke:request";
 const ATTACHMENT_RESULT_KEY = "eliza:ios-attachment-smoke:result";
-const DEFAULT_API_BASE = "http://127.0.0.1:31338";
+const DEFAULT_HOST_AGENT_PORT_STRING = String(DEFAULT_HOST_AGENT_PORT);
 
 const has = (flag) => process.argv.includes(flag);
 const val = (flag, fallback = null) => {
@@ -171,13 +184,27 @@ function latestBuiltApp() {
 }
 
 function installLatestApp(udid, appId) {
-  if (has("--skip-install")) return;
+  if (has("--skip-install")) {
+    assertInstalledIosAppRendererFresh({
+      udid,
+      bundleId: appId,
+      repoRoot,
+      log,
+    });
+    return;
+  }
   const appPath = val("--app-path") ?? latestBuiltApp();
   if (!appPath) {
     throw new Error(
       "Could not find a Debug-iphonesimulator App.app. Build the iOS simulator app first or pass --app-path.",
     );
   }
+  assertCandidateIosAppRendererFresh({
+    appPath,
+    bundleId: appId,
+    repoRoot,
+    log,
+  });
   tryRun("xcrun", ["simctl", "terminate", udid, appId]);
   tryRun("xcrun", ["simctl", "uninstall", udid, appId]);
   log(`installing ${appPath}`);
@@ -192,6 +219,12 @@ function installLatestApp(udid, appId) {
   if (!installed) {
     throw new Error(`${appId} was not installed after simctl install.`);
   }
+  assertInstalledIosAppRendererFresh({
+    udid,
+    bundleId: appId,
+    repoRoot,
+    log,
+  });
 }
 
 function prefsDomainPath(udid, appId) {
@@ -208,28 +241,6 @@ function prefsDomainPath(udid, appId) {
 
 function preferenceNativeKeys(key) {
   return [`CapacitorStorage.${key}`, key];
-}
-
-function defaultsDelete(udid, appId, key) {
-  const nativeKeys = preferenceNativeKeys(key);
-  for (const nativeKey of nativeKeys) {
-    tryRun("xcrun", [
-      "simctl",
-      "spawn",
-      udid,
-      "defaults",
-      "delete",
-      appId,
-      nativeKey,
-    ]);
-  }
-
-  const domainPath = prefsDomainPath(udid, appId);
-  if (domainPath) {
-    for (const nativeKey of nativeKeys) {
-      tryRun("defaults", ["delete", domainPath, nativeKey]);
-    }
-  }
 }
 
 function defaultsWriteString(udid, appId, key, value) {
@@ -300,23 +311,23 @@ function flushPreferences(udid) {
   tryRun("xcrun", ["simctl", "spawn", udid, "killall", "cfprefsd"]);
 }
 
-function clearFirstRunState(udid, appId) {
-  for (const key of [
-    REQUEST_KEY,
-    RESULT_KEY,
-    ATTACHMENT_REQUEST_KEY,
-    ATTACHMENT_RESULT_KEY,
-    "elizaos:active-server",
-    "eliza:first-run-complete",
-    "eliza:setup:step",
-    "eliza:onboarding-complete",
-    "eliza:mobile-runtime-mode",
-    "eliza.background.config",
-    "elizaos:first-run:force-fresh",
-  ]) {
-    defaultsDelete(udid, appId, key);
-  }
-}
+const FIRST_RUN_STATE_KEYS = [
+  REQUEST_KEY,
+  RESULT_KEY,
+  RELAUNCH_REQUEST_KEY,
+  RELAUNCH_RESULT_KEY,
+  MIXED_CONTENT_REQUEST_KEY,
+  MIXED_CONTENT_RESULT_KEY,
+  ATTACHMENT_REQUEST_KEY,
+  ATTACHMENT_RESULT_KEY,
+  "elizaos:active-server",
+  "eliza:first-run-complete",
+  "eliza:setup:step",
+  "eliza:onboarding-complete",
+  "eliza:mobile-runtime-mode",
+  "eliza.background.config",
+  "elizaos:first-run:force-fresh",
+];
 
 function takeScreenshot(udid, label) {
   try {
@@ -363,6 +374,7 @@ async function pollResult(udid, appId) {
       try {
         parsed = JSON.parse(lastRaw);
       } catch {
+        // error-policy:J3 malformed simulator preference is not a completed result
         parsed = null;
       }
       if (parsed?.ok === true) return parsed;
@@ -380,32 +392,145 @@ async function pollResult(udid, appId) {
   );
 }
 
+async function pollRelaunchResult(udid, appId) {
+  const attempts = Number.parseInt(
+    process.env.IOS_ONBOARDING_SMOKE_ATTEMPTS ?? "180",
+    10,
+  );
+  const delayMs = Number.parseInt(
+    process.env.IOS_ONBOARDING_SMOKE_DELAY_MS ?? "1000",
+    10,
+  );
+  let lastRaw = "";
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    lastRaw = defaultsReadString(udid, appId, RELAUNCH_RESULT_KEY) ?? "";
+    if (lastRaw) {
+      let parsed = null;
+      try {
+        parsed = JSON.parse(lastRaw);
+      } catch {
+        // error-policy:J3 malformed simulator preference is not a completed result
+        parsed = null;
+      }
+      if (parsed?.ok === true) return parsed;
+      if (parsed?.phase === "failed" || parsed?.error) {
+        throw new Error(`iOS relaunch smoke failed: ${lastRaw}`);
+      }
+      if (attempt % 15 === 0) {
+        log(`still proving relaunch (${attempt}/${attempts}): ${lastRaw}`);
+      }
+    }
+    await sleep(delayMs);
+  }
+  throw new Error(
+    `iOS relaunch smoke timed out after ${attempts} attempts. Last result: ${lastRaw || "<none>"}`,
+  );
+}
+
+async function pollMixedContentResult(udid, appId) {
+  const attempts = Number.parseInt(
+    process.env.IOS_ONBOARDING_SMOKE_ATTEMPTS ?? "180",
+    10,
+  );
+  const delayMs = Number.parseInt(
+    process.env.IOS_ONBOARDING_SMOKE_DELAY_MS ?? "1000",
+    10,
+  );
+  let lastRaw = "";
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    lastRaw = defaultsReadString(udid, appId, MIXED_CONTENT_RESULT_KEY) ?? "";
+    if (lastRaw) {
+      let parsed = null;
+      try {
+        parsed = JSON.parse(lastRaw);
+      } catch {
+        parsed = null;
+      }
+      if (parsed?.ok === true) return parsed;
+      if (parsed?.phase === "failed" || parsed?.error) {
+        throw new Error(`iOS mixed-content smoke failed: ${lastRaw}`);
+      }
+      if (attempt % 15 === 0) {
+        log(
+          `still proving mixed-content fallback (${attempt}/${attempts}): ${lastRaw}`,
+        );
+      }
+    }
+    await sleep(delayMs);
+  }
+  throw new Error(
+    `iOS mixed-content smoke timed out after ${attempts} attempts. Last result: ${lastRaw || "<none>"}`,
+  );
+}
+
 async function main() {
   const { appId, urlScheme } = readAppIdentity();
-  const apiBase = val("--api-base", DEFAULT_API_BASE);
+  let apiBase = val("--api-base");
   const udid = ensureSimulatorBooted();
   removePathRecursive(resultDir);
   fs.mkdirSync(resultDir, { recursive: true });
+  const hostAgent = apiBase
+    ? null
+    : await startDeviceE2eHostAgent({
+        repoRoot,
+        artifactDir: resultDir,
+        requestedPort: val("--host-agent-port"),
+        preferredPort:
+          process.env.ELIZA_IOS_HOST_AGENT_PORT ??
+          DEFAULT_HOST_AGENT_PORT_STRING,
+        log,
+      });
+  apiBase = apiBase ?? hostAgent.apiBase;
+  let recording = null;
 
-  installLatestApp(udid, appId);
-  tryRun("xcrun", ["simctl", "terminate", udid, appId]);
-  clearFirstRunState(udid, appId);
-  defaultsWriteString(udid, appId, REQUEST_KEY, JSON.stringify({ apiBase }));
-  defaultsWriteString(
-    udid,
-    appId,
-    RESULT_KEY,
-    JSON.stringify({
-      ok: false,
-      phase: "requested",
-      apiBase,
-      updatedAt: new Date().toISOString(),
-    }),
-  );
-  flushPreferences(udid);
-
-  const recording = startVideo(udid);
   try {
+    clearIosSmokeDefaults({
+      udid,
+      bundleId: appId,
+      extraKeys: FIRST_RUN_STATE_KEYS,
+      log,
+    });
+    installLatestApp(udid, appId);
+    tryRun("xcrun", ["simctl", "terminate", udid, appId]);
+    clearIosSmokeDefaults({
+      udid,
+      bundleId: appId,
+      extraKeys: FIRST_RUN_STATE_KEYS,
+      log,
+    });
+    defaultsWriteString(udid, appId, REQUEST_KEY, JSON.stringify({ apiBase }));
+    defaultsWriteString(
+      udid,
+      appId,
+      RESULT_KEY,
+      JSON.stringify({
+        ok: false,
+        phase: "requested",
+        apiBase,
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    flushPreferences(udid);
+    defaultsWriteString(
+      udid,
+      appId,
+      MIXED_CONTENT_REQUEST_KEY,
+      JSON.stringify({ apiBase }),
+    );
+    defaultsWriteString(
+      udid,
+      appId,
+      MIXED_CONTENT_RESULT_KEY,
+      JSON.stringify({
+        ok: false,
+        phase: "requested",
+        apiBase,
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    flushPreferences(udid);
+
+    recording = startVideo(udid);
     log(`launching ${appId} on ${udid}`);
     simctl(["launch", udid, appId]);
     await sleep(1500);
@@ -419,7 +544,6 @@ async function main() {
     takeScreenshot(udid, "fresh-onboarding");
     const result = await pollResult(udid, appId);
     const screenshot = takeScreenshot(udid, "home-landing");
-    const video = await stopVideo(recording);
     if (result.homeVisible !== true || result.composerVisible !== true) {
       throw new Error(
         `iOS onboarding smoke result lacked home/composer: ${JSON.stringify(result)}`,
@@ -436,17 +560,119 @@ async function main() {
         `iOS onboarding smoke did not persist active server ${apiBase}: ${JSON.stringify(result.storage)}`,
       );
     }
+    const mixedContentResult = await pollMixedContentResult(udid, appId);
+    if (
+      !String(mixedContentResult.webViewOrigin).startsWith("https://localhost")
+    ) {
+      throw new Error(
+        `iOS mixed-content smoke did not run from https://localhost: ${JSON.stringify(mixedContentResult)}`,
+      );
+    }
+    if (mixedContentResult.mixedContentWouldBlockWebSocket !== true) {
+      throw new Error(
+        `iOS mixed-content smoke did not prove an insecure ws:// would be mixed content: ${JSON.stringify(mixedContentResult)}`,
+      );
+    }
+    if (
+      !Array.isArray(mixedContentResult.webSocketConstructorCalls) ||
+      mixedContentResult.webSocketConstructorCalls.length !== 0
+    ) {
+      throw new Error(
+        `iOS mixed-content smoke attempted a WebSocket: ${JSON.stringify(mixedContentResult.webSocketConstructorCalls)}`,
+      );
+    }
+    if (mixedContentResult.connectionState?.state !== "connected") {
+      throw new Error(
+        `iOS mixed-content smoke was not connected-over-REST: ${JSON.stringify(mixedContentResult.connectionState)}`,
+      );
+    }
+    if (mixedContentResult.lostBackendOverlayAbsent !== true) {
+      throw new Error(
+        `iOS mixed-content smoke found the lost backend overlay: ${JSON.stringify(mixedContentResult)}`,
+      );
+    }
+    if (mixedContentResult.restHealth?.ok !== true) {
+      throw new Error(
+        `iOS mixed-content smoke REST health failed: ${JSON.stringify(mixedContentResult.restHealth)}`,
+      );
+    }
+    defaultsWriteString(
+      udid,
+      appId,
+      RELAUNCH_REQUEST_KEY,
+      JSON.stringify({ apiBase }),
+    );
+    defaultsWriteString(
+      udid,
+      appId,
+      RELAUNCH_RESULT_KEY,
+      JSON.stringify({
+        ok: false,
+        phase: "requested",
+        apiBase,
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    flushPreferences(udid);
+    log(`terminating ${appId} for cold relaunch proof`);
+    simctl(["terminate", udid, appId]);
+    await sleep(1000);
+    log(`relaunching ${appId} for cold relaunch proof`);
+    simctl(["launch", udid, appId]);
+    const relaunchResult = await pollRelaunchResult(udid, appId);
+    const relaunchScreenshot = takeScreenshot(udid, "cold-relaunch-home");
+    const video = await stopVideo(recording);
+    if (
+      relaunchResult.homeVisible !== true ||
+      relaunchResult.composerVisible !== true
+    ) {
+      throw new Error(
+        `iOS relaunch smoke result lacked home/composer: ${JSON.stringify(relaunchResult)}`,
+      );
+    }
+    if (relaunchResult.onboardingHidden !== true) {
+      throw new Error(
+        `iOS relaunch smoke did not prove onboarding was hidden: ${JSON.stringify(relaunchResult)}`,
+      );
+    }
+    clearIosSmokeDefaults({
+      udid,
+      bundleId: appId,
+      extraKeys: FIRST_RUN_STATE_KEYS,
+      log,
+    });
     fs.writeFileSync(
       path.join(resultDir, "result.json"),
-      `${JSON.stringify({ ...result, screenshot, video }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          ...result,
+          screenshot,
+          video,
+          mixedContent: mixedContentResult,
+          coldRelaunch: {
+            ...relaunchResult,
+            screenshot: relaunchScreenshot,
+          },
+        },
+        null,
+        2,
+      )}\n`,
     );
-    log(`PASS ${JSON.stringify({ screenshot, video })}`);
+    log(`PASS ${JSON.stringify({ screenshot, relaunchScreenshot, video })}`);
   } catch (error) {
     const screenshot = takeScreenshot(udid, "failure");
     await stopVideo(recording);
+    clearIosSmokeDefaults({
+      udid,
+      bundleId: appId,
+      extraKeys: FIRST_RUN_STATE_KEYS,
+      log,
+    });
     throw new Error(
       `${error instanceof Error ? error.message : String(error)}${screenshot ? ` (screenshot: ${screenshot})` : ""}`,
     );
+  } finally {
+    await hostAgent?.stop();
   }
 }
 

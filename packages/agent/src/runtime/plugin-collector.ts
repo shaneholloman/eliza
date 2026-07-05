@@ -28,6 +28,7 @@ import {
   isMobilePlatform,
   migrateLegacyRuntimeConfig,
   type ResolvedElizaCloudTopology,
+  readAliasedEnv,
   resolveDeploymentTargetInConfig,
   resolveElizaCloudTopology,
   resolveServiceRoutingInConfig,
@@ -67,7 +68,7 @@ function orchestratorCompatPluginRequested(config: ElizaConfig): boolean {
   if (typeof fromDefaults === "boolean") {
     return fromDefaults;
   }
-  const raw = process.env.ELIZA_AGENT_ORCHESTRATOR?.trim().toLowerCase();
+  const raw = readAliasedEnv("ELIZA_AGENT_ORCHESTRATOR")?.toLowerCase();
   if (raw === "0" || raw === "false" || raw === "no") {
     return false;
   }
@@ -218,6 +219,19 @@ export const CHANNEL_PLUGIN_MAP: Readonly<Record<string, string>> =
 export const PROVIDER_PLUGIN_MAP: Readonly<Record<string, string>> =
   providerPluginMap;
 
+/**
+ * Every model-provider plugin package (the values of {@link PROVIDER_PLUGIN_MAP}).
+ * A configured provider is first-turn capability — chat cannot answer without a
+ * TEXT_GENERATION handler — so the boot phase split treats these as blocking:
+ * a provider that made it into the load set registers BEFORE the runtime
+ * reports ready (agentState `running` / `canRespond`), never in the deferred
+ * wave. Otherwise the readiness signal flips while the first chat turns still
+ * answer "no LLM provider configured" (#14038 wake-status lag).
+ */
+export const MODEL_PROVIDER_PLUGIN_NAMES: ReadonlySet<string> = new Set(
+  Object.values(PROVIDER_PLUGIN_MAP),
+);
+
 const LOCAL_MODEL_PROVIDER_PLUGINS = new Set<string>([
   "@elizaos/plugin-ollama",
   "@elizaos/plugin-local-inference",
@@ -355,7 +369,7 @@ export function collectPluginNames(
   const hasCanonicalRuntimeConfig = hasExplicitCanonicalRuntimeConfig(
     config as Record<string, unknown>,
   );
-  const isCloudContainer = process.env.ELIZA_CLOUD_PROVISIONED === "1";
+  const isCloudContainer = readAliasedEnv("ELIZA_CLOUD_PROVISIONED") === "1";
   const storeBuild = isStoreBuildVariant();
   const cloudExplicitlyDisabled = config.cloud?.enabled === false;
   // `ELIZA_LOCAL_LLAMA=1` is the AOSP / on-device signal that the in-process

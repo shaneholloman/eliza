@@ -18,6 +18,10 @@ inputs:
     description: "Whether to install protoc for Rust plugin builds"
     required: false
     default: "true"
+  force-protoc-github-fallback:
+    description: "Force the pinned GitHub protoc fallback path for setup action self-tests"
+    required: false
+    default: "false"
   install-command:
     description: "Dependency install command"
     required: false
@@ -42,33 +46,47 @@ inputs:
     description: "Run `git submodule update --init --recursive` before install"
     required: false
     default: "false"
+  setup-node:
+    description: >-
+      Whether to set up Node.js. Self-hosted runners are not guaranteed to have
+      `node` on PATH, and this action's very first step (turbo-cache-key) shells
+      out to `node`, so leave this on unless the caller already ran
+      actions/setup-node in the same job.
+    required: false
+    default: "true"
+  node-version:
+    description: "Node.js version to set up when setup-node is true"
+    required: false
+    default: "24"
 
 runs:
   using: "composite"
   steps:
-    # Persist Turbo's *local* filesystem cache across runs using GitHub Actions
-    # cache (free, no third-party SaaS remote cache). Turbo caches typecheck /
-    # build / lint / format:check results keyed by task inputs, so unchanged
-    # packages are replayed from cache instead of rerun — which keeps the full
-    # 14-way typecheck off the runner (it was OOM/SIGTERM-killing the test job on
-    # cold runs). The primary key is derived from Turbo-relevant content instead
-    # of github.sha so it can hit across commits while still rotating after real
-    # input changes; Turbo's own task hashes still decide whether each restored
-    # cache entry is reusable. Cache failures are non-fatal; a miss just means no
-    # speedup.
-    - name: Compute Turbo cache key
-      id: turbo_cache_key
-      shell: bash
-      run: node packages/scripts/turbo-cache-key.mjs --github-output
-
-    - name: Restore Turbo cache (GitHub Actions)
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+    # Self-hosted (hetzner-robot) runners are not guaranteed to expose `node`
+    # on the step PATH, and the very next step (turbo-cache-github ->
+    # turbo-cache-key.mjs) invokes `node` directly. Without this, jobs that
+    # rely solely on this composite for their toolchain (coverage-gate,
+    # feed-env-audit, scenario-matrix, voice-workbench) fail with
+    # "node: command not found" on runners missing a system Node. setup-node is
+    # idempotent, so callers that already ran it (keyless-harness, the audits)
+    # just re-select the same version. Toggle off via setup-node: "false".
+    - name: Setup Node.js
+      if: ${{ inputs.setup-node == 'true' }}
+      # actions/setup-node@v4 (48b55a0)
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
       with:
-        path: .turbo
-        key: turbo-${{ runner.os }}-${{ github.job }}-${{ steps.turbo_cache_key.outputs.turbo_cache_key }}
-        restore-keys: |
-          turbo-${{ runner.os }}-${{ github.job }}-
-          turbo-${{ runner.os }}-
+        node-version: ${{ inputs.node-version }}
+
+    # Persist Turbo's local filesystem cache (.turbo) through the pinned
+    # GitHub-native shim (#12341) — the single Turbo cache regime, replacing the
+    # Vercel SaaS remote cache. The shim keys on the deterministic
+    # turbo-cache-key hash with no github.job fragment, so one entry is shared
+    # across every job instead of the ~30-way fragmentation the old per-job key
+    # caused; Turbo re-validates task hashes on restore, so a cross-job hit is
+    # always safe. This keeps the full 14-way typecheck off the runner on warm
+    # caches (cold ran it OOM/SIGTERM). No SaaS, no secrets; a miss is non-fatal.
+    - name: Restore Turbo cache (GitHub-native)
+      uses: ./.github/actions/turbo-cache-github
 
     - name: Setup Python
       if: ${{ inputs.setup-python == 'true' }}
@@ -88,34 +106,80 @@ runs:
       # Without protoc, `cargo test` fails before any test runs.
       if: ${{ inputs.install-protoc == 'true' && runner.os == 'Linux' }}
       shell: bash
+      env:
+        FORCE_PROTOC_GITHUB_FALLBACK: ${{ inputs.force-protoc-github-fallback }}
+        PROTOC_RUNNER_ARCH: ${{ runner.arch }}
       run: |
-        if command -v protoc >/dev/null 2>&1; then
+        if [ "${FORCE_PROTOC_GITHUB_FALLBACK}" != "true" ] && command -v protoc >/dev/null 2>&1; then
           echo "protoc already installed: $(protoc --version)"
           exit 0
         fi
-        # GitHub-hosted Ubuntu images include Microsoft feeds that are unrelated
-        # to our protoc install. If those feeds return 403, apt-get update fails
-        # before it can use the Ubuntu repositories we actually need.
-        while IFS= read -r source_file; do
-          if [[ "${source_file}" == *.disabled ]]; then
-            echo "Microsoft apt source already disabled: ${source_file}"
-            continue
-          fi
-          echo "Disabling unrelated Microsoft apt source: ${source_file}"
-          sudo mv "${source_file}" "${source_file}.disabled"
-        done < <(grep -RIl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true)
-        APT_ARGS=(-o Acquire::ForceIPv4=true -o Acquire::Retries=5 -o Acquire::http::Timeout=30)
-        for attempt in 1 2 3; do
-          if sudo apt-get "${APT_ARGS[@]}" update && \
-             sudo apt-get "${APT_ARGS[@]}" install -y --fix-missing protobuf-compiler; then
-            break
-          fi
-          if [ "$attempt" -eq 3 ]; then
-            echo "apt install of protobuf-compiler failed after ${attempt} attempts"
-            exit 1
-          fi
-          sleep $((attempt * 10))
-        done
+        apt_ok=""
+        if [ "${FORCE_PROTOC_GITHUB_FALLBACK}" = "true" ]; then
+          echo "forcing protoc GitHub fallback for setup action self-test"
+        elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+          # GitHub-hosted Ubuntu images include Microsoft feeds that are unrelated
+          # to our protoc install. If those feeds return 403, apt-get update fails
+          # before it can use the Ubuntu repositories we actually need.
+          while IFS= read -r source_file; do
+            if [[ "${source_file}" == *.disabled ]]; then
+              echo "Microsoft apt source already disabled: ${source_file}"
+              continue
+            fi
+            echo "Disabling unrelated Microsoft apt source: ${source_file}"
+            sudo mv "${source_file}" "${source_file}.disabled"
+          done < <(grep -RIl "packages.microsoft.com" /etc/apt/sources.list.d 2>/dev/null || true)
+          APT_ARGS=(-o Acquire::ForceIPv4=true -o Acquire::Retries=5 -o Acquire::http::Timeout=30)
+          for attempt in 1 2 3; do
+            if sudo apt-get "${APT_ARGS[@]}" update && \
+               sudo apt-get "${APT_ARGS[@]}" install -y --fix-missing protobuf-compiler; then
+              apt_ok=1
+              break
+            fi
+            sleep $((attempt * 10))
+          done
+        fi
+        if [ -z "$apt_ok" ]; then
+          # Sudo-free fallback: fetch the pinned protoc release into a user-writable
+          # dir and put it on PATH. Works on self-hosted runners without passwordless
+          # sudo or when Ubuntu mirrors fail. The checksum keeps the privileged
+          # build dependency from trusting an unauthenticated release asset.
+          echo "apt unavailable/failed; installing protoc from GitHub release (sudo-free)"
+          protoc_version=27.3
+          case "${PROTOC_RUNNER_ARCH}" in
+            X64)
+              protoc_asset_arch=x86_64
+              protoc_sha256=6dab2adab83f915126cab53540d48957c40e9e9023969c3e84d44bfb936c7741
+              ;;
+            ARM64)
+              protoc_asset_arch=aarch_64
+              protoc_sha256=bdad36f3ad7472281d90568c4956ea2e203c216e0de005c6bd486f1920f2751c
+              ;;
+            *)
+              echo "unsupported Linux runner architecture for protoc fallback: ${PROTOC_RUNNER_ARCH}"
+              exit 1
+              ;;
+          esac
+          dest="${RUNNER_TEMP:-/tmp}/protoc"
+          rm -rf "$dest"
+          mkdir -p "$dest"
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 5 --retry-all-errors -o "$dest/protoc.zip" \
+                "https://github.com/protocolbuffers/protobuf/releases/download/v${protoc_version}/protoc-${protoc_version}-linux-${protoc_asset_arch}.zip"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "protoc GitHub release download failed after ${attempt} attempts"
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
+          echo "${protoc_sha256}  $dest/protoc.zip" | sha256sum -c -
+          unzip -o "$dest/protoc.zip" -d "$dest" 'bin/protoc' 'include/*'
+          chmod +x "$dest/bin/protoc"
+          echo "$dest/bin" >> "$GITHUB_PATH"
+          export PATH="$dest/bin:$PATH"
+        fi
         protoc --version
 
     - name: Install native dependencies

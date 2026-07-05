@@ -67,6 +67,8 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
     path: "/chat",
     order: 1,
     tags: ["messaging", "conversation", "agent"],
+    anticipatoryIntent:
+      "Offer to pick up the most recent thread or surface anything the user left unfinished, and ask what they want to work on next.",
     visibleInManager: true,
     desktopTabEnabled: true,
     platforms: ["web", "desktop", "ios", "android"],
@@ -81,6 +83,74 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
     path: "/character",
     order: 50,
     tags: ["identity", "personality", "character"],
+    anticipatoryIntent:
+      "Offer to refine the agent's identity, personality, or style from the current character state, and point out the highest-leverage next edit.",
+    // Named actions the agent can invoke ONLY while the Character view is the
+    // foreground view (#14155, deferred step 8 of #13591/#14123). Each targets
+    // a `useAgentElement` id in the Character editor (`CharacterEditor` /
+    // `CharacterEditorPanels`) and expands into the same `agent-fill`/
+    // `agent-click` interact sequence the element-level protocol drives — no
+    // parallel DOM path. Only ids that are ALWAYS mounted are targeted: the
+    // editor renders all three panels (personality/style/examples) up front and
+    // toggles visibility with CSS (`hidden`/`display:none`), so `identity-bio`,
+    // `style-add-input-all`/`style-add-all`, `example-add-conversation`, and
+    // `post-example-add` are registered regardless of the active tab. Row-level
+    // ids (`style-rule-remove-<section>-<index>`, `example-message-<c>-<m>`) are
+    // index-dependent and only mounted when that row exists, so they are NOT
+    // declared here — a blind declaration against them would target an unmounted
+    // element and fail loudly (`VIEW_SCOPED_ACTION_ELEMENT_MISSING`).
+    scopedActions: [
+      {
+        name: "VIEW_CHARACTER_FILL_BIO",
+        description:
+          "Set the agent's bio / about-me text on the Character view's Personality section. Autosaves.",
+        similes: [
+          "set bio",
+          "edit bio",
+          "update about me",
+          "write the agent's bio",
+          "rewrite the character bio",
+        ],
+        parameters: ["bio"],
+        steps: [
+          { kind: "agent-fill", target: "identity-bio", value: "{{bio}}" },
+        ],
+      },
+      {
+        name: "VIEW_CHARACTER_ADD_STYLE_RULE",
+        description:
+          "Add a style rule to the agent's writing style on the Character view's Style section. Autosaves.",
+        similes: [
+          "add style rule",
+          "add a writing style rule",
+          "add style guideline",
+          "append a style rule",
+        ],
+        parameters: ["rule"],
+        steps: [
+          {
+            kind: "agent-fill",
+            target: "style-add-input-all",
+            value: "{{rule}}",
+          },
+          { kind: "agent-click", target: "style-add-all" },
+        ],
+      },
+      {
+        name: "VIEW_CHARACTER_ADD_MESSAGE_EXAMPLE",
+        description:
+          "Add a new chat-example conversation on the Character view's Examples section, ready for turns to be filled in. Autosaves.",
+        similes: [
+          "add message example",
+          "add a chat example",
+          "add conversation example",
+          "create a new example conversation",
+        ],
+        steps: [
+          { kind: "agent-click", target: "example-add-conversation" },
+        ],
+      },
+    ],
     visibleInManager: true,
     desktopTabEnabled: true,
   },
@@ -95,6 +165,8 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
     order: 51,
     tags: ["documents", "knowledge", "files", "uploads", "retrieval"],
     relatedActions: ["OWNER_DOCUMENTS"],
+    anticipatoryIntent:
+      "Offer to triage the newest ingested attachments/documents — summarize, tag, or file them — grounded in the recent-attachment counts.",
     visibleInManager: true,
     desktopTabEnabled: true,
   },
@@ -108,6 +180,8 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
     path: "/automations",
     order: 55,
     tags: ["automation", "tasks", "scheduling"],
+    anticipatoryIntent:
+      "Offer to create a new scheduled workflow or check on existing automations — flag any recently failed runs — grounded in the live task list.",
     visibleInManager: true,
   },
   {
@@ -129,6 +203,8 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
       "extensions",
     ],
     relatedActions: ["RUNTIME"],
+    anticipatoryIntent:
+      "Offer to install, configure, or troubleshoot a plugin — surface the smallest setup gap — grounded in installed-plugin and health state.",
     visibleInManager: true,
   },
   {
@@ -155,6 +231,8 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
     path: "/apps/transcripts",
     order: 71,
     tags: ["transcript", "voice", "recording", "audio"],
+    anticipatoryIntent:
+      "Offer to summarize or extract action items from the most recent voice transcripts, grounded in the recent-transcript count.",
     visibleInManager: true,
   },
   {
@@ -168,6 +246,8 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
     path: "/apps/memories",
     order: 72,
     tags: ["memory", "knowledge"],
+    anticipatoryIntent:
+      "Offer to search, review, or prune the agent's stored memories, and point to what's worth revisiting.",
     visibleInManager: true,
   },
   {
@@ -207,6 +287,8 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
     order: 90,
     tags: ["configuration", "preferences", "plugins"],
     relatedActions: ["RUNTIME"],
+    anticipatoryIntent:
+      "Offer to set up the model/provider, voice, or connectors — recommend the smallest concrete configuration step from current settings state.",
     visibleInManager: true,
     desktopTabEnabled: true,
   },
@@ -221,6 +303,8 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
     path: "/background",
     order: 92,
     tags: ["background", "wallpaper", "color", "theme", "appearance", "image"],
+    anticipatoryIntent:
+      "Offer to set the app background — pick a shader color, generate an image, or use an upload.",
     visibleInManager: true,
     desktopTabEnabled: true,
     platforms: ["web", "desktop", "ios", "android"],

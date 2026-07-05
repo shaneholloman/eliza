@@ -2,7 +2,7 @@
  * Manual image protocol smoke script for rendering fixture images in a real
  * terminal.
  */
-import { readFileSync } from "fs";
+import { readFileSync } from "node:fs";
 import { Image } from "../src/components/image.js";
 import { Spacer } from "../src/components/spacer.js";
 import { Text } from "../src/components/text.js";

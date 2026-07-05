@@ -5,8 +5,11 @@
  */
 
 import crypto from "crypto";
+import { and, eq, isNull, sql } from "drizzle-orm";
+import { dbWrite } from "../../db/client";
 import { encryptApiKey } from "../../db/crypto/api-keys";
 import { type ApiKey, apiKeysRepository, type NewApiKey } from "../../db/repositories";
+import { apiKeys } from "../../db/schemas/api-keys";
 import { cache } from "../cache/client";
 import { CacheKeys, CacheTTL } from "../cache/keys";
 import { API_KEY_PREFIX_LENGTH } from "../pricing";
@@ -158,12 +161,18 @@ export class ApiKeysService {
   }
 
   /**
-   * Invalidate cache for a specific API key (call on update/delete).
+   * Invalidate cache for a specific API key (call on update/delete). Fails
+   * closed.
    *
    * Clears BOTH the validation cache (16-char-prefix key) AND the inference
    * hot-path auth-context entry (full-hash key, #9899). Every api-key mutation
    * site routes through here, so a revoked/updated key stops fast-pathing
    * inference immediately rather than waiting out the IAC TTL.
+   *
+   * @throws when either backend delete is not confirmed. A revoked key whose
+   *   cache entry was NOT removed keeps authenticating until its TTL lapses, so
+   *   the mutation path must surface an unconfirmed invalidation (error-policy:J1)
+   *   rather than silently discard `cache.del`'s failure (#13417).
    */
   async invalidateCache(keyHash: string): Promise<void> {
     const shortHash = keyHash.substring(0, 16);
@@ -171,10 +180,25 @@ export class ApiKeysService {
     // key would keep authenticating until each TTL expires. All revoke/update/
     // deactivate paths funnel through here: the per-key validation cache and the
     // #9899 inference hot-path auth-context entry (keyed by full hash).
-    await Promise.all([
-      cache.del(CacheKeys.apiKey.validation(shortHash)),
+    const [validationDeleted, inferenceDeleted] = await Promise.all([
+      cache.delConfirmed(CacheKeys.apiKey.validation(shortHash)),
       invalidateInferenceAuthContextByKeyHash(keyHash),
     ]);
+
+    if (!validationDeleted || !inferenceDeleted) {
+      const unconfirmed = [
+        validationDeleted ? null : "validation",
+        inferenceDeleted ? null : "inference-auth-context",
+      ].filter((entry): entry is string => entry !== null);
+      logger.error("[ApiKeys] API key cache invalidation not confirmed", {
+        shortHash,
+        unconfirmed,
+      });
+      throw new Error(
+        `API key cache invalidation not confirmed (${unconfirmed.join(", ")}); revoked key may still authenticate until TTL`,
+      );
+    }
+
     logger.debug("[ApiKeys] Invalidated API key + inference auth-context cache");
   }
 
@@ -216,28 +240,119 @@ export class ApiKeysService {
     apiKey: ApiKey;
     plainKey: string;
   }> {
+    const { apiKey, plainKey } = await this.buildApiKeyInsert(data);
+    const created = await apiKeysRepository.create(apiKey);
+
+    return {
+      apiKey: created,
+      plainKey,
+    };
+  }
+
+  private async buildApiKeyInsert(
+    data: Omit<
+      NewApiKey,
+      | "key_hash"
+      | "key_prefix"
+      | "key_ciphertext"
+      | "key_nonce"
+      | "key_auth_tag"
+      | "key_kms_key_id"
+      | "key_kms_key_version"
+    >,
+  ): Promise<{ apiKey: NewApiKey; plainKey: string }> {
     const { key, hash, prefix } = this.generateApiKey();
 
     // Pre-allocate the row id so the encryption AAD can bind to it.
     const rowId = crypto.randomUUID();
     const encrypted = await encryptApiKey(data.organization_id, rowId, key);
 
-    const apiKey = await apiKeysRepository.create({
-      ...data,
-      id: rowId,
-      key_hash: hash,
-      key_prefix: prefix,
-      key_ciphertext: encrypted.ciphertext,
-      key_nonce: encrypted.nonce,
-      key_auth_tag: encrypted.auth_tag,
-      key_kms_key_id: encrypted.kms_key_id,
-      key_kms_key_version: encrypted.kms_key_version,
-    });
-
     return {
-      apiKey,
+      apiKey: {
+        ...data,
+        id: rowId,
+        key_hash: hash,
+        key_prefix: prefix,
+        key_ciphertext: encrypted.ciphertext,
+        key_nonce: encrypted.nonce,
+        key_auth_tag: encrypted.auth_tag,
+        key_kms_key_id: encrypted.kms_key_id,
+        key_kms_key_version: encrypted.kms_key_version,
+      },
       plainKey: key,
     };
+  }
+
+  /**
+   * Required default-key provisioning for flows that must not report success
+   * until the user has a usable personal key in the target organization.
+   * The transaction takes a per-user/org advisory lock and re-checks the
+   * primary connection before inserting, so concurrent accept/sync paths cannot
+   * mint duplicate default keys.
+   */
+  async provisionDefaultApiKey(userId: string, organizationId: string): Promise<void> {
+    if (!userId?.trim() || !organizationId?.trim()) {
+      throw new Error("Invalid userId or organizationId for default API key provisioning");
+    }
+
+    await dbWrite.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext(${`default_api_key:${userId}:${organizationId}`}))`,
+      );
+
+      const now = new Date();
+      const existingKeys = await tx
+        .select()
+        .from(apiKeys)
+        .where(
+          and(
+            eq(apiKeys.user_id, userId),
+            eq(apiKeys.organization_id, organizationId),
+            eq(apiKeys.name, "Default API Key"),
+            eq(apiKeys.is_active, true),
+            isNull(apiKeys.deleted_at),
+          ),
+        );
+      if (existingKeys.some((key) => !key.expires_at || key.expires_at > now)) {
+        return;
+      }
+
+      const { apiKey } = await this.buildApiKeyInsert({
+        user_id: userId,
+        organization_id: organizationId,
+        name: "Default API Key",
+        is_active: true,
+      });
+      await tx.insert(apiKeys).values(apiKey);
+    });
+  }
+
+  /**
+   * Best-effort default-key self-heal for session resolution. Provisioning
+   * surfaces call `provisionDefaultApiKey` so they fail honestly; this wrapper
+   * keeps older session-cache-miss repair observable without taking down auth.
+   */
+  async ensureUserHasApiKey(userId: string, organizationId: string): Promise<void> {
+    if (!userId?.trim() || !organizationId?.trim()) {
+      logger.warn("[ApiKeysService] Invalid userId or organizationId, skipping default key", {
+        userId,
+        organizationId,
+      });
+      return;
+    }
+
+    try {
+      await this.provisionDefaultApiKey(userId, organizationId);
+    } catch (error) {
+      // error-policy:J7 diagnostics-must-not-kill-the-loop: this session heal
+      // is a retry path for older broken accounts; signup/invite call the strict
+      // provisioner and fail before reporting success.
+      logger.error("[ApiKeysService] Failed to provision default API key", {
+        userId,
+        organizationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async update(id: string, data: Partial<NewApiKey>): Promise<ApiKey | undefined> {
@@ -274,6 +389,19 @@ export class ApiKeysService {
     await apiKeysRepository.deactivateUserKeysByName(userId, name);
   }
 
+  async deactivateByUserAndOrganization(userId: string, organizationId: string): Promise<void> {
+    const existingKeys = await apiKeysRepository.listByUser(userId);
+    const keysInOrganization = existingKeys.filter(
+      (key) => key.organization_id === organizationId && key.is_active,
+    );
+
+    for (const key of keysInOrganization) {
+      await this.invalidateCache(key.key_hash);
+    }
+
+    await apiKeysRepository.deactivateByUserAndOrganization(userId, organizationId);
+  }
+
   // Sandbox-scoped keys are named "agent-sandbox:<id>". Listing/revoking by that
   // canonical name is enough — no need for a separate metadata column today.
   private static agentApiKeyName(agentSandboxId: string): string {
@@ -305,9 +433,25 @@ export class ApiKeysService {
 
   async revokeForAgent(agentSandboxId: string): Promise<void> {
     const name = ApiKeysService.agentApiKeyName(agentSandboxId);
-    const keys = await apiKeysRepository.deleteByName(name);
-    for (const key of keys) {
-      await this.invalidateCache(key.key_hash);
+    // Unlike update/delete (which invalidate BEFORE the DB mutation and so can
+    // safely fail closed by throwing), this path deletes the rows FIRST — the
+    // credential is already DB-revoked. A cache-invalidation failure here must
+    // NOT abort agent (re)provisioning: the stale entry is TTL-bounded and the
+    // authoritative row is gone. So invalidation is best-effort — but the
+    // failure is surfaced observably (error-policy:J5), never swallowed silently.
+    for (const key of await apiKeysRepository.deleteByName(name)) {
+      try {
+        await this.invalidateCache(key.key_hash);
+      } catch (error) {
+        logger.error(
+          "[ApiKeys] revokeForAgent: cache invalidation not confirmed for a DB-revoked key; " +
+            "stale entry bounded by TTL, provisioning continues",
+          {
+            agentSandboxId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+      }
     }
   }
 }

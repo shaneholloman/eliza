@@ -53,6 +53,7 @@ const segmenter = getSegmenter();
 
 // Kitty CSI-u sequences for printable keys, including optional shifted/base codepoints.
 const KITTY_CSI_U_REGEX =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: Kitty CSI-u key sequences begin with a literal ESC (\x1b) control character.
   /^\x1b\[(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d+))?(?::(\d+))?u$/;
 const KITTY_MOD_SHIFT = 1;
 const KITTY_MOD_ALT = 2;

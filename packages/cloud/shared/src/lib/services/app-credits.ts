@@ -18,6 +18,7 @@ import {
   computePurchaseSplit,
   computeReconciliation,
   isAppMonetizationActive,
+  parseAppMonetizationNumber,
 } from "./app-credit-math";
 import {
   type CreditReconciliationResult,
@@ -76,6 +77,20 @@ async function invalidateAppCacheKeys(appId: string, slug?: string): Promise<voi
     promises.push(cache.del(CacheKeys.app.bySlug(slug)));
   }
   await Promise.all(promises);
+}
+
+function parseOrgCreditBalance(value: string | number | null | undefined): number {
+  if (value === null || value === undefined) {
+    throw new Error("Unable to read organization credit_balance");
+  }
+  if (typeof value === "string" && !/^[+-]?(?:\d+|\d*\.\d+)$/.test(value.trim())) {
+    throw new Error("Unable to read organization credit_balance");
+  }
+  const balance = Number(value);
+  if (!Number.isFinite(balance)) {
+    throw new Error("Unable to read organization credit_balance");
+  }
+  return balance;
 }
 
 /**
@@ -311,7 +326,9 @@ export class AppCreditsService {
   /** The org credit balance — the single ledger app purchases fund and app inference debits (#8253). */
   private async readOrgBalance(organizationId: string): Promise<number> {
     const org = await organizationsRepository.findById(organizationId);
-    return org ? Number.parseFloat(String(org.credit_balance)) : 0;
+    // error-policy:J6 missing org preserves the existing no-credit result path; a present
+    // org with corrupt money data must fail closed.
+    return org ? parseOrgCreditBalance(org.credit_balance) : 0;
   }
 
   async processPurchase(params: AppCreditPurchaseParams): Promise<AppCreditPurchaseResult> {
@@ -350,9 +367,9 @@ export class AppCreditsService {
     const monetizationActive = isAppMonetizationActive(app);
     const { platformOffset, creatorEarnings, creditsToAdd } = computePurchaseSplit(purchaseAmount, {
       monetizationEnabled: monetizationActive,
-      platformOffsetAmount: Number(app.platform_offset_amount),
-      purchaseSharePercentage: Number(app.purchase_share_percentage),
-      inferenceMarkupPercentage: Number(app.inference_markup_percentage),
+      platformOffsetAmount: app.platform_offset_amount,
+      purchaseSharePercentage: app.purchase_share_percentage,
+      inferenceMarkupPercentage: app.inference_markup_percentage,
     });
 
     logger.info("[AppCredits] Processing purchase", {
@@ -545,9 +562,9 @@ export class AppCreditsService {
     const monetizationActive = isAppMonetizationActive(app);
     const { markupPercentage, creatorMarkup, totalCost } = computeInferenceCharge(baseCost, {
       monetizationEnabled: monetizationActive,
-      platformOffsetAmount: Number(app.platform_offset_amount),
-      purchaseSharePercentage: Number(app.purchase_share_percentage),
-      inferenceMarkupPercentage: Number(app.inference_markup_percentage),
+      platformOffsetAmount: app.platform_offset_amount,
+      purchaseSharePercentage: app.purchase_share_percentage,
+      inferenceMarkupPercentage: app.inference_markup_percentage,
     });
 
     // Debit from the user's organization credit balance. Atomic via row-lock.
@@ -836,11 +853,6 @@ export class AppCreditsService {
       }
     };
 
-    const readOrgBalance = async (): Promise<number> => {
-      const org = await organizationsRepository.findById(organizationId);
-      return org ? Number.parseFloat(String(org.credit_balance)) : 0;
-    };
-
     // Skip reconciliation for negligible differences
     if (Math.abs(baseCostDifference) < RECONCILIATION_THRESHOLD) {
       await markReservationSettled("no_adjustment");
@@ -849,7 +861,7 @@ export class AppCreditsService {
         difference: 0,
         action: "none",
         adjustedAmount: 0,
-        newBalance: await readOrgBalance(),
+        newBalance: await this.readOrgBalance(organizationId),
       };
     }
 
@@ -863,7 +875,7 @@ export class AppCreditsService {
         difference: baseCostDifference,
         action: "none",
         adjustedAmount: 0,
-        newBalance: await readOrgBalance(),
+        newBalance: await this.readOrgBalance(organizationId),
       };
     }
 
@@ -875,9 +887,9 @@ export class AppCreditsService {
     const { markupPercentage, totalCostDifference, creatorMarkupDifference } =
       computeReconciliation(baseCostDifference, {
         monetizationEnabled: monetizationActive,
-        platformOffsetAmount: Number(app.platform_offset_amount),
-        purchaseSharePercentage: Number(app.purchase_share_percentage),
-        inferenceMarkupPercentage: Number(app.inference_markup_percentage),
+        platformOffsetAmount: app.platform_offset_amount,
+        purchaseSharePercentage: app.purchase_share_percentage,
+        inferenceMarkupPercentage: app.inference_markup_percentage,
       });
 
     if (baseCostDifference < 0) {
@@ -1150,12 +1162,19 @@ export class AppCreditsService {
       return null;
     }
 
+    const monetizationEnabled = isAppMonetizationActive(app);
     const config: CostMarkupConfig = {
       // Effective flag (enabled AND not review-rejected) so quote/markup reads
       // on the LLM hot path match what deductCredits will actually charge.
       // runAppReview invalidates this key on every decision.
-      monetizationEnabled: isAppMonetizationActive(app),
-      inferenceMarkupPercentage: Number(app.inference_markup_percentage),
+      monetizationEnabled,
+      inferenceMarkupPercentage: monetizationEnabled
+        ? parseAppMonetizationNumber(
+            "inference_markup_percentage",
+            app.inference_markup_percentage,
+            { min: 0, max: 1000 },
+          )
+        : 0,
     };
 
     await cache.set(cacheKey, config, CacheTTL.app.costMarkup);
@@ -1182,10 +1201,12 @@ export class AppCreditsService {
       };
     }
 
-    // Only apply markup if monetization is enabled
-    const markupPercentage = config.monetizationEnabled ? config.inferenceMarkupPercentage : 0;
-    const creatorMarkup = baseCost * (markupPercentage / 100);
-    const totalCost = baseCost + creatorMarkup;
+    const { markupPercentage, creatorMarkup, totalCost } = computeInferenceCharge(baseCost, {
+      monetizationEnabled: config.monetizationEnabled,
+      platformOffsetAmount: 0,
+      purchaseSharePercentage: 0,
+      inferenceMarkupPercentage: config.inferenceMarkupPercentage,
+    });
 
     return {
       baseCost,
@@ -1214,7 +1235,9 @@ export class AppCreditsService {
       return { sufficient: false, balance: 0, required: requiredAmount };
     }
     const org = await organizationsRepository.findById(user.organization_id);
-    const balance = org ? Number.parseFloat(String(org.credit_balance)) : 0;
+    // error-policy:J6 missing org keeps the existing insufficient-credit result; corrupt
+    // present money data is not a zero balance.
+    const balance = org ? parseOrgCreditBalance(org.credit_balance) : 0;
     return {
       sufficient: balance >= requiredAmount,
       balance,
@@ -1450,10 +1473,26 @@ export class AppCreditsService {
 
     return {
       monetizationEnabled: app.monetization_enabled,
-      inferenceMarkupPercentage: Number(app.inference_markup_percentage),
-      purchaseSharePercentage: Number(app.purchase_share_percentage),
-      platformOffsetAmount: Number(app.platform_offset_amount),
-      totalCreatorEarnings: Number(app.total_creator_earnings),
+      inferenceMarkupPercentage: parseAppMonetizationNumber(
+        "inference_markup_percentage",
+        app.inference_markup_percentage,
+        { min: 0, max: 1000 },
+      ),
+      purchaseSharePercentage: parseAppMonetizationNumber(
+        "purchase_share_percentage",
+        app.purchase_share_percentage,
+        { min: 0, max: 100 },
+      ),
+      platformOffsetAmount: parseAppMonetizationNumber(
+        "platform_offset_amount",
+        app.platform_offset_amount,
+        { min: 0 },
+      ),
+      totalCreatorEarnings: parseAppMonetizationNumber(
+        "total_creator_earnings",
+        app.total_creator_earnings,
+        { min: 0 },
+      ),
     };
   }
 

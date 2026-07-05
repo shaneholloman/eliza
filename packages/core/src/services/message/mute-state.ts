@@ -13,7 +13,8 @@
  * mention path — a muted room drops even a direct @mention, because on
  * mention-gated deployments every planner-reaching turn IS a mention),
  * connector inbound paths (plugin-discord drops before ingestion), and the
- * MESSAGE list ops (muted flags in list_channels / list_connections).
+ * MESSAGE list ops (muted flags in list_channels / list_servers /
+ * list_connections).
  */
 import { createUniqueUuid } from "../../entities.ts";
 import type { Room, World } from "../../types/environment.ts";
@@ -201,12 +202,38 @@ export async function setRoomMuteUntil(
 }
 
 /**
+ * Per-world muted flags for connector server listings (list_servers). A world
+ * that already carries mute metadata is answered directly (a connector
+ * returning the persisted record needs no refetch); one listed without it
+ * falls back to the persisted world under the same id, so server-level mute
+ * visibility does not depend on a connector's listServers fidelity. Read-only
+ * — the inbound due-check owns expiry writes.
+ */
+export async function resolveMutedWorldFlags(
+	runtime: IAgentRuntime,
+	worlds: readonly World[],
+	now: number = Date.now(),
+): Promise<boolean[]> {
+	return Promise.all(
+		worlds.map(async (world) => {
+			if (world.metadata?.agentMuteState !== undefined) {
+				return worldMuteActive(world, now);
+			}
+			return worldMuteActive(await runtime.getWorld(world.id), now);
+		}),
+	);
+}
+
+/**
  * Per-target muted flags for connector room listings (list_channels /
  * list_connections). Read-only — the inbound due-check owns expiry writes, so
  * an expired timed mute simply reports unmuted here. Targets map to rooms via
  * their explicit roomId or the canonical `createUniqueUuid(runtime, channelId)`
  * convention every connector uses for inbound messages; unknown mappings
- * report unmuted.
+ * report unmuted. A target that names a `parentChannelId` (a thread under a
+ * channel, a channel under a category) also inherits that parent room's mute —
+ * the same [room, parent] chain the inbound gate drops on — so a listing never
+ * reports a thread unmuted while its messages are being dropped.
  */
 export async function resolveMutedTargetFlags(
 	runtime: IAgentRuntime,
@@ -230,15 +257,18 @@ export async function resolveMutedTargetFlags(
 				(entry.target.channelId
 					? createUniqueUuid(runtime, entry.target.channelId)
 					: undefined);
-			if (roomId) {
+			const parentRoomId = entry.target.parentChannelId
+				? createUniqueUuid(runtime, entry.target.parentChannelId)
+				: undefined;
+			for (const id of [roomId, parentRoomId]) {
+				if (!id) continue;
 				const state = await runtime.getParticipantUserState(
-					roomId,
+					id,
 					runtime.agentId,
 				);
-				if (state === "MUTED") {
-					const room = await runtime.getRoom(roomId);
-					if (roomMuteActive(state, room, now)) return true;
-				}
+				if (state !== "MUTED") continue;
+				const room = await runtime.getRoom(id);
+				if (roomMuteActive(state, room, now)) return true;
 			}
 			return entry.target.serverId
 				? isServerMuted(entry.target.serverId)

@@ -18,6 +18,25 @@ export {
   type AudioFramePumpOptions,
   type AudioFramePumpStartResult,
 } from "./audio-frame-pump";
+export {
+  BOT_FREE_MEETING_AUDIO_SAMPLE_RATE,
+  type BotFreeMeetingAudioArtifact,
+  BotFreeMeetingAudioCaptureError,
+  type BotFreeMeetingAudioCaptureHandle,
+  type BotFreeMeetingAudioCaptureMode,
+  type BotFreeMeetingAudioCaptureOptions,
+  type BotFreeMeetingAudioCaptureResult,
+  type BotFreeMeetingAudioSourceKind,
+  type BotFreeMeetingAudioSourceMetadata,
+  type BotFreeMeetingAudioSourceStatus,
+  type BotFreeMeetingAudioSupport,
+  type BotFreeMeetingCapturedPcm,
+  buildBotFreeMeetingAudioArtifacts,
+  classifyBotFreeMeetingAudioCaptureMode,
+  getBotFreeMeetingAudioSupport,
+  mixBotFreeMeetingPcm,
+  startBotFreeMeetingAudioCapture,
+} from "./bot-free-meeting-audio-capture";
 export * from "./character-voice-config";
 export * from "./emotion";
 export {
@@ -78,6 +97,19 @@ export {
   type PresetRuntimeMode,
   pickDefaultVoiceProvider,
 } from "./voice-provider-defaults";
+export {
+  EXPECTED_PHRASE,
+  KNOWN_PHRASE_WAV_DATA_URL,
+} from "./voice-selftest/fixtures/known-phrase";
+export {
+  runVoiceSelfTest,
+  type StageStatus,
+  type VoiceSelfTestMode,
+  type VoiceSelfTestOptions,
+  type VoiceSelfTestPlatform,
+  type VoiceSelfTestReport,
+  type VoiceSelfTestStage,
+} from "./voice-selftest/voice-selftest-harness";
 export {
   DEFAULT_CONFIRM_WINDOW_MS,
   hasTrainedHead,

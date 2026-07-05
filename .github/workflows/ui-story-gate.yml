@@ -3,26 +3,40 @@ name: UI Story Gate
 # Render EVERY Storybook story in headless Chromium and assert it is healthy.
 # Hard-fails on a story that throws, renders blank, or raises an uncaught
 # pageerror — no baseline needed. Console errors + serious/critical axe a11y
-# violations are additionally enforced once their baselines are populated
-# (packages/ui/test/story-gate/baseline/*.json). See
+# violations are enforced against allowlist baselines
+# (packages/ui/test/story-gate/baseline/*.json); empty baselines mean zero
+# tolerance. See
 # packages/ui/test/story-gate/README.md.
 
 on:
+  # Reusable entry for the scheduled exhaustive develop lane (#12342).
+  workflow_call:
   pull_request:
     branches: [main, develop]
     paths:
       - "packages/ui/**"
-      - "plugins/plugin-companion/src/**"
+      - "packages/shared/**"
+      - "plugins/**/src/**"
       - ".github/workflows/ui-story-gate.yml"
   push:
     branches: [main, develop]
     paths:
       - "packages/ui/**"
-      - "plugins/plugin-companion/src/**"
+      - "packages/shared/**"
+      - "plugins/**/src/**"
+      - ".github/workflows/ui-story-gate.yml"
 
+# CI fan-out fix: the PR-scoped concurrency from #14069 fell back to
+# github.run_id on push, so every develop push got a unique group and
+# nothing ever superseded. A 37-merge wave queued thousands of push runs
+# and starved the self-hosted fleet. Fall back to github.ref (all develop
+# pushes share a group) and cancel superseded runs on push too. PR behavior
+# is unchanged (pull_request.number still wins the key); merge_group and
+# schedule events are not in the cancel set, so the merge queue and nightly
+# runs always complete.
 concurrency:
-  group: ui-story-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ui-story-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 permissions:
   contents: read
@@ -33,12 +47,8 @@ env:
 
 jobs:
   story-gate:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 30
-    env:
-      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
-      TURBO_TEAM: ${{ vars.TURBO_TEAM }}
-      TURBO_CACHE: remote:rw
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:

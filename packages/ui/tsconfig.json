@@ -100,10 +100,16 @@
       ],
       "@elizaos/shared": ["../shared/src/index.ts"],
       "@elizaos/shared/*": ["../shared/src/*"],
+      "@elizaos/contracts": ["../contracts/src/index.ts"],
+      "@elizaos/contracts/*": ["../contracts/src/*"],
       "@elizaos/skills": ["../skills/src/index.ts"],
       "@elizaos/skills/*": ["../skills/src/*"],
       "@elizaos/core": ["../core/src/index.ts"],
       "@elizaos/core/*": ["../core/src/*"],
+      "@elizaos/import-conversations": ["../import-conversations/src/index.ts"],
+      "@elizaos/import-conversations/browser": [
+        "../import-conversations/src/browser.ts"
+      ],
       "@elizaos/logger": ["../logger/src/index.ts"],
       "@elizaos/logger/*": ["../logger/src/*"],
       "@elizaos/tui": ["../tui/src/index.ts"],

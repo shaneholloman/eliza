@@ -38,6 +38,8 @@ export type MeetingSessionStatus =
 export type MeetingEndReason =
   | "normal_completion"
   | "requested_stop"
+  | "duration_cap_reached"
+  | "ended_due_to_spend_cap"
   | "removed_by_admin"
   | "left_alone_timeout"
   | "startup_alone_timeout"
@@ -62,6 +64,9 @@ export const DEFAULT_MEETING_AUTO_LEAVE: MeetingAutoLeaveConfig = {
   everyoneLeftTimeoutMs: 2 * 60 * 1000,
 };
 
+/** Default upper bound for a browser-bot meeting session: 60 minutes. */
+export const DEFAULT_MEETING_MAX_DURATION_MS = 60 * 60 * 1000;
+
 /** Input contract to start a bot (the request side of POST /api/meetings). */
 export interface MeetingJoinRequest {
   platform: MeetingPlatform;
@@ -73,8 +78,23 @@ export interface MeetingJoinRequest {
   autoLeave?: Partial<MeetingAutoLeaveConfig>;
   /** Retain the meeting audio on the transcript record (default true). */
   retainAudio?: boolean;
+  /**
+   * Optional lower per-session cap in milliseconds. The service rejects values
+   * above its configured maximum before launching the bot.
+   */
+  maxDurationMs?: number;
   /** Calendar event that prompted the join, when auto-joined. */
   calendarEventId?: string;
+}
+
+/** Metering state exposed so routes/UI can prove a meeting is spend-bounded. */
+export interface MeetingBillingState {
+  status: "unmetered" | "reserved" | "spend_cap_reached" | "reconciled";
+  reservedMs: number;
+  consumedMs: number;
+  capMs?: number;
+  reservationIds?: string[];
+  error?: string;
 }
 
 /** A participant observed in the meeting roster. */
@@ -110,6 +130,9 @@ export interface MeetingSession {
   transcriptId?: string;
   participants: MeetingParticipant[];
   calendarEventId?: string;
+  /** Maximum duration approved for this session, in milliseconds. */
+  maxDurationMs?: number;
+  billing?: MeetingBillingState;
   metadata?: Record<string, unknown>;
 }
 

@@ -188,6 +188,66 @@ function maskAddress(address: string): string {
 }
 
 // ============================================================================
+// HELPER: Fail-closed NUMERIC parsing for money-out limit gates (Fix #6 hardening)
+// ============================================================================
+
+/**
+ * A stored `redemption_limits` row NUMERIC value could not be parsed into a
+ * finite number. The Postgres driver returns NUMERIC columns as strings, and
+ * `'NaN'::numeric` is a *valid* Postgres NUMERIC that reads back as the string
+ * `"NaN"`. `Number("NaN") === NaN`, and every `NaN` comparison is `false`, so a
+ * corrupt `daily_usd_total` / `redemption_count` would silently make the daily
+ * anti-sybil money-out gates fail OPEN (unbounded redemptions). Negative money
+ * values are corrupt for these refund/cap paths because they invert balance and
+ * limit arithmetic. We throw here so the caller can fail CLOSED (deny) instead
+ * of authorizing over a corrupt row.
+ */
+export class CorruptRedemptionLimitError extends Error {
+  constructor(field: string, rawValue: unknown) {
+    super(
+      `redemption_limits.${field} is not a finite number (got ${JSON.stringify(
+        String(rawValue),
+      )}); refusing to evaluate the daily limit gate on a corrupt row`,
+    );
+    this.name = "CorruptRedemptionLimitError";
+  }
+}
+
+/**
+ * Fail-closed boundary for a `redemption_limits` NUMERIC column read.
+ *
+ * - Rejects null/undefined/empty/whitespace, negative values, and any value
+ *   that does not parse to a finite number (NaN, Infinity, `"NaN"`, `""`,
+ *   garbage) -> throws.
+ * - Allows an explicit domain zero (a fresh/zeroed limit row is legitimate).
+ *
+ * error-policy:J4 (fail-closed: a corrupt money-out limit value must DENY, not
+ * silently authorize an unbounded redemption).
+ *
+ * Exported for unit testing of the fail-closed boundary.
+ */
+export function parseRedemptionLimitNumber(value: unknown, field: string): number {
+  if (value === null || value === undefined) {
+    throw new CorruptRedemptionLimitError(field, value);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 0) {
+      throw new CorruptRedemptionLimitError(field, value);
+    }
+    return value;
+  }
+  const raw = String(value).trim();
+  if (raw === "") {
+    throw new CorruptRedemptionLimitError(field, value);
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new CorruptRedemptionLimitError(field, value);
+  }
+  return parsed;
+}
+
+// ============================================================================
 // HELPER: Decimal math (Fix #11)
 // ============================================================================
 
@@ -780,8 +840,26 @@ export class SecureTokenRedemptionService {
     const usdValue = pointsAmount / 100;
 
     if (limits) {
-      const currentTotal = Number(limits.daily_usd_total);
-      const currentCount = Number(limits.redemption_count);
+      // Fail-closed: the daily limit gates are money-out anti-sybil controls. A
+      // corrupt NUMERIC row ('NaN'::numeric reads back as "NaN") would make
+      // `NaN >= MAX` and `NaN + usd > LIMIT` both false -> the gate would fail
+      // OPEN and authorize unbounded redemptions. Refuse instead of authorize.
+      // error-policy:J4
+      let currentTotal: number;
+      let currentCount: number;
+      try {
+        currentTotal = parseRedemptionLimitNumber(limits.daily_usd_total, "daily_usd_total");
+        currentCount = parseRedemptionLimitNumber(limits.redemption_count, "redemption_count");
+      } catch (error) {
+        logger.error("[SecureRedemption] Corrupt daily-limit row; denying redemption", {
+          userId: sanitizeForLog(userId),
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        return {
+          valid: false,
+          error: "Unable to verify your daily redemption limit right now. Please try again later.",
+        };
+      }
 
       if (currentCount >= SECURE_CONFIG.MAX_DAILY_REDEMPTIONS) {
         return {
@@ -844,7 +922,29 @@ export class SecureTokenRedemptionService {
     `);
 
     const dailyRedemptions = Number((dailyStats.rows[0] as { count: string })?.count || 0);
-    const dailyUsd = Number((dailyStats.rows[0] as { total_usd: string })?.total_usd || 0);
+
+    // Fail-closed: this is the per-IP daily USD anti-sybil money-out cap. The
+    // SUM aggregates usd_value (NUMERIC) rows and the driver returns it as a
+    // string; a single corrupt 'NaN'::numeric row poisons the whole SUM to
+    // "NaN", and `NaN + usdValue > MAX_USD_PER_IP_DAILY` is false -> the cap
+    // would fail OPEN and authorize unbounded per-IP redemptions. Deny instead.
+    // error-policy:J4
+    let dailyUsd: number;
+    try {
+      dailyUsd = parseRedemptionLimitNumber(
+        (dailyStats.rows[0] as { total_usd: string })?.total_usd ?? 0,
+        "ip_daily_usd_total",
+      );
+    } catch (error) {
+      logger.error("[SecureRedemption] Corrupt per-IP daily USD aggregate; denying redemption", {
+        ipAddress: ipAddress.split(".").slice(0, 2).join(".") + ".x.x",
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        valid: false,
+        error: "Unable to verify redemption limits right now. Please try again later.",
+      };
+    }
 
     if (dailyRedemptions >= IP_RATE_LIMITS.MAX_REDEMPTIONS_PER_IP_DAILY) {
       return {
@@ -1072,8 +1172,16 @@ export class SecureTokenRedemptionService {
         throw new Error("Redemption not found or not pending");
       }
 
-      // Refund to redeemable earnings (move from pending back to available)
-      const refundAmount = Number(redemption.usd_value);
+      // Refund to redeemable earnings (move from pending back to available).
+      //
+      // Fail-closed: usd_value is NUMERIC and 'NaN'::numeric reads back as the
+      // string "NaN". A bare Number() here would interpolate NaN into the
+      // `available_balance + NaN` SQL below, poisoning the user's ENTIRE
+      // redeemable-earnings balance to NaN (plus GREATEST(0, x - NaN) = NaN in
+      // redemption_limits and a "NaN" ledger amount). Throwing rolls back the
+      // transaction: the redemption stays pending for manual repair instead of
+      // destroying the balance row. error-policy:J4
+      const refundAmount = parseRedemptionLimitNumber(redemption.usd_value, "usd_value");
 
       // CRITICAL: Refund to redeemable_earnings table
       // This moves funds from total_pending back to available_balance

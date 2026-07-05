@@ -926,6 +926,54 @@ _MEETING_PROOF_REQUIRED_REAL_METRICS = {
     "action_item_extraction",
 }
 
+_MEETING_PROOF_REQUIRED_AV_METRICS = {
+    "face_count_accuracy",
+    "active_speaker_f1",
+    "active_speaker_map",
+    "audio_video_association_accuracy",
+    "off_screen_speaker_detection_accuracy",
+    "room_feed_heuristic_precision",
+    "room_feed_heuristic_recall",
+    "visual_acoustic_disagreement_rate",
+}
+
+MEETING_PROOF_REQUIRED_GENERATED_ARTIFACT_SCORE_IDS = {
+    "summary_factuality",
+    "action_item_owner_date",
+    "decision_extraction",
+    "open_question_extraction",
+    "memory_entity_correctness",
+    "hallucination_rate",
+    "omission_rate",
+    "source_grounding",
+}
+
+_MEETING_PROOF_REQUIRED_PARITY_LANES = {
+    "local_asr_local_llm_local_tts",
+    "local_asr_cloud_llm_local_tts",
+    "cloud_asr_cloud_llm_cloud_tts",
+    "cloud_asr_local_llm_local_tts",
+    "native_talkmode_stt_tts",
+    "browser_web_speech_fallback",
+    "offline_mode",
+    "degraded_network_mode",
+    "mobile_bridge_local_inference",
+}
+
+_MEETING_PROOF_REQUIRED_PARITY_EVIDENCE_PLATFORMS = {"cloud", "desktop", "mobile"}
+_MEETING_PROOF_REQUIRED_PARITY_ARTIFACT_SCHEMA = {
+    "baseline_comparison",
+    "metrics_json",
+    "privacy_mode",
+    "resource_logs",
+    "transcript_artifact",
+}
+_MEETING_PROOF_REQUIRED_PARITY_EVIDENCE = {
+    "baseline_comparison",
+    "metrics_json",
+    "resource_logs",
+}
+
 
 def _score_from_meeting_transcription_proof_json(data: JSONValue) -> ScoreExtraction:
     """Extract the #12486 meeting transcription proof score.
@@ -955,6 +1003,63 @@ def _score_from_meeting_transcription_proof_json(data: JSONValue) -> ScoreExtrac
     speaker_name_provenance_count = (
         len(speaker_name_provenance) if isinstance(speaker_name_provenance, list) else 0
     )
+    audio_visual_cases = root.get("audio_visual_cases")
+    audio_visual_case_count = len(audio_visual_cases) if isinstance(audio_visual_cases, list) else 0
+    generated_artifact_observed: dict[str, float] = {}
+    generated_artifact_ids: set[str] = set()
+    generated_artifact_scores = root.get("generated_artifact_scores")
+    if isinstance(generated_artifact_scores, list):
+        for index, row in enumerate(generated_artifact_scores):
+            score_row = expect_dict(row, ctx=f"meeting_transcription_proof:generated_artifact_scores[{index}]")
+            score_id = str(
+                get_required(
+                    score_row,
+                    "id",
+                    ctx=f"meeting_transcription_proof:generated_artifact_scores[{index}]",
+                )
+            )
+            generated_artifact_ids.add(score_id)
+            if "observed_score" in score_row:
+                generated_artifact_observed[score_id] = expect_float(
+                    score_row["observed_score"],
+                    ctx=f"meeting_transcription_proof:generated_artifact_scores[{index}].observed_score",
+                )
+    baseline_comparisons = root.get("baseline_comparisons")
+    baseline_count = len(baseline_comparisons) if isinstance(baseline_comparisons, list) else 0
+    open_source_run_count = 0
+    internal_baseline_count = 0
+    if isinstance(baseline_comparisons, list):
+        for comparison in baseline_comparisons:
+            if not isinstance(comparison, dict):
+                continue
+            if comparison.get("comparison_type") == "open_source" and comparison.get("run_status") in {
+                "run",
+                "imported",
+            }:
+                open_source_run_count += 1
+            if (
+                comparison.get("id") == "eliza_current_baseline"
+                and comparison.get("comparison_type") == "internal_baseline"
+            ):
+                internal_baseline_count += 1
+    adversarial_cases = root.get("adversarial_cases")
+    adversarial_count = len(adversarial_cases) if isinstance(adversarial_cases, list) else 0
+    qa_items = root.get("qa_review_checklist")
+    qa_count = len(qa_items) if isinstance(qa_items, list) else 0
+    qa_machine_pass_count = 0
+    qa_human_pass_count = 0
+    if isinstance(qa_items, list):
+        qa_machine_pass_count = sum(
+            1 for item in qa_items if isinstance(item, dict) and item.get("machine_verdict") == "pass"
+        )
+        qa_human_pass_count = sum(
+            1 for item in qa_items if isinstance(item, dict) and item.get("verdict") == "pass"
+        )
+    parity_summary_raw = root.get("parity_matrix_summary")
+    parity_summary = parity_summary_raw if isinstance(parity_summary_raw, dict) else {}
+    parity_pass_count = int(parity_summary.get("pass_count") or 0)
+    parity_fail_count = int(parity_summary.get("fail_count") or 0)
+    parity_skip_count = int(parity_summary.get("skip_count") or 0)
     publishable = root.get("publishable") is True
     if lane == "real_product":
         if not publishable:
@@ -984,8 +1089,155 @@ def _score_from_meeting_transcription_proof_json(data: JSONValue) -> ScoreExtrac
         # check; the speaker-name provenance requirement is additive on top of it.
         if speaker_name_provenance_count < 8:
             raise ValueError("meeting_transcription_proof: real lane requires speaker name provenance")
+        if audio_visual_case_count < 7:
+            raise ValueError("meeting_transcription_proof: real lane requires audio_visual_cases")
+        missing_av_metrics = _MEETING_PROOF_REQUIRED_AV_METRICS - set(metrics)
+        if missing_av_metrics:
+            raise ValueError(
+                "meeting_transcription_proof: real lane requires audio-visual metrics "
+                f"{sorted(missing_av_metrics)}"
+            )
+        missing_generated_scores = MEETING_PROOF_REQUIRED_GENERATED_ARTIFACT_SCORE_IDS - generated_artifact_ids
+        if missing_generated_scores:
+            raise ValueError(
+                "meeting_transcription_proof: real lane requires complete generated artifact scores"
+            )
+        if baseline_count < 7:
+            raise ValueError("meeting_transcription_proof: real lane requires baseline comparisons")
+        if open_source_run_count < 1:
+            raise ValueError("meeting_transcription_proof: real lane requires an open-source baseline run")
+        if internal_baseline_count < 1:
+            raise ValueError("meeting_transcription_proof: real lane requires current Eliza baseline")
+        if adversarial_count < 10:
+            raise ValueError("meeting_transcription_proof: real lane requires adversarial cases")
+        if qa_count < 5:
+            raise ValueError("meeting_transcription_proof: real lane requires QA checklist verdicts")
+        if qa_machine_pass_count != qa_count or qa_human_pass_count != qa_count:
+            raise ValueError("meeting_transcription_proof: real lane requires passing QA checklist verdicts")
+        parity_matrix = expect_list(
+            get_required(root, "parity_matrix", ctx="meeting_transcription_proof:root"),
+            ctx="meeting_transcription_proof:parity_matrix",
+        )
+        parity_summary = expect_dict(
+            get_required(root, "parity_matrix_summary", ctx="meeting_transcription_proof:root"),
+            ctx="meeting_transcription_proof:parity_matrix_summary",
+        )
+        parity_lane_ids: set[str] = set()
+        row_evidence_platforms: set[str] = set()
+        for index, row_raw in enumerate(parity_matrix):
+            row = expect_dict(row_raw, ctx=f"meeting_transcription_proof:parity_matrix[{index}]")
+            lane_id = str(get_required(row, "id", ctx=f"meeting_transcription_proof:parity_matrix[{index}]"))
+            parity_lane_ids.add(lane_id)
+            status = str(get_required(row, "status", ctx=f"meeting_transcription_proof:parity_matrix[{index}]"))
+            if status != "pass":
+                raise ValueError("meeting_transcription_proof: real lane requires all parity rows to pass")
+            artifact_schema = {
+                str(item)
+                for item in expect_list(
+                    get_required(
+                        row,
+                        "artifact_schema",
+                        ctx=f"meeting_transcription_proof:parity_matrix[{index}]",
+                    ),
+                    ctx=f"meeting_transcription_proof:parity_matrix[{index}].artifact_schema",
+                )
+            }
+            missing_artifact_schema = _MEETING_PROOF_REQUIRED_PARITY_ARTIFACT_SCHEMA - artifact_schema
+            if missing_artifact_schema:
+                raise ValueError(
+                    "meeting_transcription_proof: real lane parity row missing artifact schema "
+                    f"{sorted(missing_artifact_schema)}"
+                )
+            evidence = {
+                str(item)
+                for item in expect_list(
+                    get_required(row, "evidence", ctx=f"meeting_transcription_proof:parity_matrix[{index}]"),
+                    ctx=f"meeting_transcription_proof:parity_matrix[{index}].evidence",
+                )
+            }
+            missing_evidence = _MEETING_PROOF_REQUIRED_PARITY_EVIDENCE - evidence
+            if missing_evidence:
+                raise ValueError(
+                    "meeting_transcription_proof: real lane parity row missing evidence "
+                    f"{sorted(missing_evidence)}"
+                )
+            baseline = expect_dict(
+                get_required(row, "baseline", ctx=f"meeting_transcription_proof:parity_matrix[{index}]"),
+                ctx=f"meeting_transcription_proof:parity_matrix[{index}].baseline",
+            )
+            if baseline.get("regression") is True:
+                raise ValueError("meeting_transcription_proof: real lane parity row has baseline regression")
+            row_platforms = {
+                str(item)
+                for item in expect_list(
+                    get_required(
+                        row,
+                        "evidence_platforms",
+                        ctx=f"meeting_transcription_proof:parity_matrix[{index}]",
+                    ),
+                    ctx=f"meeting_transcription_proof:parity_matrix[{index}].evidence_platforms",
+                )
+            }
+            row_evidence_platforms.update(row_platforms)
+        missing_parity_lanes = _MEETING_PROOF_REQUIRED_PARITY_LANES - parity_lane_ids
+        if missing_parity_lanes:
+            raise ValueError(
+                "meeting_transcription_proof: real lane requires parity lanes "
+                f"{sorted(missing_parity_lanes)}"
+            )
+        unknown_parity_lanes = parity_lane_ids - _MEETING_PROOF_REQUIRED_PARITY_LANES
+        if unknown_parity_lanes:
+            raise ValueError(
+                "meeting_transcription_proof: real lane has unknown parity lanes "
+                f"{sorted(unknown_parity_lanes)}"
+            )
+        parity_pass_count = int(
+            expect_float(
+                get_required(parity_summary, "pass_count", ctx="meeting_transcription_proof:parity_matrix_summary"),
+                ctx="meeting_transcription_proof:parity_matrix_summary.pass_count",
+            )
+        )
+        parity_fail_count = int(
+            expect_float(
+                get_required(parity_summary, "fail_count", ctx="meeting_transcription_proof:parity_matrix_summary"),
+                ctx="meeting_transcription_proof:parity_matrix_summary.fail_count",
+            )
+        )
+        parity_skip_count = int(
+            expect_float(
+                get_required(parity_summary, "skip_count", ctx="meeting_transcription_proof:parity_matrix_summary"),
+                ctx="meeting_transcription_proof:parity_matrix_summary.skip_count",
+            )
+        )
+        if (
+            parity_pass_count != len(_MEETING_PROOF_REQUIRED_PARITY_LANES)
+            or parity_fail_count != 0
+            or parity_skip_count != 0
+            or parity_summary.get("publishable") is not True
+        ):
+            raise ValueError("meeting_transcription_proof: real lane requires complete parity matrix")
+        evidence_platforms = expect_list(
+            get_required(parity_summary, "evidence_platforms", ctx="meeting_transcription_proof:parity_matrix_summary"),
+            ctx="meeting_transcription_proof:parity_matrix_summary.evidence_platforms",
+        )
+        missing_platforms = _MEETING_PROOF_REQUIRED_PARITY_EVIDENCE_PLATFORMS - (
+            {str(platform) for platform in evidence_platforms} | row_evidence_platforms
+        )
+        if missing_platforms:
+            raise ValueError(
+                "meeting_transcription_proof: real lane requires parity evidence platforms "
+                f"{sorted(missing_platforms)}"
+            )
     elif publishable:
         raise ValueError("meeting_transcription_proof: mocked lane cannot be publishable")
+
+    generated_artifact_metrics: dict[str, JSONValue] = {}
+    for metric_id in sorted(MEETING_PROOF_REQUIRED_GENERATED_ARTIFACT_SCORE_IDS):
+        metric_value = metrics.get(metric_id)
+        if isinstance(metric_value, (int, float)) and not isinstance(metric_value, bool):
+            generated_artifact_metrics[metric_id] = float(metric_value)
+        else:
+            generated_artifact_metrics[metric_id] = generated_artifact_observed.get(metric_id, 0)
 
     return ScoreExtraction(
         score=score,
@@ -996,10 +1248,30 @@ def _score_from_meeting_transcription_proof_json(data: JSONValue) -> ScoreExtrac
             "publishable": publishable,
             "evidence_file_count": evidence_count,
             "speaker_name_provenance_count": speaker_name_provenance_count,
+            "audio_visual_case_count": audio_visual_case_count,
+            "baseline_comparison_count": baseline_count,
+            "open_source_baseline_run_count": open_source_run_count,
+            "internal_baseline_count": internal_baseline_count,
+            "adversarial_case_count": adversarial_count,
+            "qa_checklist_count": qa_count,
+            "qa_machine_pass_count": qa_machine_pass_count,
+            "qa_human_pass_count": qa_human_pass_count,
             "transcript_quality": metrics.get("transcript_quality") or 0,
             "diarization_quality": metrics.get("diarization_quality") or 0,
             "speaker_identity_quality": metrics.get("speaker_identity_quality") or 0,
             "consent_retention_quality": metrics.get("consent_retention_quality") or 0,
+            "face_count_accuracy": metrics.get("face_count_accuracy") or 0,
+            "active_speaker_f1": metrics.get("active_speaker_f1") or 0,
+            "active_speaker_map": metrics.get("active_speaker_map") or 0,
+            "audio_video_association_accuracy": metrics.get("audio_video_association_accuracy") or 0,
+            "off_screen_speaker_detection_accuracy": metrics.get("off_screen_speaker_detection_accuracy") or 0,
+            "room_feed_heuristic_precision": metrics.get("room_feed_heuristic_precision") or 0,
+            "room_feed_heuristic_recall": metrics.get("room_feed_heuristic_recall") or 0,
+            "visual_acoustic_disagreement_rate": metrics.get("visual_acoustic_disagreement_rate") or 0,
+            **generated_artifact_metrics,
+            "parity_pass_count": parity_pass_count,
+            "parity_fail_count": parity_fail_count,
+            "parity_skip_count": parity_skip_count,
             "provider_mode": root.get("provider_mode") or "",
         },
     )
@@ -1392,6 +1664,69 @@ def _score_from_lifeops_bench_json(data: JSONValue) -> ScoreExtraction:
             "total_latency_ms": get_optional(root, "total_latency_ms") or 0,
             "model_name": get_optional(root, "model_name") or "",
             "judge_model_name": get_optional(root, "judge_model_name") or "",
+        },
+    )
+
+
+def _score_from_multitask_bench_json(data: JSONValue) -> ScoreExtraction:
+    """Extract MultitaskBench score from its ``multitask_<timestamp>.json``.
+
+    The scalar registry score is the ``mean_task_score`` of the N=10 lane —
+    how well the shared agent scores each task when handling 10 at once. The
+    interference deltas (mean task score @N minus @1) are the real headline and
+    ride along in ``metrics``. Higher is better; unit is ratio.
+
+    Validates that the report is a real MultitaskBench run: the benchmark tag,
+    a non-empty ``lanes`` array containing the N=10 lane, and the
+    ``interference`` block must all be present, and the run must not be a
+    hermetic oracle (perfect/wrong) — an oracle report is not a publishable
+    harness score.
+    """
+    root = expect_dict(data, ctx="multitask_bench:root")
+    benchmark = get_optional(root, "benchmark")
+    if str(benchmark) != "multitask_bench":
+        raise ValueError(
+            f"multitask_bench:benchmark must be 'multitask_bench', got {benchmark!r}"
+        )
+    harness = str(get_optional(root, "harness") or "").strip().lower()
+    if harness in {"perfect", "wrong"}:
+        raise ValueError(
+            f"multitask_bench: {harness!r} oracle result is not publishable as a real harness score"
+        )
+    lanes = get_optional(root, "lanes")
+    if not isinstance(lanes, list) or not lanes:
+        raise ValueError("multitask_bench:lanes must contain at least one lane")
+    interference = get_optional(root, "interference")
+    if not isinstance(interference, dict):
+        raise ValueError("multitask_bench:interference block is required")
+
+    lane_by_n: dict[int, dict[str, JSONValue]] = {}
+    for lane in lanes:
+        lane_dict = expect_dict(lane, ctx="multitask_bench:lane")
+        n_val = get_required(lane_dict, "n", ctx="multitask_bench:lane")
+        lane_by_n[int(expect_float(n_val, ctx="multitask_bench:lane.n"))] = lane_dict
+    n10 = lane_by_n.get(10)
+    if n10 is None:
+        raise ValueError("multitask_bench: the N=10 lane is required for the scalar score")
+    mean_task_score = expect_float(
+        get_required(n10, "mean_task_score", ctx="multitask_bench:n10"),
+        ctx="multitask_bench:n10.mean_task_score",
+    )
+    return ScoreExtraction(
+        score=mean_task_score,
+        unit="ratio",
+        higher_is_better=True,
+        metrics={
+            "mean_task_score_n10": mean_task_score,
+            "harness": harness,
+            "isolation": get_optional(root, "isolation") or "",
+            "model": get_optional(root, "model") or "",
+            "interference": interference,
+            "completion_rate_n10": get_optional(n10, "completion_rate") or 0,
+            "starvation_rate_n10": get_optional(n10, "starvation_rate") or 0,
+            "fairness_turns_jain_n10": get_optional(n10, "fairness_turns_jain") or 0,
+            "cost_usd_n10": get_optional(n10, "cost_usd") or {},
+            "lane_count": len(lanes),
         },
     )
 

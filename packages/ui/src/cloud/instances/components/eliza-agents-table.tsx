@@ -5,21 +5,16 @@
 "use client";
 
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
   Badge,
+  BulkDeleteDialog,
+  BulkSelectionBar,
   DashboardDataList,
   DashboardDataListDesktop,
   DashboardDataListFilteredCount,
   DashboardDataListMobile,
   DataListEmptyState,
   Input,
+  runBulkDelete,
   Select,
   SelectContent,
   SelectItem,
@@ -36,6 +31,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@elizaos/ui/cloud-ui";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpDown,
   Boxes,
@@ -52,6 +48,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "../../../components/ui/button";
+import { Checkbox } from "../../../components/ui/checkbox";
+import { api, apiWithStatus } from "../../lib/api-client";
 import { useT } from "../lib/i18n";
 import { openWebUIWithPairing } from "../lib/open-web-ui";
 import {
@@ -59,13 +57,23 @@ import {
   statusBadgeColor,
   statusDotColor,
 } from "../lib/sandbox-status";
-import { useJobPoller } from "../lib/use-job-poller";
+import { type TrackedJob, useJobPoller } from "../lib/use-job-poller";
 import {
   type SandboxListAgent,
   useSandboxListPoll,
 } from "../lib/use-sandbox-status-poll";
 import { AgentCostBadge } from "./agent-cost-badge";
 import { CreateElizaAgentDialog } from "./create-eliza-agent-dialog";
+
+/**
+ * Envelope the agent provision/suspend job endpoints return. 202 and 409
+ * responses carry a `jobId` to hand to the job poller; error responses carry
+ * a human-readable `error`.
+ */
+interface AgentJobEnvelope {
+  data?: { jobId?: string };
+  error?: string;
+}
 
 export interface ElizaAgentRow {
   id: string;
@@ -87,10 +95,85 @@ export interface ElizaAgentRow {
   updated_at: Date | string;
 }
 
-interface ElizaAgentsTableProps {
-  sandboxes: ElizaAgentRow[];
+/**
+ * Fold one API list-agent onto its existing row (or a fresh row when there is
+ * none), preserving the local-only fields the list endpoint doesn't return
+ * (ports, node/container, bridge). The single row-shape used by every
+ * poll/refresh merge — see `mergeApiData`.
+ */
+function mergeSandboxRow(
+  existing: ElizaAgentRow | undefined,
+  agent: SandboxListAgent,
+): ElizaAgentRow {
+  return {
+    ...(existing ?? {}),
+    id: agent.id,
+    agent_name: agent.agentName ?? existing?.agent_name ?? null,
+    status: agent.status ?? existing?.status ?? "pending",
+    error_message: agent.errorMessage ?? existing?.error_message ?? null,
+    last_heartbeat_at:
+      agent.lastHeartbeatAt ?? existing?.last_heartbeat_at ?? null,
+    created_at:
+      agent.createdAt ?? existing?.created_at ?? new Date().toISOString(),
+    updated_at:
+      agent.updatedAt ?? existing?.updated_at ?? new Date().toISOString(),
+    node_id: existing?.node_id ?? null,
+    container_name: existing?.container_name ?? null,
+    bridge_port: existing?.bridge_port ?? null,
+    web_ui_port: existing?.web_ui_port ?? null,
+    headscale_ip: existing?.headscale_ip ?? null,
+    docker_image: agent.dockerImage ?? existing?.docker_image ?? null,
+    execution_tier:
+      agent.executionTier === undefined
+        ? existing?.execution_tier
+        : agent.executionTier,
+    sandbox_id: existing?.sandbox_id ?? null,
+    bridge_url: existing?.bridge_url ?? null,
+    canonical_web_ui_url:
+      agent.webUiUrl === undefined
+        ? (existing?.canonical_web_ui_url ?? null)
+        : agent.webUiUrl,
+  } as ElizaAgentRow;
 }
 
+/**
+ * Merge a fresh API agent list onto the current rows for a background refresh.
+ *
+ * Updates each existing row from the API when present, keeps it otherwise, and
+ * appends rows the API introduced. It NEVER removes a row just because this
+ * fetch omitted it: a background status poll that came back short/empty (a
+ * transient, a paging blip) must not blank the table while the authoritative
+ * count still reads >0. Membership removal is owned elsewhere — the
+ * `useAgents()` refetch (which replaces the list wholesale via the
+ * `initialSandboxes` resync) and explicit-delete tombstones (`tombstoned`).
+ * Exported for direct unit coverage of that invariant.
+ */
+export function mergeAgentList(
+  prev: ElizaAgentRow[],
+  apiAgents: SandboxListAgent[],
+  tombstoned: ReadonlySet<string>,
+): ElizaAgentRow[] {
+  const apiById = new Map(apiAgents.map((a) => [a.id, a]));
+  const updated = prev
+    .filter((sb) => !tombstoned.has(sb.id))
+    .map((sb) => {
+      const agent = apiById.get(sb.id);
+      return agent ? mergeSandboxRow(sb, agent) : sb;
+    });
+  const known = new Set(prev.map((sb) => sb.id));
+  const added = apiAgents
+    .filter((a) => !known.has(a.id) && !tombstoned.has(a.id))
+    .map((a) => mergeSandboxRow(undefined, a));
+  return [...updated, ...added];
+}
+
+/**
+ * Merge a background API refresh while retiring explicit-delete tombstones only
+ * AFTER that refresh has used them to filter the existing local rows. The order
+ * matters: the first API response that omits a deleted id is also the response
+ * that should remove the local row, not resurrect it by clearing the tombstone
+ * too early.
+ */
 function isDockerBacked(sb: ElizaAgentRow): boolean {
   return !!sb.node_id || sb.execution_tier === "custom" || !!sb.docker_image;
 }
@@ -108,6 +191,107 @@ function getRuntimeKind(
     return "sandbox";
   }
   return "notProvisioned";
+}
+
+/**
+ * Everything a single agent row needs to render, derived once from the raw row
+ * plus the live poll/action state. The desktop table and the mobile card are
+ * two views of the same row and must agree on status, action-availability, and
+ * web-UI reachability; deriving here (rather than inline in each renderer) keeps
+ * them from drifting and computes `runtimeKind` a single time.
+ */
+interface AgentRowViewModel {
+  sb: ElizaAgentRow;
+  isDocker: boolean;
+  trackedJob: TrackedJob | undefined;
+  isProvisioningActive: boolean;
+  displayStatus: string;
+  busy: boolean;
+  canStart: boolean;
+  canStop: boolean;
+  hasStandaloneWebUi: boolean;
+  runtimeKind: ReturnType<typeof getRuntimeKind>;
+}
+
+export function deriveAgentRow(
+  sb: ElizaAgentRow,
+  poller: Pick<ReturnType<typeof useJobPoller>, "getStatus" | "isActive">,
+  actionInProgress: string | null,
+): AgentRowViewModel {
+  const isProvisioningActive = poller.isActive(sb.id);
+  const displayStatus = isProvisioningActive ? "provisioning" : sb.status;
+  const busy = actionInProgress === sb.id || isProvisioningActive;
+  return {
+    sb,
+    isDocker: isDockerBacked(sb),
+    trackedJob: poller.getStatus(sb.id),
+    isProvisioningActive,
+    displayStatus,
+    busy,
+    canStart:
+      ["stopped", "error", "pending", "disconnected"].includes(displayStatus) &&
+      !busy,
+    canStop: displayStatus === "running" && !busy,
+    hasStandaloneWebUi:
+      displayStatus === "running" &&
+      sb.execution_tier !== "shared" &&
+      Boolean(sb.canonical_web_ui_url),
+    runtimeKind: getRuntimeKind(sb),
+  };
+}
+
+/** The runtime label for one row, driven by a single precomputed `runtimeKind`
+ * so the four kinds map to copy in one place rather than four `getRuntimeKind`
+ * calls at the call site. */
+function RuntimeLabel({
+  runtimeKind,
+}: {
+  runtimeKind: AgentRowViewModel["runtimeKind"];
+}) {
+  const t = useT();
+  const label =
+    runtimeKind === "managed"
+      ? t("cloud.elizaAgentsTable.managedRuntime", {
+          defaultValue: "Managed runtime",
+        })
+      : runtimeKind === "shared"
+        ? t("cloud.elizaAgentsTable.sharedRuntime", {
+            defaultValue: "Shared runtime",
+          })
+        : runtimeKind === "sandbox"
+          ? t("cloud.elizaAgentsTable.cloudSandbox", {
+              defaultValue: "Cloud sandbox",
+            })
+          : t("cloud.elizaAgentsTable.notProvisioned", {
+              defaultValue: "Not provisioned",
+            });
+  return <span className="text-xs text-muted-strong">{label}</span>;
+}
+
+/** Backing label (Docker / Shared / Sandbox) + short id, shared by the desktop
+ * row and the mobile card. */
+function RowBackingMeta({ vm }: { vm: AgentRowViewModel }) {
+  const t = useT();
+  const { sb, isDocker } = vm;
+  return (
+    <div className="flex items-center gap-2">
+      <span className="inline-flex items-center gap-1 text-2xs text-muted">
+        {isDocker ? (
+          <Server className="h-2.5 w-2.5" />
+        ) : (
+          <Cloud className="h-2.5 w-2.5" />
+        )}
+        {isDocker
+          ? t("cloud.elizaAgentsTable.docker", { defaultValue: "Docker" })
+          : sb.execution_tier === "shared"
+            ? t("cloud.elizaAgentsTable.shared", { defaultValue: "Shared" })
+            : t("cloud.elizaAgentsTable.sandbox", { defaultValue: "Sandbox" })}
+      </span>
+      <span className="text-2xs text-muted font-mono tabular-nums">
+        {sb.id.slice(0, 8)}
+      </span>
+    </div>
+  );
 }
 
 function StatusCell({
@@ -194,11 +378,17 @@ function StatusCell({
 
 export function ElizaAgentsTable({
   sandboxes: initialSandboxes,
-}: ElizaAgentsTableProps) {
+}: {
+  sandboxes: ElizaAgentRow[];
+}) {
   const t = useT();
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const [deleteIds, setDeleteIds] = useState<string[] | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
 
   const [localSandboxes, setLocalSandboxes] =
     useState<ElizaAgentRow[]>(initialSandboxes);
@@ -206,68 +396,56 @@ export function ElizaAgentsTable({
     [...initialSandboxes.map((sb) => sb.id)].sort().join(","),
   );
 
+  // Delete tombstones: the backend list is eventually consistent, so a refetch
+  // right after a successful DELETE can still contain the deleted agent and
+  // resurrect its row (the "deleted but still shown until refresh" bug). Ids
+  // stay tombstoned — filtered from every merge — until the API stops
+  // returning them, then the entry is dropped.
+  const deletedIdsRef = useRef(new Set<string>());
+  const withoutDeleted = useCallback(
+    (rows: ElizaAgentRow[]) =>
+      rows.filter((sb) => !deletedIdsRef.current.has(sb.id)),
+    [],
+  );
+
   useEffect(() => {
     const newIds = [...initialSandboxes.map((sb) => sb.id)].sort().join(",");
     if (newIds !== initialSandboxIdsRef.current) {
       initialSandboxIdsRef.current = newIds;
-      setLocalSandboxes(initialSandboxes);
+      setLocalSandboxes(withoutDeleted(initialSandboxes));
     }
-  }, [initialSandboxes]);
+  }, [initialSandboxes, withoutDeleted]);
 
   const mergeApiData = useCallback((apiAgents: SandboxListAgent[]) => {
-    setLocalSandboxes((prev) => {
-      const apiIds = new Set(apiAgents.map((a) => a.id));
-      const existingMap = new Map(prev.map((sb) => [sb.id, sb]));
-
-      const merged = apiAgents.map((agent) => {
-        const existing = existingMap.get(agent.id);
-        return {
-          ...(existing ?? {}),
-          id: agent.id,
-          agent_name: agent.agentName ?? existing?.agent_name ?? null,
-          status: agent.status ?? existing?.status ?? "pending",
-          error_message: agent.errorMessage ?? existing?.error_message ?? null,
-          last_heartbeat_at:
-            agent.lastHeartbeatAt ?? existing?.last_heartbeat_at ?? null,
-          created_at:
-            agent.createdAt ?? existing?.created_at ?? new Date().toISOString(),
-          updated_at:
-            agent.updatedAt ?? existing?.updated_at ?? new Date().toISOString(),
-          node_id: existing?.node_id ?? null,
-          container_name: existing?.container_name ?? null,
-          bridge_port: existing?.bridge_port ?? null,
-          web_ui_port: existing?.web_ui_port ?? null,
-          headscale_ip: existing?.headscale_ip ?? null,
-          docker_image: agent.dockerImage ?? existing?.docker_image ?? null,
-          execution_tier:
-            agent.executionTier === undefined
-              ? existing?.execution_tier
-              : agent.executionTier,
-          sandbox_id: existing?.sandbox_id ?? null,
-          bridge_url: existing?.bridge_url ?? null,
-          canonical_web_ui_url:
-            agent.webUiUrl === undefined
-              ? (existing?.canonical_web_ui_url ?? null)
-              : agent.webUiUrl,
-        } as ElizaAgentRow;
-      });
-
-      const localOnly = prev.filter((sb) => !apiIds.has(sb.id));
-      return [...merged, ...localOnly];
-    });
+    // Retire tombstones the API stopped returning BEFORE the state update and
+    // hand the updater an immutable snapshot: React StrictMode double-invokes
+    // updaters, so an in-updater mutation of the shared tombstone set diverges
+    // between invocations and can resurrect a tombstoned row the API still
+    // returns.
+    const apiIds = new Set(apiAgents.map((a) => a.id));
+    for (const id of deletedIdsRef.current) {
+      if (!apiIds.has(id)) deletedIdsRef.current.delete(id);
+    }
+    const tombstoned: ReadonlySet<string> = new Set(deletedIdsRef.current);
+    setLocalSandboxes((prev) => mergeAgentList(prev, apiAgents, tombstoned));
   }, []);
 
   const refreshData = useCallback(async () => {
     try {
-      const res = await fetch("/api/v1/eliza/agents");
-      if (!res.ok) return;
-      const json = await res.json();
-      const agents: SandboxListAgent[] = json?.data ?? [];
-      mergeApiData(agents);
+      // The typed cloud client (Bearer → api.elizacloud.ai). A same-origin
+      // fetch here 404s on the console hosts, which serve no /api/*.
+      const json = await api<{ data?: SandboxListAgent[] }>(
+        "/api/v1/eliza/agents",
+      );
+      mergeApiData(json?.data ?? []);
+      // Keep the parent useAgents() cache honest too, so navigating away and
+      // back doesn't rehydrate pre-action rows.
+      await queryClient.invalidateQueries({ queryKey: ["agent", "agents"] });
     } catch {
-      // Silent — retried on next action or poll.
+      // error-policy:J4 list refresh is opportunistic after an action; the
+      // 15s useAgents poll reconciles on the next tick if this read fails.
     }
-  }, [mergeApiData]);
+  }, [mergeApiData, queryClient]);
 
   const jobActionById = useRef(new Map<string, string>());
 
@@ -305,6 +483,19 @@ export function ElizaAgentsTable({
       void refreshData();
     },
   });
+
+  const handleProvisionQueued = useCallback(
+    (agentId: string, jobId: string) => {
+      jobActionById.current.set(
+        jobId,
+        t("cloud.elizaAgentsTable.agentProvisioning", {
+          defaultValue: "Agent provisioning",
+        }),
+      );
+      poller.track(agentId, jobId);
+    },
+    [poller, t],
+  );
 
   useSandboxListPoll(
     localSandboxes.map((sb) => ({
@@ -380,204 +571,216 @@ export function ElizaAgentsTable({
     poller.isActive,
   ]);
 
-  async function handleProvision(id: string) {
+  /**
+   * Shared skeleton of the async agent-job actions (provision/suspend): set
+   * the optimistic row status, fire the request, then branch on the job
+   * protocol — 409 attach-to-existing-job, non-2xx throw, 202 queue-track,
+   * fallback plain success. The two callers differ only in request, optimistic
+   * status, copy, and the provision-only 202-without-job branch (#13916).
+   */
+  async function runAgentJob(
+    id: string,
+    opts: {
+      request: () => Promise<{ status: number; data?: AgentJobEnvelope }>;
+      optimisticStatus: ElizaAgentRow["status"];
+      labels: {
+        jobAction: string;
+        inProgress: string;
+        failed: string;
+        queued: string;
+        /** Provision-only: 202 with no jobId means "started, nothing to track". */
+        startedNoJob?: string;
+        alreadyDone: string;
+      };
+      onError: (err: unknown) => void;
+    },
+  ) {
+    const { request, optimisticStatus, labels, onError } = opts;
     setActionInProgress(id);
     setLocalSandboxes((prev) =>
-      prev.map((sb) => (sb.id === id ? { ...sb, status: "provisioning" } : sb)),
+      prev.map((sb) =>
+        sb.id === id ? { ...sb, status: optimisticStatus } : sb,
+      ),
     );
     try {
-      const res = await fetch(`/api/v1/eliza/agents/${id}/provision`, {
-        method: "POST",
-      });
-      const data = await res.json().catch(() => ({}));
+      const { status, data } = await request();
+      const jobId = data?.data?.jobId;
 
-      if (res.status === 409) {
-        const jobId = (data as { data?: { jobId?: string } }).data?.jobId;
+      // 409 — the job is already in flight. Attach to it when the backend
+      // returned one; either way this is informational, not an error.
+      if (status === 409) {
         if (jobId) {
-          jobActionById.current.set(
-            jobId,
-            t("cloud.elizaAgentsTable.agentProvisioning", {
-              defaultValue: "Agent provisioning",
-            }),
-          );
+          jobActionById.current.set(jobId, labels.jobAction);
           poller.track(id, jobId);
-          toast.info(
-            t("cloud.elizaAgentsTable.provisioningInProgress", {
-              defaultValue: "Provisioning already in progress",
-            }),
-          );
-          return;
+        } else {
+          void refreshData();
         }
+        toast.info(labels.inProgress);
+        return;
       }
 
-      if (!res.ok) {
+      if (status < 200 || status >= 300) {
         void refreshData();
-        throw new Error(
-          (data as { error?: string }).error ??
-            t("cloud.elizaAgentsTable.provisionFailed", {
-              defaultValue: "Provision failed",
-            }),
-        );
+        throw new Error(data?.error ?? labels.failed);
       }
 
-      if (res.status === 202) {
-        const jobId = (data as { data?: { jobId?: string } }).data?.jobId;
-        if (jobId) {
-          jobActionById.current.set(
-            jobId,
-            t("cloud.elizaAgentsTable.agentProvisioning", {
-              defaultValue: "Agent provisioning",
-            }),
-          );
-          poller.track(id, jobId);
-          toast.success(
-            t("cloud.elizaAgentsTable.provisioningQueued", {
-              defaultValue: "Agent provisioning queued",
-            }),
-          );
-          return;
-        }
-
-        toast.success(
-          t("cloud.elizaAgentsTable.provisioningStarted", {
-            defaultValue: "Agent provisioning started",
-          }),
-        );
+      // 202 — accepted: the backend queued a job to track.
+      if (status === 202 && jobId) {
+        jobActionById.current.set(jobId, labels.jobAction);
+        poller.track(id, jobId);
+        toast.success(labels.queued);
+        return;
+      }
+      if (status === 202 && labels.startedNoJob) {
+        toast.success(labels.startedNoJob);
         void refreshData();
         return;
       }
 
-      toast.success(
-        t("cloud.elizaAgentsTable.alreadyRunning", {
+      toast.success(labels.alreadyDone);
+      void refreshData();
+    } catch (err) {
+      onError(err);
+    } finally {
+      setActionInProgress(null);
+    }
+  }
+
+  function handleProvision(id: string) {
+    return runAgentJob(id, {
+      request: () =>
+        apiWithStatus<AgentJobEnvelope>(
+          `/api/v1/eliza/agents/${id}/provision`,
+          {
+            method: "POST",
+          },
+        ),
+      optimisticStatus: "provisioning",
+      labels: {
+        jobAction: t("cloud.elizaAgentsTable.agentProvisioning", {
+          defaultValue: "Agent provisioning",
+        }),
+        inProgress: t("cloud.elizaAgentsTable.provisioningInProgress", {
+          defaultValue: "Provisioning already in progress",
+        }),
+        failed: t("cloud.elizaAgentsTable.provisionFailed", {
+          defaultValue: "Provision failed",
+        }),
+        queued: t("cloud.elizaAgentsTable.provisioningQueued", {
+          defaultValue: "Agent provisioning queued",
+        }),
+        startedNoJob: t("cloud.elizaAgentsTable.provisioningStarted", {
+          defaultValue: "Agent provisioning started",
+        }),
+        alreadyDone: t("cloud.elizaAgentsTable.alreadyRunning", {
           defaultValue: "Agent is already running",
         }),
-      );
-      void refreshData();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      toast.error(
-        t("cloud.elizaAgentsTable.failedToStart", {
-          message,
-          defaultValue: "Failed to start agent: {{message}}",
-        }),
-      );
-    } finally {
-      setActionInProgress(null);
-    }
+      },
+      onError: (err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        toast.error(
+          t("cloud.elizaAgentsTable.failedToStart", {
+            message,
+            defaultValue: "Failed to start agent: {{message}}",
+          }),
+        );
+      },
+    });
   }
 
-  async function handleSuspend(id: string) {
-    setActionInProgress(id);
-    setLocalSandboxes((prev) =>
-      prev.map((sb) => (sb.id === id ? { ...sb, status: "stopped" } : sb)),
-    );
-    try {
-      const res = await fetch(`/api/v1/eliza/agents/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "suspend" }),
-      });
-      const data = await res.json().catch(() => ({}));
-      const jobId = (data as { data?: { jobId?: string } }).data?.jobId;
-
-      if (res.status === 409 && jobId) {
-        jobActionById.current.set(
-          jobId,
-          t("cloud.elizaAgentsTable.agentSuspend", {
-            defaultValue: "Agent suspend",
-          }),
-        );
-        poller.track(id, jobId);
-        toast.info(
-          t("cloud.elizaAgentsTable.suspendInProgress", {
-            defaultValue: "Suspend already in progress",
-          }),
-        );
-        return;
-      }
-
-      if (!res.ok && res.status !== 202) {
-        void refreshData();
-        throw new Error(
-          (data as { error?: string }).error ??
-            t("cloud.elizaAgentsTable.suspendFailed", {
-              defaultValue: "Suspend failed",
-            }),
-        );
-      }
-
-      if (res.status === 202 && jobId) {
-        jobActionById.current.set(
-          jobId,
-          t("cloud.elizaAgentsTable.agentSuspend", {
-            defaultValue: "Agent suspend",
-          }),
-        );
-        poller.track(id, jobId);
-        toast.success(
-          t("cloud.elizaAgentsTable.suspendQueued", {
-            defaultValue: "Suspend queued",
-          }),
-        );
-        return;
-      }
-
-      toast.success(
-        t("cloud.elizaAgentsTable.suspended", {
+  function handleSuspend(id: string) {
+    return runAgentJob(id, {
+      request: () =>
+        apiWithStatus<AgentJobEnvelope>(`/api/v1/eliza/agents/${id}`, {
+          method: "PATCH",
+          json: { action: "suspend" },
+        }),
+      optimisticStatus: "stopped",
+      labels: {
+        jobAction: t("cloud.elizaAgentsTable.agentSuspend", {
+          defaultValue: "Agent suspend",
+        }),
+        inProgress: t("cloud.elizaAgentsTable.suspendInProgress", {
+          defaultValue: "Suspend already in progress",
+        }),
+        failed: t("cloud.elizaAgentsTable.suspendFailed", {
+          defaultValue: "Suspend failed",
+        }),
+        queued: t("cloud.elizaAgentsTable.suspendQueued", {
+          defaultValue: "Suspend queued",
+        }),
+        alreadyDone: t("cloud.elizaAgentsTable.suspended", {
           defaultValue: "Agent suspended (snapshot saved)",
         }),
-      );
-      void refreshData();
-    } catch {
-      toast.error(
-        t("cloud.elizaAgentsTable.failedToSuspend", {
-          defaultValue: "Failed to suspend agent",
-        }),
-      );
-    } finally {
-      setActionInProgress(null);
-    }
+      },
+      onError: () => {
+        toast.error(
+          t("cloud.elizaAgentsTable.failedToSuspend", {
+            defaultValue: "Failed to suspend agent",
+          }),
+        );
+      },
+    });
   }
 
-  async function handleDelete(id: string) {
+  /**
+   * Delete one or many agents. Rows leave the list immediately and their ids
+   * are tombstoned so the eventually-consistent list API can't resurrect them
+   * on the next refetch; a failed DELETE lifts its tombstone and restores its
+   * row. One implementation serves the row action and the bulk bar.
+   */
+  async function handleDelete(ids: string[]) {
     setIsDeleting(true);
-    const previousSandboxes = localSandboxes;
-    setLocalSandboxes((prev) => prev.filter((sb) => sb.id !== id));
+    const rowById = new Map(localSandboxes.map((sb) => [sb.id, sb]));
+    for (const id of ids) deletedIdsRef.current.add(id);
+    setLocalSandboxes((prev) => prev.filter((sb) => !ids.includes(sb.id)));
     try {
-      const res = await fetch(`/api/v1/eliza/agents/${id}`, {
-        method: "DELETE",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setLocalSandboxes(previousSandboxes);
-        throw new Error(
-          (data as { error?: string }).error ??
-            t("cloud.elizaAgentsTable.deleteFailed", {
-              defaultValue: "Delete failed",
-            }),
+      const outcome = await runBulkDelete(ids, (id) =>
+        api(`/api/v1/eliza/agents/${id}`, { method: "DELETE" }),
+      );
+      const failed = outcome.failed;
+      if (failed.length > 0) {
+        for (const id of failed) deletedIdsRef.current.delete(id);
+        setLocalSandboxes((prev) => [
+          ...prev,
+          ...failed
+            .map((id) => rowById.get(id))
+            .filter((sb): sb is ElizaAgentRow => Boolean(sb)),
+        ]);
+        const firstError = outcome.firstError;
+        toast.error(
+          t("cloud.elizaAgentsTable.deleteSomeFailed", {
+            count: failed.length,
+            defaultValue: "Failed to delete {{count}} agent(s)",
+          }),
+          {
+            description:
+              firstError instanceof Error ? firstError.message : undefined,
+          },
         );
       }
-      toast.success(
-        t("cloud.elizaAgentsTable.agentDeleted", {
-          defaultValue: "Agent deleted",
-        }),
-      );
+      const deleted = ids.length - failed.length;
+      if (deleted > 0) {
+        toast.success(
+          deleted === 1
+            ? t("cloud.elizaAgentsTable.agentDeleted", {
+                defaultValue: "Agent deleted",
+              })
+            : t("cloud.elizaAgentsTable.agentsDeleted", {
+                count: deleted,
+                defaultValue: "{{count}} agents deleted",
+              }),
+        );
+      }
+      setSelectedIds(new Set());
       void refreshData();
-    } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : t("cloud.elizaAgentsTable.failedToDelete", {
-              defaultValue: "Failed to delete agent",
-            });
-      toast.error(message);
     } finally {
       setIsDeleting(false);
-      setDeleteId(null);
+      setDeleteIds(null);
     }
   }
 
-  const deleteTargetBusy = deleteId ? poller.isActive(deleteId) : false;
+  const deleteTargetBusy = (deleteIds ?? []).some((id) => poller.isActive(id));
 
   if (localSandboxes.length === 0) {
     return (
@@ -591,15 +794,7 @@ export function ElizaAgentsTable({
         icon={Boxes}
         action={
           <CreateElizaAgentDialog
-            onProvisionQueued={(agentId, jobId) => {
-              jobActionById.current.set(
-                jobId,
-                t("cloud.elizaAgentsTable.agentProvisioning", {
-                  defaultValue: "Agent provisioning",
-                }),
-              );
-              poller.track(agentId, jobId);
-            }}
+            onProvisionQueued={handleProvisionQueued}
             onCreated={refreshData}
           />
         }
@@ -607,9 +802,48 @@ export function ElizaAgentsTable({
     );
   }
 
+  const selectableIds = filtered
+    .filter((sb) => !poller.isActive(sb.id))
+    .map((sb) => sb.id);
+  const allSelected =
+    selectableIds.length > 0 &&
+    selectableIds.every((id) => selectedIds.has(id));
+  const toggleSelected = (id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
   return (
     <TooltipProvider>
       <DashboardDataList>
+        <BulkSelectionBar
+          count={selectedIds.size}
+          onClear={() => setSelectedIds(new Set())}
+          onDelete={() =>
+            setDeleteIds(
+              [...selectedIds].filter((id) =>
+                localSandboxes.some((sb) => sb.id === id),
+              ),
+            )
+          }
+          deleteDisabled={isDeleting}
+          labels={{
+            selected: t("cloud.elizaAgentsTable.selectedCount", {
+              count: selectedIds.size,
+              defaultValue: "{{count}} selected",
+            }),
+            clear: t("cloud.elizaAgentsTable.clearSelection", {
+              defaultValue: "Clear",
+            }),
+            deleteSelected: t("cloud.elizaAgentsTable.deleteSelected", {
+              defaultValue: "Delete selected",
+            }),
+          }}
+        />
         {/* Search + filter + create */}
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1">
@@ -668,15 +902,7 @@ export function ElizaAgentsTable({
             </SelectContent>
           </Select>
           <CreateElizaAgentDialog
-            onProvisionQueued={(agentId, jobId) => {
-              jobActionById.current.set(
-                jobId,
-                t("cloud.elizaAgentsTable.agentProvisioning", {
-                  defaultValue: "Agent provisioning",
-                }),
-              );
-              poller.track(agentId, jobId);
-            }}
+            onProvisionQueued={handleProvisionQueued}
             onCreated={refreshData}
           />
         </div>
@@ -696,6 +922,19 @@ export function ElizaAgentsTable({
           <Table>
             <TableHeader>
               <TableRow className="bg-bg-muted border-b border-border hover:bg-bg-muted">
+                <TableHead className="w-10">
+                  <Checkbox
+                    aria-label={t("cloud.elizaAgentsTable.selectAll", {
+                      defaultValue: "Select all agents",
+                    })}
+                    checked={allSelected}
+                    onCheckedChange={(checked) =>
+                      setSelectedIds(
+                        checked === true ? new Set(selectableIds) : new Set(),
+                      )
+                    }
+                  />
+                </TableHead>
                 <TableHead className="w-[30%]">
                   <Button
                     variant="ghost"
@@ -755,7 +994,7 @@ export function ElizaAgentsTable({
             <TableBody>
               {filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center">
+                  <TableCell colSpan={7} className="h-24 text-center">
                     <div className="flex flex-col items-center justify-center gap-1 text-muted">
                       <Search className="h-5 w-5 mb-1" />
                       <p className="text-sm">
@@ -768,29 +1007,34 @@ export function ElizaAgentsTable({
                 </TableRow>
               ) : (
                 filtered.map((sb) => {
-                  const isDocker = isDockerBacked(sb);
-                  const trackedJob = poller.getStatus(sb.id);
-                  const isProvisioningActive = poller.isActive(sb.id);
-                  const displayStatus = isProvisioningActive
-                    ? "provisioning"
-                    : sb.status;
-                  const busy =
-                    actionInProgress === sb.id || isProvisioningActive;
-                  const canStart =
-                    ["stopped", "error", "pending", "disconnected"].includes(
-                      displayStatus,
-                    ) && !busy;
-                  const canStop = displayStatus === "running" && !busy;
-                  const hasStandaloneWebUi =
-                    displayStatus === "running" &&
-                    sb.execution_tier !== "shared" &&
-                    Boolean(sb.canonical_web_ui_url);
+                  const vm = deriveAgentRow(sb, poller, actionInProgress);
+                  const {
+                    trackedJob,
+                    isProvisioningActive,
+                    displayStatus,
+                    busy,
+                    canStart,
+                    canStop,
+                    hasStandaloneWebUi,
+                  } = vm;
 
                   return (
                     <TableRow
                       key={sb.id}
                       className="hover:bg-bg-hover transition-colors border-b border-border"
                     >
+                      <TableCell className="w-10">
+                        <Checkbox
+                          aria-label={t("cloud.elizaAgentsTable.selectAgent", {
+                            defaultValue: "Select agent",
+                          })}
+                          checked={selectedIds.has(sb.id)}
+                          disabled={isProvisioningActive}
+                          onCheckedChange={(checked) =>
+                            toggleSelected(sb.id, checked === true)
+                          }
+                        />
+                      </TableCell>
                       <TableCell>
                         <div className="space-y-1">
                           <div className="flex flex-wrap items-center gap-2">
@@ -805,29 +1049,7 @@ export function ElizaAgentsTable({
                             </a>
                             <AgentCostBadge status={displayStatus} />
                           </div>
-                          <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center gap-1 text-2xs text-muted">
-                              {isDocker ? (
-                                <Server className="h-2.5 w-2.5" />
-                              ) : (
-                                <Cloud className="h-2.5 w-2.5" />
-                              )}
-                              {isDocker
-                                ? t("cloud.elizaAgentsTable.docker", {
-                                    defaultValue: "Docker",
-                                  })
-                                : sb.execution_tier === "shared"
-                                  ? t("cloud.elizaAgentsTable.shared", {
-                                      defaultValue: "Shared",
-                                    })
-                                  : t("cloud.elizaAgentsTable.sandbox", {
-                                      defaultValue: "Sandbox",
-                                    })}
-                            </span>
-                            <span className="text-2xs text-muted font-mono tabular-nums">
-                              {sb.id.slice(0, 8)}
-                            </span>
-                          </div>
+                          <RowBackingMeta vm={vm} />
                         </div>
                       </TableCell>
 
@@ -841,23 +1063,7 @@ export function ElizaAgentsTable({
                       </TableCell>
 
                       <TableCell>
-                        <span className="text-xs text-muted-strong">
-                          {getRuntimeKind(sb) === "managed"
-                            ? t("cloud.elizaAgentsTable.managedRuntime", {
-                                defaultValue: "Managed runtime",
-                              })
-                            : getRuntimeKind(sb) === "shared"
-                              ? t("cloud.elizaAgentsTable.sharedRuntime", {
-                                  defaultValue: "Shared runtime",
-                                })
-                              : getRuntimeKind(sb) === "sandbox"
-                                ? t("cloud.elizaAgentsTable.cloudSandbox", {
-                                    defaultValue: "Cloud sandbox",
-                                  })
-                                : t("cloud.elizaAgentsTable.notProvisioned", {
-                                    defaultValue: "Not provisioned",
-                                  })}
-                        </span>
+                        <RuntimeLabel runtimeKind={vm.runtimeKind} />
                       </TableCell>
 
                       <TableCell>
@@ -986,7 +1192,7 @@ export function ElizaAgentsTable({
                               <Button
                                 variant="ghost"
                                 type="button"
-                                onClick={() => !busy && setDeleteId(sb.id)}
+                                onClick={() => !busy && setDeleteIds([sb.id])}
                                 disabled={isDeleting || busy}
                                 className="inline-flex size-touch items-center justify-center text-muted hover:text-destructive hover:bg-destructive-subtle transition-colors disabled:opacity-30"
                               >
@@ -1022,22 +1228,16 @@ export function ElizaAgentsTable({
             </div>
           ) : (
             filtered.map((sb) => {
-              const isDocker = isDockerBacked(sb);
-              const trackedJob = poller.getStatus(sb.id);
-              const isProvisioningActive = poller.isActive(sb.id);
-              const displayStatus = isProvisioningActive
-                ? "provisioning"
-                : sb.status;
-              const busy = actionInProgress === sb.id || isProvisioningActive;
-              const canStart =
-                ["stopped", "error", "pending", "disconnected"].includes(
-                  displayStatus,
-                ) && !busy;
-              const canStop = displayStatus === "running" && !busy;
-              const hasStandaloneWebUi =
-                displayStatus === "running" &&
-                sb.execution_tier !== "shared" &&
-                Boolean(sb.canonical_web_ui_url);
+              const vm = deriveAgentRow(sb, poller, actionInProgress);
+              const {
+                trackedJob,
+                isProvisioningActive,
+                displayStatus,
+                busy,
+                canStart,
+                canStop,
+                hasStandaloneWebUi,
+              } = vm;
 
               return (
                 <div
@@ -1056,29 +1256,7 @@ export function ElizaAgentsTable({
                           })}
                       </a>
                       <AgentCostBadge status={displayStatus} />
-                      <div className="flex items-center gap-2">
-                        <span className="inline-flex items-center gap-1 text-2xs text-muted">
-                          {isDocker ? (
-                            <Server className="h-2.5 w-2.5" />
-                          ) : (
-                            <Cloud className="h-2.5 w-2.5" />
-                          )}
-                          {isDocker
-                            ? t("cloud.elizaAgentsTable.docker", {
-                                defaultValue: "Docker",
-                              })
-                            : sb.execution_tier === "shared"
-                              ? t("cloud.elizaAgentsTable.shared", {
-                                  defaultValue: "Shared",
-                                })
-                              : t("cloud.elizaAgentsTable.sandbox", {
-                                  defaultValue: "Sandbox",
-                                })}
-                        </span>
-                        <span className="text-2xs text-muted font-mono tabular-nums">
-                          {sb.id.slice(0, 8)}
-                        </span>
-                      </div>
+                      <RowBackingMeta vm={vm} />
                     </div>
                     <StatusCell
                       displayStatus={displayStatus}
@@ -1154,7 +1332,7 @@ export function ElizaAgentsTable({
                     <Button
                       variant="ghost"
                       type="button"
-                      onClick={() => !busy && setDeleteId(sb.id)}
+                      onClick={() => !busy && setDeleteIds([sb.id])}
                       disabled={isDeleting || busy}
                       className="min-h-touch px-3 text-muted hover:text-destructive hover:bg-destructive-subtle transition-colors disabled:opacity-30"
                     >
@@ -1168,52 +1346,55 @@ export function ElizaAgentsTable({
         </DashboardDataListMobile>
       </DashboardDataList>
 
-      {/* Delete confirmation */}
-      <AlertDialog
-        open={deleteId !== null}
-        onOpenChange={() => setDeleteId(null)}
-      >
-        <AlertDialogContent className="bg-card border-border">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-txt-strong">
-              {t("cloud.elizaAgentsTable.deleteAgentTitle", {
+      {/* Delete confirmation — one dialog for the row action and the bulk bar */}
+      <BulkDeleteDialog
+        open={deleteIds !== null}
+        onOpenChange={() => setDeleteIds(null)}
+        title={
+          (deleteIds?.length ?? 0) > 1
+            ? t("cloud.elizaAgentsTable.deleteAgentsTitle", {
+                count: deleteIds?.length,
+                defaultValue: "Delete {{count}} Agents",
+              })
+            : t("cloud.elizaAgentsTable.deleteAgentTitle", {
                 defaultValue: "Delete Agent",
-              })}
-            </AlertDialogTitle>
-            <AlertDialogDescription className="text-muted">
-              {deleteTargetBusy
-                ? t("cloud.elizaAgentsTable.deleteBusyDesc", {
-                    defaultValue:
-                      "This agent is still provisioning. Wait for the job to finish before deleting.",
-                  })
-                : t("cloud.elizaAgentsTable.deleteDesc", {
-                    defaultValue:
-                      "This will permanently delete the agent and stop any running container.",
-                  })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="border-border bg-transparent text-txt-strong hover:bg-bg-hover">
-              {t("cloud.elizaAgentsTable.cancel", { defaultValue: "Cancel" })}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() =>
-                deleteId && !deleteTargetBusy && handleDelete(deleteId)
-              }
-              disabled={isDeleting || deleteTargetBusy}
-              className="bg-destructive hover:bg-accent-hover text-accent-foreground disabled:opacity-50"
-            >
-              {isDeleting
-                ? t("cloud.elizaAgentsTable.deleting", {
-                    defaultValue: "Deleting…",
-                  })
-                : t("cloud.elizaAgentsTable.delete", {
-                    defaultValue: "Delete",
-                  })}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+              })
+        }
+        description={
+          deleteTargetBusy
+            ? t("cloud.elizaAgentsTable.deleteBusyDesc", {
+                defaultValue:
+                  "This agent is still provisioning. Wait for the job to finish before deleting.",
+              })
+            : (deleteIds?.length ?? 0) > 1
+              ? t("cloud.elizaAgentsTable.deleteManyDesc", {
+                  count: deleteIds?.length,
+                  defaultValue:
+                    "This will permanently delete {{count}} agents and stop their running containers.",
+                })
+              : t("cloud.elizaAgentsTable.deleteDesc", {
+                  defaultValue:
+                    "This will permanently delete the agent and stop any running container.",
+                })
+        }
+        cancelLabel={t("cloud.elizaAgentsTable.cancel", {
+          defaultValue: "Cancel",
+        })}
+        confirmLabel={
+          isDeleting
+            ? t("cloud.elizaAgentsTable.deleting", {
+                defaultValue: "Deleting…",
+              })
+            : t("cloud.elizaAgentsTable.delete", { defaultValue: "Delete" })
+        }
+        confirmDisabled={isDeleting || deleteTargetBusy}
+        onConfirm={() =>
+          deleteIds &&
+          deleteIds.length > 0 &&
+          !deleteTargetBusy &&
+          handleDelete(deleteIds)
+        }
+      />
     </TooltipProvider>
   );
 }

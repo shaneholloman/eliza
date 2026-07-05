@@ -11,6 +11,10 @@ const monorepoRoot = resolve(packageRoot, "../..");
 const uiSrc = resolve(packageRoot, "src");
 const sharedSrc = resolve(monorepoRoot, "packages/shared/src");
 const coreSrc = resolve(monorepoRoot, "packages/core/src");
+const importConversationsSrc = resolve(
+  monorepoRoot,
+  "packages/import-conversations/src",
+);
 const cloudSharedSrc = resolve(monorepoRoot, "packages/cloud/shared/src");
 const loggerSrc = resolve(monorepoRoot, "packages/logger/src");
 const tuiSrc = resolve(monorepoRoot, "packages/tui/src");
@@ -112,6 +116,14 @@ export default defineConfig({
       {
         find: /^@elizaos\/core\/(.+)$/,
         replacement: resolve(coreSrc, "$1"),
+      },
+      {
+        find: /^@elizaos\/import-conversations\/browser$/,
+        replacement: resolve(importConversationsSrc, "browser.ts"),
+      },
+      {
+        find: /^@elizaos\/import-conversations$/,
+        replacement: resolve(importConversationsSrc, "index.ts"),
       },
       {
         find: /^@elizaos\/app-core(?:\/browser|\/ui-compat)?$/,
@@ -277,6 +289,9 @@ export default defineConfig({
       "__tests__/**/*.test.ts",
       "src/**/*.test.ts",
       "src/**/*.test.tsx",
+      // Pure-logic unit tests for the story-gate audit scripts (e.g. the
+      // console/a11y baseline-allowlist ratchet) run in the standard suite.
+      "test/**/*.test.mjs",
     ],
     exclude: [
       "dist/**",

@@ -44,6 +44,7 @@ bun run --cwd packages/app test:e2e:walkthrough:live     # real backend + model
 ```bash
 bun run --cwd packages/app build:ios:local:sim           # rebuild from this tree FIRST
 bun run --cwd packages/app test:e2e:walkthrough:ios
+bun run --cwd packages/app test:e2e:ios:boot-gate        # strict boot/chat gate
 ```
 
 - **Prereqs (macOS only):** a booted simulator
@@ -51,24 +52,48 @@ bun run --cwd packages/app test:e2e:walkthrough:ios
   DerivedData. The runner refuses to capture a stale install (per the
   rebuild-before-capture rule).
 - **Produces:** `.github/issue-evidence/10198-walkthrough-ios-sim-*.png/.mov`
-  (single-shot `simctl io` capture of the running app). Drive the in-app journey
-  with `ios-onboarding-smoke.mjs` (onboarding) + `mobile-local-chat-smoke.mjs`
-  (chat round-trip) against a host agent.
+  (single-shot `simctl io` capture of the running app) plus
+  `reports/walkthrough/<runId>/device-matrix.json` with per-phase status for
+  `ios-onboarding-smoke.mjs` (onboarding), `mobile-local-chat-smoke.mjs` (chat
+  round-trip with `--ios-select-local --ios-full-bun-smoke`), and
+  `capture-ios-sim.mjs`.
 - **Skip reason (recorded automatically):** "not macOS", "no booted iOS
   simulator", or "no iOS simulator app build found in DerivedData".
 
 ### iOS physical device
 
 ```bash
-bun run --cwd packages/app build:ios:local:device
-bun run --cwd packages/app install:ios:sideload
-bun run --cwd packages/app test:e2e:walkthrough:device
+bun run --cwd packages/app ios:device:deploy                 # build + sign + stage App.app FIRST
+bun run --cwd packages/app test:e2e:walkthrough:device       # detects the tethered iPhone + captures
 ```
 
-- **Prereqs (macOS only):** a tethered, provisioned iPhone + the sideload
-  toolchain (`preflight:ios:sideload`).
-- **Skip reason (recorded automatically):** "iOS physical-device capture
-  requires a tethered, provisioned device; none detected on this host".
+- **Prereqs (macOS only):** a tethered, provisioned iPhone in devicectl state
+  `connected`, and the signed staged app at
+  `ios/build/device-deploy-stage/App.app` produced by `ios:device:deploy`
+  (rebuild-before-capture rule — the lane refuses to capture without it). Target
+  a specific device with `--ios-device <id>` or `ELIZA_IOS_DEVICE_ID` (matched on
+  the devicectl identifier, hardware UDID, or device name). Lane phones must
+  stay on power with Settings > Display & Brightness > Auto-Lock set to Never;
+  the device scripts preflight `devicectl device info lockState` and wait for an
+  unlock, but a mid-suite idle lock still invalidates the run and is reported
+  distinctly.
+- **Detection (real, not hardcoded):** the lane runs
+  `xcrun devicectl list devices`, picks a `connected`/`available` device
+  (honoring the requested id), then invokes the proven on-device capture
+  pipeline `ios-device-capture.mjs --platform device --device <id> --skip-build
+  --app-path <staged>` (boot + walkthrough XCUITest suites; WKWebView has no CDP,
+  so the in-app narrative parity runs through the committed
+  AppUITests/BootCaptureUITests harness).
+- **Produces:** an XCUITest attachment dir under
+  `ios/build/boot-capture/walkthrough-ios-device-<stamp>/` (screenshots + AX
+  snapshots), recorded as the lane's `outputDir` in `device-matrix.json`.
+- **Skip reason (recorded automatically, derived from the actual devicectl
+  probe):** "host is not darwin"; "devicectl unavailable: <error>"; "no paired
+  devices"; "no connected iOS device on this host (devicectl listing: …)"; the
+  requested device "not present"/"is not connected (state: …)"; or "connected,
+  but no signed staged app at … — run `ios:device:deploy` first". Unavailable is
+  a non-fatal `n/a`; a device that is present but whose capture breaks records a
+  fatal `error`.
 
 ### Android emulator
 

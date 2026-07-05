@@ -29,9 +29,14 @@ import {
   accountMetaFromSessionMetadata,
   type CodingAccountFailureKind,
   classifyAccountFailure,
-  getCodingAccountBridge,
+  hasHealthyPooledAccount,
   reportCodingAccountFailure,
 } from "./coding-account-selection.js";
+import {
+  readSessionRetryCount,
+  resolveStateLostRespawnCap,
+  SESSION_RETRY_METADATA_KEY,
+} from "./orchestrator-task-types.js";
 import {
   dispatchParentAgentDirective,
   extractParentAgentDirective,
@@ -671,12 +676,12 @@ export class SubAgentRouter extends Service {
     }
     const capRaw = readSetting(this.runtime, "ACPX_SUB_AGENT_ROUND_TRIP_CAP");
     const parsed = capRaw ? Number.parseInt(capRaw, 10) : NaN;
-    const slCapRaw = readSetting(this.runtime, "ACPX_STATE_LOST_RESPAWN_CAP");
-    const slParsed = slCapRaw ? Number.parseInt(slCapRaw, 10) : NaN;
+    // Resolve the state-lost respawn cap through the shared resolver so the
+    // router and the task service's terminal decision agree on the SAME
+    // effective cap even under an operator override (#14104).
     this.loopState = createRouterLoopState({
       roundTripCap: Number.isFinite(parsed) && parsed > 0 ? parsed : undefined,
-      stateLostRespawnCap:
-        Number.isFinite(slParsed) && slParsed > 0 ? slParsed : undefined,
+      stateLostRespawnCap: resolveStateLostRespawnCap(this.runtime),
     });
     // Service registration runs in parallel — when router.start() executes,
     // AcpService may not yet be registered with the runtime, so getService
@@ -815,6 +820,16 @@ export class SubAgentRouter extends Service {
 
     const origin = readOrigin(session);
     if (!origin) {
+      // No origin room means there is nothing to post — but a durable task
+      // created WITHOUT a chat room (cockpit "new session", bare POST
+      // /api/orchestrator/tasks) spawns exactly such a session:
+      // spawnAgentForTask stamps roomId from the task's optional room, which
+      // is undefined. Its completed app build must still land in the durable
+      // built-apps registry (#12036) — registration needs only the session
+      // and its verified URLs, never a room.
+      if (event === "task_complete") {
+        await this.registerRoomlessBuiltApps(session, data);
+      }
       this.log(
         "debug",
         "session has no origin metadata; skipping router post",
@@ -894,7 +909,7 @@ export class SubAgentRouter extends Service {
         // flapping stays bounded, and only fires while a healthy pooled
         // account remains — with the whole pool exhausted the honest failure
         // below reaches the user.
-        if (this.hasHealthyPooledAccount(session.agentType)) {
+        if (hasHealthyPooledAccount(session.agentType)) {
           const { state, decision } = routerLoopTransition(this.loopState, {
             type: "state_lost",
             lineageKey: respawnLineageKey(session, origin),
@@ -1581,6 +1596,56 @@ export class SubAgentRouter extends Service {
   }
 
   /**
+   * Built-app registration for a completion whose session has NO origin room
+   * (a durable task created without a chat room: cockpit "new session", bare
+   * POST /api/orchestrator/tasks). The normal registration sits after the
+   * readOrigin gate on the narration path, so these sessions never reached it
+   * and their deploys were fire-and-forget. Mirrors that path's verification:
+   * probe the URLs the completion claims and register only the live ones. The
+   * reference text falls back from `initialTask` to the bare `goal` —
+   * spawnAgentForTask stamps only the latter. Never throws: the registry is a
+   * side-record and must not break event handling.
+   */
+  private async registerRoomlessBuiltApps(
+    session: SessionInfo,
+    data: unknown,
+  ): Promise<void> {
+    try {
+      const response = pickPayloadString(data, "response");
+      if (!response) return;
+      const meta = session.metadata as Record<string, unknown> | undefined;
+      const referenceText =
+        typeof meta?.initialTask === "string"
+          ? meta.initialTask
+          : typeof meta?.goal === "string"
+            ? meta.goal
+            : undefined;
+      const verified = await annotateUnverifiedUrls(
+        normalizeUrlsInText(response),
+        (m) => this.log("debug", m),
+        referenceText,
+        pickStringSet(meta?.cachedStaleMissUrls),
+        this.runtime,
+        routeVerificationForSession(session),
+      );
+      if (verified.verifiedUrls.length === 0) return;
+      await registerBuiltAppsForCompletion(
+        this.runtime,
+        session,
+        verified.verifiedUrls,
+        (level, message, ctx) => this.log(level, message, ctx),
+      );
+    } catch (err) {
+      // error-policy:J7 side-record on the event path; a registration failure
+      // warns and must not break handling of the completion event.
+      this.log("warn", "room-less built-app registration failed", {
+        sessionId: session.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
    * Recover a session that reported `session_state_lost` by deterministically
    * spawning a fresh sub-agent inside the router — carrying the byte-identical
    * origin metadata and the original task — instead of re-injecting the error
@@ -1659,26 +1724,6 @@ export class SubAgentRouter extends Service {
   }
 
   /**
-   * Whether the account pool still has ≥1 healthy pooled account for this
-   * agent type — the gate for the in-router account failover. False when the
-   * bridge is absent (single-account host) or the pool is fully exhausted, in
-   * which case the honest failure must reach the user instead of a doomed
-   * respawn burning a lineage-budget slot.
-   */
-  private hasHealthyPooledAccount(agentType: string): boolean {
-    const bridge = getCodingAccountBridge();
-    if (!bridge) return false;
-    try {
-      const rows = bridge.describe()[agentType.toLowerCase()] ?? [];
-      return rows.some((row) => row.healthy > 0);
-    } catch {
-      // error-policy:J3 account-bridge probe failure → fail-safe "no healthy
-      // account"; declines failover so the task's honest failure reaches the user.
-      return false;
-    }
-  }
-
-  /**
    * Re-dispatch a sub-agent when its claimed URLs verify as unreachable —
    * an incomplete build (missing or empty files). Returns true if a retry
    * was spawned (the caller suppresses the parent post and lets the
@@ -1729,10 +1774,10 @@ export class SubAgentRouter extends Service {
     if (!Number.isFinite(maxRetries) || maxRetries <= 0) return false;
 
     const meta = (session.metadata ?? {}) as Record<string, unknown>;
-    const priorRetries =
-      typeof meta.buildVerifyRetryCount === "number"
-        ? meta.buildVerifyRetryCount
-        : 0;
+    // One typed read of the canonical retry counter (the router's respawn
+    // lineage and the durable OrchestratorTaskSession.retryCount share this
+    // field), rather than a bare untyped `meta.buildVerifyRetryCount`.
+    const priorRetries = readSessionRetryCount(meta);
     if (priorRetries >= maxRetries) {
       this.log(
         "info",
@@ -1801,7 +1846,7 @@ Do not report done until every referenced URL in the final page resolves without
         // retry counter so the lineage stays bounded.
         metadata: {
           ...sanitizeSuccessorMetadata(meta),
-          buildVerifyRetryCount: nextRetry,
+          [SESSION_RETRY_METADATA_KEY]: nextRetry,
           keepAliveAfterComplete: false,
           retryOfSessionId: session.id,
           ...(cachedStaleMissUrls.size > 0
@@ -2796,9 +2841,7 @@ function composeNarration(
   // pending work to the planner. Surface only the public URL(s) it claimed
   // (loopback dropped, verified downstream); a genuine failure is covered by
   // the separate build-incomplete report.
-  const retryCount = (session.metadata as Record<string, unknown> | undefined)
-    ?.buildVerifyRetryCount;
-  if (typeof retryCount === "number" && retryCount > 0) {
+  if (readSessionRetryCount(session.metadata) > 0) {
     const urls = collectVerifiableUrlCandidates(response).filter(
       (url) => !isLoopbackUrl(url),
     );

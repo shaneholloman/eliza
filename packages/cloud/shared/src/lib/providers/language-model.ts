@@ -1,6 +1,10 @@
 // Defines cloud shared language model behavior for backend service consumers.
 import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGatewayProvider, type GatewayProvider } from "@ai-sdk/gateway";
+import {
+  createGatewayProvider,
+  GatewayAuthenticationError,
+  type GatewayProvider,
+} from "@ai-sdk/gateway";
 import { createOpenAI } from "@ai-sdk/openai";
 import { APICallError, type LanguageModelMiddleware, RetryError, wrapLanguageModel } from "ai";
 import {
@@ -17,6 +21,64 @@ import { RETRYABLE_UPSTREAM_STATUSES } from "./failover";
 import { toBitRouterModelId } from "./model-id-translation";
 import { getProviderKey } from "./provider-env";
 import { hasAnyVastProviderConfigured, resolveVastEndpointConfig } from "./vast-endpoints";
+
+/**
+ * A model-resolution failure caused by this deployment's provider
+ * configuration (missing/placeholder provider key, unconfigured endpoint) —
+ * as opposed to a bad request or a transient upstream failure. The message
+ * intentionally names the missing env var for operators; API boundaries must
+ * classify with isProviderConfigurationError and return a clean client error
+ * instead of forwarding it (#13406 leaked "AI_GATEWAY_API_KEY" to callers).
+ */
+export class ProviderConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderConfigurationError";
+  }
+}
+
+/**
+ * The `@ai-sdk/gateway` error `name`s that mean "the gateway itself could not
+ * serve this model on this deployment" — a stale/invalid key, an unreachable or
+ * garbled gateway, an upstream 5xx, or a timeout. These are deployment-side
+ * infrastructure failures, not the caller's fault, so an API boundary must
+ * translate them to a clean model-not-available client error instead of leaking
+ * the raw SDK message (the auth variant embeds "... set the AI_GATEWAY_API_KEY
+ * environment variable ..." — #13406/#13960).
+ *
+ * Deliberately EXCLUDED: `GatewayInvalidRequestError` (400 — caller's bad
+ * request), `GatewayModelNotFoundError` (404), and `GatewayRateLimitError`
+ * (429). Those carry the caller-facing truth and are mapped to their real
+ * status by getRecoverableProviderErrorStatus, so folding them in here would
+ * mislabel a rate limit or a bad request as "model not available".
+ */
+const GATEWAY_INFRA_ERROR_NAMES = new Set([
+  "GatewayError",
+  "GatewayAuthenticationError",
+  "GatewayResponseError",
+  "GatewayInternalServerError",
+  "GatewayTimeoutError",
+]);
+
+/**
+ * True when an error means "this deployment has no working provider for the
+ * requested model": our own resolution throws, plus the Vercel AI Gateway SDK's
+ * infrastructure failures (stale key, unreachable/garbled gateway, upstream
+ * 5xx, timeout). Unwraps the AI SDK's RetryError to the last real error.
+ *
+ * Match is by `name`, not by the SDK's `isInstance` marker symbol: the marker
+ * is a module-local Symbol, so a duplicate `@ai-sdk/gateway` copy in the graph
+ * (or `generateText`'s re-wrap into a marker-less Error via
+ * ai/src/prompt/wrap-gateway-error.ts) defeats `isInstance` while the `name`
+ * survives. Name-matching is the only classification that holds across module
+ * boundaries and both the raw and wrapped error shapes.
+ */
+export function isProviderConfigurationError(error: unknown): boolean {
+  const unwrapped = RetryError.isInstance(error) ? error.lastError : error;
+  if (unwrapped instanceof ProviderConfigurationError) return true;
+  if (GatewayAuthenticationError.isInstance(unwrapped)) return true;
+  return unwrapped instanceof Error && GATEWAY_INFRA_ERROR_NAMES.has(unwrapped.name);
+}
 
 let groqClient: ReturnType<typeof createOpenAI> | null = null;
 let vastClients = new Map<string, ReturnType<typeof createOpenAI>>();
@@ -35,7 +97,7 @@ function getGroqClient() {
   if (!groqClient) {
     const apiKey = getProviderKey("GROQ_API_KEY");
     if (!apiKey) {
-      throw new Error("GROQ_API_KEY environment variable is required");
+      throw new ProviderConfigurationError("GROQ_API_KEY environment variable is required");
     }
 
     groqClient = createOpenAI({
@@ -50,7 +112,7 @@ function getGroqClient() {
 function getVastClient(model: string) {
   const config = resolveVastEndpointConfig(model);
   if (!config) {
-    throw new Error(`Vast endpoint is not configured for ${model}`);
+    throw new ProviderConfigurationError(`Vast endpoint is not configured for ${model}`);
   }
 
   const cacheKey = `${config.apiKey}|${config.baseUrl}`;
@@ -68,7 +130,7 @@ function getVastClient(model: string) {
 function getOpenAIClient() {
   const apiKey = getProviderKey("OPENAI_API_KEY");
   if (!apiKey) {
-    throw new Error("OPENAI_API_KEY environment variable is required");
+    throw new ProviderConfigurationError("OPENAI_API_KEY environment variable is required");
   }
 
   const baseURL = getProviderKey("OPENAI_BASE_URL") ?? undefined;
@@ -90,7 +152,7 @@ function getCerebrasClient() {
   if (!cerebrasClient) {
     const apiKey = getProviderKey("CEREBRAS_API_KEY");
     if (!apiKey) {
-      throw new Error("CEREBRAS_API_KEY environment variable is required");
+      throw new ProviderConfigurationError("CEREBRAS_API_KEY environment variable is required");
     }
 
     cerebrasClient = createOpenAI({
@@ -126,7 +188,7 @@ function getOpenRouterClient() {
   if (!openRouterClient) {
     const apiKey = getOpenRouterApiKey();
     if (!apiKey) {
-      throw new Error("OPENROUTER_API_KEY environment variable is required");
+      throw new ProviderConfigurationError("OPENROUTER_API_KEY environment variable is required");
     }
 
     openRouterClient = createOpenAI({
@@ -156,7 +218,7 @@ function getAnthropicClient() {
   if (!anthropicClient) {
     const apiKey = getProviderKey("ANTHROPIC_API_KEY");
     if (!apiKey) {
-      throw new Error("ANTHROPIC_API_KEY environment variable is required");
+      throw new ProviderConfigurationError("ANTHROPIC_API_KEY environment variable is required");
     }
 
     anthropicClient = createAnthropic({ apiKey });
@@ -213,7 +275,7 @@ function getVercelAIGatewayClient() {
   if (!vercelAIGatewayClient) {
     const apiKey = getVercelAIGatewayApiKey();
     if (!apiKey) {
-      throw new Error("AI_GATEWAY_API_KEY environment variable is required");
+      throw new ProviderConfigurationError("AI_GATEWAY_API_KEY environment variable is required");
     }
 
     vercelAIGatewayClient = createGatewayProvider({
@@ -498,7 +560,7 @@ export function getLanguageModel(model: string, credential?: PooledLanguageModel
     if (getVercelAIGatewayApiKey()) {
       return getVercelAIGatewayClient().languageModel(model as never);
     }
-    throw new Error("OPENROUTER_API_KEY is required for this model");
+    throw new ProviderConfigurationError("OPENROUTER_API_KEY is required for this model");
   }
 
   // Native, DIRECT providers (no hop) when we hold the key, with OpenRouter as
@@ -528,7 +590,7 @@ export function getLanguageModel(model: string, credential?: PooledLanguageModel
     return getOpenRouterLanguageModel(model);
   }
 
-  throw new Error(
+  throw new ProviderConfigurationError(
     "AI language model provider is not configured (set a native provider key or OPENROUTER_API_KEY)",
   );
 }
@@ -546,7 +608,7 @@ export function getTextEmbeddingModel(model: string) {
     return getVercelAIGatewayClient().embeddingModel(model as never);
   }
 
-  throw new Error("AI text embedding provider is not configured");
+  throw new ProviderConfigurationError("AI text embedding provider is not configured");
 }
 
 export function getAiProviderConfigurationError(): string {

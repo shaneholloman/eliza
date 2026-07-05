@@ -41,6 +41,7 @@ import { OPTIONAL_PLUGIN_IMPORTERS } from "./optional-plugin-imports.generated.t
 import {
   OPTIONAL_STATIC_PLUGIN_OVERRIDES,
   OPTIONAL_STATIC_PLUGIN_REGISTRATIONS,
+  optionalPluginImportSpecifier,
 } from "./optional-plugins.ts";
 import {
   isWorkspacePluginSourceFallbackAllowed,
@@ -61,6 +62,7 @@ export {
   PROVIDER_PLUGIN_MAP,
 } from "./plugin-collector.ts";
 
+import { PROVIDER_PLUGIN_MAP } from "./plugin-collector.ts";
 import { STATIC_ELIZA_PLUGIN_LOADERS } from "./plugin-types.ts";
 
 export {
@@ -124,6 +126,7 @@ import {
   isElizaSettingsDebugEnabled,
   isMobilePlatform,
   migrateLegacyRuntimeConfig,
+  readAliasedEnv,
   resolveApiExposePort,
   resolveDeploymentTargetInConfig,
   resolveDesktopApiPort,
@@ -312,9 +315,14 @@ async function loadRequiredPluginSql(): Promise<
 function resolveWorkspacePluginSourceEntry(packageName: string): string | null {
   if (!packageName.startsWith("@elizaos/plugin-")) return null;
   const shortName = packageName.slice("@elizaos/".length);
+  // Runtime-app plugins keep their Plugin object at ./plugin (src/plugin.ts),
+  // not the root barrel — mirror the importSubpath override here so the
+  // workspace-source fallback loads the same module the literal import does.
+  const subpath = OPTIONAL_STATIC_PLUGIN_OVERRIDES[packageName]?.importSubpath;
+  const entryFile = subpath ? `${subpath.slice(2)}.ts` : "index.ts";
   let dir = path.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 14; depth += 1) {
-    const candidate = path.join(dir, "plugins", shortName, "src", "index.ts");
+    const candidate = path.join(dir, "plugins", shortName, "src", entryFile);
     if (existsSync(candidate)) return candidate;
     const parent = path.dirname(dir);
     if (parent === dir) break;
@@ -333,7 +341,7 @@ const loadOptionalPlugin = async (packageName: string): Promise<unknown> => {
   try {
     const importer = OPTIONAL_PLUGIN_IMPORTERS[packageName];
     if (importer) return await importer();
-    return await import(packageName);
+    return await import(optionalPluginImportSpecifier(packageName));
   } catch {
     if (isWorkspacePluginSourceFallbackAllowed()) {
       const sourceEntry = resolveWorkspacePluginSourceEntry(packageName);
@@ -620,7 +628,7 @@ async function ensureStaticPluginsRegisteredByName(
   );
   if (missing.length > 0) {
     logger.debug(
-      `[boot] no static registration for preferred provider plugin(s): ${missing.join(", ")}`,
+      `[boot] no static registration for configured provider plugin(s): ${missing.join(", ")}`,
     );
   }
 
@@ -636,12 +644,12 @@ async function ensureStaticPluginsRegisteredByName(
         if (mod) {
           STATIC_ELIZA_PLUGINS[registryName] = mod;
           logger.info(
-            `[boot] preferred provider plugin ${registration.packageName} loaded before runtime initialization`,
+            `[boot] configured provider plugin ${registration.packageName} loaded before runtime initialization`,
           );
         }
       } catch (err) {
         logger.warn(
-          `[boot] preferred provider plugin ${registration.packageName} unavailable before runtime initialization: ${formatError(err)}`,
+          `[boot] configured provider plugin ${registration.packageName} unavailable before runtime initialization: ${formatError(err)}`,
         );
       }
     }),
@@ -2044,7 +2052,7 @@ export async function autoFetchCloudGithubToken(
     process.env.ELIZAOS_CLOUD_BASE_URL?.trim() || "https://api.elizacloud.ai";
   if (!cloudApiKey || !agentId) return;
 
-  const managedNs = process.env.ELIZA_CLOUD_MANAGED_AGENTS_API_SEGMENT?.trim();
+  const managedNs = readAliasedEnv("ELIZA_CLOUD_MANAGED_AGENTS_API_SEGMENT");
   if (!managedNs) return;
 
   try {
@@ -3675,7 +3683,7 @@ export async function startEliza(
   //     in the slim image, and the second PGlite worker has been observed to
   //     hang vault-pglite init silently — blocking the HTTP listen and
   //     tripping the 180s health check on every fresh provision.
-  const isCloudProvisioned = process.env.ELIZA_CLOUD_PROVISIONED === "1";
+  const isCloudProvisioned = readAliasedEnv("ELIZA_CLOUD_PROVISIONED") === "1";
   if (!isMobilePlatform() && !isCloudProvisioned) {
     // pre-resolve-setup's two serial cost centers: the OS-keychain hydrate and
     // the vault PGlite cold-start. Timed separately and surfaced below so the
@@ -3861,7 +3869,7 @@ export async function startEliza(
   // injected by the daemon as env vars, so there's nothing to multiplex. The
   // pool implementation is supplied by the host through the injected agent host
   // bridge (see ./host-bridge.ts) — no app-core import, no boot-time cycle.
-  if (process.env.ELIZA_CLOUD_PROVISIONED !== "1")
+  if (readAliasedEnv("ELIZA_CLOUD_PROVISIONED") !== "1")
     try {
       const accountPool = await importAppCoreRuntime();
       accountPool.getDefaultAccountPool();
@@ -4018,7 +4026,7 @@ export async function startEliza(
   // image; see the boot-time vault hydration block earlier in this function.
   if (
     process.env.ELIZA_DISABLE_VAULT_PROFILE_RESOLVER !== "1" &&
-    process.env.ELIZA_CLOUD_PROVISIONED !== "1"
+    readAliasedEnv("ELIZA_CLOUD_PROVISIONED") !== "1"
   ) {
     try {
       const { sharedVault } = await importAppCoreRuntime();
@@ -4060,10 +4068,25 @@ export async function startEliza(
   const blockDeferredPluginImports = shouldBlockDeferredPluginImports();
   const initialPluginResolutionPhase: PluginResolutionPhase =
     blockDeferredPluginImports ? "all" : "blocking";
-  const initialForceIncludePluginNames =
-    !blockDeferredPluginImports && preferredProviderPluginName
-      ? [preferredProviderPluginName]
-      : [];
+  // Model-provider plugins load in the BLOCKING phase (see the phase filter in
+  // resolvePlugins): a configured provider must register its TEXT_GENERATION
+  // handler before the runtime reports ready, or /api/status flips `running`
+  // with `canRespond:false` and the warming gate releases chat turns into
+  // "no LLM provider configured" replies. Bundled runtimes (mobile: no
+  // node_modules) can only resolve statically registered modules, so import
+  // the providers whose auto-enable env key is present up front — the same
+  // modules the deferred static wave would have imported moments later.
+  const configuredProviderPluginNames = Object.entries(PROVIDER_PLUGIN_MAP)
+    .filter(([envKey]) => Boolean(process.env[envKey]?.trim()))
+    .map(([, pluginName]) => pluginName);
+  const initialForceIncludePluginNames = !blockDeferredPluginImports
+    ? [
+        ...new Set([
+          ...(preferredProviderPluginName ? [preferredProviderPluginName] : []),
+          ...configuredProviderPluginNames,
+        ]),
+      ]
+    : [];
   await ensureStaticPluginsRegisteredByName(initialForceIncludePluginNames);
   const resolvedPlugins = await resolvePlugins(config, {
     quiet: preOnboarding,
@@ -4996,7 +5019,7 @@ export async function startEliza(
   > => {
     if (
       process.env.ELIZA_DISABLE_AGENT_WALLET_BOOTSTRAP === "1" ||
-      process.env.ELIZA_CLOUD_PROVISIONED === "1"
+      readAliasedEnv("ELIZA_CLOUD_PROVISIONED") === "1"
     ) {
       return Promise.resolve([]);
     }
@@ -5432,7 +5455,7 @@ export async function startEliza(
     // the renderer hit "Failed to fetch". Prefer the desktop API port
     // resolver when ELIZA_API_PORT is set; otherwise fall back to the
     // server-only resolver so CLI-mode defaults (2138) stay untouched.
-    const apiPort = process.env.ELIZA_API_PORT
+    const apiPort = readAliasedEnv("ELIZA_API_PORT")
       ? resolveDesktopApiPort(process.env)
       : resolveServerOnlyPort(process.env);
     // Local-agent IPC mode (Android stdio bridge / Capacitor): the WebView

@@ -3,11 +3,10 @@
  * DELETE /api/auth/steward-session — clear steward cookies (logout).
  */
 
-import {
-  STEWARD_AUTHED_COOKIE,
-  type StewardSessionErrorCode,
-  type StewardSessionRequest,
-  type StewardSessionResponse,
+import type {
+  StewardSessionErrorCode,
+  StewardSessionRequest,
+  StewardSessionResponse,
 } from "@elizaos/shared/steward-session-client";
 import { Hono } from "hono";
 import { deleteCookie, setCookie } from "hono/cookie";
@@ -17,6 +16,11 @@ import {
   type StewardVerifyEnv,
   verifyStewardTokenCached,
 } from "@/lib/auth/steward-client";
+import {
+  canMutateLegacyStewardCookies,
+  LEGACY_STEWARD_COOKIES,
+  stewardCookieNames,
+} from "@/lib/auth/steward-cookies";
 import {
   getIpKey,
   RateLimitPresets,
@@ -31,8 +35,6 @@ function stewardSecretConfigured(env: StewardVerifyEnv): boolean {
 }
 
 const STEWARD_REFRESH_COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
-const STEWARD_TOKEN_COOKIE = "steward-token";
-const STEWARD_REFRESH_TOKEN_COOKIE = "steward-refresh-token";
 
 /**
  * Origins permitted to set / clear Steward session cookies. Anything else
@@ -252,7 +254,9 @@ app.post("/", async (c) => {
     const secure = c.env.NODE_ENV === "production";
     const domain = cookieDomainForHost(c.req.header("host"));
 
-    setCookie(c, STEWARD_TOKEN_COOKIE, token, {
+    const cookieNames = stewardCookieNames(c.env.ENVIRONMENT);
+
+    setCookie(c, cookieNames.token, token, {
       httpOnly: true,
       secure,
       sameSite: "Lax",
@@ -262,7 +266,7 @@ app.post("/", async (c) => {
     });
 
     if (typeof refreshToken === "string" && refreshToken.length > 0) {
-      setCookie(c, STEWARD_REFRESH_TOKEN_COOKIE, refreshToken, {
+      setCookie(c, cookieNames.refreshToken, refreshToken, {
         httpOnly: true,
         secure,
         sameSite: "Lax",
@@ -272,7 +276,7 @@ app.post("/", async (c) => {
       });
     }
 
-    setCookie(c, STEWARD_AUTHED_COOKIE, "1", {
+    setCookie(c, cookieNames.authed, "1", {
       httpOnly: false,
       secure,
       sameSite: "Lax",
@@ -330,9 +334,19 @@ app.delete("/", (c) => {
   }
   const domain = cookieDomainForHost(c.req.header("host"));
   const opts = domain ? { path: "/", domain } : { path: "/" };
-  deleteCookie(c, STEWARD_TOKEN_COOKIE, opts);
-  deleteCookie(c, STEWARD_REFRESH_TOKEN_COOKIE, opts);
-  deleteCookie(c, STEWARD_AUTHED_COOKIE, opts);
+  // Non-production must not clear the unsuffixed legacy names: on the shared
+  // parent domain those names are production's live cookies. Production/unset
+  // still owns and clears them; non-production clears only its suffixed names
+  // and lets the bounded legacy read fallback expire naturally (#13728).
+  const names = stewardCookieNames(c.env.ENVIRONMENT);
+  deleteCookie(c, names.token, opts);
+  deleteCookie(c, names.refreshToken, opts);
+  deleteCookie(c, names.authed, opts);
+  if (canMutateLegacyStewardCookies(c.env.ENVIRONMENT)) {
+    deleteCookie(c, LEGACY_STEWARD_COOKIES.token, opts);
+    deleteCookie(c, LEGACY_STEWARD_COOKIES.refreshToken, opts);
+    deleteCookie(c, LEGACY_STEWARD_COOKIES.authed, opts);
+  }
   logStewardAuth("deleted", null);
   return c.json({ ok: true });
 });

@@ -7,6 +7,7 @@ import type { RouteHandlerContext } from "@elizaos/core";
 import { describe, expect, it } from "vitest";
 import { MeetingService } from "../service.js";
 import {
+  FakeMeetingBillingSession,
   makeFakeRuntime,
   ScriptedAdapter,
   scriptedDeps,
@@ -25,10 +26,10 @@ function route(method: string, path: string) {
 }
 
 /** Real MeetingService (scripted adapter/pipeline) behind a real runtime stub. */
-function makeHarness() {
+function makeHarness(billingSessions: FakeMeetingBillingSession[] = []) {
   const fake = makeFakeRuntime();
   const adapter = new ScriptedAdapter("google_meet");
-  const { deps } = scriptedDeps([adapter]);
+  const { deps } = scriptedDeps([adapter], billingSessions);
   const service = new MeetingService(fake.runtime, deps);
   const services = new Map<string, unknown>([["meetings", service]]);
   const baseGetService = fake.runtime.getService.bind(fake.runtime);
@@ -83,6 +84,38 @@ describe("/api/meetings routes", () => {
       ctx({ body: { meetingUrl: "https://zoom.us/j/1234567890" } }),
     );
     expect(zoom.status).toBe(422);
+  });
+
+  it("POST rejects invalid duration caps before launching", async () => {
+    const { fake, ctx, adapter } = makeHarness();
+    fake.settings.ELIZA_MEETINGS_MAX_DURATION_MS = "1000";
+    const post = route("POST", "/api/meetings");
+
+    const overCap = await post(
+      ctx({ body: { meetingUrl: MEET_URL, maxDurationMs: 1001 } }),
+    );
+
+    expect(overCap.status).toBe(400);
+    expect((overCap.body as { code: string }).code).toBe(
+      "invalid_duration_cap",
+    );
+    expect(adapter.session).toBeNull();
+  });
+
+  it("POST maps insufficient initial meeting credits to 402 and does not launch", async () => {
+    const billing = new FakeMeetingBillingSession();
+    billing.initialReserveError = Object.assign(
+      new Error("not enough credits to start meeting transcription"),
+      { code: "insufficient_credits" },
+    );
+    const { ctx, adapter } = makeHarness([billing]);
+    const post = route("POST", "/api/meetings");
+
+    const result = await post(ctx({ body: { meetingUrl: MEET_URL } }));
+
+    expect(result.status).toBe(402);
+    expect((result.body as { code: string }).code).toBe("insufficient_credits");
+    expect(adapter.session).toBeNull();
   });
 
   it("GET lists all and ?active=1 filters; GET/:id and DELETE/:id round-trip", async () => {

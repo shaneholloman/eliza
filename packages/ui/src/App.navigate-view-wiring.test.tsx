@@ -53,15 +53,18 @@ const dynamicViewLoaderMock = vi.hoisted(() => ({
   render: vi.fn(
     ({
       bundleUrl,
+      surface,
       viewId,
       viewType,
     }: {
       bundleUrl: string;
+      surface?: { capabilities?: string[] };
       viewId: string;
       viewType?: string;
     }) => (
       <div
         data-bundle-url={bundleUrl}
+        data-surface-capabilities={surface?.capabilities?.join(",") ?? ""}
         data-testid="dynamic-view-loader"
         data-view-id={viewId}
         data-view-type={viewType ?? ""}
@@ -106,6 +109,11 @@ const shopifyView = {
   viewType: "gui" as const,
 };
 
+const shopifyAgentSurfaceView = {
+  ...shopifyView,
+  surface: { capabilities: ["agent-surface"] },
+};
+
 const calendarView = {
   id: "calendar",
   label: "Calendar",
@@ -147,6 +155,20 @@ const mockAvailableViews = [
   documentsView,
 ];
 
+function resetMockAvailableViews() {
+  mockAvailableViews.splice(
+    0,
+    mockAvailableViews.length,
+    remoteLedgerView,
+    viewsManagerView,
+    viewsManagerTuiView,
+    shopifyView,
+    calendarView,
+    sharedCanvasView,
+    documentsView,
+  );
+}
+
 vi.mock("@capacitor/keyboard", () => ({
   Keyboard: { setScroll: vi.fn(async () => undefined) },
 }));
@@ -186,6 +208,9 @@ vi.mock("./hooks/useAuthStatus", () => ({
     state: { phase: "authenticated" },
     refetch: vi.fn(),
   }),
+  // Home widgets gate their loaders on this (#11084); the mounted App renders
+  // them, so the mock must export it alongside useAuthStatus.
+  useIsAuthenticated: () => true,
 }));
 
 vi.mock("./hooks/useActivityEvents", () => ({
@@ -378,12 +403,17 @@ function navigateView(detail: Record<string, unknown>) {
 describe("App navigate-view event wiring", () => {
   beforeEach(() => {
     window.history.replaceState(null, "", "/?shellMode=chat-overlay");
+    // The post-onboarding permission-priming modal (#12331) arms on a mounted
+    // App with first-run complete and covers the surfaces under test — mark it
+    // already shown.
+    window.localStorage.setItem("eliza:permissions-primed", "1");
     setBootConfig(DEFAULT_BOOT_CONFIG);
     Reflect.deleteProperty(window, "__ELIZAOS_API_BASE__");
     Reflect.deleteProperty(window, "__ELIZA_API_TOKEN__");
     Reflect.deleteProperty(window, "__ELIZAOS_API_TOKEN__");
     appState.tab = "chat";
     desktopTabsState.tabs = [];
+    resetMockAvailableViews();
     appState.setTab.mockClear();
     desktopTabsMock.openTab.mockClear();
     desktopTabsMock.closeTab.mockClear();
@@ -590,6 +620,9 @@ describe("App navigate-view event wiring", () => {
 
     const { getAllByTestId, getByTestId } = render(<App />);
 
+    const splitViews = [shopifyAgentSurfaceView, calendarView];
+    mockAvailableViews.splice(0, mockAvailableViews.length, ...splitViews);
+
     navigateView({
       action: "split-view",
       viewId: "shopify",
@@ -607,9 +640,16 @@ describe("App navigate-view event wiring", () => {
     expect(
       loaders.map((loader) => loader.getAttribute("data-view-id")),
     ).toEqual(["shopify", "calendar"]);
-    expect(desktopTabsMock.openTab).toHaveBeenCalledWith(shopifyView, {
-      pinned: false,
-    });
+    expect(loaders[0]?.getAttribute("data-surface-capabilities")).toBe(
+      "agent-surface",
+    );
+    expect(loaders[1]?.getAttribute("data-surface-capabilities")).toBe("");
+    expect(desktopTabsMock.openTab).toHaveBeenCalledWith(
+      shopifyAgentSurfaceView,
+      {
+        pinned: false,
+      },
+    );
     expect(desktopTabsMock.openTab).toHaveBeenCalledWith(calendarView, {
       pinned: false,
     });
