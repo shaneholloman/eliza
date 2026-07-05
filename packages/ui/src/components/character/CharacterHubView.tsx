@@ -715,7 +715,6 @@ export function CharacterHubView({
       return (
         <ShellViewAgentSurface viewId="documents">
           <DocumentsView
-            embedded
             fileInputId="character-hub-documents-upload"
             onDocumentsChange={handleDocumentsChange}
             onSelectedDocumentIdChange={setSelectedDocumentId}
