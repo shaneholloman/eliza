@@ -1093,7 +1093,7 @@ describe("AcpService", () => {
     const priorRecording = process.env.ELIZA_TRAJECTORY_RECORDING;
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "acp-stdout-"));
     process.env.ELIZA_TRAJECTORY_DIR = tmpDir;
-    delete process.env.ELIZA_TRAJECTORY_RECORDING;
+    process.env.ELIZA_TRAJECTORY_RECORDING = "1";
     try {
       const create = nextProc();
       const service = new AcpService(runtime());
