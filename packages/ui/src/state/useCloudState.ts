@@ -1034,6 +1034,20 @@ export function useCloudState({
   );
 
   const handleCloudSignOut = useCallback(async (): Promise<void> => {
+    // On a backend-backed session (local app-core / agent runtime) the Cloud
+    // account is also persisted server-side and re-reported by
+    // /api/cloud/status. Clearing only the renderer/Steward token there leaves
+    // the backend connected, so a reload or fresh poll would resurface the same
+    // account. Delegate to the real disconnect path (which clears the server
+    // session) unless the runtime is locked. The account-only clear below is
+    // reserved for the locked mobile runtime, where handleCloudDisconnect
+    // refuses (Cloud is required in cloud mode) and only the account session
+    // can be dropped.
+    if (!(disconnectLocked || isElizaCloudRuntimeLocked())) {
+      await handleCloudDisconnect({ skipConfirmation: true });
+      return;
+    }
+
     elizaCloudDisconnectInFlightRef.current = true;
     setElizaCloudDisconnecting(true);
 
@@ -1065,7 +1079,12 @@ export function useCloudState({
       setElizaCloudDisconnecting(false);
       void pollCloudCredits();
     }
-  }, [pollCloudCredits, setActionNotice]);
+  }, [
+    disconnectLocked,
+    handleCloudDisconnect,
+    pollCloudCredits,
+    setActionNotice,
+  ]);
 
   // ── Effects ────────────────────────────────────────────────────────
 
