@@ -92,6 +92,11 @@ function jobNeeds(text, jobId) {
   for (let i = header + 1; i < lines.length; i += 1) {
     const line = lines[i];
     if (/^ {2}\S/.test(line)) break; // next top-level job
+    const inlineNeeds = line.match(/^ {4}needs:\s*(\S+)\s*$/);
+    if (inlineNeeds) {
+      needs.add(inlineNeeds[1]);
+      continue;
+    }
     if (/^ {4}needs:\s*$/.test(line)) {
       inNeeds = true;
       continue;
@@ -196,6 +201,30 @@ function checkWorkflowText(fileName, text, problems) {
       }
     }
 
+    const changesNeeds = jobNeeds(text, "changes");
+    const changes = jobBody(text, "changes");
+    if (!changesNeeds?.has("stale-base-preflight")) {
+      problems.push(
+        "test.yml: 'changes' must need 'stale-base-preflight' so stale PRs fail before test fanout",
+      );
+    }
+    if (changes === null) {
+      problems.push("test.yml: no 'changes' job found");
+    } else {
+      if (
+        !/needs\.stale-base-preflight\.result\s*==\s*'success'/.test(changes)
+      ) {
+        problems.push(
+          "test.yml: 'changes' must require stale-base-preflight success for pull_request fanout",
+        );
+      }
+      if (!/github\.event_name\s*!=\s*'pull_request'/.test(changes)) {
+        problems.push(
+          "test.yml: 'changes' must continue for non-PR events where stale-base-preflight is skipped",
+        );
+      }
+    }
+
     const gate = jobBody(text, "merge-quality-gate");
     if (gate === null) {
       problems.push("test.yml: no 'merge-quality-gate' job found");
@@ -258,6 +287,7 @@ function selfTest() {
   changes:
     name: Classify changed paths
     needs: stale-base-preflight
+    if: always() && (github.event_name != 'pull_request' || needs.stale-base-preflight.result == 'success')
     runs-on: \${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 10
   server-tests:
@@ -323,6 +353,21 @@ function selfTest() {
     {
       name: "preflight not PR-only",
       text: good.replace("if: github.event_name == 'pull_request'", ""),
+    },
+    {
+      name: "changes missing preflight need",
+      text: good.replace("    needs: stale-base-preflight\n", ""),
+    },
+    {
+      name: "changes missing preflight success gate",
+      text: good.replace(
+        " || needs.stale-base-preflight.result == 'success'",
+        "",
+      ),
+    },
+    {
+      name: "changes missing non-PR continuation",
+      text: good.replace("github.event_name != 'pull_request' || ", ""),
     },
     {
       name: "gate missing typecheck",
