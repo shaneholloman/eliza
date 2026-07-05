@@ -200,6 +200,16 @@ export function isOwnedScratchDir(workdir: string): boolean {
   );
 }
 const ACP_SCRATCH_DIR_PREFIX = "task-";
+// Every scratch dir this service creates is `task-<randomUUID()>` (spawnSession
+// is computeSessionWorkdir's only production caller), so destructive reclaim
+// matches the full UUID shape rather than the bare prefix: workspace roots
+// double as scratch roots above, and a human repo named `task-master` or
+// `task-runner` sitting under one must never look reclaimable (#13895).
+const ACP_SCRATCH_DIR_NAME_RE =
+  /^task-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function isAcpScratchDirName(name: string): boolean {
+  return ACP_SCRATCH_DIR_NAME_RE.test(name);
+}
 const ACP_METADATA_ISOLATED_WORKDIR = "isolatedWorkdir";
 const ACP_METADATA_WORKDIR_ROOT = "workdirRoot";
 const MAX_CAPTURED_TOOL_OUTPUT_CHARS = 12_000;
@@ -737,7 +747,16 @@ export class AcpService extends Service {
     const now = Date.now();
     let reclaimed = 0;
     let kept = 0;
+    const configuredAcpRoot = this.setting("ELIZA_ACP_WORKSPACE_ROOT")?.trim();
     for (const root of this.configuredScratchRoots()) {
+      // Only ACP-exclusive scratch roots are wholly owned by this service.
+      // Coding/workspace roots can contain user projects, so an untracked
+      // directory there is never orphaned ACP work by name alone.
+      const isAcpOwnedRoot =
+        resolve(root) === resolve(DEFAULT_WORKDIR_ROOT) ||
+        (configuredAcpRoot
+          ? resolve(root) === resolve(configuredAcpRoot)
+          : false);
       let entries: string[];
       try {
         entries = await readdir(root);
@@ -746,9 +765,7 @@ export class AcpService extends Service {
         // explicit zero-work result, not a masked read failure.
         continue;
       }
-      const taskDirs = entries.filter((name) =>
-        name.startsWith(ACP_SCRATCH_DIR_PREFIX),
-      );
+      const taskDirs = entries.filter((name) => isAcpScratchDirName(name));
       await Promise.allSettled(
         taskDirs.map(async (name) => {
           const path = join(root, name);
@@ -759,10 +776,22 @@ export class AcpService extends Service {
             kept++;
             return;
           }
+          // A terminal session that did NOT own an isolated scratch dir ran
+          // inside a directory handed to it (explicit route workdir, opt-out,
+          // self-checkout) — never reclaimable here, even when the dir name
+          // happens to match the scratch shape (#13895).
+          if (session && !this.sessionOwnsIsolatedWorkdir(session)) {
+            kept++;
+            return;
+          }
           // No owning session in THIS store: the dir may belong to a co-tenant
-          // AcpService sharing this tmp root, so gate removal on age. A dir whose
-          // session is terminal here is unambiguously ours → reclaim regardless.
+          // AcpService sharing the ACP-owned tmp root, so gate removal on age.
+          // Under user-configured roots, UUID shape is still not ownership.
           if (!session) {
+            if (!isAcpOwnedRoot) {
+              kept++;
+              return;
+            }
             try {
               const st = await stat(path);
               if (now - st.mtimeMs <= maxAgeMs) {
