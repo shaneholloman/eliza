@@ -7,10 +7,10 @@
  * map, and NEVER touches the globalThis bridges (those are single-tenant
  * self-host plumbing).
  *
- * The AccountPool class is loaded lazily from @elizaos/app-core/account-pool
- * and every public method is strict-fallback: any failure (module load, DB,
- * decrypt) returns null / no-ops so callers keep today's platform-env
- * behavior. Pooled keys are an additive layer, never a new failure mode.
+ * The pool implementation is local to cloud-shared and every public method is
+ * strict-fallback: any failure (DB, decrypt, provider probe) returns null /
+ * no-ops so callers keep today's platform-env behavior. Pooled keys are an
+ * additive layer, never a new failure mode.
  *
  * Keep-alive: a low-frequency sweep over ACTIVE orgs (orgs currently in the
  * registry) that (a) re-probes flagged credentials whose cool-off has passed
@@ -26,7 +26,8 @@
 import { pooledCredentialsRepository } from "../../../db/repositories/pooled-credentials";
 import { logger } from "../../utils/logger";
 import { secretsService } from "../secrets/secrets";
-import type { AccountPool, AccountPoolConstructor, Strategy } from "./account-pool-contract";
+import { TeamCredentialAccountPool } from "./account-pool";
+import type { AccountPool, Strategy } from "./account-pool-contract";
 import { DrizzleAccountPoolDeps } from "./pool-deps";
 import { probePooledApiKey } from "./probe";
 import {
@@ -41,7 +42,6 @@ const KEEP_ALIVE_INTERVAL_MS = 5 * 60_000;
 const KEEP_ALIVE_PROBES_PER_SWEEP = 8;
 /** Healthy credentials get re-verified when older than this. */
 const STALE_OK_REPROBE_MS = 6 * 60 * 60_000;
-const ACCOUNT_POOL_MODULE = "@elizaos/app-core/account-pool";
 
 interface OrgPoolEntry {
   pool: AccountPool;
@@ -93,12 +93,9 @@ export class TeamPoolRegistry {
     try {
       let entry = this.pools.get(organizationId);
       if (!entry) {
-        const { AccountPool: AccountPoolClass } = (await import(ACCOUNT_POOL_MODULE)) as {
-          AccountPool: AccountPoolConstructor;
-        };
         const deps = new DrizzleAccountPoolDeps(organizationId);
         entry = {
-          pool: new AccountPoolClass(deps),
+          pool: new TeamCredentialAccountPool(deps),
           deps,
           lastAccessAt: Date.now(),
         };

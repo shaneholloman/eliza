@@ -1,8 +1,7 @@
 /**
- * Structural contract consumed by the cloud team-credential pool. The concrete
- * `AccountPool` implementation lives in app-core for self-hosted runtime
- * selection, but cloud-shared only needs this dependency-injected surface so it
- * can keep the app-core package optional and avoid a package dependency cycle.
+ * Structural contract consumed by the cloud team-credential pool. The cloud
+ * implementation keeps selection metadata dependency-injected so the same pool
+ * logic can run over Drizzle rows without coupling to self-host runtime state.
  */
 import type { LinkedAccountConfig } from "@elizaos/contracts";
 
@@ -40,8 +39,4 @@ export interface AccountPool {
     opts?: { providerId?: PoolProviderId },
   ): Promise<void>;
   reprobeFlagged(): Promise<string[]>;
-}
-
-export interface AccountPoolConstructor {
-  new (deps: AccountPoolDeps): AccountPool;
 }

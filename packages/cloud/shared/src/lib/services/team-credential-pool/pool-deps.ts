@@ -1,11 +1,10 @@
 /**
  * Drizzle-backed AccountPoolDeps (#11332).
  *
- * The self-host AccountPool brain (@elizaos/app-core/account-pool) is
- * dependency-injected: give it `readAccounts` / `writeAccount` /
- * `deleteAccount` and every selection strategy, health rule, and affinity
- * behavior works unchanged. This implements those deps against the
- * `pooled_credentials` table for ONE organization:
+ * The cloud account-pool brain is dependency-injected: give it `readAccounts`
+ * / `writeAccount` / `deleteAccount` and every selection strategy, health
+ * rule, and affinity behavior works against the `pooled_credentials` table for
+ * ONE organization:
  *
  * - `readAccounts` is synchronous by contract (the self-host impl reads a
  *   local JSON file), so this deps object serves an in-memory snapshot that

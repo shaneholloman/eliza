@@ -2,7 +2,7 @@
 
 ## Change Proven
 
-- Removed `@elizaos/cloud-shared -> @elizaos/app-core` by replacing type imports with a local structural `AccountPool` contract and keeping the concrete app-core pool as a lazy optional runtime import.
+- Removed `@elizaos/cloud-shared -> @elizaos/app-core` by replacing the lazy runtime import of `@elizaos/app-core/account-pool` with a Worker-safe `TeamCredentialAccountPool` implementation local to `cloud-shared`.
 - Removed `@elizaos/plugin-wallet -> @elizaos/app-core` by moving the automation-node contributor registry/builder to `@elizaos/shared/automation-node-contributors` and leaving `@elizaos/app-core/api/automation-node-contributors` as a compatibility re-export.
 - Updated wallet, Hyperliquid, and LifeOps automation-node contributors to use the shared contributor registry directly.
 
@@ -38,8 +38,26 @@ git diff --check
 bun - <<'BUN' # shared automation-node contributor smoke
 bun - <<'BUN' # app-core compatibility re-export smoke
 bun - <<'BUN' # cloud account-pool structural contract smoke
+bun test src/lib/services/__tests__/team-credential-pool.test.ts --timeout 120000
 bunx tsc -p packages/shared/tsconfig.json --noEmit --pretty false
 ```
+
+Focused cloud team-credential pool evidence was run from `packages/cloud/shared`
+so the root `bunfig.toml` coverage gate did not convert a targeted file run into
+a repo-wide coverage threshold check:
+
+```text
+12 pass
+0 fail
+75 expect() calls
+Ran 12 tests across 1 file. [3.70s]
+```
+
+Manual review: the test boots a real PGlite schema, stores encrypted `secrets`
+rows, uses the real `pooled_credentials` repository, and hits a real local HTTP
+provider stub for 200/401 probe behavior. It verifies rotation, 429/401 health
+writeback, stale-snapshot admin-disable protection, keep-alive healing, usage
+rollups, tenant scoping, and secret deletion.
 
 Blocked by lean worktree dependency state:
 
@@ -55,11 +73,16 @@ All three package scripts reached `vitest` and failed with `vitest: command not 
 bunx tsc -p packages/cloud/shared/tsconfig.json --noEmit --pretty false
 ```
 
-This stopped before source checking on missing `@types/node`, also due to the no-install worktree. The focused runtime smoke imported the cloud contract and `DrizzleAccountPoolDeps` successfully.
+This currently reaches an unrelated pre-existing shared config error:
+`packages/shared/src/config/brand-env-aliases.ts(143,34): Property
+'syncElizaKey' does not exist...`. No `team-credential-pool` errors were emitted
+by the filtered typecheck output.
 
 ## Evidence N/A
 
 - Real-LLM trajectory: N/A - no agent prompt/action/model behavior changed.
 - UI screenshots/video/frontend logs: N/A - no UI rendering changed.
 - Backend runtime logs: N/A - this is a package dependency graph refactor; no server route or scheduler was run.
-- DB/domain artifacts: N/A - no schema or data path changed.
+- DB/domain artifacts: covered by the focused team-credential pool test above:
+  PGlite rows, encrypted secrets, usage rollups, and deletion state were
+  inspected by assertions against the real repositories.
