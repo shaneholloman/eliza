@@ -3,14 +3,12 @@
 import {
   ApiError,
   Button,
-  ChatEmptyStateWithRecommendations,
   type CodingAgentTaskThread,
   type CodingAgentTaskThreadDetail,
   client,
   useAppSelectorShallow,
 } from "@elizaos/ui";
 import { useAgentElement } from "@elizaos/ui/agent-surface";
-import { ViewBackButton } from "@elizaos/ui/components";
 import { Archive, Bot, ListChecks, Terminal } from "lucide-react";
 import {
   type ReactNode,
@@ -24,6 +22,7 @@ import {
   SparseWatermark,
   TaskCard,
   TaskCountChip,
+  TaskEmptyState,
   TaskListHeader,
   TaskMetaChip,
   TaskSearchInput,
@@ -871,28 +870,49 @@ export function CodingAgentTasksPanel({
       className="relative flex h-full min-h-0 w-full flex-col gap-3 overflow-y-auto bg-bg px-4 pb-28 pt-4 text-txt"
       data-testid="task-coordinator-panel"
     >
-      <TaskListHeader
-        leading={fullPage ? <ViewBackButton /> : null}
-        icon={<ListChecks className="h-5 w-5" />}
-        title={t("taskseventspanel.Tasks", { defaultValue: "Coding Tasks" })}
-        counts={
-          threads.length > 0 ? (
-            <>
-              <TaskCountChip value={threads.length} label="total" />
-              {activeCount > 0 ? (
-                <TaskCountChip
-                  value={activeCount}
-                  label="active"
-                  tone="active"
-                />
-              ) : null}
-              {doneCount > 0 ? (
-                <TaskCountChip value={doneCount} label="done" tone="accent" />
-              ) : null}
-            </>
-          ) : null
-        }
-      />
+      {fullPage ? (
+        // The shell `ViewHeader` (icon-only back + centered "Tasks") owns this
+        // view's top bar, so the panel drops its own title/back row to avoid a
+        // second heading (#13565). The counts survive as a lightweight,
+        // left-aligned meta strip that mirrors the SectionNav secondary-row
+        // geometry beneath the uniform header.
+        threads.length > 0 ? (
+          <div
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1"
+            data-testid="task-count-strip"
+          >
+            <TaskCountChip value={threads.length} label="total" />
+            {activeCount > 0 ? (
+              <TaskCountChip value={activeCount} label="active" tone="active" />
+            ) : null}
+            {doneCount > 0 ? (
+              <TaskCountChip value={doneCount} label="done" tone="accent" />
+            ) : null}
+          </div>
+        ) : null
+      ) : (
+        <TaskListHeader
+          icon={<ListChecks className="h-5 w-5" />}
+          title={t("taskseventspanel.Tasks", { defaultValue: "Coding Tasks" })}
+          counts={
+            threads.length > 0 ? (
+              <>
+                <TaskCountChip value={threads.length} label="total" />
+                {activeCount > 0 ? (
+                  <TaskCountChip
+                    value={activeCount}
+                    label="active"
+                    tone="active"
+                  />
+                ) : null}
+                {doneCount > 0 ? (
+                  <TaskCountChip value={doneCount} label="done" tone="accent" />
+                ) : null}
+              </>
+            ) : null
+          }
+        />
+      )}
 
       {threads.length > 0 || loading ? (
         <div className="flex items-center gap-2">
@@ -910,7 +930,7 @@ export function CodingAgentTasksPanel({
             onClick={() => setShowArchived((value) => !value)}
             aria-pressed={showArchived}
             data-testid="task-show-archived"
-            className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-xs font-medium transition-colors ${
+            className={`inline-flex h-9 min-h-11 items-center gap-2 rounded-xl border px-3 text-xs font-medium transition-colors ${
               showArchived
                 ? "border-accent/40 bg-accent-subtle text-accent"
                 : "border-border/50 bg-bg-accent/30 text-muted hover:text-txt"
@@ -960,9 +980,7 @@ export function CodingAgentTasksPanel({
           })}
         </div>
       ) : (
-        <ChatEmptyStateWithRecommendations
-          icon={Bot}
-          testId="task-empty-state"
+        <TaskEmptyState
           title={
             backendAbsent
               ? t("codingagenttaskspanel.empty.setupTitle", {
@@ -972,21 +990,9 @@ export function CodingAgentTasksPanel({
                   defaultValue: "No coding tasks yet.",
                 })
           }
-          recommendations={[
-            t("codingagenttaskspanel.empty.rec.fixBug", {
-              defaultValue: "Dispatch a coding agent to fix a failing test",
-            }),
-            t("codingagenttaskspanel.empty.rec.addFeature", {
-              defaultValue: "Have a coding agent add a small feature",
-            }),
-            backendAbsent
-              ? t("codingagenttaskspanel.empty.rec.setup", {
-                  defaultValue: "Help me set up coding agents",
-                })
-              : t("codingagenttaskspanel.empty.rec.refactor", {
-                  defaultValue: "Ask a coding agent to refactor a file",
-                }),
-          ]}
+          hint={t("codingagenttaskspanel.empty.hint", {
+            defaultValue: "Dispatched coding tasks show up here.",
+          })}
         />
       )}
     </div>
