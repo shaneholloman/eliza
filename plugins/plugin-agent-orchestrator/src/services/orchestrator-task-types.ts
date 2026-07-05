@@ -62,15 +62,13 @@ export interface OrchestratorTaskRecord {
   currentPlan?: Record<string, unknown>;
   ownerUserId?: string;
   worldId?: string;
+  /** Registered Project this task is bound to (id from the core project
+   * registry). Bound tasks resolve their spawn workdir from the project's
+   * localPath, so every session of the task targets the same repo. Undefined =
+   * unbound (workdir re-resolved per session from routes/convention). */
+  projectId?: string;
   roomId?: string;
   taskRoomId?: string;
-  /** The {@link Project} this task is bound to (see project-registry). Set once
-   * at creation so every session of a task targets the same repo/workdir —
-   * without it, workdir/repo were only derivable from the most-recent session,
-   * letting two sessions of one task silently drift to different repos (#13776).
-   * A backfilled indexed SQL column makes "all tasks for project X" an index
-   * lookup instead of a JSON-document scan. */
-  projectId?: string;
   /** Lineage: the task this one was forked from, if any. */
   parentTaskId?: string;
   forkSource?: string;
@@ -398,9 +396,15 @@ export interface CreateTaskInput {
   acceptanceCriteria?: string[];
   ownerUserId?: string;
   worldId?: string;
+  /** Explicit project binding. When omitted, {@link createTask} attempts to
+   * bind by realpath-matching {@link workdir} against a registered project; no
+   * match leaves the task unbound. */
+  projectId?: string;
+  /** Resolved spawn workdir hint used to bind the task to a registered project
+   * by realpath when {@link projectId} is absent. Not persisted on the record. */
+  workdir?: string;
   roomId?: string;
   taskRoomId?: string;
-  projectId?: string;
   parentTaskId?: string;
   forkSource?: string;
   providerPolicy?: TaskProviderPolicy;
