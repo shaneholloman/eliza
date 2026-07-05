@@ -37,4 +37,15 @@ describe("shouldOptInScenarioTrajectoryLogging", () => {
       } as NodeJS.ProcessEnv),
     ).toBe(false);
   });
+
+  it("treats blank canonical values as unset so the runner still opts in", () => {
+    for (const blank of ["", " ", "\t"]) {
+      expect(
+        shouldOptInScenarioTrajectoryLogging({
+          ELIZA_TRAJECTORY_LOGGING: blank,
+          NODE_ENV: "production",
+        } as NodeJS.ProcessEnv),
+      ).toBe(true);
+    }
+  });
 });
