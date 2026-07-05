@@ -355,6 +355,16 @@ export function DocumentsView({
     getCached<Record<KnowledgeFacet, number>>(`documents:facets:${scopeFilter}`)
       ?.data ?? null,
   );
+  // Mirror the latest server counts into a ref so loadData (a stable callback)
+  // can tell "never had server counts" from "have stale server counts" without
+  // re-binding on every count change.
+  const serverFacetCountsRef = useRef(serverFacetCounts);
+  serverFacetCountsRef.current = serverFacetCounts;
+  // True when the segmented control is showing first-page-derived counts
+  // because the whole-store count fetch failed and no server truth exists yet
+  // (codex P2). Rendered as an approximate marker so the numbers aren't passed
+  // off as authoritative.
+  const [facetCountsApproximate, setFacetCountsApproximate] = useState(false);
   const [searchResults, setSearchResults] = useState<
     DocumentSearchResult[] | null
   >(null);
@@ -405,7 +415,14 @@ export function DocumentsView({
         setCached(`documents:list:${scopeFilter}:${facet}`, docsRes.documents);
         if (facetsRes?.counts) {
           setServerFacetCounts(facetsRes.counts);
+          setFacetCountsApproximate(false);
           setCached(`documents:facets:${scopeFilter}`, facetsRes.counts);
+        } else {
+          // The whole-store count fetch failed while the list succeeded
+          // (codex P2). Rather than silently pass off first-page counts as the
+          // truth, mark them approximate so the segmented control can flag it;
+          // any prior server counts stay on screen (never reset to null).
+          setFacetCountsApproximate(serverFacetCountsRef.current === null);
         }
         // Only surface the WHOLE list to an embedder's shared cache (e.g.
         // CharacterHubView). When a facet is active the rows are server-filtered
@@ -924,6 +941,10 @@ export function DocumentsView({
     [documents],
   );
   const facetCounts = serverFacetCounts ?? localFacetCounts;
+  // Only the fall-through-to-local case is approximate; once server counts land
+  // they're exact and the marker drops.
+  const facetCountsAreApproximate =
+    facetCountsApproximate && serverFacetCounts === null;
   // Facet + free-text narrowing over the plain list (semantic search results
   // are cross-format by relevance, so the facet control hides while they show).
   const filteredDocuments = useMemo(() => {
@@ -991,7 +1012,20 @@ export function DocumentsView({
             >
               <Icon className="h-3.5 w-3.5" aria-hidden />
               {knowledgeFacetLabel(value, t)}
-              <span className="text-muted/70">{facetCounts[value]}</span>
+              <span
+                className="text-muted/70"
+                title={
+                  facetCountsAreApproximate
+                    ? t("knowledgehub.approxCountHint", {
+                        defaultValue:
+                          "Approximate — whole-store counts are unavailable.",
+                      })
+                    : undefined
+                }
+              >
+                {facetCountsAreApproximate ? "~" : ""}
+                {facetCounts[value]}
+              </span>
             </span>
           ),
         };

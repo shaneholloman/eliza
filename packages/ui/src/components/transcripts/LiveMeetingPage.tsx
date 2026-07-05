@@ -49,6 +49,11 @@ export function LiveMeetingPage(): React.JSX.Element {
   const [liveTranscripts, setLiveTranscripts] = React.useState<
     Record<string, Transcript>
   >({});
+  // Per-transcript load errors (codex P2): a broken GET /api/transcripts/:id
+  // must read as an error, not an indefinite "Connecting…".
+  const [transcriptErrors, setTranscriptErrors] = React.useState<
+    Record<string, string>
+  >({});
   const [joiningMeeting, setJoiningMeeting] = React.useState(false);
   const [meetingError, setMeetingError] = React.useState<string | null>(null);
 
@@ -59,15 +64,27 @@ export function LiveMeetingPage(): React.JSX.Element {
     (transcriptId: string, force = false) => {
       return client
         .getTranscript(transcriptId)
-        .then((r) =>
+        .then((r) => {
           setLiveTranscripts((prev) =>
             !force && prev[transcriptId]
               ? prev
               : { ...prev, [transcriptId]: r.transcript },
-          ),
-        )
-        .catch(() => {
-          // Transient — the next meeting-status event or refresh re-loads it.
+          );
+          // Recovered: clear any prior load error for this record.
+          setTranscriptErrors((prev) => {
+            if (!prev[transcriptId]) return prev;
+            const { [transcriptId]: _cleared, ...rest } = prev;
+            return rest;
+          });
+        })
+        .catch((e) => {
+          // Distinguish a broken transcript load from a still-connecting
+          // meeting so the pane doesn't hang on "Connecting…" forever.
+          setTranscriptErrors((prev) => ({
+            ...prev,
+            [transcriptId]:
+              e instanceof Error ? e.message : "Failed to load transcript",
+          }));
         });
     },
     [],
@@ -190,6 +207,9 @@ export function LiveMeetingPage(): React.JSX.Element {
                   const transcript = session.transcriptId
                     ? liveTranscripts[session.transcriptId]
                     : undefined;
+                  const transcriptError = session.transcriptId
+                    ? transcriptErrors[session.transcriptId]
+                    : undefined;
                   return (
                     <section
                       key={session.id}
@@ -201,6 +221,14 @@ export function LiveMeetingPage(): React.JSX.Element {
                       </h2>
                       {transcript ? (
                         <LiveMeetingPane transcript={transcript} />
+                      ) : transcriptError ? (
+                        <p
+                          data-testid={`live-meeting-error-${session.id}`}
+                          className="text-sm text-muted"
+                          role="alert"
+                        >
+                          {transcriptError}
+                        </p>
                       ) : (
                         <p className="text-sm text-muted/70">
                           Connecting to the meeting transcript…
