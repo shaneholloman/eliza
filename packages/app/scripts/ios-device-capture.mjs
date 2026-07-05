@@ -39,6 +39,7 @@ import { fileURLToPath } from "node:url";
 import { readDevicectlDeviceList } from "./ios-device-devicectl.mjs";
 import {
   buildPlistXml,
+  classifyXcresultSummaryForGate,
   extractXctestrunAppPaths,
   findDeviceRecord,
   parseCliArgs,
@@ -162,11 +163,11 @@ function newestXctestrun(productsDir) {
 
 async function main() {
   const args = parseCliArgs(process.argv.slice(2), {
-    booleans: ["skip-build", "help"],
+    booleans: ["skip-build", "strict-gate", "help"],
   });
   if (args.help) {
     console.log(
-      "Usage: node scripts/ios-device-capture.mjs --platform sim|device [--device <udid>] [--skip-build] [--output <dir>] [--app-path <App.app>] [--boot-timeout <sec>] [--interval <sec>] [--agent-ready-timeout <sec>] [--derived-data <dir>] [--only-testing <id>]",
+      "Usage: node scripts/ios-device-capture.mjs --platform sim|device [--device <udid>] [--skip-build] [--strict-gate] [--output <dir>] [--app-path <App.app>] [--boot-timeout <sec>] [--interval <sec>] [--agent-ready-timeout <sec>] [--derived-data <dir>] [--only-testing <id>]",
     );
     return;
   }
@@ -341,7 +342,12 @@ async function main() {
   //    Default = the whole AppUITests target, so the lane exercises both the
   //    boot-capture suite AND the WKWebView gesture-semantics suite (#11353);
   //    narrow with --only-testing AppUITests/<Class>[/<test>].
-  const onlyTesting = args["only-testing"] || "AppUITests";
+  const strictGate =
+    Boolean(args["strict-gate"]) ||
+    process.env.ELIZA_IOS_STRICT_BOOT_GATE === "1";
+  const onlyTesting =
+    args["only-testing"] ||
+    (strictGate ? "AppUITests/BootCaptureUITests" : "AppUITests");
   // Record the whole run on the simulator (walkthrough evidence for the
   // gesture-loop lane; no-op on a physical device). Started just before the
   // harness so it captures every gesture, stopped in `finally` so a failing run
@@ -389,6 +395,14 @@ async function main() {
             args["local-download-wait"] ??
             process.env.ELIZA_LOCAL_MODEL_DOWNLOAD_WAIT_SECONDS ??
             "0",
+          ...(strictGate
+            ? {
+                TEST_RUNNER_ELIZA_REQUIRE_HOME: "1",
+                TEST_RUNNER_ELIZA_REQUIRE_REPLY: "1",
+                TEST_RUNNER_ELIZA_REQUIRE_NO_SKIPS: "1",
+                TEST_RUNNER_ELIZA_FAIL_ON_SKIP: "1",
+              }
+            : {}),
           // Seeded launcher gesture-loop (LauncherGestureLoopUITests): forward
           // the reproduction seed + action count so a run replays exactly.
           ...(process.env.ELIZA_LOOP_SEED
@@ -439,6 +453,22 @@ async function main() {
         path.join(outputDir, "test-summary.json"),
         summary.stdout,
       );
+      try {
+        const verdict = classifyXcresultSummaryForGate(
+          JSON.parse(summary.stdout),
+        );
+        if (!verdict.ok) {
+          fail(
+            `test-summary gate failed: ${verdict.reason}. ` +
+              `stats=${JSON.stringify(verdict.stats)}. ` +
+              `Review ${path.join(outputDir, "test-summary.json")} and ${attachmentsDir}.`,
+          );
+        }
+      } catch (error) {
+        fail(
+          `could not parse test-summary.json for gate validation: ${error?.message ?? error}`,
+        );
+      }
     }
   } else {
     log("warning: no .xcresult bundle produced — nothing to export.");

@@ -35,6 +35,7 @@
     "test:e2e:cloud-wallet": "node scripts/run-ui-playwright.mjs --config playwright.ui-smoke.config.ts test/ui-smoke/cloud-wallet-import.spec.ts",
     "test:e2e:android": "node scripts/android-e2e.mjs",
     "test:e2e:ios": "node scripts/ios-e2e.mjs",
+    "test:e2e:ios:boot-gate": "ELIZA_IOS_STRICT_BOOT_GATE=1 node scripts/ios-device-capture.mjs --platform sim --strict-gate",
     "test:e2e:ios:cloud": "node scripts/ios-e2e.mjs --cloud",
     "test:e2e:android:local": "node scripts/android-e2e.mjs --skip-route-coverage",
     "test:e2e:android:routes": "node scripts/android-e2e.mjs --skip-local-chat",

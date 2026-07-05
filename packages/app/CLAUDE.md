@@ -147,6 +147,10 @@ bun run --cwd packages/app ios:device:logs -- --device <id> --no-console --pull-
 # attachments (filmstrip PNGs + AX hierarchy) from the .xcresult.
 bun run --cwd packages/app capture:ios-sim:boot                  # simulator (booted sim auto-detected)
 bun run --cwd packages/app ios:device:capture -- --device <id> --app-path <signed App.app>  # physical device
+
+# Strict simulator boot/chat health gate: same harness, but error-card,
+# no-reply, all-skipped, and zero-passed summaries are hard failures.
+bun run --cwd packages/app test:e2e:ios:boot-gate
 ```
 
 Produced artifacts: deploy stages into `ios/build/device-deploy-stage/`; logs

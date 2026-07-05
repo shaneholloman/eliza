@@ -543,6 +543,104 @@ export function extractXctestrunAppPaths(xctestrun, testRoot) {
   return [...new Set(paths)];
 }
 
+function numberFromSummaryValue(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (value && typeof value === "object") {
+    return numberFromSummaryValue(value._value ?? value.value ?? value.count);
+  }
+  return null;
+}
+
+function collectXcresultSummaryStats(value, stats = null) {
+  const current = stats ?? {
+    passed: null,
+    failed: null,
+    skipped: null,
+    total: null,
+    resultValues: [],
+  };
+  if (Array.isArray(value)) {
+    for (const item of value) collectXcresultSummaryStats(item, current, "");
+    return current;
+  }
+  if (!value || typeof value !== "object") return current;
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    const lowerKey = rawKey.toLowerCase();
+    if (
+      (lowerKey === "result" || lowerKey.endsWith("result")) &&
+      typeof rawValue === "string"
+    ) {
+      current.resultValues.push(rawValue.toLowerCase());
+    }
+    const numeric = numberFromSummaryValue(rawValue);
+    if (numeric !== null) {
+      if (/passedtests|passcount|passedcount|testspassed/.test(lowerKey)) {
+        current.passed = Math.max(current.passed ?? 0, numeric);
+      } else if (
+        /failedtests|failurecount|failedcount|testsfailed/.test(lowerKey)
+      ) {
+        current.failed = Math.max(current.failed ?? 0, numeric);
+      } else if (
+        /skippedtests|skipcount|skippedcount|testsskipped/.test(lowerKey)
+      ) {
+        current.skipped = Math.max(current.skipped ?? 0, numeric);
+      } else if (/testscount|testcount|totaltests|tests/.test(lowerKey)) {
+        current.total = Math.max(current.total ?? 0, numeric);
+      }
+    }
+    collectXcresultSummaryStats(rawValue, current);
+  }
+  return current;
+}
+
+/**
+ * Classify `xcrun xcresulttool get test-results summary --path <bundle>` JSON
+ * for health-gate purposes. Xcode has changed this payload shape across
+ * versions, so this consumes both explicit count fields and recursive result
+ * strings. The strict rule is intentionally small: an all-skipped run or a run
+ * with an explicit zero passed-tests count is not a useful health signal.
+ *
+ * @param {unknown} summary parsed xcresulttool summary JSON
+ * @returns {{ ok: boolean, reason: string | null, stats: { passed: number | null, failed: number | null, skipped: number | null, total: number | null, resultValues: string[] } }}
+ */
+export function classifyXcresultSummaryForGate(summary) {
+  const stats = collectXcresultSummaryStats(summary);
+  const hasPassedResult = stats.resultValues.includes("passed");
+  const hasFailedResult = stats.resultValues.includes("failed");
+  const hasSkippedResult = stats.resultValues.includes("skipped");
+  if (stats.passed === 0) {
+    return {
+      ok: false,
+      reason: "test-summary reports passedTests=0",
+      stats,
+    };
+  }
+  if (
+    stats.skipped !== null &&
+    stats.skipped > 0 &&
+    (stats.passed ?? 0) === 0 &&
+    (stats.failed ?? 0) === 0
+  ) {
+    return {
+      ok: false,
+      reason: "test-summary reports an all-skipped run",
+      stats,
+    };
+  }
+  if (hasSkippedResult && !hasPassedResult && !hasFailedResult) {
+    return {
+      ok: false,
+      reason: "test-summary result is Skipped with no passed tests",
+      stats,
+    };
+  }
+  return { ok: true, reason: null, stats };
+}
+
 /**
  * Recursively replace the __TESTROOT__ placeholder in every string value of a
  * parsed .xctestrun. Required whenever the .xctestrun file is written
