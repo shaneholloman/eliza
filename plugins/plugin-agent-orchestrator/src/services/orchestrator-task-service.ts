@@ -18,16 +18,26 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  readdir,
+  readFile,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
   getTrajectoryContext,
   type IAgentRuntime,
+  type RecordedTrajectory,
   resolveStateDir,
   resolveTrajectoryGate,
+  rollUpTrajectoryUsage,
   Service,
   TRACE_ENV,
+  type TrajectoryUsageRollup,
 } from "@elizaos/core";
 import {
   detectTaskType,
@@ -181,6 +191,20 @@ type RuntimeLike = IAgentRuntime & {
   databaseAdapter?: unknown;
   getSetting?: (key: string) => string | undefined | null;
 };
+
+export interface TraceUsageArtifactError {
+  path: string;
+  reason: "read_failed" | "invalid_trajectory";
+  message: string;
+}
+
+export interface TaskTraceUsageRollup extends TrajectoryUsageRollup {
+  readState: "complete" | "partial";
+  artifactCount: number;
+  readableArtifactCount: number;
+  unreadableArtifactCount: number;
+  artifactErrors: TraceUsageArtifactError[];
+}
 
 /**
  * The deployment's configured default coding agent type, if any
@@ -3140,6 +3164,93 @@ export class OrchestratorTaskService extends Service {
   async getUsage(taskId: string): Promise<TaskUsageSummary | null> {
     const doc = await this.store.getTask(taskId);
     return doc ? summarizeUsage(doc) : null;
+  }
+
+  /**
+   * Per-trace token/cost roll-up across this task's INGESTED SUB-AGENT
+   * TRAJECTORY FILES (#13775 item 5). Distinct from {@link getUsage}: that sums
+   * the ACP terminal `OrchestratorTaskUsage` frames (the spend a sub-agent's
+   * ACP surface reported for the whole session); this reads the file-recorder
+   * `trajectory` artifacts item 2 attached and sums their inner per-model-call
+   * metrics, grouped by the shared `traceId`. The two count different things
+   * (ACP-reported session spend vs. file-recorded inner-call spend) and are
+   * deliberately kept apart so nothing is double-summed. For an eliza-backend
+   * sub-agent whose ACP frame is coarse/absent, this is the only surface that
+   * attributes the real inner spend to the logical run.
+   *
+   * Attach-by-reference means the files live where the child wrote them. A
+   * missing/unreadable/parse-failed file keeps the endpoint partial: readable
+   * files still contribute to totals, and failed files are returned as
+   * `artifactErrors` so operators never mistake partial spend for a complete
+   * clean roll-up.
+   */
+  async getTraceUsage(taskId: string): Promise<TaskTraceUsageRollup | null> {
+    const doc = await this.store.getTask(taskId);
+    if (!doc) return null;
+    // Dedupe by path: `ingestChildTrajectories` rescans the task-wide child
+    // dir on every task_complete, so a multi-session / retried task can hold
+    // more than one artifact row pointing at the SAME trajectory file. Summing
+    // each row would double-count that file's tokens/cost, so read each
+    // distinct path once.
+    const paths = [
+      ...new Set(
+        doc.artifacts
+          .filter(
+            (artifact) =>
+              artifact.artifactType === "trajectory" && Boolean(artifact.path),
+          )
+          .map((artifact) => artifact.path as string),
+      ),
+    ];
+    const trajectories: RecordedTrajectory[] = [];
+    const artifactErrors: TraceUsageArtifactError[] = [];
+    for (const path of paths) {
+      try {
+        const raw = await readFile(path, "utf8");
+        const parsed = JSON.parse(raw) as unknown;
+        // A well-formed trajectory carries a metrics block; anything else is a
+        // mislabeled artifact and is surfaced as partial rather than trusted.
+        if (
+          parsed &&
+          typeof parsed === "object" &&
+          "metrics" in parsed &&
+          parsed.metrics &&
+          typeof parsed.metrics === "object"
+        ) {
+          trajectories.push(parsed as RecordedTrajectory);
+        } else {
+          artifactErrors.push({
+            path,
+            reason: "invalid_trajectory",
+            message: "Trajectory artifact does not contain metrics.",
+          });
+        }
+      } catch (err) {
+        // error-policy:J4 trace usage is a user-facing accounting surface; keep
+        // readable totals available, but return artifactErrors/readState so a
+        // corrupt or missing file cannot look like complete zero spend.
+        const message = err instanceof Error ? err.message : String(err);
+        artifactErrors.push({
+          path,
+          reason: "read_failed",
+          message,
+        });
+        this.log("warn", "partial trace usage due to unreadable artifact", {
+          taskId,
+          path,
+          error: message,
+        });
+      }
+    }
+    const rollup = rollUpTrajectoryUsage(trajectories);
+    return {
+      ...rollup,
+      readState: artifactErrors.length > 0 ? "partial" : "complete",
+      artifactCount: paths.length,
+      readableArtifactCount: trajectories.length,
+      unreadableArtifactCount: artifactErrors.length,
+      artifactErrors,
+    };
   }
 
   // ---- sub-agent control -------------------------------------------------
