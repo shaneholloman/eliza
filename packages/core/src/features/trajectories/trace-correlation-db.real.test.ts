@@ -163,7 +163,10 @@ describe("trajectories trace_id join key (real PGLite)", () => {
 
 		await handler?.({ runtime, message, source: "api" } as MessagePayload);
 
-		const meta = message.metadata as { traceId?: string; trajectoryId?: string };
+		const meta = message.metadata as {
+			traceId?: string;
+			trajectoryId?: string;
+		};
 		expect(typeof meta.traceId).toBe("string");
 		expect((meta.traceId ?? "").length).toBeGreaterThan(0);
 		expect(typeof meta.trajectoryId).toBe("string");

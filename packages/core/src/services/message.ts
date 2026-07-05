@@ -8470,8 +8470,7 @@ export class DefaultMessageService implements IMessageService {
 		const preStampedTraceId =
 			typeof message.metadata === "object" &&
 			message.metadata !== null &&
-			typeof (message.metadata as { traceId?: unknown }).traceId ===
-				"string" &&
+			typeof (message.metadata as { traceId?: unknown }).traceId === "string" &&
 			(message.metadata as { traceId: string }).traceId.trim() !== ""
 				? (message.metadata as { traceId: string }).traceId
 				: undefined;
