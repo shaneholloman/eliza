@@ -270,6 +270,8 @@ const MAX_CAPTURED_TOOL_OUTPUT_CHARS = 12_000;
 const TOOL_OUTPUT_END_MARKER = "[/tool output]";
 const SESSION_GIT_WRAPPER = `#!/usr/bin/env node
 const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
 const git = process.env.ACP_REAL_GIT || "git";
 const indexFile = process.env.ACP_GIT_INDEX_FILE;
 const baseline = process.env.ACP_GIT_BASELINE_SHA;
@@ -303,14 +305,95 @@ function commandInfo(argv) {
 function run(argv, opts = {}) {
   return spawnSync(git, argv, { stdio: "inherit", env: process.env, ...opts });
 }
+// A per-worktree commit is not one atomic git operation: we read-tree HEAD to
+// rebuild this session's index onto the current tip, replay the staged diff, then
+// git commit re-reads HEAD for the parent. Two sessions sharing one worktree
+// (isolate:false) run this wrapper as two separate processes; if the other's
+// commit lands between our read-tree and our commit, our tree (built from the
+// older HEAD) silently reverts it (#14183). Serialize that window across
+// processes with an exclusive lockfile in the worktree's own git dir (where HEAD
+// lives), so isolated worktrees — which have distinct git dirs and HEADs — never
+// contend, while shared ones can't interleave.
+const LOCK_POLL_MS = 25;
+const LOCK_WAIT_MS = 120000;
+const LOCK_STALE_MS = 300000;
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+function lockIsStale(lockPath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(lockPath, "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT") return false;
+    throw err;
+  }
+  const pid = Number.parseInt(raw, 10);
+  if (Number.isInteger(pid) && pid > 0) return !processAlive(pid);
+  let st;
+  try {
+    st = fs.statSync(lockPath);
+  } catch (err) {
+    if (err.code === "ENOENT") return false;
+    throw err;
+  }
+  return Date.now() - st.mtimeMs > LOCK_STALE_MS;
+}
+function resolveGitDir(prefix) {
+  const res = spawnSync(git, [...prefix, "rev-parse", "--absolute-git-dir"], { encoding: "utf8" });
+  if (res.status !== 0) return undefined;
+  const dir = (res.stdout || "").trim();
+  return dir || undefined;
+}
+function acquireCommitLock(gitDir) {
+  const lockPath = path.join(gitDir, "eliza-acp-commit.lock");
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    let fd;
+    try {
+      fd = fs.openSync(lockPath, "wx");
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      if (lockIsStale(lockPath)) {
+        fs.rmSync(lockPath, { force: true });
+        continue;
+      }
+      if (Date.now() >= deadline) throw new Error("eliza-acp: timed out acquiring commit lock at " + lockPath);
+      sleepSync(LOCK_POLL_MS);
+      continue;
+    }
+    fs.writeSync(fd, String(process.pid));
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      fs.closeSync(fd);
+      fs.rmSync(lockPath, { force: true });
+    };
+    process.on("exit", release);
+    return release;
+  }
+}
 const info = commandInfo(args);
 if (indexFile && baseline && info.cmd === "commit") {
+  // The diff reads only this session's staged index vs its baseline, so it does
+  // not depend on HEAD and stays outside the lock.
   const diff = spawnSync(git, [...info.prefix, "diff", "--cached", "--binary", baseline], {
     env: process.env,
     encoding: "buffer",
     maxBuffer: 64 * 1024 * 1024,
   });
   if (diff.status !== 0) process.exit(diff.status || 1);
+  const gitDir = resolveGitDir(info.prefix);
+  const release = gitDir ? acquireCommitLock(gitDir) : () => {};
   if (diff.stdout.length > 0) {
     const reset = run([...info.prefix, "read-tree", "HEAD"]);
     if (reset.status !== 0) process.exit(reset.status || 1);
@@ -321,6 +404,10 @@ if (indexFile && baseline && info.cmd === "commit") {
     });
     if (apply.status !== 0) process.exit(apply.status || 1);
   }
+  const result = run(args);
+  release();
+  if (result.signal) process.kill(process.pid, result.signal);
+  process.exit(result.status ?? 1);
 }
 const result = run(args);
 if (result.signal) process.kill(process.pid, result.signal);
