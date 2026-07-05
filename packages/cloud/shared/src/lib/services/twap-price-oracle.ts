@@ -38,6 +38,100 @@ import { logger } from "../utils/logger";
 import { type SupportedNetwork } from "./eliza-token-price";
 
 // ============================================================================
+// FAIL-CLOSED NUMERIC BOUNDARY (#13415 cloud-shared service-layer sweep)
+// ============================================================================
+//
+// This oracle is a redemption-security money surface. Its inputs come from
+// Postgres NUMERIC columns (`eliza_token_prices.price_usd`) and NUMERIC-typed
+// SUM/COUNT aggregates (`token_redemptions.usd_value`), both returned by the
+// driver as STRINGS. `'NaN'::numeric` is a valid stored value that reads back
+// as the literal string "NaN", and `Number("NaN") === NaN`. Because EVERY
+// comparison against NaN is `false`, a single corrupt/unexpected row silently
+// DISABLED the supply-shock protections this file exists to enforce:
+//   - getSystemHealth: `NaN >= LIMIT` false -> hourly/daily/velocity caps all
+//     BYPASSED (fail-OPEN rate limit).
+//   - validatePayoutPrice: `NaN > threshold` false -> a corrupt TWAP read
+//     VALIDATES an arbitrage/manipulated payout at money-out time.
+//   - getTWAP: a corrupt price sample poisons twapPrice/spotPrice into NaN.
+// The boundary below refuses a corrupt value fail-closed instead of coercing
+// it to NaN and pretending the guard passed.
+
+const PLAIN_DECIMAL_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)$/;
+
+/** Thrown when a NUMERIC money/price field can't be parsed to a finite number. */
+export class CorruptTwapNumericError extends Error {
+  readonly field: string;
+  readonly rawValue: unknown;
+  constructor(field: string, rawValue: unknown) {
+    super(
+      `[TWAP] corrupt NUMERIC value for ${field}: ${JSON.stringify(rawValue)} is not valid for this money surface`,
+    );
+    this.name = "CorruptTwapNumericError";
+    this.field = field;
+    this.rawValue = rawValue;
+  }
+}
+
+/**
+ * Fail-closed parse of a NUMERIC column / aggregate value.
+ * - accepts a finite number or a plain numeric string (driver returns NUMERIC as string),
+ * - allows an explicit domain zero (a legitimately-empty aggregate is 0, not corrupt),
+ * - THROWS on null/undefined/empty/whitespace/"NaN"/Infinity/garbage/negative — never returns NaN.
+ */
+export function parseTwapNumeric(
+  field: string,
+  value: unknown,
+  options: { allowZero?: boolean; requireInteger?: boolean } = {},
+): number {
+  const { allowZero = true, requireInteger = false } = options;
+  const validateDomain = (parsed: number): number => {
+    if (parsed < 0 || (!allowZero && parsed === 0)) {
+      throw new CorruptTwapNumericError(field, value);
+    }
+    if (requireInteger && !Number.isInteger(parsed)) {
+      throw new CorruptTwapNumericError(field, value);
+    }
+    return parsed;
+  };
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new CorruptTwapNumericError(field, value);
+    }
+    return validateDomain(value);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed === "") {
+      throw new CorruptTwapNumericError(field, value);
+    }
+    if (!PLAIN_DECIMAL_RE.test(trimmed)) {
+      throw new CorruptTwapNumericError(field, value);
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      throw new CorruptTwapNumericError(field, value);
+    }
+    return validateDomain(parsed);
+  }
+  // null / undefined / object / boolean etc.
+  throw new CorruptTwapNumericError(field, value);
+}
+
+/**
+ * Fail-closed parse of an aggregate (SUM/COUNT) that COALESCEs to 0 in SQL.
+ * The query already `COALESCE(..., 0)`s an empty aggregate, so a genuinely
+ * missing value arrives as the string "0"/number 0 (allowed). A non-finite
+ * value here means a corrupt row poisoned the aggregate — fail closed.
+ */
+function parseTwapAggregate(
+  field: string,
+  value: unknown,
+  options?: { requireInteger?: boolean },
+): number {
+  return parseTwapNumeric(field, value, options);
+}
+
+// ============================================================================
 // TWAP CONFIGURATION
 // ============================================================================
 
@@ -192,7 +286,9 @@ export class TWAPPriceOracle {
     }
 
     const priceHistory: PricePoint[] = samples.map((s) => ({
-      price: Number(s.price),
+      // Fail-closed: a corrupt price sample must not poison the TWAP/spot into
+      // NaN (which would then silently pass the isStable/slippage checks below).
+      price: parseTwapNumeric("price_usd", s.price, { allowZero: false }),
       timestamp: s.timestamp,
       source: s.source,
     }));
@@ -389,9 +485,24 @@ export class TWAPPriceOracle {
       AND created_at >= ${velocityWindow}
     `);
 
-    const hourlyVolumeUsd = Number((hourlyResult.rows[0] as { total: string })?.total || 0);
-    const dailyVolumeUsd = Number((dailyResult.rows[0] as { total: string })?.total || 0);
-    const recentRedemptionCount = Number((velocityResult.rows[0] as { count: string })?.count || 0);
+    // Fail-closed: these SUM/COUNT aggregates feed the supply-shock rate limits.
+    // A corrupt 'NaN'::numeric usd_value read back as "NaN" would make every
+    // `>= LIMIT` check `false` and silently BYPASS the hourly/daily/velocity
+    // caps (fail-OPEN). Parse through the boundary so a corrupt aggregate
+    // surfaces instead of disabling protection.
+    const hourlyVolumeUsd = parseTwapAggregate(
+      "hourly_volume_usd",
+      (hourlyResult.rows[0] as { total: string })?.total,
+    );
+    const dailyVolumeUsd = parseTwapAggregate(
+      "daily_volume_usd",
+      (dailyResult.rows[0] as { total: string })?.total,
+    );
+    const recentRedemptionCount = parseTwapAggregate(
+      "recent_redemption_count",
+      (velocityResult.rows[0] as { count: string })?.count,
+      { requireInteger: true },
+    );
 
     let canProcessRedemptions = true;
     let pauseReason: string | undefined;
@@ -445,19 +556,21 @@ export class TWAPPriceOracle {
       return { valid: false, error: "Cannot validate price - no recent data" };
     }
 
+    const parsedQuotedPrice = parseTwapNumeric("quoted_price", quotedPrice, { allowZero: false });
+
     // Check if current TWAP is significantly different from quoted price
-    const priceDrift = Math.abs(twap.twapPrice - quotedPrice) / quotedPrice;
+    const priceDrift = Math.abs(twap.twapPrice - parsedQuotedPrice) / parsedQuotedPrice;
 
     if (priceDrift > TWAP_CONFIG.MAX_TWAP_SLIPPAGE * 2) {
       logger.warn("[TWAP] Payout price drift too high", {
-        quotedPrice,
+        quotedPrice: parsedQuotedPrice,
         currentTwap: twap.twapPrice,
         drift: priceDrift,
         network,
       });
 
       // If price went UP (unfavorable for us), reject
-      if (twap.twapPrice > quotedPrice) {
+      if (twap.twapPrice > parsedQuotedPrice) {
         return {
           valid: false,
           error: `Price increased ${(priceDrift * 100).toFixed(1)}% since quote. Please get a new quote.`,
