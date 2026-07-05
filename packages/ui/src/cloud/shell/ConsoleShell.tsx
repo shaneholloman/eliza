@@ -13,7 +13,12 @@
  */
 
 import { BRAND_PATHS, LOGO_FILES } from "@elizaos/shared/brand";
-import { type ReactNode, useCallback, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Link, Navigate, useLocation } from "react-router-dom";
 import {
   DashboardHeader,
@@ -24,7 +29,7 @@ import {
   PageHeaderProvider,
   usePageHeader,
 } from "../../cloud-ui/components/layout";
-import { hasStewardToken } from "../lib/steward-session";
+import { hasHydratableStewardToken } from "../lib/steward-session";
 import { useSessionAuth } from "../lib/use-session-auth";
 import {
   CONSOLE_OVERVIEW_NAV_ITEM,
@@ -49,6 +54,28 @@ const CONSOLE_NAV_SECTIONS: DashboardSidebarSection[] = [
     ],
   },
 ];
+
+function subscribeToStewardTokenChanges(listener: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener("storage", listener);
+  window.addEventListener("steward-token-sync", listener);
+  return () => {
+    window.removeEventListener("storage", listener);
+    window.removeEventListener("steward-token-sync", listener);
+  };
+}
+
+function readHydratableStewardTokenSnapshot(): boolean {
+  return hasHydratableStewardToken();
+}
+
+function useHasHydratableStewardToken(): boolean {
+  return useSyncExternalStore(
+    subscribeToStewardTokenChanges,
+    readHydratableStewardTokenSnapshot,
+    () => false,
+  );
+}
 
 function renderRouterLink({
   href,
@@ -107,6 +134,7 @@ export function ConsoleShell({
 }): React.JSX.Element {
   const location = useLocation();
   const session = useSessionAuth();
+  const hasHydratableToken = useHasHydratableStewardToken();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const toggleSidebar = useCallback(() => setSidebarOpen((v) => !v), []);
 
@@ -120,10 +148,11 @@ export function ConsoleShell({
     // navigates here BEFORE the auth provider consumes it, so for ~1-2s the
     // session reads ready-but-unauthenticated. Redirecting then bounces the
     // user back to the sign-in form — which reads as "login didn't work"
-    // (nubs, #13406). While a stored token exists, hold the loading fallback:
-    // the provider either hydrates (authenticated flips true) or its 401
-    // self-heal clears the token and this same branch redirects for real.
-    if (hasStewardToken()) {
+    // (nubs, #13406). Hold only for a non-expired, identity-bearing token:
+    // expired/malformed tokens already read as signed-out in useSessionAuth and
+    // must redirect immediately. The storage/sync subscription above makes a
+    // provider clear transition re-render this branch into the login redirect.
+    if (hasHydratableToken) {
       return (
         <div
           aria-busy="true"

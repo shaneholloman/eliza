@@ -6,7 +6,7 @@
  * calls `useSetPageHeader` gets its title surfaced in the top bar.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -20,7 +20,7 @@ const sessionState = {
 };
 let storedToken = false;
 vi.mock("../lib/steward-session", () => ({
-  hasStewardToken: () => storedToken,
+  hasHydratableStewardToken: () => storedToken,
 }));
 
 vi.mock("../lib/use-session-auth", () => ({
@@ -196,5 +196,33 @@ describe("ConsoleShell", () => {
     expect(screen.queryByTestId("login-page")).toBeNull();
     expect(screen.queryByTestId("page-body")).toBeNull();
     expect(screen.getByText("Signing you in…")).toBeTruthy();
+  });
+
+  it("redirects once the hydratable token is cleared during the signing-in hold", async () => {
+    sessionState.authenticated = false;
+    storedToken = true;
+    render(
+      <MemoryRouter initialEntries={["/dashboard/agents"]}>
+        <Routes>
+          <Route path="/login" element={<div data-testid="login-page" />} />
+          <Route
+            path="*"
+            element={
+              <ConsoleShell>
+                <TitledPage />
+              </ConsoleShell>
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("Signing you in…")).toBeTruthy();
+
+    storedToken = false;
+    window.dispatchEvent(new CustomEvent("steward-token-sync"));
+
+    await waitFor(() => expect(screen.getByTestId("login-page")).toBeTruthy());
+    expect(screen.queryByText("Signing you in…")).toBeNull();
+    expect(screen.queryByTestId("page-body")).toBeNull();
   });
 });
