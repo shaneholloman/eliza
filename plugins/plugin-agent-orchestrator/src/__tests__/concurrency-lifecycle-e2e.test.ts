@@ -23,12 +23,7 @@
  *     as the #13773 workspace-GC regression guard.
  */
 
-import {
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  rmSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -37,9 +32,9 @@ import { AcpService, computeSessionWorkdir } from "../services/acp-service.ts";
 import { OrchestratorTaskService } from "../services/orchestrator-task-service.ts";
 import { OrchestratorTaskStore } from "../services/orchestrator-task-store.ts";
 import {
+  type OrchestratorTaskStatus,
   TASK_STATUS_TRANSITIONS,
   TERMINAL_TASK_STATUSES,
-  type OrchestratorTaskStatus,
 } from "../services/orchestrator-task-types.ts";
 import {
   detectStalledSessions,
@@ -441,7 +436,8 @@ describe("real-engine concurrency lifecycle e2e (#13778)", () => {
       // makes each task's terminal transition deterministic.
       const running = acp.listSessions().find((s) => s.status === "running");
       if (!running) break;
-      const runningTaskId = (running.metadata?.taskId as string | undefined) ?? "";
+      const runningTaskId =
+        (running.metadata?.taskId as string | undefined) ?? "";
       await waitUntil(async () => {
         const doc = await store.getTask(runningTaskId);
         return doc?.task.status === "active";
@@ -493,9 +489,9 @@ describe("real-engine concurrency lifecycle e2e (#13778)", () => {
       if (failTargetGoals.has(goal)) {
         // A crashed task must have gone terminal `failed` via `unrecoverable`.
         expect(status).toBe("failed");
-        expect(
-          doc?.events.some((e) => e.eventType === "task_failed"),
-        ).toBe(true);
+        expect(doc?.events.some((e) => e.eventType === "task_failed")).toBe(
+          true,
+        );
       } else {
         // A completed task parks at `validating` (AUTO_GOAL_VERIFY off); advance
         // it to `done` the only legal way — through validateTask, which enforces
