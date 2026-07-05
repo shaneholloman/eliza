@@ -1241,10 +1241,30 @@ export class OrchestratorTaskService extends Service {
     }
     if (files.length === 0) return [];
 
+    // Dedupe against files this task already recorded (#14110). The trajectory
+    // dir is per-TASK but `task_complete` fires per-SESSION-completion, so a
+    // re-completion of the same session or a respawned second session re-scans
+    // the same files. Without this guard each pass re-attaches them as brand-new
+    // artifacts (fresh `randomUUID()` ids) and re-stamps the *current* session's
+    // correlation onto files an *earlier* session actually recorded — corrupting
+    // the file↔DB trace join #13871 exists to provide. The already-recorded
+    // artifact paths are the persistent dedupe key: they survive restart with
+    // the task document, and skipping them preserves the original ingesting
+    // session's correlation (we never touch an already-attached artifact).
+    const existingArtifactPaths = new Set(
+      ((await this.store.getTask(taskId))?.artifacts ?? [])
+        .filter((a) => a.artifactType === "trajectory" && a.path)
+        .map((a) => a.path as string),
+    );
+    const freshFiles = files.filter((path) => !existingArtifactPaths.has(path));
+    if (freshFiles.length === 0) return [];
+
     // Newest first, capped so a runaway child can't flood the task doc; the
-    // store's MAX_ARTIFACTS also clamps.
+    // store's MAX_ARTIFACTS also clamps. Cap applies to genuinely-new files only
+    // so a large already-ingested backlog can't starve fresh trajectories out of
+    // the window.
     const withMtime = await Promise.all(
-      files.map(async (path) => ({
+      freshFiles.map(async (path) => ({
         path,
         mtimeMs: (await stat(path)).mtimeMs,
       })),
@@ -1280,10 +1300,16 @@ export class OrchestratorTaskService extends Service {
     }
 
     if (ingested.length > 0) {
+      // Union-dedupe the id list too: even though path-dedupe above prevents
+      // re-ingesting a file, two distinct files sharing a `<trajectoryId>.json`
+      // basename (or a legacy pre-fix duplicate row) must not append a repeat id.
       const existing = session?.childTrajectoryIds ?? [];
-      await this.store.updateSession(sessionId, {
-        childTrajectoryIds: [...existing, ...ingested],
-      });
+      const merged = [...new Set([...existing, ...ingested])];
+      if (merged.length !== existing.length) {
+        await this.store.updateSession(sessionId, {
+          childTrajectoryIds: merged,
+        });
+      }
     }
     return ingested;
   }
