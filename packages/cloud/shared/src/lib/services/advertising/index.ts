@@ -102,8 +102,6 @@ function csvCell(value: string | number | null): string {
   return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
-export { CorruptSpendCapError, parseSpendCapCredits } from "./spend-cap";
-
 class AdvertisingService {
   private textEncoder = new TextEncoder();
 
@@ -245,7 +243,7 @@ class AdvertisingService {
       input.account.id,
       { excludeCampaignId: input.excludeCampaignId },
     );
-    const cap = parseSpendCapCredits(input.account.spend_cap_credits);
+    const cap = Number(input.account.spend_cap_credits);
     if (existingAllocated + input.newCampaignCredits > cap + 1e-9) {
       throw ValidationError(
         `Ad account spend cap would be exceeded: ${(
@@ -260,7 +258,7 @@ class AdvertisingService {
     newCampaignCredits: number;
   }): void {
     if (!input.spendCapCredits) return;
-    const cap = parseSpendCapCredits(input.spendCapCredits);
+    const cap = Number(input.spendCapCredits);
     if (input.newCampaignCredits > cap + 1e-9) {
       throw ValidationError(
         `Campaign spend cap would be exceeded: ${input.newCampaignCredits.toFixed(
