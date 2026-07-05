@@ -1236,14 +1236,14 @@ describe("ios-device-capture agent availability preflight (#13569)", () => {
       ),
     ).toMatchObject({
       kind: "cloud-health",
-      url: "https://cloud.example.test/health",
+      url: "https://cloud.example.test/api/health",
     });
   });
 
   it("maps probe responses to ready, not-ready, and unreachable verdicts", async () => {
     await expect(
       probeAgentAvailability({
-        target: { url: "https://agent.example.test/health" },
+        target: { url: "https://agent.example.test/api/health" },
         fetchImpl: async () =>
           new Response(JSON.stringify({ ready: true }), { status: 200 }),
       }),
@@ -1251,7 +1251,7 @@ describe("ios-device-capture agent availability preflight (#13569)", () => {
 
     await expect(
       probeAgentAvailability({
-        target: { url: "https://agent.example.test/health" },
+        target: { url: "https://agent.example.test/api/health" },
         fetchImpl: async () =>
           new Response(JSON.stringify({ ready: false }), { status: 200 }),
       }),
@@ -1259,7 +1259,7 @@ describe("ios-device-capture agent availability preflight (#13569)", () => {
 
     await expect(
       probeAgentAvailability({
-        target: { url: "https://agent.example.test/health" },
+        target: { url: "https://agent.example.test/api/health" },
         fetchImpl: async () => {
           throw new Error("ECONNREFUSED");
         },

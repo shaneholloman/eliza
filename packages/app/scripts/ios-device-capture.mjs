@@ -128,7 +128,7 @@ export function resolveAgentProbeTarget(env = process.env, args = {}) {
   );
   return {
     kind: "cloud-health",
-    url: withPath(cloudBase, "/health"),
+    url: withPath(cloudBase, "/api/health"),
     source: "cloud health endpoint",
   };
 }
@@ -204,9 +204,7 @@ function collectSkippedChatRows(value, rows = []) {
   ]
     .filter((field) => typeof field === "string" && field.trim())
     .join(" ");
-  const chatLike = /\b(chat|message|reply|onboarding[-_ ]?chat)\b/i.test(
-    identifier,
-  );
+  const chatLike = /chat|message|reply/i.test(identifier);
   if (skipped && chatLike) {
     rows.push({ identifier: identifier.trim() || "unknown-chat-test" });
   }
