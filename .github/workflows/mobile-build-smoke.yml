@@ -36,7 +36,7 @@ jobs:
     # Path classifier is a git-diff + node script: no self-hosted resources.
     # Keep it on GitHub-hosted so a drained hetzner fleet cannot leave it
     # queued indefinitely and pile up runs (#13617/#8501).
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 10
     outputs:
       ios: ${{ steps.filter.outputs.ios }}
@@ -431,7 +431,7 @@ jobs:
     # cloud runtime-mode gate is a fast ubuntu job seeded with a real Cloud
     # credential rather than a browser OAuth leg.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 30
     env:
       # Headless session seed (#13578 done-when #2): a real Cloud credential
@@ -494,7 +494,7 @@ jobs:
     name: Android Debug Build
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.android == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
