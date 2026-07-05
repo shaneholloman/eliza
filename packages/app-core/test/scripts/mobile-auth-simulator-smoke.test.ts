@@ -12,10 +12,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   assertAuthCallbackResult,
+  buildAndroidPreferenceXml,
   buildCallbackUrl,
   expectedAuthCallbackFromUrl,
   parseArgs,
   parseResolvedActivity,
+  readAndroidPreferenceFromXml,
   resolvedActivityMatchesApp,
   resolveTargetAppDir,
 } from "../../scripts/mobile-auth-simulator-smoke.mjs";
@@ -131,9 +133,9 @@ describe("mobile-auth-simulator-smoke: callback URL + args", () => {
 });
 
 // #13693: the auth-OUTCOME assertion. These prove the smoke is NON-VACUOUS:
-// the delivery echo alone no longer passes; the handler must have read its real
-// session state back and reported that the OS-delivered callback did not
-// establish a session.
+// the delivery echo alone no longer passes; the handler must have classified
+// the callback as rejected and reported that the OS-delivered callback did not
+// change the active session.
 describe("mobile-auth-simulator-smoke: auth outcome assertion (#13693)", () => {
   const expected = expectedAuthCallbackFromUrl(
     "elizaos://auth/callback?state=simulator-oauth-state&code=simulator-oauth-code",
@@ -141,19 +143,34 @@ describe("mobile-auth-simulator-smoke: auth outcome assertion (#13693)", () => {
   const okResult = {
     ok: true,
     phase: "handled",
+    classification: "synthetic_callback_rejected",
+    accepted: false,
     sessionEstablished: false,
+    sessionChanged: false,
     path: expected.path,
     state: expected.state,
     code: expected.code,
   };
 
-  it("accepts a handled callback that did NOT establish a session", () => {
+  it("accepts a handled callback that did NOT change the session", () => {
     expect(assertAuthCallbackResult(okResult, expected, "iOS")).toBe(okResult);
   });
 
-  it("RED: throws when the handler never surfaced an outcome (deliver-only)", () => {
-    // The pre-#13693 vacuous payload: URL echoed back, no session readback.
-    // This is exactly the silent pass the issue calls out — it must now throw.
+  it("accepts an already-authenticated simulator when the callback leaves the session untouched", () => {
+    const preAuthenticated = {
+      ...okResult,
+      sessionEstablished: true,
+      activeServerBeforePresent: true,
+      activeServerAfterPresent: true,
+    };
+    expect(assertAuthCallbackResult(preAuthenticated, expected, "iOS")).toBe(
+      preAuthenticated,
+    );
+  });
+
+  it("RED: throws when the handler only echoes delivery", () => {
+    // The pre-#13693 vacuous payload: URL echoed back, no classification and no
+    // session readback. This is the silent pass the issue calls out.
     const deliverOnly = {
       ok: true,
       phase: "handled",
@@ -163,19 +180,49 @@ describe("mobile-auth-simulator-smoke: auth outcome assertion (#13693)", () => {
     };
     expect(() =>
       assertAuthCallbackResult(deliverOnly, expected, "iOS"),
-    ).toThrow(/no auth outcome surfaced/);
+    ).toThrow(/callback was not classified/);
   });
 
-  it("RED: throws when the deep link established a session (token accepted)", () => {
+  it("RED: throws when the handler surfaces a session readback but no classification", () => {
+    expect(() =>
+      assertAuthCallbackResult(
+        { ...okResult, classification: undefined },
+        expected,
+        "iOS",
+      ),
+    ).toThrow(/callback was not classified/);
+  });
+
+  it("RED: throws when the handler classifies rejection but does not explicitly reject", () => {
+    expect(() =>
+      assertAuthCallbackResult(
+        { ...okResult, accepted: true },
+        expected,
+        "iOS",
+      ),
+    ).toThrow(/not explicitly rejected/);
+  });
+
+  it("RED: throws when the deep link changed the active session", () => {
     // The security regression: a callback authenticating the app off an
     // OS-delivered deep link. Must fail loudly.
     expect(() =>
       assertAuthCallbackResult(
-        { ...okResult, sessionEstablished: true },
+        { ...okResult, sessionEstablished: true, sessionChanged: true },
         expected,
         "iOS",
       ),
-    ).toThrow(/established a session/);
+    ).toThrow(/changed the active session/);
+  });
+
+  it("RED: throws when the handler never surfaced a callback-specific session comparison", () => {
+    expect(() =>
+      assertAuthCallbackResult(
+        { ...okResult, sessionChanged: undefined },
+        expected,
+        "iOS",
+      ),
+    ).toThrow(/no auth outcome surfaced/);
   });
 
   it("still enforces the delivery echo (path/state/code)", () => {
@@ -189,6 +236,25 @@ describe("mobile-auth-simulator-smoke: auth outcome assertion (#13693)", () => {
     expect(() =>
       assertAuthCallbackResult({ ...okResult, ok: false }, expected, "iOS"),
     ).toThrow(/did not report ok=true/);
+  });
+
+  it("round-trips Android Capacitor Preferences XML keys", () => {
+    const request = JSON.stringify({ expected });
+    const result = JSON.stringify(okResult);
+    const xml = buildAndroidPreferenceXml({
+      "eliza:auth-callback-smoke:request": request,
+      "eliza:auth-callback-smoke:result": result,
+      "quote<&": "value<&",
+    });
+
+    expect(
+      readAndroidPreferenceFromXml(xml, "eliza:auth-callback-smoke:request"),
+    ).toBe(request);
+    expect(
+      readAndroidPreferenceFromXml(xml, "eliza:auth-callback-smoke:result"),
+    ).toBe(result);
+    expect(readAndroidPreferenceFromXml(xml, "quote<&")).toBe("value<&");
+    expect(readAndroidPreferenceFromXml(xml, "missing")).toBeNull();
   });
 });
 
