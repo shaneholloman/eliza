@@ -138,7 +138,23 @@ def _hermes_factory(model: str | None) -> AgentFactory:
 
 
 def _openclaw_factory(model: str | None) -> AgentFactory:
-    """One shared OpenClawClient; each task gets its own per-turn agent_fn."""
+    """One shared OpenClawClient; each task gets its own per-turn agent_fn.
+
+    Transport default is the **direct OpenAI-compatible path**, because it is
+    the only one that produces a *scored* LifeOpsBench lane: it returns the
+    structured ``tool_calls`` the runner executes against the harness-owned
+    LifeWorld. That path is disclosed as ``partial`` (not CLI-native tool-call
+    parity), which the report records.
+
+    Set ``OPENCLAW_USE_CLI=1`` to run the **real ``openclaw agent --local``
+    CLI** instead (needs a custom provider registered in the openclaw config —
+    see the adapter README's "CLI-native provider registration"). Those turns
+    are genuinely live, but the CLI owns its own tool execution and returns
+    natural-language ``payloads``: it cannot surface the harness tool catalog
+    as executable ``tool_calls``, so the lane completes every task yet scores
+    ``mean_score=0.000``. Use it to exercise the real CLI path, not to publish
+    a scalar. See ``.github/issue-evidence/13777-multitask-live/openclaw-cli-native/``.
+    """
     ensure_benchmark_adapter_importable("openclaw")
     from openclaw_adapter.client import OpenClawClient
     from openclaw_adapter.lifeops_bench import build_lifeops_bench_agent_fn
@@ -148,9 +164,13 @@ def _openclaw_factory(model: str | None) -> AgentFactory:
         or os.environ.get("ELIZA_PROVIDER")
         or "cerebras"
     ).strip().lower()
-    model_name = model or os.environ.get("BENCHMARK_MODEL_NAME") or "gemma-4-31b"
+    model_name = model or os.environ.get("BENCHMARK_MODEL_NAME") or "gpt-oss-120b"
+    # CLI-native only when explicitly opted in; otherwise the scoring path.
+    cli_native = os.environ.get("OPENCLAW_USE_CLI") == "1"
     shared_client = OpenClawClient(
-        provider=provider, model=model_name, direct_openai_compatible=True
+        provider=provider,
+        model=model_name,
+        direct_openai_compatible=not cli_native,
     )
     shared_client.wait_until_ready(timeout=120)
 
