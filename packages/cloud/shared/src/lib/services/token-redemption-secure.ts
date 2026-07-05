@@ -58,6 +58,7 @@ import { getCloudAwareEnv } from "../runtime/cloud-bindings";
 import { logger } from "../utils/logger";
 import { ELIZA_TOKEN_ADDRESSES, type SupportedNetwork } from "./eliza-token-price";
 import { redeemableEarningsService } from "./redeemable-earnings";
+import { normalizeRedemptionClientIp } from "./redemption-client-ip";
 import { twapPriceOracle } from "./twap-price-oracle";
 
 // ============================================================================
@@ -146,6 +147,9 @@ const IP_RATE_LIMITS = {
   // Max USD value per IP per day
   MAX_USD_PER_IP_DAILY: 2000,
 };
+
+export const REDEMPTION_ORIGIN_VERIFICATION_ERROR =
+  "Unable to verify redemption origin. Please try again later.";
 
 interface SecureRedemptionResult {
   success: boolean;
@@ -318,6 +322,17 @@ export class SecureTokenRedemptionService {
       return { success: false, error: "Amount exceeds absolute maximum" };
     }
 
+    const ipAddress = normalizeRedemptionClientIp(metadata?.ipAddress);
+    if (!ipAddress) {
+      logger.warn("[SecureRedemption] Missing trusted client IP", {
+        userId: `${userId.slice(0, 8)}...`,
+      });
+      return {
+        success: false,
+        error: REDEMPTION_ORIGIN_VERIFICATION_ERROR,
+      };
+    }
+
     // Validate network
     if (!ELIZA_TOKEN_ADDRESSES[network]) {
       return { success: false, error: `Unsupported network: ${network}` };
@@ -392,15 +407,13 @@ export class SecureTokenRedemptionService {
     }
 
     // SECURITY: Check IP-based rate limits (anti-sybil protection)
-    if (metadata?.ipAddress) {
-      const ipCheck = await this.checkIPRateLimits(metadata.ipAddress, pointsAmount);
-      if (!ipCheck.valid) {
-        logger.warn("[SecureRedemption] IP rate limit exceeded", {
-          ipAddress: metadata.ipAddress.split(".").slice(0, 2).join(".") + ".x.x", // Partially mask
-          reason: ipCheck.error,
-        });
-        return { success: false, error: ipCheck.error };
-      }
+    const ipCheck = await this.checkIPRateLimits(ipAddress, pointsAmount);
+    if (!ipCheck.valid) {
+      logger.warn("[SecureRedemption] IP rate limit exceeded", {
+        ipAddress: ipAddress.split(".").slice(0, 2).join(".") + ".x.x", // Partially mask
+        reason: ipCheck.error,
+      });
+      return { success: false, error: ipCheck.error };
     }
 
     // Fix #10: Check idempotency key
@@ -583,7 +596,7 @@ export class SecureTokenRedemptionService {
           description: `Redemption locked: $${deductionAmount.toFixed(2)} for ${elizaAmount.toFixed(4)} elizaOS on ${network}`,
           metadata: {
             idempotency_key: finalIdempotencyKey,
-            ip_address: metadata?.ipAddress,
+            ip_address: ipAddress,
           },
         })
         .returning();
@@ -607,7 +620,7 @@ export class SecureTokenRedemptionService {
           requires_review: requiresReview,
           metadata: {
             user_agent: metadata?.userAgent ? sanitizeForLog(metadata.userAgent) : undefined,
-            ip_address: metadata?.ipAddress,
+            ip_address: ipAddress,
             price_source: priceSource,
             idempotency_key: finalIdempotencyKey,
             original_balance: currentAvailable.toNumber(),

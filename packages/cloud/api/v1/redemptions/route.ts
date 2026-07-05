@@ -14,7 +14,11 @@ import {
   rateLimit,
 } from "@/lib/middleware/rate-limit-hono-cloudflare";
 import { payoutStatusService } from "@/lib/services/payout-status";
-import { secureTokenRedemptionService } from "@/lib/services/token-redemption-secure";
+import { normalizeRedemptionClientIp } from "@/lib/services/redemption-client-ip";
+import {
+  REDEMPTION_ORIGIN_VERIFICATION_ERROR,
+  secureTokenRedemptionService,
+} from "@/lib/services/token-redemption-secure";
 import { logger } from "@/lib/utils/logger";
 import type { AppEnv } from "@/types/cloud-worker-env";
 
@@ -38,6 +42,12 @@ function normalizeRedemptionNetwork(
   network: z.infer<typeof CreateRedemptionSchema>["network"],
 ) {
   return network === "bsc" ? "bnb" : network;
+}
+
+export function resolveRedemptionClientIp(
+  headers: Headers,
+): string | undefined {
+  return normalizeRedemptionClientIp(headers.get("cf-connecting-ip"));
 }
 
 const app = new Hono<AppEnv>();
@@ -143,10 +153,16 @@ app.post("/", rateLimit(RateLimitPresets.CRITICAL), async (c) => {
     }
 
     const userAgent = c.req.header("user-agent") ?? undefined;
-    const ipAddress =
-      c.req.header("x-forwarded-for")?.split(",")[0].trim() ??
-      c.req.header("x-real-ip") ??
-      undefined;
+    const ipAddress = resolveRedemptionClientIp(c.req.raw.headers);
+    if (!ipAddress) {
+      logger.warn("[Redemption API] Missing trusted client IP", {
+        userId: `${user.id.slice(0, 8)}...`,
+      });
+      return c.json(
+        { success: false, error: REDEMPTION_ORIGIN_VERIFICATION_ERROR },
+        400,
+      );
+    }
 
     const maskedAddress =
       payoutAddress.length > 20
