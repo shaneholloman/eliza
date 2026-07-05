@@ -26,6 +26,23 @@ export class ChatHistoryPersistenceError extends Error {
 }
 
 export const RELAUNCH_MARKER_PREFIX = "RELAUNCH-PERSIST";
+const RELAUNCH_MARKER_RE = new RegExp(
+  `^${RELAUNCH_MARKER_PREFIX}-[A-Za-z0-9_-]+-[A-Za-z0-9_-]+-\\d{10,}-[A-Za-z0-9]{8,}$`,
+);
+
+function markerSegment(value, fallback) {
+  const sanitized = String(value ?? "")
+    .replace(/[^A-Za-z0-9_-]/g, "")
+    .trim();
+  return sanitized || fallback;
+}
+
+function markerRandomSegment(value, fallback) {
+  const sanitized = String(value ?? "")
+    .replace(/[^A-Za-z0-9]/g, "")
+    .trim();
+  return sanitized.length >= 8 ? sanitized : fallback;
+}
 
 /**
  * A per-run unique marker string. The timestamp + random suffix guarantee that
@@ -38,19 +55,16 @@ export function buildRelaunchMarker({
   now = Date.now(),
   random,
 } = {}) {
-  const rand =
-    typeof random === "string" && random
-      ? random
-      : Math.random().toString(36).slice(2, 10);
-  const run = runId ? String(runId).replace(/[^A-Za-z0-9_-]/g, "") : rand;
-  return `${RELAUNCH_MARKER_PREFIX}-${platform}-${run}-${now}-${rand}`;
+  const generatedRand = Math.random().toString(36).slice(2, 10);
+  const rand = markerRandomSegment(random, generatedRand);
+  const platformSegment = markerSegment(platform, "app");
+  const run = markerSegment(runId, rand);
+  return `${RELAUNCH_MARKER_PREFIX}-${platformSegment}-${run}-${now}-${rand}`;
 }
 
-/** True only for a string that came from `buildRelaunchMarker`. */
+/** True only for a marker with the full shape emitted by `buildRelaunchMarker`. */
 export function isRelaunchMarker(value) {
-  return (
-    typeof value === "string" && value.startsWith(`${RELAUNCH_MARKER_PREFIX}-`)
-  );
+  return typeof value === "string" && RELAUNCH_MARKER_RE.test(value);
 }
 
 /**
