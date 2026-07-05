@@ -10,13 +10,22 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type IAgentRuntime, upsertProject } from "@elizaos/core";
+import {
+  type IAgentRuntime,
+  projectWorldId,
+  stringToUuid,
+  type UUID,
+  upsertProject,
+} from "@elizaos/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AcpService } from "../services/acp-service.js";
 import { OrchestratorTaskService } from "../services/orchestrator-task-service.js";
 import { OrchestratorTaskStore } from "../services/orchestrator-task-store.js";
-import { deriveProjectWorldId } from "../services/project-binding.js";
 import type { SpawnOptions, SpawnResult } from "../services/types.js";
+
+/** The agentId the test runtime carries; the stamped project world is derived
+ * per-agent from it (#14171), so the assertions below reuse this exact value. */
+const BINDER_AGENT_ID: UUID = "00000000-0000-4000-8000-000000000abc";
 
 /** ACP stand-in that records the workdir each spawn was handed and echoes it
  * back as the session's landed workdir (what AcpService does when the caller
@@ -55,7 +64,7 @@ function makeWorkdirCapturingAcp() {
 
 function makeRuntime(acpService: unknown): IAgentRuntime {
   return {
-    agentId: "00000000-0000-4000-8000-000000000abc",
+    agentId: BINDER_AGENT_ID,
     character: { name: "Binder" },
     logger: {
       debug: () => undefined,
@@ -497,12 +506,19 @@ describe("project memory-world stamping at bind time (#13776 D3)", () => {
         acceptanceCriteria: [],
         workdir: firstDir,
       });
+      // Cross-package equality guard (#14171): the world the real service path
+      // stamps must be EXACTLY core's per-agent `projectWorldId(agentId, id)` —
+      // a single source of truth, never the plugin re-deriving its own.
+      const expectedWorld = projectWorldId(BINDER_AGENT_ID, project.id);
       expect(detail.projectId).toBe(project.id);
-      expect(detail.worldId).toBe(deriveProjectWorldId(project.id));
+      expect(detail.worldId).toBe(expectedWorld);
+      // Mutation guard: it must NOT be the old agentId-less global form; if the
+      // plugin ever reverts to `stringToUuid("project:" + id)` this fails.
+      expect(detail.worldId).not.toBe(stringToUuid(`project:${project.id}`));
       // Persisted, not just returned.
       const record = await store.getTask(detail.id);
       expect(record?.task.projectId).toBe(project.id);
-      expect(record?.task.worldId).toBe(deriveProjectWorldId(project.id));
+      expect(record?.task.worldId).toBe(expectedWorld);
     } finally {
       await service.stop().catch(() => undefined);
     }
