@@ -336,11 +336,24 @@ export function DocumentsView({
   );
   useRegisterViewChatBinding(searchBinding);
   // Seed from the shared cache so a revisit paints the last-known documents
-  // instantly and revalidates silently, instead of flashing a spinner.
-  const documentsCacheKey = `documents:list:${scopeFilter}`;
+  // instantly and revalidates silently, instead of flashing a spinner. Keyed by
+  // scope AND facet (#13594): the server now draws the list per facet from the
+  // whole store, so each facet's page is cached independently.
+  const documentsCacheKey = `documents:list:${scopeFilter}:${facet}`;
   const cachedDocuments = getCached<DocumentRecord[]>(documentsCacheKey);
   const [documents, setDocuments] = useState<DocumentRecord[]>(
     cachedDocuments?.data ?? [],
+  );
+  // Whole-store per-facet counts for the segmented control (#13594). Fetched
+  // server-side so a facet is never missing/miscounted once its records fall
+  // outside the list page (the review blocker); seeded from the local slice as
+  // a first-paint estimate, then overwritten by the server truth.
+  const [serverFacetCounts, setServerFacetCounts] = useState<Record<
+    KnowledgeFacet,
+    number
+  > | null>(
+    getCached<Record<KnowledgeFacet, number>>(`documents:facets:${scopeFilter}`)
+      ?.data ?? null,
   );
   const [searchResults, setSearchResults] = useState<
     DocumentSearchResult[] | null
@@ -374,12 +387,26 @@ export function DocumentsView({
       if (!options?.silent) setLoading(true);
       setLoadError(null);
       try {
-        const docsRes = await client.listDocuments({
-          limit: 100,
-          ...(scopeFilter !== "all" ? { scope: scopeFilter } : {}),
-        });
+        const scopeParam = scopeFilter !== "all" ? { scope: scopeFilter } : {};
+        // Drive the list off the server facet so its rows come from the whole
+        // store, not the client's first page (#13594 review blocker). The
+        // facet-count fetch runs in parallel and describes the whole store
+        // under the current scope, so counts stay correct across pages.
+        const facetParam = facet !== "all" ? { knowledgeFacet: facet } : {};
+        const [docsRes, facetsRes] = await Promise.all([
+          client.listDocuments({
+            limit: 100,
+            ...scopeParam,
+            ...facetParam,
+          }),
+          client.getDocumentFacetCounts(scopeParam).catch(() => null),
+        ]);
         setDocuments(docsRes.documents);
-        setCached(`documents:list:${scopeFilter}`, docsRes.documents);
+        setCached(`documents:list:${scopeFilter}:${facet}`, docsRes.documents);
+        if (facetsRes?.counts) {
+          setServerFacetCounts(facetsRes.counts);
+          setCached(`documents:facets:${scopeFilter}`, facetsRes.counts);
+        }
         onDocumentsChange?.(docsRes.documents);
         setIsServiceLoading(false);
         setDocumentsUnavailable(false);
@@ -411,18 +438,19 @@ export function DocumentsView({
         setLoading(false);
       }
     },
-    [onDocumentsChange, scopeFilter],
+    [onDocumentsChange, scopeFilter, facet],
   );
 
   useEffect(() => {
     // Revalidate silently when cached documents are already on screen.
     loadData({
       silent:
-        getCached<DocumentRecord[]>(`documents:list:${scopeFilter}`) != null,
+        getCached<DocumentRecord[]>(`documents:list:${scopeFilter}:${facet}`) !=
+        null,
     }).catch(() => {
       setLoading(false);
     });
-  }, [loadData, scopeFilter]);
+  }, [loadData, scopeFilter, facet]);
   useEffect(() => {
     if (!isServiceLoading) {
       serviceRetryRef.current = 0;
@@ -880,13 +908,23 @@ export function DocumentsView({
 
   const isShowingSearchResults = searchResults !== null;
   const visibleSearchResults = searchResults ?? [];
-  const facetCounts = useMemo(
+  // The segmented control shows the whole-store counts the server returns; the
+  // local slice is only a first-paint estimate until they arrive (#13594). When
+  // a facet is active the list is already narrowed server-side, so the local
+  // slice can't recount the other facets — the server counts are the truth.
+  const localFacetCounts = useMemo(
     () => knowledgeFacetCounts(documents),
     [documents],
   );
+  const facetCounts = serverFacetCounts ?? localFacetCounts;
   // Facet + free-text narrowing over the plain list (semantic search results
   // are cross-format by relevance, so the facet control hides while they show).
   const filteredDocuments = useMemo(() => {
+    // The facet is applied server-side now (#13594): `documents` already holds
+    // the whole-store rows for the active facet, so only the instant free-text
+    // narrowing runs here. `documentMatchesFacet` stays a cheap belt-and-braces
+    // guard so a stale cached slice from another facet can't leak through on
+    // first paint before the revalidation lands.
     const query = searchQuery.trim().toLowerCase();
     return documents.filter((doc) => {
       if (!documentMatchesFacet(doc, facet)) return false;
