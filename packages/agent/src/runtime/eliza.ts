@@ -125,6 +125,7 @@ import {
   isElizaSettingsDebugEnabled,
   isMobilePlatform,
   migrateLegacyRuntimeConfig,
+  readAliasedEnv,
   resolveApiExposePort,
   resolveDeploymentTargetInConfig,
   resolveDesktopApiPort,
@@ -2050,7 +2051,7 @@ export async function autoFetchCloudGithubToken(
     process.env.ELIZAOS_CLOUD_BASE_URL?.trim() || "https://api.elizacloud.ai";
   if (!cloudApiKey || !agentId) return;
 
-  const managedNs = process.env.ELIZA_CLOUD_MANAGED_AGENTS_API_SEGMENT?.trim();
+  const managedNs = readAliasedEnv("ELIZA_CLOUD_MANAGED_AGENTS_API_SEGMENT");
   if (!managedNs) return;
 
   try {
@@ -3681,7 +3682,7 @@ export async function startEliza(
   //     in the slim image, and the second PGlite worker has been observed to
   //     hang vault-pglite init silently — blocking the HTTP listen and
   //     tripping the 180s health check on every fresh provision.
-  const isCloudProvisioned = process.env.ELIZA_CLOUD_PROVISIONED === "1";
+  const isCloudProvisioned = readAliasedEnv("ELIZA_CLOUD_PROVISIONED") === "1";
   if (!isMobilePlatform() && !isCloudProvisioned) {
     // pre-resolve-setup's two serial cost centers: the OS-keychain hydrate and
     // the vault PGlite cold-start. Timed separately and surfaced below so the
@@ -3867,7 +3868,7 @@ export async function startEliza(
   // injected by the daemon as env vars, so there's nothing to multiplex. The
   // pool implementation is supplied by the host through the injected agent host
   // bridge (see ./host-bridge.ts) — no app-core import, no boot-time cycle.
-  if (process.env.ELIZA_CLOUD_PROVISIONED !== "1")
+  if (readAliasedEnv("ELIZA_CLOUD_PROVISIONED") !== "1")
     try {
       const accountPool = await importAppCoreRuntime();
       accountPool.getDefaultAccountPool();
@@ -4024,7 +4025,7 @@ export async function startEliza(
   // image; see the boot-time vault hydration block earlier in this function.
   if (
     process.env.ELIZA_DISABLE_VAULT_PROFILE_RESOLVER !== "1" &&
-    process.env.ELIZA_CLOUD_PROVISIONED !== "1"
+    readAliasedEnv("ELIZA_CLOUD_PROVISIONED") !== "1"
   ) {
     try {
       const { sharedVault } = await importAppCoreRuntime();
@@ -5002,7 +5003,7 @@ export async function startEliza(
   > => {
     if (
       process.env.ELIZA_DISABLE_AGENT_WALLET_BOOTSTRAP === "1" ||
-      process.env.ELIZA_CLOUD_PROVISIONED === "1"
+      readAliasedEnv("ELIZA_CLOUD_PROVISIONED") === "1"
     ) {
       return Promise.resolve([]);
     }
@@ -5438,7 +5439,7 @@ export async function startEliza(
     // the renderer hit "Failed to fetch". Prefer the desktop API port
     // resolver when ELIZA_API_PORT is set; otherwise fall back to the
     // server-only resolver so CLI-mode defaults (2138) stay untouched.
-    const apiPort = process.env.ELIZA_API_PORT
+    const apiPort = readAliasedEnv("ELIZA_API_PORT")
       ? resolveDesktopApiPort(process.env)
       : resolveServerOnlyPort(process.env);
     // Local-agent IPC mode (Android stdio bridge / Capacitor): the WebView
