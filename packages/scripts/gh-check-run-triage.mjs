@@ -235,6 +235,7 @@ async function main() {
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
 if (invokedPath === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
+    // error-policy:J1 CLI boundary translates failures to stderr + exit status.
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   });
