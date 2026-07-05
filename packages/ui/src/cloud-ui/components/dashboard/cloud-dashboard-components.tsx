@@ -153,7 +153,7 @@ export function DashboardActionCards({
           <Server className="h-5 w-5" />
           <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
         </div>
-        <h3 className="text-base font-semibold">Instances</h3>
+        <h3 className="text-base font-semibold">Agents</h3>
       </Link>
 
       <Link
@@ -226,12 +226,15 @@ export function AppsSkeleton() {
 export function ContainersSkeleton() {
   return (
     <DashboardTableSkeleton
+      // Columns must mirror the real Agents table header (eliza-agents-table)
+      // so the loading skeleton doesn't flash stale labels ("Instances",
+      // "Port") before the live headers ("Agent", "Runtime", "Web UI") paint.
       columns={[
-        { key: "name", label: "Name", skeletonClassName: "w-32" },
+        { key: "agent", label: "Agent", skeletonClassName: "w-32" },
         { key: "status", label: "Status", skeletonClassName: "h-6 w-20" },
-        { key: "port", label: "Port", skeletonClassName: "w-12" },
-        { key: "instances", label: "Instances", skeletonClassName: "w-8" },
-        { key: "deployed", label: "Deployed", skeletonClassName: "w-24" },
+        { key: "runtime", label: "Runtime", skeletonClassName: "w-20" },
+        { key: "webui", label: "Web UI", skeletonClassName: "w-16" },
+        { key: "created", label: "Created", skeletonClassName: "w-24" },
         {
           key: "actions",
           label: "Actions",

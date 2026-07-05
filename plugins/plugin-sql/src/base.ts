@@ -1718,14 +1718,25 @@ export abstract class BaseDrizzleAdapter extends DatabaseAdapter<DrizzleDatabase
       // `similarity()` only exists when pg_trgm is installed; degrade to 0 so the
       // ORDER BY and DTO carry a real (extension-absent) signal, not a fake rank.
       const trigramExpr = trigramAvailable
-        ? sql<number>`similarity(${document}, ${foldedQuery})`
+        ? sql<number>`GREATEST(similarity(${document}, ${foldedQuery}), word_similarity(${foldedQuery}, ${document}))`
         : sql<number>`0`;
+      const trigramMatch = trigramAvailable
+        ? sql`NOT EXISTS (
+            SELECT 1
+            FROM unnest(regexp_split_to_array(${foldedQuery}, '[[:space:]]+')) AS query_terms(term)
+            WHERE query_terms.term <> ''
+              AND NOT (
+                ${document} LIKE eliza_search_like_pattern(query_terms.term)
+                OR word_similarity(query_terms.term, ${document}) >= 0.45
+              )
+          )`
+        : sql`FALSE`;
 
       const conditions = [
         eq(memoryTable.type, tableName),
         eq(memoryTable.agentId, this.agentId),
         inArray(memoryTable.roomId, params.roomIds),
-        sql`(${tsvector} @@ ${tsquery} OR ${document} LIKE eliza_search_like_pattern(${params.query}))`,
+        sql`(${tsvector} @@ ${tsquery} OR ${document} LIKE eliza_search_like_pattern(${params.query}) OR ${trigramMatch})`,
       ];
 
       const rows = await this.db

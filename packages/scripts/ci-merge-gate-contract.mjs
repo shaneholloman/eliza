@@ -6,11 +6,12 @@
  *
  * Three invariants, each guarding one failure mode the issue documents:
  *
- *   1. Path classifiers stay GitHub-hosted. Every `Classify changed paths` job
- *      is a git-diff + node script; when it was pinned to the hetzner-robot
- *      fleet a drained fleet left it queued forever and every downstream job
- *      (and the required `ci-ok`) wedged with it (#8501 gridlock). It must run
- *      on `ubuntu-24.04`.
+ *   1. Path classifiers keep a hosted fallback. Every `Classify changed paths`
+ *      job is a git-diff + node script; when it was pinned to the hetzner-robot
+ *      fleet with no fallback, a drained fleet left it queued forever and every
+ *      downstream job (and the required `ci-ok`) wedged with it (#8501
+ *      gridlock). It must either run directly on `ubuntu-*` or use the
+ *      `HETZNER_FLEET_ONLINE` fallback expression.
  *
  *   2. Heavy self-hosted jobs carry the fleet-drain fallback. `ci-ok` needs the
  *      test lanes, which run on the hetzner-robot fleet. There is no way to
@@ -24,8 +25,8 @@
  *      format / typecheck / stale-base / secret regression (all required on
  *      `main`) could merge to develop. `ci-ok` must need `merge-quality-gate`,
  *      and that job must run lint + format:check + typecheck + stale-base +
- *      a gitleaks secret scan on a hosted runner so it gates regardless of
- *      fleet health.
+ *      a gitleaks secret scan on a runner with the same hosted fallback, so it
+ *      gates even when operators drain the self-hosted fleet.
  *
  * Text-scans the workflow YAML (no yaml dependency, matching the sibling
  * ci-*-contract.mjs scripts). `--self-test` proves the checker against synthetic
@@ -62,7 +63,7 @@ function classifierRunsOn(text) {
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i += 1) {
     if (/^\s+name:\s*Classify changed paths\s*$/.test(lines[i])) {
-      for (let j = i + 1; j < Math.min(i + 6, lines.length); j += 1) {
+      for (let j = i + 1; j < Math.min(i + 16, lines.length); j += 1) {
         const m = lines[j].match(/^\s+runs-on:\s*(.+?)\s*$/);
         if (m) return m[1];
       }
@@ -91,6 +92,11 @@ function jobNeeds(text, jobId) {
   for (let i = header + 1; i < lines.length; i += 1) {
     const line = lines[i];
     if (/^ {2}\S/.test(line)) break; // next top-level job
+    const inlineNeeds = line.match(/^ {4}needs:\s*(\S+)\s*$/);
+    if (inlineNeeds) {
+      needs.add(inlineNeeds[1]);
+      continue;
+    }
     if (/^ {4}needs:\s*$/.test(line)) {
       inNeeds = true;
       continue;
@@ -105,6 +111,19 @@ function jobNeeds(text, jobId) {
     }
   }
   return needs;
+}
+
+function hasFleetFallback(value) {
+  return (
+    value.includes(`vars.${FLEET_FALLBACK_VAR}`) &&
+    value.includes("ubuntu-") &&
+    value.includes("self-hosted") &&
+    value.includes("hetzner-robot")
+  );
+}
+
+function hasHostedRunnerOrFleetFallback(value) {
+  return value.startsWith("ubuntu-") || hasFleetFallback(value);
 }
 
 /** The raw body of a named job (its lines up to the next top-level job). */
@@ -128,9 +147,9 @@ function checkWorkflowText(fileName, text, problems) {
     // test.yml must own the classifier; other files might legitimately drop it.
     problems.push(`${fileName}: no 'Classify changed paths' job found`);
   }
-  if (runsOn !== null && !runsOn.startsWith("ubuntu-")) {
+  if (runsOn !== null && !hasHostedRunnerOrFleetFallback(runsOn)) {
     problems.push(
-      `${fileName}: 'Classify changed paths' runs-on is '${runsOn}', expected a GitHub-hosted ubuntu-* runner (a drained self-hosted fleet must not wedge the classifier)`,
+      `${fileName}: 'Classify changed paths' runs-on is '${runsOn}', expected ubuntu-* or the ${FLEET_FALLBACK_VAR} hosted fallback expression (a drained self-hosted fleet must not wedge the classifier)`,
     );
   }
 
@@ -153,15 +172,90 @@ function checkWorkflowText(fileName, text, problems) {
       problems.push(
         "test.yml: 'ci-ok' does not need 'merge-quality-gate' — the merge queue would not enforce lint/format/typecheck/secret gates",
       );
+    } else if (!ciOkNeeds.has("stale-base-preflight")) {
+      problems.push(
+        "test.yml: 'ci-ok' does not need 'stale-base-preflight' — stale PRs could skip the test fan-out without failing the required aggregate",
+      );
+    }
+
+    const preflight = jobBody(text, "stale-base-preflight");
+    if (preflight === null) {
+      problems.push("test.yml: no 'stale-base-preflight' job found");
+    } else {
+      const preflightRunsOn =
+        preflight.match(/^\s+runs-on:\s*(.+?)\s*$/m)?.[1] ?? "";
+      if (!hasHostedRunnerOrFleetFallback(preflightRunsOn)) {
+        problems.push(
+          `test.yml: 'stale-base-preflight' runs-on is '${preflightRunsOn || "missing"}', expected ubuntu-* or the ${FLEET_FALLBACK_VAR} hosted fallback expression`,
+        );
+      }
+      if (!/github\.event_name\s*==\s*'pull_request'/.test(preflight)) {
+        problems.push(
+          "test.yml: 'stale-base-preflight' must be PR-only so non-PR ci-ok lanes keep using merge-quality-gate",
+        );
+      }
+      if (!/actions\/setup-node@/.test(preflight)) {
+        problems.push(
+          "test.yml: 'stale-base-preflight' must set up Node before running the stale-base guard scripts",
+        );
+      }
+      if (
+        !/HEAD_REPO:[\s\S]*github\.event\.pull_request\.head\.repo\.full_name/.test(
+          preflight,
+        )
+      ) {
+        problems.push(
+          "test.yml: 'stale-base-preflight' must fetch the PR head from the head repository so fork PRs are supported",
+        );
+      }
+      if (
+        !/https:\/\/github\.com\/\$\{HEAD_REPO\}\.git[\s\S]*"\$HEAD_SHA"/.test(
+          preflight,
+        )
+      ) {
+        problems.push(
+          "test.yml: 'stale-base-preflight' fetch must use the PR head repository URL for HEAD_SHA",
+        );
+      }
+      if (!/stale-base-guard\.mjs[\s\S]*--head "\$HEAD_SHA"/.test(preflight)) {
+        problems.push(
+          "test.yml: 'stale-base-preflight' is missing the PR-head stale-base guard step",
+        );
+      }
+    }
+
+    const changesNeeds = jobNeeds(text, "changes");
+    const changes = jobBody(text, "changes");
+    if (!changesNeeds?.has("stale-base-preflight")) {
+      problems.push(
+        "test.yml: 'changes' must need 'stale-base-preflight' so stale PRs fail before test fanout",
+      );
+    }
+    if (changes === null) {
+      problems.push("test.yml: no 'changes' job found");
+    } else {
+      if (
+        !/needs\.stale-base-preflight\.result\s*==\s*'success'/.test(changes)
+      ) {
+        problems.push(
+          "test.yml: 'changes' must require stale-base-preflight success for pull_request fanout",
+        );
+      }
+      if (!/github\.event_name\s*!=\s*'pull_request'/.test(changes)) {
+        problems.push(
+          "test.yml: 'changes' must continue for non-PR events where stale-base-preflight is skipped",
+        );
+      }
     }
 
     const gate = jobBody(text, "merge-quality-gate");
     if (gate === null) {
       problems.push("test.yml: no 'merge-quality-gate' job found");
     } else {
-      if (!/runs-on:\s*ubuntu-/.test(gate)) {
+      const gateRunsOn = gate.match(/^\s+runs-on:\s*(.+?)\s*$/m)?.[1] ?? "";
+      if (!hasHostedRunnerOrFleetFallback(gateRunsOn)) {
         problems.push(
-          "test.yml: 'merge-quality-gate' must run on a GitHub-hosted ubuntu runner so it gates independent of fleet health",
+          `test.yml: 'merge-quality-gate' runs-on is '${gateRunsOn || "missing"}', expected ubuntu-* or the ${FLEET_FALLBACK_VAR} hosted fallback expression`,
         );
       }
       const required = [
@@ -207,9 +301,21 @@ function run(repoRoot) {
 
 function selfTest() {
   const good = `jobs:
+  stale-base-preflight:
+    name: PR stale-base preflight
+    if: github.event_name == 'pull_request'
+    runs-on: \${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
+    env:
+      HEAD_REPO: \${{ github.event.pull_request.head.repo.full_name }}
+    steps:
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - run: node packages/scripts/stale-base-guard.mjs --base "refs/remotes/origin/\${BASE_REF}" --head "$HEAD_SHA"
+      - run: git fetch "https://github.com/\${HEAD_REPO}.git" "$HEAD_SHA"
   changes:
     name: Classify changed paths
-    runs-on: ubuntu-24.04
+    needs: stale-base-preflight
+    if: always() && (github.event_name != 'pull_request' || needs.stale-base-preflight.result == 'success')
+    runs-on: \${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 10
   server-tests:
     name: Server Tests
@@ -218,7 +324,7 @@ function selfTest() {
   merge-quality-gate:
     name: Merge Queue Quality Gate
     needs: changes
-    runs-on: ubuntu-24.04
+    runs-on: \${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     steps:
       - run: bun run lint
       - run: bun run format:check
@@ -228,6 +334,7 @@ function selfTest() {
   ci-ok:
     name: ci-ok
     needs:
+      - stale-base-preflight
       - changes
       - merge-quality-gate
       - server-tests
@@ -244,7 +351,7 @@ function selfTest() {
     {
       name: "self-hosted classifier",
       text: good.replace(
-        "runs-on: ubuntu-24.04\n    timeout-minutes",
+        /runs-on: \$\{\{ fromJSON[^\n]+\}\}\n {4}timeout-minutes/,
         "runs-on: [self-hosted, hetzner-robot]\n    timeout-minutes",
       ),
     },
@@ -258,6 +365,58 @@ function selfTest() {
     {
       name: "ci-ok missing merge-quality-gate",
       text: good.replace("      - merge-quality-gate\n", ""),
+    },
+    {
+      name: "ci-ok missing stale-base preflight",
+      text: good.replace("      - stale-base-preflight\n", ""),
+    },
+    {
+      name: "missing stale-base preflight job",
+      text: good.replace(
+        / {2}stale-base-preflight:[\s\S]*?(?= {2}changes:\n)/,
+        "",
+      ),
+    },
+    {
+      name: "preflight not PR-only",
+      text: good.replace("if: github.event_name == 'pull_request'", ""),
+    },
+    {
+      name: "preflight missing node setup",
+      text: good.replace(
+        "      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e\n",
+        "",
+      ),
+    },
+    {
+      name: "preflight missing head repo env",
+      text: good.replace(
+        "      HEAD_REPO: $" +
+          "{{ github.event.pull_request.head.repo.full_name }}\n",
+        "",
+      ),
+    },
+    {
+      name: "preflight fetches head from origin",
+      text: good.replace(
+        'git fetch "https://github.com/$' + '{HEAD_REPO}.git" "$HEAD_SHA"',
+        'git fetch origin "$HEAD_SHA"',
+      ),
+    },
+    {
+      name: "changes missing preflight need",
+      text: good.replace("    needs: stale-base-preflight\n", ""),
+    },
+    {
+      name: "changes missing preflight success gate",
+      text: good.replace(
+        " || needs.stale-base-preflight.result == 'success'",
+        "",
+      ),
+    },
+    {
+      name: "changes missing non-PR continuation",
+      text: good.replace("github.event_name != 'pull_request' || ", ""),
     },
     {
       name: "gate missing typecheck",
@@ -286,7 +445,9 @@ function selfTest() {
       throw new Error(`self-test: invalid fixture '${name}' was not caught`);
     }
   }
-  console.log("ci-merge-gate-contract self-test: 8 cases passed");
+  console.log(
+    `ci-merge-gate-contract self-test: ${badCases.length + 1} cases passed`,
+  );
 }
 
 function main() {
@@ -301,7 +462,7 @@ function main() {
     process.exit(1);
   }
   console.log(
-    "ci-merge-gate-contract: classifiers hosted, fleet-drain fallback present, ci-ok enforces the hosted quality gate.",
+    "ci-merge-gate-contract: classifiers have hosted fallback, fleet-drain fallback present, ci-ok enforces the quality gate.",
   );
 }
 

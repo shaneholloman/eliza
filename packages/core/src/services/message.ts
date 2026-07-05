@@ -269,7 +269,9 @@ import {
 } from "./message/direct-action-heuristics";
 import {
 	buildFailureReplyPrompt,
+	INSUFFICIENT_CREDITS_REPLY,
 	isAuthError,
+	isInsufficientCreditsError,
 	isRateLimitError,
 	stripReasoningBlocks,
 } from "./message/fallback-reply";
@@ -1500,6 +1502,7 @@ interface StrategyResult {
 type FailureReplyAttempt =
 	| { kind: "text"; value: string }
 	| { kind: "noProvider" }
+	| { kind: "creditsExhausted" }
 	| { kind: "rateLimited" }
 	| { kind: "authFailed" };
 
@@ -1518,7 +1521,10 @@ export function shouldSkipResponseMemoryPersistence(memory: Memory): boolean {
 
 export {
 	buildFailureReplyPrompt,
+	INSUFFICIENT_CREDITS_REPLY,
 	isAuthError,
+	isInsufficientCreditsError,
+	isInsufficientCreditsMessage,
 	isModelProviderFallbackError,
 	isRateLimitError,
 	stripReasoningBlocks,
@@ -8452,13 +8458,26 @@ export class DefaultMessageService implements IMessageService {
 				? message.content.source
 				: "messageService";
 
-		// Mint the root-turn traceId once here (#13775) — inherited from a spawning
-		// parent's env when this runtime is itself a sub-agent, else a fresh id.
-		// Stamped on message.metadata BEFORE MESSAGE_RECEIVED is emitted so the DB
-		// trajectory handler (features/trajectories) records the SAME traceId as
-		// the file recorder, and placed on the turn's trajectory context below so
-		// sub-agent spawns read it too. Both stores then join on one traceId.
-		const traceId = resolveTraceCorrelationFromEnv().traceId ?? asUUID(v4());
+		// Root-turn traceId (#13775). On emit-first paths (agent API chat route,
+		// connectors) the trajectories MESSAGE_RECEIVED handler already minted and
+		// stamped one on message.metadata before we ran — reuse it, or the DB row
+		// and the file trajectory would carry different ids. Otherwise mint here
+		// (inherited from a spawning parent's env when this runtime is itself a
+		// sub-agent, else fresh) and stamp it BEFORE MESSAGE_RECEIVED is emitted
+		// below so the DB trajectory handler records the SAME traceId as the file
+		// recorder. Placed on the turn's trajectory context below so sub-agent
+		// spawns read it too. All stores then join on one traceId.
+		const preStampedTraceId =
+			typeof message.metadata === "object" &&
+			message.metadata !== null &&
+			typeof (message.metadata as { traceId?: unknown }).traceId === "string" &&
+			(message.metadata as { traceId: string }).traceId.trim() !== ""
+				? (message.metadata as { traceId: string }).traceId
+				: undefined;
+		const traceId =
+			preStampedTraceId ??
+			resolveTraceCorrelationFromEnv().traceId ??
+			asUUID(v4());
 		if (!message.metadata) {
 			message.metadata = { type: "message" };
 		}
@@ -10592,6 +10611,7 @@ export class DefaultMessageService implements IMessageService {
 		prompt: string,
 		stage: string,
 	): Promise<FailureReplyAttempt> {
+		let sawCreditsExhausted = false;
 		let sawRateLimit = false;
 		let sawAuthError = false;
 		for (const modelType of [
@@ -10630,11 +10650,15 @@ export class DefaultMessageService implements IMessageService {
 				) {
 					return { kind: "noProvider" };
 				}
-				// Track the most recent slot's cause. Reporting "rate-limited"
-				// only when the LAST attempted slot was a 429 avoids misleading
-				// the user in a mixed-failure run (one slot throttled, others
-				// failed for unrelated reasons where retrying won't help). The
-				// all-429 cascade from the live incident still lands here.
+				// Credit exhaustion is sticky across slots because no later
+				// fallback model can make a drained account retryable. The
+				// rate/auth flags still track the most recent slot's cause:
+				// reporting "rate-limited" only when the LAST attempted slot was
+				// a 429 avoids misleading the user in a mixed-failure run.
+				// Credits are classified before rate limits below: a 429 *with*
+				// billing context is a drained balance ("top up"), not a
+				// transient throttle ("try again in a few seconds").
+				sawCreditsExhausted ||= isInsufficientCreditsError(error);
 				sawRateLimit = isRateLimitError(error);
 				sawAuthError = isAuthError(error);
 				runtime.logger.warn(
@@ -10649,9 +10673,15 @@ export class DefaultMessageService implements IMessageService {
 			}
 		}
 		// Every model slot failed without a usable reply. When the final cause
-		// was provider rate-limiting (429), tell the user that plainly instead
-		// of the opaque generic message — the honest signal is "try again
-		// shortly", not "something broke".
+		// was credit exhaustion (402/insufficient_credits), the condition is
+		// permanent until the user tops up — "try again" can never succeed, so
+		// surface the actionable top-up message.
+		if (sawCreditsExhausted) {
+			return { kind: "creditsExhausted" };
+		}
+		// When the final cause was provider rate-limiting (429), tell the user
+		// that plainly instead of the opaque generic message — the honest
+		// signal is "try again shortly", not "something broke".
 		if (sawRateLimit) {
 			return { kind: "rateLimited" };
 		}
@@ -10705,17 +10735,20 @@ export class DefaultMessageService implements IMessageService {
 			);
 		}
 
-		let replyText =
-			attempt.kind === "rateLimited" || attempt.kind === "authFailed"
-				? ""
-				: attempt.value;
+		let replyText = attempt.kind === "text" ? attempt.value : "";
 		if (!replyText) {
 			// Last-ditch fallback when every model call above also failed.
 			// Voice-neutral so any character can ship this default; characters
 			// can override with their own phrasing via
 			// character.templates.transientFailureReply (or
-			// rateLimitedReply for the throttling-specific case).
-			if (attempt.kind === "rateLimited") {
+			// rateLimitedReply / insufficientCreditsReply for the specific
+			// cases).
+			if (attempt.kind === "creditsExhausted") {
+				const tmpl = runtime.character.templates?.insufficientCreditsReply;
+				replyText =
+					(typeof tmpl === "function" ? tmpl({ state }) : tmpl) ||
+					INSUFFICIENT_CREDITS_REPLY;
+			} else if (attempt.kind === "rateLimited") {
 				const tmpl = runtime.character.templates?.rateLimitedReply;
 				replyText =
 					(typeof tmpl === "function" ? tmpl({ state }) : tmpl) ||
@@ -10735,10 +10768,17 @@ export class DefaultMessageService implements IMessageService {
 
 		replyText = truncateToCompleteSentence(replyText.trim(), 2000);
 
+		// Credit exhaustion is not transient — it persists until the user tops
+		// up — so the synthetic reply carries the structural kind downstream
+		// consumers already key on (chat DTO failureKind gate, recent-messages
+		// synthetic-failure filter) instead of masquerading as a blip.
 		const responseContent: Content = {
 			thought: `Handle a temporary reply failure during ${stage}.`,
 			actions: ["REPLY"],
-			failureKind: "transient_failure",
+			failureKind:
+				attempt.kind === "creditsExhausted"
+					? "insufficient_credits"
+					: "transient_failure",
 			elizaSyntheticFailure: true,
 			transient: true,
 			doNotPersist: true,

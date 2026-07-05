@@ -15,18 +15,22 @@ import {
 
 let tmpDir: string;
 const priorTrajDir = process.env.ELIZA_TRAJECTORY_DIR;
+const priorLogging = process.env.ELIZA_TRAJECTORY_LOGGING;
 const priorRecording = process.env.ELIZA_TRAJECTORY_RECORDING;
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "subagent-stdout-test-"));
   process.env.ELIZA_TRAJECTORY_DIR = tmpDir;
-  delete process.env.ELIZA_TRAJECTORY_RECORDING; // default ON
+  process.env.ELIZA_TRAJECTORY_LOGGING = "1";
+  delete process.env.ELIZA_TRAJECTORY_RECORDING;
 });
 
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
   if (priorTrajDir === undefined) delete process.env.ELIZA_TRAJECTORY_DIR;
   else process.env.ELIZA_TRAJECTORY_DIR = priorTrajDir;
+  if (priorLogging === undefined) delete process.env.ELIZA_TRAJECTORY_LOGGING;
+  else process.env.ELIZA_TRAJECTORY_LOGGING = priorLogging;
   if (priorRecording === undefined)
     delete process.env.ELIZA_TRAJECTORY_RECORDING;
   else process.env.ELIZA_TRAJECTORY_RECORDING = priorRecording;
@@ -63,6 +67,7 @@ describe("appendSubagentStdout", () => {
   });
 
   it("no-ops (writes nothing, returns undefined) when recording is disabled", async () => {
+    delete process.env.ELIZA_TRAJECTORY_LOGGING;
     process.env.ELIZA_TRAJECTORY_RECORDING = "0";
     const returned = await appendSubagentStdout(
       "ses_off",
@@ -104,5 +109,67 @@ describe("appendSubagentStdout", () => {
     expect(path.dirname(path.resolve(p))).toBe(path.resolve(dir));
     expect(path.basename(p)).not.toContain("/");
     await expect(fs.readFile(p, "utf8")).resolves.toContain('"text":"x"');
+  });
+});
+
+describe("appendSubagentStdout secret redaction (#13775 review)", () => {
+  // The persisted file outlives the session, so a raw provider credential
+  // echoed to stdout would be a durable on-disk leak. The tee runs each chunk
+  // through core's canonical value-shape redactor (redactSensitiveText) at write
+  // time; these assert the persisted bytes never carry the live secret while
+  // ordinary content is left alone. Cerebras csk- prefix coverage is validated
+  // against the redactor directly in packages/core/src/security/redact.test.ts.
+  const readTexts = async (sessionId: string): Promise<string[]> => {
+    const raw = await fs.readFile(subagentStdoutLogPath(sessionId), "utf8");
+    return raw
+      .trim()
+      .split("\n")
+      .map((l) => (JSON.parse(l) as { text: string }).text);
+  };
+
+  it("redacts sk-/Bearer tokens in a MODEL-USED-style line before it lands", async () => {
+    const key = "sk-abcd1234EFGH5678wxyz";
+    const bearer = `Bearer ${"abcdef0123456789ABCDEF".repeat(2)}`;
+    const line = `MODEL-USED openai/gpt-5.5 key=${key} auth=${bearer}\n`;
+    const returned = await appendSubagentStdout("ses_secret", line);
+    expect(returned).toBe(subagentStdoutLogPath("ses_secret"));
+
+    const [persisted] = await readTexts("ses_secret");
+    // The raw file must never contain the live token bytes.
+    expect(persisted).not.toContain(key);
+    expect(persisted).not.toContain("abcdef0123456789ABCDEF".repeat(2));
+    // …but it is masked in place, not dropped: the redactor keeps a short
+    // head/tail marker (`…`) so the trace stays readable.
+    expect(persisted).toContain("…");
+    // Non-secret tokens on the same line survive.
+    expect(persisted).toContain("MODEL-USED openai/gpt-5.5");
+  });
+
+  it("leaves non-secret content byte-identical", async () => {
+    const clean =
+      "running `bun test`\n  ✓ 3 passed\n  path=/tmp/x done in 1.2s\n";
+    await appendSubagentStdout("ses_clean", clean);
+    const [persisted] = await readTexts("ses_clean");
+    // Nothing here matches a secret shape, so the chunk round-trips unchanged.
+    expect(persisted).toBe(clean);
+  });
+
+  it("redaction does not disturb rotation: the new (redacted) line is the only live content", async () => {
+    const logPath = subagentStdoutLogPath("ses_secret_rotate");
+    await fs.mkdir(path.dirname(logPath), { recursive: true });
+    await fs.writeFile(logPath, "x".repeat(10 * 1024 * 1024 + 1), "utf8");
+
+    const bearer = `Bearer ${"deadbeefcafef00d1234".repeat(2)}`;
+    await appendSubagentStdout(
+      "ses_secret_rotate",
+      `post-rotation auth=${bearer}\n`,
+    );
+
+    const rolled = await fs.readFile(`${logPath}.1`, "utf8");
+    expect(rolled.length).toBeGreaterThan(10 * 1024 * 1024);
+    const [persisted] = await readTexts("ses_secret_rotate");
+    expect(persisted).toContain("post-rotation");
+    expect(persisted).not.toContain("deadbeefcafef00d1234".repeat(2));
+    await expect(fs.stat(`${logPath}.2`)).rejects.toThrow();
   });
 });

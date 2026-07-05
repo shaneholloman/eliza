@@ -1897,6 +1897,31 @@ function trigramSetSimilarity(a: Set<string>, b: Set<string>): number {
 	return shared / (a.size + b.size - shared);
 }
 
+const MESSAGE_SEARCH_TRIGRAM_THRESHOLD = 0.45;
+
+function messageSearchTokens(text: string): string[] {
+	return text.split(/[^\p{L}\p{N}_:/.-]+/u).filter((t) => t.length > 0);
+}
+
+function termTrigramSimilarity(queryTerms: string[], document: string): number {
+	const documentTokens = messageSearchTokens(document);
+	if (queryTerms.length === 0 || documentTokens.length === 0) return 0;
+	let total = 0;
+	for (const queryTerm of queryTerms) {
+		let bestForTerm = document.includes(queryTerm) ? 1 : 0;
+		const queryGrams = toTrigramSet(queryTerm);
+		for (const documentToken of documentTokens) {
+			bestForTerm = Math.max(
+				bestForTerm,
+				trigramSetSimilarity(queryGrams, toTrigramSet(documentToken)),
+			);
+		}
+		if (bestForTerm < MESSAGE_SEARCH_TRIGRAM_THRESHOLD) return 0;
+		total += bestForTerm;
+	}
+	return total / queryTerms.length;
+}
+
 /** A message-shaped record the in-memory search ranker can score and order. */
 export interface SearchableMessage {
 	content: { text?: unknown; attachments?: unknown };
@@ -1931,15 +1956,21 @@ export function rankMessageSearch<T extends SearchableMessage>(
 		const doc = foldForSearch(messageSearchDocument(item.content));
 		const allTermsPresent = queryTerms.every((t) => doc.includes(t));
 		const phraseSubstring = doc.includes(foldedQuery);
-		if (!allTermsPresent && !phraseSubstring) continue;
 		const docLen = Math.max(doc.length, 1);
 		const ftsRank = allTermsPresent
 			? queryTerms.reduce((acc, t) => acc + occurrences(doc, t) / docLen, 0)
 			: 0;
-		const trigramSimilarity = trigramSetSimilarity(
-			queryTrigrams,
-			toTrigramSet(doc),
+		const trigramSimilarity = Math.max(
+			trigramSetSimilarity(queryTrigrams, toTrigramSet(doc)),
+			termTrigramSimilarity(queryTerms, doc),
 		);
+		if (
+			!allTermsPresent &&
+			!phraseSubstring &&
+			trigramSimilarity < MESSAGE_SEARCH_TRIGRAM_THRESHOLD
+		) {
+			continue;
+		}
 		hits.push({ item, ftsRank, trigramSimilarity });
 	}
 
