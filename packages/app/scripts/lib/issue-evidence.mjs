@@ -20,6 +20,83 @@ export const ISSUE_EVIDENCE_DIR = path.join(
   "issue-evidence",
 );
 
+/**
+ * Truthiness for an env var that carries a boolean intent. Treats the common
+ * falsey spellings (`"0"`, `"false"`, `"no"`, `"off"`, empty/whitespace) as
+ * false and any other non-empty value as true, so `CI=true`, `CI=1`, and a bare
+ * `CI=""` (GitHub sets `CI=true`, but a defensively-empty value should NOT arm
+ * a hard gate) all resolve sanely.
+ */
+function envFlagIsTrue(value) {
+  if (value === undefined || value === null) return false;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "") return false;
+  return !(
+    normalized === "0" ||
+    normalized === "false" ||
+    normalized === "no" ||
+    normalized === "off"
+  );
+}
+
+/**
+ * Resolve whether a capture run must PRODUCE evidence (vs. being allowed to
+ * soft-skip when the platform/tooling is absent). This is the fix for the
+ * "green-with-nothing" disease: when evidence was explicitly requested, a
+ * `skip()` (no device / not the right OS / tool missing) must become a hard,
+ * non-zero failure instead of exiting 0 with zero artifacts.
+ *
+ * Sources, in precedence order:
+ *   1. An explicit opt-OUT always wins: `--no-require-evidence`, or
+ *      `--require-evidence false|0|no|off`. This lets an operator run a capture
+ *      locally under CI without the gate arming.
+ *   2. An explicit opt-IN: a bare `--require-evidence` (or `=true|1|yes|on`).
+ *   3. Env opt-in: `E2E_REQUIRE_EVIDENCE` / `ELIZA_REQUIRE_EVIDENCE` truthy.
+ *   4. Auto-on under CI: `CI` truthy (GitHub Actions et al.).
+ * Otherwise false (local ad-hoc runs stay soft-skippable — behavior-preserving).
+ *
+ * Pure + exported so it is unit-testable without spawning a process.
+ */
+export function resolveRequireEvidence(
+  argv = process.argv.slice(2),
+  env = process.env,
+) {
+  // Scan argv for the flag (last occurrence wins) so an explicit value or an
+  // explicit --no- form is authoritative over the env/CI defaults.
+  let explicit; // undefined | true | false
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === "--no-require-evidence") {
+      explicit = false;
+      continue;
+    }
+    if (token === "--require-evidence") {
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("--")) {
+        const v = next.trim().toLowerCase();
+        explicit = !(v === "0" || v === "false" || v === "no" || v === "off");
+        i++;
+      } else {
+        explicit = true;
+      }
+      continue;
+    }
+    if (token.startsWith("--require-evidence=")) {
+      const v = token.slice("--require-evidence=".length).trim().toLowerCase();
+      explicit = !(v === "0" || v === "false" || v === "no" || v === "off");
+    }
+  }
+  if (explicit !== undefined) return explicit;
+
+  if (
+    envFlagIsTrue(env?.E2E_REQUIRE_EVIDENCE) ||
+    envFlagIsTrue(env?.ELIZA_REQUIRE_EVIDENCE)
+  ) {
+    return true;
+  }
+  return envFlagIsTrue(env?.CI);
+}
+
 /** Parse `--flag value` and boolean `--flag` from argv into a flat object. */
 export function parseFlags(argv = process.argv.slice(2)) {
   const flags = {};
@@ -103,9 +180,35 @@ export function captureBackendLog(
   return out;
 }
 
-/** Print a skip-with-reason line and exit 0 — capture is non-fatal when the
- * platform/tooling is absent, matching scripts/e2e-recordings/run-all.mjs. */
-export function skip(platform, reason) {
+/**
+ * Print a skip-with-reason line and exit.
+ *
+ * Default (evidence NOT required): exit 0 — capture is non-fatal when the
+ * platform/tooling is absent, matching scripts/e2e-recordings/run-all.mjs.
+ *
+ * When evidence WAS explicitly required (`--require-evidence`, or auto-on under
+ * CI — see resolveRequireEvidence): print a distinct failure line and exit
+ * NON-ZERO (1). A capture that was demanded but produced nothing is a real
+ * failure, not a silent green-skip. This is the core of the #13624 fix: the
+ * skip contract can no longer swallow a missing artifact when the caller asked
+ * for one.
+ *
+ * @param {string} platform
+ * @param {string} reason
+ * @param {{ requireEvidence?: boolean }} [opts] override the resolved default
+ *   (primarily for tests / callers that already parsed the flag).
+ */
+export function skip(platform, reason, opts = {}) {
+  const required =
+    opts.requireEvidence !== undefined
+      ? opts.requireEvidence
+      : resolveRequireEvidence();
+  if (required) {
+    console.error(
+      `[capture:${platform}] [require-evidence] evidence was required but not captured: ${reason}`,
+    );
+    process.exit(1);
+  }
   console.log(`[capture:${platform}] [skip] ${reason}`);
   process.exit(0);
 }
