@@ -14,69 +14,68 @@
 
 import { BRAND_PATHS, LOGO_FILES } from "@elizaos/shared/brand";
 import {
-  Bot,
-  Building2,
-  CreditCard,
-  Grid3x3,
-  Home,
-  KeyRound,
-  User,
-} from "lucide-react";
-import { type ReactNode, useCallback, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+  type ReactNode,
+  useCallback,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import { Link, Navigate, useLocation } from "react-router-dom";
 import {
   DashboardHeader,
   DashboardShellLayout,
   DashboardSidebar,
-  type DashboardSidebarItem,
   type DashboardSidebarLinkRenderProps,
   type DashboardSidebarSection,
   PageHeaderProvider,
   usePageHeader,
 } from "../../cloud-ui/components/layout";
-import { useRequireAuth } from "../lib/use-session-auth";
+import { hasHydratableStewardToken } from "../lib/steward-session";
+import { useSessionAuth } from "../lib/use-session-auth";
+import {
+  CONSOLE_OVERVIEW_NAV_ITEM,
+  CONSOLE_SURFACES,
+} from "./console-surfaces";
 
 /**
- * The console nav: one flat list, launch-core surfaces only (nubs's cut,
- * 2026-07-04 — manage account, funds, agents, apps, API keys). Everything
- * else (my-agents, mcps, analytics, api-explorer, monetization, connectors,
- * security) stays REGISTERED and deep-linkable — it just isn't advertised
- * here until it earns its slot back. One unsectioned list means no section
- * titles at all, which also settles the Account/Account double-label.
+ * The console nav is one flat list so sidebar section labels never compete
+ * with Account and Organization route labels. Specialist routes stay registered
+ * for deep links but are not promoted into the default console chrome.
  */
 const CONSOLE_NAV_SECTIONS: DashboardSidebarSection[] = [
   {
     items: [
-      { id: "overview", label: "Overview", href: "/dashboard", icon: Home },
-      { id: "agents", label: "Agents", href: "/dashboard/agents", icon: Bot },
-      { id: "apps", label: "Apps", href: "/dashboard/apps", icon: Grid3x3 },
-      {
-        id: "billing",
-        label: "Billing",
-        href: "/dashboard/billing",
-        icon: CreditCard,
-      },
-      {
-        id: "api-keys",
-        label: "API Keys",
-        href: "/dashboard/api-keys",
-        icon: KeyRound,
-      },
-      {
-        id: "account",
-        label: "Account",
-        href: "/dashboard/account",
-        icon: User,
-      },
-      {
-        id: "organization",
-        label: "Organization",
-        href: "/dashboard/organization",
-        icon: Building2,
-      },
+      CONSOLE_OVERVIEW_NAV_ITEM,
+      ...CONSOLE_SURFACES.map(({ id, label, href, icon }) => ({
+        id,
+        label,
+        href,
+        icon,
+      })),
     ],
   },
 ];
+
+function subscribeToStewardTokenChanges(listener: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener("storage", listener);
+  window.addEventListener("steward-token-sync", listener);
+  return () => {
+    window.removeEventListener("storage", listener);
+    window.removeEventListener("steward-token-sync", listener);
+  };
+}
+
+function readHydratableStewardTokenSnapshot(): boolean {
+  return hasHydratableStewardToken();
+}
+
+function useHasHydratableStewardToken(): boolean {
+  return useSyncExternalStore(
+    subscribeToStewardTokenChanges,
+    readHydratableStewardTokenSnapshot,
+    () => false,
+  );
+}
 
 function renderRouterLink({
   href,
@@ -89,13 +88,6 @@ function renderRouterLink({
       {children}
     </Link>
   );
-}
-
-/** Prefix match so agent/app detail routes keep their parent item lit; the
- * Overview item stays exact so it doesn't light for every console page. */
-function isItemActive(item: DashboardSidebarItem, activePath: string): boolean {
-  if (item.href === "/dashboard") return activePath === "/dashboard";
-  return activePath === item.href || activePath.startsWith(`${item.href}/`);
 }
 
 function ConsoleLogo(): ReactNode {
@@ -141,9 +133,40 @@ export function ConsoleShell({
   children: ReactNode;
 }): React.JSX.Element {
   const location = useLocation();
-  const session = useRequireAuth();
+  const session = useSessionAuth();
+  const hasHydratableToken = useHasHydratableStewardToken();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const toggleSidebar = useCallback(() => setSidebarOpen((v) => !v), []);
+
+  // A dead session must SEND THE USER TO LOGIN, not render the console with
+  // every query gated off — that state reads as a fake-empty account ("No
+  // agents yet", balance "—") and is indistinguishable from real data loss
+  // (#13709: expired staging session showed exactly that). returnTo brings
+  // them straight back after re-auth.
+  if (session.ready && !session.authenticated) {
+    // Post-OAuth hydration window: the login page persists the token and
+    // navigates here BEFORE the auth provider consumes it, so for ~1-2s the
+    // session reads ready-but-unauthenticated. Redirecting then bounces the
+    // user back to the sign-in form — which reads as "login didn't work"
+    // (nubs, #13406). Hold only for a non-expired, identity-bearing token:
+    // expired/malformed tokens already read as signed-out in useSessionAuth and
+    // must redirect immediately. The storage/sync subscription above makes a
+    // provider clear transition re-render this branch into the login redirect.
+    if (hasHydratableToken) {
+      return (
+        <div
+          aria-busy="true"
+          className="flex min-h-dvh items-center justify-center bg-bg text-sm text-muted"
+        >
+          Signing you in…
+        </div>
+      );
+    }
+    const returnTo = encodeURIComponent(
+      `${location.pathname}${location.search}`,
+    );
+    return <Navigate to={`/login?returnTo=${returnTo}`} replace />;
+  }
 
   return (
     <PageHeaderProvider>
@@ -156,7 +179,6 @@ export function ConsoleShell({
             isOpen={sidebarOpen}
             onToggle={toggleSidebar}
             renderLink={renderRouterLink}
-            isItemActive={isItemActive}
             logo={<ConsoleLogo />}
             // The kit's own `md:static` loses the cascade in this bundle: Vite
             // emits per-chunk CSS and a later chunk re-declares `.fixed`, which

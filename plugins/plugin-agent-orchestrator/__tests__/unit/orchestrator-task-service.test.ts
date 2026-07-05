@@ -17,9 +17,10 @@ import type { IAgentRuntime } from "@elizaos/core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { OrchestratorTaskService } from "../../src/services/orchestrator-task-service.js";
 import { OrchestratorTaskStore } from "../../src/services/orchestrator-task-store.js";
-import type {
-  CreateTaskInput,
-  OrchestratorTaskSession,
+import {
+  type CreateTaskInput,
+  type OrchestratorTaskSession,
+  TERMINAL_TASK_STATUSES,
 } from "../../src/services/orchestrator-task-types.js";
 
 // This suite pins the status state machine and the ACP→task event bridge — NOT
@@ -153,6 +154,25 @@ async function drive(
 ): Promise<void> {
   acp.emit(sessionId, event, data);
   await flush();
+}
+
+/** Poll until the task reaches `status`. The `task_complete` bridge path does
+ * real async IO (change-set mirror, trajectory ingest #13775) before the
+ * `completion_reported` status advance, so a single-macrotask {@link flush}
+ * races it — asserting the post-completion status directly is flaky. */
+async function settleStatus(
+  service: OrchestratorTaskService,
+  taskId: string,
+  status: string,
+): Promise<void> {
+  const deadline = Date.now() + 5000;
+  let last: string | undefined;
+  while (Date.now() < deadline) {
+    last = must(await service.getTask(taskId), "task").status;
+    if (last === status) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  expect(last).toBe(status);
 }
 
 /** A started service with one task and one spawned (ready) session, plus the
@@ -1112,9 +1132,7 @@ describe("OrchestratorTaskService — task status guards", () => {
   it("moves the task to validating on completion, never straight to done", async () => {
     const { service, acp, taskId, sessionId } = await withSpawnedSession();
     await drive(acp, sessionId, "task_complete", { response: "done" });
-    expect(must(await service.getTask(taskId), "detail").status).toBe(
-      "validating",
-    );
+    await settleStatus(service, taskId, "validating");
   });
 
   it("routes blocked and login_required to the right task status", async () => {
@@ -1141,6 +1159,7 @@ describe("OrchestratorTaskService — task status guards", () => {
   it("does not let a later active signal stomp validating", async () => {
     const { service, acp, taskId, sessionId } = await withSpawnedSession();
     await drive(acp, sessionId, "task_complete", { response: "done" });
+    await settleStatus(service, taskId, "validating");
     await drive(acp, sessionId, "tool_running", { toolCall: { title: "ls" } });
     expect(must(await service.getTask(taskId), "detail").status).toBe(
       "validating",
@@ -1150,6 +1169,7 @@ describe("OrchestratorTaskService — task status guards", () => {
   it("never mutates a terminal task from a session event", async () => {
     const { service, acp, taskId, sessionId } = await withSpawnedSession();
     await drive(acp, sessionId, "task_complete", { response: "done" });
+    await settleStatus(service, taskId, "validating");
     await service.validateTask(taskId, { passed: true, summary: "verified" });
     await drive(acp, sessionId, "tool_running", { toolCall: { title: "ls" } });
     expect(must(await service.getTask(taskId), "detail").status).toBe("done");
@@ -1196,6 +1216,90 @@ describe("OrchestratorTaskService — task status guards", () => {
     const detail = must(await service.getTask(task.id), "detail");
     expect(detail.status).toBe("interrupted");
     expect(must(detail.sessions[0], "session").status).toBe("stop_failed");
+  });
+
+  // #14105: the operator stop paths used to write `status: "interrupted"`
+  // directly, so a terminal task (done/failed/archived) still holding a live
+  // keepAlive session whose ACP stop fails was stomped to `interrupted` —
+  // `done → interrupted` is not a legal transition-table edge and this broke the
+  // terminal-immutability invariant #13830 enforces. Routing through
+  // advanceTaskStatus makes the illegal edge a no-op.
+  it("does NOT move a terminal `done` task to interrupted when stopTaskAgent hits an unavailable ACP", async () => {
+    const { service, store } = makeServiceWithStore();
+    const task = await service.createTask(createInput());
+    const sessionId = await addStoredSession(store, task.id);
+    // Terminal `done` while a `ready` (live) session is still on the record.
+    await store.updateTask(task.id, {
+      status: "done",
+      closedAt: new Date().toISOString(),
+    });
+
+    await expect(service.stopTaskAgent(task.id, sessionId)).rejects.toThrow(
+      /ACP service unavailable/,
+    );
+
+    const detail = must(await service.getTask(task.id), "detail");
+    expect(detail.status).toBe("done");
+    // The session-level stop failure is still recorded for observability.
+    expect(must(detail.sessions[0], "session").status).toBe("stop_failed");
+  });
+
+  it("does NOT regress a terminal `done` task to interrupted when archive's session stop fails", async () => {
+    const acp = new FakeAcp();
+    const { service, store } = makeServiceWithStore(acp);
+    await service.start();
+    const task = await service.createTask(createInput());
+    const sessionId = await addStoredSession(store, task.id);
+    await store.updateTask(task.id, {
+      status: "done",
+      closedAt: new Date().toISOString(),
+    });
+    acp.failStop = true;
+
+    // stopActiveSessions throws on the failed stop before archive fields land;
+    // the terminal task must stay `done` (pre-#14105 it was stomped to
+    // `interrupted` first — `done → interrupted` is an illegal edge).
+    await expect(service.archiveTask(task.id)).rejects.toThrow(
+      /Failed to stop/,
+    );
+    const detail = must(await service.getTask(task.id), "detail");
+    expect(detail.status).toBe("done");
+    expect(must(detail.sessions[0], "session").status).toBe("stop_failed");
+    void sessionId;
+  });
+
+  it("archives a terminal `done` task through the transition table when no live session blocks the stop", async () => {
+    const { service, store } = makeServiceWithStore();
+    const task = await service.createTask(createInput());
+    await store.updateTask(task.id, {
+      status: "done",
+      closedAt: new Date().toISOString(),
+    });
+
+    // No active sessions → stopActiveSessions is a no-op → archive resolves the
+    // target via nextTaskStatus(done, "archived") (a live table edge, not a
+    // literal write).
+    const archived = must(await service.archiveTask(task.id), "archived");
+    expect(archived.status).toBe("archived");
+    expect(archived.archivedAt).toBeTruthy();
+  });
+
+  it("still interrupts a NON-terminal task when archive's session stop fails", async () => {
+    const acp = new FakeAcp();
+    const { service, store } = makeServiceWithStore(acp);
+    await service.start();
+    const task = await service.createTask(createInput());
+    await addStoredSession(store, task.id); // leaves task `active`
+    acp.failStop = true;
+
+    // stopActiveSessions throws a RecoveryConflictError on the failed stop; the
+    // active task legally advances to `interrupted` (active → interrupted is a
+    // table edge) before the throw, so archive is not reached.
+    await expect(service.archiveTask(task.id)).rejects.toThrow(
+      /Failed to stop/,
+    );
+    const detail = must(await service.getTask(task.id), "detail");
+    expect(detail.status).toBe("interrupted");
   });
 });
 
@@ -1424,5 +1528,260 @@ describe("OrchestratorTaskService — store degradation resilience (#11641)", ()
       .slice(before)
       .filter((c) => String(c[0]).includes("failed to record session event"));
     expect(recordWarns).toHaveLength(1);
+  });
+});
+
+// The #13771 lifecycle holes: a crashed sub-agent must drive the task to a
+// terminal `failed` state (bounded by the retry budget), resume must re-engage
+// the work pause hard-stopped, and the session->task index must survive a
+// parent restart by rebuilding from the durable store.
+describe("OrchestratorTaskService — crash produces terminal failed (#13771)", () => {
+  it("keeps a RESPAWNABLE crash (session_state_lost) non-terminal while the budget remains", async () => {
+    // Only a crash the router actually re-drives may stay non-terminal — here a
+    // `session_state_lost`, which respawnStateLost re-spawns under a cap. A plain
+    // crash (no respawn producer) must NOT park like this; see the terminal case
+    // below and session-crash-terminates.test.ts.
+    const acp = new FakeAcp();
+    const { service, store } = makeServiceWithStore(acp);
+    await service.start();
+    const task = await service.createTask(createInput());
+    const detail0 = must(
+      await service.spawnAgentForTask(task.id),
+      "spawn detail",
+    );
+    const sessionId = must(detail0.sessions[0], "session").sessionId;
+    await drive(acp, sessionId, "error", {
+      failureKind: "session_state_lost",
+      message: "ACP session state lost",
+    });
+    const detail = must(await service.getTask(task.id), "detail");
+    // First respawnable crash: retrying, not terminal — the router's respawn
+    // gets a chance.
+    expect(detail.status).not.toBe("failed");
+    expect(TERMINAL_TASK_STATUSES.has(detail.status)).toBe(false);
+    expect(must(detail.sessions[0], "session").status).toBe("errored");
+    // The canonical typed counter is stamped on the durable session record.
+    const found = must(await store.findSession(sessionId), "found");
+    expect(found.session.retryCount).toBe(1);
+    // The producer records an honest retrying event.
+    expect(
+      detail.events?.some((e) => e.eventType === "session_error_retrying"),
+    ).toBe(true);
+  });
+
+  it("fails a plain crash immediately — it has no respawn producer, so parking it would wedge the task", async () => {
+    // #13771 regression guard (#13830): a generic session error is respawned by
+    // NEITHER the account-failover nor the session_state_lost path in
+    // sub-agent-router.ts, so no successor session is ever spawned and no further
+    // error re-enters the budget. Routing the first such crash to
+    // `retrying -> active` wedges the task forever; it must go terminal `failed`.
+    const acp = new FakeAcp();
+    const service = makeService(acp);
+    await service.start();
+    const task = await service.createTask(createInput());
+    const detail0 = must(
+      await service.spawnAgentForTask(task.id),
+      "spawn detail",
+    );
+    const sessionId = must(detail0.sessions[0], "session").sessionId;
+    await drive(acp, sessionId, "error", { message: "boom" });
+
+    const final = must(await service.getTask(task.id), "final");
+    expect(final.status).toBe("failed");
+    expect(TERMINAL_TASK_STATUSES.has(final.status)).toBe(true);
+    expect(final.events?.some((e) => e.eventType === "task_failed")).toBe(true);
+  });
+
+  it("advances the task to terminal failed once the respawnable-crash retry budget is spent", async () => {
+    const acp = new FakeAcp();
+    const service = makeService(acp);
+    await service.start();
+    const task = await service.createTask(createInput());
+
+    // Simulate the respawn lineage the router would drive for a respawnable
+    // crash: each crashed session is replaced by a fresh spawn, until the budget
+    // (3) is exhausted. `session_state_lost` is the respawnable class.
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const detail = must(
+        await service.spawnAgentForTask(task.id),
+        "spawn detail",
+      );
+      const sessionId = must(
+        detail.sessions.at(-1),
+        "spawned session",
+      ).sessionId;
+      await drive(acp, sessionId, "error", {
+        failureKind: "session_state_lost",
+        message: `state lost ${attempt}`,
+      });
+    }
+
+    const final = must(await service.getTask(task.id), "final");
+    expect(final.status).toBe("failed");
+    expect(TERMINAL_TASK_STATUSES.has(final.status)).toBe(true);
+    expect(final.events?.some((e) => e.eventType === "task_failed")).toBe(true);
+  });
+
+  it("never mutates a task once it has reached terminal failed", async () => {
+    const acp = new FakeAcp();
+    const service = makeService(acp);
+    await service.start();
+    const task = await service.createTask(createInput());
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const detail = must(
+        await service.spawnAgentForTask(task.id),
+        "spawn detail",
+      );
+      const sessionId = must(detail.sessions.at(-1), "session").sessionId;
+      await drive(acp, sessionId, "error", { message: "crash" });
+    }
+    expect(must(await service.getTask(task.id), "d").status).toBe("failed");
+
+    // A late liveness/tool event from a straggler session must not resurrect it.
+    const straggler = must(
+      await service.spawnAgentForTask(task.id),
+      "straggler",
+    );
+    const stragglerId = must(straggler.sessions.at(-1), "s").sessionId;
+    await drive(acp, stragglerId, "tool_running", {
+      toolCall: { title: "ls" },
+    });
+    await drive(acp, stragglerId, "ready");
+    expect(must(await service.getTask(task.id), "d2").status).toBe("failed");
+  });
+
+  it("does not count a clean stop against the crash budget", async () => {
+    const acp = new FakeAcp();
+    const { service, store } = makeServiceWithStore(acp);
+    await service.start();
+    const task = await service.createTask(createInput());
+    // Two clean stops must NOT enter the crash lineage — only `error` events do.
+    // A respawnable crash after them is therefore attempt 1/3 (retryCount === 1),
+    // not 3/3: had the stops counted, the budget would already be spent.
+    for (let i = 0; i < 2; i += 1) {
+      const d = must(await service.spawnAgentForTask(task.id), "spawn");
+      const sid = must(d.sessions.at(-1), "s").sessionId;
+      await drive(acp, sid, "stopped");
+    }
+    const d = must(await service.spawnAgentForTask(task.id), "spawn");
+    const sid = must(d.sessions.at(-1), "s").sessionId;
+    await drive(acp, sid, "error", {
+      failureKind: "session_state_lost",
+      message: "state lost",
+    });
+    const detail = must(await service.getTask(task.id), "detail");
+    // Respawnable + budget remains → non-terminal (the stops didn't burn it).
+    expect(detail.status).not.toBe("failed");
+    // Only one errored session in the lineage — the clean stops are not counted.
+    const found = must(await store.findSession(sid), "found");
+    expect(found.session.retryCount).toBe(1);
+  });
+});
+
+describe("OrchestratorTaskService — resume re-engagement symmetry (#13771)", () => {
+  it("resume re-spawns a fresh sub-agent for the work pause hard-stopped", async () => {
+    const { service, acp, taskId, sessionId } = await withSpawnedSession();
+    const spawnsBeforePause = acp.spawnArgs.length;
+
+    const paused = must(await service.pauseTask(taskId), "paused");
+    expect(paused.paused).toBe(true);
+    expect(acp.stopped).toContain(sessionId);
+
+    const resumed = must(await service.resumeTask(taskId), "resumed");
+    expect(resumed.paused).toBe(false);
+    // A new sub-agent was spawned to continue the interrupted work.
+    expect(acp.spawnArgs.length).toBe(spawnsBeforePause + 1);
+    expect(
+      resumed.events?.some((e) => e.eventType === "resume_reengaged"),
+    ).toBe(true);
+  });
+
+  it("resume of a task paused before any work runs just unpauses (no spawn)", async () => {
+    const acp = new FakeAcp();
+    const service = makeService(acp);
+    await service.start();
+    const task = await service.createTask(createInput());
+    await service.pauseTask(task.id); // no sessions yet
+    const spawnsBefore = acp.spawnArgs.length;
+
+    const resumed = must(await service.resumeTask(task.id), "resumed");
+    expect(resumed.paused).toBe(false);
+    expect(acp.spawnArgs.length).toBe(spawnsBefore);
+    expect(
+      resumed.events?.some((e) => e.eventType === "resume_reengaged"),
+    ).toBe(false);
+  });
+});
+
+describe("OrchestratorTaskService — restart reconstruction (#13771)", () => {
+  it("resolves a session's task from the durable store after an in-memory index loss", async () => {
+    const acp = new FakeAcp();
+    const store = new OrchestratorTaskStore({ backend: "memory" });
+    // A first service instance spawns the session and populates the store.
+    const first = new OrchestratorTaskService(runtime(acp), { store });
+    await first.start();
+    const task = await first.createTask(createInput());
+    const detail = must(await first.spawnAgentForTask(task.id), "spawn detail");
+    const sessionId = must(detail.sessions[0], "session").sessionId;
+
+    // Simulate a parent restart: a brand-new service with an EMPTY in-memory
+    // sessionTaskIndex, sharing only the durable store. The session event must
+    // still route to the task (index self-heals from store.findSession), which
+    // proves in-flight session->task resolution survives restart without a
+    // separate rebuild step.
+    const restarted = new OrchestratorTaskService(runtime(acp), { store });
+    await restarted.start();
+    await drive(acp, sessionId, "blocked", { message: "need input" });
+
+    const after = must(await restarted.getTask(task.id), "after restart");
+    expect(after.status).toBe("blocked");
+    expect(after.events?.some((e) => e.eventType === "blocked")).toBe(true);
+  });
+});
+
+// A late `error` for a session that already posted `task_complete` is a
+// teardown race — the process dropped its state AFTER the deliverable shipped.
+// The router suppresses its respawn for exactly this case (the completion
+// claim in router-loop-guard); the task bridge must be symmetric: keep the
+// `completed` session record, keep the task in `validating` so the in-flight
+// verification can finish (validateTask requires `validating`), and spend
+// nothing from the crash-retry budget.
+describe("OrchestratorTaskService — post-completion teardown race (#13830 audit)", () => {
+  it("drops a late session error after task_complete: task stays validating, session stays completed", async () => {
+    const { service, acp, taskId, sessionId } = await withSpawnedSession();
+    await drive(acp, sessionId, "task_complete", { response: "shipped" });
+    await settleStatus(service, taskId, "validating");
+    expect(
+      must(must(await service.getTask(taskId), "mid").sessions[0], "session")
+        .status,
+    ).toBe("completed");
+
+    await drive(acp, sessionId, "error", {
+      failureKind: "session_state_lost",
+      message: "session state lost during teardown",
+    });
+    // Give the straggler's (fast, in-memory) error path time to land before
+    // asserting it changed nothing.
+    await flush();
+
+    const after = must(await service.getTask(taskId), "after");
+    expect(after.status).toBe("validating");
+    expect(must(after.sessions[0], "session").status).toBe("completed");
+    expect(
+      after.events?.some((e) => e.eventType === "session_error_retrying"),
+    ).toBe(false);
+    expect(after.events?.some((e) => e.eventType === "task_failed")).toBe(
+      false,
+    );
+  });
+
+  it("still fails the task when a plain crash errors a session that never completed", async () => {
+    const { service, acp, taskId, sessionId } = await withSpawnedSession();
+    await drive(acp, sessionId, "error", {
+      message: "process exited with code 1",
+    });
+    await settleStatus(service, taskId, "failed");
+    const detail = must(await service.getTask(taskId), "detail");
+    expect(must(detail.sessions[0], "session").status).toBe("errored");
   });
 });

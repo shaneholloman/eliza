@@ -264,6 +264,7 @@ All are optional unless noted. Read by `src/services/config-env.ts` and
 | `ELIZA_CLAUDE_ACP_COMMAND` | `npx -y @agentclientprotocol/claude-agent-acp@0.34.0` | Native Claude ACP command |
 | `ELIZA_OPENCODE_ACP_COMMAND` | bundled shim or `opencode acp` | Native OpenCode ACP command |
 | `ELIZA_ACP_MAX_SESSIONS` | `8` | Concurrent session cap |
+| `ELIZA_ACP_SYSTEM_SESSION_HEADROOM` | `2` | Reserved concurrent slots for short-lived `system` spawns (the #8898 read-only verifier), counted separately from `ELIZA_ACP_MAX_SESSIONS` so validation never deadlocks behind the worker cap |
 | `ELIZA_MAX_SPAWNS_PER_ORIGIN` | `3` | Max sub-agent spawns per root user message before relaying the best captured result instead of re-spawning (bounds the weak-model re-spawn loop) |
 | `ELIZA_ACP_STATE_DIR` | `~/.eliza/plugin-acp` | Session state persistence dir when no runtime DB |
 | `ELIZA_ACP_SESSION_STORE_BACKEND` | unset | Override session store backend (`db`, `file`, or `memory`) |
@@ -281,8 +282,8 @@ All are optional unless noted. Read by `src/services/config-env.ts` and
 | `SMITHERS_DB_DATA_DIR` | unset | Data directory for smithers file-backed storage |
 | `ELIZA_SCRATCH_RETENTION` | unset | How long to retain scratch workspace dirs |
 | `ELIZA_SCRATCH_DECISION_TTL_MS` | unset | TTL for scratch workspace GC decisions |
-| `ELIZA_CLOUD_API_KEY` / `ELIZAOS_CLOUD_API_KEY` | unset | Cloud API key forwarded to spawned sub-agents |
-| `ELIZA_CLOUD_URL` / `ELIZAOS_CLOUD_URL` | unset | Cloud base URL forwarded to spawned sub-agents |
+| `ELIZAOS_CLOUD_API_KEY` / `ELIZAOS_CLOUD_URL` | unset | Owner Cloud creds. **Broker-first (#14118): NOT forwarded to sub-agents by default** — a child reaches Cloud via the parent broker (`apps.create` / `containers.create`, spend-gated). Set `ELIZA_FORWARD_CLOUD_KEY_TO_SUBAGENTS=1` to restore raw forwarding. |
+| `ELIZA_FORWARD_CLOUD_KEY_TO_SUBAGENTS` | unset (OFF) | Opt IN to forwarding the owner's raw `ELIZAOS_CLOUD*` creds into every child env. Default OFF; broker-first is preferred. A structured warning logs when active. |
 | `ACPX_DEFAULT_TIMEOUT_MS` | `300000` | Per-prompt timeout in ms |
 | `ACPX_APPROVE_ALL` | `false` | When `true`, defaults sessions to approve-all preset |
 | `ACPX_NO_TERMINAL` | `true` | Pass `--no-terminal` so agents use ACP events, not terminal UI |

@@ -507,6 +507,15 @@ export async function handlePermissionRoutes(
   );
 }
 
+type ProjectRoutesModule = typeof import("./project-routes.ts");
+export async function handleProjectRoutes(
+  ...args: Parameters<ProjectRoutesModule["handleProjectRoutes"]>
+): ReturnType<ProjectRoutesModule["handleProjectRoutes"]> {
+  const ctx = routeContext(args);
+  if (!ctx?.pathname.startsWith("/api/projects")) return false;
+  return (await import("./project-routes.ts")).handleProjectRoutes(...args);
+}
+
 type PermissionsExtraRoutesModule =
   typeof import("./permissions-routes-extra.ts");
 export async function handlePermissionsExtraRoutes(
@@ -692,8 +701,20 @@ export async function handleViewsRoutes(
   return handleViewsRoutes(...args);
 }
 
-export async function registerBuiltinViews(): Promise<void> {
+export async function registerBuiltinViews(
+  runtime?: import("@elizaos/core").IAgentRuntime | null,
+): Promise<void> {
   (await import("./views-registry.ts")).registerBuiltinViews();
+  // Register the built-in shell views' scoped actions once the runtime exists.
+  // Mechanism only: BUILTIN_VIEWS carries no scoped actions until per-view
+  // children add them, so this is a no-op today but wires the boot path.
+  if (runtime) {
+    const { BUILTIN_VIEWS } = await import("./builtin-views.ts");
+    const { registerViewScopedActions } = await import(
+      "../runtime/view-scoped-actions.ts"
+    );
+    registerViewScopedActions(runtime, "@elizaos/builtin", BUILTIN_VIEWS);
+  }
 }
 
 type WorkbenchRoutesModule = typeof import("./workbench-routes.ts");

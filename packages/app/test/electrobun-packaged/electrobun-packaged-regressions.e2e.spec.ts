@@ -9,6 +9,7 @@ import { expect, type TestInfo, test } from "@playwright/test";
 import { assertScreenshotNotBlank } from "../ui-smoke/helpers/screenshot-quality";
 import { type MockApiServer, startMockApiServer } from "./mock-api";
 import {
+  type DesktopNotificationDiagnostic,
   PackagedDesktopHarness,
   resolvePackagedLauncher,
 } from "./packaged-app-helpers";
@@ -28,6 +29,8 @@ const FIRST_RUN_SELECTOR = '[data-testid="continuous-chat-overlay"]';
 const SETTINGS_ROUTE = "/settings";
 const SETTINGS_MEDIA_ROUTE = "/settings/voice";
 const PLUGINS_ROUTE = "/apps/plugins";
+const NAVIGATE_SETTINGS_EVENT = "eliza:navigate:settings";
+const NOTIFICATION_TEST_BRIDGE_SYMBOL = "elizaos.ui.notification-store-tests";
 
 test.describe.configure({ mode: "serial" });
 
@@ -70,7 +73,30 @@ function getCurrentRouteExpression(): string {
   ].join("\n");
 }
 
+function getSettingsSectionForRoute(route: string): string | null {
+  const match = /^\/settings\/([^/?#]+)$/.exec(route);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function getRouteNavigationScript(route: string): string {
+  const settingsSection = getSettingsSectionForRoute(route);
+  if (settingsSection) {
+    return [
+      `const targetRoute = ${JSON.stringify(route)};`,
+      `const settingsSection = ${JSON.stringify(settingsSection)};`,
+      `const readCurrentRoute = () => ${getCurrentRouteExpression()};`,
+      `window.dispatchEvent(new CustomEvent(${JSON.stringify(NAVIGATE_SETTINGS_EVENT)}, {`,
+      `  detail: { section: settingsSection },`,
+      `}));`,
+      `const targetHash = "#" + settingsSection;`,
+      `if (window.location.hash !== targetHash) {`,
+      `  window.history.replaceState(null, "", targetHash);`,
+      `  window.dispatchEvent(new HashChangeEvent("hashchange"));`,
+      `}`,
+      `const currentRoute = readCurrentRoute();`,
+    ].join("\n");
+  }
+
   return [
     `const targetRoute = ${JSON.stringify(route)};`,
     `const readCurrentRoute = () => ${getCurrentRouteExpression()};`,
@@ -137,6 +163,78 @@ async function waitForEval<T>(
   return lastResult;
 }
 
+async function ingestPackagedNotification(
+  harness: PackagedDesktopHarness,
+  notification: {
+    id: string;
+    title: string;
+    body: string;
+    priority: "normal" | "high" | "urgent";
+  },
+): Promise<{ hasFocus: boolean; visibilityState: string }> {
+  const result = await waitForEval<
+    EvalResult<{ hasFocus: boolean; visibilityState: string }>
+  >(
+    harness,
+    `(() => {
+      try {
+        const bridge = globalThis[Symbol.for(${JSON.stringify(
+          NOTIFICATION_TEST_BRIDGE_SYMBOL,
+        )})];
+        if (!bridge?.ingestNotificationForTests) {
+          return { ok: false, error: "notification store test bridge unavailable" };
+        }
+        bridge.ingestNotificationForTests({
+          id: ${JSON.stringify(notification.id)},
+          title: ${JSON.stringify(notification.title)},
+          body: ${JSON.stringify(notification.body)},
+          category: "system",
+          priority: ${JSON.stringify(notification.priority)},
+          source: "packaged-e2e",
+          createdAt: Date.now(),
+          readAt: null,
+        }, 1);
+        return {
+          ok: true,
+          hasFocus: document.hasFocus(),
+          visibilityState: document.visibilityState,
+        };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    })()`,
+    (value) => value.ok === true,
+    {
+      message:
+        "Expected packaged renderer notification store test bridge to ingest a notification.",
+      timeout: 30_000,
+    },
+  );
+  expect(result.ok, result.ok ? undefined : result.error).toBe(true);
+  return result;
+}
+
+async function waitForNativeNotification(
+  harness: PackagedDesktopHarness,
+  title: string,
+): Promise<DesktopNotificationDiagnostic> {
+  const startedAt = Date.now();
+  let lastNotifications: DesktopNotificationDiagnostic[] = [];
+  while (Date.now() - startedAt < 30_000) {
+    lastNotifications = await harness.readNotifications();
+    const match = lastNotifications.find(
+      (notification) => notification.title === title,
+    );
+    if (match) return match;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(
+    `Timed out waiting for native notification ${JSON.stringify(
+      title,
+    )}.\nLast notifications: ${JSON.stringify(lastNotifications, null, 2)}`,
+  );
+}
+
 async function writeHarnessScreenshot(
   harness: PackagedDesktopHarness,
   testInfo: TestInfo,
@@ -172,6 +270,9 @@ async function openRouteAndWait(
       found: boolean;
       text: string;
       firstRunFound: boolean;
+      hash: string;
+      activeSettingsSection: string | null;
+      voiceSectionActive: boolean;
       rootHtmlLength: number;
       bodyText: string;
     }>
@@ -191,6 +292,18 @@ async function openRouteAndWait(
         firstRunFound: Boolean(
           document.querySelector(${JSON.stringify(FIRST_RUN_SELECTOR)}),
         ),
+        hash: window.location.hash,
+        activeSettingsSection:
+          document
+            .querySelector('[data-agent-id^="section-"][aria-current="page"]')
+            ?.getAttribute("data-agent-id")
+            ?.replace(/^section-/, "") ?? null,
+        voiceSectionActive: Boolean(
+          window.location.hash === "#voice" &&
+            document.querySelector(${JSON.stringify(SETTINGS_SELECTOR)}),
+        ) || Boolean(
+          document.querySelector('[data-agent-id="section-voice"][aria-current="page"]'),
+        ),
         rootHtmlLength: document.getElementById("root")?.innerHTML.length ?? 0,
         bodyText: (document.body?.innerText || "")
           .replace(/\\s+/g, " ")
@@ -206,9 +319,13 @@ async function openRouteAndWait(
     })()`,
     (current) =>
       current.ok &&
-      current.route === route &&
       current.selector === selector &&
-      current.found,
+      current.found &&
+      (route === SETTINGS_MEDIA_ROUTE
+        ? current.hash === "#voice" &&
+          current.activeSettingsSection === "voice" &&
+          current.voiceSectionActive
+        : current.route === route),
     {
       timeout: 20_000,
       message: `Timed out waiting for ${selector} at ${route}.`,
@@ -225,6 +342,11 @@ async function waitForMediaSettingsRoute(
     EvalResult<{
       shellReady: boolean;
       route: string;
+      hash: string;
+      activeSettingsSection: string | null;
+      voiceSectionActive: boolean;
+      rootHtmlLength: number;
+      bodyText: string;
     }>
   >(
     harness,
@@ -235,6 +357,23 @@ async function waitForMediaSettingsRoute(
           ok: true,
           shellReady: Boolean(document.querySelector(${JSON.stringify(SETTINGS_SELECTOR)})),
           route: currentRoute,
+          hash: window.location.hash,
+          activeSettingsSection:
+            document
+              .querySelector('[data-agent-id^="section-"][aria-current="page"]')
+              ?.getAttribute("data-agent-id")
+              ?.replace(/^section-/, "") ?? null,
+          voiceSectionActive: Boolean(
+            window.location.hash === "#voice" &&
+              document.querySelector(${JSON.stringify(SETTINGS_SELECTOR)}),
+          ) || Boolean(
+            document.querySelector('[data-agent-id="section-voice"][aria-current="page"]'),
+          ),
+          rootHtmlLength: document.getElementById("root")?.innerHTML.length ?? 0,
+          bodyText: (document.body?.innerText || "")
+            .replace(/\\s+/g, " ")
+            .trim()
+            .slice(0, 240),
         };
       } catch (error) {
         return {
@@ -246,7 +385,9 @@ async function waitForMediaSettingsRoute(
     (current) =>
       current.ok &&
       current.shellReady &&
-      current.route === SETTINGS_MEDIA_ROUTE,
+      current.hash === "#voice" &&
+      current.activeSettingsSection === "voice" &&
+      current.voiceSectionActive,
     {
       timeout: 20_000,
       message: `Timed out waiting for media settings route at ${SETTINGS_MEDIA_ROUTE}.`,
@@ -875,7 +1016,10 @@ async function withPackagedHarness(
       // behaviour. Since #10350 flipped the default resting surface to the
       // chromeless bottom bar, opt out here so they keep testing the full window
       // (the bottom-bar default is covered by electrobun-bottom-bar.e2e.spec.ts).
-      extraEnv: { ELIZA_DESKTOP_BOTTOM_BAR: "0" },
+      extraEnv: {
+        ELIZA_DESKTOP_BOTTOM_BAR: "0",
+        ELIZA_DESKTOP_TRAY_POPOVER: "1",
+      },
     });
     debugPackagedPhase("starting initial packaged launch");
     await harness.start({
@@ -1117,6 +1261,103 @@ test("packaged desktop reset from the application menu returns the shell to firs
   });
 });
 
+test("packaged desktop shortcut bridge summons the main window", async ({
+  browserName: _browserName,
+}) => {
+  void _browserName;
+  test.skip(
+    !isPackagedPlatform(),
+    "Packaged desktop regressions require a macOS, Windows, or Linux launcher.",
+  );
+
+  await withPackagedHarness(async ({ harness }) => {
+    const initialState = await harness.getState();
+    expect(initialState.shell.shortcuts ?? []).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "chat-overlay" })]),
+    );
+
+    await harness.closeMainWindow();
+    await harness.waitForState(
+      (state) => !state.mainWindow.present && state.shell.trayPresent,
+      "Expected closing the main window to leave the tray active before shortcut summon.",
+      30_000,
+    );
+
+    await harness.pressShortcut("chat-overlay");
+    await harness.waitForState(
+      (state) => state.mainWindow.present && state.shell.windowFocused,
+      "Expected shortcut bridge press to summon and focus the main window.",
+      30_000,
+    );
+  });
+});
+
+test("packaged desktop notification store reaches native OS notifications", async ({
+  browserName: _browserName,
+}) => {
+  void _browserName;
+  test.skip(
+    !isPackagedPlatform(),
+    "Packaged desktop notification regressions require a macOS, Windows, or Linux launcher.",
+  );
+
+  await withPackagedHarness(async ({ harness }) => {
+    await harness.clearNotifications();
+    await harness.focusMainWindow();
+    await harness.waitForState(
+      (state) => state.mainWindow.present && state.shell.windowFocused,
+      "Expected the packaged main window to be focused before urgent notification injection.",
+      30_000,
+    );
+
+    const urgentFocus = await ingestPackagedNotification(harness, {
+      id: "packaged-focused-urgent",
+      title: "Focused urgent packaged alert",
+      body: "The focused urgent notification should still reach the OS bridge.",
+      priority: "urgent",
+    });
+    expect(urgentFocus).toMatchObject({
+      hasFocus: true,
+      visibilityState: "visible",
+    });
+
+    expect(
+      await waitForNativeNotification(harness, "Focused urgent packaged alert"),
+    ).toMatchObject({
+      title: "Focused urgent packaged alert",
+      body: "The focused urgent notification should still reach the OS bridge.",
+      silent: false,
+    });
+
+    await harness.clearNotifications();
+    await harness.minimizeMainWindow();
+    await harness.waitForState(
+      (state) => state.mainWindow.present && !state.shell.windowFocused,
+      "Expected the packaged main window to lose focus before background notification injection.",
+      30_000,
+    );
+
+    const backgroundFocus = await ingestPackagedNotification(harness, {
+      id: "packaged-background-normal",
+      title: "Background normal packaged alert",
+      body: "The minimized normal notification should reach the OS bridge.",
+      priority: "normal",
+    });
+    expect(backgroundFocus.hasFocus).toBe(false);
+
+    expect(
+      await waitForNativeNotification(
+        harness,
+        "Background normal packaged alert",
+      ),
+    ).toMatchObject({
+      title: "Background normal packaged alert",
+      body: "The minimized normal notification should reach the OS bridge.",
+      silent: false,
+    });
+  });
+});
+
 test("packaged macOS desktop keeps the tray alive and preserves vibrancy through resize", async ({
   browserName: _browserName,
 }, testInfo) => {
@@ -1138,6 +1379,11 @@ test("packaged macOS desktop keeps the tray alive and preserves vibrancy through
     );
 
     expect(initialState.mainWindow.titleBarStyle).toBe("hiddenInset");
+    expect(initialState.shell.trayPopover).toMatchObject({
+      configured: true,
+      windowPresent: false,
+      visible: false,
+    });
     await writeHarnessScreenshot(
       harness,
       testInfo,
@@ -1146,6 +1392,27 @@ test("packaged macOS desktop keeps the tray alive and preserves vibrancy through
 
     const initialEffects = await readMainWindowEffects(harness);
     expect(initialEffects.shadowEnabled).toBe(true);
+
+    const openedPopover = await harness.toggleTrayPopover();
+    expect(openedPopover).toMatchObject({
+      configured: true,
+      windowPresent: true,
+      visible: true,
+    });
+    expect(openedPopover.lastAnchorBounds).toMatchObject({
+      width: 360,
+      height: 480,
+    });
+
+    const hiddenPopover = await harness.toggleTrayPopover();
+    expect(hiddenPopover).toMatchObject({
+      configured: true,
+      windowPresent: true,
+      visible: false,
+    });
+    expect(hiddenPopover.lastAnchorBounds).toEqual(
+      openedPopover.lastAnchorBounds,
+    );
 
     await harness.closeMainWindow();
 

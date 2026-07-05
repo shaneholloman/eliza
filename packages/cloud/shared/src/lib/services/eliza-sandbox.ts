@@ -29,6 +29,7 @@ import {
   type NewAgentSandboxBackup,
 } from "../../db/schemas/agent-sandboxes";
 import { jobs } from "../../db/schemas/jobs";
+import { InsufficientCreditsError as InsufficientCreditsApiError } from "../api/errors";
 import { containersEnv } from "../config/containers-env";
 import { getElizaAgentPublicWebUiUrl } from "../eliza-agent-web-ui";
 import { getCloudAwareEnv } from "../runtime/cloud-bindings";
@@ -229,6 +230,16 @@ export interface BridgeRequest {
   method: string;
   params?: Record<string, unknown>;
 }
+
+/**
+ * JSON-RPC error code for a shared-runtime turn rejected by the credit
+ * reserve. REST callers (shared-rest-adapter, the messages/stream route)
+ * match on this code to translate the failure into the canonical 402
+ * insufficient-credits response instead of a generic retryable failure —
+ * an empty balance is permanent until the org tops up, not a transient
+ * outage.
+ */
+export const BRIDGE_INSUFFICIENT_CREDITS_CODE = -32002;
 
 export interface BridgeResponse {
   jsonrpc: "2.0";
@@ -606,7 +617,11 @@ export class ElizaSandboxService {
     // filled from the org's pooled credentials. Merged only into this
     // in-memory bootstrap payload (→ settings.secrets via
     // buildRuntimeBootstrapAgent) — never persisted to environment_vars.
-    // Strict fallback: on any pool failure the env passes through unchanged.
+    // A provider with no eligible pooled credential leaves the env unchanged
+    // (the registry degrades a missing/unhealthy pool to null, its J4); a
+    // genuine internal pool fault propagates and fails provisioning closed —
+    // consistent with the decrypt/create throws above — rather than silently
+    // booting an agent missing a credential it was meant to receive.
     const pooledEnv = await applyPooledCredentialsToBootstrapEnv({
       organizationId: rec.organization_id,
       userId: rec.user_id,
@@ -1422,40 +1437,19 @@ export class ElizaSandboxService {
 
         await this.ensureRuntimeAgentStarted(runtimeRec);
 
-        // 4. Restore from backup (reconstructs incrementals back to a full).
-        const backup = await agentSandboxesRepository.getLatestBackup(rec.id);
-        if (backup) {
-          const restoreState = await agentSandboxesRepository.getReconstructedBackupState(
-            backup.id,
-          );
-          if (restoreState) {
-            try {
-              await this.pushState(handle.bridgeUrl, restoreState, { trusted: true });
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              if (
-                rec.execution_tier !== "custom" ||
-                !message.startsWith("State restore failed: HTTP 404")
-              ) {
-                throw error;
-              }
-              logger.info(
-                "[agent-sandbox] Backup restore skipped: custom image has no restore endpoint",
-                {
-                  agentId: rec.id,
-                  backupId: backup.id,
-                },
-              );
-            }
-          } else {
-            logger.warn("[agent-sandbox] Backup restore skipped: reconstructed state was null", {
-              agentId: rec.id,
-              backupId: backup.id,
-            });
-          }
-        }
-
-        // 5. Mark running + persist provider-specific metadata
+        // 4. Mark running + persist provider-specific metadata.
+        //
+        // This write happens BEFORE the backup restore on purpose: the status
+        // column is the reachability gate — the dedicated-agent proxy
+        // synthesizes a 202 "starting" for EVERY request (including the
+        // launcher's /api/status poll) until status='running'. The container is
+        // serving from this moment (health checked, runtime agent started), so
+        // gating the flip on the restore tail made a responsive agent read as
+        // "waking" for the whole restore — the launcher escalated to "taking
+        // longer than usual" while chat already answered (#14038). A restore
+        // failure still flips the row out of 'running' via the catch below
+        // (ghost cleanup → retry or markError), so 'running' never sticks on a
+        // failed provision.
         const updateData: Parameters<typeof agentSandboxesRepository.update>[1] = {
           status: "running",
           sandbox_id: handle.sandboxId,
@@ -1489,6 +1483,39 @@ export class ElizaSandboxService {
         // already reactivate; do it here so ALL provision paths re-enter billing.
         // Idempotent + exempt-guarded (ne billing_status 'exempt').
         await agentBillingRepository.reactivateSandboxBillingAfterFunding(rec.id, new Date());
+
+        // 5. Restore from backup (reconstructs incrementals back to a full).
+        const backup = await agentSandboxesRepository.getLatestBackup(rec.id);
+        if (backup) {
+          const restoreState = await agentSandboxesRepository.getReconstructedBackupState(
+            backup.id,
+          );
+          if (restoreState) {
+            try {
+              await this.pushState(handle.bridgeUrl, restoreState, { trusted: true });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (
+                rec.execution_tier !== "custom" ||
+                !message.startsWith("State restore failed: HTTP 404")
+              ) {
+                throw error;
+              }
+              logger.info(
+                "[agent-sandbox] Backup restore skipped: custom image has no restore endpoint",
+                {
+                  agentId: rec.id,
+                  backupId: backup.id,
+                },
+              );
+            }
+          } else {
+            logger.warn("[agent-sandbox] Backup restore skipped: reconstructed state was null", {
+              agentId: rec.id,
+              backupId: backup.id,
+            });
+          }
+        }
 
         logger.info("[agent-sandbox] Provisioned", {
           agentId: rec.id,
@@ -2016,7 +2043,7 @@ export class ElizaSandboxService {
             jsonrpc: "2.0",
             id: rpc.id,
             error: {
-              code: -32002,
+              code: BRIDGE_INSUFFICIENT_CREDITS_CODE,
               message: `Insufficient credits. Required: $${error.required.toFixed(4)}, Available: $${error.available.toFixed(4)}`,
             },
           };
@@ -3475,6 +3502,15 @@ export class ElizaSandboxService {
         return this.createBridgeSseTextResponse(text);
       }
       if (sharedResponse.error) {
+        // A credit-reserve rejection is not a stream failure — no SSE bytes
+        // exist yet, so throw the canonical typed 402 for the route boundary
+        // to translate (messages/stream → 402 JSON; agent stream routes'
+        // errorToResponse / control-plane errorBody map ApiError natively).
+        // Wrapping it in an SSE error frame here would bury a permanent
+        // add-credits condition inside a 200 stream.
+        if (sharedResponse.error.code === BRIDGE_INSUFFICIENT_CREDITS_CODE) {
+          throw new InsufficientCreditsApiError(sharedResponse.error.message);
+        }
         return this.createBridgeSseErrorResponse(sharedResponse.error.message);
       }
       return fallbackText ? this.createBridgeSseTextResponse(fallbackText) : null;

@@ -11,6 +11,11 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import {
+  ANDROID_FULL_TURN_FAILURE_RE,
+  IOS_FULL_BUN_SMOKE_FAILURE_RE,
+} from "./lib/chat-failure-strings.mjs";
+import { startDeviceE2eHostAgent } from "./lib/host-agent.mjs";
 import { assertInstalledIosAppRendererFresh } from "./lib/ios-renderer-stamp.mjs";
 import { clearIosSmokeDefaults } from "./lib/ios-sim-defaults-hygiene.mjs";
 import { evaluateLocalInferenceReadiness } from "./lib/local-inference-readiness.mjs";
@@ -20,6 +25,10 @@ const repoRoot = path.resolve(
   "../../..",
 );
 const appConfigPath = path.join(repoRoot, "packages/app/app.config.ts");
+const iosLocalChatResultDir = path.join(
+  repoRoot,
+  "packages/app/test-results/ios-local-chat",
+);
 
 function argValue(name) {
   const index = process.argv.indexOf(name);
@@ -27,10 +36,13 @@ function argValue(name) {
 }
 
 const platform = argValue("--platform") ?? "ios";
-const apiBase = argValue("--api-base");
+let apiBase = argValue("--api-base");
 const authTokenArg = argValue("--auth-token");
+const startHostAgent = process.argv.includes("--start-host-agent");
+const hostAgentPort = argValue("--host-agent-port");
 const requireInstalled = process.argv.includes("--require-installed");
-const exerciseAppCoreApi = process.argv.includes("--live") || Boolean(apiBase);
+const exerciseAppCoreApi =
+  process.argv.includes("--live") || Boolean(apiBase) || startHostAgent;
 const iosSelectLocal = process.argv.includes("--ios-select-local");
 const iosFullBunSmoke = process.argv.includes("--ios-full-bun-smoke");
 const androidSelectLocal = process.argv.includes("--android-select-local");
@@ -60,8 +72,11 @@ const IOS_FULL_BUN_SMOKE_CONTEXT_SIZE = Number.parseInt(
 const IOS_FULL_BUN_SMOKE_ATTEMPTS = 180;
 const IOS_FULL_BUN_SMOKE_DELAY_MS = 2000;
 const IOS_FULL_BUN_SMOKE_EXPECTED_REPLY = "ios smoke model works";
-const IOS_FULL_BUN_SMOKE_FAILURE_RE =
-  /something went wrong|backend is not running|local backend is not running|no local backend|no local model|no model registered|no provider|connect a provider|waiting for the model download|timed out|<think\b|<\/think>|\/?\bno_think\b/i;
+// IOS_FULL_BUN_SMOKE_FAILURE_RE / ANDROID_FULL_TURN_FAILURE_RE are derived from
+// the single checked-in failure-string source of truth
+// (./lib/chat-failure-strings.mjs), which also generates the Swift artifact the
+// on-device XCUITest reply verifier consumes (issue #13687). A parity test keeps
+// the two sides in lockstep.
 const ANDROID_HEALTH_ATTEMPTS = 240;
 const ANDROID_FULL_TURN_TIMEOUT_MS = Number.parseInt(
   process.env.ANDROID_FULL_TURN_TIMEOUT_MS?.trim() || String(10 * 60_000),
@@ -111,25 +126,32 @@ const ANDROID_LOCAL_INFERENCE_READY_DELAY_MS = Number.parseInt(
 const ANDROID_FULL_TURN_PROMPT =
   "Reply with exactly these four words: android smoke model works.";
 const ANDROID_FULL_TURN_EXPECTED_REPLY = "android smoke model works";
-const ANDROID_FULL_TURN_FAILURE_RE =
-  /something went wrong|no local gguf|no local model|no model registered|no provider|connect a provider|device_disconnected|device_timeout|timed out|chat generation failed|waiting for the model download|set chat routing|progress:\s*0%/i;
 const ANDROID_SMOKE_MODEL_CONTEXT_SIZE = Number.parseInt(
   process.env.ANDROID_SMOKE_MODEL_CONTEXT_SIZE?.trim() || "4096",
   10,
 );
 const ANDROID_SMOKE_MODEL_ID =
   process.env.ANDROID_SMOKE_MODEL_ID?.trim() || "eliza-1-2b";
+const DEFAULT_ANDROID_SMOKE_MODEL = {
+  relativePath: "bundles/e2b/text/eliza-1-e2b-32k.gguf",
+  file: "eliza-1-e2b-32k.gguf",
+  sizeBytes: 1_270_808_512,
+};
 const ANDROID_SMOKE_MODEL_RELATIVE_PATH =
   process.env.ANDROID_SMOKE_MODEL_RELATIVE_PATH?.trim() ||
-  "bundles/2b/text/eliza-1-2b-128k.gguf";
+  DEFAULT_ANDROID_SMOKE_MODEL.relativePath;
 const ANDROID_SMOKE_MODEL_FILE =
-  process.env.ANDROID_SMOKE_MODEL_FILE?.trim() || "eliza-1-2b-128k.gguf";
-// Size/sha defaults are unset for the 2B entry tier — set them via env to
-// re-enable the exact-match download verification against a known artifact.
-const ANDROID_SMOKE_MODEL_SIZE_BYTES = Number.parseInt(
-  process.env.ANDROID_SMOKE_MODEL_SIZE_BYTES?.trim() || "",
-  10,
-);
+  process.env.ANDROID_SMOKE_MODEL_FILE?.trim() ||
+  DEFAULT_ANDROID_SMOKE_MODEL.file;
+const androidSmokeModelSizeOverride =
+  process.env.ANDROID_SMOKE_MODEL_SIZE_BYTES?.trim();
+const ANDROID_SMOKE_MODEL_SIZE_BYTES = androidSmokeModelSizeOverride
+  ? Number.parseInt(androidSmokeModelSizeOverride, 10)
+  : ANDROID_SMOKE_MODEL_RELATIVE_PATH ===
+        DEFAULT_ANDROID_SMOKE_MODEL.relativePath &&
+      ANDROID_SMOKE_MODEL_FILE === DEFAULT_ANDROID_SMOKE_MODEL.file
+    ? DEFAULT_ANDROID_SMOKE_MODEL.sizeBytes
+    : Number.NaN;
 const ANDROID_SMOKE_MODEL_SHA256 =
   process.env.ANDROID_SMOKE_MODEL_SHA256?.trim() || "";
 const ANDROID_SMOKE_MODEL_URL =
@@ -166,6 +188,8 @@ Options:
   --require-installed              Fail when the selected app/simulator is unavailable
   --live                           Exercise the app-core local-agent HTTP API on Android
   --api-base URL                   Exercise an already-reachable app-core HTTP API
+  --start-host-agent               Start the deterministic host app-core API when --api-base is omitted
+  --host-agent-port PORT           Port for --start-host-agent (default: 31338, or a free port if busy)
   --auth-token TOKEN               Bearer token for protected app-core API routes
   --ios-select-local               Pre-seed iOS first-run/runtime state for Local mode before launch
   --ios-full-bun-smoke             Run a WebView-executed full Bun backend smoke in the iOS app
@@ -757,6 +781,11 @@ async function verifySmokeModelFile(filePath) {
   return true;
 }
 
+function describeAndroidSmokeModelSize(sizeBytes) {
+  if (!Number.isFinite(sizeBytes)) return "unknown size";
+  return `${sizeBytes} bytes`;
+}
+
 async function ensureAndroidSmokeModelLocalFile() {
   const explicit = process.env.ANDROID_SMOKE_MODEL_PATH?.trim();
   if (explicit) {
@@ -835,17 +864,24 @@ async function stageAndroidSmokeModel(context) {
     "Failed to inspect Android smoke model.",
     { allowFailure: true },
   );
-  const expectedSize = String(ANDROID_SMOKE_MODEL_SIZE_BYTES);
-  if (existingBytes?.trim() === expectedSize) {
+  const expectedSize = Number.isFinite(ANDROID_SMOKE_MODEL_SIZE_BYTES)
+    ? String(ANDROID_SMOKE_MODEL_SIZE_BYTES)
+    : null;
+  if (
+    expectedSize
+      ? existingBytes?.trim() === expectedSize
+      : Boolean(existingBytes?.trim())
+  ) {
     writeAndroidSmokeModelManifest(context, targetDir);
     writeAndroidLocalInferenceRegistry(context, localInferenceDir);
     console.log(
-      `[local-chat-smoke] Reused staged Android smoke model ${ANDROID_SMOKE_MODEL_ID}: ${targetFile}`,
+      `[local-chat-smoke] Reused staged Android smoke model ${ANDROID_SMOKE_MODEL_ID} (${existingBytes.trim()} bytes): ${targetFile}`,
     );
     return;
   }
 
   const source = await ensureAndroidSmokeModelLocalFile();
+  const sourceSize = fs.statSync(source).size;
   const tmpTarget = `/data/local/tmp/${ANDROID_SMOKE_MODEL_FILE}`;
   requireExec(
     context.adb,
@@ -871,7 +907,7 @@ async function stageAndroidSmokeModel(context) {
     allowFailure: true,
   });
   console.log(
-    `[local-chat-smoke] Staged Android smoke model ${ANDROID_SMOKE_MODEL_ID}: ${targetFile}`,
+    `[local-chat-smoke] Staged Android smoke model ${ANDROID_SMOKE_MODEL_ID} (${describeAndroidSmokeModelSize(sourceSize)}): ${targetFile}`,
   );
 }
 
@@ -2264,10 +2300,7 @@ function requireUsableFullTurnReply(done, rawStreamText) {
   if (!reply) {
     throw new Error(`Full-turn smoke returned empty reply: ${rawStreamText}`);
   }
-  if (
-    /<think\b|<\/think>|\/?\bno_think\b/i.test(reply) ||
-    ANDROID_FULL_TURN_FAILURE_RE.test(reply)
-  ) {
+  if (ANDROID_FULL_TURN_FAILURE_RE.test(reply)) {
     throw new Error(`Full-turn smoke returned unusable reply: ${reply}`);
   }
   const normalizedReply = reply
@@ -2404,7 +2437,23 @@ async function runLocalInferenceApiSmoke(
 async function main() {
   let androidContext = null;
   let iosContext = null;
+  let hostAgent = null;
   try {
+    if (startHostAgent) {
+      if (apiBase) {
+        throw new Error(
+          "--start-host-agent cannot be combined with --api-base.",
+        );
+      }
+      hostAgent = await startDeviceE2eHostAgent({
+        repoRoot,
+        artifactDir: iosLocalChatResultDir,
+        requestedPort: hostAgentPort,
+        log: (message) => console.log(`[local-chat-smoke] ${message}`),
+      });
+      apiBase = hostAgent.apiBase;
+    }
+
     if (platform === "ios" || platform === "both") {
       iosContext = launchIosSimulatorApp();
       if (iosContext?.installed) {
@@ -2479,6 +2528,7 @@ async function main() {
       );
     }
   } finally {
+    await hostAgent?.stop();
     if (iosContext?.udid) {
       clearIosSmokeDefaults({
         udid: iosContext.udid,

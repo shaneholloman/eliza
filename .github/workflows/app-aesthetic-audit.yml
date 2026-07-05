@@ -35,7 +35,7 @@ env:
 
 jobs:
   aesthetic-audit:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 45
     env:
       # Keyless: the ui-smoke stub is forced when CI=true (shouldForceStubStack).

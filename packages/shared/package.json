@@ -53,6 +53,16 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./automation-node-contributors": {
+      "types": "./dist/automation-node-contributors.d.ts",
+      "eliza-source": {
+        "types": "./src/automation-node-contributors.ts",
+        "import": "./src/automation-node-contributors.ts",
+        "default": "./src/automation-node-contributors.ts"
+      },
+      "import": "./dist/automation-node-contributors.js",
+      "default": "./dist/automation-node-contributors.js"
+    },
     "./connector-account-catalog": {
       "types": "./dist/connector-account-catalog.d.ts",
       "eliza-source": {
@@ -172,6 +182,16 @@
       },
       "import": "./dist/events/index.js",
       "default": "./dist/events/index.js"
+    },
+    "./backgrounds/catalog-index": {
+      "types": "./dist/backgrounds/catalog-index.d.ts",
+      "eliza-source": {
+        "types": "./src/backgrounds/catalog-index.ts",
+        "import": "./src/backgrounds/catalog-index.ts",
+        "default": "./src/backgrounds/catalog-index.ts"
+      },
+      "import": "./dist/backgrounds/catalog-index.js",
+      "default": "./dist/backgrounds/catalog-index.js"
     },
     "./contracts": {
       "types": "./dist/contracts/index.d.ts",

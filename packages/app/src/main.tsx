@@ -48,6 +48,7 @@ import {
   DesktopSurfaceNavigationRuntime,
   DesktopTrayRuntime,
   DetachedShellRoot,
+  IOS_FULL_BUN_SMOKE_FAILURE_RE,
 } from "@elizaos/app-core";
 import {
   installIosLocalAgentFetchBridge,
@@ -419,6 +420,21 @@ function getWindowUrlSearchParams(): URLSearchParams {
   return new URLSearchParams(search || hashSearch);
 }
 
+function applyRuntimeChooserOverrideFromUrl(): void {
+  const params = getWindowUrlSearchParams();
+  if (params.get("enableRuntimeChooser") !== "1") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem("eliza:enable-runtime-chooser", "1");
+    removeUrlParameter("enableRuntimeChooser");
+  } catch (error) {
+    // error-policy:J3 storage/history can be unavailable in constrained webviews; keep booting.
+    logger.warn("[App] Failed to persist runtime chooser override", { error });
+  }
+}
+
 function applyCloudPairSessionToken(): void {
   if (typeof window === "undefined") return;
   try {
@@ -462,6 +478,7 @@ if (shouldInstallMainWindowFirstRunPatches(windowShellRoute)) {
 installLocalProviderCloudPreferencePatch(client);
 installDesktopPermissionsClientPatch(client);
 applyCloudPairSessionToken();
+applyRuntimeChooserOverrideFromUrl();
 
 // NOTE: do not gate on isElizaOS() here — that requires the `ElizaOS/` UA
 // marker which only AOSP/branded device images carry, so it excluded the
@@ -711,6 +728,24 @@ async function writeIosAuthCallbackSmokeResult(
     IOS_AUTH_CALLBACK_SMOKE_RESULT_KEY,
     result,
   );
+}
+
+interface AuthCallbackDeepLinkOutcome {
+  accepted: boolean;
+  classification: "synthetic_callback_rejected";
+  reason: string;
+}
+
+function rejectOsDeliveredAuthCallback(): AuthCallbackDeepLinkOutcome {
+  return {
+    accepted: false,
+    classification: "synthetic_callback_rejected",
+    reason: "os_delivered_auth_callback_rejected",
+  };
+}
+
+function readActiveServerSessionSnapshot(): string {
+  return window.localStorage.getItem("elizaos:active-server") ?? "";
 }
 
 async function writeIosPreferenceSmokeResult(
@@ -1740,9 +1775,7 @@ async function runIosFullBunSmokeIfRequested(): Promise<boolean> {
     );
     if (
       !streamMessage.includes('"type":"done"') ||
-      /something went wrong|<think\b|<\/think>|\/?\bno_think\b/i.test(
-        streamMessage,
-      )
+      IOS_FULL_BUN_SMOKE_FAILURE_RE.test(streamMessage)
     ) {
       throw new Error(
         `full Bun conversation stream returned unusable SSE: ${streamMessage.slice(0, 500)}`,
@@ -2039,8 +2072,17 @@ async function recordIosAuthCallbackSmoke(
   parsed: URL,
   path: string,
   url: string,
+  outcome: AuthCallbackDeepLinkOutcome,
+  activeServerBefore: string,
 ): Promise<void> {
-  if (!isIOS) return;
+  // Record the auth-callback end state on ANY native platform. Pre-#13693 this
+  // was iOS-only, so the Android smoke leg had no in-app readback at all (pure
+  // `am start` fire-and-forget). Broadening to `isNative` lets the Android
+  // smoke read the same Capacitor-Preferences handshake (backed by
+  // SharedPreferences) and assert the same end state instead of trusting intent
+  // resolution alone. This is a smoke seam: the body no-ops unless the harness
+  // has armed the request key, so real users' deep-link handling is unchanged.
+  if (!isNative) return;
   let rawRequest: string | null = null;
   try {
     rawRequest = window.localStorage.getItem(
@@ -2064,9 +2106,49 @@ async function recordIosAuthCallbackSmoke(
     request = { malformedRequest: rawRequest };
   }
 
+  // #13693: assert the AUTH OUTCOME, not just delivery. The security invariant
+  // for this handler (see the `connect`/first-run-remote cases above) is that
+  // an OS-delivered deep link NEVER establishes or swaps an authenticated
+  // session. Compare the real active-server key before/after handling the
+  // callback so a pre-authenticated simulator passes when the callback leaves
+  // the session untouched, while a regression that authenticates from the deep
+  // link flips `sessionChanged=true`.
+  let activeServerAfter = "";
+  try {
+    activeServerAfter = readActiveServerSessionSnapshot();
+  } catch (error) {
+    // error-policy:J7 diagnostics readback — the smoke must fail closed when it
+    // cannot observe the auth outcome it is supposed to prove.
+    await writeIosAuthCallbackSmokeResult({
+      ok: false,
+      phase: "failed",
+      classification: outcome.classification,
+      accepted: outcome.accepted,
+      reason: outcome.reason,
+      error:
+        error instanceof Error
+          ? error.message
+          : `active-server readback failed: ${String(error)}`,
+      path,
+      url,
+      state: parsed.searchParams.get("state") ?? "",
+      code: parsed.searchParams.get("code") ?? "",
+      query: Object.fromEntries(parsed.searchParams.entries()),
+      request,
+    });
+    return;
+  }
+
   await writeIosAuthCallbackSmokeResult({
     ok: true,
     phase: "handled",
+    classification: outcome.classification,
+    accepted: outcome.accepted,
+    reason: outcome.reason,
+    sessionEstablished: activeServerAfter.length > 0,
+    sessionChanged: activeServerAfter !== activeServerBefore,
+    activeServerBeforePresent: activeServerBefore.length > 0,
+    activeServerAfterPresent: activeServerAfter.length > 0,
     path,
     url,
     state: parsed.searchParams.get("state") ?? "",
@@ -2074,6 +2156,44 @@ async function recordIosAuthCallbackSmoke(
     query: Object.fromEntries(parsed.searchParams.entries()),
     request,
   });
+}
+
+async function handleAuthCallbackDeepLink(
+  parsed: URL,
+  path: string,
+  url: string,
+): Promise<void> {
+  const outcome = rejectOsDeliveredAuthCallback();
+  let activeServerBefore = "";
+  try {
+    activeServerBefore = readActiveServerSessionSnapshot();
+  } catch (error) {
+    await writeIosAuthCallbackSmokeResult({
+      ok: false,
+      phase: "failed",
+      classification: outcome.classification,
+      accepted: outcome.accepted,
+      reason: outcome.reason,
+      error:
+        error instanceof Error
+          ? error.message
+          : `active-server pre-readback failed: ${String(error)}`,
+      path,
+      url,
+      state: parsed.searchParams.get("state") ?? "",
+      code: parsed.searchParams.get("code") ?? "",
+      query: Object.fromEntries(parsed.searchParams.entries()),
+    });
+    return;
+  }
+
+  await recordIosAuthCallbackSmoke(
+    parsed,
+    path,
+    url,
+    outcome,
+    activeServerBefore,
+  );
 }
 
 function handleDeepLink(url: string): void {
@@ -2108,7 +2228,7 @@ function handleDeepLink(url: string): void {
     ? parsed.pathname.replace(/^\/+|\/+$/g, "")
     : getDeepLinkPath(parsed);
   if (path === "auth/callback") {
-    void recordIosAuthCallbackSmoke(parsed, path, url);
+    void handleAuthCallbackDeepLink(parsed, path, url);
     return;
   }
 
