@@ -17,7 +17,16 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  readdir,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import {
@@ -187,6 +196,43 @@ export function computeSessionWorkdir(
   return isolate ? resolve(base, `task-${sessionId}`) : resolve(base);
 }
 
+function findGitBinaryForAcp(): string {
+  for (const dir of (process.env.PATH ?? "").split(":")) {
+    if (!dir) continue;
+    const candidate = join(dir, "git");
+    if (existsSync(candidate)) return candidate;
+  }
+  return "git";
+}
+
+async function runGitForAcp(
+  workdir: string,
+  args: string[],
+): Promise<string | undefined> {
+  return new Promise((resolveRun) => {
+    const proc = spawn("git", ["-C", workdir, ...args], {
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    let stdout = "";
+    const timer = setTimeout(() => {
+      proc.kill("SIGTERM");
+      resolveRun(undefined);
+    }, 5_000);
+    proc.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    proc.on("error", () => {
+      clearTimeout(timer);
+      resolveRun(undefined);
+    });
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      resolveRun(code === 0 ? stdout.trim() : undefined);
+    });
+  });
+}
+
 /**
  * True iff `workdir` is a throwaway scratch dir AcpService itself created under
  * its default temp root — a `task-<sessionId>` directory directly beneath
@@ -217,8 +263,69 @@ export function isAcpScratchDirName(name: string): boolean {
 }
 const ACP_METADATA_ISOLATED_WORKDIR = "isolatedWorkdir";
 const ACP_METADATA_WORKDIR_ROOT = "workdirRoot";
+const ACP_METADATA_GIT_INDEX_FILE = "gitIndexFile";
+const ACP_METADATA_GIT_INDEX_BASE_FILE = "gitIndexBaseFile";
+const ACP_METADATA_GIT_WRAPPER_DIR = "gitWrapperDir";
 const MAX_CAPTURED_TOOL_OUTPUT_CHARS = 12_000;
 const TOOL_OUTPUT_END_MARKER = "[/tool output]";
+const SESSION_GIT_WRAPPER = `#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
+const git = process.env.ACP_REAL_GIT || "git";
+const indexFile = process.env.ACP_GIT_INDEX_FILE;
+const baseline = process.env.ACP_GIT_BASELINE_SHA;
+if (indexFile) process.env.GIT_INDEX_FILE = indexFile;
+delete process.env.ACP_GIT_INDEX_FILE;
+delete process.env.ACP_GIT_BASELINE_SHA;
+delete process.env.ACP_REAL_GIT;
+const args = process.argv.slice(2);
+function commandInfo(argv) {
+  const prefix = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--") return { cmd: undefined, prefix };
+    if (arg === "-C" || arg === "-c" || arg === "--git-dir" || arg === "--work-tree" || arg === "--namespace") {
+      prefix.push(arg, argv[i + 1]);
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--git-dir=") || arg.startsWith("--work-tree=") || arg.startsWith("--namespace=")) {
+      prefix.push(arg);
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      prefix.push(arg);
+      continue;
+    }
+    return { cmd: arg, prefix };
+  }
+  return { cmd: undefined, prefix };
+}
+function run(argv, opts = {}) {
+  return spawnSync(git, argv, { stdio: "inherit", env: process.env, ...opts });
+}
+const info = commandInfo(args);
+if (indexFile && baseline && info.cmd === "commit") {
+  const diff = spawnSync(git, [...info.prefix, "diff", "--cached", "--binary", baseline], {
+    env: process.env,
+    encoding: "buffer",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (diff.status !== 0) process.exit(diff.status || 1);
+  if (diff.stdout.length > 0) {
+    const reset = run([...info.prefix, "read-tree", "HEAD"]);
+    if (reset.status !== 0) process.exit(reset.status || 1);
+    const apply = spawnSync(git, [...info.prefix, "apply", "--cached", "--whitespace=nowarn", "-"], {
+      input: diff.stdout,
+      stdio: ["pipe", "inherit", "inherit"],
+      env: process.env,
+    });
+    if (apply.status !== 0) process.exit(apply.status || 1);
+  }
+}
+const result = run(args);
+if (result.signal) process.kill(process.pid, result.signal);
+process.exit(result.status ?? 1);
+`;
 const ACP_HEALTH_CHECK_INTERVAL_MS = 60_000;
 // Terminal (stopped/errored) sessions are kept this long for any post-completion
 // reference, then reclaimed by the health-check sweep so the durable session
@@ -584,6 +691,129 @@ export class AcpService extends Service {
 
   private acpxStateRoot(): string {
     return join(homedir(), ".acpx");
+  }
+
+  private acpGitIndexRoot(sessionId: string): string {
+    return join(this.acpxStateRoot(), "git-indexes", sessionId);
+  }
+
+  private async prepareSessionGitIndex(
+    workdir: string,
+    sessionId: string,
+    baselineSha?: string,
+  ): Promise<
+    | {
+        env: Record<string, string>;
+        metadata: Record<string, string>;
+      }
+    | undefined
+  > {
+    const insideWorkTree = await runGitForAcp(workdir, [
+      "rev-parse",
+      "--is-inside-work-tree",
+    ]);
+    if (insideWorkTree !== "true") return undefined;
+
+    let repoIndex = await runGitForAcp(workdir, [
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-path",
+      "index",
+    ]);
+    if (!repoIndex) {
+      repoIndex = await runGitForAcp(workdir, [
+        "rev-parse",
+        "--git-path",
+        "index",
+      ]);
+    }
+    if (!repoIndex) return undefined;
+    repoIndex = resolve(workdir, repoIndex);
+
+    try {
+      const st = await stat(repoIndex);
+      if (!st.isFile()) return undefined;
+    } catch {
+      // error-policy:J3 unborn or exotic repos can lack an index; fall back to
+      // default git behavior rather than spawning with an invalid empty index.
+      return undefined;
+    }
+
+    const root = this.acpGitIndexRoot(sessionId);
+    const wrapperDir = join(root, "bin");
+    const wrapperFile = join(wrapperDir, "git");
+    const indexFile = join(root, "index");
+    const baseFile = join(root, "index.base");
+    await mkdir(wrapperDir, { recursive: true });
+    await copyFile(repoIndex, baseFile);
+    await copyFile(repoIndex, indexFile);
+    await writeFile(wrapperFile, SESSION_GIT_WRAPPER, "utf8");
+    await chmod(wrapperFile, 0o755);
+    return {
+      env: {
+        ACP_GIT_INDEX_FILE: indexFile,
+        ACP_REAL_GIT: findGitBinaryForAcp(),
+        GIT_INDEX_FILE: indexFile,
+        PATH: `${wrapperDir}:${process.env.PATH ?? ""}`,
+        ...(baselineSha ? { ACP_GIT_BASELINE_SHA: baselineSha } : {}),
+      },
+      metadata: {
+        [ACP_METADATA_GIT_INDEX_FILE]: indexFile,
+        [ACP_METADATA_GIT_INDEX_BASE_FILE]: baseFile,
+        [ACP_METADATA_GIT_WRAPPER_DIR]: wrapperDir,
+        ...(baselineSha ? { codingBaselineSha: baselineSha } : {}),
+      },
+    };
+  }
+
+  private gitIndexEnvForSession(
+    session: SessionInfo,
+  ): Record<string, string> | undefined {
+    const gitIndexFile = session.metadata?.[ACP_METADATA_GIT_INDEX_FILE];
+    const wrapperDir = session.metadata?.[ACP_METADATA_GIT_WRAPPER_DIR];
+    if (typeof gitIndexFile !== "string" || !gitIndexFile.trim()) {
+      return undefined;
+    }
+    return {
+      ACP_GIT_INDEX_FILE: gitIndexFile,
+      ACP_REAL_GIT: findGitBinaryForAcp(),
+      GIT_INDEX_FILE: gitIndexFile,
+      ...(typeof wrapperDir === "string" && wrapperDir.trim()
+        ? { PATH: `${wrapperDir}:${process.env.PATH ?? ""}` }
+        : {}),
+      ...(typeof session.metadata?.codingBaselineSha === "string"
+        ? { ACP_GIT_BASELINE_SHA: session.metadata.codingBaselineSha }
+        : {}),
+    };
+  }
+
+  private async removeOwnedGitIndex(session: SessionInfo): Promise<void> {
+    const gitIndexFile = session.metadata?.[ACP_METADATA_GIT_INDEX_FILE];
+    if (typeof gitIndexFile !== "string" || !gitIndexFile.trim()) return;
+    const root = this.acpGitIndexRoot(session.id);
+    if (!this.isPathUnderRoot(gitIndexFile, root)) {
+      this.log(
+        "warn",
+        "git-index cleanup refused: index outside session root",
+        {
+          sessionId: session.id,
+          gitIndexFile,
+          root,
+        },
+      );
+      return;
+    }
+    try {
+      await rm(root, { recursive: true, force: true });
+    } catch (err) {
+      // error-policy:J6 best-effort per-session index reclaim; terminal session
+      // cleanup must continue and a future sweep can retry the state dir.
+      this.log("warn", "failed to reclaim session git index", {
+        sessionId: session.id,
+        gitIndexFile,
+        error: errorMessage(err),
+      });
+    }
   }
 
   private async cleanStaleLocks(): Promise<void> {
@@ -1083,6 +1313,20 @@ export class AcpService extends Service {
       const baselineSha = await captureBaselineSha(workdir);
       const baselineDirty = await captureBaselineDirty(workdir);
 
+      // Give each concurrent ACP session its own copied git index so sequential
+      // commits in the SAME worktree never drop another session's staged tree.
+      // Returns undefined when the workspace isn't a git repo; the per-session
+      // wrapper git refreshes the alternate index from HEAD before each commit.
+      const gitIndexIsolation = await this.prepareSessionGitIndex(
+        workdir,
+        id,
+        baselineSha,
+      );
+      const sessionEnv: Record<string, string> = {
+        ...(opts.env ?? {}),
+        ...(gitIndexIsolation?.env ?? {}),
+      };
+
       // Multi-account selection: pick the least-used (default) linked subscription
       // for this agent type and inject its credentials into the spawn env so the
       // sub-agent authenticates AS that account. Returns null (and we keep the
@@ -1141,6 +1385,7 @@ export class AcpService extends Service {
         ...(baselineSha && baselineDirty.length > 0
           ? { codingBaselineDirty: baselineDirty }
           : {}),
+        ...(gitIndexIsolation?.metadata ?? {}),
         ...(resolvedAccount ? { account: resolvedAccount.meta } : {}),
         slotClass,
       };
@@ -1183,6 +1428,7 @@ export class AcpService extends Service {
       if (this.transportMode === "native") {
         const result = await this.spawnNativeSession(id, session, {
           ...opts,
+          env: sessionEnv,
           customCredentials,
         });
         if (opts.initialTask?.trim()) {
@@ -1233,7 +1479,7 @@ export class AcpService extends Service {
         workdir,
         args,
         env: this.buildEnv(
-          opts.env,
+          sessionEnv,
           customCredentials,
           opts.model,
           agentType,
@@ -1436,8 +1682,13 @@ export class AcpService extends Service {
 
     // The cli transport spawns a fresh subprocess per prompt, so re-inject the
     // session's selected-account credentials (the native transport keeps the
-    // spawn-time client, which already has them).
+    // spawn-time client, which already has them) and the per-session git index
+    // env that keeps same-repo sessions from sharing one mutable index file.
     const promptCredentials = await this.accountCredentialsForSession(session);
+    const promptEnv: Record<string, string> = {
+      ...(opts.env ?? {}),
+      ...(this.gitIndexEnvForSession(session) ?? {}),
+    };
     const result = await this.runAcpx({
       sessionId,
       sessionName: session.name ?? session.id,
@@ -1445,7 +1696,7 @@ export class AcpService extends Service {
       workdir: session.workdir,
       args,
       env: this.buildEnv(
-        opts.env,
+        promptEnv,
         promptCredentials,
         opts.model,
         session.agentType,
@@ -1518,6 +1769,7 @@ export class AcpService extends Service {
       // before teardown). Accounting-only — the registry never rm's ACP dirs.
       this.workspaceRegistry.markTerminal(session.workdir);
       void this.revokeModelLease(sessionId, "cancelSession:native");
+      await this.removeOwnedGitIndex(session);
       return;
     }
     const active = this.activeProcesses.get(sessionId);
@@ -1540,6 +1792,7 @@ export class AcpService extends Service {
     await this.store.updateStatus(sessionId, "cancelled");
     this.workspaceRegistry.markTerminal(session.workdir);
     void this.revokeModelLease(sessionId, "cancelSession");
+    await this.removeOwnedGitIndex(session);
   }
 
   async closeSession(sessionId: string): Promise<void> {
@@ -1559,6 +1812,7 @@ export class AcpService extends Service {
         }
       }
       await this.removeOwnedScratchWorkdir(session);
+      await this.removeOwnedGitIndex(session);
       return;
     }
     await this.stopTrackedProcess(sessionId);
@@ -1585,6 +1839,7 @@ export class AcpService extends Service {
       response: this.lastOutput(sessionId),
     });
     await this.removeOwnedScratchWorkdir(session);
+    await this.removeOwnedGitIndex(session);
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -1598,6 +1853,7 @@ export class AcpService extends Service {
       });
     });
     await this.removeOwnedScratchWorkdir(session);
+    await this.removeOwnedGitIndex(session);
     await this.store.delete(sessionId);
     this.outputBuffers.delete(sessionId);
     this.changedPathsBySession.delete(sessionId);
@@ -2907,6 +3163,9 @@ export class AcpService extends Service {
     // emitter is called from deep transport paths; revocation is idempotent.
     if (LEASE_REVOKE_EVENTS.has(event)) {
       void this.revokeModelLease(sessionId, `event:${event}`);
+      void this.store.get(sessionId).then((session) => {
+        if (session) void this.removeOwnedGitIndex(session);
+      });
     }
   }
 
