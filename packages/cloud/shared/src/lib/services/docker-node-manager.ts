@@ -142,6 +142,17 @@ export function buildPrePullReapCommand(pidFile: string, image: string): string 
   return `sh -c ${shellQuote(script)}`;
 }
 
+export function buildPrePullSelfHealRecoverCommand(): string {
+  return [
+    "systemctl kill -s SIGKILL docker.service docker.socket 2>/dev/null",
+    "sleep 2",
+    "systemctl restart containerd 2>/dev/null",
+    "sleep 4",
+    "systemctl reset-failed docker.service 2>/dev/null",
+    "systemctl start docker.service",
+  ].join("; ");
+}
+
 export function __resetPrePullFailureStateForTests(): void {
   prePullFailureState.clear();
 }
@@ -638,9 +649,13 @@ export class DockerNodeManager {
       },
     );
     try {
-      // Requires live-restore=true on the node so running agents survive.
-      await ssh.exec("systemctl restart docker", 90_000);
+      // Live staging showed graceful `systemctl restart docker` can hang when
+      // dockerd/containerd content ingest is already wedged. Stamp the cooldown
+      // before attempting the shared-host recovery, then force-kill dockerd and
+      // bounce containerd; live-restore plus container shims keep agents alive.
       state.lastSelfHealMs = Date.now();
+      prePullFailureState.set(node.node_id, state);
+      await ssh.exec(buildPrePullSelfHealRecoverCommand(), 120_000);
       state.consecutiveFailures = 0;
       prePullFailureState.set(node.node_id, state);
     } catch (restartError) {

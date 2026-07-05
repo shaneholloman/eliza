@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   __resetPrePullFailureStateForTests,
   buildPrePullReapCommand,
+  buildPrePullSelfHealRecoverCommand,
   buildTrackedPrePullCommand,
   DockerNodeManager,
   isPrePullTimeoutError,
@@ -103,6 +104,16 @@ describe("tracked pre-pull commands", () => {
     expect(command).toContain('kill -9 "$pid"');
     expect(command).not.toContain("pkill");
   });
+
+  test("builds a force recovery command for a daemon whose graceful restart hangs", () => {
+    const command = buildPrePullSelfHealRecoverCommand();
+
+    expect(command).toContain("systemctl kill -s SIGKILL docker.service docker.socket");
+    expect(command).toContain("systemctl restart containerd");
+    expect(command).toContain("systemctl reset-failed docker.service");
+    expect(command).toContain("systemctl start docker.service");
+    expect(command).not.toContain("systemctl restart docker");
+  });
 });
 
 describe("pre-pull self-heal restart policy", () => {
@@ -119,10 +130,12 @@ describe("pre-pull self-heal restart policy", () => {
     expect(commands).toHaveLength(1);
     expect(commands[0]).toContain(PID_FILE);
     expect(commands[0]).not.toContain("pkill");
-    expect(commands.some((command) => command.includes("systemctl restart docker"))).toBe(false);
+    expect(
+      commands.some((command) => command.includes("systemctl kill -s SIGKILL docker.service")),
+    ).toBe(false);
   });
 
-  test("restarts docker only after repeated timeout symptoms and then honors cooldown", async () => {
+  test("force-recovers docker only after repeated timeout symptoms and then honors cooldown", async () => {
     process.env.CONTAINERS_PREPULL_SELF_HEAL_RESTART = "true";
     const { ssh, commands } = fakeSsh();
     const node = { node_id: "node-b", hostname: "node-b.example.test" };
@@ -130,15 +143,48 @@ describe("pre-pull self-heal restart policy", () => {
     await managerHarness().recoverAfterTimedOutPrePull(ssh, node, PID_FILE, IMAGE);
     await managerHarness().recoverAfterTimedOutPrePull(ssh, node, PID_FILE, IMAGE);
 
-    expect(commands.filter((command) => command.includes("systemctl restart docker"))).toHaveLength(
-      1,
-    );
+    expect(
+      commands.filter((command) => command.includes("systemctl kill -s SIGKILL docker.service")),
+    ).toHaveLength(1);
+    expect(
+      commands.filter((command) => command.includes("systemctl restart containerd")),
+    ).toHaveLength(1);
+    expect(commands.join("\n")).not.toContain("systemctl restart docker");
 
     await managerHarness().recoverAfterTimedOutPrePull(ssh, node, PID_FILE, IMAGE);
     await managerHarness().recoverAfterTimedOutPrePull(ssh, node, PID_FILE, IMAGE);
 
-    expect(commands.filter((command) => command.includes("systemctl restart docker"))).toHaveLength(
-      1,
-    );
+    expect(
+      commands.filter((command) => command.includes("systemctl kill -s SIGKILL docker.service")),
+    ).toHaveLength(1);
+  });
+
+  test("records cooldown even when force recovery fails", async () => {
+    process.env.CONTAINERS_PREPULL_SELF_HEAL_RESTART = "true";
+    const commands: string[] = [];
+    const ssh = {
+      exec: mock(async (command: string) => {
+        commands.push(command);
+        if (command.includes("systemctl kill -s SIGKILL docker.service")) {
+          throw new Error("force recovery failed");
+        }
+        return "";
+      }),
+    };
+    const node = { node_id: "node-c", hostname: "node-c.example.test" };
+
+    await managerHarness().recoverAfterTimedOutPrePull(ssh, node, PID_FILE, IMAGE);
+    await managerHarness().recoverAfterTimedOutPrePull(ssh, node, PID_FILE, IMAGE);
+
+    expect(
+      commands.filter((command) => command.includes("systemctl kill -s SIGKILL docker.service")),
+    ).toHaveLength(1);
+
+    await managerHarness().recoverAfterTimedOutPrePull(ssh, node, PID_FILE, IMAGE);
+    await managerHarness().recoverAfterTimedOutPrePull(ssh, node, PID_FILE, IMAGE);
+
+    expect(
+      commands.filter((command) => command.includes("systemctl kill -s SIGKILL docker.service")),
+    ).toHaveLength(1);
   });
 });
