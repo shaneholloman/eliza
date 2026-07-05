@@ -79,9 +79,7 @@ describe("parseWholesaleUsdCents (money-out price boundary)", () => {
   });
 
   it("THROWS on an unparseable / non-finite / negative / absent price (never returns NaN)", () => {
-    // REGRESSION: each of these produced `NaN` under the old bare
-    // `Number(...)` and would have flowed into the credit debit as a poisoned
-    // 'NaN'::numeric amount, bypassing the `amount <= 0` positive guard.
+    // These malformed values must never become a poisoned numeric debit amount.
     for (const bad of [
       "N/A",
       "free",
@@ -118,16 +116,10 @@ describe("parseWholesaleUsdCents (money-out price boundary)", () => {
   });
 
   it("pins the exact fail-open the fix closes: the old inline parse produced NaN", () => {
-    // Documents the pre-fix behavior at the source line this boundary replaces:
-    //   Math.round(Number(entry.pricing.registration_cost) * 100)
-    // For a corrupt price this is NaN, which the buy route's `amount <= 0`
-    // positive guard does NOT catch (NaN <= 0 === false) — the money-out
-    // fail-open. The new parser throws instead of returning that NaN.
+    // JavaScript comparison semantics make NaN an unsafe sentinel for debit guards.
     const oldInlineParse = (raw: string) => Math.round(Number(raw) * 100);
     expect(Number.isNaN(oldInlineParse("N/A"))).toBe(true);
-    // NaN slips past the route's positive-amount guard:
     expect((Number.NaN as number) <= 0).toBe(false);
-    // The new boundary refuses it:
     expect(() => parseWholesaleUsdCents("corrupt.example", "registration_cost", "N/A")).toThrow(
       CorruptRegistrarPriceError,
     );

@@ -141,17 +141,9 @@ interface CfDomainCheckEntry {
 /**
  * A registrable domain's Cloudflare wholesale price was missing or unparseable.
  *
- * Distinct error so the price boundary FAILS CLOSED instead of fabricating a
- * NaN price. Pre-fix `Math.round(Number(entry.pricing.registration_cost) * 100)`
- * had NO finite guard: a malformed / absent / non-numeric `registration_cost`
- * (a CF API shape drift or a partial `pricing` object) yielded
- * `priceUsdCents: NaN`. That NaN flowed into `computeDomainPrice` →
- * `totalUsdCents: NaN` → the buy route's `deductCredits({ amount: NaN / 100 })`,
- * where the `amount <= 0` positive-amount guard is BYPASSED (`NaN <= 0` is
- * `false`) and `'NaN'::numeric` (a valid Postgres value) poisons `credit_balance`;
- * the check/search routes also render a `$NaN` quote to the user. Throwing here
- * makes the route surface a clean 502 rather than charge against an unpriceable
- * quote. (error-policy: fail-closed on a money-out boundary)
+ * This boundary must fail closed because Cloudflare registrar prices flow into
+ * user-facing quotes and the credit debit path. A fabricated NaN can bypass
+ * positive-amount guards (`NaN <= 0` is false) and poison numeric ledger state.
  */
 export class CorruptRegistrarPriceError extends Error {
   constructor(domain: string, field: "registration_cost" | "renewal_cost", rawValue: unknown) {
@@ -168,8 +160,7 @@ export class CorruptRegistrarPriceError extends Error {
  *
  * A legitimate free/zero price ("0", "0.00") is allowed — some TLDs/promos can be
  * $0 — but a missing / non-numeric / non-finite / negative price throws so a
- * fabricated NaN can never reach the credit debit. Rounds to the nearest cent
- * exactly as the previous inline `Math.round(... * 100)` did.
+ * fabricated NaN can never reach the credit debit. Rounds to the nearest cent.
  */
 export function parseWholesaleUsdCents(
   domain: string,
@@ -193,7 +184,7 @@ export function parseWholesaleUsdCents(
 function fromCheckEntry(entry: CfDomainCheckEntry): AvailabilityResult {
   // Only a registrable domain carries a `pricing` object we could charge against;
   // a non-registrable one keeps priceUsdCents:0 (never buyable) unchanged. When
-  // pricing IS present the price MUST parse — a NaN here would silently bypass the
+  // pricing is present the price must parse; a NaN here would bypass the
   // buy route's positive-amount debit guard.
   const reg = entry.pricing
     ? parseWholesaleUsdCents(entry.name, "registration_cost", entry.pricing.registration_cost)
