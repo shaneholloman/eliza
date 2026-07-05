@@ -5,8 +5,17 @@
  * (`bun run --cwd packages/app test`), i.e. the root test:client lane.
  */
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildRequireChatDecision,
+  probeAgentAvailability,
+  resolveAgentProbeTarget,
+  summarizeChatSkipAccounting,
+} from "./ios-device-capture.mjs";
+import {
+  assertDeviceUnlocked,
   buildCodesignPlan,
   buildIosXcuitestShardPlan,
   buildOnlyTestingIdentifier,
@@ -14,6 +23,7 @@ import {
   CONSOLE_SIGTRAP_SIGNATURE,
   classifyCodesignPreflight,
   classifyConsoleExit,
+  classifyXcresultSummaryForGate,
   classifyIsolatedReruns,
   DEFAULT_IOS_XCUITEST_SHARDS,
   deriveSigningEntitlements,
@@ -23,6 +33,8 @@ import {
   findDeviceRecord,
   findUncoveredIosXcuitestEntries,
   isBenignIosAppAbsence,
+  formatDeviceUnlockWaitMessage,
+  normalizeDeviceLockState,
   normalizeProvisioningProfile,
   PlistData,
   parseCliArgs,
@@ -693,6 +705,77 @@ describe("extractXctestrunAppPaths", () => {
   });
 });
 
+describe("classifyXcresultSummaryForGate", () => {
+  it("passes a summary with at least one passed test", () => {
+    const verdict = classifyXcresultSummaryForGate({
+      result: "Passed",
+      passedTests: 2,
+      skippedTests: 1,
+      failedTests: 0,
+    });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.reason).toBeNull();
+  });
+
+  it("fails an explicit zero-passed summary", () => {
+    const verdict = classifyXcresultSummaryForGate({
+      result: "Passed",
+      passedTests: 0,
+      skippedTests: 4,
+      failedTests: 0,
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.reason).toMatch(/passedTests=0/);
+  });
+
+  it("fails a recursively all-skipped summary", () => {
+    const verdict = classifyXcresultSummaryForGate({
+      testNodes: [
+        {
+          name: "AppUITests",
+          result: "Skipped",
+          children: [{ name: "BootCaptureUITests", result: "Skipped" }],
+        },
+      ],
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.reason).toMatch(/Skipped/);
+  });
+
+  it("handles Xcode-style wrapped numeric values", () => {
+    const verdict = classifyXcresultSummaryForGate({
+      metrics: {
+        testsCount: { _value: "3" },
+        passedTests: { _value: "1" },
+        skippedTests: { _value: "2" },
+      },
+    });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.stats.total).toBe(3);
+    expect(verdict.stats.passed).toBe(1);
+  });
+});
+
+describe("ios-device-capture strict summary gate", () => {
+  it("keeps test-summary classification behind --strict-gate", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "scripts", "ios-device-capture.mjs"),
+      "utf8",
+    );
+    const summaryWriteIndex = source.indexOf("test-summary.json");
+    const strictGateIndex = source.indexOf(
+      "if (strictGate)",
+      summaryWriteIndex,
+    );
+    const classifierIndex = source.indexOf(
+      "classifyXcresultSummaryForGate",
+      summaryWriteIndex,
+    );
+    expect(strictGateIndex).toBeGreaterThan(summaryWriteIndex);
+    expect(classifierIndex).toBeGreaterThan(strictGateIndex);
+  });
+});
+
 describe("resolveXctestrunTestRoot", () => {
   it("replaces __TESTROOT__ in nested strings, preserving other value types", () => {
     const when = new Date("2026-07-01T00:00:00Z");
@@ -759,6 +842,91 @@ describe("device resolution", () => {
     }
     expect(findDeviceRecord(payload, "nope")).toBeNull();
     expect(findDeviceRecord({}, "anything")).toBeNull();
+  });
+});
+
+describe("device lock-state preflight", () => {
+  const device = {
+    identifier: "59EBB356-BC44-5AA2-91F1-E6AAE756BB86",
+    name: "MoonCycles",
+  };
+
+  it("normalizes top-level and nested lockState payloads", () => {
+    expect(
+      normalizeDeviceLockState({
+        passcodeRequired: true,
+        unlockedSinceBoot: true,
+      }),
+    ).toMatchObject({ locked: true, reason: "passcode required" });
+    expect(
+      normalizeDeviceLockState({
+        result: {
+          lockState: { passcodeRequired: false, unlockedSinceBoot: false },
+        },
+      }),
+    ).toMatchObject({ locked: true, reason: "not unlocked since boot" });
+    expect(
+      normalizeDeviceLockState({
+        result: { passcodeRequired: false, unlockedSinceBoot: true },
+      }),
+    ).toMatchObject({ locked: false, reason: null });
+  });
+
+  it("formats an operator-visible unlock instruction", () => {
+    expect(
+      formatDeviceUnlockWaitMessage({
+        device,
+        timeoutSeconds: 30,
+        reason: "passcode required",
+      }),
+    ).toBe(
+      "MoonCycles (59EBB356-BC44-5AA2-91F1-E6AAE756BB86) is locked (passcode required); unlock the phone and keep it awake. Waiting up to 30s.",
+    );
+  });
+
+  it("waits until lockState becomes usable", async () => {
+    const states = [
+      { passcodeRequired: true, unlockedSinceBoot: true },
+      { passcodeRequired: false, unlockedSinceBoot: true },
+    ];
+    const notifications = [];
+    const sleeps = [];
+    let nowMs = 0;
+    const result = await assertDeviceUnlocked({
+      device,
+      probeLockState: () => states.shift(),
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        nowMs += ms;
+      },
+      now: () => nowMs,
+      notify: (message) => notifications.push(message),
+      waitSeconds: 30,
+      pollIntervalSeconds: 5,
+    });
+    expect(result.locked).toBe(false);
+    expect(sleeps).toEqual([5000]);
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toContain("unlock the phone");
+  });
+
+  it("times out distinctly when the phone stays locked", async () => {
+    let nowMs = 0;
+    await expect(
+      assertDeviceUnlocked({
+        device,
+        probeLockState: () => ({
+          passcodeRequired: true,
+          unlockedSinceBoot: true,
+        }),
+        sleep: async (ms) => {
+          nowMs += ms;
+        },
+        now: () => nowMs,
+        waitSeconds: 1,
+        pollIntervalSeconds: 1,
+      }),
+    ).rejects.toThrow(/Timed out before the device became usable/);
   });
 });
 
@@ -1202,5 +1370,119 @@ describe("evaluateRunnerStaleness (#13566)", () => {
     });
     expect(decision.stale).toBe(false);
     expect(decision.newestSource).toBe(null);
+  });
+});
+
+
+describe("ios-device-capture agent availability preflight (#13569)", () => {
+  it("prefers the configured iOS API base over the cloud health fallback", () => {
+    expect(
+      resolveAgentProbeTarget(
+        {
+          VITE_ELIZA_IOS_API_BASE: "https://mac.example.test/api-root/",
+          VITE_ELIZA_CLOUD_BASE: "https://cloud.example.test",
+        },
+        {},
+      ),
+    ).toMatchObject({
+      kind: "api-base",
+      url: "https://mac.example.test/api/health",
+    });
+  });
+
+  it("falls back to the cloud health endpoint when no device API base is configured", () => {
+    expect(
+      resolveAgentProbeTarget(
+        { VITE_ELIZA_CLOUD_BASE: "https://cloud.example.test/" },
+        {},
+      ),
+    ).toMatchObject({
+      kind: "cloud-health",
+      url: "https://cloud.example.test/api/health",
+    });
+  });
+
+  it("maps probe responses to ready, not-ready, and unreachable verdicts", async () => {
+    await expect(
+      probeAgentAvailability({
+        target: { url: "https://agent.example.test/api/health" },
+        fetchImpl: async () =>
+          new Response(JSON.stringify({ ready: true }), { status: 200 }),
+      }),
+    ).resolves.toMatchObject({ verdict: "ready" });
+
+    await expect(
+      probeAgentAvailability({
+        target: { url: "https://agent.example.test/api/health" },
+        fetchImpl: async () =>
+          new Response(JSON.stringify({ ready: false }), { status: 200 }),
+      }),
+    ).resolves.toMatchObject({ verdict: "not-ready(ready=false)" });
+
+    await expect(
+      probeAgentAvailability({
+        target: { url: "https://agent.example.test/api/health" },
+        fetchImpl: async () => {
+          throw new Error("ECONNREFUSED");
+        },
+      }),
+    ).resolves.toMatchObject({ verdict: "unreachable(ECONNREFUSED)" });
+  });
+
+  it("summarizes skipped chat legs with the agent preflight verdict", () => {
+    const summary = {
+      tests: [
+        {
+          testIdentifierString: "MessageGestureUITests/testSendsMessage()",
+          testStatus: "Skipped",
+        },
+        {
+          testIdentifierString: "BootCaptureUITests/testBootsHome()",
+          testStatus: "Passed",
+        },
+        {
+          testIdentifierString: "OnboardingChatUITests/testFirstReply()",
+          status: "skipped",
+        },
+      ],
+    };
+
+    expect(
+      summarizeChatSkipAccounting(summary, "not-ready(ready=false)"),
+    ).toEqual({
+      count: 2,
+      tests: [
+        "MessageGestureUITests/testSendsMessage()",
+        "OnboardingChatUITests/testFirstReply()",
+      ],
+      message: "2 chat legs skipped: agent never ready (not-ready(ready=false))",
+    });
+  });
+
+  it("makes --require-chat fail for a bad preflight or skipped chat legs", () => {
+    expect(
+      buildRequireChatDecision({
+        requireChat: true,
+        agentProbeVerdict: "ready",
+        chatSkippedCount: 1,
+      }),
+    ).toMatchObject({ exitNonZero: true, reason: "1 chat leg skipped" });
+    expect(
+      buildRequireChatDecision({
+        requireChat: true,
+        agentProbeVerdict: "unreachable(timeout)",
+        chatSkippedCount: 0,
+      }),
+    ).toMatchObject({
+      exitNonZero: true,
+      reason: "agent preflight unreachable(timeout)",
+    });
+    expect(
+      buildRequireChatDecision({
+        requireChat: false,
+        agentProbeVerdict: "unreachable(timeout)",
+        chatSkippedCount: 1,
+      }),
+    ).toMatchObject({ exitNonZero: false });
   });
 });
