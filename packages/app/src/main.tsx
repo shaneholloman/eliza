@@ -175,12 +175,12 @@ import { decideChatOverlayToggle } from "./desktop-hotkey";
 import { runEmbedHandshake } from "./embed-bootstrap";
 import { registerAppHostExternalImporters } from "./host-externals";
 import { runIosAttachmentSmokeIfRequested } from "./ios-attachment-smoke";
-import { runIosVoiceSelfTestSmokeIfRequested } from "./ios-voice-selftest-smoke";
 import {
   apiBaseToDeviceBridgeUrl,
   type IosRuntimeConfig,
   resolveIosRuntimeConfig,
 } from "./ios-runtime";
+import { runIosVoiceSelfTestSmokeIfRequested } from "./ios-voice-selftest-smoke";
 import { startKeyboardDictationSession } from "./keyboard-dictation";
 import {
   createMobileLifecycle,

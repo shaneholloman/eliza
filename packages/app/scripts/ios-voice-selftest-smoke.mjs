@@ -78,7 +78,16 @@ function tryRun(command, args, options = {}) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
-  } catch {
+  } catch (error) {
+    // error-policy:J6 optional host probe — callers treat null as an explicit
+    // unavailable result and hard-fail separately when the value is required
+    if (options.warnOnFailure) {
+      log(
+        `${options.label ?? `${command} ${args.join(" ")}`} failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
     return null;
   }
 }
@@ -276,8 +285,14 @@ function defaultsReadString(udid, appId, key) {
           for (const nativeKey of preferenceNativeKeys(key)) {
             if (typeof parsed[nativeKey] === "string") return parsed[nativeKey];
           }
-        } catch {
-          // fall through to defaults read
+        } catch (error) {
+          // error-policy:J3 corrupt plist JSON — fall through to the native
+          // defaults readers and keep the malformed source visible in logs
+          log(
+            `failed to parse ${plist}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         }
       }
     }
@@ -331,7 +346,14 @@ function takeScreenshot(udid, label) {
       filename: `${label}.png`,
       log,
     });
-  } catch {
+  } catch (error) {
+    // error-policy:J6 best-effort evidence capture — the test verdict still
+    // comes from the machine-readable voice report
+    log(
+      `screenshot "${label}" failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
     return null;
   }
 }
@@ -367,7 +389,16 @@ async function pollResult(udid, appId) {
       let parsed = null;
       try {
         parsed = JSON.parse(lastRaw);
-      } catch {
+      } catch (error) {
+        // error-policy:J3 corrupt interim result blob — keep polling until a
+        // valid terminal result arrives or the lane times out
+        if (attempt % 15 === 0) {
+          log(
+            `result JSON parse failed (${attempt}/${attempts}): ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
         parsed = null;
       }
       if (parsed?.phase === "complete" || parsed?.phase === "failed") {
@@ -476,6 +507,8 @@ async function main() {
     );
     log(`artifacts: ${resultDir}`);
   } catch (error) {
+    // error-policy:J1 simulator smoke boundary — capture best-effort evidence
+    // and rethrow so the CLI exits nonzero
     const screenshot = takeScreenshot(udid, "failure");
     await stopVideo(recording);
     throw new Error(
@@ -487,6 +520,7 @@ async function main() {
 }
 
 main().catch((error) => {
+  // error-policy:J1 CLI boundary — the caller observes the nonzero exit
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
 });

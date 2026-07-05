@@ -64,9 +64,14 @@ function parseIosVoiceSelfTestRequest(
           ? parsed.apiBase.trim()
           : fallback.apiBase,
     };
-  } catch {
-    // error-policy:J3 corrupt smoke-request blob — run against the paired agent
-    return fallback;
+  } catch (error) {
+    // error-policy:J3 corrupt smoke-request blob — fail the harness instead of
+    // turning malformed input into a false-green default run
+    throw new Error(
+      `Invalid iOS voice self-test request: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
 }
 
@@ -92,9 +97,13 @@ async function readSmokePreference(
   try {
     const value = window.localStorage.getItem(key);
     if (value) return value;
-  } catch {
+  } catch (error) {
     // error-policy:J4 unavailable localStorage — Preferences (read above) is
     // the authoritative native store for the simulator harness
+    console.warn(
+      "[ios-voice-selftest] localStorage read failed; using Preferences only",
+      error,
+    );
   }
   return null;
 }
@@ -238,7 +247,12 @@ export async function runIosVoiceSelfTestSmokeIfRequested({
       // error-policy:J5 a WKWebView AudioContext boots suspended without a user
       // gesture; the TTS stage records started/outputObserved from the decoded
       // buffer either way, so a failed resume here must not abort the run
-      await audioCtx.resume().catch(() => {});
+      await audioCtx.resume().catch((error) => {
+        console.warn(
+          "[ios-voice-selftest] AudioContext resume failed; continuing with decoded-buffer TTS evidence",
+          error,
+        );
+      });
     }
 
     const report = await withRunTimeout(
@@ -285,13 +299,22 @@ export async function runIosVoiceSelfTestSmokeIfRequested({
   } finally {
     if (audioCtx) {
       // error-policy:J6 best-effort teardown — the run is complete
-      await audioCtx.close().catch(() => {});
+      await audioCtx.close().catch((error) => {
+        console.warn(
+          "[ios-voice-selftest] AudioContext teardown failed after completed run",
+          error,
+        );
+      });
     }
     try {
       window.localStorage.removeItem(IOS_VOICE_SELFTEST_REQUEST_KEY);
-    } catch {
+    } catch (error) {
       // error-policy:J6 best-effort cleanup — Preferences removal below is
       // authoritative for the simulator harness
+      console.warn(
+        "[ios-voice-selftest] localStorage cleanup failed; removing Preferences request",
+        error,
+      );
     }
     await removePreference(IOS_VOICE_SELFTEST_REQUEST_KEY);
   }
