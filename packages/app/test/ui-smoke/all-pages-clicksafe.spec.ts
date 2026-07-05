@@ -40,6 +40,14 @@ type RouteProbe = {
    * no-op-for-exempt-views semantics.
    */
   requireViewHeader?: boolean;
+  /**
+   * Scope for the ViewHeader assertion: the routed view's shell selector
+   * (`viewHeaderWithin`) or the header's own title text (`viewHeaderTitle`).
+   * Without one, the helper could bind to an AMBIENT header floating under
+   * the routed view and mask a view that lost its own header (#14152).
+   */
+  viewHeaderWithin?: string;
+  viewHeaderTitle?: string;
 };
 
 type ViewportProbe = {
@@ -169,6 +177,7 @@ const CORE_ROUTE_PROBES: readonly RouteProbe[] = [
     name: "automations",
     path: "/automations",
     readyChecks: [{ selector: '[data-testid="automations-shell"]' }],
+    viewHeaderWithin: '[data-testid="automations-shell"]',
     timeoutMs: 60_000,
     requireViewHeader: true,
   },
@@ -197,6 +206,7 @@ const CORE_ROUTE_PROBES: readonly RouteProbe[] = [
     name: "wallet",
     path: "/wallet",
     readyChecks: [{ selector: '[data-testid="wallet-shell"]' }],
+    viewHeaderWithin: '[data-testid="wallet-shell"]',
     timeoutMs: 60_000,
     requireViewHeader: true,
   },
@@ -218,6 +228,7 @@ const CORE_ROUTE_PROBES: readonly RouteProbe[] = [
     name: "settings",
     path: "/settings",
     readyChecks: [{ selector: '[data-testid="settings-shell"]' }],
+    viewHeaderWithin: '[data-testid="settings-shell"]',
     timeoutMs: 60_000,
     requireViewHeader: true,
   },
@@ -286,6 +297,7 @@ const CORE_ROUTE_PROBES: readonly RouteProbe[] = [
     mode: "all",
     timeoutMs: 60_000,
     requireViewHeader: true,
+    viewHeaderTitle: "Skills",
   },
   {
     name: "character experience deep link",
@@ -297,6 +309,7 @@ const CORE_ROUTE_PROBES: readonly RouteProbe[] = [
     mode: "all",
     timeoutMs: 60_000,
     requireViewHeader: true,
+    viewHeaderTitle: "Experience",
   },
   {
     name: "automation node catalog deep link",
@@ -344,6 +357,7 @@ const CORE_ROUTE_PROBES: readonly RouteProbe[] = [
     name: "help",
     path: "/help",
     readyChecks: [{ selector: '[data-testid="help-view"]' }],
+    viewHeaderWithin: '[data-testid="help-view"]',
     timeoutMs: 60_000,
     requireViewHeader: true,
   },
@@ -1497,6 +1511,8 @@ async function probeRoute(page: Page, route: RouteProbe): Promise<void> {
     const isMobileViewport = Boolean(viewport && viewport.width <= 500);
     await assertSharedViewHeaderContract(page, {
       requireTapTarget: isMobileViewport,
+      within: route.viewHeaderWithin,
+      title: route.viewHeaderTitle,
     });
   }
 }
