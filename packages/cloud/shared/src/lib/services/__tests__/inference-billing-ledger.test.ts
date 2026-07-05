@@ -690,6 +690,30 @@ describe("sweepStalePendingInferenceChargesDb — corrupt estimate fails closed 
   );
 
   test(
+    "a negative estimate is NOT settled — it fails closed to an auditable 'corrupt' row (no debit)",
+    async () => {
+      if (!pgliteReady) return;
+      const negative = nextRequestId();
+      await dbWrite.execute(
+        `INSERT INTO inference_pending_charges
+           (request_id, organization_id, user_id, api_key_id, model, provider, billing_source, estimated_cost_usd, status, enqueued_at)
+         VALUES ('${negative}', '${ORG_ID}', '${USER_ID}', NULL, 'gpt-oss-120b', 'cerebras', 'platform', '-5.000000'::numeric, 'pending', NOW() - INTERVAL '1800000 milliseconds');`,
+      );
+
+      const stats = await ledger.sweepStalePendingInferenceChargesDb({ graceMs: 20 * 60 * 1000 });
+
+      expect(stats.settled).toBe(0);
+      expect(stats.corrupt).toBe(1);
+      expect(await debitCount()).toBe(0);
+      expect(await readBalance()).toBeCloseTo(100, 6);
+      const rows = await pendingRows();
+      const row = rows.find((r) => r.request_id === negative);
+      expect(row?.status).toBe("corrupt");
+    },
+    PGLITE_TIMEOUT,
+  );
+
+  test(
     "a corrupt row is transitioned out of 'pending' so it does not re-scan forever, and GCs like other terminals",
     async () => {
       if (!pgliteReady) return;

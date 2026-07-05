@@ -362,7 +362,7 @@ export interface LedgerSweepStats {
   skipped: number;
   /**
    * Pending rows the sweep could not settle because their persisted
-   * `estimated_cost_usd` read back corrupt (`'NaN'::numeric`, empty, non-finite).
+   * `estimated_cost_usd` read back corrupt (`'NaN'::numeric`, empty, non-finite, negative).
    * They are transitioned out of `pending` to `corrupt` (auditable, no debit)
    * rather than fabricated-settled at $0. Distinct from `skipped` (lost the claim
    * to a concurrent inline settle — already handled).
@@ -376,7 +376,7 @@ export interface LedgerSweepStats {
 
 /**
  * Corrupt-value marker raised when a swept pending charge's persisted
- * `estimated_cost_usd` cannot be read as a finite number.
+ * `estimated_cost_usd` cannot be read as a finite, non-negative number.
  */
 export class CorruptPendingChargeEstimateError extends Error {
   constructor(
@@ -404,9 +404,9 @@ export class CorruptPendingChargeEstimateError extends Error {
  * row as if the cost were legitimately zero. That is exactly the fallback-slop
  * class #13415 targets: a failed read becoming a success-shaped value.
  *
- * This parser throws on a missing/empty/non-finite value so the sweep can route
- * the row to an auditable `corrupt` terminal state instead of a silent $0 settle.
- * An explicit domain `0` (a genuinely free request) is allowed through.
+ * This parser throws on a missing/empty/non-finite/negative value so the sweep
+ * can route the row to an auditable `corrupt` terminal state instead of a silent
+ * $0 settle. An explicit domain `0` (a genuinely free request) is allowed through.
  */
 function parseSweepEstimate(
   requestId: string,
@@ -416,7 +416,7 @@ function parseSweepEstimate(
     throw new CorruptPendingChargeEstimateError(requestId, rawValue);
   }
   const parsed = typeof rawValue === "number" ? rawValue : Number(rawValue);
-  if (!Number.isFinite(parsed)) {
+  if (!Number.isFinite(parsed) || parsed < 0) {
     throw new CorruptPendingChargeEstimateError(requestId, rawValue);
   }
   return parsed;
@@ -523,10 +523,11 @@ export async function sweepStalePendingInferenceChargesDb(opts?: {
     stats.scanned += rows.length;
 
     for (const row of rows) {
-      // Fail-closed on a corrupt persisted estimate: a `'NaN'::numeric` estimate
-      // must NOT settle at $0 (that fabricates a free-inference collection and
-      // clears the row as if the cost were legitimately zero). Route it to an
-      // auditable `corrupt` terminal state instead. error-policy:J1
+      // Fail-closed on a corrupt persisted estimate: a `'NaN'::numeric` or negative
+      // estimate must NOT settle at $0 / as a credit (that fabricates a
+      // success-shaped collection and clears the row as if the cost were
+      // legitimate). Route it to an auditable `corrupt` terminal state instead.
+      // error-policy:J1
       let estimate: number;
       try {
         estimate = parseSweepEstimate(row.request_id, row.estimated_cost_usd);
