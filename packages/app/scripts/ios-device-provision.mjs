@@ -25,9 +25,10 @@
  * Bundle ids are resolved from (in precedence order): explicit `--bundle-id`
  * flags, then the appexes discovered inside `--product <App.app>/PlugIns/*.appex`
  * (their `CFBundleIdentifier`) plus the app itself. Idempotent — an already
- * registered device / existing bundle id is reused; a same-named profile is
- * refreshed (dev profiles are immutable, so it is deleted + recreated). Minted
- * profiles are written into the profiles dir where `discoverProfiles()` looks.
+ * registered device / existing bundle id is reused; each device gets its own
+ * stable profile name, so refreshing one device never removes another device's
+ * working profile. Minted profiles are written into the profiles dir where
+ * `discoverProfiles()` looks.
  *
  * The API-flow, JWT construction, and credential handling are exported as pure
  * functions with an injectable `fetchImpl` so the contract is unit-tested
@@ -218,9 +219,23 @@ export async function ensureBundleId(
 }
 
 /**
+ * Keep development profile names stable per bundle+device without embedding the
+ * full UDID in ASC-visible names. Development profiles are immutable, so a
+ * same-named refresh deletes only this device-specific profile.
+ */
+export function developmentProfileName(identifier, deviceId) {
+  const suffix = crypto
+    .createHash("sha256")
+    .update(String(deviceId))
+    .digest("hex")
+    .slice(0, 12);
+  return `Eliza Dev - ${identifier} - ${suffix}`;
+}
+
+/**
  * Mint (or refresh) a development profile for a bundle id. Development profiles
- * are immutable, so a same-named profile is deleted and recreated with the
- * current device + certificate set.
+ * are immutable, so a same-named profile is deleted and recreated with this
+ * device + certificate set.
  */
 export async function mintDevelopmentProfile(
   asc,
@@ -313,6 +328,19 @@ export function discoverAppBundleIds(productAppDir, { runPlutil } = {}) {
   });
 }
 
+export function validateBundleIds(bundleIds, source = "provision") {
+  if (!bundleIds || bundleIds.length === 0) {
+    throw new Error(
+      `${source}: no bundle ids resolved (pass --bundle-id or --product with appexes).`,
+    );
+  }
+  for (const bid of bundleIds) {
+    if (!bid?.identifier?.trim()) {
+      throw new Error(`${source}: resolved an empty bundle identifier.`);
+    }
+  }
+}
+
 /**
  * Full provisioning flow. Idempotent. Returns a per-bundle-id result table.
  * `fetchImpl`, `dir`, and `now` are injectable for tests.
@@ -327,11 +355,7 @@ export async function provision({
   now,
 }) {
   if (!udid) throw new Error("provision: a device UDID is required.");
-  if (!bundleIds || bundleIds.length === 0) {
-    throw new Error(
-      "provision: no bundle ids resolved (pass --bundle-id or --product with appexes).",
-    );
-  }
+  validateBundleIds(bundleIds);
   const jwt = createAscJwt(creds, now);
   const asc = makeAscClient({ jwt, fetchImpl });
   const device = await ensureDeviceRegistered(asc, { udid, name: deviceName });
@@ -342,7 +366,7 @@ export async function provision({
       identifier: bid.identifier,
       name: bid.name,
     });
-    const profileName = `Eliza Dev - ${bid.identifier}`;
+    const profileName = developmentProfileName(bid.identifier, device.id);
     const profile = await mintDevelopmentProfile(asc, {
       name: profileName,
       bundleIdRef: bundle.id,
@@ -386,6 +410,7 @@ async function main() {
   if (bundleIds.length === 0 && args.product) {
     bundleIds = discoverAppBundleIds(args.product);
   }
+  validateBundleIds(bundleIds, "ios:device:provision");
   if (args.dryRun) {
     // Prove the JWT + resolution without mutating the ASC team.
     createAscJwt(creds);

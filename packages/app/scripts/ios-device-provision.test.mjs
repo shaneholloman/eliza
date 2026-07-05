@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   createAscJwt,
+  developmentProfileName,
   discoverAppBundleIds,
   ensureBundleId,
   ensureDeviceRegistered,
@@ -13,6 +14,7 @@ import {
   mintDevelopmentProfile,
   provision,
   resolveAscCredentials,
+  validateBundleIds,
   writeProfile,
 } from "./ios-device-provision.mjs";
 
@@ -237,6 +239,18 @@ describe("mintDevelopmentProfile", () => {
   });
 });
 
+describe("developmentProfileName", () => {
+  it("scopes profile refresh names by device so one device cannot delete another", () => {
+    const first = developmentProfileName("ai.elizaos.app", "DEVICE-A");
+    const second = developmentProfileName("ai.elizaos.app", "DEVICE-B");
+
+    expect(first).toMatch(/^Eliza Dev - ai\.elizaos\.app - [a-f0-9]{12}$/);
+    expect(second).toMatch(/^Eliza Dev - ai\.elizaos\.app - [a-f0-9]{12}$/);
+    expect(first).not.toBe(second);
+    expect(developmentProfileName("ai.elizaos.app", "DEVICE-A")).toBe(first);
+  });
+});
+
 describe("writeProfile", () => {
   it("decodes profileContent to <uuid>.mobileprovision", () => {
     const dir = tmpDir();
@@ -286,10 +300,25 @@ describe("discoverAppBundleIds", () => {
   });
 });
 
+describe("validateBundleIds", () => {
+  it("fails the non-mutating proof when no bundle ids resolve", () => {
+    expect(() => validateBundleIds([], "ios:device:provision")).toThrow(
+      /ios:device:provision: no bundle ids resolved/,
+    );
+  });
+
+  it("rejects empty bundle identifiers", () => {
+    expect(() =>
+      validateBundleIds([{ identifier: "   " }], "ios:device:provision"),
+    ).toThrow(/empty bundle identifier/);
+  });
+});
+
 describe("provision — full idempotent flow", () => {
   it("registers device, ensures bundles, mints + writes a profile per bundle id", async () => {
     const dir = tmpDir();
     const content = Buffer.from("profile-bytes").toString("base64");
+    const expectedProfileName = developmentProfileName("ai.elizaos.app", "DEV");
     const fetchImpl = mockFetch({
       "GET /v1/devices": { body: { data: [] } },
       "POST /v1/devices": { status: 201, body: { data: { id: "DEV" } } },
@@ -303,7 +332,7 @@ describe("provision — full idempotent flow", () => {
           data: {
             id: "PROF",
             attributes: {
-              name: "Eliza Dev - ai.elizaos.app",
+              name: expectedProfileName,
               uuid: "UUID",
               profileContent: content,
             },
@@ -325,13 +354,17 @@ describe("provision — full idempotent flow", () => {
       {
         identifier: "ai.elizaos.app",
         bundleCreated: true,
-        profile: "Eliza Dev - ai.elizaos.app",
+        profile: expectedProfileName,
         file: path.join(dir, "UUID.mobileprovision"),
       },
     ]);
     expect(
       fs.readFileSync(path.join(dir, "UUID.mobileprovision"), "utf8"),
     ).toBe("profile-bytes");
+    const profilePost = fetchImpl.calls.find(
+      (c) => c.method === "POST" && c.path === "/v1/profiles",
+    );
+    expect(profilePost.body.data.attributes.name).toBe(expectedProfileName);
     // Every request carried the bearer JWT.
     expect(fetchImpl.calls.every((c) => c.auth?.startsWith("Bearer "))).toBe(
       true,

@@ -13,9 +13,10 @@ it non-interactively — no Xcode account session:
 2. **registers** the device UDID (`GET`/`POST /v1/devices`) — idempotent;
 3. resolves a **DEVELOPMENT certificate** (`/v1/certificates`), failing fast if none;
 4. **ensures a bundle id** for the app + every appex (`GET`/`POST /v1/bundleIds`) — idempotent;
-5. **mints/refreshes a development profile** per bundle id
-   (`IOS_APP_DEVELOPMENT`; dev profiles are immutable, so a same-named one is
-   deleted + recreated with the current device + cert set);
+5. **mints/refreshes a device-scoped development profile** per bundle id
+   (`IOS_APP_DEVELOPMENT`; dev profiles are immutable, so a same-named profile
+   for the same bundle+device is deleted + recreated, while another device's
+   working profile is left untouched);
 6. **downloads** each profile's base64 `profileContent` into
    `~/Library/MobileDevice/Provisioning Profiles/<uuid>.mobileprovision` — exactly
    where `ios-device-deploy.mjs` `discoverProfiles()` looks.
@@ -25,7 +26,9 @@ Bundle ids come from `--bundle-id` flags or are discovered from
 5 appexes (widgets, DeviceActivity ×2, WebsiteBlocker, ElizaKeyboard) get
 profiles and `ios:device:deploy` no longer needs `--skip-appexes`.
 
-`--dry-run` proves the JWT + bundle-id resolution without mutating the ASC team.
+`--dry-run` proves the JWT + bundle-id resolution without mutating the ASC team,
+and now fails if neither `--bundle-id` nor a valid `--product` resolves at least
+one bundle id.
 
 ## Test evidence (real run on this host)
 
@@ -36,19 +39,29 @@ network:
 ```
 $ bunx vitest run packages/app/scripts/ios-device-provision.test.mjs
  Test Files  1 passed (1)
-      Tests  17 passed (17)
+      Tests  20 passed (20)
 ```
 
 Coverage: credential fail-fast (names every missing var; inline PEM vs .p8 path);
 **real ES256 JWT** — asserts the header/claims and that the signature *verifies*
 against the generated EC public key (`crypto.verify`, `ieee-p1363`); non-EC key
 rejected; ASC error bodies surfaced verbatim (fail fast, no swallow); device /
-bundle-id **idempotency** (existing → reused, no POST); profile **refresh**
-(GET → DELETE old → POST new) with the correct `IOS_APP_DEVELOPMENT` +
-device/cert relationships; base64 `profileContent` decoded to
-`<uuid>.mobileprovision`; appex `CFBundleIdentifier` discovery (de-duped); and
-the full `provision()` flow writing a profile per bundle id with the bearer JWT
-on every request.
+bundle-id **idempotency** (existing → reused, no POST); profile **refresh** with
+the correct `IOS_APP_DEVELOPMENT` + device/cert relationships; device-scoped
+profile names that prevent provisioning device B from deleting device A's
+profile; base64 `profileContent` decoded to `<uuid>.mobileprovision`; appex
+`CFBundleIdentifier` discovery (de-duped); dry-run/bundle validation that fails
+on zero resolved bundle ids; and the full `provision()` flow writing a profile
+per bundle id with the bearer JWT on every request.
+
+The verifier-reported dry-run false-green now fails:
+
+```
+$ APP_STORE_API_KEY_ID=KID APP_STORE_API_ISSUER_ID=ISS APP_STORE_API_KEY_P8=<p8> \
+  node packages/app/scripts/ios-device-provision.mjs --device TEST --dry-run
+[provision] ios:device:provision: no bundle ids resolved (pass --bundle-id or --product with appexes).
+# exit 1
+```
 
 ## Acceptance criteria mapping
 
@@ -74,5 +87,5 @@ on every request.
 
 - Live `ios:device:provision` run against the real ASC team + device
   registration + on-device install — **N/A here**: no ASC credentials and no
-  physical iOS device on this host. Proven by the 17-test contract suite +
+  physical iOS device on this host. Proven by the 20-test contract suite +
   inspection; the live run is the device-lane verification step.
