@@ -9,7 +9,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_WORKSPACE_DISK_CAP_BYTES,
   DEFAULT_WORKSPACE_MIN_FREE_BYTES,
@@ -23,6 +23,10 @@ import {
 import { CodingWorkspaceService } from "../services/workspace-service.js";
 
 const roots: string[] = [];
+
+beforeEach(() => {
+  resetSharedWorkspaceRegistry();
+});
 
 afterEach(() => {
   resetSharedWorkspaceRegistry();
@@ -130,46 +134,37 @@ describe("WorkspaceRegistry cap enforcement", () => {
   });
 });
 
-describe("CodingWorkspaceService registry lifecycle", () => {
-  it("marks retained full-clone workspaces terminal so disk pressure can reclaim them", async () => {
+describe("CodingWorkspaceService registry integration", () => {
+  it("marks submitted full-clone workspaces terminal so pressure can evict them", async () => {
     const root = tmpRoot("wsreg-service-");
-    const workspacePath = join(root, "clone-retained");
-    await makeDirWithBytes(workspacePath, 8192);
-    resetSharedWorkspaceRegistry();
-    const registry = getSharedWorkspaceRegistry();
+    const clone = join(root, "clone-submitted");
+    await makeDirWithBytes(clone, 64 * 1024);
+
     const service = new CodingWorkspaceService({
       getSetting: () => undefined,
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
     } as never);
     (
       service as unknown as {
-        workspaces: Map<
-          string,
-          {
-            id: string;
-            path: string;
-            branch: string;
-            baseBranch: string;
-            isWorktree: boolean;
-            repo: string;
-            status: string;
-          }
-        >;
+        workspaces: Map<string, unknown>;
       }
-    ).workspaces.set("ws-retained", {
-      id: "ws-retained",
-      path: workspacePath,
-      branch: "feature/test",
-      baseBranch: "develop",
+    ).workspaces.set("ws-submitted", {
+      id: "ws-submitted",
+      path: clone,
+      branch: "feature",
+      baseBranch: "main",
       isWorktree: false,
-      repo: "https://github.com/elizaOS/eliza.git",
+      repo: "elizaOS/eliza",
       status: "ready",
     });
-    registry.register("git-workspace", workspacePath, "ws-retained");
 
-    service.markWorkspaceTerminal("ws-retained");
-    await registry.checkDiskBudget(root, { capBytes: 0 });
+    const registry = getSharedWorkspaceRegistry();
+    registry.register("git-workspace", clone, "ws-submitted");
+    service.markWorkspaceTerminal("ws-submitted");
 
-    expect(existsSync(workspacePath)).toBe(false);
+    const decision = await registry.checkDiskBudget(root, { capBytes: 0 });
+    expect(decision.reclaimedCount).toBe(1);
+    expect(existsSync(clone)).toBe(false);
   });
 });
 

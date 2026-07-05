@@ -6,7 +6,7 @@
  * must remove the orphaned dir and drop its registry entry, so a failed spawn
  * never pins the shared cap (#13803 review blocker #2). No mocks of the cleanup.
  */
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -97,11 +97,12 @@ describe("AcpService spawn disk-budget + registry (#13773)", () => {
     expect(registry.size()).toBe(before);
   });
 
-  it("keeps the workdir for a durable errored session when acpx exits nonzero", async () => {
+  it("preserves the scratch dir when a durable CLI session fails to start", async () => {
     const root = tmpRoot();
     const store = new InMemorySessionStore();
     const svc = new AcpService(
       makeRuntime({
+        ELIZA_ACP_TRANSPORT: "cli",
         ELIZA_ACP_WORKSPACE_ROOT: root,
       }) as never,
       { store },
@@ -109,29 +110,29 @@ describe("AcpService spawn disk-budget + registry (#13773)", () => {
     (svc as unknown as { started: boolean }).started = true;
     (
       svc as unknown as {
-        runAcpx: () => Promise<{ code: number; stdout: string; stderr: string }>;
+        runAcpx: () => Promise<{
+          code: number;
+          stdout: string;
+          stderr: string;
+        }>;
       }
     ).runAcpx = async () => ({
-      code: 42,
+      code: 1,
       stdout: "",
-      stderr: "transport refused",
+      stderr: "startup failed",
     });
 
     await expect(
       svc.spawnSession({ agentType: "opencode", slotClass: "worker" }),
     ).rejects.toThrow();
 
-    const scratchDirs = readdirSync(root).filter((n) => n.startsWith("task-"));
-    expect(scratchDirs).toHaveLength(1);
-    const scratchDir = scratchDirs[0] ?? "";
-    expect(scratchDir).not.toBe("");
     const [session] = await store.list();
-    expect(session?.status).toBe("errored");
-    expect(session?.workdir).toContain(scratchDir);
-
-    const registry = getSharedWorkspaceRegistry();
-    expect(registry.has(session?.workdir ?? "")).toBe(true);
-    expect(registry.isLive(session?.workdir ?? "")).toBe(false);
+    expect(session).toMatchObject({
+      status: "errored",
+      lastError: expect.stringContaining("startup failed"),
+    });
+    expect(existsSync(session.workdir)).toBe(true);
+    expect(getSharedWorkspaceRegistry().isLive(session.workdir)).toBe(false);
   });
 
   it("refuses a spawn when the free-disk floor cannot be met", async () => {
