@@ -117,6 +117,7 @@ import {
   type CreateTaskInput,
   MAX_ATTEMPT_REFLECTIONS,
   MAX_SESSION_RETRY_ATTEMPTS,
+  nextTaskStatus,
   type OrchestratorAccountAssignment,
   type OrchestratorAccountOverview,
   type OrchestratorRoomParticipant,
@@ -2169,9 +2170,16 @@ export class OrchestratorTaskService extends Service {
     if (!doc) return null;
     await this.dequeueAdmission(taskId);
     await this.stopActiveSessions(doc);
+    // Re-read after stopActiveSessions, which may have advanced the status, and
+    // resolve the archive target through the transition table rather than
+    // writing `"archived"` literally: the `archived` trigger is legal from every
+    // state, so this is total, but going through the table keeps that table row
+    // live (a legality regression there now fails this write) instead of dead
+    // documentation the operator path silently bypasses.
+    const current = (await this.store.getTask(taskId)) ?? doc;
     await this.store.updateTask(taskId, {
       archived: true,
-      status: "archived",
+      status: nextTaskStatus(current.task.status, "archived"),
       archivedAt: nowIso(),
       closedAt: doc.task.closedAt ?? nowIso(),
     });
@@ -3736,7 +3744,12 @@ export class OrchestratorTaskService extends Service {
     const acp = this.acp();
     if (!acp) {
       await this.store.updateSession(sessionId, { status: "stop_failed" });
-      await this.store.updateTask(taskId, { status: "interrupted" });
+      // Route through the transition table: a task that already reached a
+      // terminal state (done/failed/archived) but still holds a live keepAlive
+      // session whose stop we can't attempt must NOT be stomped to `interrupted`
+      // — `done → interrupted` has no table edge, so this is a legal no-op there
+      // and only interrupts a genuinely non-terminal task.
+      await this.advanceTaskStatus(taskId, "interrupted");
       throw new Error("ACP service unavailable; cannot stop active session");
     }
     try {
@@ -3974,7 +3987,7 @@ export class OrchestratorTaskService extends Service {
           }),
         ),
       );
-      await this.store.updateTask(doc.task.id, { status: "interrupted" });
+      await this.advanceTaskStatus(doc.task.id, "interrupted");
       throw new RecoveryConflictError(
         "ACP service unavailable; cannot stop active sessions",
       );
@@ -4001,7 +4014,10 @@ export class OrchestratorTaskService extends Service {
       }),
     );
     if (failures.length > 0) {
-      await this.store.updateTask(doc.task.id, { status: "interrupted" });
+      // A terminal task holding a live keepAlive session whose ACP stop fails
+      // must not regress to `interrupted`; the table makes that a legal no-op
+      // while still interrupting a non-terminal one.
+      await this.advanceTaskStatus(doc.task.id, "interrupted");
       throw new RecoveryConflictError(
         `Failed to stop ${failures.length} active session${
           failures.length === 1 ? "" : "s"
