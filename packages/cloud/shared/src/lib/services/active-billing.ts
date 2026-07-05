@@ -8,6 +8,10 @@ import type { AppEnv } from "../../types/cloud-worker-env";
 import { AGENT_PRICING } from "../constants/agent-pricing";
 import { calculateDailyContainerCost } from "../constants/pricing";
 import { logger } from "../utils/logger";
+import {
+  parseActiveBillingNonNegativeNumber,
+  parseActiveBillingNumber,
+} from "./active-billing-numeric";
 import { provisioningJobService } from "./provisioning-jobs";
 
 export type BillableResourceType = "container" | "agent_sandbox";
@@ -147,7 +151,10 @@ class ActiveBillingService {
         lastBilledAt: iso(container.last_billed_at),
         nextBillingAt: iso(container.next_billing_at),
         estimatedNextBillingAt: iso(estimatedNext),
-        totalBilled: Number(container.total_billed),
+        totalBilled: parseActiveBillingNonNegativeNumber(
+          container.total_billed,
+          "container.total_billed",
+        ),
         cancelEndpoint: cancelEndpoint("container", container.id),
         cancelAction: "stop",
         metadata: {
@@ -182,14 +189,20 @@ class ActiveBillingService {
         lastBilledAt: iso(agent.last_billed_at),
         nextBillingAt: null,
         estimatedNextBillingAt: iso(estimatedNext),
-        totalBilled: Number(agent.total_billed),
+        totalBilled: parseActiveBillingNonNegativeNumber(
+          agent.total_billed,
+          "agent_sandbox.total_billed",
+        ),
         cancelEndpoint: cancelEndpoint("agent_sandbox", agent.id),
         cancelAction: "suspend_billing",
         metadata: {
           characterId: agent.character_id,
           sandboxId: agent.sandbox_id,
           bridgeUrl: agent.bridge_url,
-          hourlyRate: Number(agent.hourly_rate ?? unitPrice),
+          hourlyRate:
+            agent.hourly_rate === null || agent.hourly_rate === undefined
+              ? unitPrice
+              : parseActiveBillingNonNegativeNumber(agent.hourly_rate, "agent_sandbox.hourly_rate"),
           lastBackupAt: iso(agent.last_backup_at),
           scheduledShutdownAt: iso(agent.scheduled_shutdown_at),
           billableReason: isRunning ? "running_agent" : "idle_snapshot_storage",
@@ -215,7 +228,7 @@ class ActiveBillingService {
       const detected = detectLedgerResource(metadata);
       return {
         id: row.id,
-        amount: Number(row.amount),
+        amount: parseActiveBillingNumber(row.amount, "credit_transaction.amount"),
         type: row.type,
         description: row.description,
         createdAt: row.created_at.toISOString(),
@@ -271,7 +284,10 @@ class ActiveBillingService {
               lastBilledAt: iso(container.last_billed_at),
               nextBillingAt: null,
               estimatedNextBillingAt: null,
-              totalBilled: Number(container.total_billed),
+              totalBilled: parseActiveBillingNonNegativeNumber(
+                container.total_billed,
+                "container.total_billed",
+              ),
               cancelEndpoint: cancelEndpoint("container", container.id),
               cancelAction: "stop",
               metadata: {
@@ -322,7 +338,10 @@ class ActiveBillingService {
             lastBilledAt: iso(updated.last_billed_at),
             nextBillingAt: iso(updated.next_billing_at),
             estimatedNextBillingAt: null,
-            totalBilled: Number(updated.total_billed),
+            totalBilled: parseActiveBillingNonNegativeNumber(
+              updated.total_billed,
+              "updated.total_billed",
+            ),
             cancelEndpoint: cancelEndpoint("container", updated.id),
             cancelAction: "stop",
             metadata: {
@@ -378,7 +397,10 @@ class ActiveBillingService {
               lastBilledAt: iso(agent.last_billed_at),
               nextBillingAt: null,
               estimatedNextBillingAt: null,
-              totalBilled: Number(agent.total_billed),
+              totalBilled: parseActiveBillingNonNegativeNumber(
+                agent.total_billed,
+                "agent_sandbox.total_billed",
+              ),
               cancelEndpoint: cancelEndpoint("agent_sandbox", agent.id),
               cancelAction: "suspend_billing",
               metadata: {
@@ -426,7 +448,10 @@ class ActiveBillingService {
             lastBilledAt: iso(updated.last_billed_at),
             nextBillingAt: null,
             estimatedNextBillingAt: null,
-            totalBilled: Number(updated.total_billed),
+            totalBilled: parseActiveBillingNonNegativeNumber(
+              updated.total_billed,
+              "updated.total_billed",
+            ),
             cancelEndpoint: cancelEndpoint("agent_sandbox", updated.id),
             cancelAction: "suspend_billing",
             metadata: {
