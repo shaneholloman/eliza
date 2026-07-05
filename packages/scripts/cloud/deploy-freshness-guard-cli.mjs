@@ -6,6 +6,7 @@
  *   node packages/scripts/cloud/deploy-freshness-guard-cli.mjs \
  *     --run-sha "$GITHUB_SHA" \
  *     --served-url "https://staging.elizacloud.ai" \
+ *     [--served-path "/api/health"] \
  *     [--force]
  *
  * Emits `should_deploy=true|false` to $GITHUB_OUTPUT (and reason/detail), so the
@@ -30,6 +31,7 @@ function parseArgs(argv) {
   const out = {
     runSha: null,
     servedUrl: null,
+    servedPath: null,
     servedCommit: null,
     force: false,
   };
@@ -43,6 +45,9 @@ function parseArgs(argv) {
     } else if (arg === "--served-url") {
       i += 1;
       out.servedUrl = argv[i];
+    } else if (arg === "--served-path") {
+      i += 1;
+      out.servedPath = argv[i];
     } else if (arg === "--served-commit") {
       i += 1;
       out.servedCommit = argv[i];
@@ -50,6 +55,8 @@ function parseArgs(argv) {
       out.runSha = arg.slice("--run-sha=".length);
     } else if (arg.startsWith("--served-url=")) {
       out.servedUrl = arg.slice("--served-url=".length);
+    } else if (arg.startsWith("--served-path=")) {
+      out.servedPath = arg.slice("--served-path=".length);
     } else if (arg.startsWith("--served-commit=")) {
       out.servedCommit = arg.slice("--served-commit=".length);
     }
@@ -64,6 +71,37 @@ function git(args) {
   })
     .toString()
     .trim();
+}
+
+function isShallowRepository() {
+  try {
+    return git(["rev-parse", "--is-shallow-repository"]) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function hydrateHistoryForAncestry() {
+  if (!isShallowRepository()) return true;
+  try {
+    execFileSync(
+      "git",
+      [
+        "fetch",
+        "--no-tags",
+        "--unshallow",
+        "origin",
+        "+refs/heads/*:refs/remotes/origin/*",
+      ],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 180000,
+      },
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -104,6 +142,7 @@ function ensureCommit(sha) {
  */
 function isAncestor(runSha, servedCommit) {
   if (!ensureCommit(runSha) || !ensureCommit(servedCommit)) return null;
+  if (!hydrateHistoryForAncestry()) return null;
   try {
     execFileSync("git", ["merge-base", "--is-ancestor", runSha, servedCommit], {
       stdio: ["ignore", "pipe", "pipe"],
@@ -143,12 +182,16 @@ async function main() {
   const {
     runSha,
     servedUrl,
+    servedPath,
     servedCommit: servedCommitArg,
     force,
   } = parseArgs(process.argv.slice(2));
 
   const servedCommit =
-    servedCommitArg ?? (servedUrl ? await fetchServedCommit(servedUrl) : null);
+    servedCommitArg ??
+    (servedUrl
+      ? await fetchServedCommit(servedUrl, { stampPath: servedPath })
+      : null);
 
   const result = decideDeployFreshness({
     runSha,

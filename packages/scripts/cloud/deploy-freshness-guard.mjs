@@ -8,8 +8,8 @@
  *
  * This guard runs BEFORE `wrangler pages deploy` / `wrangler deploy` and:
  *   1. Fetches the currently-served build stamp (the deployed
- *      `eliza-renderer-build.json` for Pages, whose `commit` field records the
- *      ref that built it).
+ *      `eliza-renderer-build.json` for Pages, or `/api/health` for the Worker,
+ *      whose `commit` field records the ref that built it).
  *   2. Skips the deploy when the run's SHA is an ANCESTOR of the served commit
  *      (`git merge-base --is-ancestor <runSha> <servedCommit>`) — i.e. the
  *      currently-served build is strictly newer than what this run would ship.
@@ -178,21 +178,33 @@ export function parseServedCommit(body) {
 }
 
 /**
- * Fetch the served renderer build manifest and return its recorded commit, or
- * null on any failure (fail-open — an unreachable stamp must not block deploys).
+ * Fetch the served deploy stamp and return its recorded commit, or null on any
+ * failure (fail-open — an unreachable stamp must not block deploys).
  *
  * @param {string} baseUrl e.g. "https://staging.elizacloud.ai"
  * @param {object} [opts]
  * @param {typeof fetch} [opts.fetchImpl]
+ * @param {string} [opts.stampPath]
  * @param {number} [opts.timeoutMs]
  * @returns {Promise<string|null>}
  */
 export async function fetchServedCommit(
   baseUrl,
-  { fetchImpl = fetch, timeoutMs = 15000 } = {},
+  {
+    fetchImpl = fetch,
+    stampPath = "/eliza-renderer-build.json",
+    timeoutMs = 15000,
+  } = {},
 ) {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) return null;
-  const url = `${baseUrl.replace(/\/+$/, "")}/eliza-renderer-build.json`;
+  const normalizedStampPath =
+    typeof stampPath === "string" && stampPath.trim()
+      ? stampPath.trim()
+      : "/eliza-renderer-build.json";
+  const path = normalizedStampPath.startsWith("/")
+    ? normalizedStampPath
+    : `/${normalizedStampPath}`;
+  const url = `${baseUrl.replace(/\/+$/, "")}${path}`;
   const controller =
     typeof AbortController !== "undefined" ? new AbortController() : null;
   const timer = controller

@@ -1,7 +1,14 @@
-// Exercises the cloud deploy freshness guard (#14083): stale zombie-run deploys
-// must be SKIPPED, but every ambiguous signal must FAIL OPEN (deploy).
+/**
+ * Exercises the cloud deploy freshness guard (#14083): stale zombie-run deploys
+ * must be skipped, but every ambiguous signal must fail open and deploy.
+ */
 import { describe, expect, it } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
+import { isAncestor } from "../cloud/deploy-freshness-guard-cli.mjs";
 import {
   decideDeployFreshness,
   fetchServedCommit,
@@ -182,6 +189,19 @@ describe("fetchServedCommit — fail-open network boundary", () => {
     );
   });
 
+  it("can request the Worker health stamp path", async () => {
+    let requested = "";
+    const fetchImpl = (async (url: string) => {
+      requested = url;
+      return { ok: true, text: async () => JSON.stringify({ commit: SERVED }) };
+    }) as unknown as typeof fetch;
+    await fetchServedCommit("https://api-staging.elizacloud.ai", {
+      fetchImpl,
+      stampPath: "/api/health",
+    });
+    expect(requested).toBe("https://api-staging.elizacloud.ai/api/health");
+  });
+
   it("returns null on a non-OK response (404 -> deploy, don't block)", async () => {
     const fetchImpl = (async () => ({
       ok: false,
@@ -203,5 +223,49 @@ describe("fetchServedCommit — fail-open network boundary", () => {
 
   it("returns null for a blank base URL", async () => {
     expect(await fetchServedCommit("")).toBeNull();
+  });
+});
+
+describe("isAncestor — shallow checkout hydration", () => {
+  it("detects an old stale run beyond the initial shallow fetch depth", () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-freshness-guard-"));
+    const origin = join(root, "origin");
+    const clone = join(root, "clone");
+    const previousCwd = process.cwd();
+
+    try {
+      execFileSync("git", ["init", origin], { stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: origin,
+      });
+      execFileSync("git", ["config", "user.name", "Deploy Guard Test"], {
+        cwd: origin,
+      });
+
+      const commits: string[] = [];
+      for (let i = 0; i < 70; i += 1) {
+        writeFileSync(join(origin, "stamp.txt"), `${i}\n`);
+        execFileSync("git", ["add", "stamp.txt"], { cwd: origin });
+        execFileSync("git", ["commit", "-m", `commit ${i}`], {
+          cwd: origin,
+          stdio: "ignore",
+        });
+        commits.push(
+          execFileSync("git", ["rev-parse", "HEAD"], { cwd: origin })
+            .toString()
+            .trim(),
+        );
+      }
+
+      execFileSync("git", ["clone", "--depth=1", `file://${origin}`, clone], {
+        stdio: "ignore",
+      });
+      process.chdir(clone);
+
+      expect(isAncestor(commits[0], commits.at(-1) ?? "")).toBe(true);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
