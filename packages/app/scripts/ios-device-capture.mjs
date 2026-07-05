@@ -36,11 +36,16 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readDevicectlDeviceList } from "./ios-device-devicectl.mjs";
 import {
+  readDevicectlDeviceList,
+  readDevicectlDeviceLockState,
+} from "./ios-device-devicectl.mjs";
+import {
+  assertDeviceUnlocked,
   buildPlistXml,
   extractXctestrunAppPaths,
   findDeviceRecord,
+  normalizeDeviceLockState,
   parseCliArgs,
   parsePlist,
   resolveDeviceId,
@@ -65,6 +70,21 @@ function runInherit(command, args, options = {}) {
       `${command} ${args.slice(0, 4).join(" ")} … exited with ${result.status}`,
     );
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForDeviceUnlocked(device, phase) {
+  await assertDeviceUnlocked({
+    device,
+    probeLockState: () => readDevicectlDeviceLockState(device.identifier),
+    sleep,
+    waitSeconds: process.env.ELIZA_IOS_DEVICE_UNLOCK_WAIT_SECONDS ?? 120,
+    pollIntervalSeconds: process.env.ELIZA_IOS_DEVICE_UNLOCK_POLL_SECONDS ?? 5,
+    notify: (message) => log(`${phase}: ${message}`),
+  });
 }
 
 /**
@@ -302,6 +322,7 @@ async function main() {
   // 4. Destination for the run.
   let destination;
   let simUdid = null;
+  let physicalDevice = null;
   if (platform === "sim") {
     const udid = args.device || bootedSimulatorUdid();
     simUdid = udid;
@@ -328,6 +349,8 @@ async function main() {
     if (!deviceId)
       fail("device platform needs --device or ELIZA_IOS_DEVICE_ID.");
     const record = resolvePhysicalDeviceUdid(deviceId);
+    physicalDevice = record;
+    await waitForDeviceUnlocked(record, "preflight");
     destination = `platform=iOS,id=${record.udid}`;
   }
   log(`destination: ${destination}`);
@@ -451,6 +474,18 @@ async function main() {
   log(`result bundle: ${resultBundle}`);
 
   if (testResult.status !== 0) {
+    if (physicalDevice) {
+      const lockState = normalizeDeviceLockState(
+        readDevicectlDeviceLockState(physicalDevice.identifier),
+      );
+      if (lockState.locked) {
+        fail(
+          `device locked during run (${lockState.reason ?? "lockState reported locked"}). ` +
+            `Unlock ${physicalDevice.name} and set Settings > Display & Brightness > Auto-Lock > Never for lane devices. ` +
+            `Screenshots exported to ${attachmentsDir}.`,
+        );
+      }
+    }
     fail(
       `harness run failed (xcodebuild exit ${testResult.status}). ` +
         "Exit 65 means a test assertion failed — e.g. the boot never reached home " +

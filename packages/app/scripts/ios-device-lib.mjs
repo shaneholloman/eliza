@@ -2,10 +2,11 @@
  * Pure decision logic for the one-command iOS device automation scripts
  * (ios-device-deploy.mjs / ios-device-logs.mjs / ios-device-capture.mjs).
  *
- * Everything exported here is deterministic and side-effect free so it can be
- * unit-tested (see ios-device-lib.test.mjs, run by `bun run --cwd packages/app
- * test`, i.e. the root test:client lane). The scripts own the impure edges
- * (spawning `security` / `xcodebuild` / `devicectl`, reading files).
+ * Everything exported here is deterministic, or takes impure edges as injected
+ * dependencies, so it can be unit-tested (see ios-device-lib.test.mjs, run by
+ * `bun run --cwd packages/app test`, i.e. the root test:client lane). The
+ * scripts own the actual impure edges (spawning `security` / `xcodebuild` /
+ * `devicectl`, reading files).
  */
 import crypto from "node:crypto";
 
@@ -637,6 +638,121 @@ export function findDeviceRecord(payload, deviceId) {
     }
   }
   return null;
+}
+
+/**
+ * Normalize the shape emitted by `devicectl device info lockState`.
+ * The useful fields have appeared both at top level and under result payloads
+ * across Xcode toolchains, so consume either without guessing at unknown data.
+ *
+ * @param {Record<string, unknown>} payload
+ * @returns {{ passcodeRequired: boolean | null, unlockedSinceBoot: boolean | null, locked: boolean, reason: string | null }}
+ */
+export function normalizeDeviceLockState(payload) {
+  const candidate =
+    payload?.result?.lockState && typeof payload.result.lockState === "object"
+      ? payload.result.lockState
+      : payload?.result && typeof payload.result === "object"
+        ? payload.result
+        : payload;
+  const passcodeRequired =
+    typeof candidate?.passcodeRequired === "boolean"
+      ? candidate.passcodeRequired
+      : null;
+  const unlockedSinceBoot =
+    typeof candidate?.unlockedSinceBoot === "boolean"
+      ? candidate.unlockedSinceBoot
+      : null;
+  if (passcodeRequired === true) {
+    return {
+      passcodeRequired,
+      unlockedSinceBoot,
+      locked: true,
+      reason: "passcode required",
+    };
+  }
+  if (unlockedSinceBoot === false) {
+    return {
+      passcodeRequired,
+      unlockedSinceBoot,
+      locked: true,
+      reason: "not unlocked since boot",
+    };
+  }
+  return {
+    passcodeRequired,
+    unlockedSinceBoot,
+    locked: false,
+    reason: null,
+  };
+}
+
+export function formatDeviceUnlockWaitMessage({
+  device,
+  timeoutSeconds,
+  reason,
+}) {
+  const name = device?.name || "iOS device";
+  const identifier = device?.identifier || "unknown identifier";
+  const suffix = reason ? ` (${reason})` : "";
+  return `${name} (${identifier}) is locked${suffix}; unlock the phone and keep it awake. Waiting up to ${timeoutSeconds}s.`;
+}
+
+/**
+ * Wait until a physical iOS device is unlocked.
+ *
+ * The impure edges are injected so the polling behavior stays unit-testable.
+ *
+ * @param {{
+ *   device: { identifier: string, name?: string },
+ *   probeLockState: () => Record<string, unknown> | Promise<Record<string, unknown>>,
+ *   sleep: (ms: number) => Promise<void>,
+ *   notify?: (message: string) => void,
+ *   waitSeconds?: number,
+ *   pollIntervalSeconds?: number,
+ *   now?: () => number,
+ * }} options
+ * @returns {Promise<ReturnType<typeof normalizeDeviceLockState>>}
+ */
+export async function assertDeviceUnlocked({
+  device,
+  probeLockState,
+  sleep,
+  notify = () => {},
+  waitSeconds = 120,
+  pollIntervalSeconds = 5,
+  now = Date.now,
+}) {
+  const timeoutMs = Math.max(0, Number(waitSeconds) || 0) * 1000;
+  const pollMs = Math.max(1, Number(pollIntervalSeconds) || 1) * 1000;
+  const deadline = now() + timeoutMs;
+  let notified = false;
+  let lastState = null;
+
+  while (true) {
+    lastState = normalizeDeviceLockState(await probeLockState());
+    if (!lastState.locked) return lastState;
+    if (!notified) {
+      notify(
+        formatDeviceUnlockWaitMessage({
+          device,
+          timeoutSeconds: Math.ceil(timeoutMs / 1000),
+          reason: lastState.reason,
+        }),
+      );
+      notified = true;
+    }
+    if (now() >= deadline) {
+      throw new Error(
+        `${formatDeviceUnlockWaitMessage({
+          device,
+          timeoutSeconds: Math.ceil(timeoutMs / 1000),
+          reason: lastState.reason,
+        })} Timed out before the device became usable.`,
+      );
+    }
+    await sleep(Math.min(pollMs, Math.max(1, deadline - now())));
+  }
 }
 
 /**

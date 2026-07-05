@@ -66,7 +66,10 @@ bun run --cwd packages/app test:e2e:walkthrough:device
 ```
 
 - **Prereqs (macOS only):** a tethered, provisioned iPhone + the sideload
-  toolchain (`preflight:ios:sideload`).
+  toolchain (`preflight:ios:sideload`). Lane phones must stay on power with
+  Settings > Display & Brightness > Auto-Lock set to Never; the device scripts
+  preflight `devicectl device info lockState` and wait for an unlock, but a
+  mid-suite idle lock still invalidates the run and is reported distinctly.
 - **Skip reason (recorded automatically):** "iOS physical-device capture
   requires a tethered, provisioned device; none detected on this host".
 
