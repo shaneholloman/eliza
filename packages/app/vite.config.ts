@@ -1039,14 +1039,22 @@ function appShellMetadataPlugin(): Plugin {
 }
 
 function productionBuildStampGuardPlugin(): Plugin {
+  let viteProductionBuild = false;
+  const shouldRemoveStamp = () =>
+    shouldSkipBuildStamp(process.env, { viteProductionBuild });
+
   return {
     name: "eliza-production-build-stamp-guard",
+    configResolved(config) {
+      viteProductionBuild =
+        config.command === "build" && config.mode === "production";
+    },
     buildStart() {
-      if (!shouldSkipBuildStamp()) return;
+      if (!shouldRemoveStamp()) return;
       removePublicBuildStamp(here);
     },
     generateBundle(_options, bundle) {
-      if (!shouldSkipBuildStamp()) return;
+      if (!shouldRemoveStamp()) return;
       removeEmittedBuildStamp(bundle);
     },
   };

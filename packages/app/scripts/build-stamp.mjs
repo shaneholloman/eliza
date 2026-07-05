@@ -8,11 +8,21 @@ import path from "node:path";
 
 const BUILD_INFO_FILE = "build-info.json";
 
-export function shouldSkipBuildStamp(env = process.env) {
-  const isProductionBuild =
+export function shouldSkipBuildStamp(env = process.env, options = {}) {
+  const variant = env.ELIZA_BUILD_VARIANT?.toLowerCase();
+  const isDeclaredProduction =
     env.VITE_ENVIRONMENT === "production" ||
     env.ELIZA_RELEASE_AUTHORITY === "apple-app-store" ||
-    env.ELIZA_BUILD_VARIANT?.toLowerCase() === "store";
+    variant === "store";
+  const isDeclaredNonProduction =
+    (typeof env.VITE_ENVIRONMENT === "string" &&
+      env.VITE_ENVIRONMENT.length > 0 &&
+      env.VITE_ENVIRONMENT !== "production") ||
+    env.ELIZA_RELEASE_AUTHORITY === "developer-toolchain" ||
+    variant === "direct";
+  const isProductionBuild =
+    isDeclaredProduction ||
+    (options.viteProductionBuild === true && !isDeclaredNonProduction);
   return isProductionBuild && env.ELIZA_BUILD_STAMP !== "1";
 }
 
