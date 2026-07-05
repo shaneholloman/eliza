@@ -17,6 +17,8 @@ name: UI Fixture E2E
 # documents the skip instead of silently not existing.
 
 on:
+  # Reusable entry for the scheduled exhaustive develop lane (#12342).
+  workflow_call:
   pull_request:
     branches: [main, develop]
     paths:
@@ -40,7 +42,7 @@ env:
 
 jobs:
   fixture-e2e:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5

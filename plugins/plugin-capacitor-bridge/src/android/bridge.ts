@@ -69,6 +69,7 @@ import {
 	type StdioBridgeResponseFrame,
 } from "../shared/stdio-bridge.ts";
 import {
+	type AndroidCoreRouteDeps,
 	type AndroidDispatchRoute,
 	type AndroidRequestPayload,
 	dispatchBufferedRequest,
@@ -83,6 +84,8 @@ type StartEliza = (options: {
 interface AndroidAgentModule {
 	startEliza: StartEliza;
 	dispatchRoute: AndroidDispatchRoute;
+	/** Persisted-config seams for the server-level core routes (first-run). */
+	coreRoutes: AndroidCoreRouteDeps;
 }
 
 async function loadAgentModule(): Promise<AndroidAgentModule> {
@@ -96,8 +99,21 @@ async function loadAgentModule(): Promise<AndroidAgentModule> {
 	const mod = (await import(/* @vite-ignore */ "@elizaos/agent")) as {
 		startEliza: StartEliza;
 		dispatchRoute: AndroidDispatchRoute;
+		configFileExists: AndroidCoreRouteDeps["configFileExists"];
+		loadElizaConfig: AndroidCoreRouteDeps["loadElizaConfig"];
+		saveElizaConfig: AndroidCoreRouteDeps["saveElizaConfig"];
+		hasPersistedFirstRunState: AndroidCoreRouteDeps["hasPersistedFirstRunState"];
 	};
-	return { startEliza: mod.startEliza, dispatchRoute: mod.dispatchRoute };
+	return {
+		startEliza: mod.startEliza,
+		dispatchRoute: mod.dispatchRoute,
+		coreRoutes: {
+			configFileExists: mod.configFileExists,
+			loadElizaConfig: mod.loadElizaConfig,
+			saveElizaConfig: mod.saveElizaConfig,
+			hasPersistedFirstRunState: mod.hasPersistedFirstRunState,
+		},
+	};
 }
 
 // ── Resolve canonical paths and install mobile fs sandbox ─────────────────
@@ -205,6 +221,7 @@ function serveConnection(
 	socket: NodeSocket,
 	runtime: IAgentRuntime,
 	dispatchRoute: AndroidDispatchRoute,
+	coreRoutes: AndroidCoreRouteDeps,
 ): void {
 	const bridge = createStdioBridge({
 		request: async (frame) =>
@@ -212,6 +229,7 @@ function serveConnection(
 				runtime,
 				dispatchRoute,
 				(frame.payload ?? {}) as AndroidRequestPayload,
+				coreRoutes,
 			),
 		requestStream: async (frame, sink) =>
 			dispatchStreamingRequest(
@@ -219,6 +237,7 @@ function serveConnection(
 				dispatchRoute,
 				(frame.payload ?? {}) as AndroidRequestPayload,
 				sink,
+				coreRoutes,
 			),
 		writeFrame: (frame: StdioBridgeResponseFrame) => {
 			if (!socket.destroyed) socket.write(`${JSON.stringify(frame)}\n`);
@@ -256,13 +275,14 @@ function serveConnection(
 function startLocalAgentServer(
 	runtime: IAgentRuntime,
 	dispatchRoute: AndroidDispatchRoute,
+	coreRoutes: AndroidCoreRouteDeps,
 ): Promise<NodeServer> {
 	const name = localAgentSocketName();
 	// Abstract namespace: a leading NUL byte in the path (Linux). Mirrors
 	// BionicHostLoader's `net.connect({ path: "\0" + name })`.
 	const abstractPath = `\0${name}`;
 	const server = createNetServer((socket) => {
-		serveConnection(socket, runtime, dispatchRoute);
+		serveConnection(socket, runtime, dispatchRoute, coreRoutes);
 	});
 	return new Promise<NodeServer>((resolve, reject) => {
 		server.once("error", reject);
@@ -306,24 +326,89 @@ export async function runAndroidBridgeCli(): Promise<void> {
 		_origConsoleWarn(...args);
 	};
 
+	// Fatal breadcrumbs land in the SAME restart-diagnostics JSONL the
+	// launcher and ElizaAgentService write/read (launch.sh's shape), so a
+	// death inside the detached agent is attributable from the Java side —
+	// without this, a fatal here is visible only in android-bridge.log, a
+	// file the service never reads, and the user sees a generic "transport
+	// hung" card (#13475).
+	const _appendDiagnostics = (
+		event: string,
+		details: Record<string, string>,
+	) => {
+		try {
+			const file =
+				process.env.DIAGNOSTICS_FILE ||
+				`${process.cwd()}/agent-restart-diagnostics.jsonl`;
+			const record = {
+				ts: Date.now(),
+				event,
+				status: "agent-child",
+				detachedAgentMode: true,
+				restartAttempts: -1,
+				details: {
+					...details,
+					pid: String(process.pid),
+					startupTraceId: process.env.ELIZA_STARTUP_TRACE_ID ?? "",
+				},
+			};
+			nodeFs.appendFileSync(file, `${JSON.stringify(record)}\n`);
+		} catch {
+			// error-policy:J7 diagnostics-must-not-kill-the-loop — the breadcrumb
+			// writer can never take down the agent it is documenting; the fatal
+			// is still mirrored to android-bridge.log below.
+		}
+	};
+
 	process.on("unhandledRejection", (reason) => {
 		const msg =
 			reason instanceof Error ? reason.stack || reason.message : String(reason);
 		_logToFile(`[android-bridge] unhandledRejection: ${msg}`);
+		_appendDiagnostics("agent-fatal", {
+			kind: "unhandledRejection",
+			message: msg.slice(0, 2000),
+		});
 		console.error("[android-bridge] unhandled rejection:", msg);
 	});
 	process.on("uncaughtException", (error) => {
 		_logToFile(
 			`[android-bridge] uncaughtException: ${error.stack || error.message}`,
 		);
+		_appendDiagnostics("agent-fatal", {
+			kind: "uncaughtException",
+			message: (error.stack || error.message).slice(0, 2000),
+		});
 		console.error(
 			"[android-bridge] uncaught exception:",
 			error.stack || error.message,
 		);
+		// Installing this handler suppresses the runtime's default fatal exit;
+		// without an explicit exit a post-boot uncaught exception leaves a
+		// zombie agent the supervisor never learns about. Exit loudly instead.
+		process.exit(1);
 	});
 
+	// Mid-boot SIGTERM/SIGINT window: the graceful stop handlers register only
+	// AFTER startEliza returns, so the entire multi-second boot was previously
+	// a silent-kill window (a service stop/restart pkill landed with zero
+	// breadcrumbs). These early handlers attribute the death, then exit with
+	// the conventional 128+signal code; the post-boot graceful registration
+	// below replaces them.
+	const _earlySignalExit = (signal: "SIGTERM" | "SIGINT") => {
+		_logToFile(`[android-bridge] ${signal} during boot — exiting`);
+		_appendDiagnostics("agent-terminated-by-signal", {
+			kind: signal,
+			stage: "boot",
+		});
+		process.exit(signal === "SIGTERM" ? 143 : 130);
+	};
+	const _earlyTerm = () => _earlySignalExit("SIGTERM");
+	const _earlyInt = () => _earlySignalExit("SIGINT");
+	process.once("SIGTERM", _earlyTerm);
+	process.once("SIGINT", _earlyInt);
+
 	_logToFile("[android-bridge] importing agent module...");
-	const { startEliza, dispatchRoute } = await loadAgentModule();
+	const { startEliza, dispatchRoute, coreRoutes } = await loadAgentModule();
 	_logToFile(
 		"[android-bridge] calling startEliza({ serverOnly: true, localAgentMode: true })...",
 	);
@@ -341,6 +426,10 @@ export async function runAndroidBridgeCli(): Promise<void> {
 	} catch (err: unknown) {
 		const msg = err instanceof Error ? err.stack || err.message : String(err);
 		_logToFile(`[android-bridge] startEliza THREW: ${msg}`);
+		_appendDiagnostics("agent-fatal", {
+			kind: "startEliza-threw",
+			message: msg.slice(0, 2000),
+		});
 		throw err;
 	} finally {
 		clearInterval(_hb);
@@ -404,12 +493,16 @@ export async function runAndroidBridgeCli(): Promise<void> {
 	const stopped = new Promise<void>((resolve) => {
 		stop = resolve;
 	});
+	// Boot is over: retire the attribute-and-exit boot handlers in favor of
+	// the graceful server stop.
+	process.removeListener("SIGTERM", _earlyTerm);
+	process.removeListener("SIGINT", _earlyInt);
 	process.once("SIGINT", () => stop?.());
 	process.once("SIGTERM", () => stop?.());
 
 	let server: NodeServer;
 	try {
-		server = await startLocalAgentServer(runtime, dispatchRoute);
+		server = await startLocalAgentServer(runtime, dispatchRoute, coreRoutes);
 	} catch (err) {
 		_logToFile(
 			`[android-bridge] failed to bind local-agent socket: ${

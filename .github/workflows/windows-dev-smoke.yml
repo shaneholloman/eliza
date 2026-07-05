@@ -20,7 +20,11 @@ permissions:
 jobs:
   changes:
     name: Classify changed paths
-    runs-on: [self-hosted, hetzner-robot]
+    # Path classifier is a git-diff + node script: no self-hosted resources.
+    # Keep it on GitHub-hosted so a drained hetzner fleet cannot leave it
+    # queued indefinitely and pile up runs (#13617/#8501).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       windows_dev: ${{ steps.filter.outputs.windows_dev }}
     steps:
@@ -28,6 +32,11 @@ jobs:
         with:
           fetch-depth: 0
           submodules: false
+
+      - name: Setup Node.js for path gate
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: "24"
 
       - name: Determine affected Windows dev smoke surface
         id: filter

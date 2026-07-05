@@ -14,6 +14,7 @@
  * - `t`                      — translation function, used for auth-rejected notice key
  */
 
+import { logger } from "@elizaos/logger";
 import {
   clearStoredStewardToken,
   readStoredStewardToken,
@@ -42,6 +43,10 @@ import {
   yieldHttpAfterNativeMessageBox,
 } from "../utils";
 import { scrubPersistedAgentProfileTokens } from "./agent-profiles";
+import {
+  getInjectedEthereumProvider,
+  siweLoginWithInjectedWallet,
+} from "./cloud-siwe-login";
 import {
   hasStewardLoginLauncher,
   hasUsableStoredStewardToken,
@@ -119,6 +124,7 @@ function originsMatch(left: string, right: string): boolean {
   try {
     return new URL(left).origin === new URL(right).origin;
   } catch {
+    // error-policy:J3 malformed URL input fails closed (no origin match).
     return false;
   }
 }
@@ -137,6 +143,7 @@ function isConfiguredCloudSiteBase(baseUrl: string): boolean {
       host === "dev.elizacloud.ai"
     );
   } catch {
+    // error-policy:J3 malformed base URL fails closed (not a cloud site base).
     return false;
   }
 }
@@ -152,6 +159,7 @@ function isCapacitorAssetBase(baseUrl: string): boolean {
       parsed.port === ""
     );
   } catch {
+    // error-policy:J3 malformed base URL fails closed (not the asset base).
     return false;
   }
 }
@@ -201,6 +209,8 @@ function resolveStewardRefreshEndpoint(): string | undefined {
         : host;
     return `${url.protocol}//${apiHost}${STEWARD_REFRESH_PATH}`;
   } catch {
+    // error-policy:J3 malformed cloud base URL → use the shared default
+    // refresh endpoint (the documented `undefined` contract of this helper).
     return undefined;
   }
 }
@@ -327,8 +337,6 @@ export function useCloudState({
       return lastElizaCloudPollConnectedRef.current;
     }
     if (!cloudStatus) {
-      // Preserve the last applied cloud snapshot across transient backend
-      // restarts so the UI does not flap into a false "disconnected" state.
       return lastElizaCloudPollConnectedRef.current;
     }
     const enabled = Boolean(cloudStatus.enabled ?? false);
@@ -370,10 +378,16 @@ export function useCloudState({
     );
     if (cloudStatus.topUpUrl) setElizaCloudTopUpUrl(cloudStatus.topUpUrl);
     if (isConnected) {
-      // error-policy:J4 transient credits-poll failure degrades to null (blank
-      // credits) and re-polls on the next interval; the server-reported
-      // `credits.error` still drives the visible credits-error state below.
-      const credits = await client.getCloudCredits().catch(() => null);
+      // error-policy:J4 a transport failure fetching credits degrades to null
+      // (no fabricated balance) but is carried into the visible credits-error
+      // state below — the balance widget renders a real error, never
+      // healthy-empty; the next poll interval retries.
+      let creditsFetchError: string | null = null;
+      const credits = await client.getCloudCredits().catch((err: unknown) => {
+        creditsFetchError = err instanceof Error ? err.message : String(err);
+        logger.warn({ err }, "[useCloudState] cloud credits fetch failed");
+        return null;
+      });
       if (elizaCloudDisconnectInFlightRef.current) {
         return lastElizaCloudPollConnectedRef.current;
       }
@@ -392,7 +406,7 @@ export function useCloudState({
           credits.error.trim() &&
           typeof credits.balance !== "number"
             ? credits.error.trim()
-            : null;
+            : creditsFetchError;
         setElizaCloudCreditsError(apiErr);
         if (credits && typeof credits.balance === "number") {
           setElizaCloudCredits(credits.balance);
@@ -443,7 +457,8 @@ export function useCloudState({
         try {
           prePoppedWindow.close();
         } catch {
-          // Cross-origin — ignore.
+          // error-policy:J6 best-effort teardown — closing a window the user
+          // navigated cross-origin throws; nothing to recover.
         }
       };
 
@@ -477,6 +492,53 @@ export function useCloudState({
         resolveLoginCompletion();
       };
       elizaCloudLoginCompletionRef.current = loginCompletion;
+
+      // Wallet SIWE (#13377): an injected EIP-1193 provider (a real browser
+      // wallet, or the e2e harness wallet on devices) signs in with a genuine
+      // EIP-4361 handshake against the cloud API — no browser round trip, no
+      // human beyond the wallet's own approval. Taken only when a provider is
+      // actually injected AND no still-usable session exists; a rejection or
+      // handshake failure falls through to the other sign-in paths on the
+      // same click.
+      if (!hasUsableStoredStewardToken() && getInjectedEthereumProvider()) {
+        const siweBase =
+          getBootConfig().cloudApiBase ?? "https://elizacloud.ai";
+        try {
+          const apiKey = await siweLoginWithInjectedWallet(siweBase);
+          if (apiKey) {
+            closePrePoppedWindow();
+            const connected = await pollCloudCredits();
+            // error-policy:J4 wallet config is a secondary panel; a failed
+            // load must not undo a verified login.
+            await loadWalletConfig().catch(() => undefined);
+            if (connected) {
+              setElizaCloudConnected(true);
+              setElizaCloudLoginError(null);
+              setActionNotice(
+                "Logged in to Eliza Cloud successfully.",
+                "success",
+                6000,
+              );
+            } else {
+              setElizaCloudLoginError(
+                "Could not verify your Eliza Cloud session. Please sign in again.",
+              );
+            }
+            elizaCloudLoginBusyRef.current = false;
+            setElizaCloudLoginBusy(false);
+            completeLogin();
+            return loginCompletion;
+          }
+        } catch (err) {
+          // error-policy:J4 a declined/failed wallet handshake is a designed
+          // degrade — the Steward / device-code paths below remain this
+          // click's way in; the failure is logged for the harness.
+          logger.warn(
+            { err },
+            "[useCloudState] SIWE wallet login failed; falling through",
+          );
+        }
+      }
 
       // Cloud = Steward everywhere (DECISIONS.md D3). When the shell-router has
       // mounted the Steward provider it registers a launcher; drive the in-app
@@ -565,7 +627,14 @@ export function useCloudState({
         if (alreadyAuthenticated) {
           closePrePoppedWindow();
           await pollCloudCredits();
-          await loadWalletConfig().catch(() => undefined);
+          await loadWalletConfig().catch((err: unknown) => {
+            // error-policy:J4 already-authenticated login has succeeded; a
+            // wallet config refresh failure must not wedge the login button.
+            logger.warn(
+              { err },
+              "[useCloudState] wallet config refresh failed after cloud login",
+            );
+          });
           setElizaCloudLoginError(null);
           setActionNotice("Already connected to Eliza Cloud.", "info", 4000);
           elizaCloudLoginBusyRef.current = false;
@@ -618,6 +687,8 @@ export function useCloudState({
             try {
               await openExternalUrl(resp.browserUrl);
             } catch {
+              // error-policy:J4 browser launch failed — degrade to a visible
+              // copyable link so the user can complete login manually.
               setElizaCloudLoginError(
                 `Open this link to log in: ${resp.browserUrl}`,
               );
@@ -1008,7 +1079,10 @@ export function useCloudState({
       // call then surfaces the re-auth path). No token rotation on failure.
       const result = await refreshCloudStewardSession({
         endpoint: resolveStewardRefreshEndpoint(),
-      }).catch(() => null);
+      }).catch((err: unknown) => {
+        logger.warn({ err }, "[useCloudState] steward session refresh failed");
+        return null;
+      });
       if (disposed) return;
       if (result?.token) {
         writeStoredStewardToken(result.token);

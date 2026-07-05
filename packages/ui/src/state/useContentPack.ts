@@ -38,6 +38,8 @@ function isSafeContentPackUrl(value: string): boolean {
     const u = new URL(value);
     return u.protocol === "https:" || u.protocol === "http:";
   } catch {
+    // error-policy:J3 unparseable pack URL is rejected (fail-closed); the
+    // caller surfaces the invalid-URL error to the user.
     return false;
   }
 }

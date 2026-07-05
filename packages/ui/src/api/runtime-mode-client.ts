@@ -52,11 +52,13 @@ export async function fetchRuntimeModeSnapshot(): Promise<RuntimeModeSnapshot | 
   try {
     res = await fetchWithCsrf(`${modeBase()}/api/runtime/mode`);
   } catch {
+    // error-policy:J4 advisory snapshot (see JSDoc) — unreachable endpoint
+    // reads as the explicit null callers resolve with local heuristics.
     return null;
   }
   if (!res.ok) return null;
-  // error-policy:J3 advisory snapshot; a non-JSON body parses to null and the
-  // caller falls back to local heuristics (never load-bearing for security).
+  // error-policy:J3 unparseable body reads as the explicit "mode unknown"
+  // null signal callers already handle.
   const body = (await res.json().catch(() => null)) as {
     mode?: unknown;
     deploymentRuntime?: unknown;

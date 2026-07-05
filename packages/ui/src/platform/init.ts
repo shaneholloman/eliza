@@ -138,6 +138,8 @@ export function handleDeepLink(
   try {
     parsed = new URL(url);
   } catch {
+    // error-policy:J3 malformed deep link (untrusted external input) is
+    // ignored rather than routed.
     return;
   }
 

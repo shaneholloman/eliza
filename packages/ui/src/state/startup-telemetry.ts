@@ -90,6 +90,8 @@ function readAndroidBridgeTraceId(): string | undefined {
   try {
     return normalizeTraceId(bridge.getStartupTraceId());
   } catch {
+    // error-policy:J7 startup telemetry must not break boot — a failed native
+    // trace-id read degrades to an unattributed startup trace.
     return undefined;
   }
 }

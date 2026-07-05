@@ -9,6 +9,10 @@ import { deleteCookie, getCookie } from "hono/cookie";
 import { getAuditDispatcher } from "@/api-app/services/audit-dispatcher-singleton";
 import { invalidateSessionCaches } from "@/lib/auth";
 import { cookieDomainForHost } from "@/lib/auth/cookie-domain";
+import {
+  LEGACY_STEWARD_COOKIES,
+  stewardCookieNames,
+} from "@/lib/auth/steward-cookies";
 import { getCurrentUser } from "@/lib/auth/workers-hono-auth";
 import {
   RateLimitPresets,
@@ -23,7 +27,10 @@ const app = new Hono<AppEnv>();
 app.use("*", rateLimit(RateLimitPresets.STANDARD));
 
 app.post("/", async (c) => {
-  const stewardToken = getCookie(c, "steward-token");
+  const cookieNames = stewardCookieNames(c.env.ENVIRONMENT);
+  const stewardToken =
+    getCookie(c, cookieNames.token) ??
+    getCookie(c, LEGACY_STEWARD_COOKIES.token);
 
   // Clear cookies FIRST. Clearing them is what actually logs the user out, and
   // it must happen even if the server-side teardown below fails (a transient DB
@@ -33,9 +40,14 @@ app.post("/", async (c) => {
   // hygiene (caches expire on their own TTL).
   const domain = cookieDomainForHost(c.req.header("host"));
   const stewardOpts = domain ? { path: "/", domain } : { path: "/" };
-  deleteCookie(c, "steward-token", stewardOpts);
-  deleteCookie(c, "steward-refresh-token", stewardOpts);
-  deleteCookie(c, "steward-authed", stewardOpts);
+  // Clear the env-scoped pair AND the legacy unsuffixed pair — logout must
+  // always win regardless of which naming era set the cookies. (#13728)
+  deleteCookie(c, cookieNames.token, stewardOpts);
+  deleteCookie(c, cookieNames.refreshToken, stewardOpts);
+  deleteCookie(c, LEGACY_STEWARD_COOKIES.token, stewardOpts);
+  deleteCookie(c, LEGACY_STEWARD_COOKIES.refreshToken, stewardOpts);
+  deleteCookie(c, cookieNames.authed, stewardOpts);
+  deleteCookie(c, LEGACY_STEWARD_COOKIES.authed, stewardOpts);
   deleteCookie(c, "eliza-anon-session", { path: "/" });
 
   try {
@@ -60,6 +72,8 @@ app.post("/", async (c) => {
           request_id: c.get("requestId"),
           metadata: { method: "steward_cookie" },
         })
+        // error-policy:J7 audit write is diagnostic; logout already succeeded via
+        // the cookie clear above, so a dropped audit event is logged, not fatal.
         .catch((err: unknown) => {
           logger.warn("[Logout] audit emit failed", {
             error: err instanceof Error ? err.message : String(err),
@@ -67,9 +81,9 @@ app.post("/", async (c) => {
         });
     }
   } catch (error) {
-    // Cookies are already cleared, so the user is logged out client-side; a
-    // failed server-side teardown must not turn logout into a 500 that strands
-    // stale cookies.
+    // error-policy:J6 best-effort teardown — cookies are already cleared, so the
+    // user is logged out client-side; a failed server-side session teardown must
+    // not turn logout into a 500 that strands stale cookies. Caches expire on TTL.
     logger.warn(
       "[Logout] server-side teardown failed (cookies already cleared)",
       {

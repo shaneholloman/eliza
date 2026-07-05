@@ -51,7 +51,6 @@
     "@electric-sql/pglite": "^0.4.5",
     "@electric-sql/pglite-socket": "0.1.6",
     "@elevenlabs/elevenlabs-js": "^2.45.0",
-    "@elizaos/app-core": "workspace:*",
     "@elizaos/cloud-sdk": "workspace:*",
     "@elizaos/contracts": "workspace:*",
     "@elizaos/core": "workspace:*",
@@ -113,5 +112,10 @@
     "ioredis-mock": "^8.13.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.4"
+  },
+  "elizaos": {
+    "scripts": {
+      "coreBuild": true
+    }
   }
 }

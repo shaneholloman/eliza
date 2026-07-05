@@ -27,6 +27,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveTurboNonImportedBuildDepOwners } from "./lib/script-metadata.mjs";
 import { listPackages } from "./lib/workspaces.mjs";
 
 const repoRoot = path.resolve(
@@ -140,24 +141,11 @@ function referencedInSource(dir, needle) {
 }
 
 // Owners whose `#build` override deliberately enumerates packages it does not
-// statically import — these are real build relationships a source scan cannot
-// see, so their named edges are not phantom drift. Keep this list short and
-// justified.
-const ALLOW_OWNERS = new Set([
-  // build script delegates to the chat example via a relative path
-  // (`bun run --cwd ../chat build`), so the package name never appears in src.
-  "@elizaos/example-form",
-  // bundles the model plugins into the extension at build time (referenced by
-  // the extension's build config / manifest, not a src import).
-  "@elizaos/example-browser-extension",
-  // the scenario harness builds the connector/runtime plugins it loads
-  // dynamically when executing scenarios; they are not statically imported.
-  "@elizaos/scenario-runner",
-  // the desktop shell bundles the app renderer's built dist by filesystem
-  // path (electrobun.config.ts reads `packages/app/dist`), so @elizaos/app is
-  // a real build edge with no package-name import.
-  "@elizaos/electrobun",
-]);
+// statically import — real build relationships a source scan cannot see, so
+// their named edges are not phantom drift. Each owner opts in via
+// `elizaos.scripts.turboNonImportedBuildDeps` in its own package.json; resolved
+// through the discovery seam so no owner names live in this file.
+const ALLOW_OWNERS = resolveTurboNonImportedBuildDepOwners({ repoRoot });
 
 const turbo = readJson(path.join(repoRoot, "turbo.json"));
 const tasks = turbo.tasks ?? {};
@@ -166,6 +154,29 @@ const phantomTaskOverrides = [];
 const phantoms = [];
 const undeclared = [];
 const redundant = [];
+const directWorkspaceCycles = [];
+
+const workspaceDepsByPackage = new Map();
+for (const [name, dir] of WORKSPACE_DIRS.entries()) {
+  let pkg;
+  try {
+    pkg = readJson(path.join(dir, "package.json"));
+  } catch {
+    continue;
+  }
+  workspaceDepsByPackage.set(
+    name,
+    new Set([...declaredDeps(pkg)].filter((dep) => WORKSPACE_DIRS.has(dep))),
+  );
+}
+for (const [name, deps] of workspaceDepsByPackage.entries()) {
+  for (const dep of deps) {
+    if (name >= dep) continue;
+    if (workspaceDepsByPackage.get(dep)?.has(name)) {
+      directWorkspaceCycles.push(`${name} <-> ${dep}`);
+    }
+  }
+}
 
 for (const [taskName, def] of Object.entries(tasks)) {
   const separator = taskName.lastIndexOf("#");
@@ -264,6 +275,16 @@ if (phantoms.length) {
   );
   process.exit(1);
 }
+if (directWorkspaceCycles.length) {
+  console.error(
+    `[audit-turbo-build-deps] ${directWorkspaceCycles.length} direct workspace package cycle(s):\n`,
+  );
+  for (const cycle of directWorkspaceCycles) console.error(`  ✗ ${cycle}`);
+  console.error(
+    "\nA direct package.json cycle makes Turbo build-order inference unstable.\nMove one edge behind a runtime dynamic import or remove it if production source does not import it.",
+  );
+  process.exit(1);
+}
 if (phantomTaskOverrides.length) {
   console.error(
     `[audit-turbo-build-deps] ${phantomTaskOverrides.length} phantom pkg#task override(s):\n`,
@@ -276,3 +297,4 @@ if (phantomTaskOverrides.length) {
 }
 console.log("[audit-turbo-build-deps] ✓ no phantom #build dependency edges");
 console.log("[audit-turbo-build-deps] ✓ no phantom pkg#task overrides");
+console.log("[audit-turbo-build-deps] ✓ no direct workspace package cycles");

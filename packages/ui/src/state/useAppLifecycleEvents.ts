@@ -66,6 +66,8 @@ async function probeAgentHealth(): Promise<boolean> {
     });
     return isHealthy(body);
   } catch {
+    // error-policy:J4 resume health probe — an unreachable agent IS the
+    // unhealthy signal; the caller reacts by rediscovering the runtime.
     return false;
   }
 }

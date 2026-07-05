@@ -19,6 +19,8 @@ export function readPersistedAdvancedFlag(): boolean {
   try {
     return window.localStorage.getItem(ADVANCED_TOGGLE_STORAGE_KEY) === "1";
   } catch {
+    // error-policy:J3 storage unavailable — the toggle starts at its default
+    // (off) instead of wedging settings.
     return false;
   }
 }
@@ -31,8 +33,8 @@ export function writePersistedAdvancedFlag(enabled: boolean): void {
       enabled ? "1" : "0",
     );
   } catch {
-    // localStorage may be unavailable (e.g. iframe with denied storage).
-    // Silently fall through — the in-memory listener cascade still works.
+    // error-policy:J6 localStorage may be unavailable (e.g. iframe with
+    // denied storage) — the in-memory listener cascade still works.
   }
 }
 

@@ -147,6 +147,7 @@ function renderConductor() {
   const value: ConversationMessagesValue = {
     conversationMessages: [],
     removeConversationMessage: () => {},
+    prependConversationMessages: () => {},
     setConversationMessages: (updater) => {
       transcript.current =
         typeof updater === "function" ? updater(transcript.current) : updater;
@@ -287,6 +288,9 @@ beforeEach(() => {
     data: [],
   });
   localStorage.setItem("steward_session_token", "cloud-token");
+  // The storm drives the full runtime chooser (local / remote picks), which is
+  // OFF by default (#13377) — opt in via the override.
+  localStorage.setItem("eliza:enable-runtime-chooser", "1");
 });
 
 afterEach(() => {

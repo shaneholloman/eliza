@@ -48,6 +48,7 @@ describe("useCloudState — handleCloudLogin with a stale Steward token and no l
   const realFetch = globalThis.fetch;
   let cloudLoginSpy: ReturnType<typeof vi.spyOn>;
   let cloudLoginDirectSpy: ReturnType<typeof vi.spyOn>;
+  let getCloudStatusSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     localStorage.clear();
@@ -74,7 +75,7 @@ describe("useCloudState — handleCloudLogin with a stale Steward token and no l
         browserUrl: "",
         error: DEVICE_CODE_SENTINEL,
       });
-    vi.spyOn(client, "getCloudStatus").mockResolvedValue({
+    getCloudStatusSpy = vi.spyOn(client, "getCloudStatus").mockResolvedValue({
       connected: false,
       enabled: false,
     } as Awaited<ReturnType<typeof client.getCloudStatus>>);
@@ -104,6 +105,34 @@ describe("useCloudState — handleCloudLogin with a stale Steward token and no l
     expect(result.current.elizaCloudLoginError).not.toMatch(NOT_MOUNTED_ERROR);
     // …and drain the stale token so it cannot shadow later authed calls.
     expect(localStorage.getItem(STEWARD_TOKEN_KEY)).toBeNull();
+  });
+
+  it("does not wedge the login button when already connected but wallet config hydration fails", async () => {
+    getCloudStatusSpy.mockResolvedValue({
+      connected: true,
+      enabled: true,
+    } as Awaited<ReturnType<typeof client.getCloudStatus>>);
+    vi.spyOn(client, "getCloudCredits").mockResolvedValue({
+      balance: 10,
+      low: false,
+      critical: false,
+    } as Awaited<ReturnType<typeof client.getCloudCredits>>);
+    const params = makeParams();
+    params.loadWalletConfig.mockRejectedValue(new Error("wallet config down"));
+
+    const { result } = renderHook(() => useCloudState(params));
+    await act(async () => {
+      await result.current.handleCloudLogin();
+    });
+
+    expect(deviceCodeCalls()).toBe(0);
+    expect(result.current.elizaCloudLoginBusy).toBe(false);
+    expect(result.current.elizaCloudLoginError).toBeNull();
+    expect(params.setActionNotice).toHaveBeenCalledWith(
+      "Already connected to Eliza Cloud.",
+      "info",
+      4000,
+    );
   });
 
   it("a still-usable stored token keeps the Steward short-circuit (no device-code call)", async () => {

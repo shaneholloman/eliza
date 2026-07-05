@@ -10,10 +10,13 @@
  * Covers:
  *  1. pure derivation for both deploy targets (custom static host URL-shape
  *     match; eliza-cloud app-build gate + code-host/loopback exclusion);
- *  2. registry round-trip + redeploy dedupe on the runtime cache;
+ *  2. registry round-trip + redeploy dedupe + delete on the runtime cache;
  *  3. the REAL router path: handleEvent("task_complete") with a live URL
  *     served by a local HTTP server → verification probes it → the registry
- *     record lands in the runtime cache with that URL.
+ *     record lands in the runtime cache with that URL;
+ *  4. the HTTP management surface: register → DELETE → list over a real HTTP
+ *     server dispatching handleOrchestratorRoutes (404 when absent, 200
+ *     {deleted:true} on success, list reflects immediately).
  */
 
 import { createServer, type Server } from "node:http";
@@ -22,9 +25,12 @@ import type { IAgentRuntime } from "@elizaos/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeGrillingRuntime } from "../../test/scenarios/_helpers/orchestrator-grilling-harness.ts";
 import { makeSpawnCapturingAcp } from "../../test/scenarios/_helpers/reflexion-scenario.ts";
+import { handleOrchestratorRoutes } from "../api/orchestrator-routes.ts";
+import type { RouteContext } from "../api/route-utils.ts";
 import {
   BUILT_APPS_CACHE_KEY,
   type BuiltAppRecord,
+  deleteBuiltApp,
   deriveBuiltApp,
   listBuiltApps,
   registerBuiltApp,
@@ -159,10 +165,74 @@ describe("registry round-trip", () => {
     expect(apps[0]).toEqual(redeploy);
   });
 
+  it("deletes one record by target+slug and reports absence honestly", async () => {
+    const { runtime } = cacheRuntime();
+    await registerBuiltApp(runtime, record());
+    await registerBuiltApp(runtime, record({ slug: "todo", name: "Todo" }));
+
+    expect(await deleteBuiltApp(runtime, "custom", "snake-game")).toBe(true);
+    expect(await listBuiltApps(runtime)).toMatchObject([{ slug: "todo" }]);
+
+    // Already gone / never existed / wrong target: false, list untouched.
+    expect(await deleteBuiltApp(runtime, "custom", "snake-game")).toBe(false);
+    expect(await deleteBuiltApp(runtime, "eliza-cloud", "todo")).toBe(false);
+    expect(await listBuiltApps(runtime)).toHaveLength(1);
+  });
+
+  it("concurrent registrations from different sessions all land", async () => {
+    // Two sub-agent sessions can complete at the same time, so two
+    // registerBuiltApp calls interleave on the get/set-only cache. Without
+    // serialization both read the same snapshot and the last write clobbers
+    // the other's record. A latency-injected cache widens the interleaving
+    // window the way a real DB-backed cache does.
+    const store = new Map<string, unknown>();
+    const runtime = {
+      getCache: async (key: string) => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return store.get(key);
+      },
+      setCache: async (key: string, value: unknown) => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        store.set(key, value);
+        return true;
+      },
+    } as unknown as IAgentRuntime;
+
+    const slugs = ["snake-game", "todo", "workouts", "chess", "notes"];
+    await Promise.all(
+      slugs.map((slug, i) =>
+        registerBuiltApp(
+          runtime,
+          record({
+            slug,
+            name: slug,
+            url: `https://example.org/apps/${slug}/`,
+            sessionId: `sess-${i}`,
+          }),
+        ),
+      ),
+    );
+    const apps = await listBuiltApps(runtime);
+    expect(apps.map((app) => app.slug).sort()).toEqual([...slugs].sort());
+  });
+
+  it("a concurrent delete cannot resurrect or drop unrelated records", async () => {
+    const { runtime } = cacheRuntime();
+    await registerBuiltApp(runtime, record());
+    // Register of a second app races the delete of the first: both must
+    // observe each other's write regardless of interleaving order.
+    await Promise.all([
+      registerBuiltApp(runtime, record({ slug: "todo", name: "Todo" })),
+      deleteBuiltApp(runtime, "custom", "snake-game"),
+    ]);
+    expect(await listBuiltApps(runtime)).toMatchObject([{ slug: "todo" }]);
+  });
+
   it("degrades gracefully when the runtime has no cache", async () => {
     const bare = {} as IAgentRuntime;
     expect(await registerBuiltApp(bare, record())).toBe(false);
     expect(await listBuiltApps(bare)).toEqual([]);
+    expect(await deleteBuiltApp(bare, "custom", "snake-game")).toBe(false);
     expect(
       await registerBuiltAppsForCompletion(bare, { id: "s" }, [
         "https://example.org/apps/x/",
@@ -290,28 +360,13 @@ describe("task_complete → registry record (real router path)", () => {
     );
   });
 
-  it("a successful app-deploy completion writes the live URL to the registry", async () => {
-    const liveUrl = `${baseUrl}/apps/snake-game/`;
+  function routerHarness(session: { id: string } & Record<string, unknown>): {
+    cache: Map<string, unknown>;
+    runtime: IAgentRuntime;
+  } {
     const cache = new Map<string, unknown>();
-    const session = {
-      id: "sess-app",
-      agentType: "codex",
-      name: "Ada",
-      workdir: "/tmp/built-apps-registry-test",
-      status: "ready",
-      createdAt: new Date(0),
-      lastActivityAt: new Date(0),
-      metadata: {
-        roomId: ROOM,
-        taskRoomId: ROOM,
-        messageId: MSG,
-        source: "discord",
-        label: "build snake game",
-        initialTask: "build a snake game web app and deploy it live",
-      },
-    };
     const sessions = new Map<string, Record<string, unknown>>([
-      ["sess-app", session],
+      [session.id, session],
     ]);
     const acp = {
       onSessionEvent: () => () => {},
@@ -342,17 +397,51 @@ describe("task_complete → registry record (real router path)", () => {
       emitEvent: vi.fn(async () => undefined),
       useModel: vi.fn(async () => "{}"),
     } as unknown as IAgentRuntime;
+    return { cache, runtime };
+  }
 
+  async function driveTaskComplete(
+    runtime: IAgentRuntime,
+    sessionId: string,
+    response: string,
+  ): Promise<void> {
     const router = new SubAgentRouter(runtime);
     await router.start();
     const internals = router as unknown as {
       handleEvent(id: string, event: string, data: unknown): Promise<void>;
     };
-    await internals.handleEvent("sess-app", "task_complete", {
-      response: `The snake game is built and live at ${liveUrl}`,
+    await internals.handleEvent(sessionId, "task_complete", {
+      response,
       stopReason: "end_turn",
     });
     await router.stop();
+  }
+
+  it("a successful app-deploy completion writes the live URL to the registry", async () => {
+    const liveUrl = `${baseUrl}/apps/snake-game/`;
+    const { cache, runtime } = routerHarness({
+      id: "sess-app",
+      agentType: "codex",
+      name: "Ada",
+      workdir: "/tmp/built-apps-registry-test",
+      status: "ready",
+      createdAt: new Date(0),
+      lastActivityAt: new Date(0),
+      metadata: {
+        roomId: ROOM,
+        taskRoomId: ROOM,
+        messageId: MSG,
+        source: "discord",
+        label: "build snake game",
+        initialTask: "build a snake game web app and deploy it live",
+      },
+    });
+
+    await driveTaskComplete(
+      runtime,
+      "sess-app",
+      `The snake game is built and live at ${liveUrl}`,
+    );
 
     const apps = cache.get(BUILT_APPS_CACHE_KEY) as BuiltAppRecord[];
     expect(apps).toHaveLength(1);
@@ -365,5 +454,129 @@ describe("task_complete → registry record (real router path)", () => {
       label: "build snake game",
     });
     expect(apps[0].registeredAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("a room-less durable task's deploy still registers (cockpit new-session / bare API create)", async () => {
+    const liveUrl = `${baseUrl}/apps/workout-tracker/`;
+    // Exactly what spawnAgentForTask stamps for a task created WITHOUT a chat
+    // room (cockpit "new session", bare POST /api/orchestrator/tasks): no room
+    // UUID anywhere, the bare `goal` (not `initialTask`), source
+    // "orchestrator". readOrigin() yields null for this session, so the router
+    // has no room to post to — the registry write must not depend on one.
+    const { cache, runtime } = routerHarness({
+      id: "sess-roomless",
+      agentType: "codex",
+      name: "Ada",
+      workdir: "/tmp/built-apps-registry-test",
+      status: "ready",
+      createdAt: new Date(0),
+      lastActivityAt: new Date(0),
+      metadata: {
+        taskId: "task-1",
+        roomId: undefined,
+        label: "Ada",
+        source: "orchestrator",
+        goal: "build a workout tracker web app and deploy it live",
+        keepAliveAfterComplete: true,
+        nestingDepth: 0,
+      },
+    });
+
+    await driveTaskComplete(
+      runtime,
+      "sess-roomless",
+      `Deployed. The workout tracker is live at ${liveUrl}`,
+    );
+
+    const apps = cache.get(BUILT_APPS_CACHE_KEY) as BuiltAppRecord[];
+    expect(apps).toHaveLength(1);
+    expect(apps[0]).toMatchObject({
+      slug: "workout-tracker",
+      name: "Workout Tracker",
+      url: liveUrl,
+      target: "custom",
+      sessionId: "sess-roomless",
+      label: "Ada",
+    });
+  });
+});
+
+describe("HTTP management surface: register → DELETE → list round-trip", () => {
+  // Drives the real route dispatcher over a real HTTP server. The runtime has
+  // NO orchestrator task service registered, which proves the built-apps legs
+  // dispatch before the service gate — were they behind it, every request here
+  // would 503 instead.
+  let server: Server;
+  let baseUrl: string;
+  let runtime: IAgentRuntime;
+
+  beforeEach(async () => {
+    const cache = new Map<string, unknown>();
+    runtime = {
+      getCache: async (key: string) => cache.get(key),
+      setCache: async (key: string, value: unknown) => {
+        cache.set(key, value);
+        return true;
+      },
+      getService: () => undefined,
+      hasService: () => false,
+    } as unknown as IAgentRuntime;
+    const ctx: RouteContext = {
+      runtime,
+      acpService: null,
+      workspaceService: null,
+    };
+    server = createServer((req, res) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      handleOrchestratorRoutes(req, res, pathname, ctx).then((handled) => {
+        if (!handled && !res.headersSent) {
+          res.writeHead(404).end();
+        }
+      });
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve, reject) =>
+      server.close((err) => (err ? reject(err) : resolve())),
+    );
+  });
+
+  it("DELETE /built-apps/:target/:slug removes the app; the list reflects immediately", async () => {
+    await registerBuiltApp(runtime, record());
+    await registerBuiltApp(runtime, record({ slug: "todo", name: "Todo" }));
+
+    const listed = await fetch(`${baseUrl}/api/orchestrator/built-apps`);
+    expect(listed.status).toBe(200);
+    expect((await listed.json()).apps).toHaveLength(2);
+
+    const deleted = await fetch(
+      `${baseUrl}/api/orchestrator/built-apps/custom/snake-game`,
+      { method: "DELETE" },
+    );
+    expect(deleted.status).toBe(200);
+    expect(await deleted.json()).toEqual({ deleted: true });
+
+    const after = await fetch(`${baseUrl}/api/orchestrator/built-apps`);
+    expect((await after.json()).apps).toMatchObject([{ slug: "todo" }]);
+
+    // Deleting the same app again: honest 404, not a fake success.
+    const repeat = await fetch(
+      `${baseUrl}/api/orchestrator/built-apps/custom/snake-game`,
+      { method: "DELETE" },
+    );
+    expect(repeat.status).toBe(404);
+  });
+
+  it("rejects a malformed delete path with 400", async () => {
+    const missingSlug = await fetch(
+      `${baseUrl}/api/orchestrator/built-apps/custom`,
+      { method: "DELETE" },
+    );
+    expect(missingSlug.status).toBe(400);
   });
 });

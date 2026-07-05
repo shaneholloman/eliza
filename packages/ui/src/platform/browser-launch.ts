@@ -35,6 +35,8 @@ function isConfiguredCloudHost(host: string): boolean {
   try {
     return host === new URL(configured).hostname;
   } catch {
+    // error-policy:J3 unparseable configured cloud base cannot vouch for the
+    // host — untrusted (fail-closed).
     return false;
   }
 }

@@ -17,9 +17,11 @@ import pytest
 from benchmarks.orchestrator_lifecycle.runner import (
     LifecycleRunner,
     _ensure_eliza_adapter_on_path,
+    _simulate_turn,
 )
 from benchmarks.orchestrator_lifecycle.types import (
     LifecycleConfig,
+    Scenario,
     ScenarioTurn,
     TurnRecord,
 )
@@ -85,12 +87,33 @@ def test_bridge_report_is_scored(tmp_path: Path) -> None:
     )
     report = json.loads(Path(report_path).read_text())
     assert report["scored"] is True
+    assert report["scenarios"][0]["category"] == "test"
     extraction = _score_from_orchestrator_lifecycle_json(report)
     assert extraction.score == 1.0
 
 
 def _turn(message: str) -> ScenarioTurn:
     return ScenarioTurn(actor="user", message=message)
+
+
+def test_simulator_distinguishes_spawn_from_status_reporting() -> None:
+    delegated_only = _simulate_turn(
+        ScenarioTurn(
+            actor="user",
+            message="Implement the login timeout fix.",
+            expected_behaviors=["spawn_subagent"],
+        )
+    )
+    assert delegated_only.events == ["spawn"]
+
+    delegated_with_status = _simulate_turn(
+        ScenarioTurn(
+            actor="user",
+            message="Implement the login timeout fix and keep me updated.",
+            expected_behaviors=["spawn_subagent", "report_active_subagent_status"],
+        )
+    )
+    assert delegated_with_status.events == ["spawn", "status_query"]
 
 
 def _bridge_runner(client: object) -> LifecycleRunner:
@@ -214,3 +237,38 @@ def test_bridge_reply_retries_generic_failure_response() -> None:
     assert record.events == ["send"]
     assert len(client.calls) == 2
     assert client.calls[1]["retry_empty_response"] is True
+
+
+def test_bridge_reset_failure_aborts_before_turn_dispatch(tmp_path: Path) -> None:
+    class FakeClient:
+        def reset(self, *, task_id: str, benchmark: str) -> dict[str, object]:
+            raise RuntimeError("reset endpoint unavailable")
+
+        def send_message(
+            self, text: str, context: dict[str, object] | None = None
+        ) -> MessageResponse:
+            raise AssertionError("run must abort before dispatching turns")
+
+    class OneScenarioDataset:
+        def load(self) -> list[Scenario]:
+            return [
+                Scenario(
+                    scenario_id="reset_failure_case",
+                    title="reset failure",
+                    category="status",
+                    turns=[
+                        ScenarioTurn(
+                            actor="user",
+                            message="How is it going?",
+                            expected_behaviors=["report_active_subagent_status"],
+                        )
+                    ],
+                )
+            ]
+
+    runner = _bridge_runner(FakeClient())
+    runner.config = LifecycleConfig(output_dir=str(tmp_path), mode="bridge")
+    runner.dataset = OneScenarioDataset()
+
+    with pytest.raises(RuntimeError, match="reset failed for scenario reset_failure_case"):
+        runner.run()

@@ -71,11 +71,12 @@ export async function discoverGatewayEndpoints(args?: {
     });
     return normalizeGateways(result?.gateways);
   } catch (error) {
+    // error-policy:J4 a failed LAN scan reads as "no gateways discovered" —
+    // discovery is a probe, and the warn keeps a broken plugin observable.
     logger.warn({ error }, "[gateway-discovery] Discovery failed");
     return [];
   } finally {
-    // error-policy:J6 teardown — stop the mDNS browser started above; a failed
-    // stop has no recovery and must not mask the discovery result/throw.
+    // error-policy:J6 best-effort teardown of the native scan session.
     void plugin.stopDiscovery?.().catch(() => {});
   }
 }

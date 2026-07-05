@@ -20,6 +20,7 @@ import { getBootConfig } from "../config/boot-config-store";
 import { BrandingContext, DEFAULT_BRANDING } from "../config/branding";
 import {
   classifyActionMessage,
+  getFirstRunCloudLoginFallbackPath,
   tryHandleFirstRunAction,
   tryHandleFirstRunText,
 } from "../first-run/first-run-action-channel";
@@ -330,6 +331,7 @@ function AppProviderInner({
     setActiveConversationId,
     setCompanionMessageCutoffTs,
     setConversationMessages,
+    prependConversationMessages,
     setAutonomousEvents,
     setAutonomousLatestEventId,
     setAutonomousRunHealthByRunId,
@@ -649,6 +651,7 @@ function AppProviderInner({
       cloudProvisionedContainer: firstRunCloudProvisionedContainer,
     },
     completionCommittedRef: firstRunCompletionCommittedRefFromHook,
+    completionJustCommittedRef: firstRunCompletionJustCommittedRefFromHook,
   } = firstRun;
 
   const {
@@ -806,6 +809,8 @@ function AppProviderInner({
   const _restartNotificationSignatureRef = useRef<string | null>(null);
   const _heartbeatNotificationKeyRef = useRef<string | null>(null);
   const firstRunCompletionCommittedRef = firstRunCompletionCommittedRefFromHook;
+  const firstRunCompletionJustCommittedRef =
+    firstRunCompletionJustCommittedRefFromHook;
 
   // --- Confirm Modal ---
   const { modalProps } = useConfirm();
@@ -956,6 +961,15 @@ function AppProviderInner({
   } = navHook;
 
   useNavigationPathSync({ tab, setTabRaw });
+
+  // Harness wallet for zero-interaction SIWE e2e (#13377): installs only when
+  // a test key is seeded (never on store builds) and may auto-complete the
+  // cloud sign-in before onboarding asks. One-shot per app instance.
+  useEffect(() => {
+    void import("../platform/e2e-wallet").then(
+      ({ installE2eWalletIfRequested }) => installE2eWalletIfRequested(),
+    );
+  }, []);
 
   // loadLogs is now in useLogsState (logsHook)
 
@@ -1146,6 +1160,7 @@ function AppProviderInner({
     handleChatStop,
     handleChatRetry,
     handleChatEdit,
+    handleChatDelete,
     handleChatClear,
     handleSelectConversation,
     handleDeleteConversation,
@@ -1175,9 +1190,19 @@ function AppProviderInner({
       // and NEVER reach the server — regardless of onboarding state.
       if (tryHandleModelAction(text)) return Promise.resolve();
       switch (classifyActionMessage(text, firstRunComplete === true)) {
-        case "first-run":
-          tryHandleFirstRunAction(text);
+        case "first-run": {
+          const handled = tryHandleFirstRunAction(text);
+          const fallbackPath = handled
+            ? null
+            : getFirstRunCloudLoginFallbackPath(
+                text,
+                firstRunComplete === true,
+              );
+          if (fallbackPath && typeof window !== "undefined") {
+            window.location.assign(fallbackPath);
+          }
           return Promise.resolve();
+        }
         case "conductor":
           tryHandleFirstRunText(text);
           return Promise.resolve();
@@ -1493,6 +1518,7 @@ function AppProviderInner({
     setConversations,
     requestGreetingWhenRunningRef,
     firstRunCompletionCommittedRef,
+    firstRunCompletionJustCommittedRef,
     initialTabSetRef,
     activeConversationIdRef,
     elizaCloudPollInterval,
@@ -1673,8 +1699,14 @@ function AppProviderInner({
       conversationMessages,
       removeConversationMessage,
       setConversationMessages,
+      prependConversationMessages,
     }),
-    [conversationMessages, removeConversationMessage, setConversationMessages],
+    [
+      conversationMessages,
+      removeConversationMessage,
+      setConversationMessages,
+      prependConversationMessages,
+    ],
   );
 
   // Live assistant-turn status (rich status indicator) lives in its own context
@@ -2003,6 +2035,7 @@ function AppProviderInner({
       handleChatStop,
       handleChatRetry,
       handleChatEdit,
+      handleChatDelete,
       handleChatClear,
       handleStartDraftConversation,
       handleNewConversation,
@@ -2384,6 +2417,7 @@ function AppProviderInner({
       handleChatStop,
       handleChatRetry,
       handleChatEdit,
+      handleChatDelete,
       handleChatClear,
       handleStartDraftConversation,
       handleNewConversation,

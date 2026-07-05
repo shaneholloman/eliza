@@ -49,7 +49,7 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { api } from "../lib/api-client";
 import { useDocumentTitle } from "../lib/use-document-title";
-import { useRequireAuth } from "../lib/use-session-auth";
+import { useSessionAuth } from "../lib/use-session-auth";
 import { ApiTester } from "./api-tester";
 import { AuthManager } from "./auth-manager";
 import { toast } from "./toast";
@@ -147,7 +147,7 @@ function resolveApiUrl() {
  * section and wrapped by {@link ApiExplorerRoute} for the standalone route.
  */
 export function ApiExplorerSurface() {
-  const session = useRequireAuth();
+  const session = useSessionAuth();
 
   useDocumentTitle("API Explorer");
 
@@ -474,7 +474,7 @@ export function ApiExplorerSurface() {
                 variant="ghost"
                 type="button"
                 onClick={handleCopyJson}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[var(--accent)] text-white rounded-sm hover:bg-[#e54f00] transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#FF5800] text-black rounded-sm hover:bg-[#e54f00] transition-colors"
               >
                 {copied === "json" ? (
                   <Check className="h-3.5 w-3.5" />

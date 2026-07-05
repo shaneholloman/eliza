@@ -24,9 +24,7 @@ import {
   Layers,
   Play,
   PlayCircle,
-  Plus,
   Workflow,
-  Zap,
 } from "lucide-react";
 import {
   type ReactNode,
@@ -44,7 +42,6 @@ import type {
   AutomationListResponse,
 } from "../../api/client-types-config";
 import { isApiError } from "../../api/client-types-core";
-import { dispatchChatPrefill } from "../../events";
 import { getCached, setCached } from "../../hooks/resource-cache";
 import { useAutomationDeepLink } from "../../hooks/useAutomationDeepLink";
 import { useFetchData } from "../../hooks/useFetchData";
@@ -56,6 +53,7 @@ import {
 import { formatSchedule } from "../../utils/cron-format";
 import { mergeUnifiedTasks } from "../../utils/merge-unified-tasks";
 import { PagePanel } from "../composites/page-panel";
+import { ViewHeader } from "../shared/ViewHeader";
 import { Button } from "../ui/button";
 import { ListSkeleton } from "../ui/skeleton-layouts";
 import { Spinner } from "../ui/spinner";
@@ -109,7 +107,6 @@ const FILTER_ICONS: Record<FeedFilter, ReactNode> = {
   inactive: <CircleSlash className="h-3.5 w-3.5" aria-hidden />,
 };
 const NEW_AUTOMATION_LINK_ID = "__new__";
-const NEW_AUTOMATION_PROMPT = "Create an automation that ";
 
 // On mobile the workflow runtime (and its `GET /api/automations` route) is
 // intentionally absent — phones cannot host it — even though the Automations
@@ -142,6 +139,19 @@ interface FeedRow {
   source: AutomationItem;
 }
 
+function formatInterval(intervalMs: number): string {
+  const minutes = Math.round(intervalMs / 60_000);
+  if (minutes < 60) {
+    return minutes === 1 ? "Every minute" : `Every ${minutes} minutes`;
+  }
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) {
+    return hours === 1 ? "Every hour" : `Every ${hours} hours`;
+  }
+  const days = Math.round(hours / 24);
+  return days === 1 ? "Every day" : `Every ${days} days`;
+}
+
 /**
  * Derive a schedule label from an automation item's `schedules`
  * (`TriggerSummary[]` populated by the `/api/automations` builder from
@@ -163,6 +173,7 @@ function schedulesLabel(
             defaultValue: "On {{event}}",
           });
         }
+        if (trigger.intervalMs) return formatInterval(trigger.intervalMs);
         if (trigger.displayName) return trigger.displayName;
         return null;
       })
@@ -216,20 +227,6 @@ export function AutomationsFeed({
     null,
   );
   const rowRefs = useRef<Map<string, HTMLLIElement>>(new Map());
-
-  const focusAutomationChat = useCallback(() => {
-    dispatchChatPrefill({ text: NEW_AUTOMATION_PROMPT, select: false });
-  }, []);
-
-  const newAgent = useAgentElement<HTMLButtonElement>({
-    id: "action-new",
-    role: "button",
-    label: t("automationsfeed.new", { defaultValue: "New" }),
-    group: "automations-actions",
-    description:
-      "Focus Automations chat to create a workflow or prompt automation",
-    onActivate: focusAutomationChat,
-  });
 
   const editor: EditorState = useMemo(() => {
     if (scheduledEditorId)
@@ -462,32 +459,15 @@ export function AutomationsFeed({
 
   const feedContent = (
     <ShellViewAgentSurface viewId="automations">
+      {/* Uniform view header (#13451/#13597): bare-icon back, centered title. */}
+      <ViewHeader
+        title={t("automationsfeed.title", { defaultValue: "Automations" })}
+      />
       {/* Flat — no card/border. The shell owns the page's horizontal padding. */}
       <div
         data-testid="automations-shell"
         className="device-layout mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-4 lg:px-6"
       >
-        {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <Zap className="h-5 w-5 shrink-0 text-accent" aria-hidden />
-            <h1 className="text-lg font-semibold tracking-[-0.01em] text-txt">
-              {t("automationsfeed.title", { defaultValue: "Automations" })}
-            </h1>
-          </div>
-          <Button
-            ref={newAgent.ref}
-            variant="default"
-            size="sm"
-            className="min-h-11"
-            onClick={focusAutomationChat}
-            {...newAgent.agentProps}
-          >
-            <Plus className="mr-1 h-3.5 w-3.5" aria-hidden />
-            {t("automationsfeed.new", { defaultValue: "New" })}
-          </Button>
-        </div>
-
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {overviewStats.map((stat) => (
             <OverviewStat
@@ -527,6 +507,10 @@ export function AutomationsFeed({
           {loading && !data ? (
             <ListSkeleton rows={6} className="p-3" />
           ) : rows.length === 0 ? (
+            // Designed-empty render only. A default workflow is seeded on first
+            // run so this state is unreachable in practice (#13597); it exists
+            // for the deleted-everything edge. NO create CTA — the agent offers
+            // to re-create a workflow from chat instead.
             <div className="flex flex-col items-center gap-5 px-6 py-14 text-center">
               <AutomationEmptyIllustration />
               <div className="space-y-1">
@@ -538,21 +522,10 @@ export function AutomationsFeed({
                 <p className="text-xs text-muted-strong">
                   {t("automationsfeed.emptySub", {
                     defaultValue:
-                      "Workflows and prompt automations you create run here.",
+                      "Ask in chat to set up a workflow and it will run here.",
                   })}
                 </p>
               </div>
-              <Button
-                variant="default"
-                size="sm"
-                className="min-h-11"
-                onClick={focusAutomationChat}
-              >
-                <Plus className="mr-1 h-3.5 w-3.5" aria-hidden />
-                {t("automationsfeed.createFirst", {
-                  defaultValue: "Create your first automation",
-                })}
-              </Button>
             </div>
           ) : (
             <ul>

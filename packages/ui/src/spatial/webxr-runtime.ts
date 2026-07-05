@@ -242,6 +242,8 @@ async function capabilityFrom(
     try {
       return await xr.isSessionSupported(mode);
     } catch {
+      // error-policy:J4 capability probe — browsers may throw (permissions
+      // policy) instead of answering; the mode reads as unsupported.
       return false;
     }
   };

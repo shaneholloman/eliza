@@ -154,12 +154,12 @@ export const CHAT_OPEN_EVENT = "eliza:chat:open" as const;
 /** Open the keyword message-search panel (fired by the chat search affordance). */
 export const CHAT_MESSAGE_SEARCH_EVENT = "eliza:chat:message-search" as const;
 /**
- * Open the notification center from anywhere (#10706). On mobile the home
- * pull-down owns opening the sheet; this window event is the surface-agnostic
- * entry point the desktop-native "Notifications" menu/tray item + the
- * `<scheme>://notifications` deep link use, so desktop gets a visible native way
- * in (the floating bell is hidden there). The single always-mounted headless
- * NotificationCenter is the one listener.
+ * Open the notification center from anywhere (#10706). The notification center
+ * is the dashboard widget (NotificationsHomeCenter) pinned on the home surface,
+ * so this surface-agnostic window event — fired by the desktop-native
+ * "Notifications" menu/tray item and the `<scheme>://notifications` deep link —
+ * navigates to the home dashboard. The headless NotificationsShellBoot is the
+ * one listener.
  */
 export const OPEN_NOTIFICATION_CENTER_EVENT =
   "eliza:notifications:open" as const;
@@ -312,6 +312,8 @@ export function readPendingFocusConnector(): string | null {
     const value = window.sessionStorage.getItem(FOCUS_CONNECTOR_STORAGE_KEY);
     return value && value.trim().length > 0 ? value : null;
   } catch {
+    // error-policy:J3 storage unavailable — no pending focus hint; the
+    // connectors page opens without a pre-focused entry.
     return null;
   }
 }

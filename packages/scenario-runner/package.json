@@ -101,7 +101,6 @@
     "@elizaos/plugin-streaming": "workspace:*",
     "@elizaos/plugin-todos": "workspace:*",
     "@elizaos/plugin-video": "workspace:*",
-    "@elizaos/plugin-xr": "workspace:*",
     "@elizaos/plugin-sql": "workspace:*",
     "ws": "^8.19.0",
     "@elizaos/auth": "workspace:*"
@@ -110,5 +109,13 @@
     "@elizaos/test-harness": "workspace:*",
     "typescript": "^6.0.3",
     "vitest": "^4.0.0"
+  },
+  "elizaos": {
+    "scripts": {
+      "testLanes": [
+        "server"
+      ],
+      "turboNonImportedBuildDeps": true
+    }
   }
 }

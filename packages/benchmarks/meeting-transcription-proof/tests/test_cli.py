@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from elizaos_meeting_transcription_proof.cli import build_report
+from elizaos_meeting_transcription_proof.cli import REQUIRED_PARITY_LANES, build_report
 
 
 FIXTURE_MANIFEST = Path(__file__).resolve().parents[1] / "fixtures" / "mock-meeting-manifest.json"
@@ -29,6 +29,105 @@ def _fixture_speaker_operations() -> list[object]:
 
 def _fixture_speaker_name_provenance() -> list[object]:
     return json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))["speaker_name_provenance"]
+
+
+def _fixture_audio_visual_cases() -> list[object]:
+    return json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))["audio_visual_cases"]
+
+
+def _fixture_generated_artifact_scores() -> list[object]:
+    return json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))["generated_artifact_scores"]
+
+
+def _fixture_baseline_comparisons() -> list[object]:
+    return json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))["baseline_comparisons"]
+
+
+def _fixture_adversarial_cases() -> list[object]:
+    return json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))["adversarial_cases"]
+
+
+def _fixture_qa_review_checklist() -> list[object]:
+    return json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))["qa_review_checklist"]
+
+
+def _fixture_parity_matrix() -> list[object]:
+    return json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))["parity_matrix"]
+
+
+def _parity_metrics(lane_id: str) -> dict[str, object]:
+    privacy_mode_by_lane = {
+        "browser_web_speech_fallback": "browser_fallback",
+        "cloud_asr_cloud_llm_cloud_tts": "cloud_processed",
+        "cloud_asr_local_llm_local_tts": "hybrid_local_cloud",
+        "degraded_network_mode": "hybrid_local_cloud",
+        "local_asr_cloud_llm_local_tts": "hybrid_local_cloud",
+        "local_asr_local_llm_local_tts": "local_only",
+        "mobile_bridge_local_inference": "native_device",
+        "native_talkmode_stt_tts": "native_device",
+        "offline_mode": "offline_local",
+    }
+    cloud_lanes = {"cloud_asr_cloud_llm_cloud_tts", "cloud_asr_local_llm_local_tts", "degraded_network_mode"}
+    return {
+        "wer": 0.09,
+        "cer": 0.04,
+        "der": 0.18,
+        "jer": 0.22,
+        "cp_wer": 0.13,
+        "wder": 0.2,
+        "ttfa_ms": 420,
+        "final_transcript_latency_ms": 1300,
+        "first_note_latency_ms": 2500,
+        "cpu_percent": 42.5,
+        "memory_mb": 768,
+        "battery_percent_delta": 2.5,
+        "thermal_state": "nominal",
+        "cloud_cost_usd": 0.021 if lane_id in cloud_lanes else 0.0,
+        "network_bytes": 348160 if lane_id in cloud_lanes else 8192,
+        "failure_rate": 0.0,
+        "retry_count": 0,
+        "dropout_rate": 0.0,
+        "privacy_mode": privacy_mode_by_lane[lane_id],
+    }
+
+
+def _all_pass_parity_matrix() -> list[object]:
+    scenario_ids = [scenario["id"] for scenario in _fixture_scenarios() if isinstance(scenario, dict)]
+    artifact_schema = [
+        "baseline_comparison",
+        "metrics_json",
+        "privacy_mode",
+        "resource_logs",
+        "transcript_artifact",
+    ]
+    platform_by_lane = {
+        "browser_web_speech_fallback": ["browser", "desktop"],
+        "cloud_asr_cloud_llm_cloud_tts": ["cloud", "desktop"],
+        "cloud_asr_local_llm_local_tts": ["cloud", "desktop"],
+        "degraded_network_mode": ["cloud", "desktop"],
+        "local_asr_cloud_llm_local_tts": ["cloud", "desktop"],
+        "local_asr_local_llm_local_tts": ["desktop", "native"],
+        "mobile_bridge_local_inference": ["mobile", "native"],
+        "native_talkmode_stt_tts": ["mobile", "native"],
+        "offline_mode": ["desktop", "mobile", "native"],
+    }
+    return [
+        {
+            "id": lane_id,
+            "status": "pass",
+            "scenario_ids": scenario_ids,
+            "artifact_schema": artifact_schema,
+            "metrics": _parity_metrics(lane_id),
+            "baseline": {
+                "baseline_id": "meeting-parity-2026-07",
+                "comparison_report": f"baseline-comparison-{lane_id}.json",
+                "regression": False,
+            },
+            "evidence": ["metrics_json", "resource_logs", "baseline_comparison"],
+            "evidence_platforms": platform_by_lane[lane_id],
+        }
+        for lane_id in sorted(REQUIRED_PARITY_LANES)
+    ]
 
 
 def _base_manifest(provider_mode: str = "real_zoom_meet") -> dict[str, object]:
@@ -57,6 +156,12 @@ def _base_manifest(provider_mode: str = "real_zoom_meet") -> dict[str, object]:
         "capture_paths": _fixture_capture_paths(),
         "speaker_operations": _fixture_speaker_operations(),
         "speaker_name_provenance": _fixture_speaker_name_provenance(),
+        "audio_visual_cases": _fixture_audio_visual_cases(),
+        "generated_artifact_scores": _fixture_generated_artifact_scores(),
+        "baseline_comparisons": _fixture_baseline_comparisons(),
+        "adversarial_cases": _fixture_adversarial_cases(),
+        "qa_review_checklist": _fixture_qa_review_checklist(),
+        "parity_matrix": _all_pass_parity_matrix(),
         "metrics": {
             "transcript_quality": 0.91,
             "diarization_quality": 0.82,
@@ -69,6 +174,14 @@ def _base_manifest(provider_mode: str = "real_zoom_meet") -> dict[str, object]:
             "jer": 0.22,
             "overlap_aware_wer": 0.2,
             "active_speaker_accuracy": 0.84,
+            "face_count_accuracy": 0.9,
+            "active_speaker_f1": 0.88,
+            "active_speaker_map": 0.87,
+            "audio_video_association_accuracy": 0.86,
+            "off_screen_speaker_detection_accuracy": 0.85,
+            "room_feed_heuristic_precision": 0.83,
+            "room_feed_heuristic_recall": 0.82,
+            "visual_acoustic_disagreement_rate": 0.12,
             "voice_profile_false_accept_rate": 0.03,
             "voice_profile_false_reject_rate": 0.08,
             "end_of_turn_latency_ms": 280,
@@ -76,6 +189,14 @@ def _base_manifest(provider_mode: str = "real_zoom_meet") -> dict[str, object]:
             "p95_end_to_end_latency_ms": 1300,
             "notes_factuality": 0.93,
             "action_item_extraction": 0.89,
+            "summary_factuality": 0.92,
+            "action_item_owner_date": 0.88,
+            "decision_extraction": 0.86,
+            "open_question_extraction": 0.84,
+            "memory_entity_correctness": 0.9,
+            "hallucination_rate": 0.02,
+            "omission_rate": 0.04,
+            "source_grounding": 0.95,
         },
     }
 
@@ -98,6 +219,112 @@ def test_mocked_plumbing_fixture_is_not_publishable() -> None:
     assert len(report["capture_paths"]) == len(_fixture_capture_paths())
     assert len(report["speaker_operations"]) == len(_fixture_speaker_operations())
     assert len(report["speaker_name_provenance"]) == len(_fixture_speaker_name_provenance())
+    assert len(report["audio_visual_cases"]) == len(_fixture_audio_visual_cases())
+    assert len(report["generated_artifact_scores"]) == len(_fixture_generated_artifact_scores())
+    assert len(report["baseline_comparisons"]) == len(_fixture_baseline_comparisons())
+    assert len(report["adversarial_cases"]) == len(_fixture_adversarial_cases())
+    assert len(report["qa_review_checklist"]) == len(_fixture_qa_review_checklist())
+    assert report["parity_matrix_summary"]["pass_count"] == 1
+    assert report["parity_matrix_summary"]["skip_count"] == len(REQUIRED_PARITY_LANES) - 1
+    assert report["parity_matrix_summary"]["publishable"] is False
+
+
+def test_mocked_plumbing_fixture_reports_explicit_parity_skips() -> None:
+    report = build_report(lane="mocked_plumbing", manifest_path=FIXTURE_MANIFEST)
+
+    skipped = [row for row in report["parity_matrix"] if row["status"] == "skip"]
+
+    assert skipped
+    assert all(row.get("skip_reason") for row in skipped)
+    assert report["parity_matrix_summary"]["pass_count"] < len(REQUIRED_PARITY_LANES)
+
+
+def test_real_lane_requires_parity_matrix_all_lanes(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    manifest_data["parity_matrix"] = [
+        row for row in _all_pass_parity_matrix() if isinstance(row, dict) and row["id"] != "offline_mode"
+    ]
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="parity_matrix missing lanes"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_parity_matrix_rejects_unknown_lane(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    matrix = _all_pass_parity_matrix()
+    matrix.append({**matrix[0], "id": "imaginary_lane"})
+    manifest_data["parity_matrix"] = matrix
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="parity_matrix contains unknown lanes"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_parity_matrix_requires_skip_reason(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    matrix = _all_pass_parity_matrix()
+    assert isinstance(matrix[0], dict)
+    matrix[0] = {**matrix[0], "status": "skip"}
+    manifest_data["parity_matrix"] = matrix
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match=r"parity_matrix\[0\]\.skip_reason must be a non-empty string"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_parity_matrix_requires_same_scenario_corpus(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    matrix = _all_pass_parity_matrix()
+    assert isinstance(matrix[0], dict)
+    scenario_ids = matrix[0]["scenario_ids"]
+    assert isinstance(scenario_ids, list)
+    matrix[0] = {**matrix[0], "scenario_ids": scenario_ids[:-1]}
+    manifest_data["parity_matrix"] = matrix
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="missing required scenarios"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_parity_matrix_requires_same_artifact_schema(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    matrix = _all_pass_parity_matrix()
+    assert isinstance(matrix[0], dict)
+    artifact_schema = matrix[0]["artifact_schema"]
+    assert isinstance(artifact_schema, list)
+    matrix[0] = {**matrix[0], "artifact_schema": [*artifact_schema, "lane_specific_extra"]}
+    manifest_data["parity_matrix"] = matrix
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="non-skipped lanes must use the same artifact schema"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_parity_matrix_requires_baseline_comparison(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    matrix = _all_pass_parity_matrix()
+    assert isinstance(matrix[0], dict)
+    matrix[0] = {key: value for key, value in matrix[0].items() if key != "baseline"}
+    manifest_data["parity_matrix"] = matrix
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match=r"parity_matrix\[0\]\.baseline must be an object"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_parity_matrix_rejects_pass_with_regression(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    matrix = _all_pass_parity_matrix()
+    assert isinstance(matrix[0], dict)
+    baseline = matrix[0]["baseline"]
+    assert isinstance(baseline, dict)
+    matrix[0] = {**matrix[0], "baseline": {**baseline, "regression": True}}
+    manifest_data["parity_matrix"] = matrix
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="regression cannot be true for a passing parity lane"):
+        build_report(lane="real_product", manifest_path=manifest)
 
 
 def test_real_lane_requires_non_mock_provider(tmp_path: Path) -> None:
@@ -432,6 +659,260 @@ def test_speaker_name_policies_reject_sensitive_attribute_shortcuts(tmp_path: Pa
         build_report(lane="real_product", manifest_path=manifest)
 
 
+def test_real_lane_requires_audio_visual_cases(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    manifest_data.pop("audio_visual_cases")
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="audio_visual_cases must be a non-empty array"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_audio_visual_cases_require_all_case_ids(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    manifest_data["audio_visual_cases"] = [
+        case
+        for case in _fixture_audio_visual_cases()
+        if isinstance(case, dict) and case.get("id") != "ava_active_speaker"
+    ]
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="missing audio visual cases"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_audio_visual_cases_forbid_face_identity_binding(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    cases = _fixture_audio_visual_cases()
+    assert isinstance(cases[0], dict)
+    policy = cases[0].get("identity_policy")
+    assert isinstance(policy, dict)
+    cases[0] = {**cases[0], "identity_policy": {**policy, "face_identity_binding": "allowed"}}
+    manifest_data["audio_visual_cases"] = cases
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="face_identity_binding"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_audio_visual_cases_reject_sensitive_attribute_policy(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    cases = _fixture_audio_visual_cases()
+    assert isinstance(cases[0], dict)
+    policy = cases[0].get("identity_policy")
+    assert isinstance(policy, dict)
+    cases[0] = {**cases[0], "identity_policy": {**policy, "sensitive_attribute_policy": "allowed"}}
+    manifest_data["audio_visual_cases"] = cases
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="sensitive_attribute_policy"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_real_lane_requires_generated_artifact_scores(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    manifest_data.pop("generated_artifact_scores")
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="generated_artifact_scores must be a non-empty array"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_generated_artifact_scores_require_all_rows(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    manifest_data["generated_artifact_scores"] = [
+        row
+        for row in _fixture_generated_artifact_scores()
+        if isinstance(row, dict) and row.get("id") != "source_grounding"
+    ]
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="missing generated artifact scores"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_generated_artifact_scores_validate_threshold_direction(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    rows = _fixture_generated_artifact_scores()
+    assert isinstance(rows[0], dict)
+    rows[0] = {**rows[0], "observed_score": 0.1, "threshold": 0.9, "higher_is_better": True, "passed": True}
+    manifest_data["generated_artifact_scores"] = rows
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="passed does not match threshold direction"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_generated_artifact_scores_require_judge_proof(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    rows = _fixture_generated_artifact_scores()
+    assert isinstance(rows[0], dict)
+    rows[0] = {**rows[0], "proof": {}}
+    manifest_data["generated_artifact_scores"] = rows
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="missing proof"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_real_lane_requires_baseline_comparisons(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    manifest_data.pop("baseline_comparisons")
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="baseline_comparisons must be a non-empty array"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_baseline_comparisons_require_all_systems(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    manifest_data["baseline_comparisons"] = [
+        row
+        for row in _fixture_baseline_comparisons()
+        if isinstance(row, dict) and row.get("id") != "otter_product_baseline"
+    ]
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="missing baseline comparisons"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_baseline_not_run_rows_require_reason(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    rows = _fixture_baseline_comparisons()
+    assert isinstance(rows[1], dict)
+    rows[1] = {key: value for key, value in rows[1].items() if key != "not_run_reason"}
+    manifest_data["baseline_comparisons"] = rows
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="not_run_reason must explain skipped systems"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_baseline_comparisons_require_open_source_run_or_import(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    rows: list[object] = []
+    for row in _fixture_baseline_comparisons():
+        if isinstance(row, dict) and row.get("comparison_type") == "open_source":
+            rows.append({**row, "run_status": "not_run", "not_run_reason": "not installed for this test"})
+        else:
+            rows.append(row)
+    manifest_data["baseline_comparisons"] = rows
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="at least one open-source run or import"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_real_lane_requires_adversarial_cases(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    manifest_data.pop("adversarial_cases")
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="adversarial_cases must be a non-empty array"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_adversarial_cases_require_all_classes(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    manifest_data["adversarial_cases"] = [
+        case
+        for case in _fixture_adversarial_cases()
+        if isinstance(case, dict) and case.get("class") != "transcript_prompt_injection"
+    ]
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="adversarial_cases missing classes"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_adversarial_cases_may_only_reference_known_fuzz_targets(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    cases = _fixture_adversarial_cases()
+    assert isinstance(cases[0], dict)
+    cases[0] = {**cases[0], "fuzz_targets": ["canonical_artifact_schema", "imaginary_fuzzer"]}
+    manifest_data["adversarial_cases"] = cases
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="unknown fuzz targets"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_adversarial_case_seed_must_be_non_negative_integer(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    cases = _fixture_adversarial_cases()
+    assert isinstance(cases[0], dict)
+    cases[0] = {**cases[0], "seed": -1}
+    manifest_data["adversarial_cases"] = cases
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="seed must be a non-negative integer"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_real_lane_requires_qa_review_checklist(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    manifest_data.pop("qa_review_checklist")
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="qa_review_checklist must be a non-empty array"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_qa_review_checklist_requires_all_flows(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    manifest_data["qa_review_checklist"] = [
+        item for item in _fixture_qa_review_checklist() if isinstance(item, dict) and item.get("flow") != "delete_audio"
+    ]
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="qa_review_checklist missing flows"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_qa_review_checklist_verdicts_are_machine_readable(tmp_path: Path) -> None:
+    manifest_data = _base_manifest()
+    items = _fixture_qa_review_checklist()
+    assert isinstance(items[0], dict)
+    items[0] = {**items[0], "machine_verdict": "maybe"}
+    manifest_data["qa_review_checklist"] = items
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="machine_verdict must be one of"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
+def test_real_lane_requires_passing_qa_review_verdicts(tmp_path: Path) -> None:
+    evidence_names = [
+        "audio",
+        "video",
+        "backend_logs",
+        "frontend_logs",
+        "screenshots",
+        "metrics",
+        "model_trajectories",
+        "transcript_artifact",
+        "speaker_profile_artifact",
+        "consent_record",
+        "retention_artifact",
+    ]
+    evidence = {}
+    for name in evidence_names:
+        filename = f"{name}.txt"
+        (tmp_path / filename).write_text(name, encoding="utf-8")
+        evidence[name] = filename
+    manifest_data = _base_manifest()
+    items = _fixture_qa_review_checklist()
+    assert isinstance(items[0], dict)
+    items[0] = {**items[0], "machine_verdict": "fail"}
+    manifest_data["qa_review_checklist"] = items
+    manifest_data["evidence"] = evidence
+    manifest = _write_manifest(tmp_path, manifest_data)
+
+    with pytest.raises(ValueError, match="pass verdicts"):
+        build_report(lane="real_product", manifest_path=manifest)
+
+
 def test_real_lane_scores_lowest_required_quality_and_resolves_evidence(tmp_path: Path) -> None:
     evidence_names = [
         "audio",
@@ -452,6 +933,12 @@ def test_real_lane_scores_lowest_required_quality_and_resolves_evidence(tmp_path
         (tmp_path / filename).write_text(name, encoding="utf-8")
         evidence[name] = filename
     manifest_data = _base_manifest()
+    qa_review_checklist = _fixture_qa_review_checklist()
+    manifest_data["qa_review_checklist"] = [
+        {**item, "verdict": "pass", "machine_verdict": "pass"}
+        for item in qa_review_checklist
+        if isinstance(item, dict)
+    ]
     manifest_data["evidence"] = evidence
     manifest = _write_manifest(tmp_path, manifest_data)
 
@@ -461,6 +948,10 @@ def test_real_lane_scores_lowest_required_quality_and_resolves_evidence(tmp_path
     assert report["score"] == pytest.approx(0.77)
     assert report["metrics"]["wer"] == pytest.approx(0.09)
     assert report["metrics"]["p95_end_to_end_latency_ms"] == pytest.approx(1300)
+    assert report["parity_matrix_summary"]["pass_count"] == len(REQUIRED_PARITY_LANES)
+    assert report["parity_matrix_summary"]["fail_count"] == 0
+    assert report["parity_matrix_summary"]["skip_count"] == 0
+    assert report["parity_matrix_summary"]["publishable"] is True
     assert {dataset["id"] for dataset in report["dataset_sources"]} >= {"musan", "libricss", "chime6", "misp_meeting"}
     assert {path["id"] for path in report["capture_paths"]} >= {"zoom_bot", "google_meet_bot_free", "on_device_capture"}
     assert {operation["id"] for operation in report["speaker_operations"]} >= {
@@ -487,6 +978,59 @@ def test_real_lane_scores_lowest_required_quality_and_resolves_evidence(tmp_path
         "preserve_unknown",
     }
     assert all("confidence" in case for case in report["speaker_name_provenance"])
+    assert {case["id"] for case in report["audio_visual_cases"]} >= {
+        "ava_active_speaker",
+        "misp_2025_meeting",
+        "easycom_license_permitting",
+        "synthetic_room_feed_smoke",
+        "off_screen_speaker",
+        "visual_acoustic_disagreement",
+        "audio_video_association",
+    }
+    assert all(
+        case["identity_policy"]["face_identity_binding"] == "forbidden_without_explicit_opt_in"
+        for case in report["audio_visual_cases"]
+    )
+    assert report["metrics"]["active_speaker_f1"] == pytest.approx(0.88)
+    assert report["metrics"]["visual_acoustic_disagreement_rate"] == pytest.approx(0.12)
+    assert {row["id"] for row in report["generated_artifact_scores"]} == {
+        "summary_factuality",
+        "action_item_owner_date",
+        "decision_extraction",
+        "open_question_extraction",
+        "memory_entity_correctness",
+        "hallucination_rate",
+        "omission_rate",
+        "source_grounding",
+    }
+    assert report["metrics"]["summary_factuality"] == pytest.approx(0.92)
+    assert report["metrics"]["hallucination_rate"] == pytest.approx(0.02)
+    assert {row["id"] for row in report["baseline_comparisons"]} >= {
+        "eliza_current_baseline",
+        "otter_product_baseline",
+        "granola_product_baseline",
+        "zoom_native_notes_baseline",
+        "google_meet_gemini_notes_baseline",
+        "whisperx_pyannote_open_source_baseline",
+        "nemo_sortformer_open_source_baseline",
+    }
+    assert any(
+        row["comparison_type"] == "open_source" and row["run_status"] in {"run", "imported"}
+        for row in report["baseline_comparisons"]
+    )
+    assert any(row["comparison_type"] == "internal_baseline" for row in report["baseline_comparisons"])
+    assert {case["class"] for case in report["adversarial_cases"]} >= {
+        "transcript_prompt_injection",
+        "malformed_artifact_shape",
+        "audio_deleted_transcript_allowed",
+    }
+    assert {item["flow"] for item in report["qa_review_checklist"]} == {
+        "permission_denied",
+        "capture_stopped",
+        "speaker_correction",
+        "delete_audio",
+        "share_privacy_state",
+    }
     assert all(dataset["version"] for dataset in report["dataset_sources"])
     assert all(dataset["checksum"] for dataset in report["dataset_sources"])
     assert all(dataset["sample_count"] > 0 for dataset in report["dataset_sources"])

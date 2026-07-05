@@ -149,6 +149,8 @@ async function revealSecret(
     const json = (await res.json()) as { value?: string | null };
     return typeof json.value === "string" ? json.value : null;
   } catch {
+    // error-policy:J4 null is the typed "cannot reveal" signal — the masked
+    // field stays masked and the user can retry; never fabricate a value.
     return null;
   }
 }

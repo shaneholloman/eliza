@@ -141,6 +141,8 @@ function readStewardSessionFromStorage(): StewardSessionUser {
       walletAddress: decoded.walletAddress,
     };
   } catch {
+    // error-policy:J3 unreadable storage or undecodable token reads as
+    // signed-out (fail-closed) — never a fabricated session.
     return null;
   }
 }
@@ -210,9 +212,4 @@ export function useSessionAuth(): SessionAuthState {
   const ready = !providerAuth.isLoading || isPlaywrightTestAuthEnabled();
 
   return { ready, authenticated, user };
-}
-
-/** The session state for protected pages (gate rendering on `authenticated`). */
-export function useRequireAuth(): SessionAuthState {
-  return useSessionAuth();
 }

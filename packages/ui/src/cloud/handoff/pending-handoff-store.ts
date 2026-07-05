@@ -34,6 +34,8 @@ function storage(): Storage | null {
   try {
     return window.localStorage;
   } catch {
+    // error-policy:J4 storage unavailable — pending handoffs simply cannot
+    // persist across reloads; the in-flight flow still completes.
     return null;
   }
 }

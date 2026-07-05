@@ -20,8 +20,10 @@ import {
 } from "@elizaos/core";
 import {
   DEFAULT_MEETING_AUTO_LEAVE,
+  DEFAULT_MEETING_MAX_DURATION_MS,
   MEETING_PLATFORM_LABELS,
   type MeetingAutoLeaveConfig,
+  type MeetingBillingState,
   type MeetingEndReason,
   type MeetingJoinRequest,
   type MeetingParticipant,
@@ -29,6 +31,7 @@ import {
   type MeetingSession,
   type MeetingSessionStatus,
   parseMeetingUrl,
+  parsePositiveInteger,
 } from "@elizaos/shared";
 import type { TranscriptSegment } from "@elizaos/shared/transcripts";
 import { MeetingEventEmitter } from "./events.js";
@@ -36,6 +39,9 @@ import { resolveMeetingRuntimeSupport } from "./platform-support.js";
 import { MeetingTranscriptWriter } from "./transcripts/meeting-transcript-writer.js";
 import type {
   MeetingAudioSink,
+  MeetingBillingError,
+  MeetingBillingSession,
+  MeetingBillingSessionInput,
   MeetingBotSession,
   MeetingPipelineOptions,
   MeetingPlatformAdapter,
@@ -53,13 +59,18 @@ export interface MeetingPipelineInstance extends MeetingTranscriptionPipeline {
 export interface MeetingServiceDependencies {
   adapters: ReadonlyMap<MeetingPlatform, MeetingPlatformAdapter>;
   createPipeline(options: MeetingPipelineOptions): MeetingPipelineInstance;
+  createBillingSession?(
+    input: MeetingBillingSessionInput,
+  ): MeetingBillingSession | null;
 }
 
 export type MeetingJoinErrorCode =
   | "invalid_url"
   | "unsupported_platform"
   | "unsupported_host"
-  | "already_joined";
+  | "already_joined"
+  | "invalid_duration_cap"
+  | "insufficient_credits";
 
 /** Validation/conflict failures of `requestJoin` — routes map these to 4xx. */
 export class MeetingJoinError extends Error {
@@ -93,9 +104,12 @@ interface InternalSession {
   transcriptId: UUID;
   participants: MeetingParticipant[];
   calendarEventId?: string;
+  readonly maxDurationMs: number;
   readonly abort: AbortController;
   readonly pipeline: MeetingPipelineInstance;
   readonly writer: MeetingTranscriptWriter;
+  readonly billing?: MeetingBillingSession;
+  billingFinalized?: Promise<void>;
   /** Confirmed segments accumulated from pipeline updates (live view state). */
   confirmedSegments: TranscriptSegment[];
   /** Resolves when the adapter lifecycle + finalize have fully completed. */
@@ -220,13 +234,44 @@ export class MeetingService extends Service {
       ...DEFAULT_MEETING_AUTO_LEAVE,
       ...request.autoLeave,
     };
+    const maxDurationMs = this.resolveMaxDurationMs(request.maxDurationMs);
     const retainAudio = request.retainAudio ?? true;
+    const billing = this.deps.createBillingSession?.({
+      runtime: this.runtime,
+      sessionId,
+      request,
+      maxDurationMs,
+    });
+
+    if (billing) {
+      try {
+        await billing.reserveInitial();
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          "code" in err &&
+          err.code === "insufficient_credits"
+        ) {
+          throw new MeetingJoinError("insufficient_credits", err.message);
+        }
+        throw err;
+      }
+    }
 
     const pipeline = this.deps.createPipeline({
       runtime: this.runtime,
       sessionId,
       language: request.language,
       retainAudio,
+      ...(billing ? { billing } : {}),
+      onSpendCapReached: (error: MeetingBillingError) => {
+        const live = this.sessions.get(sessionId);
+        if (!live || TERMINAL_STATUSES.has(live.status)) return;
+        live.endReason = "ended_due_to_spend_cap";
+        live.errorMessage = error.message;
+        this.applyStatus(live, "leaving");
+        live.abort.abort();
+      },
     });
     const writer = new MeetingTranscriptWriter(this.runtime);
 
@@ -242,9 +287,11 @@ export class MeetingService extends Service {
       transcriptId: writer.transcriptId,
       participants: [],
       calendarEventId: request.calendarEventId,
+      maxDurationMs,
       abort: new AbortController(),
       pipeline,
       writer,
+      ...(billing ? { billing } : {}),
       confirmedSegments: [],
       done: Promise.resolve(),
     };
@@ -276,6 +323,22 @@ export class MeetingService extends Service {
         nativeMeetingId: parsed.nativeMeetingId,
       });
     } catch (err) {
+      try {
+        await this.reconcileBillingOnce(session, "error");
+      } catch (billingErr) {
+        logger.error(
+          {
+            sessionId,
+            platform: parsed.platform,
+            nativeMeetingId: parsed.nativeMeetingId,
+            error:
+              billingErr instanceof Error
+                ? billingErr.message
+                : String(billingErr),
+          },
+          "[MeetingService] join setup billing release failed",
+        );
+      }
       this.sessions.delete(sessionId);
       logger.error(
         {
@@ -375,7 +438,19 @@ export class MeetingService extends Service {
       transcriptId: session.transcriptId,
       participants: session.participants.map((p) => ({ ...p })),
       calendarEventId: session.calendarEventId,
+      maxDurationMs: session.maxDurationMs,
+      billing: this.billingState(session),
     };
+  }
+
+  private billingState(session: InternalSession): MeetingBillingState {
+    return (
+      session.billing?.state ?? {
+        status: "unmetered",
+        reservedMs: 0,
+        consumedMs: 0,
+      }
+    );
   }
 
   /** One shared "Meetings" world across sessions (created once, reused). */
@@ -499,8 +574,32 @@ export class MeetingService extends Service {
   ): Promise<void> {
     let endReason: MeetingEndReason;
     let errorMessage: string | undefined;
+    let capTimer: ReturnType<typeof setTimeout> | null = null;
+    let durationCapReached = false;
     try {
-      endReason = await adapter.run(botSession);
+      const capReached = new Promise<MeetingEndReason>((resolve) => {
+        capTimer = setTimeout(() => {
+          durationCapReached = true;
+          logger.warn(
+            {
+              sessionId: session.id,
+              maxDurationMs: session.maxDurationMs,
+            },
+            "[MeetingService] duration cap reached; stopping meeting",
+          );
+          this.applyStatus(session, "leaving");
+          resolve("duration_cap_reached");
+          session.abort.abort();
+        }, session.maxDurationMs);
+        capTimer.unref?.();
+      });
+      endReason = await Promise.race([adapter.run(botSession), capReached]);
+      if (durationCapReached) {
+        endReason = "duration_cap_reached";
+      } else if (session.endReason === "ended_due_to_spend_cap") {
+        endReason = "ended_due_to_spend_cap";
+        errorMessage = session.errorMessage;
+      }
     } catch (err) {
       endReason = "error";
       errorMessage = err instanceof Error ? err.message : String(err);
@@ -508,6 +607,8 @@ export class MeetingService extends Service {
         { sessionId: session.id, error: errorMessage },
         "[MeetingService] platform adapter failed",
       );
+    } finally {
+      if (capTimer) clearTimeout(capTimer);
     }
     await this.finishSession(session, endReason, errorMessage);
   }
@@ -548,6 +649,18 @@ export class MeetingService extends Service {
       );
     }
 
+    try {
+      await this.reconcileBillingOnce(session, endReason);
+    } catch (err) {
+      endReason = "error";
+      errorMessage =
+        errorMessage ?? (err instanceof Error ? err.message : String(err));
+      logger.error(
+        { sessionId: session.id, error: errorMessage },
+        "[MeetingService] billing reconciliation failed",
+      );
+    }
+
     session.endReason = endReason;
     session.errorMessage = errorMessage;
     session.endedAt = Date.now();
@@ -574,8 +687,49 @@ export class MeetingService extends Service {
     this.terminated.set(session.id, dto);
   }
 
+  private async reconcileBillingOnce(
+    session: InternalSession,
+    endReason: MeetingEndReason,
+  ): Promise<void> {
+    if (!session.billing) return;
+    if (!session.billingFinalized) {
+      session.billingFinalized = session.billing
+        .reconcile(endReason)
+        .then(() => undefined);
+    }
+    await session.billingFinalized;
+  }
+
   private settingString(key: string): string | null {
     const value = this.runtime.getSetting(key);
     return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+
+  private resolveMaxDurationMs(requested: number | undefined): number {
+    const configured = this.settingPositiveInteger(
+      "ELIZA_MEETINGS_MAX_DURATION_MS",
+    );
+    const maximum = configured ?? DEFAULT_MEETING_MAX_DURATION_MS;
+    if (
+      requested !== undefined &&
+      (!Number.isSafeInteger(requested) || requested <= 0)
+    ) {
+      throw new MeetingJoinError(
+        "invalid_duration_cap",
+        "maxDurationMs must be a positive integer",
+      );
+    }
+    if (requested !== undefined && requested > maximum) {
+      throw new MeetingJoinError(
+        "invalid_duration_cap",
+        `maxDurationMs exceeds the configured maximum (${maximum}ms)`,
+      );
+    }
+    return requested ?? maximum;
+  }
+
+  private settingPositiveInteger(key: string): number | null {
+    const raw = this.settingString(key);
+    return parsePositiveInteger(raw) ?? null;
   }
 }

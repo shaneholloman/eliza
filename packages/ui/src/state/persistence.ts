@@ -45,6 +45,9 @@ function tryLocalStorage<T>(fn: () => T, fallback: T): T {
   try {
     return fn();
   } catch {
+    // error-policy:J3 localStorage can throw (private mode, quota, security
+    // policy); preference reads start from their designed default rather than
+    // wedging the shell on an inaccessible store.
     return fallback;
   }
 }
@@ -476,6 +479,9 @@ export function loadPersistedFirstRunComplete(): boolean {
   try {
     return localStorage.getItem(FIRST_RUN_COMPLETE_STORAGE_KEY) === "1";
   } catch (err) {
+    // error-policy:J3 an unreadable store reads as "first run not complete";
+    // the native-store mirror (hydratePersistedFirstRunCompleteFromNativeStore)
+    // is the durability backstop against a wiped WebView store.
     logger.warn(
       `[persistence] failed to load first-run completion flag: ${describePersistenceError(err)}`,
     );
@@ -507,7 +513,8 @@ async function persistNativeFirstRunComplete(complete: boolean): Promise<void> {
       await Preferences.remove({ key: FIRST_RUN_COMPLETE_STORAGE_KEY });
     }
   } catch {
-    // Capacitor Preferences is unavailable in web / unit-test shells.
+    // error-policy:J4 Capacitor Preferences is unavailable in web / unit-test
+    // shells; localStorage stays the sole store there by design.
   }
 }
 
@@ -565,7 +572,8 @@ export async function hydratePersistedFirstRunCompleteFromNativeStore(): Promise
       localStorage.setItem(FIRST_RUN_COMPLETE_STORAGE_KEY, "1");
     }
   } catch {
-    // Native store unavailable — localStorage remains authoritative.
+    // error-policy:J4 native store unavailable — localStorage remains
+    // authoritative for this boot.
   }
 }
 
@@ -751,6 +759,8 @@ export function loadFavoriteApps(): string[] {
       const parsed = JSON.parse(stored);
       return sanitizeFavoriteApps(parsed);
     } catch (err) {
+      // error-policy:J3 corrupt saved favorites start clean from the defaults
+      // (documented start-clean parse; the warn keeps corruption observable).
       logger.warn(
         `[persistence] failed to parse favorite apps from localStorage: ${describePersistenceError(err)}`,
       );
@@ -792,6 +802,8 @@ export async function fetchServerFavoriteApps(): Promise<string[] | null> {
     return sanitized;
   } catch (err) {
     const message = describePersistenceError(err);
+    // error-policy:J4 `null` is the documented failure signal (caller keeps
+    // the local cache); iOS mode-gated boot logs debug, real failures warn.
     if (isTerminalIosNativeAgentBootErrorMessage(message)) {
       logger.debug(
         `[persistence] server favorite apps unavailable while the native transport is mode-gated (will retry after agent-ready): ${message}`,
@@ -824,6 +836,8 @@ export async function replaceServerFavoriteApps(
     saveFavoriteApps(sanitized);
     return sanitized;
   } catch (err) {
+    // error-policy:J4 `null` is the documented failure signal — the caller
+    // keeps its optimistic UI state; the warn keeps a broken route observable.
     logger.warn(
       `[persistence] failed to replace server favorite apps: ${describePersistenceError(err)}`,
     );
@@ -852,6 +866,8 @@ export async function toggleServerFavoriteApp(
     saveFavoriteApps(sanitized);
     return sanitized;
   } catch (err) {
+    // error-policy:J4 `null` is the documented failure signal — the caller
+    // keeps its optimistic UI state; the warn keeps a broken route observable.
     logger.warn(
       `[persistence] failed to toggle server favorite app: ${describePersistenceError(err)}`,
     );
@@ -875,6 +891,8 @@ export function loadRecentApps(): string[] {
         .filter((item): item is string => typeof item === "string")
         .slice(0, RECENT_APPS_MAX);
     } catch (err) {
+      // error-policy:J3 corrupt saved recents start clean; warn keeps the
+      // corruption observable.
       logger.warn(
         `[persistence] failed to parse recent apps from localStorage: ${describePersistenceError(err)}`,
       );
@@ -890,6 +908,66 @@ export function saveRecentApps(apps: string[]): void {
       JSON.stringify(apps.slice(0, RECENT_APPS_MAX)),
     );
   }, undefined);
+}
+
+/* ── Launcher recents/favorites persistence ─────────────────────────── */
+// The launcher's Recents/Favorites zones are keyed by canonical LAUNCHER VIEW
+// ID (`wallet`, `settings`, …), a different namespace from the catalog-app-name
+// keyed `recent-apps`/`favorite-apps` above (which the chat + catalog surfaces
+// own). They are kept separate so a launcher tap never rewrites the catalog's
+// app-name lists and vice versa — merging the two would conflate unlike keys.
+const LAUNCHER_RECENTS_KEY = "eliza:launcher:recents";
+const LAUNCHER_FAVORITES_KEY = "eliza:launcher:favorites";
+/** Cap on the persisted launcher recents list; older ids are evicted. */
+export const LAUNCHER_RECENTS_MAX = 8;
+
+function loadLauncherIds(key: string, max: number): string[] {
+  return tryLocalStorage(() => {
+    const stored = localStorage.getItem(key);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is string => typeof item === "string")
+      .slice(0, max);
+  }, []);
+}
+
+export function loadLauncherRecents(): string[] {
+  return loadLauncherIds(LAUNCHER_RECENTS_KEY, LAUNCHER_RECENTS_MAX);
+}
+
+export function saveLauncherRecents(ids: string[]): void {
+  tryLocalStorage(() => {
+    localStorage.setItem(
+      LAUNCHER_RECENTS_KEY,
+      JSON.stringify(ids.slice(0, LAUNCHER_RECENTS_MAX)),
+    );
+  }, undefined);
+}
+
+export function loadLauncherFavorites(): string[] {
+  return loadLauncherIds(LAUNCHER_FAVORITES_KEY, Number.MAX_SAFE_INTEGER);
+}
+
+export function saveLauncherFavorites(ids: string[]): void {
+  tryLocalStorage(() => {
+    localStorage.setItem(LAUNCHER_FAVORITES_KEY, JSON.stringify(ids));
+  }, undefined);
+}
+
+/**
+ * Move `id` to the front of the launcher recents list and persist it. Pure
+ * most-recent-first ordering with de-dup and eviction; returns the new list so
+ * the caller can update React state without a second read.
+ */
+export function recordLauncherRecent(id: string): string[] {
+  const next = [id, ...loadLauncherRecents().filter((x) => x !== id)].slice(
+    0,
+    LAUNCHER_RECENTS_MAX,
+  );
+  saveLauncherRecents(next);
+  return next;
 }
 
 /* ── Wallet enabled persistence ─────────────────────────────────────── */
@@ -1157,6 +1235,8 @@ function isElizaCloudControlPlaneApiBase(value: unknown): boolean {
     const pathname = url.pathname.replace(/\/+$/, "");
     return pathname === "" || pathname === "/api/v1/eliza/agents";
   } catch (err) {
+    // error-policy:J3 an unparseable apiBase is not a control-plane base;
+    // downstream trust gates reject it on their own.
     logger.debug(
       `[persistence] failed to parse apiBase URL while checking Eliza Cloud control plane: apiBase=${apiBase}; error=${describePersistenceError(err)}`,
     );
@@ -1199,6 +1279,8 @@ export function createPersistedActiveServer(args: {
         try {
           label = new URL(apiBase).host || label;
         } catch (err) {
+          // error-policy:J3 label derivation only — an unparseable base keeps
+          // the raw string as the display label.
           logger.debug(
             `[persistence] failed to parse apiBase URL for remote server label; using raw apiBase: apiBase=${apiBase}; error=${describePersistenceError(err)}`,
           );
@@ -1275,6 +1357,8 @@ export function savePersistedActiveServer(server: PersistedActiveServer): void {
   try {
     localStorage.setItem(ACTIVE_SERVER_STORAGE_KEY, JSON.stringify(server));
   } catch (err) {
+    // error-policy:J4 documented above — no-throw persistence write with the
+    // failure surfaced at warn instead of swallowed.
     logger.warn(
       `[persistence] failed to save active server: ${describePersistenceError(err)}`,
     );

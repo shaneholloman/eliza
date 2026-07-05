@@ -30,6 +30,8 @@ function parseUrl(url: string): URL | null {
   try {
     return new URL(url);
   } catch {
+    // error-policy:J3 explicit invalid signal — null never matches a cloud
+    // host, so unparseable URLs stay off the direct-cloud path.
     return null;
   }
 }

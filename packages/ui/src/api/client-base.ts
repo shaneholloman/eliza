@@ -30,6 +30,7 @@ import type {
   ChatActionResultSummary,
   ChatFailureKind,
   ChatTokenUsage,
+  ChatToolCallEvent,
   ChatTurnStatus,
   ConnectionStateInfo,
   ConversationChannelType,
@@ -81,11 +82,18 @@ type StreamChatEvent = {
   actionResults?: ChatActionResultSummary[];
   // `type: "status"` carries the in-flight phase flat on the event (the server
   // spreads ChatTurnStatus into the SSE payload), so `kind` + the optional
-  // action/tool name live alongside the discriminator.
+  // action/tool name live alongside the discriminator. `type: "tool"` likewise
+  // spreads ChatToolCallEvent flat, so `phase` / `callId` / args / result / error
+  // share the event shape.
   kind?: ChatTurnStatus["kind"];
   label?: string;
   actionName?: string;
   toolName?: string;
+  phase?: ChatToolCallEvent["phase"];
+  callId?: string;
+  args?: Record<string, unknown>;
+  result?: unknown;
+  error?: string;
   usage?: {
     promptTokens?: number;
     completionTokens?: number;
@@ -153,6 +161,33 @@ function parseChatTurnStatus(parsed: StreamChatEvent): ChatTurnStatus | null {
   };
 }
 
+const CHAT_TOOL_PHASES: ReadonlySet<ChatToolCallEvent["phase"]> = new Set<
+  ChatToolCallEvent["phase"]
+>(["call", "result", "error"]);
+
+/** Build a typed ChatToolCallEvent from a `type: "tool"` SSE event, or null when
+ *  the phase/callId/toolName are missing/unknown (a future server phase is
+ *  ignored, not crashed on). */
+function parseChatToolCallEvent(
+  parsed: StreamChatEvent,
+): ChatToolCallEvent | null {
+  if (!parsed.phase || !CHAT_TOOL_PHASES.has(parsed.phase)) return null;
+  if (typeof parsed.callId !== "string" || !parsed.callId) return null;
+  if (typeof parsed.toolName !== "string" || !parsed.toolName) return null;
+  return {
+    phase: parsed.phase,
+    callId: parsed.callId,
+    toolName: parsed.toolName,
+    ...(parsed.args && typeof parsed.args === "object"
+      ? { args: parsed.args }
+      : {}),
+    ...(parsed.result !== undefined ? { result: parsed.result } : {}),
+    ...(typeof parsed.error === "string" && parsed.error
+      ? { error: parsed.error }
+      : {}),
+  };
+}
+
 type StreamChatState = {
   fullText: string;
   doneText: string | null;
@@ -184,6 +219,7 @@ function isElizaCloudControlPlaneBase(
       new URL(normalized).hostname.toLowerCase(),
     );
   } catch {
+    // error-policy:J3 malformed base URL reads as "not the control plane".
     return false;
   }
 }
@@ -210,6 +246,8 @@ function parseStreamChatDataLine(line: string): StreamChatEvent | null {
     if (!parsed.type && typeof parsed.text === "string") parsed.type = "token";
     return parsed;
   } catch {
+    // error-policy:J3 an unparseable SSE data line is explicitly invalid and
+    // skipped; the terminal done/error events drive the turn outcome.
     return null;
   }
 }
@@ -275,6 +313,7 @@ function applyStreamChatDataLine(
   state: StreamChatState,
   onToken: (token: string, accumulatedText?: string) => void,
   onStatus?: (status: ChatTurnStatus) => void,
+  onToolEvent?: (event: ChatToolCallEvent) => void,
 ): boolean {
   const parsed = parseStreamChatDataLine(line);
   if (!parsed) return false;
@@ -287,6 +326,14 @@ function applyStreamChatDataLine(
     if (onStatus) {
       const status = parseChatTurnStatus(parsed);
       if (status) onStatus(status);
+    }
+    return false;
+  }
+  if (parsed.type === "tool") {
+    // Additive: an inline tool-call step (call → result/error). Non-terminal.
+    if (onToolEvent) {
+      const event = parseChatToolCallEvent(parsed);
+      if (event) onToolEvent(event);
     }
     return false;
   }
@@ -324,6 +371,7 @@ function isSharedRuntimeRestAdapterBase(
     // the lost-connection overlay while REST chat remains usable.
     return /^\/api\/v1\/eliza\/agents\/[^/]+(?:\/bridge)?$/.test(url.pathname);
   } catch {
+    // error-policy:J3 malformed base URL reads as "not a shared-runtime base".
     return false;
   }
 }
@@ -358,6 +406,7 @@ function isDedicatedCloudAgentBase(value: string | null | undefined): boolean {
       !ELIZA_CLOUD_CONTROL_PLANE_HOSTS.has(host)
     );
   } catch {
+    // error-policy:J3 malformed base URL reads as "not a dedicated agent".
     return false;
   }
 }
@@ -374,6 +423,12 @@ function getInjectedWsBase(): string | undefined {
     if (trimmed) return trimmed;
   }
   return undefined;
+}
+
+function isMixedContentWebSocketBlocked(wsProtocol: "ws:" | "wss:"): boolean {
+  if (wsProtocol !== "ws:") return false;
+  if (typeof window === "undefined") return false;
+  return window.location?.protocol === "https:";
 }
 
 // ---------------------------------------------------------------------------
@@ -913,6 +968,8 @@ export class ElizaClient {
       const transport = await this.rawRequestTransport(requestUrl);
       return await transport.request(requestUrl, requestInit, { timeoutMs });
     } catch (err) {
+      // error-policy:J2 context-adding rethrow — throwRawRequestError wraps
+      // the transport failure with path/timeout/abort context and throws.
       return this.throwRawRequestError(
         err,
         path,
@@ -1165,6 +1222,22 @@ export class ElizaClient {
 
     if (!host) return;
 
+    // WKWebView and browsers on an HTTPS origin block insecure `ws://` as mixed
+    // content before the backend can answer. REST/SSE remains usable in that
+    // remote-host simulator lane, so degrade to connected-over-REST instead of
+    // burning the reconnect budget and surfacing the fatal lost-connection
+    // overlay against a healthy agent.
+    if (isMixedContentWebSocketBlocked(wsProtocol)) {
+      this.backoffMs = 500;
+      this.reconnectAttempt = 0;
+      this.disconnectedAt = null;
+      if (this.connectionState !== "connected") {
+        this.connectionState = "connected";
+        this.emitConnectionStateChange();
+      }
+      return;
+    }
+
     // On Capacitor native (iosScheme/androidScheme = "https"), the origin host
     // is a synthetic bundle host (e.g. "localhost" with no server behind it).
     // Skip WS if we have no explicit baseUrl and the host doesn't look like a
@@ -1243,24 +1316,10 @@ export class ElizaClient {
           string,
           unknown
         >;
-        const type = data.type as string;
-        const handlers = this.wsHandlers.get(type);
-        if (handlers?.size) {
-          for (const handler of handlers) {
-            handler(data);
-          }
-        } else {
-          this.rememberReplayableWsEvent(type, data);
-        }
-        // Also fire "all" handlers
-        const allHandlers = this.wsHandlers.get("*");
-        if (allHandlers) {
-          for (const handler of allHandlers) {
-            handler(data);
-          }
-        }
+        this.dispatchWsData(data);
       } catch {
-        // ignore parse errors
+        // error-policy:J3 untrusted socket frame — a malformed frame is dropped;
+        // the parsed-and-fanned path is dispatchWsData, exercised by tests.
       }
     };
 
@@ -1431,9 +1490,6 @@ export class ElizaClient {
           const parsed = JSON.parse(queued) as { type?: unknown };
           return parsed.type !== "active-conversation";
         } catch {
-          // error-policy:J3 an unparseable queued frame can't be classified as a
-          // superseded active-conversation update, so keep it in the send queue
-          // rather than silently dropping a message we failed to inspect.
           return true;
         }
       });
@@ -1458,6 +1514,39 @@ export class ElizaClient {
     return () => {
       this.wsHandlers.get(type)?.delete(handler);
     };
+  }
+
+  // Single fan-out for a parsed incoming WS frame: deliver to the type's
+  // handlers (or backlog for later replay), then to the wildcard handlers. The
+  // live socket's onmessage and the test-only deliver hook share this so the
+  // dispatch path has one implementation.
+  private dispatchWsData(data: Record<string, unknown>): void {
+    const type = data.type as string;
+    const handlers = this.wsHandlers.get(type);
+    if (handlers?.size) {
+      for (const handler of handlers) {
+        handler(data);
+      }
+    } else {
+      this.rememberReplayableWsEvent(type, data);
+    }
+    const allHandlers = this.wsHandlers.get("*");
+    if (allHandlers) {
+      for (const handler of allHandlers) {
+        handler(data);
+      }
+    }
+  }
+
+  /**
+   * Deliver a synthetic incoming WS frame through the real handler fan-out —
+   * the same path the live socket's `onmessage` runs. Lets integration tests
+   * and headless render fixtures drive stream-consuming stores (the inline
+   * task-activity pipeline, #13536) with genuine server payload shapes and no
+   * socket, so the on-wire reconstruction seam is exercised, not bypassed.
+   */
+  deliverWsMessageForTest(data: Record<string, unknown>): void {
+    this.dispatchWsData(data);
   }
 
   disconnectWs(): void {
@@ -1527,6 +1616,9 @@ export class ElizaClient {
     /** Additive: in-flight phase changes (thinking / streaming / running_action
      *  / waking …). Omitting it leaves the token/done/error behaviour unchanged. */
     onStatus?: (status: ChatTurnStatus) => void,
+    /** Additive: inline tool-call steps (call → result/error) for the thread's
+     *  tool rows. Omitting it leaves token/done/error behaviour unchanged. */
+    onToolEvent?: (event: ChatToolCallEvent) => void,
   ): Promise<{
     text: string;
     agentName: string;
@@ -1605,8 +1697,8 @@ export class ElizaClient {
       // body and frees the connection) and returning whatever streamed so far as
       // an interrupted (`completed: false`) turn.
       if (signal?.aborted) {
-        // error-policy:J6 best-effort teardown of an already-aborted reader.
-        void reader.cancel("elizaos-sse-client-abort").catch(() => {});
+        // error-policy:J6 best-effort reader teardown on client abort.
+        void reader.cancel("elizaos-sse-client-abort").catch(() => undefined);
         break;
       }
       let done = false;
@@ -1647,8 +1739,8 @@ export class ElizaClient {
         // A client abort wins over everything else: cancel the reader and stop —
         // the partial streamed so far is returned as an interrupted turn.
         if (signal?.aborted) {
-          // error-policy:J6 best-effort teardown of an already-aborted reader.
-          void reader.cancel("elizaos-sse-client-abort").catch(() => {});
+          // error-policy:J6 best-effort reader teardown on client abort.
+          void reader.cancel("elizaos-sse-client-abort").catch(() => undefined);
           break;
         }
         // Only the 60s idle timeout sets `idleTimedOut`; a mid-stream network
@@ -1661,8 +1753,9 @@ export class ElizaClient {
           streamState.doneFailureKind =
             streamState.doneFailureKind ?? "provider_issue";
         }
-        // error-policy:J6 best-effort teardown after a stalled/dropped stream.
-        void reader.cancel("elizaos-sse-idle-timeout").catch(() => {});
+        // error-policy:J6 best-effort reader teardown; the stall itself is
+        // already stamped on the turn above.
+        void reader.cancel("elizaos-sse-idle-timeout").catch(() => undefined);
         break;
       }
       if (done || !value) break;
@@ -1674,10 +1767,12 @@ export class ElizaClient {
         buffer = buffer.slice(eventBreak.index + eventBreak.length);
         for (const line of rawEvent.split(/\r?\n/)) {
           if (!line.startsWith("data:")) continue;
-          if (applyStreamChatDataLine(line, streamState, onToken, onStatus)) {
+          if (applyStreamChatDataLine(line, streamState, onToken, onStatus, onToolEvent)) {
             buffer = "";
-            // error-policy:J6 best-effort teardown once the terminal event lands.
-            void reader.cancel("elizaos-sse-terminal-done").catch(() => {});
+            // error-policy:J6 best-effort reader teardown after terminal done.
+            void reader
+              .cancel("elizaos-sse-terminal-done")
+              .catch(() => undefined);
             break;
           }
         }
@@ -1690,7 +1785,7 @@ export class ElizaClient {
     if (!streamState.receivedDone && buffer.trim()) {
       for (const line of buffer.split(/\r?\n/)) {
         if (line.startsWith("data:")) {
-          applyStreamChatDataLine(line, streamState, onToken, onStatus);
+          applyStreamChatDataLine(line, streamState, onToken, onStatus, onToolEvent);
         }
       }
     }

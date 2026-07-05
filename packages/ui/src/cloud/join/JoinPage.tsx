@@ -52,6 +52,8 @@ function readLastActiveCloudAgentId(): string | null {
       ? parsed.id.slice("cloud:".length).trim() || null
       : null;
   } catch {
+    // error-policy:J3 corrupt persisted server entry — no reusable agent id;
+    // the join flow provisions from scratch.
     return null;
   }
 }
@@ -154,7 +156,7 @@ export default function JoinPage(): React.JSX.Element {
               variant="ghost"
               type="button"
               onClick={handleRetry}
-              className="bg-[var(--accent)] px-6 py-2.5 font-semibold text-white transition-colors hover:bg-[#e54f00]"
+              className="bg-[#FF5800] px-6 py-2.5 font-semibold text-black transition-colors hover:bg-[#e54f00]"
             >
               {t("cloud.join.retry", { defaultValue: "Try again" })}
             </Button>

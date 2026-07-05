@@ -277,6 +277,8 @@ function storage(): Storage | null {
   try {
     return typeof window === "undefined" ? null : window.localStorage;
   } catch {
+    // error-policy:J4 storage unavailable (privacy mode / sandbox) — callers
+    // treat null as "no persisted kernel state" and run in-memory.
     return null;
   }
 }
@@ -1513,6 +1515,8 @@ async function loadCapacitorLlama(): Promise<CapacitorLlamaAdapter | null> {
       )) as CapacitorLlamaModule | null;
       return mod?.capacitorLlama ?? null;
     } catch {
+      // error-policy:J4 optional native module — builds without the llama
+      // bridge get null; callers throw an explicit "runtime unavailable".
       return null;
     }
   })();
@@ -1525,6 +1529,8 @@ async function loadLlamaCpp(): Promise<LlamaCppModule | null> {
       const packageName = "llama-cpp-capacitor";
       return (await import(/* @vite-ignore */ packageName)) as LlamaCppModule;
     } catch {
+      // error-policy:J4 optional native module — builds without llama.cpp
+      // get null; callers throw an explicit "runtime unavailable".
       return null;
     }
   })();
@@ -1820,9 +1826,8 @@ async function listInstalledModels(): Promise<InstalledModel[]> {
 
 async function hardwareProbe(): Promise<HardwareProbe> {
   const llama = await loadCapacitorLlama();
-  // error-policy:J4 designed degrade — a failed native hardware probe falls back
-  // to the browser's own capability APIs (navigator.hardwareConcurrency, etc.)
-  // rather than blocking model load; conservative defaults are intentional.
+  // error-policy:J4 capability probe — without native hardware info the probe
+  // degrades to navigator hints + per-platform RAM defaults below.
   const hardware = await llama?.getHardwareInfo?.().catch(() => null);
   const cpuCores = hardware?.cpuCores ?? navigator.hardwareConcurrency ?? 0;
   const platform = normalizeMobilePlatform(hardware?.platform);
@@ -1975,9 +1980,8 @@ async function ensureActiveModelLoadedImpl(): Promise<void> {
   const hardware = await hardwareProbe();
   const loadOptions = buildMobileLoadOptions(model, installed, hardware);
   const signature = runtimeSignature(loadOptions);
-  // error-policy:J4 designed degrade — if the native "is model loaded?" probe
-  // fails we treat it as not-loaded and (re)load below; the conservative path is
-  // safe (a redundant load), whereas trusting a failed probe could skip loading.
+  // error-policy:J4 already-loaded probe — an unanswerable probe falls
+  // through to the real llama.load below, whose failure throws to the caller.
   const loaded = await llama.isLoaded?.().catch(() => null);
   if (
     loaded?.loaded &&
@@ -2301,9 +2305,6 @@ async function probeAgentCloudPaired(
       signal: controller.signal,
     });
   } catch (err) {
-    // error-policy:J1 boundary translation — the IPC fetch failure becomes a
-    // typed CloudPairedProbe "unknown" result carrying the reason, not a
-    // fabricated paired/unpaired verdict the caller would trust.
     return {
       kind: "unknown",
       reason: err instanceof Error ? err.message : String(err),
@@ -2314,8 +2315,8 @@ async function probeAgentCloudPaired(
   if (!response.ok) {
     return { kind: "unknown", reason: `auth-status http ${response.status}` };
   }
-  // error-policy:J3 parse-sanitize — non-JSON/empty body becomes null and is
-  // rejected as a typed "unknown" auth-status result below, never fabricated.
+  // error-policy:J3 body-parse failure maps to the explicit "unknown" pairing
+  // result below — never a fake "paired"/"not-paired".
   const body: unknown = await response.json().catch(() => null);
   if (!body || typeof body !== "object") {
     return { kind: "unknown", reason: "auth-status non-object body" };
@@ -2374,8 +2375,8 @@ async function sendPromptToIosCloud(
     throw new Error(`Cloud bridge failed: HTTP ${response.status}`);
   }
 
-  // error-policy:J3 parse-sanitize — non-JSON/empty body becomes null and is
-  // rejected as an explicit error below (res.ok was already asserted above).
+  // error-policy:J3 body-parse failure becomes the explicit non-object throw
+  // below instead of a fabricated bridge reply.
   const body = asRecord(await response.json().catch(() => null));
   if (!body) {
     throw new Error("Cloud bridge returned a non-object response.");
@@ -2916,9 +2917,8 @@ function startDownload(model: CatalogModel): DownloadJob {
           etaMs: 0,
         });
         if (activeState.status === "idle" || !activeState.modelId) {
-          // error-policy:J6 best-effort convenience auto-activate after a
-          // successful download; a failure leaves the model installed-but-idle
-          // for explicit activation, it does not fail the completed download.
+          // error-policy:J5 opportunistic auto-activate — activateModel
+          // records failures in the active-model state the models UI renders.
           await activateModel(model.id, textPath).catch(() => undefined);
         }
         return;
@@ -2980,9 +2980,8 @@ function startDownload(model: CatalogModel): DownloadJob {
         etaMs: 0,
       });
       if (activeState.status === "idle" || !activeState.modelId) {
-        // error-policy:J6 best-effort convenience auto-activate after a
-        // successful download; a failure leaves the model installed-but-idle
-        // for explicit activation, it does not fail the completed download.
+        // error-policy:J5 opportunistic auto-activate — activateModel records
+        // failures in the active-model state the models UI renders.
         await activateModel(model.id, path).catch(() => undefined);
       }
     } catch (error) {

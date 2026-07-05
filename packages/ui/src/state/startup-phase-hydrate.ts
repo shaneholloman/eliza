@@ -76,6 +76,7 @@ export interface HydratingDeps {
   setTab: (t: Tab) => void;
   setTabRaw: (t: Tab) => void;
   firstRunCompletionCommittedRef: React.MutableRefObject<boolean>;
+  firstRunCompletionJustCommittedRef: React.MutableRefObject<boolean>;
   initialTabSetRef: React.MutableRefObject<boolean>;
 }
 
@@ -258,7 +259,13 @@ export async function runHydrating(
     })();
   };
 
-  // Tab routing
+  // Tab routing. A root open lands on the default tab; a URL that names a
+  // specific view is an explicit deep link and wins via the `setTabRaw(urlTab)`
+  // pass below. The character-select landing keys on the SESSION-scoped
+  // just-committed ref (#13396), never the durable completion ref — the
+  // durable ref is seeded from the persisted flag on every process start
+  // (#11506), and branching on it routed every post-onboarding cold boot to
+  // /character/select instead of home (#13371).
   const navPath = getWindowNavigationPath();
   const urlTab = tabFromPath(navPath);
   const isRoot = isRouteRootPath(navPath);
@@ -270,7 +277,7 @@ export async function runHydrating(
   // contradicting each other (and sometimes stranding the user on character
   // select instead of the view they asked for).
   const shouldCharSelect =
-    (deps.firstRunCompletionCommittedRef.current ||
+    (deps.firstRunCompletionJustCommittedRef.current ||
       shouldStartAtCharacterSelectOnLaunch({
         firstRunNeedsOptions: false,
         navPath,
@@ -280,12 +287,14 @@ export async function runHydrating(
   if (!deps.initialTabSetRef.current) {
     deps.initialTabSetRef.current = true;
     if (shouldCharSelect) {
+      deps.firstRunCompletionJustCommittedRef.current = false;
       deps.firstRunCompletionCommittedRef.current = false;
       deps.setTab("character-select");
       void deps.loadCharacter();
     } else if (isRoot) {
       deps.setTab(resolveDefaultLandingTab());
     } else {
+      deps.firstRunCompletionJustCommittedRef.current = false;
       deps.firstRunCompletionCommittedRef.current = false;
     }
   }

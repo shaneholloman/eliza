@@ -151,6 +151,8 @@ function cacheDataEqual(a: unknown, b: unknown): boolean {
   try {
     return JSON.stringify(a) === JSON.stringify(b);
   } catch {
+    // error-policy:J3 unserializable payloads compare as not-equal, forcing
+    // the safe refresh/notify path instead of a stale cache hit.
     return false;
   }
 }

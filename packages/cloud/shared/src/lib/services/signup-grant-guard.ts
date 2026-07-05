@@ -26,10 +26,91 @@ import type { DbTransaction } from "../../db/client";
 import { dbWrite } from "../../db/client";
 import { logger } from "../utils/logger";
 
-export const FREE_GRANT_IP_LIMITS = {
-  /** Max free welcome-bonus grants per source IP per rolling 24h. */
-  MAX_FREE_GRANTS_PER_IP_DAILY: 3,
-} as const;
+type SignupGrantIpLimitEnv = {
+  [key: string]: string | undefined;
+  MAX_FREE_GRANTS_PER_IP_DAILY?: string;
+  FREE_GRANT_IP_WINDOW_HOURS?: string;
+};
+
+export function resolveSignupGrantIpLimits(env: SignupGrantIpLimitEnv = process.env): {
+  MAX_FREE_GRANTS_PER_IP_DAILY: number;
+  WINDOW_HOURS: number;
+} {
+  return {
+    /** Max free welcome-bonus grants per source IP per rolling 24h. */
+    MAX_FREE_GRANTS_PER_IP_DAILY: readPositiveIntEnv(env.MAX_FREE_GRANTS_PER_IP_DAILY, 3),
+    /** Rolling cap window in hours. */
+    WINDOW_HOURS: readPositiveIntEnv(env.FREE_GRANT_IP_WINDOW_HOURS, 24),
+  };
+}
+
+export const FREE_GRANT_IP_LIMITS = resolveSignupGrantIpLimits();
+
+export type SignupGrantWithheldReason = "ip_daily_cap" | "count_unavailable";
+
+export interface SignupGrantDecision {
+  granted: boolean;
+  withheldReason?: SignupGrantWithheldReason;
+  withheldMessage?: string;
+  cap?: number;
+  windowHours?: number;
+}
+
+function readPositiveIntEnv(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Signals that the per-IP grant COUNT could not be resolved to a finite,
+ * non-negative integer. The anti-sybil cap is a security gate, so an
+ * unreadable count must FAIL CLOSED (withhold the free bonus), never fall
+ * open into an unbounded faucet.
+ */
+export class SignupGrantCountUnavailableError extends Error {
+  readonly rawCount: unknown;
+  constructor(rawCount: unknown) {
+    super(
+      `[SignupGrantGuard] per-IP free-grant count is not a finite integer: ${String(rawCount)}`,
+    );
+    this.name = "SignupGrantCountUnavailableError";
+    this.rawCount = rawCount;
+  }
+}
+
+/**
+ * Fail-closed parse of the per-IP grant COUNT. Postgres `COUNT(*)` returns a
+ * bigint as a decimal string, so the happy path is a plain non-negative
+ * integer string. Anything else (missing row, non-numeric, NaN/Infinity,
+ * fractional, negative) means the anti-sybil count is unverifiable — throw so
+ * the caller withholds the grant instead of granting past an unread cap.
+ *
+ * Rationale: the old `Number(count ?? 0)` returned `NaN` on a malformed read,
+ * and `NaN >= cap` is `false`, which silently GRANTED the bonus — a fail-open
+ * on a sybil gate. This mirrors the fail-closed numeric-read boundaries used by
+ * the redemption/billing money gates in the same service layer.
+ */
+export function parseGrantCount(rawCount: unknown): number {
+  if (typeof rawCount === "number") {
+    if (Number.isInteger(rawCount) && rawCount >= 0) return rawCount;
+    throw new SignupGrantCountUnavailableError(rawCount);
+  }
+  if (typeof rawCount === "bigint") {
+    if (rawCount < 0n) throw new SignupGrantCountUnavailableError(rawCount);
+    return Number(rawCount);
+  }
+  if (typeof rawCount === "string") {
+    const trimmed = rawCount.trim();
+    // Plain non-negative integer only: rejects "", "NaN", "1.5", "1e3", "0x10", "-1".
+    if (/^\d+$/.test(trimmed)) {
+      const parsed = Number(trimmed);
+      if (Number.isSafeInteger(parsed)) return parsed;
+    }
+    throw new SignupGrantCountUnavailableError(rawCount);
+  }
+  throw new SignupGrantCountUnavailableError(rawCount);
+}
 
 function maskIp(ip: string): string {
   // IPv4: keep the first two octets; otherwise just the prefix.
@@ -55,12 +136,26 @@ export async function runWithSignupGrantIpCap(
   ip: string | undefined,
   grant: (tx?: DbTransaction) => Promise<void>,
 ): Promise<boolean> {
+  return (await runWithSignupGrantIpCapDetailed(ip, grant)).granted;
+}
+
+/**
+ * Detailed variant of `runWithSignupGrantIpCap` for signup routes that must
+ * tell the caller whether a $0 new org means "empty balance" or "welcome
+ * bonus withheld by anti-sybil policy".
+ */
+export async function runWithSignupGrantIpCapDetailed(
+  ip: string | undefined,
+  grant: (tx?: DbTransaction) => Promise<void>,
+): Promise<SignupGrantDecision> {
   if (!ip) {
     await grant();
-    return true;
+    return { granted: true };
   }
 
-  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const windowHours = FREE_GRANT_IP_LIMITS.WINDOW_HOURS;
+  const cap = FREE_GRANT_IP_LIMITS.MAX_FREE_GRANTS_PER_IP_DAILY;
+  const dayAgo = new Date(Date.now() - windowHours * 60 * 60 * 1000);
 
   return await dbWrite.transaction(async (tx) => {
     // Serialize same-IP grant attempts: the lock is held for the whole
@@ -76,20 +171,54 @@ export async function runWithSignupGrantIpCap(
         AND created_at >= ${dayAgo}
     `);
 
-    const granted = Number((result.rows[0] as { count: string } | undefined)?.count ?? 0);
-    if (granted >= FREE_GRANT_IP_LIMITS.MAX_FREE_GRANTS_PER_IP_DAILY) {
+    const rawCount = (result.rows[0] as { count?: unknown } | undefined)?.count;
+    let granted: number;
+    try {
+      granted = parseGrantCount(rawCount);
+    } catch (error) {
+      // Fail closed: an unreadable anti-sybil count must NOT grant the bonus.
+      // (The old `Number(count ?? 0)` -> NaN, and `NaN >= cap` === false, which
+      // silently granted — an unbounded free-credit faucet on a corrupt read.)
+      logger.warn(
+        "[SignupGrantGuard] Per-IP free-grant count unreadable; withholding welcome bonus (fail-closed)",
+        {
+          ip: maskIp(ip),
+          rawCount,
+          cap,
+          windowHours,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
+      return {
+        granted: false,
+        withheldReason: "count_unavailable",
+        withheldMessage: "Welcome credit unavailable right now. Add funds to start an agent.",
+        cap,
+        windowHours,
+      };
+    }
+
+    if (granted >= cap) {
       logger.warn(
         "[SignupGrantGuard] Per-IP daily free-grant cap reached; withholding welcome bonus",
         {
           ip: maskIp(ip),
           granted,
-          cap: FREE_GRANT_IP_LIMITS.MAX_FREE_GRANTS_PER_IP_DAILY,
+          cap,
+          windowHours,
         },
       );
-      return false;
+      return {
+        granted: false,
+        withheldReason: "ip_daily_cap",
+        withheldMessage:
+          "Welcome credit unavailable because this network reached the daily free-credit limit. Add funds to start an agent.",
+        cap,
+        windowHours,
+      };
     }
 
     await grant(tx);
-    return true;
+    return { granted: true };
   });
 }

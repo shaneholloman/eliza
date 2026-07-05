@@ -427,6 +427,8 @@ export class DeviceBridge {
       try {
         listener(snapshot);
       } catch {
+        // error-policy:J4 a throwing subscriber is evicted so one broken
+        // listener cannot starve the rest of the fan-out.
         this.statusListeners.delete(listener);
       }
     }
@@ -1100,6 +1102,8 @@ export class DeviceBridge {
     try {
       raw = await fs.readFile(this.pendingLogPath(), "utf8");
     } catch {
+      // error-policy:J3 no pending-generates log is the normal cold-start
+      // state — nothing to restore.
       return;
     }
     let items: PersistedGenerateRequest[];
@@ -1107,6 +1111,8 @@ export class DeviceBridge {
       items = JSON.parse(raw) as PersistedGenerateRequest[];
       if (!Array.isArray(items)) return;
     } catch {
+      // error-policy:J3 corrupt pending log starts clean — requesters have
+      // their own timeouts (see the restore contract in the method doc).
       return;
     }
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;

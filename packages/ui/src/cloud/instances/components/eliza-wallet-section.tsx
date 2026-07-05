@@ -84,7 +84,11 @@ function CopyButton({ text }: { text: string }) {
       className="ml-1.5 inline-flex h-7 w-7 shrink-0 items-center justify-center text-muted hover:text-txt transition-colors"
     >
       {copied ? (
-        <Check className="w-3 h-3 text-status-success" strokeWidth={2} aria-hidden="true" />
+        <Check
+          className="w-3 h-3 text-status-success"
+          strokeWidth={2}
+          aria-hidden="true"
+        />
       ) : (
         <Copy className="w-3 h-3" strokeWidth={2} aria-hidden="true" />
       )}
@@ -135,6 +139,8 @@ export function ElizaWalletSection({ agentId }: ElizaWalletSectionProps) {
         fetch(`${base}/balances`).then((r) =>
           r.ok ? r.json() : Promise.reject(r.statusText),
         ),
+        // error-policy:J4 steward status is an optional panel section — the
+        // addresses result (allSettled) drives the primary error rendering.
         fetch(`${base}/steward-status`)
           // error-policy:J4 steward status is an optional wallet sub-panel; a
           // failed/absent status degrades to null (the "no steward" render). The
@@ -313,10 +319,7 @@ export function ElizaWalletSection({ agentId }: ElizaWalletSectionProps) {
           />
           <div className="space-y-2">
             {data.balances.evm.map((chain) => (
-              <div
-                key={chain.chainId}
-                className="border border-border bg-card"
-              >
+              <div key={chain.chainId} className="border border-border bg-card">
                 <div className="px-4 py-2 border-b border-border flex items-center justify-between">
                   <span className="font-mono text-xs-tight uppercase tracking-[0.2em] text-muted">
                     {chain.chainName} ({chain.chainId})

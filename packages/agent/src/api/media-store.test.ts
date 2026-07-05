@@ -39,6 +39,7 @@ const {
   sniffMarkupMime,
   readStoredMediaBytes,
   writeStoredMediaFile,
+  deleteMediaFile,
 } = await import("./media-store.ts");
 
 function mediaPath(fileName: string): string {
@@ -654,6 +655,62 @@ describe("writeStoredMediaFile fast-fail (#12265)", () => {
         }
         expect(caught).toBeInstanceOf(ElizaError);
         expect((caught as ElizaError).code).toBe("MEDIA_STORE_WRITE_FAILED");
+      } finally {
+        fs.chmodSync(roMedia, 0o755);
+        fs.rmSync(roRoot, { recursive: true, force: true });
+        process.env.ELIZA_STATE_DIR = prev;
+      }
+    },
+  );
+});
+
+// deleteMediaFile: a traversal/invalid name and a missing file both still
+// return false (idempotent), but a genuine unlink failure (EACCES/EPERM) now
+// throws a typed MEDIA_STORE_DELETE_FAILED instead of being swallowed into a
+// fabricated "false" — which the DELETE /api/files route would mistranslate
+// into a misleading 404 for a file that exists but could not be removed.
+describe("deleteMediaFile fast-fail (#12265)", () => {
+  it("returns true when a stored file is removed", () => {
+    const name = `${"c".repeat(64)}.bin`;
+    expect(writeStoredMediaFile(name, Buffer.from("bye"))).toBe(true);
+    expect(deleteMediaFile(name)).toBe(true);
+    expect(readStoredMediaBytes(name)).toBeNull();
+  });
+
+  it("returns false for a traversal-rejecting name without touching the fs", () => {
+    expect(deleteMediaFile("../../etc/passwd")).toBe(false);
+  });
+
+  it("returns false when the file is already absent (idempotent delete)", () => {
+    const name = `${"d".repeat(64)}.bin`;
+    expect(deleteMediaFile(name)).toBe(false);
+  });
+
+  it.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+    "throws MEDIA_STORE_DELETE_FAILED when the store dir is read-only",
+    () => {
+      // Real permission failure: a populated media/ dir stripped of write perms
+      // makes unlink throw EACCES/EPERM (not ENOENT). root bypasses mode bits.
+      const prev = process.env.ELIZA_STATE_DIR;
+      const roRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), "media-store-del-ro-"),
+      );
+      const roMedia = path.join(roRoot, "media");
+      fs.mkdirSync(roMedia, { recursive: true });
+      const name = `${"f".repeat(64)}.bin`;
+      fs.writeFileSync(path.join(roMedia, name), "x");
+      fs.chmodSync(roMedia, 0o555);
+      process.env.ELIZA_STATE_DIR = roRoot;
+      try {
+        let caught: unknown;
+        try {
+          deleteMediaFile(name);
+        } catch (err) {
+          caught = err;
+        }
+        expect(caught).toBeInstanceOf(ElizaError);
+        expect((caught as ElizaError).code).toBe("MEDIA_STORE_DELETE_FAILED");
+        expect((caught as ElizaError).cause).toBeDefined();
       } finally {
         fs.chmodSync(roMedia, 0o755);
         fs.rmSync(roRoot, { recursive: true, force: true });

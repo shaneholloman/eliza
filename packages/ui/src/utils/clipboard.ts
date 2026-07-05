@@ -19,6 +19,8 @@ function copyWithLegacyDomApi(text: string): boolean {
   try {
     return document.execCommand("copy");
   } catch {
+    // error-policy:J4 legacy path failure reads as "copy failed" — the caller
+    // chain reports the boolean and surfaces its own failure UI.
     return false;
   } finally {
     textarea.remove();

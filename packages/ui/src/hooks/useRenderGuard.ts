@@ -142,6 +142,8 @@ function captureRenderStack(): string | undefined {
       .map((line) => line.trim())
       .join("\n");
   } catch {
+    // error-policy:J7 render telemetry — a stack capture failure degrades the
+    // diagnostic detail, never the render.
     return undefined;
   }
 }

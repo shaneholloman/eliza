@@ -19,7 +19,12 @@
  */
 
 import { Buffer } from "node:buffer";
-import type { IAgentRuntime, RouteHandlerResult } from "@elizaos/core";
+import type {
+	AgentNotification,
+	IAgentRuntime,
+	RouteHandlerResult,
+} from "@elizaos/core";
+import { ServiceType } from "@elizaos/core";
 import type { StdioBridgeStreamSink } from "../shared/stdio-bridge.ts";
 
 /** In-process route dispatcher (from `@elizaos/agent/api`). */
@@ -132,6 +137,291 @@ function statusText(status: number): string {
 	return STATUS_TEXT[status] ?? "";
 }
 
+function jsonResponse(status: number, body: unknown): AndroidBufferedResponse {
+	const text = JSON.stringify(body);
+	return {
+		status,
+		statusText: statusText(status),
+		headers: { "content-type": "application/json; charset=utf-8" },
+		body: text,
+		bodyBase64: Buffer.from(text, "utf8").toString("base64"),
+		bodyEncoding: "base64",
+	};
+}
+
+function runtimeAgentName(runtime: IAgentRuntime): string {
+	const character = (runtime as { character?: { name?: unknown } }).character;
+	return typeof character?.name === "string" && character.name.trim()
+		? character.name.trim()
+		: "Eliza";
+}
+
+/** The persisted-config seams the first-run routes read/write (from @elizaos/agent). */
+export interface AndroidCoreRouteDeps {
+	configFileExists: () => boolean;
+	loadElizaConfig: () => AndroidElizaConfigLike;
+	saveElizaConfig: (config: AndroidElizaConfigLike) => void;
+	hasPersistedFirstRunState: (config: AndroidElizaConfigLike) => boolean;
+}
+
+/** Structural stand-in for ElizaConfig — the bridge only touches `meta`. */
+export type AndroidElizaConfigLike = Record<string, unknown> & {
+	meta?: Record<string, unknown>;
+};
+
+/**
+ * Structural view of the runtime NotificationService the bridge serves the
+ * `/api/notifications` surface against. The service lives on the runtime, so
+ * the bridge does not need to import the agent's HTTP route module — it drives
+ * the same service the HTTP `handleNotificationRoute` does (list/read/remove/
+ * clear), which is what the dashboard notification center hydrates from.
+ */
+interface AndroidNotificationServiceLike {
+	list: (query?: {
+		unreadOnly?: boolean;
+		category?: string;
+		limit?: number;
+	}) => AgentNotification[];
+	getUnreadCount: () => number;
+	markRead: (id: string) => Promise<boolean>;
+	markAllRead: () => Promise<number>;
+	remove: (id: string) => Promise<boolean>;
+	clear: () => Promise<void>;
+}
+
+function isAndroidNotifier(
+	value: unknown,
+): value is AndroidNotificationServiceLike {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof (value as AndroidNotificationServiceLike).list === "function" &&
+		typeof (value as AndroidNotificationServiceLike).markRead === "function"
+	);
+}
+
+/**
+ * Serve the `/api/notifications` inbox surface over the Android UDS. These are
+ * server-level routes (not plugin `runtime.routes`), so `dispatchRoute` never
+ * matches them and the loopback 404s — which left the dashboard notification
+ * center empty on every on-device local boot (the store's hydrate `GET
+ * /api/notifications` failed). Drives the runtime NotificationService directly,
+ * mirroring how first-run/health are inline-served above. Returns null for
+ * anything outside the inbox verbs (incl. the push-tokens sub-namespace, which
+ * the push service owns) so it falls through to the plugin dispatcher.
+ */
+async function directAndroidNotificationRoute(
+	runtime: IAgentRuntime,
+	method: string,
+	pathname: string,
+	query: Record<string, string | string[]>,
+): Promise<AndroidBufferedResponse | null> {
+	const queryValue = (key: string): string | undefined => {
+		const raw = query[key];
+		return Array.isArray(raw) ? raw[0] : raw;
+	};
+	if (!pathname.startsWith("/api/notifications")) return null;
+	// Push-token registration is owned by the push delivery service, not the
+	// inbox — leave it to the normal dispatcher.
+	if (pathname.startsWith("/api/notifications/push-tokens")) return null;
+
+	const service = runtime.getService(ServiceType.NOTIFICATION);
+	if (!isAndroidNotifier(service)) {
+		// The service isn't up yet (very early boot). Serve an empty inbox on
+		// GET so the widget shows its empty state instead of erroring; fail the
+		// mutations loudly.
+		if (method === "GET" && pathname === "/api/notifications") {
+			return jsonResponse(200, { notifications: [], unreadCount: 0 });
+		}
+		return jsonResponse(503, { error: "notification service not ready" });
+	}
+
+	if (method === "GET" && pathname === "/api/notifications") {
+		const limitRaw = queryValue("limit");
+		const parsedLimit = limitRaw ? Number.parseInt(limitRaw, 10) : undefined;
+		const limit =
+			typeof parsedLimit === "number" &&
+			Number.isFinite(parsedLimit) &&
+			parsedLimit >= 0
+				? Math.min(parsedLimit, 500)
+				: undefined;
+		const notifications = service.list({
+			unreadOnly: queryValue("unreadOnly") === "true",
+			category: queryValue("category"),
+			limit,
+		});
+		return jsonResponse(200, {
+			notifications,
+			unreadCount: service.getUnreadCount(),
+		});
+	}
+
+	if (method === "POST" && pathname === "/api/notifications/read-all") {
+		const changed = await service.markAllRead();
+		return jsonResponse(200, { changed });
+	}
+
+	const readMatch = pathname.match(/^\/api\/notifications\/([^/]+)\/read$/);
+	if (method === "POST" && readMatch) {
+		const ok = await service.markRead(decodeURIComponent(readMatch[1]));
+		return jsonResponse(200, { ok });
+	}
+
+	if (method === "DELETE" && pathname === "/api/notifications") {
+		await service.clear();
+		return jsonResponse(200, { ok: true });
+	}
+
+	const idMatch = pathname.match(/^\/api\/notifications\/([^/]+)$/);
+	if (method === "DELETE" && idMatch) {
+		const ok = await service.remove(decodeURIComponent(idMatch[1]));
+		return jsonResponse(200, { ok });
+	}
+
+	// A known notifications sub-path with an unsupported verb — 404 here rather
+	// than letting the plugin dispatcher's `:id` matchers mis-handle it.
+	return jsonResponse(404, { error: "notification route not found" });
+}
+
+function directAndroidCoreRoute(
+	runtime: IAgentRuntime,
+	method: string,
+	pathname: string,
+	coreRoutes?: AndroidCoreRouteDeps,
+): AndroidBufferedResponse | null {
+	if (method === "GET" && pathname === "/api/health") {
+		return jsonResponse(200, {
+			ready: true,
+			runtime: "ok",
+			database: "ok",
+			plugins: {
+				loaded: Array.isArray((runtime as { plugins?: unknown }).plugins)
+					? ((runtime as { plugins?: unknown[] }).plugins?.length ?? 0)
+					: 0,
+				failed: 0,
+			},
+			coordinator: "not_wired",
+			agentState: "running",
+			agentName: runtimeAgentName(runtime),
+			startedAt: null,
+			uptime: 0,
+			androidBridge: "uds",
+		});
+	}
+
+	if (method === "GET" && pathname === "/api/status") {
+		return jsonResponse(200, {
+			state: "running",
+			agentName: runtimeAgentName(runtime),
+			model: null,
+			canRespond: true,
+			startedAt: null,
+			uptime: 0,
+			startup: { phase: "running", runtimePhase: "running" },
+			cloud: {
+				connectionStatus: "disconnected",
+				activeAgentId: null,
+				cloudProvisioned: false,
+				hasApiKey: false,
+			},
+			pendingRestart: false,
+			pendingRestartReasons: [],
+			androidBridge: "uds",
+		});
+	}
+
+	if (method === "GET" && pathname === "/api/apps/runs") {
+		return jsonResponse(200, []);
+	}
+
+	if (method === "GET" && pathname === "/api/first-run/status") {
+		let complete = false;
+		try {
+			complete = Boolean(
+				coreRoutes?.configFileExists() &&
+					coreRoutes.hasPersistedFirstRunState(coreRoutes.loadElizaConfig()),
+			);
+		} catch {
+			// error-policy:J3 an unreadable config cannot prove onboarding completion.
+			// Fail closed to "onboarding required" instead of skipping first-run on Android.
+			complete = false;
+		}
+		return jsonResponse(200, {
+			complete,
+			cloudProvisioned: false,
+			deploymentTarget: "local",
+		});
+	}
+
+	if (method === "POST" && pathname === "/api/first-run") {
+		if (!coreRoutes) {
+			return jsonResponse(503, {
+				error: "config_unavailable",
+				reason: "config_unavailable",
+			});
+		}
+		try {
+			const config: AndroidElizaConfigLike = coreRoutes.configFileExists()
+				? coreRoutes.loadElizaConfig()
+				: {};
+			config.meta = { ...(config.meta ?? {}), firstRunComplete: true };
+			coreRoutes.saveElizaConfig(config);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return jsonResponse(500, {
+				error: `Failed to persist first-run completion: ${message}`,
+			});
+		}
+		return jsonResponse(200, {
+			ok: true,
+			complete: true,
+			deploymentTarget: "local",
+		});
+	}
+
+	if (method === "GET" && pathname === "/api/auth/me") {
+		return jsonResponse(200, {
+			identity: {
+				id: "local-agent",
+				displayName: "Local Agent",
+				kind: "machine",
+			},
+			session: { id: "local", kind: "local", expiresAt: null },
+			access: {
+				mode: "local",
+				passwordConfigured: false,
+				ownerConfigured: false,
+				role: "OWNER",
+			},
+		});
+	}
+
+	if (method === "GET" && pathname === "/api/auth/status") {
+		return jsonResponse(200, {
+			required: false,
+			authenticated: true,
+			loginRequired: false,
+			bootstrapRequired: false,
+			pairingEnabled: false,
+			expiresAt: null,
+			enabled: false,
+			cloudProvisioned: false,
+			passwordConfigured: false,
+			localAccess: true,
+			mode: "local",
+		});
+	}
+
+	if (method === "POST" && pathname === "/api/auth/bootstrap/exchange") {
+		return jsonResponse(503, {
+			error: "db_unavailable",
+			reason: "db_unavailable",
+		});
+	}
+
+	return null;
+}
+
 /** Serialize a RouteHandlerResult body to raw bytes, mirroring the HTTP path. */
 function resultBodyBytes(result: RouteHandlerResult): {
 	bytes: Buffer;
@@ -182,6 +472,7 @@ export async function dispatchBufferedRequest(
 	runtime: IAgentRuntime,
 	dispatchRoute: AndroidDispatchRoute,
 	payload: AndroidRequestPayload,
+	coreRoutes?: AndroidCoreRouteDeps,
 ): Promise<AndroidBufferedResponse> {
 	const rawPath = typeof payload.path === "string" ? payload.path.trim() : "";
 	if (!rawPath || !isSafeLocalPath(rawPath)) {
@@ -192,6 +483,17 @@ export async function dispatchBufferedRequest(
 	const method = normalizeMethod(payload.method);
 	const headers = normalizeHeaderRecord(payload.headers);
 	const { pathname, query } = splitPathAndQuery(rawPath);
+
+	const direct = directAndroidCoreRoute(runtime, method, pathname, coreRoutes);
+	if (direct) return direct;
+
+	const notif = await directAndroidNotificationRoute(
+		runtime,
+		method,
+		pathname,
+		query,
+	);
+	if (notif) return notif;
 
 	const result = await dispatchRoute({
 		runtime,
@@ -230,6 +532,7 @@ export async function dispatchStreamingRequest(
 	dispatchRoute: AndroidDispatchRoute,
 	payload: AndroidRequestPayload,
 	sink: StdioBridgeStreamSink,
+	coreRoutes?: AndroidCoreRouteDeps,
 ): Promise<void> {
 	const rawPath = typeof payload.path === "string" ? payload.path.trim() : "";
 	if (!rawPath || !isSafeLocalPath(rawPath)) {
@@ -240,6 +543,17 @@ export async function dispatchStreamingRequest(
 	const method = normalizeMethod(payload.method);
 	const headers = normalizeHeaderRecord(payload.headers);
 	const { pathname, query } = splitPathAndQuery(rawPath);
+
+	const direct = directAndroidCoreRoute(runtime, method, pathname, coreRoutes);
+	if (direct) {
+		sink.emitResponse({
+			status: direct.status,
+			statusText: direct.statusText,
+			headers: direct.headers,
+		});
+		if (direct.bodyBase64) sink.emitChunk(direct.bodyBase64);
+		return;
+	}
 
 	// A legacy SSE handler flushes body fragments through `res.write(...)` before
 	// it resolves. `dispatchRoute` resolves only after `res.end()`, so we cannot

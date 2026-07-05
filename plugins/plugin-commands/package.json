@@ -46,6 +46,9 @@
 			"capabilities": [
 				"chat-commands"
 			]
+		},
+		"scripts": {
+			"coreBuild": true
 		}
 	},
 	"dependencies": {

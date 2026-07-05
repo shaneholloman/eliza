@@ -166,6 +166,8 @@ export function appendIosBootTrace(
       }),
     ) as Record<string, unknown>;
   } catch {
+    // error-policy:J7 boot-trace diagnostics — an unserializable detail skips
+    // this trace entry rather than breaking iOS startup.
     return;
   }
   bridge
@@ -462,6 +464,8 @@ function hasIosFullBunSmokeRequest(): boolean {
       "1"
     );
   } catch {
+    // error-policy:J3 storage unavailable — no readable flag means no smoke
+    // request; the harness only runs when explicitly requested.
     return false;
   }
 }
@@ -472,6 +476,8 @@ function readPersistedRuntimeMode(): string | null {
       globalThis.localStorage?.getItem("eliza:mobile-runtime-mode") ?? null
     );
   } catch {
+    // error-policy:J3 storage unavailable — null means "no persisted mode";
+    // the caller falls back to the platform default runtime mode.
     return null;
   }
 }
@@ -494,6 +500,8 @@ function isNativeIos(): boolean {
   try {
     return Capacitor.isNativePlatform() && Capacitor.getPlatform() === "ios";
   } catch {
+    // error-policy:J4 capability probe — no Capacitor runtime means not
+    // native iOS; the transport stays on the HTTP path.
     return false;
   }
 }
@@ -527,6 +535,8 @@ function isLoopbackLocalAgentUrl(value: string): boolean {
         hostname === "[::1]")
     );
   } catch {
+    // error-policy:J3 unparseable URL cannot be proven loopback — classify
+    // as non-local (fail-closed).
     return false;
   }
 }
@@ -647,6 +657,8 @@ function isFullBunRuntimePluginAvailable(): boolean {
     };
     return capacitor.isPluginAvailable?.("ElizaBunRuntime") === true;
   } catch {
+    // error-policy:J4 capability probe — an unanswerable plugin check means
+    // the full-Bun runtime is unavailable on this build.
     return false;
   }
 }
@@ -678,6 +690,8 @@ export function isIosInProcessLocalAgentUrl(url: string): boolean {
       return false;
     }
   } catch {
+    // error-policy:J3 unparseable URL — fail closed under the strict iOS
+    // network policy rather than treating it as an in-process agent URL.
     return false;
   }
   return isNativeIos() && isMobileLocalAgentUrl(url);
@@ -780,9 +794,8 @@ async function getFullBunRuntime(): Promise<FullBunRuntimePlugin | null> {
       // the raw Capacitor proxy — awaiting the proxy deadlocks; see the
       // comment inside it).
       const runtime = await importFullBunRuntimePlugin();
-      // error-policy:J4 status probe — an unreachable/not-yet-booted engine is
-      // the expected "not ready" shape; null falls through to start() below,
-      // where a genuine start() failure is NOT caught and surfaces to the user.
+      // error-policy:J4 adopt-if-running probe — an unanswerable status falls
+      // through to the real runtime.start below, whose failure is not caught.
       const currentStatus = await runtime.getStatus().catch(() => null);
       if (currentStatus?.ready && currentStatus.engine === "bun") {
         recordIosNativeAgentBootPhase("ready");

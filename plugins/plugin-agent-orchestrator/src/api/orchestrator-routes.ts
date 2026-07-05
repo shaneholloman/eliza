@@ -11,7 +11,10 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { listBuiltApps } from "../services/built-apps-registry.js";
+import {
+  deleteBuiltApp,
+  listBuiltApps,
+} from "../services/built-apps-registry.js";
 import {
   LLM_GOAL_VERIFIER_NAME,
   verifyGoalCompletion,
@@ -29,6 +32,7 @@ import type {
   OrchestratorTaskPriority,
   TaskProviderPolicy,
 } from "../services/orchestrator-task-types.js";
+import { AdmissionQueueFullError } from "../services/types.js";
 import type { RouteContext } from "./route-utils.js";
 import {
   asBoolean,
@@ -190,6 +194,34 @@ async function dispatchOrchestratorRoutes(
     return true;
   }
 
+  // DELETE /api/orchestrator/built-apps/:target/:slug — remove one built app
+  // from the durable registry. Like the list route, this is cache-backed and
+  // independent of OrchestratorTaskService startup.
+  const builtAppsRest = pathname.slice(`${PREFIX}/built-apps/`.length);
+  if (
+    method === "DELETE" &&
+    pathname.startsWith(`${PREFIX}/built-apps/`) &&
+    builtAppsRest.length > 0
+  ) {
+    const segments = builtAppsRest.split("/").filter((s) => s.length > 0);
+    const target = decodeURIComponent(segments[0] ?? "");
+    const slug = decodeURIComponent(segments[1] ?? "");
+    if (segments.length !== 2 || !slug) {
+      sendError(res, "target and slug are required", 400);
+      return true;
+    }
+    if (target !== "custom" && target !== "eliza-cloud") {
+      sendError(res, "target must be custom or eliza-cloud", 400);
+      return true;
+    }
+    const deleted = await deleteBuiltApp(ctx.runtime, target, slug);
+    if (!deleted) {
+      sendError(res, "Built app not found", 404);
+      return true;
+    }
+    sendJson(res, { deleted: true });
+    return true;
+  }
   const service = await resolveService(ctx);
   if (!service) {
     // Lazy service registration: the route is mounted before
@@ -202,6 +234,13 @@ async function dispatchOrchestratorRoutes(
   // GET /api/orchestrator/status
   if (method === "GET" && pathname === `${PREFIX}/status`) {
     sendJson(res, await service.getStatus());
+    return true;
+  }
+
+  // GET /api/orchestrator/capacity — live worker/system slot accounting plus the
+  // ordered admission queue, for the dashboard's cap-pressure surface (#13772).
+  if (method === "GET" && pathname === `${PREFIX}/capacity`) {
+    sendJson(res, await service.getCapacityOverview());
     return true;
   }
 
@@ -252,6 +291,7 @@ async function dispatchOrchestratorRoutes(
       status: query.get("status") ?? undefined,
       search: query.get("search") ?? undefined,
       includeArchived: query.get("includeArchived") === "true",
+      projectId: query.get("projectId") ?? undefined,
       limit: parseLimit(query.get("limit")),
     });
     sendJson(res, { tasks });
@@ -922,7 +962,14 @@ async function dispatchOrchestratorRoutes(
             task: asString(body.task),
           });
         } catch (error) {
-          // error-policy:J1 route boundary — spawn failure becomes a 500 response.
+          // error-policy:J1 route boundary — a full admission queue is
+          // back-pressure the caller must see (429); any other spawn failure
+          // becomes a 500. A plain SessionCapError should no longer reach here:
+          // spawnAgentForTask parks it in the queue instead of throwing.
+          if (error instanceof AdmissionQueueFullError) {
+            sendError(res, error.message, 429);
+            return true;
+          }
           sendError(
             res,
             error instanceof Error ? error.message : "Failed to spawn agent",
@@ -934,7 +981,9 @@ async function dispatchOrchestratorRoutes(
           sendError(res, "Task not found", 404);
           return true;
         }
-        sendJson(res, task, 201);
+        // 202 when the spawn was parked at the session cap (task carries the
+        // admission DTO with its queue position); 201 when a session spawned.
+        sendJson(res, task, task.admission ? 202 : 201);
         return true;
       }
       // POST /tasks/:taskId/agents/:sessionId/stop

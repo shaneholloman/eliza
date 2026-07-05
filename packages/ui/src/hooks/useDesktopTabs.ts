@@ -56,6 +56,8 @@ function loadPersistedTabs(): DesktopTab[] {
           : { ...item, pinnedAt: undefined },
       );
   } catch {
+    // error-policy:J3 corrupt/unavailable persisted tab set — the desktop
+    // shell starts with no restored tabs instead of wedging boot.
     return [];
   }
 }

@@ -11,6 +11,8 @@
  * detects mobile (`ELIZA_PLATFORM=android|ios`) embeddings where host
  * capabilities that shell out are unavailable.
  */
+
+import { getBootConfigEnvAliases } from "./boot-env.js";
 import { isTruthyEnvValue } from "./env-utils.js";
 
 const DEFAULT_API_BIND_HOST = "127.0.0.1";
@@ -84,8 +86,8 @@ function firstNonEmpty(
 	keys: readonly string[],
 ): string | null {
 	for (const key of keys) {
-		const value = env[key]?.trim();
-		if (value) return value;
+		const entry = resolveEnvEntry(env, key);
+		if (entry) return entry.value;
 	}
 	return null;
 }
@@ -96,10 +98,43 @@ export function firstWinningEnvString(
 	keys: readonly string[],
 ): { key: string; value: string } | null {
 	for (const key of keys) {
-		const value = env[key]?.trim();
-		if (value) return { key, value };
+		const entry = resolveEnvEntry(env, key);
+		if (entry) return entry;
 	}
 	return null;
+}
+
+function presentEnvValue(value: string | undefined): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed || undefined;
+}
+
+function resolveEnvEntry(
+	env: RuntimeEnvRecord,
+	key: string,
+): { key: string; value: string } | null {
+	const direct = presentEnvValue(env[key]);
+	if (direct !== undefined) return { key, value: direct };
+
+	const aliases = getBootConfigEnvAliases();
+	if (!aliases) return null;
+
+	for (const [brandKey, elizaKey] of aliases) {
+		const partner =
+			key === brandKey ? elizaKey : key === elizaKey ? brandKey : null;
+		if (!partner) continue;
+		const value = presentEnvValue(env[partner]);
+		if (value !== undefined) return { key: partner, value };
+	}
+	return null;
+}
+
+function resolveEnvValue(
+	env: RuntimeEnvRecord,
+	key: string,
+): string | undefined {
+	return resolveEnvEntry(env, key)?.value;
 }
 
 export interface PortPreferenceResolution {
@@ -114,13 +149,15 @@ export function resolveDesktopApiPortPreference(
 	env: RuntimeEnvRecord = process.env,
 ): PortPreferenceResolution {
 	for (const key of DESKTOP_API_PORT_KEYS) {
-		const p = parsePositivePort(env[key]);
+		const entry = resolveEnvEntry(env, key);
+		if (!entry) continue;
+		const p = parsePositivePort(entry.value);
 		if (p !== null) {
 			return {
 				port: p,
-				sourceLabel: `env set — ${key}=${p}`,
-				changeLabel: `unset ${key} or set ELIZA_API_PORT / ELIZA_PORT (first wins); built-in ${DEFAULT_DESKTOP_API_PORT}`,
-				winningKey: key,
+				sourceLabel: `env set — ${entry.key}=${p}`,
+				changeLabel: `unset ${entry.key} or set ELIZA_API_PORT / ELIZA_PORT (first wins); built-in ${DEFAULT_DESKTOP_API_PORT}`,
+				winningKey: entry.key,
 			};
 		}
 	}
@@ -138,13 +175,15 @@ export function resolveDesktopUiPortPreference(
 	env: RuntimeEnvRecord = process.env,
 ): PortPreferenceResolution {
 	for (const key of DESKTOP_UI_PORT_KEYS) {
-		const p = parsePositivePort(env[key]);
+		const entry = resolveEnvEntry(env, key);
+		if (!entry) continue;
+		const p = parsePositivePort(entry.value);
 		if (p !== null) {
 			return {
 				port: p,
-				sourceLabel: `env set — ${key}=${p}`,
-				changeLabel: `unset ${key} for built-in ${DEFAULT_DESKTOP_UI_PORT}`,
-				winningKey: key,
+				sourceLabel: `env set — ${entry.key}=${p}`,
+				changeLabel: `unset ${entry.key} for built-in ${DEFAULT_DESKTOP_UI_PORT}`,
+				winningKey: entry.key,
 			};
 		}
 	}
@@ -222,15 +261,16 @@ export function resolveRuntimePorts(
 ): ResolvedRuntimePorts {
 	return {
 		serverOnlyPort:
-			parsePositivePort(env.ELIZA_PORT) ??
-			parsePositivePort(env.ELIZA_UI_PORT) ??
+			parsePositivePort(resolveEnvValue(env, "ELIZA_PORT")) ??
+			parsePositivePort(resolveEnvValue(env, "ELIZA_UI_PORT")) ??
 			DEFAULT_SERVER_ONLY_PORT,
 		desktopApiPort:
-			parsePositivePort(env.ELIZA_API_PORT) ??
-			parsePositivePort(env.ELIZA_PORT) ??
+			parsePositivePort(resolveEnvValue(env, "ELIZA_API_PORT")) ??
+			parsePositivePort(resolveEnvValue(env, "ELIZA_PORT")) ??
 			DEFAULT_DESKTOP_API_PORT,
 		desktopUiPort:
-			parsePositivePort(env.ELIZA_UI_PORT) ?? DEFAULT_DESKTOP_UI_PORT,
+			parsePositivePort(resolveEnvValue(env, "ELIZA_UI_PORT")) ??
+			DEFAULT_DESKTOP_UI_PORT,
 	};
 }
 
@@ -376,13 +416,15 @@ export function syncResolvedApiPort(
 const MOBILE_PLATFORM_VALUES = new Set(["android", "ios"]);
 
 export function isMobilePlatform(env: RuntimeEnvRecord = process.env): boolean {
-	const raw = env.ELIZA_PLATFORM?.trim().toLowerCase();
+	const raw = resolveEnvValue(env, "ELIZA_PLATFORM")?.trim().toLowerCase();
 	if (!raw) return false;
 	return MOBILE_PLATFORM_VALUES.has(raw);
 }
 
 export function isAndroidMobile(env: RuntimeEnvRecord = process.env): boolean {
-	return env.ELIZA_PLATFORM?.trim().toLowerCase() === "android";
+	return (
+		resolveEnvValue(env, "ELIZA_PLATFORM")?.trim().toLowerCase() === "android"
+	);
 }
 
 export function resolveElizaRuntimeEnv(

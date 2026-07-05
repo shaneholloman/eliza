@@ -65,7 +65,7 @@ import { HomeLauncherSurface } from "./components/shell/HomeLauncherSurface";
 import { HomePill } from "./components/shell/HomePill";
 import { HomeScreen, type HomeTileTarget } from "./components/shell/HomeScreen";
 import { KioskViewCanvas } from "./components/shell/KioskViewCanvas";
-import { NotificationCenter } from "./components/shell/NotificationCenter";
+import { NotificationsShellBoot } from "./components/shell/notifications-boot";
 import { ShellControllerProvider } from "./components/shell/ShellControllerContext";
 import { useShellControllerContext } from "./components/shell/ShellControllerContext.hooks";
 import { ShellOverlays } from "./components/shell/ShellOverlays";
@@ -2426,6 +2426,23 @@ export function App() {
               "max(calc(var(--safe-area-top, 0px) - 1.25rem), 1.25rem)",
           }}
         >
+          {/* BOTTOM-BAR / SAFE-AREA FLOOR (do not remove): a viewport-filling
+              dark background-token floor mounted on EVERY route, behind the
+              shader (z-0) and every other layer. html/body/#root paint the
+              orange launch guard (--launch-bg #ef5a1f) as a FOUC color, and on
+              shared-background routes (home/chat) the AppBackground shader was
+              the ONLY thing hiding it. On iOS the composer overlay is anchored
+              by the visualViewport-derived `bottom`, so in the home-indicator
+              safe-area the shader coverage can fall short and the orange host
+              color bled through as a band under the composer. This floor makes
+              the bottom inset (and every unpainted zone) the dark BACKGROUND
+              token — never accent — regardless of route or shader state. The
+              shader/wallpaper renders on top of it unchanged on shared routes. */}
+          <div
+            aria-hidden="true"
+            data-testid="app-safe-area-floor"
+            className="pointer-events-none fixed inset-0 z-[-1] bg-bg"
+          />
           {/* The unified app background, mounted once here so it persists
               seamlessly across shared-background routes. It keeps the
               background event channel mounted for the whole session, but only
@@ -2515,12 +2532,12 @@ export function App() {
             it never collides with the in-chat first-run conductor. Renders null
             when not eligible; re-triggerable from Settings → Permissions. */}
         <PermissionPrimingOverlay />
-        {/* Notification center, headless for now: the visible bell is hidden,
-            but this still self-boots the notification store (hydrate + live
-            stream) and routes interrupt toasts through ActionNotice. Restore
-            the floating bell by rendering <NotificationCenter /> in a
-            top-right fixed wrapper again (HomePill owns bottom-center). */}
-        <NotificationCenter headless />
+        {/* Headless notification wiring: boots the notification store (hydrate
+            + live stream), routes interrupt toasts through ActionNotice, and
+            sends every "open notifications" entry point (menu/tray/deep-link)
+            to the dashboard, where NotificationsHomeCenter is the one
+            notification surface. Renders null. */}
+        <NotificationsShellBoot />
         <ShellOverlays actionNotice={actionNotice} />
         <SaveCommandModal
           open={contextMenu.saveCommandModalOpen}

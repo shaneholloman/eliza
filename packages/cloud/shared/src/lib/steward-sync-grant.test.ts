@@ -85,12 +85,13 @@ mock.module("./services/api-keys", () => ({
   apiKeysService: {
     listByOrganization: async () => [],
     create: async () => ({ id: "key-1" }),
+    ensureUserHasApiKey: async () => undefined,
   },
 }));
 
 mock.module("./services/characters/characters", () => ({
   charactersService: {
-    listByOrganization: async () => [],
+    existsForOrganization: async () => false,
     create: async () => ({ id: "char-1" }),
   },
 }));
@@ -174,7 +175,11 @@ describe("syncUserFromSteward — initial-credits grant fallback", () => {
     ).toHaveLength(0);
     // No grant failure surfaced.
     expect(loggerErrorCalls.some((c) => c.message.includes("addCredits failed"))).toBe(false);
-    expect(result).toBe(finalUserWithOrg as never);
+    expect(result).toMatchObject({
+      ...finalUserWithOrg,
+      initialCreditsGranted: true,
+      initialFreeCreditsUsd: 5,
+    });
   });
 
   test("ledger failure: rolls back the org and does not write an unledgered balance", async () => {

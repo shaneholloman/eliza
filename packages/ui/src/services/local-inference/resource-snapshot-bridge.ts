@@ -128,6 +128,8 @@ export async function getDeviceResourceSnapshot(
     const raw = await plugin.getResourceSnapshot();
     return normalizeResourceSnapshot(raw, nowMs);
   } catch {
+    // error-policy:J4 capability probe — a failed native snapshot reads as
+    // "no resource telemetry on this device", not fabricated numbers.
     return null;
   }
 }

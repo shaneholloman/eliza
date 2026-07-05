@@ -126,6 +126,8 @@ async function readElizaOwned(): Promise<InstalledModel[]> {
       .map(hydrateStoredModel)
       .filter((m): m is InstalledModel => m !== null);
   } catch {
+    // error-policy:J3 missing registry file is the first-run state; a corrupt
+    // one starts clean — installed files are re-adopted by the next scan.
     return [];
   }
 }

@@ -13,6 +13,8 @@ name: UI Fixture E2E
 # chat-ambient/onboarding have their own follow-ups.
 
 on:
+  # Reusable entry for the scheduled exhaustive develop lane (#12342).
+  workflow_call:
   pull_request:
     branches: [main, develop]
     paths:
@@ -49,7 +51,7 @@ env:
 
 jobs:
   ui-fixture-e2e:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5

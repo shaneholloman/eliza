@@ -33,6 +33,7 @@ class KeyLogger implements Component {
       .map((c) => c.charCodeAt(0))
       .join(", ");
     const repr = data
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally matching the literal ESC (\x1b) control byte to render it as readable text.
       .replace(/\x1b/g, "\\x1b")
       .replace(/\r/g, "\\r")
       .replace(/\n/g, "\\n")

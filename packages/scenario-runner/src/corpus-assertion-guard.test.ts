@@ -258,6 +258,15 @@ const EXPECTED_PR_DETERMINISTIC_SCENARIO_IDS = [
   // added here in the same commit so this toEqual stays green while the coverage
   // ledger can still resolve their ids.
   "adhd-distractor-storm-mid-capture",
+  // LifeOps persona pack A2 (adhd-follow-through, #12770). Same G1 convention:
+  // these keyless api+tick scenarios drive the REAL no-reply/escalation ladder
+  // (create a reminder with a completionCheck, tick across simulated no-reply,
+  // assert the retry -> re-fire -> skip/expire progression + reminderIntensity
+  // differences) and are registered here in the same commit.
+  "adhd-followthrough-intensity-minimal-chases-none",
+  "adhd-followthrough-intensity-persistent-chases-twice",
+  "adhd-followthrough-noreply-retry-then-skip",
+  "adhd-followthrough-reply-breaks-escalation",
   "adhd-hyperfocus-guardrail-protects-standup",
   // LifeOps persona pack C1 (traveler-timezone-truth, #12773). Same G1
   // convention: keyless `tick`-driven timezone journeys authored under
@@ -271,6 +280,21 @@ const EXPECTED_PR_DETERMINISTIC_SCENARIO_IDS = [
   "traveler-disruption-recovery-missed-connection",
   "traveler-dst-boundary-reminder-integrity",
   "traveler-reanchor-on-timezone-change-signal",
+  // LifeOps persona pack E1 (low-activation-reengagement, #12775). Same G1
+  // convention: pr-deterministic scenarios live under plugin-personal-assistant
+  // and are added here in the same commit.
+  "lowact-micro-step-deferred-not-dropped",
+  "lowact-morning-single-priority-fires-once",
+  "lowact-quiet-streak-softens-next-nudge",
+  "lowact-values-anchored-activity-fires-in-window",
+  // LifeOps persona pack F1 (neurotypical-control-adversarial, #12776). Same G1
+  // convention: keyless api+tick canaries proving the D1/E1/B1/C1 persona
+  // accommodations do NOT leak into a plain/neutral owner (literal cadence,
+  // standard quiet hours, literal zoned time, fail-closed approvals).
+  "f1-adversarial-highstakes-confirmation-fail-closed",
+  "f1-cross-persona-quiet-hours-respected-baseline",
+  "f1-multiday-recurrence-control-baseline",
+  "f1-timezone-boundary-edge-generic",
   "agent-orchestrator.list-agents",
   // LifeOps persona pack B1 (night-owl-anchored-day, #12771). Same G1
   // convention as A1: authored under the SCANNED root

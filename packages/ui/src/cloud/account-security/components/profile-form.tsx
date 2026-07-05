@@ -72,6 +72,8 @@ async function updateProfile(formData: FormData): Promise<ProfileActionResult> {
       method: "PATCH",
       json: { name, avatar: avatar || undefined },
     });
+    // error-policy:J3 an unparseable body maps to the explicit failure
+    // result below, never a fake success.
     const body = (await res
       .json()
       // error-policy:J3 a non-JSON/empty body is an explicit "invalid" signal;
@@ -103,6 +105,7 @@ async function updateEmail(formData: FormData): Promise<ProfileActionResult> {
       method: "PATCH",
       json: { email },
     });
+    // error-policy:J3 unparseable body maps to the explicit failure below.
     const body = (await res
       .json()
       // error-policy:J3 a non-JSON/empty body is an explicit "invalid" signal;
@@ -129,6 +132,7 @@ async function uploadAvatar(formData: FormData): Promise<AvatarUploadResult> {
       method: "POST",
       body: formData,
     });
+    // error-policy:J3 unparseable body maps to the explicit failure below.
     const body = (await res
       .json()
       // error-policy:J3 a non-JSON/empty body is an explicit "invalid" signal;

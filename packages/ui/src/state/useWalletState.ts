@@ -16,6 +16,7 @@
  * - `confirmAction`   — confirmDesktopAction utility, used by handleExportKeys
  */
 
+import { logger } from "@elizaos/logger";
 import type {
   WalletAddresses,
   WalletBalancesResponse,
@@ -27,7 +28,6 @@ import type {
   WalletPrimaryMap,
   WalletSource,
 } from "@elizaos/shared";
-import { logger } from "@elizaos/logger";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   client,
@@ -80,51 +80,58 @@ export function useWalletState({
   hydrateServerConfig = true,
 }: WalletStateParams) {
   // ── Feature toggles ────────────────────────────────────────────────
+  // A capability toggle is a write that matters: if the server-side config
+  // update fails silently, the running agent's capabilities diverge from what
+  // the settings UI shows. Surface the failure instead of swallowing it.
+  const syncCapability = useCallback(
+    (name: "wallet" | "browser" | "computerUse", v: boolean) => {
+      void client
+        .updateConfig({ ui: { capabilities: { [name]: v } } })
+        .catch((err: unknown) => {
+          logger.error(
+            { err, capability: name, value: v },
+            "[useWalletState] capability sync to server failed",
+          );
+          setActionNotice(
+            `Failed to sync ${name} setting to the agent — it may revert on reload`,
+            "error",
+          );
+        });
+    },
+    [setActionNotice],
+  );
+
   const [walletEnabled, setWalletEnabledRaw] = useState(loadWalletEnabled);
-  const setWalletEnabled = useCallback((v: boolean) => {
-    setWalletEnabledRaw(v);
-    saveWalletEnabled(v);
-    void client
-      .updateConfig({ ui: { capabilities: { wallet: v } } })
-      .catch((err) => {
-        // Optimistic local toggle already applied; a lost server write would
-        // silently revert on the next getConfig hydration, so make it observable.
-        logger.error(
-          { err },
-          "[useWalletState] failed to persist wallet capability toggle to server config",
-        );
-      });
-  }, []);
+  const setWalletEnabled = useCallback(
+    (v: boolean) => {
+      setWalletEnabledRaw(v);
+      saveWalletEnabled(v);
+      syncCapability("wallet", v);
+    },
+    [syncCapability],
+  );
 
   const [browserEnabled, setBrowserEnabledRaw] = useState(loadBrowserEnabled);
-  const setBrowserEnabled = useCallback((v: boolean) => {
-    setBrowserEnabledRaw(v);
-    saveBrowserEnabled(v);
-    void client
-      .updateConfig({ ui: { capabilities: { browser: v } } })
-      .catch((err) => {
-        logger.error(
-          { err },
-          "[useWalletState] failed to persist browser capability toggle to server config",
-        );
-      });
-  }, []);
+  const setBrowserEnabled = useCallback(
+    (v: boolean) => {
+      setBrowserEnabledRaw(v);
+      saveBrowserEnabled(v);
+      syncCapability("browser", v);
+    },
+    [syncCapability],
+  );
 
   const [computerUseEnabled, setComputerUseEnabledRaw] = useState(
     loadComputerUseEnabled,
   );
-  const setComputerUseEnabled = useCallback((v: boolean) => {
-    setComputerUseEnabledRaw(v);
-    saveComputerUseEnabled(v);
-    void client
-      .updateConfig({ ui: { capabilities: { computerUse: v } } })
-      .catch((err) => {
-        logger.error(
-          { err },
-          "[useWalletState] failed to persist computerUse capability toggle to server config",
-        );
-      });
-  }, []);
+  const setComputerUseEnabled = useCallback(
+    (v: boolean) => {
+      setComputerUseEnabledRaw(v);
+      saveComputerUseEnabled(v);
+      syncCapability("computerUse", v);
+    },
+    [syncCapability],
+  );
 
   // ── Hydrate capability flags from server config on mount ──────────
   // Server config (written by TOGGLE_CAPABILITY agent action) wins on
@@ -151,9 +158,15 @@ export function useWalletState({
           saveComputerUseEnabled(caps.computerUse);
         }
       })
-      // error-policy:J4 offline/stale hydration degrades to the localStorage
-      // fallback the capability toggles were seeded from (comment above).
-      .catch(() => {});
+      // error-policy:J4 capability flags keep their localStorage values when
+      // the server config is unreachable; log so a broken config endpoint is
+      // still observable.
+      .catch((err: unknown) => {
+        logger.warn(
+          { err },
+          "[useWalletState] capability hydration from server config failed; keeping local values",
+        );
+      });
     return () => {
       cancelled = true;
     };
@@ -249,7 +262,7 @@ export function useWalletState({
       source: WalletSource,
     ) =>
       (config?.wallets ?? []).some(
-        (wallet) =>
+        (wallet: WalletEntry) =>
           wallet.chain === chain &&
           wallet.source === source &&
           typeof wallet.address === "string" &&

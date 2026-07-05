@@ -8,9 +8,11 @@ import type { Buffer } from "node:buffer";
 import type { IAgentRuntime, UUID } from "@elizaos/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  MeetingBillingSession,
   MeetingPipelineOptions,
   PipelineTranscriptUpdate,
 } from "../../types";
+import { MeetingBillingError } from "../../types";
 import { createMeetingTranscriptionPipeline } from "../pipeline";
 import type {
   AsrBackend,
@@ -93,6 +95,7 @@ describe("createMeetingTranscriptionPipeline", () => {
     expect(backend.calls[0].wav.toString("ascii", 0, 4)).toBe("RIFF");
     expect(backend.calls[0].opts.language).toBe("en");
     expect(backend.calls[0].opts.prompt).toBeUndefined();
+    expect(backend.calls[0].opts.purpose).toBe("interim");
 
     pipeline.pushSpeakerAudio("t0", seconds(2));
     await tick(2000);
@@ -102,9 +105,85 @@ describe("createMeetingTranscriptionPipeline", () => {
     pipeline.pushSpeakerAudio("t0", seconds(2));
     await tick(2000);
     expect(backend.calls[2].opts.prompt).toBe("welcome to the standup");
+    expect(backend.calls[2].opts.purpose).toBe("interim");
 
     const segments = await pipeline.finalize();
     expect(segments.map((s) => s.text)).toContain("welcome to the standup");
+  });
+
+  it("does not call ASR when the billing meter cannot reserve the next window", async () => {
+    const backend = new ScriptedBackend();
+    backend.enqueue({ text: "this should not run" });
+    const billing: MeetingBillingSession = {
+      state: {
+        status: "reserved",
+        reservedMs: 1000,
+        consumedMs: 0,
+        capMs: 1000,
+      },
+      reserveInitial: async () => undefined,
+      ensureTranscriptionWindow: vi.fn(async () => {
+        throw new MeetingBillingError(
+          "insufficient_credits",
+          "meeting spend cap reached",
+        );
+      }),
+      reconcile: async () => ({
+        status: "reconciled",
+        reservedMs: 1000,
+        consumedMs: 0,
+      }),
+    };
+    const onSpendCapReached = vi.fn();
+    const pipeline = createMeetingTranscriptionPipeline(
+      options({ billing, onSpendCapReached }),
+      backend,
+    );
+
+    pipeline.pushSpeakerAudio("t0", seconds(2));
+    await tick(2000);
+
+    expect(billing.ensureTranscriptionWindow).toHaveBeenCalledWith(2000);
+    expect(backend.calls).toHaveLength(0);
+    expect(onSpendCapReached).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "insufficient_credits" }),
+    );
+  });
+
+  it("treats cloud billing errors with the insufficient-credit code as spend-cap stops", async () => {
+    const backend = new ScriptedBackend();
+    backend.enqueue({ text: "this should not run" });
+    const cloudBillingError = Object.assign(new Error("cloud cap reached"), {
+      code: "insufficient_credits" as const,
+    });
+    const billing: MeetingBillingSession = {
+      state: {
+        status: "reserved",
+        reservedMs: 1000,
+        consumedMs: 0,
+        capMs: 1000,
+      },
+      reserveInitial: async () => undefined,
+      ensureTranscriptionWindow: vi.fn(async () => {
+        throw cloudBillingError;
+      }),
+      reconcile: async () => ({
+        status: "reconciled",
+        reservedMs: 1000,
+        consumedMs: 0,
+      }),
+    };
+    const onSpendCapReached = vi.fn();
+    const pipeline = createMeetingTranscriptionPipeline(
+      options({ billing, onSpendCapReached }),
+      backend,
+    );
+
+    pipeline.pushSpeakerAudio("t0", seconds(2));
+    await tick(2000);
+
+    expect(backend.calls).toHaveLength(0);
+    expect(onSpendCapReached).toHaveBeenCalledWith(cloudBillingError);
   });
 
   it("emits confirmed (new-only) + pending replacement-tail updates", async () => {
@@ -228,11 +307,28 @@ describe("createMeetingTranscriptionPipeline", () => {
       "beta speaks second",
     ]);
     expect(segments[0].startMs).toBeLessThanOrEqual(segments[1].startMs);
+    expect(backend.calls.map((call) => call.opts.purpose)).toEqual([
+      "interim",
+      "interim",
+    ]);
 
     // Finalized pipeline ignores new audio and returns the same segments.
     pipeline.pushSpeakerAudio("a", seconds(2));
     await tick(4000);
     expect(await pipeline.finalize()).toHaveLength(2);
+  });
+
+  it("marks a terminal no-transcript flush as a final ASR submission", async () => {
+    const backend = new ScriptedBackend();
+    backend.enqueue({ text: "short closing thought" });
+    const pipeline = createMeetingTranscriptionPipeline(options(), backend);
+
+    pipeline.pushSpeakerAudio("a", seconds(1)); // below cadence minimum
+
+    const segments = await pipeline.finalize();
+    expect(segments.map((s) => s.text)).toEqual(["short closing thought"]);
+    expect(backend.calls).toHaveLength(1);
+    expect(backend.calls[0].opts.purpose).toBe("final");
   });
 
   it("drops a window whose ASR fails and keeps the stream moving", async () => {

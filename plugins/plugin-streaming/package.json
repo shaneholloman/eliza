@@ -39,7 +39,8 @@
   "dependencies": {
     "@elizaos/cloud-routing": "workspace:*",
     "@elizaos/core": "workspace:*",
-    "@elizaos/plugin-browser": "workspace:*"
+    "@elizaos/plugin-browser": "workspace:*",
+    "@elizaos/shared": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.5.1",
@@ -111,6 +112,13 @@
       "CUSTOM_RTMP_KEY": {
         "type": "string",
         "required": false
+      }
+    }
+  },
+  "elizaos": {
+    "scripts": {
+      "buildModel": {
+        "doubleCheck": true
       }
     }
   }

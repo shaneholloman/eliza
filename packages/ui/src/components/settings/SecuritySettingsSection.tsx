@@ -138,6 +138,8 @@ function parseAbsoluteUrl(value: string | null | undefined): URL | null {
   try {
     return new URL(trimmed);
   } catch {
+    // error-policy:J3 explicit invalid signal — an unparseable URL reads as
+    // "no absolute URL", never a fabricated origin.
     return null;
   }
 }

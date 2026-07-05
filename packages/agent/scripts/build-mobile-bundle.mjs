@@ -47,6 +47,18 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Pure data module (no imports) — safe to load in the build script. The
+// manifest's plugin lists are derived from it so they cannot drift from what
+// the runtime actually allow-lists on mobile (the hand-written copy silently
+// under-reported MOBILE_CORE_PLUGINS).
+import {
+  ELIZAOS_ANDROID_CORE_PLUGINS,
+  ELIZAOS_ANDROID_TERMINAL_PLUGINS,
+  MOBILE_CORE_PLUGINS,
+  MOBILE_MODEL_PROVIDER_PLUGINS,
+  MOBILE_VIEW_PLUGINS,
+} from "../src/runtime/core-plugins.ts";
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const agentRoot = path.resolve(here, "..");
 // agentRoot = repoRoot/packages/agent → two parents up is the repo root.
@@ -99,10 +111,90 @@ const OUT_DIRS = {
 const outDir = path.join(agentRoot, OUT_DIRS[TARGET]);
 const stubsDir = path.join(here, "mobile-stubs");
 const entry = path.join(agentRoot, "src", "bin.ts");
+let mobileWorkspacePackageDirCache = null;
+
+function collectMobileWorkspacePackageDirs() {
+  if (mobileWorkspacePackageDirCache) return mobileWorkspacePackageDirCache;
+  mobileWorkspacePackageDirCache = new Map();
+  const roots = [
+    path.join(repoRoot, "packages"),
+    path.join(repoRoot, "plugins"),
+    path.join(repoRoot, "packages", "cloud"),
+    path.join(repoRoot, "packages", "cloud", "services"),
+    path.join(repoRoot, "packages", "native", "plugins"),
+    path.join(repoRoot, "packages", "os"),
+    path.join(repoRoot, "packages", "examples"),
+  ];
+  for (const root of roots) {
+    for (const entryName of readdirSyncSafe(root)) {
+      const packageDir = path.join(root, entryName);
+      const packageJsonPath = path.join(packageDir, "package.json");
+      if (!existsSync(packageJsonPath)) continue;
+      try {
+        const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+        if (typeof packageJson.name === "string") {
+          mobileWorkspacePackageDirCache.set(packageJson.name, packageDir);
+        }
+      } catch {
+        // Ignore malformed workspace metadata here; the normal bundler error
+        // still surfaces if that package is actually imported.
+      }
+    }
+  }
+  return mobileWorkspacePackageDirCache;
+}
+
+function resolveMobileWorkspacePackageDir(pkgName) {
+  const workspaceDir = collectMobileWorkspacePackageDirs().get(pkgName) ?? null;
+  const pkgPath = path.resolve(repoRoot, "node_modules", ...pkgName.split("/"));
+  if (!existsSync(pkgPath)) return workspaceDir;
+
+  const linkedDir = realpathSync(pkgPath);
+  if (!workspaceDir) return linkedDir;
+  // Fresh/light installs can leave @elizaos workspace symlinks pointing at an
+  // older temp checkout. The mobile bundle must use the current checkout's
+  // sources so local simulator builds do not depend on stale installed output.
+  if (
+    linkedDir === repoRoot ||
+    linkedDir.startsWith(`${repoRoot}${path.sep}`)
+  ) {
+    return linkedDir;
+  }
+  return workspaceDir;
+}
 
 console.log("[build-mobile] target:", TARGET);
 console.log("[build-mobile] agent root:", agentRoot);
 console.log("[build-mobile] output dir:", outDir);
+
+if (process.argv.includes("--verify-workspace-resolution")) {
+  const requiredPackages = [
+    "@elizaos/plugin-birdclaw",
+    "@elizaos/plugin-commands",
+    "@elizaos/plugin-vision",
+    "@elizaos/plugin-background-runner",
+    "@elizaos/plugin-wallet",
+    "@elizaos/cloud-routing",
+    "@elizaos/cloud-sdk",
+  ];
+  const missing = requiredPackages.filter(
+    (pkgName) => !resolveMobileWorkspacePackageDir(pkgName),
+  );
+  const walletDir = resolveMobileWorkspacePackageDir("@elizaos/plugin-wallet");
+  if (walletDir && !existsSync(path.join(walletDir, "src", "diagnostic.ts"))) {
+    missing.push("@elizaos/plugin-wallet/diagnostic");
+  }
+  if (missing.length > 0) {
+    console.error(
+      `[build-mobile] FATAL: mobile workspace resolution missing ${missing.join(", ")}`,
+    );
+    process.exit(1);
+  }
+  console.log(
+    `[build-mobile] workspace resolution verified for ${requiredPackages.length} packages`,
+  );
+  process.exit(0);
+}
 
 rmRecursive(outDir);
 await mkdir(outDir, { recursive: true });
@@ -284,7 +376,6 @@ const nativeStubs = {
   // and API dispatch, so keep PDF parsing behind a clear mobile runtime error
   // instead of paying that no-JIT parse cost on every app launch.
   unpdf: path.join(stubsDir, "unpdf.cjs"),
-  "puppeteer-core": path.join(stubsDir, "puppeteer-core.cjs"),
   "pty-manager": path.join(stubsDir, "pty-manager.cjs"),
   sharp: path.join(stubsDir, "sharp.cjs"),
   canvas: path.join(stubsDir, "canvas.cjs"),
@@ -319,6 +410,13 @@ const nativeStubs = {
   // `ELIZA_VAULT_PASSPHRASE` / in-memory keys; ElizaAgentService can mint
   // a per-boot passphrase if needed. Stub keeps the bundle building.
   "@napi-rs/keyring": path.join(stubsDir, "null-plugin.cjs"),
+  // `puppeteer-core` is the local-Chromium driver behind
+  // plugin-app-control's AppVerificationService pixel-verification path
+  // (lazy `import("puppeteer-core")`). The plugin now bundles on mobile for
+  // its VIEWS navigation surface, but a phone never launches a local
+  // Chromium — stub the driver so its multi-MB dependency closure stays out
+  // of the on-device bundle (same rationale as plugin-meetings above).
+  "puppeteer-core": path.join(stubsDir, "null-plugin.cjs"),
   // React + react-dom stubs: workspace plugins (`@elizaos/plugin-personal-assistant`,
   // etc.) re-export their UI subtree from
   // `src/index.ts` for the host app to consume. The agent only loads each
@@ -396,6 +494,15 @@ const optionalPluginStubs = {
   "@elizaos/plugin-agent-orchestrator": path.join(stubsDir, "null-plugin.cjs"),
   "@elizaos/plugin-shell": path.join(stubsDir, "null-plugin.cjs"),
   "@elizaos/plugin-coding-tools": path.join(stubsDir, "null-plugin.cjs"),
+  // AOSP-only companion, reached via a lazy `import(...)` gated on
+  // ELIZA_LOCAL_LLAMA (getAospLocalInferenceApi in local-inference-routes +
+  // agent cli). It is not a declared dependency (present only on AOSP
+  // images), so the stock mobile bundle must stub it or Bun.build fails to
+  // resolve it. The gate never fires on stock, so the stub is never invoked.
+  "@elizaos/plugin-aosp-local-inference": path.join(
+    stubsDir,
+    "null-plugin.cjs",
+  ),
   // NOTE: @elizaos/plugin-commands is intentionally NOT stubbed. Its only
   // dependency is `@elizaos/core` (workspace:*), so it does not drag an
   // incompatible core into the bundle, and `api/commands-routes.ts` imports the
@@ -437,15 +544,24 @@ const optionalPluginStubs = {
   // @elizaos/plugin-streaming destinations: ResolveMessage: Cannot
   // find module '@elizaos/plugin-streaming'` on every chat turn.
   "@elizaos/plugin-streaming": path.join(stubsDir, "null-plugin.cjs"),
+  // Birdclaw shells out to the host-local birdclaw CLI and is never loaded on
+  // mobile; the runtime plugin filter strips it before registration. Stub the
+  // static optional import so fresh mobile builds do not require its desktop
+  // package output to exist.
+  "@elizaos/plugin-birdclaw": path.join(stubsDir, "null-plugin.cjs"),
   // Workflow/automation routes are desktop/cloud surface area. Mobile's
   // runtime plugin filter does not load workflow, and latest workflow source
   // keeps large generated node catalogs in dist rather than src/data. Stub the
   // package so a local-source mobile bundle does not depend on those desktop
   // catalogs or pull the full workflow graph into the phone agent.
   "@elizaos/plugin-workflow": path.join(stubsDir, "null-plugin.cjs"),
-  // plugin-native-filesystem uses native fs APIs and is not available
-  // in the mobile bundle — stub it so the runtime skips it gracefully.
-  "@elizaos/plugin-native-filesystem": path.join(stubsDir, "null-plugin.cjs"),
+  // NOTE: @elizaos/plugin-native-filesystem is intentionally NOT stubbed. It
+  // is a declared MOBILE_CORE_PLUGINS member — the mobile-safe FILE
+  // target=device bridge (duck-typed window.Capacitor on iOS/Android,
+  // node:fs/promises under resolveStateDir() elsewhere) — with no native or
+  // Capacitor package imports, so it bundles cleanly. Stubbing it here made
+  // the host-declared table a lie: the collector kept it, the resolver
+  // silently dropped it, and FILE target=device was dead on-device.
   // `plugin-meetings` drives headless-Chromium meeting bots via
   // `playwright-core`, whose dependency closure carries chokidar → fsevents —
   // a macOS-only native `.node` addon that trips the native-addon leak gate on
@@ -1142,12 +1258,7 @@ const workspaceSrcFallbackPlugin = {
     const cache = new Map();
     const resolvePackageDir = (pkgName) => {
       if (cache.has(pkgName)) return cache.get(pkgName);
-      const pkgPath = path.resolve(
-        repoRoot,
-        "node_modules",
-        ...pkgName.split("/"),
-      );
-      const result = existsSync(pkgPath) ? pkgPath : null;
+      const result = resolveMobileWorkspacePackageDir(pkgName);
       cache.set(pkgName, result);
       return result;
     };
@@ -1905,26 +2016,13 @@ const manifest = {
     },
   },
   plugins: {
-    core: [
-      "@elizaos/plugin-sql",
-      "@elizaos/plugin-background-runner",
-      "@elizaos/plugin-vision",
-      "@elizaos/plugin-scheduling",
-    ],
+    core: [...MOBILE_CORE_PLUGINS],
+    views: [...MOBILE_VIEW_PLUGINS],
     aospOnly: [
-      "@elizaos/plugin-wifi",
-      "@elizaos/plugin-contacts",
-      "@elizaos/plugin-phone",
-      "@elizaos/plugin-shell",
-      "@elizaos/plugin-coding-tools",
-      "agent-orchestrator",
+      ...ELIZAOS_ANDROID_CORE_PLUGINS,
+      ...ELIZAOS_ANDROID_TERMINAL_PLUGINS,
     ],
-    optional: [
-      "@elizaos/plugin-anthropic",
-      "@elizaos/plugin-openai",
-      "@elizaos/plugin-ollama",
-      "@elizaos/plugin-elizacloud",
-    ],
+    optional: [...MOBILE_MODEL_PROVIDER_PLUGINS],
   },
   externalsAsStubs: Object.keys(stubAliases),
   unsupportedAndroidRuntimeStubs: [

@@ -309,6 +309,13 @@ app.post("/", async (c) => {
 
     let initialCreditsGranted = false;
     let initialFreeCreditsUsd = 0;
+    let welcomeBonusWithheld = false;
+    // Track the grant service's own withheld-reason type so a new reason (e.g.
+    // "count_unavailable") doesn't silently drop here.
+    let welcomeBonusWithheldReason: Awaited<
+      ReturnType<typeof grantInitialCreditsToWalletAccount>
+    >["welcomeBonusWithheldReason"];
+    let welcomeBonusWithheldMessage: string | undefined;
     let agent: Awaited<
       ReturnType<typeof elizaSandboxService.createAgent>
     >["agent"];
@@ -321,6 +328,9 @@ app.post("/", async (c) => {
         });
         initialCreditsGranted = creditGrant.initialCreditsGranted;
         initialFreeCreditsUsd = creditGrant.initialFreeCreditsUsd;
+        welcomeBonusWithheld = creditGrant.welcomeBonusWithheld === true;
+        welcomeBonusWithheldReason = creditGrant.welcomeBonusWithheldReason;
+        welcomeBonusWithheldMessage = creditGrant.welcomeBonusWithheldMessage;
       }
 
       const creditCheck = await checkAgentCreditGate(ownerOrganizationId);
@@ -334,6 +344,12 @@ app.post("/", async (c) => {
               orgId: ownerOrganizationId,
               serviceOrgId: identity.organizationId,
               walletOwned: Boolean(walletAccount),
+            },
+            {
+              welcomeBonusWithheldReason: welcomeBonusWithheld
+                ? welcomeBonusWithheldReason
+                : undefined,
+              welcomeBonusWithheldMessage,
             },
           ),
           402,
@@ -506,6 +522,9 @@ app.post("/", async (c) => {
                 isNewAccount: walletAccount.isNewAccount,
                 initialCreditsGranted,
                 initialFreeCreditsUsd,
+                welcomeBonusWithheld,
+                welcomeBonusWithheldReason,
+                welcomeBonusWithheldMessage,
               }
             : null,
         },
@@ -579,12 +598,16 @@ app.post("/", async (c) => {
               isNewAccount: walletAccount.isNewAccount,
               initialCreditsGranted,
               initialFreeCreditsUsd,
+              welcomeBonusWithheld,
+              welcomeBonusWithheldReason,
+              welcomeBonusWithheldMessage,
             }
           : null,
       },
       202,
     );
   } catch (error) {
+    // error-policy:J1 route boundary — every catch in v1/agents/* translates a thrown error into a structured HTTP failure (typed 4xx for known cases, failureResponse 5xx otherwise), never a fabricated success.
     if (error instanceof AgentImageNotAllowedError) {
       logger.warn("[service-api] Agent creation blocked: image not allowed", {
         image: error.image,

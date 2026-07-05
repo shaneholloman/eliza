@@ -552,9 +552,11 @@ function parseKittySequence(data: string): ParsedKittySequence | null {
   // With flag 2, event type is appended after modifier colon: 1=press, 2=repeat, 3=release
   // With flag 4, alternate keys are appended after codepoint with colons
   const csiUMatch = data.match(
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: Kitty CSI-u key sequences begin with a literal ESC (\x1b) control character.
     /^\x1b\[(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d+))?(?::(\d+))?u$/,
   );
   if (csiUMatch) {
+    // biome-ignore lint/style/noNonNullAssertion: group 1 is the mandatory (\d+) codepoint, always present when the match succeeds.
     const codepoint = parseInt(csiUMatch[1]!, 10);
     const shiftedKey =
       csiUMatch[2] && csiUMatch[2].length > 0
@@ -574,13 +576,16 @@ function parseKittySequence(data: string): ParsedKittySequence | null {
   }
 
   // Arrow keys with modifier: \x1b[1;<mod>A/B/C/D or \x1b[1;<mod>:<event>A/B/C/D
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: arrow-key CSI sequences begin with a literal ESC (\x1b) control character.
   const arrowMatch = data.match(/^\x1b\[1;(\d+)(?::(\d+))?([ABCD])$/);
   if (arrowMatch) {
+    // biome-ignore lint/style/noNonNullAssertion: group 1 is the mandatory (\d+) modifier, always present when the match succeeds.
     const modValue = parseInt(arrowMatch[1]!, 10);
     const eventType = parseEventType(arrowMatch[2]);
     const arrowCodes: Record<string, number> = { A: -1, B: -2, C: -3, D: -4 };
     _lastEventType = eventType;
     return {
+      // biome-ignore lint/style/noNonNullAssertion: group 3 is the mandatory ([ABCD]) key letter, so arrowCodes lookup is always defined.
       codepoint: arrowCodes[arrowMatch[3]!]!,
       modifier: modValue - 1,
       eventType,
@@ -588,8 +593,10 @@ function parseKittySequence(data: string): ParsedKittySequence | null {
   }
 
   // Functional keys: \x1b[<num>~ or \x1b[<num>;<mod>~ or \x1b[<num>;<mod>:<event>~
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: functional-key CSI sequences begin with a literal ESC (\x1b) control character.
   const funcMatch = data.match(/^\x1b\[(\d+)(?:;(\d+))?(?::(\d+))?~$/);
   if (funcMatch) {
+    // biome-ignore lint/style/noNonNullAssertion: group 1 is the mandatory (\d+) key number, always present when the match succeeds.
     const keyNum = parseInt(funcMatch[1]!, 10);
     const modValue = funcMatch[2] ? parseInt(funcMatch[2], 10) : 1;
     const eventType = parseEventType(funcMatch[3]);
@@ -609,8 +616,10 @@ function parseKittySequence(data: string): ParsedKittySequence | null {
   }
 
   // Home/End with modifier: \x1b[1;<mod>H/F or \x1b[1;<mod>:<event>H/F
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: Home/End CSI sequences begin with a literal ESC (\x1b) control character.
   const homeEndMatch = data.match(/^\x1b\[1;(\d+)(?::(\d+))?([HF])$/);
   if (homeEndMatch) {
+    // biome-ignore lint/style/noNonNullAssertion: group 1 is the mandatory (\d+) modifier, always present when the match succeeds.
     const modValue = parseInt(homeEndMatch[1]!, 10);
     const eventType = parseEventType(homeEndMatch[2]);
     const codepoint =
@@ -675,9 +684,12 @@ function matchesModifyOtherKeys(
   expectedKeycode: number,
   expectedModifier: number,
 ): boolean {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: xterm modifyOtherKeys CSI sequences begin with a literal ESC (\x1b) control character.
   const match = data.match(/^\x1b\[27;(\d+);(\d+)~$/);
   if (!match) return false;
+  // biome-ignore lint/style/noNonNullAssertion: groups 1 and 2 are mandatory (\d+) captures, always present when the match succeeds.
   const modValue = parseInt(match[1]!, 10);
+  // biome-ignore lint/style/noNonNullAssertion: groups 1 and 2 are mandatory (\d+) captures, always present when the match succeeds.
   const keycode = parseInt(match[2]!, 10);
   // Convert from 1-indexed xterm format to our 0-indexed format
   const actualMod = modValue - 1;

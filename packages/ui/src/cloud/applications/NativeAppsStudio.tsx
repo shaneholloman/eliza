@@ -16,7 +16,7 @@
  *  - the cloud providers the pages expect — the shared cloud `QueryClient` and
  *    the cloud i18n context (same pair `CloudRouterShell` wraps its routes in);
  *  - a **native Steward auth context** fed from the stored Steward JWT
- *    (`localStorage[STEWARD_TOKEN_KEY]`), so `useRequireAuth()` resolves
+ *    (`localStorage[STEWARD_TOKEN_KEY]`), so `useSessionAuth()` resolves
  *    immediately to the signed-in user instead of waiting on the heavy
  *    `@stwd/*` runtime (which native never mounts — sign-in is the existing
  *    `launchStewardLogin` launcher, reached before this view).
@@ -96,6 +96,8 @@ function resolveNativeStewardRefreshEndpoint(): string | undefined {
         : host;
     return `${url.protocol}//${apiHost}/api/auth/steward-refresh`;
   } catch {
+    // error-policy:J3 unparseable cloud base — no custom refresh endpoint;
+    // the refresh call uses its built-in default.
     return undefined;
   }
 }
@@ -150,7 +152,7 @@ function buildStewardAuthValue(token: string | null): LocalStewardAuthValue {
 
 /**
  * Provide the cloud Steward auth context from the stored JWT, kept in sync with
- * token changes (refresh, sign-out, 401 self-heal) so `useRequireAuth()` tracks
+ * token changes (refresh, sign-out, 401 self-heal) so `useSessionAuth()` tracks
  * the live session without the `@stwd/*` runtime.
  */
 function NativeStewardAuthProvider({
@@ -270,8 +272,8 @@ export default function NativeAppsStudio(): React.JSX.Element {
       const token = readStoredStewardToken()?.trim() ?? null;
       if (shouldRefreshBeforeRender(token)) {
         const refreshed = await Promise.race([
-          // error-policy:J4 best-effort pre-render token refresh; on failure or
-          // timeout the page still boots with the existing token (below).
+          // error-policy:J4 a failed pre-render refresh keeps the stored
+          // token; expiry surfaces through the studio's own auth error path.
           refreshCloudStewardSession({
             endpoint: resolveNativeStewardRefreshEndpoint(),
           }).catch(() => null),
@@ -285,8 +287,7 @@ export default function NativeAppsStudio(): React.JSX.Element {
           try {
             window.dispatchEvent(new CustomEvent("steward-token-sync"));
           } catch {
-            // error-policy:J6 best-effort notify; token is already persisted, so
-            // a missing CustomEvent constructor (SSR/old runtime) is non-fatal.
+            // best-effort
           }
         }
       }

@@ -44,10 +44,12 @@ does not - see **Documented divergences**.
 
 | Widget | Marker | Producing action | Parser | Renderer | Handlers it calls | Surfaces | Status |
 |---|---|---|---|---|---|---|---|
-| **Task** | `[TASK:<threadId>]<title>[/TASK]` | `TASKS_CREATE` -> `plugin-agent-orchestrator/src/actions/tasks.ts:725` | `message-task-parser.ts` | `task-widget.tsx` `TaskWidget` | none (display-only; whole-card navigate to `/orchestrator?taskId=`) | both (1) | wired + verified |
+| **Task** | `[TASK:<threadId>]<title>[/TASK]` | `TASKS_CREATE` -> `plugin-agent-orchestrator/src/actions/tasks.ts:725` | `message-task-parser.ts` | `task-widget.tsx` `TaskWidget` | header click expands the live WS-driven pipeline (nested sub-agents + tool steps + plan) in place; `navigate` to `/orchestrator?taskId=` via the explicit "Open in workbench" link (#13536) | both (1) | wired + verified |
 | **Choice** | `[CHOICE:<scope> ...]...[/CHOICE]` | any action emitting a choice block | `message-choice-parser.ts` | `ChoiceWidget.tsx` | `sendAction` | both | wired + verified |
 | **Followups** | `[FOLLOWUPS ...]...[/FOLLOWUPS]` | any action emitting followup chips | `message-followups-parser.ts` | `followups.tsx` `FollowupsWidget` | `sendAction` (reply), `navigate` (navigate kind), `prefillComposer` (prompt kind) | both | wired + verified |
 | **Form** | `[FORM]\n{json}\n[/FORM]` | any action emitting a form schema | `message-form-parser.ts` | `form-request.tsx` `FormRequest` | `submitForm` | both | wired + verified |
+| **Workflow** | `[WORKFLOW]\n{json}\n[/WORKFLOW]` | any agent emitting an ordered step pipeline (#13536) | `message-workflow-parser.ts` | `workflow-steps.tsx` `WorkflowSteps` | none (display-only; re-emit to advance) | both | wired + verified |
+| **Checklist** | `[CHECKLIST]\n{json}\n[/CHECKLIST]` | any agent emitting a standalone todo list (#13536) | `message-checklist-parser.ts` | `task-pipeline.tsx` `PlanChecklist` | none (display-only; re-emit to mutate in place) | both | wired + verified |
 
 (1) The Task widget is registered by `plugin-task-coordinator` (`registerTaskWidget()`), **not** auto-loaded in `inline-builtins`. It renders on both surfaces only when the orchestrator UI is loaded, by design (`MessageContent` knows nothing about tasks).
 
@@ -69,9 +71,14 @@ ChatView today (see divergence D1).
 
 ## Slot widget matrix
 
+Notifications are NOT a slot widget: the dashboard notification center
+(`components/shell/NotificationsHomeCenter.tsx`, reading the notification
+store <- WS `agent_event` `stream:"notification"`) is pinned by HomeScreen
+directly below the time/weather base — a registry entry would double-render
+the inbox.
+
 | Widget id | Slot | Data source / updates | Component | Host mount | Status |
 |---|---|---|---|---|---|
-| `notifications.recent` | home | notification-store <- WS `agent_event` `stream:"notification"` | `notifications.tsx` | ViewCatalog (home) | wired |
 | `agent-orchestrator.activity` | chat-sidebar + home | `useActivityEvents` <- WS `pty-session-event` / `proactive-message` / `agent_event` | `agent-orchestrator.tsx` `OrchestratorActivityWidget` | TasksEventsPanel + ViewCatalog | wired |
 | `agent-orchestrator.apps` | chat-sidebar + home | poll `listAppRuns()` 5s | `agent-orchestrator.tsx` `AppRunsWidget` | TasksEventsPanel + ViewCatalog | wired |
 | `agent-orchestrator.accounts` | chat-sidebar | poll `listAccounts()`/`getOrchestratorAccounts()`/`getOrchestratorRooms()` 15s | `agent-orchestrator-accounts-view.tsx` | TasksEventsPanel | wired |
@@ -128,15 +135,16 @@ Every stateful widget lives at one of three densities; the user moves between
 them by intent, never by hunting a chrome button:
 
 1. **Glance** - chat/home card: status as color + icon, least text, no actions.
-2. **Expand-in-place** *(proposed)* - tap the card -> grows inline (sub-steps,
-   last activity) without leaving chat. The card is the control.
+2. **Expand-in-place** - tap the card header -> grows inline (nested sub-agents,
+   live tool steps, plan checklist), stream-driven, without leaving chat.
+   Implemented for Task in #13536.
 3. **Full view page** - deep review + the few real controls. Tasks have this at
-   `/orchestrator?taskId=` (the workbench); buttons live here so glance/expand
-   stay button-free.
+   `/orchestrator?taskId=` (the workbench), reached via the card's explicit
+   "Open in workbench" link.
 
-`TaskWidget` is the reference glance design (one ~64px card, whole-card
-navigate, zero action buttons, self-polling, freezes on terminal). Tier 2 is
-the open proposal.
+`TaskWidget` is the reference glance+expand design (a compact card that expands
+its live WS-driven pipeline in place; the single "Open in workbench" link is the
+only navigation affordance).
 
 ---
 
@@ -164,7 +172,7 @@ the open proposal.
 | Choice | yes | yes | n/a |
 | Followups | yes | yes | n/a |
 | Form | yes | yes | n/a |
-| Notifications | yes | yes (added #9304) | n/a |
+| Notification center (pinned `NotificationsHomeCenter`) | yes | yes | yes, home-screen e2e |
 | Messages | yes | yes (added #9304) | n/a |
 | Orchestrator activity | yes (e2e fixture) | yes | n/a |
 | Orchestrator accounts | yes (e2e fixture) | yes | n/a |
