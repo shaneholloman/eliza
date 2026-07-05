@@ -59,7 +59,7 @@ jobs:
   # agent from the UI.
   app-live-chat:
     name: app live chat (real local runtime)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 45
     env:
       PGLITE_WASM_MODE: node
@@ -131,7 +131,7 @@ jobs:
   # writes WALKTHROUGH_VERDICTS.md (the PR mock lane is keyless and can't).
   walkthrough-live:
     name: full walkthrough (real backend + model + vision verdicts)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 60
     env:
       PGLITE_WASM_MODE: node
@@ -195,7 +195,7 @@ jobs:
   # authenticates. Skips cleanly if the key is absent.
   cloud-live:
     name: cloud login + provision + chat (real Eliza Cloud)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 45
     env:
       ELIZA_UI_SMOKE_CLOUD_LIVE: "1"
@@ -257,7 +257,7 @@ jobs:
   android-local-chat:
     name: android local chat (on-device GGUF)
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_android_local_chat }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -314,7 +314,7 @@ jobs:
   # still validate, so the renderer step is best-effort.
   desktop-packaged:
     name: desktop packaged (build + boot + renderer)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 60
     env:
       PGLITE_WASM_MODE: node
@@ -385,7 +385,7 @@ jobs:
     name: notify on red nightly
     needs: [app-live-chat, walkthrough-live, cloud-live, desktop-packaged]
     if: ${{ always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure') }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     permissions:
       issues: write
     steps:

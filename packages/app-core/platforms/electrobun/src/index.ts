@@ -987,13 +987,31 @@ function appendApiBaseParam(rendererUrl: string, apiBase: string): string {
   }
 }
 
+function appendRuntimeChooserTestParam(rendererUrl: string): string {
+  if (process.env.ELIZA_DESKTOP_TEST_ENABLE_RUNTIME_CHOOSER !== "1") {
+    return rendererUrl;
+  }
+
+  try {
+    const url = new URL(rendererUrl);
+    url.searchParams.set("enableRuntimeChooser", "1");
+    return url.toString();
+  } catch {
+    return rendererUrl;
+  }
+}
+
 async function resolveRendererUrlForCurrentRuntime(): Promise<string> {
   const rendererUrl = await resolveRendererUrl();
   const runtime = resolveDesktopRuntime();
   if (runtime.mode === "external" && runtime.externalApi.base) {
-    return appendApiBaseParam(rendererUrl, runtime.externalApi.base);
+    const externalRendererUrl = appendApiBaseParam(
+      rendererUrl,
+      runtime.externalApi.base,
+    );
+    return appendRuntimeChooserTestParam(externalRendererUrl);
   }
-  return rendererUrl;
+  return appendRuntimeChooserTestParam(rendererUrl);
 }
 
 /**
@@ -2100,7 +2118,9 @@ async function setupUpdater(): Promise<void> {
       return false;
     };
 
-    const handleAppEntryMenuAction = (action: string | undefined): boolean => {
+    const handleAppEntryMenuAction = async (
+      action: string | undefined,
+    ): Promise<boolean> => {
       if (!action?.startsWith("apps:") && !action?.startsWith("tray-app-")) {
         return false;
       }
@@ -2110,7 +2130,7 @@ async function setupUpdater(): Promise<void> {
       const entry = findAppMenuEntryBySlug(slug);
       if (!entry) return true;
       if (entry.hasDetailsPage) {
-        void restoreWindow();
+        await restoreWindow();
         sendToActiveRenderer("desktopAppDetailsRequested", {
           slug: entry.slug,
         });
@@ -2179,7 +2199,7 @@ async function setupUpdater(): Promise<void> {
       if (handleSettingsMenuAction(action)) return;
       if (handleSurfaceMenuAction(action)) return;
       if (handleStewardMenuAction(action)) return;
-      if (handleAppEntryMenuAction(action)) return;
+      if (await handleAppEntryMenuAction(action)) return;
       handleRuntimeMenuAction(action);
     };
 
@@ -2240,7 +2260,7 @@ async function handleDeepLink(url: string): Promise<void> {
       // review screen instead of a direct window so deep links and clicks
       // produce identical UX.
       if (entry.hasDetailsPage) {
-        void restoreWindow();
+        await restoreWindow();
         sendToActiveRenderer("desktopAppDetailsRequested", {
           slug: entry.slug,
         });

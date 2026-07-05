@@ -1,15 +1,25 @@
 /**
- * Deterministic `node --test` coverage for the assistant-role/IME/assist-key
+ * Deterministic vitest coverage for the assistant-role/IME/assist-key
  * verification parsers (#13581). Fixtures are real-shaped `adb`/`dumpsys`/`cmd`/
  * `logcat` output slices, not mocks of the parser — the parsers are pure
  * string→decision functions, so this suite proves the string handling that
  * regresses silently off-device (a garbled scrape reading as "absent"), covering
  * the present, absent, short-vs-full component form, and empty/garbage cases.
  *
- * Run: `node --test packages/app/scripts/lib/android-assistant-verify-lib.test.mjs`
+ * Runs in the normal `packages/app` vitest lane (which collects
+ * `scripts/**\/*.test.mjs`) so a parser regression fails CI — the earlier
+ * `node:test` form was loaded by vitest but collected as ZERO tests, an
+ * unenforced green-by-skip.
+ *
+ * Run: `bun run --cwd packages/app test -- scripts/lib/android-assistant-verify-lib.test.mjs`
  */
 import assert from "node:assert/strict";
-import { test } from "node:test";
+// #13581 enforcement fix: run under vitest (the lane that collects
+// scripts/**/*.test.mjs) instead of node:test, which vitest loads but collects
+// as ZERO tests — a green-by-skip that left this regression guard unenforced.
+// node:assert still throws on failure, so every assertion below fails the
+// vitest test the same way; only the test-registration source changes.
+import { test } from "vitest";
 
 import {
   APP_PACKAGE,
@@ -274,7 +284,8 @@ test("summarizeLaneVerdict passes only when every required surface checks out", 
     surfacesRegistered: true,
     roleHeld: true,
     imeSelected: true,
-    assistLanded: true,
+    voiceinteractionLanded: true,
+    assistKeyLanded: true,
     imeLanded: true,
     asrOutcome: "committed",
   };
@@ -299,6 +310,42 @@ test("summarizeLaneVerdict passes only when every required surface checks out", 
   );
   assert.equal(roleMissing.pass, false);
   assert.match(roleMissing.failures.join(" "), /assistant role/);
+
+  const voiceinteractionMissing = summarizeLaneVerdict(
+    { ...green, voiceinteractionLanded: false },
+    false,
+  );
+  assert.equal(voiceinteractionMissing.pass, false);
+  assert.match(voiceinteractionMissing.failures.join(" "), /voiceinteraction/);
+
+  const assistKeyMissing = summarizeLaneVerdict(
+    { ...green, assistKeyLanded: false },
+    false,
+  );
+  assert.equal(assistKeyMissing.pass, false);
+  assert.match(assistKeyMissing.failures.join(" "), /KEYCODE_ASSIST/);
+
+  // An unknown ASR outcome is the emulator lane's designed state: the verify
+  // lane never raises the IME keyboard or captures audio, so no ASR line is
+  // logged and the round-trip cannot be classified. It is acceptable when the
+  // agent is NOT required...
+  assert.equal(
+    summarizeLaneVerdict({ ...green, asrOutcome: "unknown" }, false).pass,
+    true,
+  );
+  // ...but a hard failure when a full engine IS required (never green-by-skip).
+  const requiredButUnknown = summarizeLaneVerdict(
+    { ...green, asrOutcome: "unknown" },
+    true,
+  );
+  assert.equal(requiredButUnknown.pass, false);
+  assert.match(requiredButUnknown.failures.join(" "), /unknown/);
+
+  // A transcription error always fails, engine required or not.
+  assert.equal(
+    summarizeLaneVerdict({ ...green, asrOutcome: "error" }, false).pass,
+    false,
+  );
 
   const notRegistered = summarizeLaneVerdict(
     { ...green, surfacesRegistered: false },

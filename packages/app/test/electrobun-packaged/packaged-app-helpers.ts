@@ -69,6 +69,14 @@ export interface DesktopTestBridgeState {
   };
 }
 
+export interface DesktopNotificationDiagnostic {
+  id: string;
+  title: string;
+  body?: string;
+  silent?: boolean;
+  shownAt: number;
+}
+
 export interface DesktopWindowBounds {
   x: number;
   y: number;
@@ -870,6 +878,16 @@ export class PackagedDesktopHarness {
     });
   }
 
+  async minimizeMainWindow(): Promise<void> {
+    await fetchJson<{ ok: boolean }>(`${this.bridgeUrl}/main-window/minimize`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.bridgeToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+  }
+
   async waitForState(
     predicate: (state: DesktopTestBridgeState) => boolean,
     message: string,
@@ -1002,6 +1020,25 @@ export class PackagedDesktopHarness {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ id }),
+    });
+  }
+
+  async readNotifications(): Promise<DesktopNotificationDiagnostic[]> {
+    const response = await fetchJson<{
+      notifications: DesktopNotificationDiagnostic[];
+    }>(`${this.bridgeUrl}/notifications`, {
+      headers: { Authorization: `Bearer ${this.bridgeToken}` },
+    });
+    return response.notifications;
+  }
+
+  async clearNotifications(): Promise<void> {
+    await fetchJson<{ ok: boolean }>(`${this.bridgeUrl}/notifications`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${this.bridgeToken}`,
+        "Content-Type": "application/json",
+      },
     });
   }
 }

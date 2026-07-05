@@ -379,6 +379,51 @@ describe("auth pairing pair-code route", () => {
     expect(res2.body()).toEqual({ token: "test-machine-session-id" });
   });
 
+  it("does not spend the invalid-code rate limit on valid no-DB retries", async () => {
+    vi.spyOn(crypto, "randomInt").mockImplementation(() => 0);
+    sessionMocks.createMachineSession.mockClear();
+
+    await handleAuthPairingCompatRoutes(
+      fakeReq({
+        method: "GET",
+        pathname: "/api/auth/pair-code",
+        ip: "127.0.0.1",
+        host: "localhost:2138",
+      }),
+      fakeRes().res,
+      STATE,
+    );
+
+    for (let i = 0; i < 6; i += 1) {
+      const retryDuringBoot = fakeReq({
+        method: "POST",
+        pathname: "/api/auth/pair",
+        ip: "203.0.113.10",
+      });
+      (retryDuringBoot as unknown as { body: unknown }).body = {
+        code: "AAAA-AAAA-AAAA",
+      };
+      const res = fakeRes();
+      await handleAuthPairingCompatRoutes(retryDuringBoot, res.res, STATE);
+      expect(res.status()).toBe(503);
+    }
+
+    const retryAfterBoot = fakeReq({
+      method: "POST",
+      pathname: "/api/auth/pair",
+      ip: "203.0.113.10",
+    });
+    (retryAfterBoot as unknown as { body: unknown }).body = {
+      code: "AAAA-AAAA-AAAA",
+    };
+    const res = fakeRes();
+    await handleAuthPairingCompatRoutes(retryAfterBoot, res.res, STATE_WITH_DB);
+
+    expect(res.status()).toBe(200);
+    expect(res.body()).toEqual({ token: "test-machine-session-id" });
+    expect(sessionMocks.createMachineSession).toHaveBeenCalledTimes(1);
+  });
+
   it("mints a machine session on successful pair (returns session id, not the static API token)", async () => {
     vi.spyOn(crypto, "randomInt").mockImplementation(() => 0);
     sessionMocks.createMachineSession.mockClear();
@@ -494,7 +539,7 @@ describe("auth pairing pair-code route", () => {
 
   // #13422: the pairing gate reads ELIZA_PAIRING_DISABLED through the
   // alias-aware reader, so a rebranded deployment's MILADY_PAIRING_DISABLED must
-  // disable pairing WITHOUT the syncBrandEnvToEliza mirror mutation, and a
+  // disable pairing WITHOUT the process.env alias-sync mirror mutation, and a
   // present canonical ELIZA_PAIRING_DISABLED must still win over the branded key.
   it("does not reveal a code when pairing is disabled via a branded (non-ELIZA) alias", async () => {
     const savedConfig = getBootConfig();

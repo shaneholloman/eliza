@@ -6,6 +6,14 @@ on:
   issues:
     types: [opened, edited]
 
+# #14051 Tier B: label runs are pure metadata — a superseded label pass on the
+# same PR/issue is worthless. Cancel the in-flight run when a new event lands so
+# rapid pushes don't pile up 70+ queued Auto Label runs on the fleet. Group by
+# PR number (or issue number) so PR and issue lanes never collide.
+concurrency:
+  group: auto-label-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: write
@@ -14,7 +22,7 @@ permissions:
 jobs:
   label-pr:
     if: github.event_name == 'pull_request_target'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     steps:
       - uses: actions/labeler@f27b608878404679385c85cfa523b85ccb86e213
         with:
@@ -23,7 +31,7 @@ jobs:
 
   label-issue:
     if: github.event_name == 'issues'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     steps:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
