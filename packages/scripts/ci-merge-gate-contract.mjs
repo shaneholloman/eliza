@@ -167,6 +167,33 @@ function checkWorkflowText(fileName, text, problems) {
       problems.push(
         "test.yml: 'ci-ok' does not need 'merge-quality-gate' — the merge queue would not enforce lint/format/typecheck/secret gates",
       );
+    } else if (!ciOkNeeds.has("stale-base-preflight")) {
+      problems.push(
+        "test.yml: 'ci-ok' does not need 'stale-base-preflight' — stale PRs could skip the test fan-out without failing the required aggregate",
+      );
+    }
+
+    const preflight = jobBody(text, "stale-base-preflight");
+    if (preflight === null) {
+      problems.push("test.yml: no 'stale-base-preflight' job found");
+    } else {
+      const preflightRunsOn =
+        preflight.match(/^\s+runs-on:\s*(.+?)\s*$/m)?.[1] ?? "";
+      if (!hasHostedRunnerOrFleetFallback(preflightRunsOn)) {
+        problems.push(
+          `test.yml: 'stale-base-preflight' runs-on is '${preflightRunsOn || "missing"}', expected ubuntu-* or the ${FLEET_FALLBACK_VAR} hosted fallback expression`,
+        );
+      }
+      if (!/github\.event_name\s*==\s*'pull_request'/.test(preflight)) {
+        problems.push(
+          "test.yml: 'stale-base-preflight' must be PR-only so non-PR ci-ok lanes keep using merge-quality-gate",
+        );
+      }
+      if (!/stale-base-guard\.mjs[\s\S]*--head "\$HEAD_SHA"/.test(preflight)) {
+        problems.push(
+          "test.yml: 'stale-base-preflight' is missing the PR-head stale-base guard step",
+        );
+      }
     }
 
     const gate = jobBody(text, "merge-quality-gate");
@@ -222,8 +249,15 @@ function run(repoRoot) {
 
 function selfTest() {
   const good = `jobs:
+  stale-base-preflight:
+    name: PR stale-base preflight
+    if: github.event_name == 'pull_request'
+    runs-on: \${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
+    steps:
+      - run: node packages/scripts/stale-base-guard.mjs --base "refs/remotes/origin/\${BASE_REF}" --head "$HEAD_SHA"
   changes:
     name: Classify changed paths
+    needs: stale-base-preflight
     runs-on: \${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 10
   server-tests:
@@ -243,6 +277,7 @@ function selfTest() {
   ci-ok:
     name: ci-ok
     needs:
+      - stale-base-preflight
       - changes
       - merge-quality-gate
       - server-tests
@@ -275,6 +310,21 @@ function selfTest() {
       text: good.replace("      - merge-quality-gate\n", ""),
     },
     {
+      name: "ci-ok missing stale-base preflight",
+      text: good.replace("      - stale-base-preflight\n", ""),
+    },
+    {
+      name: "missing stale-base preflight job",
+      text: good.replace(
+        / {2}stale-base-preflight:[\s\S]*?(?= {2}changes:\n)/,
+        "",
+      ),
+    },
+    {
+      name: "preflight not PR-only",
+      text: good.replace("if: github.event_name == 'pull_request'", ""),
+    },
+    {
       name: "gate missing typecheck",
       text: good.replace("      - run: bun run typecheck\n", ""),
     },
@@ -301,7 +351,9 @@ function selfTest() {
       throw new Error(`self-test: invalid fixture '${name}' was not caught`);
     }
   }
-  console.log("ci-merge-gate-contract self-test: 8 cases passed");
+  console.log(
+    `ci-merge-gate-contract self-test: ${badCases.length + 1} cases passed`,
+  );
 }
 
 function main() {
