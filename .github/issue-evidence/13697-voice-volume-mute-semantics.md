@@ -48,3 +48,37 @@ blocked: this host Swift toolchain cannot import XCTest
 - Real-LLM trajectory: N/A — no agent prompt/model/action behavior changed.
 - Screenshots/video: N/A — no UI changed.
 - Domain artifact reviewed by hand: README policy and source-contract test.
+
+## Follow-up design slice merged into this branch
+
+This branch also pins the headless TalkMode policy contract in
+`plugins/plugin-native-talkmode/src/volumeMutePolicy.ts` with deterministic tests
+in `plugins/plugin-native-talkmode/src/volumeMutePolicy.test.ts`:
+
+- voice capture is input-side state and continues when output is muted or set to
+  volume 0;
+- the capture indicator stays `recording` while capture remains live under muted
+  output;
+- TTS follows the platform output lane and continues progressing silently under
+  mute / volume 0 instead of pausing or canceling;
+- restoring output volume makes the same in-flight utterance audible again;
+- stale TTS finish events cannot clear the current utterance.
+
+Additional verification:
+
+```bash
+$ bun test plugins/plugin-native-talkmode/src/audio-policy-contract.test.ts \
+    plugins/plugin-native-talkmode/src/volumeMutePolicy.test.ts
+11 pass / 53 expects
+
+$ bunx @biomejs/biome check plugins/plugin-native-talkmode/README.md \
+    plugins/plugin-native-talkmode/src/audio-policy-contract.test.ts \
+    plugins/plugin-native-talkmode/src/volumeMutePolicy.ts \
+    plugins/plugin-native-talkmode/src/volumeMutePolicy.test.ts \
+    plugins/plugin-native-talkmode/src/index.ts \
+    .github/issue-evidence/13697-voice-volume-mute-semantics.md
+pass
+
+$ git diff --check
+pass
+```
