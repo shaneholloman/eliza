@@ -14,13 +14,14 @@
  * app launch. WKWebView has no CDP, so this Preferences handshake is how the
  * host orchestrator reads the verdict back.
  */
+
+import type { ElizaClient } from "@elizaos/ui/api";
 import {
   EXPECTED_PHRASE,
   KNOWN_PHRASE_WAV_DATA_URL,
   runVoiceSelfTest,
   type VoiceSelfTestReport,
 } from "@elizaos/ui/voice";
-import type { ElizaClient } from "@elizaos/ui/api";
 
 const IOS_VOICE_SELFTEST_REQUEST_KEY = "eliza:ios-voice-selftest:request";
 const IOS_VOICE_SELFTEST_RESULT_KEY = "eliza:ios-voice-selftest:result";

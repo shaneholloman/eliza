@@ -38,8 +38,10 @@ export function evaluateVoiceSelfTestReport(report) {
     };
   }
 
-  const overall = typeof report.overall === "string" ? report.overall : "unknown";
-  const transcript = typeof report.transcript === "string" ? report.transcript : "";
+  const overall =
+    typeof report.overall === "string" ? report.overall : "unknown";
+  const transcript =
+    typeof report.transcript === "string" ? report.transcript : "";
   const reply = typeof report.reply === "string" ? report.reply : "";
   const stages = Array.isArray(report.stages) ? report.stages : [];
 

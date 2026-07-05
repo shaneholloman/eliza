@@ -60,7 +60,9 @@ describe("evaluateVoiceSelfTestReport", () => {
       }),
     );
     expect(verdict.pass).toBe(false);
-    expect(verdict.reasons).toContain('stage "asr" is "skipped", expected "pass"');
+    expect(verdict.reasons).toContain(
+      'stage "asr" is "skipped", expected "pass"',
+    );
   });
 
   it("treats an all-skipped overall=skipped report as a failure", () => {
@@ -83,11 +85,17 @@ describe("evaluateVoiceSelfTestReport", () => {
       passingReport({
         overall: "fail",
         reply: "",
-        stages: [stage("asr", "pass"), stage("send", "fail"), stage("tts", "skipped")],
+        stages: [
+          stage("asr", "pass"),
+          stage("send", "fail"),
+          stage("tts", "skipped"),
+        ],
       }),
     );
     expect(verdict.pass).toBe(false);
-    expect(verdict.reasons).toContain('stage "send" is "fail", expected "pass"');
+    expect(verdict.reasons).toContain(
+      'stage "send" is "fail", expected "pass"',
+    );
     expect(verdict.reasons).toContain("agent reply is empty");
   });
 
@@ -96,7 +104,9 @@ describe("evaluateVoiceSelfTestReport", () => {
       passingReport({ transcript: "banana bread please" }),
     );
     expect(verdict.pass).toBe(false);
-    expect(verdict.reasons.some((r) => r.includes("does not contain"))).toBe(true);
+    expect(verdict.reasons.some((r) => r.includes("does not contain"))).toBe(
+      true,
+    );
   });
 
   it("fails when a required stage is entirely absent", () => {
@@ -118,7 +128,11 @@ describe("evaluateVoiceSelfTestReport", () => {
     // Defends against trusting `overall` alone — the stage grid is authoritative.
     const verdict = evaluateVoiceSelfTestReport(
       passingReport({
-        stages: [stage("asr", "pass"), stage("send", "pass"), stage("tts", "fail")],
+        stages: [
+          stage("asr", "pass"),
+          stage("send", "pass"),
+          stage("tts", "fail"),
+        ],
       }),
     );
     expect(verdict.pass).toBe(false);

@@ -64,7 +64,9 @@ function run(command, args, options = {}) {
     stdio: options.stdio ?? "inherit",
   });
   if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(" ")} exited with ${result.status}`);
+    throw new Error(
+      `${command} ${args.join(" ")} exited with ${result.status}`,
+    );
   }
   return result.stdout?.trim() ?? "";
 }
@@ -90,7 +92,11 @@ function removePathRecursive(targetPath) {
   if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new Error(
-      [`failed to remove ${targetPath}`, result.stdout.trim(), result.stderr.trim()]
+      [
+        `failed to remove ${targetPath}`,
+        result.stdout.trim(),
+        result.stderr.trim(),
+      ]
         .filter(Boolean)
         .join("\n"),
     );
@@ -119,7 +125,13 @@ function simctl(args) {
 }
 
 function bootedUdid() {
-  const json = tryRun("xcrun", ["simctl", "list", "devices", "booted", "--json"]);
+  const json = tryRun("xcrun", [
+    "simctl",
+    "list",
+    "devices",
+    "booted",
+    "--json",
+  ]);
   if (!json) return null;
   const parsed = JSON.parse(json);
   for (const devices of Object.values(parsed.devices ?? {})) {
@@ -216,7 +228,15 @@ function preferenceNativeKeys(key) {
 
 function defaultsDelete(udid, appId, key) {
   for (const nativeKey of preferenceNativeKeys(key)) {
-    tryRun("xcrun", ["simctl", "spawn", udid, "defaults", "delete", appId, nativeKey]);
+    tryRun("xcrun", [
+      "simctl",
+      "spawn",
+      udid,
+      "defaults",
+      "delete",
+      appId,
+      nativeKey,
+    ]);
   }
   const domainPath = prefsDomainPath(udid, appId);
   if (domainPath) {
@@ -378,7 +398,8 @@ async function main() {
         artifactDir: resultDir,
         requestedPort: val("--host-agent-port"),
         preferredPort:
-          process.env.ELIZA_IOS_HOST_AGENT_PORT ?? DEFAULT_HOST_AGENT_PORT_STRING,
+          process.env.ELIZA_IOS_HOST_AGENT_PORT ??
+          DEFAULT_HOST_AGENT_PORT_STRING,
         log,
       });
   apiBase = apiBase ?? hostAgent.apiBase;
@@ -390,7 +411,12 @@ async function main() {
     installLatestApp(udid, appId);
     tryRun("xcrun", ["simctl", "terminate", udid, appId]);
     clearState(udid, appId);
-    defaultsWriteString(udid, appId, ONBOARDING_REQUEST_KEY, JSON.stringify({ apiBase }));
+    defaultsWriteString(
+      udid,
+      appId,
+      ONBOARDING_REQUEST_KEY,
+      JSON.stringify({ apiBase }),
+    );
     defaultsWriteString(
       udid,
       appId,
@@ -402,7 +428,12 @@ async function main() {
         updatedAt: new Date().toISOString(),
       }),
     );
-    defaultsWriteString(udid, appId, VOICE_REQUEST_KEY, JSON.stringify({ apiBase }));
+    defaultsWriteString(
+      udid,
+      appId,
+      VOICE_REQUEST_KEY,
+      JSON.stringify({ apiBase }),
+    );
     defaultsWriteString(
       udid,
       appId,
@@ -421,7 +452,9 @@ async function main() {
     simctl(["launch", udid, appId]);
     await sleep(1500);
     takeScreenshot(udid, "fresh-launch");
-    log(`armed in-app first-run remote connect + voice self-test for ${apiBase}`);
+    log(
+      `armed in-app first-run remote connect + voice self-test for ${apiBase}`,
+    );
 
     const result = await pollResult(udid, appId);
     const screenshot = takeScreenshot(udid, "voice-selftest-result");
