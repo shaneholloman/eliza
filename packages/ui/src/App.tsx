@@ -1102,6 +1102,7 @@ function ViewLayoutSurface({
                       componentExport={view.componentExport}
                       viewId={view.id}
                       viewType={view.viewType}
+                      surface={view.surface}
                     />
                   ) : (
                     <ViewRouter routeOverride={routeOverrideForView(view)} />
