@@ -520,12 +520,11 @@ describe("admission queue integration (#13772)", () => {
     const running = acp.listSessions().find((s) => s.status === "running");
     expect(running).toBeDefined();
     if (running) acp.complete(running.id);
-    await waitUntil(async () => {
-      const record = (await store.getTask(b))?.task.metadata?.admission as
-        | { enqueuedAt: string }
-        | undefined;
-      return record !== undefined;
-    });
+    // Wait for the drain to actually attempt (and lose) the dispatch, then let
+    // the pass settle — polling for record-presence alone would race ahead of
+    // the drain and vacuously see the original record.
+    await waitUntil(() => !acp.stealNext);
+    await new Promise((r) => setTimeout(r, 50));
 
     // B is re-parked with its original seniority, not a fresh enqueue time.
     const reparked = (await store.getTask(b))?.task.metadata?.admission as
