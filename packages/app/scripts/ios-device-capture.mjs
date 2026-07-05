@@ -37,10 +37,15 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readDevicectlDeviceList } from "./ios-device-devicectl.mjs";
+import {
+  readDevicectlDeviceList,
+  readDevicectlDeviceLockState,
+} from "./ios-device-devicectl.mjs";
 import {
   buildIosXcuitestShardPlan,
+  assertDeviceUnlocked,
   buildPlistXml,
+  classifyXcresultSummaryForGate,
   classifyCodesignPreflight,
   classifyIsolatedReruns,
   DEFAULT_APP_BUNDLE_ID,
@@ -50,6 +55,7 @@ import {
   findDeviceRecord,
   findUncoveredIosXcuitestEntries,
   isBenignIosAppAbsence,
+  normalizeDeviceLockState,
   parseCliArgs,
   parseFailedTestIdentifiers,
   parsePlist,
@@ -262,6 +268,21 @@ function runInherit(command, args, options = {}) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForDeviceUnlocked(device, phase) {
+  await assertDeviceUnlocked({
+    device,
+    probeLockState: () => readDevicectlDeviceLockState(device.identifier),
+    sleep,
+    waitSeconds: process.env.ELIZA_IOS_DEVICE_UNLOCK_WAIT_SECONDS ?? 120,
+    pollIntervalSeconds: process.env.ELIZA_IOS_DEVICE_UNLOCK_POLL_SECONDS ?? 5,
+    notify: (message) => log(`${phase}: ${message}`),
+  });
+}
+
 function runResetCommand(command, args, { label, allowAbsentApp = false }) {
   const result = spawnSync(command, args, { encoding: "utf8" });
   const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
@@ -424,6 +445,7 @@ async function main() {
   const args = parseCliArgs(process.argv.slice(2), {
     booleans: [
       "skip-build",
+      "strict-gate",
       "allow-stale-runner",
       "no-retry-isolation",
       "require-chat",
@@ -432,7 +454,7 @@ async function main() {
   });
   if (args.help) {
     console.log(
-      "Usage: node scripts/ios-device-capture.mjs --platform sim|device [--device <udid>] [--skip-build] [--allow-stale-runner] [--no-retry-isolation] [--require-chat] [--output <dir>] [--app-path <App.app>] [--boot-timeout <sec>] [--interval <sec>] [--agent-ready-timeout <sec>] [--derived-data <dir>] [--only-testing <id>] [--bundle-id <id>]",
+      "Usage: node scripts/ios-device-capture.mjs --platform sim|device [--device <udid>] [--skip-build] [--strict-gate] [--allow-stale-runner] [--no-retry-isolation] [--require-chat] [--output <dir>] [--app-path <App.app>] [--boot-timeout <sec>] [--interval <sec>] [--agent-ready-timeout <sec>] [--derived-data <dir>] [--only-testing <id>] [--bundle-id <id>]",
     );
     return;
   }
@@ -695,6 +717,7 @@ async function main() {
   // 4. Destination for the run.
   let destination;
   let simUdid = null;
+  let physicalDevice = null;
   let deviceControlId = null;
   const installableBundles = extractXctestrunAppPaths(parsed, testRoot).filter(
     (bundle) => bundle.endsWith(".app") && fs.existsSync(bundle),
@@ -722,6 +745,8 @@ async function main() {
     if (!deviceId)
       fail("device platform needs --device or ELIZA_IOS_DEVICE_ID.");
     const record = resolvePhysicalDeviceUdid(deviceId);
+    physicalDevice = record;
+    await waitForDeviceUnlocked(record, "preflight");
     deviceControlId = record.identifier;
     destination = `platform=iOS,id=${record.udid}`;
   }
@@ -833,10 +858,15 @@ async function main() {
   // 5. Run the harness. TEST_RUNNER_-prefixed env vars are forwarded by
   //    xcodebuild into the test-runner process (how the Swift side reads
   //    ELIZA_BOOT_TIMEOUT_SECONDS / ELIZA_BOOT_SCREENSHOT_INTERVAL_SECONDS).
+  const strictGate =
+    Boolean(args["strict-gate"]) ||
+    process.env.ELIZA_IOS_STRICT_BOOT_GATE === "1";
   //    Default = a deterministic shard list with a fresh app container before
   //    every shard (#13686); narrow with --only-testing AppUITests/<Class>[/<test>].
   const shardPlan = buildIosXcuitestShardPlan({
-    onlyTesting: args["only-testing"] || "AppUITests",
+    onlyTesting:
+      args["only-testing"] ||
+      (strictGate ? "AppUITests/BootCaptureUITests" : "AppUITests"),
   });
   if (!args["only-testing"]) {
     const uncovered = findUncoveredIosXcuitestEntries({
@@ -880,6 +910,14 @@ async function main() {
       : {}),
     ...(process.env.ELIZA_LOOP_ACTIONS
       ? { TEST_RUNNER_ELIZA_LOOP_ACTIONS: process.env.ELIZA_LOOP_ACTIONS }
+      : {}),
+    ...(strictGate
+      ? {
+          TEST_RUNNER_ELIZA_REQUIRE_HOME: "1",
+          TEST_RUNNER_ELIZA_REQUIRE_REPLY: "1",
+          TEST_RUNNER_ELIZA_REQUIRE_NO_SKIPS: "1",
+          TEST_RUNNER_ELIZA_FAIL_ON_SKIP: "1",
+        }
       : {}),
   };
 
@@ -1027,6 +1065,17 @@ async function main() {
         agentProbe.verdict,
       ),
     };
+    if (strictGate) {
+      const verdict = classifyXcresultSummaryForGate(artifacts.summaryJson);
+      shardSummary.strictGate = verdict;
+      if (!verdict.ok) {
+        shardSummary.passed = false;
+        log(
+          `strict summary gate failed (${shard.resultName}): ${verdict.reason}; ` +
+            `stats=${JSON.stringify(verdict.stats)}`,
+        );
+      }
+    }
     log(
       `shard ${shard.resultName}: exit=${testResult.status} attachments=${artifacts.attachmentCount}`,
     );
@@ -1125,6 +1174,20 @@ async function main() {
     `${JSON.stringify(aggregate, null, 2)}\n`,
   );
 
+  const failedShards = shardSummaries.filter((shard) => !shard.passed);
+  if (failedShards.length > 0 && physicalDevice) {
+    const lockState = normalizeDeviceLockState(
+      readDevicectlDeviceLockState(physicalDevice.identifier),
+    );
+    if (lockState.locked) {
+      fail(
+        `device locked during run (${lockState.reason ?? "lockState reported locked"}). ` +
+          `Unlock ${physicalDevice.name} and set Settings > Display & Brightness > Auto-Lock > Never for lane devices. ` +
+          `Review shard artifacts under ${shardsRoot}.`,
+      );
+    }
+  }
+
   if (aggregateChatSkipAccounting.message) {
     log(aggregateChatSkipAccounting.message);
   }
@@ -1137,7 +1200,6 @@ async function main() {
     fail(`--require-chat failed: ${requireChatDecision.reason}.`);
   }
 
-  const failedShards = shardSummaries.filter((shard) => !shard.passed);
   if (failedShards.length > 0) {
     fail(
       `iOS capture failed: ${failedShards.length}/${shardSummaries.length} shard(s) failed ` +
