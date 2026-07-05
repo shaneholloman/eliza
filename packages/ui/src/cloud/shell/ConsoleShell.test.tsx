@@ -18,6 +18,11 @@ const sessionState = {
     email: string;
   } | null,
 };
+let storedToken = false;
+vi.mock("../lib/steward-session", () => ({
+  hasStewardToken: () => storedToken,
+}));
+
 vi.mock("../lib/use-session-auth", () => ({
   useSessionAuth: () => sessionState,
 }));
@@ -80,6 +85,7 @@ describe("ConsoleShell", () => {
     cleanup();
     sessionState.ready = true;
     sessionState.authenticated = true;
+    storedToken = false;
   });
 
   it("renders the sidebar directory, the page body, and the captured page title", () => {
@@ -167,5 +173,28 @@ describe("ConsoleShell", () => {
     );
     expect(screen.getByTestId("login-page")).toBeTruthy();
     expect(screen.queryByTestId("page-body")).toBeNull();
+  });
+
+  it("holds a signing-in fallback (no login bounce) while a stored token awaits hydration", () => {
+    sessionState.authenticated = false;
+    storedToken = true;
+    render(
+      <MemoryRouter initialEntries={["/dashboard"]}>
+        <Routes>
+          <Route path="/login" element={<div data-testid="login-page" />} />
+          <Route
+            path="*"
+            element={
+              <ConsoleShell>
+                <TitledPage />
+              </ConsoleShell>
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.queryByTestId("login-page")).toBeNull();
+    expect(screen.queryByTestId("page-body")).toBeNull();
+    expect(screen.getByText("Signing you in…")).toBeTruthy();
   });
 });

@@ -24,6 +24,7 @@ import {
   PageHeaderProvider,
   usePageHeader,
 } from "../../cloud-ui/components/layout";
+import { hasStewardToken } from "../lib/steward-session";
 import { useSessionAuth } from "../lib/use-session-auth";
 import {
   CONSOLE_OVERVIEW_NAV_ITEM,
@@ -115,6 +116,23 @@ export function ConsoleShell({
   // (#13709: expired staging session showed exactly that). returnTo brings
   // them straight back after re-auth.
   if (session.ready && !session.authenticated) {
+    // Post-OAuth hydration window: the login page persists the token and
+    // navigates here BEFORE the auth provider consumes it, so for ~1-2s the
+    // session reads ready-but-unauthenticated. Redirecting then bounces the
+    // user back to the sign-in form — which reads as "login didn't work"
+    // (nubs, #13406). While a stored token exists, hold the loading fallback:
+    // the provider either hydrates (authenticated flips true) or its 401
+    // self-heal clears the token and this same branch redirects for real.
+    if (hasStewardToken()) {
+      return (
+        <div
+          aria-busy="true"
+          className="flex min-h-dvh items-center justify-center bg-bg text-sm text-muted"
+        >
+          Signing you in…
+        </div>
+      );
+    }
     const returnTo = encodeURIComponent(
       `${location.pathname}${location.search}`,
     );

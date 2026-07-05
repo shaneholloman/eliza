@@ -35,6 +35,7 @@ import {
   useParams,
 } from "react-router-dom";
 import { queryClient } from "../lib/query-client";
+import { hasStewardToken } from "../lib/steward-session";
 import { useSessionAuth } from "../lib/use-session-auth";
 import { isApexControlPlaneHost } from "./apex-host";
 import {
@@ -291,6 +292,12 @@ export function AppCatchAllRoute({
       return <RouteChunkFallback />;
     }
     if (!authenticated) {
+      // Same post-OAuth hydration hold as ConsoleShell: a stored token means
+      // the provider is about to hydrate (or self-heal-clear); bouncing to
+      // /login during that window reads as a failed sign-in.
+      if (hasStewardToken()) {
+        return <RouteChunkFallback />;
+      }
       const returnTo = encodeURIComponent(
         `${location.pathname}${location.search}`,
       );
