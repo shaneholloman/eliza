@@ -97,6 +97,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import {
+  isShortLandscapeViewport,
   measureSafeAreaInsetTop,
   resolveChatPanelLayout,
 } from "./chat-panel-layout";
@@ -1199,6 +1200,12 @@ export function ContinuousChatOverlay({
   // Invariant: only true while at FULL (sheetOpen && expanded && !pilled); every
   // leave-full transition resets it.
   const [maximized, setMaximized] = React.useState(false);
+  // Reactive composer-focus flag. Only the short-landscape compact resting
+  // affordance reads it (#14173): focusing the field lifts the compact treatment
+  // so the composer widens to full BEFORE the first keystroke, and blurring an
+  // empty composer settles it back to compact. Elsewhere focus is tracked via
+  // refs (composerFocusedAtPressRef) that must not trigger a re-render.
+  const [composerFocused, setComposerFocused] = React.useState(false);
   // Whether the sheet was collapsed when the composer last gained focus — so
   // dismissing the keyboard (tap the handle, tap the scrim, tap outside) returns
   // to the prior resting state (collapsed → input) instead of leaving the sheet
@@ -1806,7 +1813,12 @@ export function ContinuousChatOverlay({
   // reserved when bounding the panel height.
   const readViewport = React.useCallback(() => {
     if (typeof window === "undefined")
-      return { height: 800, keyboardInset: 0, innerHeight: 800 };
+      return {
+        height: 800,
+        keyboardInset: 0,
+        innerHeight: 800,
+        innerWidth: 1280,
+      };
     const vv = window.visualViewport;
     const innerHeight = window.innerHeight;
     const height = vv?.height ?? innerHeight;
@@ -1815,8 +1827,15 @@ export function ContinuousChatOverlay({
       : 0;
     // innerHeight is the LAYOUT viewport: on Android it shrinks (adjustResize)
     // when the keyboard opens, on iOS (`resize: "body"`) it does not. The lift
-    // math below uses that to avoid double-counting the keyboard.
-    return { height, keyboardInset, innerHeight };
+    // math below uses that to avoid double-counting the keyboard. innerWidth +
+    // innerHeight also drive the short-landscape compact treatment (#14173) —
+    // the LAYOUT viewport so a raised keyboard never flips the orientation read.
+    return {
+      height,
+      keyboardInset,
+      innerHeight,
+      innerWidth: window.innerWidth,
+    };
   }, []);
   const [viewport, setViewport] = React.useState(readViewport);
   const [bottomPad, setBottomPad] = React.useState(0);
@@ -1847,7 +1866,8 @@ export function ContinuousChatOverlay({
       const next = readViewport();
       return prev.height === next.height &&
         prev.keyboardInset === next.keyboardInset &&
-        prev.innerHeight === next.innerHeight
+        prev.innerHeight === next.innerHeight &&
+        prev.innerWidth === next.innerWidth
         ? prev
         : next;
     });
@@ -1965,6 +1985,29 @@ export function ContinuousChatOverlay({
   // a stale flag can never leak into half/collapsed/pill. Drives the edge-to-edge
   // panel styles + a zero top margin.
   const fullBleed = maximized && expanded && sheetOpen && !pilled;
+
+  // #14173: on a wide-but-short landscape viewport the bottom-anchored composer
+  // spans nearly the full width (max-w-3xl, centered) as a ~full-width band, and
+  // in the short height that band sits on top of the view's own controls (the
+  // audit's `overlayClearanceIssues`, e.g. builtin-browser). Shrink the RESTING
+  // overlay to a compact bottom-corner affordance so it clears them; the moment
+  // it is opened, focused, composing, or working, the normal centered composer
+  // returns (so the reading/typing surface is never cramped). Portrait phones
+  // and desktop/tablet never satisfy `shortLandscape`, so they are untouched.
+  const shortLandscape = isShortLandscapeViewport(
+    viewport.innerWidth,
+    viewport.innerHeight,
+  );
+  const compactLanding =
+    shortLandscape &&
+    !sheetOpen &&
+    !fullBleed &&
+    !composerFocused &&
+    !hasDraft &&
+    !hasImages &&
+    !recording &&
+    !responding &&
+    !firstRunOpen;
 
   // Top clearance + max height come from the pure, unit-tested layout solver.
   // It reserves the real measured notch inset (`safeAreaTop`) above the panel,
@@ -3525,7 +3568,13 @@ export function ContinuousChatOverlay({
     <div
       ref={overlayRef}
       className={cn(
-        "pointer-events-none fixed inset-x-0 bottom-0 flex w-full min-w-0 flex-col items-center",
+        "pointer-events-none fixed inset-x-0 bottom-0 flex w-full min-w-0 flex-col",
+        // Resting on a landscape phone, the compact composer hugs the trailing
+        // (inline-end) bottom corner — the conventional compose slot views leave
+        // free — instead of centering a wide band over their controls (#14173).
+        // Direction-aware: `items-end` is inline-end, so it lands bottom-left in
+        // RTL. Full-width children (banners) are unaffected (they stay `w-full`).
+        compactLanding ? "items-end" : "items-center",
         // Full-bleed (maximized) removes the side inset so the chat is edge-to-edge.
         fullBleed ? "px-0" : "px-3 sm:px-4",
       )}
@@ -3730,7 +3779,15 @@ export function ContinuousChatOverlay({
       <div
         className={cn(
           "pointer-events-none relative flex w-full flex-col items-center",
-          fullBleed ? "max-w-none" : "max-w-3xl",
+          // Compact resting affordance on a landscape phone (#14173): a narrow
+          // 13rem composer whose overlap with view controls stays under the
+          // audit's clearance threshold. The grabber + pill are positioned
+          // relative to THIS wrapper, so they shrink and re-corner with it.
+          fullBleed
+            ? "max-w-none"
+            : compactLanding
+              ? "max-w-[13rem]"
+              : "max-w-3xl",
         )}
       >
         {!fullBleed ? (
@@ -4323,6 +4380,9 @@ export function ContinuousChatOverlay({
                   if (e.target.value.trim().length > 0) expand();
                 }}
                 onFocus={() => {
+                  // Widen out of the short-landscape compact affordance (#14173)
+                  // on focus, before the first keystroke.
+                  setComposerFocused(true);
                   // A pill-open focus only raises the keyboard; it must not
                   // expand a history thread (see suppressExpandOnFocusRef).
                   if (suppressExpandOnFocusRef.current) {
@@ -4331,6 +4391,7 @@ export function ContinuousChatOverlay({
                     expand();
                   }
                 }}
+                onBlur={() => setComposerFocused(false)}
                 onPaste={handleComposerPaste}
                 onKeyDown={handleComposerKeyDown}
                 // The composer is unlocked during onboarding (#12178): typing is
