@@ -98,9 +98,23 @@ function run(command, args, cwd) {
 // Best-effort build stamp for the in-app BuildBadge (PWA cache-freshness
 // check). Writes public/build-info.json with the current git sha + build
 // time. The file is gitignored, so it never commits a stale local stamp; when
-// git is unavailable (some CI/tarball builds) it is skipped and the badge
-// simply renders nothing.
+// git is unavailable (some tarball builds) it is skipped and the badge simply
+// renders nothing.
+//
+// The badge is a tester/staging affordance, and "no .git → no stamp" does NOT
+// keep it out of production: CI checkouts and Pages clones carry .git. Gate on
+// the build's declared environment instead — production/store builds delete
+// any prior stamp so a stale local file can never ship. ELIZA_BUILD_STAMP=1
+// force-enables for debugging the badge itself.
 function stampBuildInfo() {
+  const isProductionBuild =
+    process.env.VITE_ENVIRONMENT === "production" ||
+    Boolean(process.env.ELIZA_RELEASE_AUTHORITY) ||
+    process.env.ELIZA_BUILD_VARIANT === "store";
+  if (isProductionBuild && process.env.ELIZA_BUILD_STAMP !== "1") {
+    fs.rmSync(path.join(appDir, "public", "build-info.json"), { force: true });
+    return;
+  }
   try {
     const commit = execFileSync("git", ["rev-parse", "--short=10", "HEAD"], {
       cwd: repoRoot,
