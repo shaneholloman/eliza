@@ -24,6 +24,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { redactBasicEmails } from "@elizaos/core";
 
 export type PrivacyLevel = "public" | "limited" | "private";
 
@@ -120,8 +121,6 @@ const DEFAULT_CREDENTIAL_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
 const EMAIL_REPLACEMENT = "[REDACTED_EMAIL]";
 const PHONE_REPLACEMENT = "[REDACTED_PHONE]";
 const ADDRESS_REPLACEMENT = "[REDACTED_ADDRESS]";
-
-const EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
 
 const STREET_SUFFIXES =
   "St|Street|Ave|Avenue|Blvd|Boulevard|Rd|Road|Ln|Lane|Dr|Drive|Ct|Court|Pl|Place|Way|Pkwy|Parkway|Ter|Terrace|Cir|Circle|Hwy|Highway|Sq|Square|Trl|Trail|Loop";
@@ -248,12 +247,11 @@ function redactGeo(value: string, state: InternalState): string {
 }
 
 function redactPii(value: string, state: InternalState): string {
-  let out = value;
-  // email → address → phone (see note on DEFAULT_PHONE_PATTERNS / addresses).
-  out = out.replace(EMAIL_PATTERN, () => {
+  let out = redactBasicEmails(value, () => {
     state.redactionCount += 1;
     return EMAIL_REPLACEMENT;
   });
+  // email → address → phone (see note on DEFAULT_PHONE_PATTERNS / addresses).
   for (const pattern of DEFAULT_ADDRESS_PATTERNS) {
     out = out.replace(pattern, () => {
       state.redactionCount += 1;

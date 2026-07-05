@@ -13,13 +13,14 @@
  */
 
 import { BRAND_PATHS, LOGO_FILES } from "@elizaos/shared/brand";
+import { ChevronDown, LogOut, UserRound } from "lucide-react";
 import {
   type ReactNode,
   useCallback,
   useState,
   useSyncExternalStore,
 } from "react";
-import { Link, Navigate, useLocation } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import {
   DashboardHeader,
   DashboardShellLayout,
@@ -29,17 +30,27 @@ import {
   PageHeaderProvider,
   usePageHeader,
 } from "../../cloud-ui/components/layout";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu";
+import { useCreditsBalance } from "../instances/lib/data/credits";
+import { formatUsd } from "../lib/format-usd";
 import { hasHydratableStewardToken } from "../lib/steward-session";
 import { useSessionAuth } from "../lib/use-session-auth";
 import {
   CONSOLE_OVERVIEW_NAV_ITEM,
   CONSOLE_SURFACES,
 } from "./console-surfaces";
+import { clearStaleStewardSession } from "./StewardProviderShared";
 
 /**
  * The console nav is one flat list so sidebar section labels never compete
- * with Account and Organization route labels. Specialist routes stay registered
- * for deep links but are not promoted into the default console chrome.
+ * with route labels. Specialist routes stay registered for deep links but are
+ * not promoted into the default console chrome.
  */
 const CONSOLE_NAV_SECTIONS: DashboardSidebarSection[] = [
   {
@@ -102,6 +113,62 @@ function ConsoleLogo(): ReactNode {
   );
 }
 
+/** Credits balance pill + the account dropdown (Account / Billing / Sign out) —
+ * the console's only sign-out affordance, so it must always be reachable.
+ * Sign-out uses the same hardened Steward teardown path as auth refresh and
+ * 401 recovery, keeping token mirrors, cookies, and sync listeners aligned. */
+function ConsoleUserMenu({
+  email,
+}: {
+  email: string | null;
+}): React.JSX.Element {
+  const navigate = useNavigate();
+  const credits = useCreditsBalance();
+  const balance =
+    typeof credits.data?.balance === "number" ? credits.data.balance : null;
+
+  return (
+    <div className="flex items-center gap-2">
+      {balance !== null ? (
+        <span className="hidden rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-white/80 md:inline">
+          {formatUsd(balance)} credits
+        </span>
+      ) : null}
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          aria-label={email ? `Account menu for ${email}` : "Account menu"}
+          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-white/70 outline-none hover:bg-white/5 hover:text-white focus-visible:ring-2 focus-visible:ring-white/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#111]"
+        >
+          <UserRound className="h-3.5 w-3.5 md:hidden" aria-hidden />
+          <span className="hidden max-w-[160px] truncate md:inline">
+            {email ?? "Account"}
+          </span>
+          <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-44">
+          <DropdownMenuItem onSelect={() => navigate("/dashboard/account")}>
+            Account
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => navigate("/dashboard/billing")}>
+            Billing
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="text-red-400 focus:text-red-300"
+            onSelect={() => {
+              clearStaleStewardSession();
+              navigate("/login", { replace: true });
+            }}
+          >
+            <LogOut className="mr-2 h-3.5 w-3.5" aria-hidden />
+            Sign out
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
 /** Top bar wired to the captured page header (title + actions) and the
  * signed-in identity. Lives inside PageHeaderProvider. */
 function ConsoleHeader({
@@ -116,13 +183,7 @@ function ConsoleHeader({
     <DashboardHeader
       onToggleSidebar={onToggleSidebar}
       pageInfo={pageInfo}
-      rightContent={
-        email ? (
-          <span className="hidden truncate text-xs text-white/62 md:inline">
-            {email}
-          </span>
-        ) : undefined
-      }
+      rightContent={<ConsoleUserMenu email={email} />}
     />
   );
 }

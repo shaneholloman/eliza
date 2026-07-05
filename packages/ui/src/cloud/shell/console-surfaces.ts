@@ -2,14 +2,12 @@
  * Console surface catalog shared by the sidebar and overview cards. The
  * advertised control-plane routes are intentionally narrower than the complete
  * router: deep-linkable specialist surfaces stay registered, but only the core
- * agent, app, billing, key, account, and organization paths are promoted here.
+ * agent, billing, key, and account paths are promoted here.
  */
 
 import {
   Bot,
-  Building2,
   CreditCard,
-  Grid3x3,
   Home,
   KeyRound,
   type LucideIcon,
@@ -49,16 +47,6 @@ export const CONSOLE_SURFACES: ReadonlyArray<ConsoleSurface> = [
     descDefault: "Hosted agents: create, wake, sleep, logs.",
   },
   {
-    id: "apps",
-    href: "/dashboard/apps",
-    icon: Grid3x3,
-    label: "Apps",
-    titleKey: "cloud.home.apps",
-    titleDefault: "Apps",
-    descKey: "cloud.home.appsDesc",
-    descDefault: "Hosted apps: monetization, domains, users.",
-  },
-  {
     id: "billing",
     href: "/dashboard/billing",
     icon: CreditCard,
@@ -88,14 +76,9 @@ export const CONSOLE_SURFACES: ReadonlyArray<ConsoleSurface> = [
     descKey: "cloud.home.accountDesc",
     descDefault: "Profile, email, identity, and security.",
   },
-  {
-    id: "organization",
-    href: "/dashboard/organization",
-    icon: Building2,
-    label: "Organization",
-    titleKey: "cloud.home.organization",
-    titleDefault: "Organization",
-    descKey: "cloud.home.organizationDesc",
-    descDefault: "Members, credentials, and invites.",
-  },
 ];
+
+// The console presents as plain per-user accounts. The org route stays
+// registered (register-all's `import "./organization/routes"`) so invite
+// deep-links keep working; it is just not surfaced in the sidebar or overview
+// cards. Backend/DB orgs are untouched.

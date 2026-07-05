@@ -15,6 +15,7 @@
  * that pins the wire protocol.
  */
 import type { JsonObject, JsonValue } from "../types/primitives";
+import type { SurfaceCapability } from "../types/surface-manifest";
 
 export * from "./sandbox-factory";
 
@@ -239,13 +240,28 @@ export type RemotePluginRouteManifest = {
 
 export type RemotePluginBackgroundPolicy = "opaque" | "shared";
 
+export type RemotePluginSurfaceManifest = JsonObject & {
+	background?: RemotePluginBackgroundPolicy;
+	header?: "normal" | "fullscreen" | "modal" | "immersive";
+	isolation?:
+		| "in-process"
+		| "sandboxed-iframe"
+		| "native-webview"
+		| "immersive";
+	lifecycle?: "ephemeral" | "retained";
+	capabilities?: SurfaceCapability[];
+};
+
 export type RemotePluginViewManifest = {
 	id: string;
 	label: string;
 	viewType?: "gui" | "tui" | "xr";
 	backgroundPolicy?: RemotePluginBackgroundPolicy;
+	surface?: RemotePluginSurfaceManifest;
 	bundlePath?: string;
 	bundleUrl?: string;
+	framePath?: string;
+	frameUrl?: string;
 	contentType?: string;
 	integrity?: string;
 };
@@ -2524,6 +2540,102 @@ function optionalBackgroundPolicy(
 	throw decodeError(method, `${key} must be "opaque" or "shared".`);
 }
 
+function optionalSurfaceManifest(
+	object: JsonObject,
+	key: string,
+	method: string,
+): RemotePluginSurfaceManifest | undefined {
+	const value = optionalJsonObject(object, key, method);
+	if (value === undefined) return undefined;
+
+	const background = optionalString(value, "background", `${method}.${key}`);
+	if (
+		background !== undefined &&
+		background !== "opaque" &&
+		background !== "shared"
+	) {
+		throw decodeError(
+			method,
+			`${key}.background must be "opaque" or "shared".`,
+		);
+	}
+
+	const header = optionalString(value, "header", `${method}.${key}`);
+	if (
+		header !== undefined &&
+		header !== "normal" &&
+		header !== "fullscreen" &&
+		header !== "modal" &&
+		header !== "immersive"
+	) {
+		throw decodeError(
+			method,
+			`${key}.header must be "normal", "fullscreen", "modal", or "immersive".`,
+		);
+	}
+
+	const isolation = optionalString(value, "isolation", `${method}.${key}`);
+	if (
+		isolation !== undefined &&
+		isolation !== "in-process" &&
+		isolation !== "sandboxed-iframe" &&
+		isolation !== "native-webview" &&
+		isolation !== "immersive"
+	) {
+		throw decodeError(method, `${key}.isolation is not supported.`);
+	}
+
+	const lifecycle = optionalString(value, "lifecycle", `${method}.${key}`);
+	if (
+		lifecycle !== undefined &&
+		lifecycle !== "ephemeral" &&
+		lifecycle !== "retained"
+	) {
+		throw decodeError(
+			method,
+			`${key}.lifecycle must be "ephemeral" or "retained".`,
+		);
+	}
+
+	const capabilities = optionalSurfaceCapabilities(
+		value,
+		"capabilities",
+		`${method}.${key}`,
+	);
+
+	return {
+		...(background === undefined ? {} : { background }),
+		...(header === undefined ? {} : { header }),
+		...(isolation === undefined ? {} : { isolation }),
+		...(lifecycle === undefined ? {} : { lifecycle }),
+		...(capabilities === undefined ? {} : { capabilities }),
+	};
+}
+
+function optionalSurfaceCapabilities(
+	object: JsonObject,
+	key: string,
+	method: string,
+): SurfaceCapability[] | undefined {
+	const values = optionalStringArray(object, key, method);
+	if (values === undefined) return undefined;
+	const allowed = new Set<SurfaceCapability>([
+		"wallpaper",
+		"background:apply",
+		"navigate",
+		"storage",
+		"agent-surface",
+	]);
+	const capabilities: SurfaceCapability[] = [];
+	for (const value of values) {
+		if (!allowed.has(value as SurfaceCapability)) {
+			throw decodeError(method, `${key} contains unsupported capability.`);
+		}
+		capabilities.push(value as SurfaceCapability);
+	}
+	return capabilities;
+}
+
 function requireResponseHandlerFieldEffect(
 	value: JsonValue,
 	method: string,
@@ -3413,17 +3525,26 @@ function requireRemotePluginView(
 	}
 	const bundlePath = optionalNonEmptyString(object, "bundlePath", method);
 	const bundleUrl = optionalNonEmptyString(object, "bundleUrl", method);
+	const framePath = optionalNonEmptyString(object, "framePath", method);
+	const frameUrl = optionalNonEmptyString(object, "frameUrl", method);
 	if (bundlePath !== undefined) {
 		validateRemotePluginAssetPath(bundlePath, "bundlePath", method);
 	}
 	if (bundleUrl !== undefined) {
 		validateRemotePluginBundleUrl(bundleUrl, "bundleUrl", method);
 	}
+	if (framePath !== undefined) {
+		validateRemotePluginAssetPath(framePath, "framePath", method);
+	}
+	if (frameUrl !== undefined) {
+		validateRemotePluginBrowserUrl(frameUrl, "frameUrl", method);
+	}
 	const backgroundPolicy = optionalBackgroundPolicy(
 		object,
 		"backgroundPolicy",
 		method,
 	);
+	const surface = optionalSurfaceManifest(object, "surface", method);
 	const contentType = optionalString(object, "contentType", method);
 	const integrity = optionalString(object, "integrity", method);
 	return {
@@ -3431,8 +3552,11 @@ function requireRemotePluginView(
 		label: requireNonEmptyString(object, "label", method),
 		...(viewType === undefined ? {} : { viewType }),
 		...(backgroundPolicy === undefined ? {} : { backgroundPolicy }),
+		...(surface === undefined ? {} : { surface }),
 		...(bundlePath === undefined ? {} : { bundlePath }),
 		...(bundleUrl === undefined ? {} : { bundleUrl }),
+		...(framePath === undefined ? {} : { framePath }),
+		...(frameUrl === undefined ? {} : { frameUrl }),
 		...(contentType === undefined ? {} : { contentType }),
 		...(integrity === undefined ? {} : { integrity }),
 	};

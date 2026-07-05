@@ -127,6 +127,41 @@ export interface OnboardArgs {
   dryRun: boolean;
 }
 
+interface ExistingDockerNodePin {
+  host_key_fingerprint: string | null;
+}
+
+interface OnboardSshConfig {
+  hostname: string;
+  port: number;
+  username: string;
+  privateKeyPath: string;
+  hostKeyFingerprint?: string;
+  onHostKeyDiscovered: (hostname: string, fingerprint: string) => Promise<void>;
+}
+
+export function buildOnboardSshConfig(
+  args: OnboardArgs,
+  existing: ExistingDockerNodePin | null,
+  onHostKeyDiscovered: OnboardSshConfig["onHostKeyDiscovered"],
+): OnboardSshConfig {
+  return {
+    hostname: args.host,
+    port: args.sshPort,
+    username: args.sshUser,
+    privateKeyPath: args.keyPath,
+    hostKeyFingerprint: existing?.host_key_fingerprint ?? undefined,
+    onHostKeyDiscovered,
+  };
+}
+
+export function hostKeyFingerprintForOnboardUpsert(
+  existing: ExistingDockerNodePin | null,
+  capturedFingerprint: string | undefined,
+): string | null {
+  return existing?.host_key_fingerprint ?? capturedFingerprint ?? null;
+}
+
 /** Parse argv + env into a validated config. Throws on missing required fields. */
 export function parseArgs(argv: string[], env: NodeJS.ProcessEnv): OnboardArgs {
   const flags = new Map<string, string>();
@@ -213,13 +248,20 @@ async function main(): Promise<void> {
     DockerSSHClient,
   } = await loadDeps();
   const summary: string[] = [];
+  const existing = await dockerNodesRepository.findByNodeId(args.nodeId);
 
-  const ssh = new DockerSSHClient({
-    hostname: args.host,
-    port: args.sshPort,
-    username: args.sshUser,
-    privateKeyPath: args.keyPath,
-  });
+  // Re-onboard must verify against the stored pin before any root SSH command
+  // runs. Only a never-pinned node takes the TOFU branch and persists the
+  // captured key during the upsert below.
+  let capturedFingerprint: string | undefined;
+  const ssh = new DockerSSHClient(
+    buildOnboardSshConfig(args, existing, async (hostname, fingerprint) => {
+      capturedFingerprint = fingerprint;
+      console.log(
+        `[onboard] TOFU captured host key for ${hostname}: SHA256:${fingerprint}`,
+      );
+    }),
+  );
 
   try {
     // 1. Docker present + running (install via get.docker.com only if missing).
@@ -285,7 +327,6 @@ async function main(): Promise<void> {
       });
 
     // 6. Register / upsert into docker_nodes — same shape as bootstrap-callback.
-    const existing = await dockerNodesRepository.findByNodeId(args.nodeId);
     if (existing) {
       await dockerNodesRepository.update(existing.id, {
         hostname: args.host,
@@ -293,6 +334,12 @@ async function main(): Promise<void> {
         ssh_user: args.sshUser,
         capacity: args.capacity,
         status: "unknown",
+        // Never overwrite an established pin during re-onboard; a differing
+        // presented key must fail in DockerSSHClient before this update.
+        host_key_fingerprint: hostKeyFingerprintForOnboardUpsert(
+          existing,
+          capturedFingerprint,
+        ),
         metadata: {
           ...((existing.metadata as Record<string, unknown>) ?? {}),
           provider: "operator-onboarded",
@@ -310,6 +357,11 @@ async function main(): Promise<void> {
         enabled: true,
         status: "unknown",
         allocated_count: 0,
+        // Persist the TOFU-captured pin so later control-plane SSH is verified.
+        host_key_fingerprint: hostKeyFingerprintForOnboardUpsert(
+          null,
+          capturedFingerprint,
+        ),
         metadata: {
           provider: "operator-onboarded",
           onboardedAt: new Date().toISOString(),

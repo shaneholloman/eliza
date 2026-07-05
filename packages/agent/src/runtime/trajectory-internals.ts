@@ -19,6 +19,7 @@ import {
   type IAgentRuntime,
   ModelType,
   observationExtractionTemplate,
+  redactBasicEmails,
   resolveStateDir,
   resolveTrajectoryGate,
 } from "@elizaos/core";
@@ -2240,10 +2241,6 @@ export function shouldEnableTrajectoryLoggingByDefault(
  * with workspace isolation rather than treating as a sole defence.
  */
 const TRAJECTORY_REDACT_PATTERNS: { re: RegExp; label: string }[] = [
-  {
-    re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
-    label: "<EMAIL>",
-  },
   { re: /sk-[A-Za-z0-9_-]{20,}/g, label: "<API_KEY>" },
   { re: /(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}/g, label: "<GH_TOKEN>" },
   { re: /xox[bpars]-[A-Za-z0-9-]{10,}/g, label: "<SLACK_TOKEN>" },
@@ -2255,7 +2252,7 @@ const TRAJECTORY_REDACT_PATTERNS: { re: RegExp; label: string }[] = [
 export function redactTrajectoryText(value: unknown): unknown {
   if (typeof value !== "string") return value;
   if (value.length === 0) return value;
-  let out = value;
+  let out = redactBasicEmails(value, "<EMAIL>");
   for (const { re, label } of TRAJECTORY_REDACT_PATTERNS) {
     out = out.replace(re, label);
   }

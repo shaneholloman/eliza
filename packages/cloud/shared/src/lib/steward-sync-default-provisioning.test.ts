@@ -93,10 +93,10 @@ mock.module("./services/api-keys", () => {
     apiKeysService: {
       listByOrganization: async () => [],
       create,
-      // Mirrors the real service method: resolves only once the (deferred)
-      // key create has completed, so the await-not-fire-and-forget proof
-      // below still measures the provisioning write itself.
-      ensureUserHasApiKey: async () => {
+      // Mirrors steward-sync's default-key provisioner: resolves only once the
+      // deferred key create has completed, so the await-not-fire-and-forget
+      // proof below still measures the provisioning write itself.
+      provisionDefaultApiKey: async () => {
         await create();
       },
     },

@@ -45,6 +45,16 @@ import {
   normalizeIpForPolicy,
 } from "../security/network-policy.ts";
 
+export {
+  stripSqlBlockComments,
+  stripSqlDollarQuotedLiterals,
+} from "../shared/sql-sanitizers.ts";
+
+import {
+  stripSqlBlockComments,
+  stripSqlDollarQuotedLiterals,
+} from "../shared/sql-sanitizers.ts";
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1072,21 +1082,34 @@ async function handleQuery(
     // Use empty-string replacement (not space) to mirror how PostgreSQL
     // concatenates tokens across comments — e.g. DE/* */LETE → DELETE.
     // A space replacement would turn it into "DE LETE", hiding the keyword.
-    const stripped = sqlText
-      .replace(/\/\*[\s\S]*?\*\//g, "")
+    const stripped = stripSqlBlockComments(sqlText)
       .replace(/--.*$/gm, "")
       .trim();
 
     // Strip string literals so that mutation keywords/functions inside quoted
     // strings are ignored. Handles single-quoted ('...'), dollar-quoted
     // ($$...$$), and tagged dollar-quoted ($tag$...$tag$) strings.
-    const noLiterals = stripped
-      .replace(/\$([A-Za-z0-9_]*)\$[\s\S]*?\$\1\$/g, " ")
-      .replace(/'(?:[^']|'')*'/g, " ");
+    const noLiterals = stripSqlDollarQuotedLiterals(stripped).replace(
+      /'(?:[^']|'')*'/g,
+      " ",
+    );
 
     // For keyword checks, also strip double-quoted identifiers to avoid
     // matching words inside quoted table/column names.
     const noStrings = noLiterals.replace(/"(?:[^"]|"")*"/g, " ");
+
+    // Reject PostgreSQL unicode-escaped quoted identifiers (`U&"s\0065tval"`)
+    // in read-only mode: they decode to the real name only at parse time, so
+    // the literal-name dangerous-function scan below is bypassable (a mutating
+    // function hides as `U&"s\0065tval"`). Legit read-only queries never need
+    // them. Mirrors checkReadOnly() in actions/database.ts.
+    if (/[uU]&"/.test(noLiterals)) {
+      sendJsonError(
+        res,
+        'Query rejected: Unicode-escaped identifiers (U&"...") are not allowed in read-only mode: they can hide a dangerous function name from the guard.',
+      );
+      return;
+    }
 
     const mutationKeywords = [
       // ── DML ────────────────────────────────────────────────────────────

@@ -81,6 +81,16 @@
 			"import": "./dist/testing/index.js",
 			"default": "./dist/testing/index.js"
 		},
+		"./security/*": {
+			"types": "./dist/security/*.d.ts",
+			"eliza-source": {
+				"types": "./src/security/*.ts",
+				"import": "./src/security/*.ts",
+				"default": "./src/security/*.ts"
+			},
+			"import": "./dist/security/*.js",
+			"default": "./dist/security/*.js"
+		},
 		"./services/*": {
 			"types": "./dist/services/*.d.ts",
 			"import": "./dist/services/*.js",

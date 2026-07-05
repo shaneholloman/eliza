@@ -10,7 +10,9 @@ import {
   type AppShellBackgroundPolicy,
   type EnabledViewKinds,
   isViewVisible,
+  type ResolvedSurfaceManifest,
   resolveSurfaceBackgroundPolicy,
+  resolveSurfaceManifest,
   type SurfaceManifestBearer,
   type ViewKind,
 } from "@elizaos/core";
@@ -32,6 +34,7 @@ import {
   type ActiveViewLayout,
   createNavigateViewHandler,
   type NavigateViewDetail,
+  navigateBrowserPath,
 } from "./app-navigate-view";
 import { AppBackground } from "./backgrounds/AppBackground";
 import {
@@ -53,11 +56,11 @@ import { SaveCommandModal } from "./components/chat/SaveCommandModal";
 import { CustomActionEditor } from "./components/custom-actions/CustomActionEditor";
 import { CustomActionsPanel } from "./components/custom-actions/CustomActionsPanel";
 import { AppsPageView } from "./components/pages/AppsPageView";
-import { TutorialOverlay } from "./components/pages/tutorial/TutorialOverlay";
 import { PermissionPrimingOverlay } from "./components/permissions/PermissionPrimingOverlay";
 import { ActionBanner } from "./components/shell/ActionBanner";
 import { AssistantOverlay } from "./components/shell/AssistantOverlay";
 import { BugReportModal } from "./components/shell/BugReportModal";
+import { BuildBadge } from "./components/shell/BuildBadge";
 import { ChatSurface } from "./components/shell/ChatSurface";
 import { CloudHandoffBanner } from "./components/shell/CloudHandoffBanner";
 import { ConnectionFailedBanner } from "./components/shell/ConnectionFailedBanner";
@@ -125,6 +128,11 @@ import {
 import { isShellPaintable } from "./state/startup-coordinator";
 import { firstRunOwnsLoginSurface } from "./state/top-level-auth-gate";
 import { isLoopbackGatewayHost } from "./state/use-startup-shell-controller";
+import {
+  SurfaceRealmScope,
+  setActiveSurfaceRealmScope,
+} from "./surface-realm-broker";
+import { TutorialConductorMount } from "./tutorial/TutorialConductor";
 import { confirmDesktopAction } from "./utils/desktop-dialogs";
 import { VoiceSelfTestShell } from "./voice/voice-selftest/VoiceSelfTestShell";
 import { VoiceWorkbenchShell } from "./voice/voice-selftest/VoiceWorkbenchShell";
@@ -187,6 +195,10 @@ import {
 // eagerly elsewhere in the app graph (plugin-loader / boot-config), so a
 // lazy() boundary here would only fold back into main. The remaining page
 // views are lazy-split below.
+import {
+  CharacterSectionNav,
+  isCharacterSectionPath,
+} from "./components/character/CharacterSectionNav";
 import { DesktopTabBar } from "./components/desktop/DesktopTabBar";
 import { LauncherSurface } from "./components/pages/LauncherSurface";
 import {
@@ -195,6 +207,7 @@ import {
 } from "./components/pages/WalletSectionNav";
 import { FineTuningView } from "./components/training/injected";
 import { DynamicViewLoader } from "./components/views/DynamicViewLoader";
+import { registerSandboxProbeView } from "./components/views/sandbox-probe-view";
 import {
   useAvailableViews,
   useRoutableViews,
@@ -220,9 +233,12 @@ const BrowserWorkspaceView = lazyNamedView(
   () => import("./components/pages/BrowserWorkspaceView"),
   "BrowserWorkspaceView",
 );
-const TranscriptsPageView = lazyNamedView(
-  () => import("./components/transcripts/TranscriptsPage"),
-  "TranscriptsPage",
+// #13594: `/apps/transcripts` is now the chrome-minimal LIVE-meeting affordance
+// only — recordings were folded into the Knowledge hub. The full recordings
+// browser (TranscriptsPage) is no longer routed.
+const LiveMeetingPageView = lazyNamedView(
+  () => import("./components/transcripts/LiveMeetingPage"),
+  "LiveMeetingPage",
 );
 const CameraPageView = lazyNamedView(
   () => import("./components/pages/CameraPageView"),
@@ -251,10 +267,6 @@ const SettingsView = lazyNamedView(
 const TutorialView = lazyNamedView(
   () => import("./components/pages/tutorial/TutorialView"),
   "TutorialView",
-);
-const HelpView = lazyNamedView(
-  () => import("./components/pages/help/HelpView"),
-  "HelpView",
 );
 const StreamView = lazyNamedView(
   () => import("./components/pages/StreamView"),
@@ -909,6 +921,114 @@ function useActiveScreenBackgroundPolicy({
   }, [availableViews, navigationPath, registryVersion, tab, viewLayout]);
 }
 
+/**
+ * The active view's identity + resolved surface manifest — the same registration
+ * the background resolver above reads, resolved through the SAME
+ * {@link resolveSurfaceManifest} so there is one policy source. Drives the
+ * in-process host-realm broker (#14179): the shell scopes the active view's
+ * storage/navigation/DOM mutations from this manifest exactly as it derives the
+ * background from it.
+ */
+interface ActiveViewSurface {
+  manifest: ResolvedSurfaceManifest;
+  viewId: string;
+}
+
+function resolveActiveViewSurface({
+  tab,
+  navigationPath,
+  availableViews,
+  viewLayout,
+}: {
+  tab: string;
+  navigationPath: string;
+  availableViews: ViewRegistryEntry[];
+  viewLayout: ActiveViewLayout | null;
+}): ActiveViewSurface {
+  // A split/tile layout or an unregistered builtin route has no manifest bearer;
+  // it resolves to the safe default (no grants) — the default-deny baseline.
+  if (viewLayout) {
+    return {
+      manifest: resolveSurfaceManifest(null),
+      viewId: `layout:${viewLayout.viewIds.join("+") || tab}`,
+    };
+  }
+
+  const appShellPageForRoute = findAppShellPageForRoute(navigationPath);
+  if (appShellPageForRoute) {
+    return {
+      manifest: resolveSurfaceManifest(appShellPageForRoute),
+      viewId: appShellPageForRoute.id,
+    };
+  }
+
+  const appSlug =
+    tab === "apps" || tab === "views"
+      ? getAppSlugFromPath(navigationPath)
+      : null;
+  const remoteView = findRemoteViewForRoute(
+    availableViews,
+    navigationPath,
+    tab,
+    appSlug,
+  );
+  if (remoteView) {
+    return {
+      manifest: resolveSurfaceManifest(remoteView),
+      viewId: remoteView.id,
+    };
+  }
+
+  const appShellPageForTab = listAppShellPages().find(
+    (entry) => entry.id === tab,
+  );
+  if (appShellPageForTab) {
+    return {
+      manifest: resolveSurfaceManifest(appShellPageForTab),
+      viewId: appShellPageForTab.id,
+    };
+  }
+
+  const registeredView = availableViews.find(
+    (view) =>
+      view.builtin !== true &&
+      (view.id === tab ||
+        view.path === navigationPath ||
+        view.path === trimmedNavigationPath(navigationPath)),
+  );
+  if (registeredView) {
+    return {
+      manifest: resolveSurfaceManifest(registeredView),
+      viewId: registeredView.id,
+    };
+  }
+
+  return { manifest: resolveSurfaceManifest(null), viewId: tab };
+}
+
+function useActiveViewSurface({
+  tab,
+  navigationPath,
+  availableViews,
+  viewLayout,
+}: {
+  tab: string;
+  navigationPath: string;
+  availableViews: ViewRegistryEntry[];
+  viewLayout: ActiveViewLayout | null;
+}): ActiveViewSurface {
+  const registryVersion = useAppShellPageRegistryVersion();
+  return useMemo(() => {
+    void registryVersion;
+    return resolveActiveViewSurface({
+      tab,
+      navigationPath,
+      availableViews,
+      viewLayout,
+    });
+  }, [availableViews, navigationPath, registryVersion, tab, viewLayout]);
+}
+
 function trimmedNavigationPath(navigationPath: string): string {
   return navigationPath.length > 1 && navigationPath.endsWith("/")
     ? navigationPath.slice(0, -1)
@@ -916,7 +1036,11 @@ function trimmedNavigationPath(navigationPath: string): string {
 }
 
 function remoteViewAvailable(view: ViewRegistryEntry): boolean {
-  return Boolean(view.bundleUrl && view.available !== false);
+  return Boolean((view.bundleUrl || view.frameUrl) && view.available !== false);
+}
+
+function remoteViewLoaderUrl(view: ViewRegistryEntry): string | null {
+  return view.bundleUrl ?? view.frameUrl ?? null;
 }
 
 function remoteViewMatchesTab(
@@ -979,11 +1103,13 @@ function findRemoteViewForRoute(
 }
 
 function renderRemoteView(view: ViewRegistryEntry, nav?: ReactNode): ReactNode {
-  if (!view.bundleUrl) return null;
+  const loaderUrl = remoteViewLoaderUrl(view);
+  if (!loaderUrl) return null;
   return (
     <TabContentView nav={nav}>
       <DynamicViewLoader
-        bundleUrl={view.bundleUrl}
+        bundleUrl={loaderUrl}
+        frameUrl={view.frameUrl}
         componentExport={view.componentExport}
         viewId={view.id}
         viewType={view.viewType}
@@ -1084,31 +1210,36 @@ function ViewLayoutSurface({
           )} eliza-continuous-chat-scroll pb-[calc(0.5rem+var(--eliza-continuous-chat-clearance,5.25rem))]`}
         >
           {entries.length > 0 ? (
-            entries.map((view) => (
-              <section
-                key={view.id}
-                data-testid={`view-layout-pane-${view.id}`}
-                className={paneClassName}
-              >
-                <div className="flex h-9 shrink-0 items-center border-b border-border/35 px-2.5">
-                  <span className="truncate text-xs font-medium text-muted">
-                    {view.label}
-                  </span>
-                </div>
-                <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-                  {view.bundleUrl ? (
-                    <DynamicViewLoader
-                      bundleUrl={view.bundleUrl}
-                      componentExport={view.componentExport}
-                      viewId={view.id}
-                      viewType={view.viewType}
-                    />
-                  ) : (
-                    <ViewRouter routeOverride={routeOverrideForView(view)} />
-                  )}
-                </div>
-              </section>
-            ))
+            entries.map((view) => {
+              const loaderUrl = remoteViewLoaderUrl(view);
+              return (
+                <section
+                  key={view.id}
+                  data-testid={`view-layout-pane-${view.id}`}
+                  className={paneClassName}
+                >
+                  <div className="flex h-9 shrink-0 items-center border-b border-border/35 px-2.5">
+                    <span className="truncate text-xs font-medium text-muted">
+                      {view.label}
+                    </span>
+                  </div>
+                  <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+                    {loaderUrl ? (
+                      <DynamicViewLoader
+                        bundleUrl={loaderUrl}
+                        frameUrl={view.frameUrl}
+                        componentExport={view.componentExport}
+                        viewId={view.id}
+                        viewType={view.viewType}
+                        surface={view.surface}
+                      />
+                    ) : (
+                      <ViewRouter routeOverride={routeOverrideForView(view)} />
+                    )}
+                  </div>
+                </section>
+              );
+            })
           ) : (
             <div className="flex min-h-[18rem] items-center justify-center border border-border/45 px-4 text-center text-sm text-muted">
               Requested views are not available.
@@ -1161,6 +1292,7 @@ interface StaticTabRenderContext {
   navigationPath: string;
   settingsInitialSection?: string | null;
   walletNav?: ReactNode;
+  characterNav?: ReactNode;
 }
 
 /**
@@ -1188,7 +1320,6 @@ function buildStaticTabRenderers(): Record<
   );
   return {
     tutorial: wrap(<TutorialView />),
-    help: wrap(<HelpView />),
     chat: () => <ViewUnavailableFallback />,
     browser: () => <BrowserWorkspaceView />,
     stream: () => <StreamView />,
@@ -1197,11 +1328,26 @@ function buildStaticTabRenderers(): Record<
     plugins: wrap(<PluginsPageView />),
     skills: wrap(<SkillsView />),
     trajectories: wrap(<TrajectoriesView />),
-    transcripts: wrap(<TranscriptsPageView />),
-    relationships: wrap(<RelationshipsView />),
+    transcripts: wrap(<LiveMeetingPageView />),
+    // Relationships is a Character-family section: the shared CharacterSectionNav
+    // (passed as `nav`) owns the "Character" header + strip, so the view renders
+    // headerless.
+    relationships: ({ characterNav }) => (
+      <TabContentView nav={characterNav}>
+        <RelationshipsView hideHeader={Boolean(characterNav)} />
+      </TabContentView>
+    ),
     documents: wrap(<KnowledgeView />),
-    experience: wrap(<CharacterExperienceView />),
-    "character-skills": wrap(<CharacterSkillsView />),
+    experience: ({ characterNav }) => (
+      <TabContentView nav={characterNav}>
+        <CharacterExperienceView />
+      </TabContentView>
+    ),
+    "character-skills": ({ characterNav }) => (
+      <TabContentView nav={characterNav}>
+        <CharacterSkillsView />
+      </TabContentView>
+    ),
     memories: wrap(<MemoryViewerView />),
     files: () => (
       <TabScrollView>
@@ -1235,13 +1381,13 @@ function buildStaticTabRenderers(): Record<
     // Rendered directly (no opaque TabContentView chrome) so the live app
     // background shows through behind the controls.
     background: () => <BackgroundView />,
-    character: () => (
-      <TabContentView>
+    character: ({ characterNav }) => (
+      <TabContentView nav={characterNav}>
         <CharacterEditor />
       </TabContentView>
     ),
-    "character-select": () => (
-      <TabContentView>
+    "character-select": ({ characterNav }) => (
+      <TabContentView nav={characterNav}>
         <CharacterEditor />
       </TabContentView>
     ),
@@ -1260,12 +1406,14 @@ function renderStaticViewRouterTab({
   navigationPath,
   settingsInitialSection,
   walletNav,
+  characterNav,
 }: {
   tab: string;
   nativeOsSurfaceEnabled: boolean;
   navigationPath: string;
   settingsInitialSection?: string | null;
   walletNav?: ReactNode;
+  characterNav?: ReactNode;
 }): ReactNode {
   // Resolve legacy alias ids (e.g. `triggers` -> `automations`, `advanced` ->
   // `fine-tuning`) onto their canonical builtin id via the shared registry, so
@@ -1278,6 +1426,7 @@ function renderStaticViewRouterTab({
       navigationPath,
       settingsInitialSection,
       walletNav,
+      characterNav,
     });
   }
   return <ViewUnavailableFallback />;
@@ -1324,6 +1473,13 @@ function renderViewRouterContent({
     <WalletSectionNav activePath={navigationPath} />
   ) : undefined;
 
+  // Character-family routes (Personality/Relationships/Skills/Experience) share
+  // one "Character" header + section strip in the same nav slot (#13591). Unlike
+  // Wallet, the members are a fixed host-owned set, so the strip is static.
+  const characterNav = isCharacterSectionPath(navigationPath) ? (
+    <CharacterSectionNav activePath={navigationPath} />
+  ) : undefined;
+
   const appShellPageForRoute = findAppShellPageForRoute(navigationPath);
   if (
     appShellPageForRoute &&
@@ -1341,13 +1497,16 @@ function renderViewRouterContent({
     tab,
     appSlug,
   );
-  if (remoteView?.bundleUrl) return renderRemoteView(remoteView, walletNav);
+  if (remoteView && remoteViewLoaderUrl(remoteView)) {
+    return renderRemoteView(remoteView, walletNav);
+  }
   return renderStaticViewRouterTab({
     tab,
     nativeOsSurfaceEnabled,
     navigationPath,
     settingsInitialSection,
     walletNav,
+    characterNav,
   });
 }
 
@@ -1795,6 +1954,11 @@ export function App() {
   }));
   const isPopout = useIsPopout();
   const shellMode = useShellMode();
+  // Register the developer-only sandboxed-iframe consumer once at boot (#14180),
+  // so the level has a shipped, navigable first-party view. Idempotent.
+  useEffect(() => {
+    registerSandboxProbeView();
+  }, []);
   // Auth gate — only active after the coordinator reaches "ready".
   // During first-run setup / pairing / startup phases the StartupScreen handles
   // its own gate (bootstrap step), so we skip the check.
@@ -2014,6 +2178,33 @@ export function App() {
     screenBackgroundPolicy === "shared" && !overlayAppSurfaceActive;
   const renderOpaqueAppBackground =
     screenBackgroundPolicy === "opaque" || overlayAppSurfaceActive;
+
+  // In-process host-realm isolation (#14179). Resolve the active view's surface
+  // manifest from the same registry as the background, then publish one broker
+  // scope per active view: storage/navigation gated on the manifest's grants,
+  // and the view's global root/body-class + `:root`-var mutations reset on
+  // teardown so nothing a view injected into the host realm survives into the
+  // next view. `resolveSurfaceManifest` stays the single policy source.
+  const activeViewSurface = useActiveViewSurface({
+    tab,
+    navigationPath,
+    availableViews: availableViewsForDesktopTabs,
+    viewLayout,
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const scope = new SurfaceRealmScope(
+      activeViewSurface.manifest,
+      activeViewSurface.viewId,
+      window.localStorage,
+      navigateBrowserPath,
+    );
+    setActiveSurfaceRealmScope(scope);
+    return () => {
+      scope.resetHostRealm();
+      setActiveSurfaceRealmScope(null);
+    };
+  }, [activeViewSurface]);
 
   const [editingAction, setEditingAction] = useState<
     import("./api").CustomActionDef | null
@@ -2546,11 +2737,12 @@ export function App() {
             downloading/loading/missing/errored it seeds ONE live status turn
             with cancel / switch-to-cloud / retry controls. Renders null. */}
         <ModelStatusConductorMount />
-        {/* Interactive tutorial: a persistent spotlight overlay that survives
-            navigation (it sends the user to Settings, back home, …). Renders
-            only when the tutorial is active (launched from the home Tutorial
-            tile or the Help view). */}
-        <TutorialOverlay />
+        {/* In-chat tutorial conductor (headless) — while the tour is active it
+            seeds one conversational turn per step into the SAME live transcript
+            the overlay renders, narrates through the real voice engine, and
+            auto-advances on the user's real actions. No locks, no spotlight:
+            the user can ignore it freely. */}
+        <TutorialConductorMount />
         {/* Post-login permission priming: a one-time soft-ask modal that walks
             the user through the platform's onboarding permission set (voice,
             location, notifications) BEFORE any OS prompt. Self-gates on
@@ -2564,6 +2756,11 @@ export function App() {
             to the dashboard, where NotificationsHomeCenter is the one
             notification surface. Renders null. */}
         <NotificationsShellBoot />
+        {/* Tiny dismissible build stamp (bottom-left) so testers can verify
+            PWA cache freshness at a glance. Best-effort: hidden when
+            /build-info.json is absent (production builds without the
+            build-time stamp render nothing). */}
+        <BuildBadge />
         <ShellOverlays actionNotice={actionNotice} />
         <SaveCommandModal
           open={contextMenu.saveCommandModalOpen}

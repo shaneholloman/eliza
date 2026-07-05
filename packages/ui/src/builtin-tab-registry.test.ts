@@ -8,14 +8,37 @@
  * and the router's alias handling, and a grep-guard proves the old central
  * if-chains are gone from App.tsx's executable paths.
  */
+
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { resolveSurfaceManifest } from "@elizaos/core";
 import { describe, expect, it } from "vitest";
 import {
   BUILTIN_TAB_METADATA,
   resolveBuiltinBackgroundPolicy,
+  resolveBuiltinSurfaceManifest,
   resolveBuiltinTabId,
 } from "./builtin-tab-registry";
+
+describe("builtin-tab-registry: resolveBuiltinSurfaceManifest", () => {
+  it("resolves the Browser view to the native-webview isolation level", () => {
+    // The Browser view's tab renderer reads this to drive its native child
+    // web-content embedding (#14181); the level must stay native-webview.
+    expect(resolveBuiltinSurfaceManifest("browser").isolation).toBe(
+      "native-webview",
+    );
+    expect(resolveBuiltinSurfaceManifest("browser").background).toBe("opaque");
+  });
+
+  it("throws for a tab that declares no full surface manifest", () => {
+    // `views`/`apps` declare a path-predicate `shared` form, not a full
+    // manifest — asking for their resolved isolation is a misuse to surface,
+    // not a silent default.
+    expect(() => resolveBuiltinSurfaceManifest("views")).toThrow();
+    expect(() => resolveBuiltinSurfaceManifest("settings")).toThrow();
+    expect(() => resolveBuiltinSurfaceManifest("does-not-exist")).toThrow();
+  });
+});
 
 describe("builtin-tab-registry: table integrity", () => {
   it("has unique canonical ids and no id/alias collisions", () => {
@@ -93,6 +116,36 @@ describe("resolveBuiltinBackgroundPolicy: legacy parity", () => {
     ["triggers", "/automations"],
   ] as const)("%s @ %s -> null (no builtin policy)", (tab, path) => {
     expect(resolveBuiltinBackgroundPolicy(tab, path)).toBeNull();
+  });
+});
+
+describe("browser: native-webview isolation manifest (#13596)", () => {
+  const decl = BUILTIN_TAB_METADATA.find(
+    (entry) => entry.id === "browser",
+  )?.surface;
+  // The browser declares a full SurfaceManifest, not the path-predicate variant
+  // (`{ shared }`) the wallpaper tabs use — narrow to the manifest shape so the
+  // resolver typechecks and a regression to a predicate is caught here.
+  const surface = decl && "isolation" in decl ? decl : undefined;
+
+  it("declares a full surface manifest (not id-only, not a path predicate)", () => {
+    expect(surface).toBeDefined();
+  });
+
+  it("resolves to native-webview isolation (the catalogue's canonical consumer)", () => {
+    // The browser hosts arbitrary third-party web content in a native child
+    // web-content surface with its own renderer process; it must never share
+    // the host realm. See surface-isolation.ts's catalogue entry.
+    expect(resolveSurfaceManifest({ surface }).isolation).toBe(
+      "native-webview",
+    );
+  });
+
+  it("stays opaque — the browser never paints the shared wallpaper", () => {
+    expect(resolveBuiltinBackgroundPolicy("browser", "/browser")).toBe(
+      "opaque",
+    );
+    expect(resolveSurfaceManifest({ surface }).background).toBe("opaque");
   });
 });
 

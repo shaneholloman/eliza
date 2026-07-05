@@ -189,6 +189,10 @@ import {
   SIDE_EFFECT_APP_MODULE_LOADERS,
   type SideEffectAppModuleLoader,
 } from "./plugin-registrations";
+import {
+  applyRuntimeChooserOverrideFromUrl,
+  removeUrlParameter,
+} from "./runtime-chooser-override";
 import { registerViewServiceWorker } from "./sw-registration";
 
 declare const __ELIZA_BUILD_VARIANT__: string | undefined;
@@ -463,6 +467,7 @@ if (shouldInstallMainWindowFirstRunPatches(windowShellRoute)) {
 installLocalProviderCloudPreferencePatch(client);
 installDesktopPermissionsClientPatch(client);
 applyCloudPairSessionToken();
+applyRuntimeChooserOverrideFromUrl();
 
 // NOTE: do not gate on isElizaOS() here — that requires the `ElizaOS/` UA
 // marker which only AOSP/branded device images carry, so it excluded the
@@ -1840,6 +1845,24 @@ async function initializePlatform(): Promise<void> {
     waitForElement: waitForIosOnboardingElement,
     readStorageSnapshot: readIosOnboardingSmokeStorageSnapshot,
   });
+  // Lazy + iOS-gated: the voice self-test pulls the whole @elizaos/ui/voice
+  // graph, which a static import anchors into every web/desktop entry chunk.
+  // Non-iOS platforms never ran the smoke anyway (the module self-gates), so
+  // they now skip fetching the chunk entirely.
+  if (isIOS) {
+    void import("./ios-voice-selftest-smoke").then(
+      ({ runIosVoiceSelfTestSmokeIfRequested }) =>
+        runIosVoiceSelfTestSmokeIfRequested({
+          isIOS,
+          client,
+          getPreference: boundedPreferenceGet,
+          removePreference: (key) =>
+            boundedPreferenceWrite(() => Preferences.remove({ key })),
+          writeResult: writeIosPreferenceSmokeResult,
+          readStorageSnapshot: readIosOnboardingSmokeStorageSnapshot,
+        }),
+    );
+  }
 
   if (isIOS || isAndroid) {
     await initializeStatusBar();
@@ -2859,24 +2882,6 @@ function injectWaifuChatAccessToken(): void {
       removeUrlParameter(window.location.href, "waifu_access_token"),
     );
   }
-}
-
-function removeUrlParameter(href: string, parameter: string): URL {
-  const nextUrl = new URL(href);
-  nextUrl.searchParams.delete(parameter);
-  const hashQueryIndex = nextUrl.hash.indexOf("?");
-  if (hashQueryIndex >= 0) {
-    const hashPath = nextUrl.hash.slice(0, hashQueryIndex);
-    const hashParams = new URLSearchParams(
-      nextUrl.hash.slice(hashQueryIndex + 1),
-    );
-    hashParams.delete(parameter);
-    const serializedHashParams = hashParams.toString();
-    nextUrl.hash = serializedHashParams
-      ? `${hashPath}?${serializedHashParams}`
-      : hashPath;
-  }
-  return nextUrl;
 }
 
 function injectDetachedShellApiBase(): void {

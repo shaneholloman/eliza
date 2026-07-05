@@ -321,6 +321,8 @@ async function dispatchOrchestratorRoutes(
       acceptanceCriteria: asStringArray(body.acceptanceCriteria),
       ownerUserId: asString(body.ownerUserId),
       worldId: asString(body.worldId),
+      projectId: asString(body.projectId),
+      workdir: asString(body.workdir),
       roomId: asString(body.roomId),
       taskRoomId: asString(body.taskRoomId),
       providerPolicy: asProviderPolicy(body.providerPolicy),
@@ -518,6 +520,9 @@ async function dispatchOrchestratorRoutes(
         goal: asString(body.goal),
         priority: asPriority(body.priority),
         acceptanceCriteria: asStringArray(body.acceptanceCriteria),
+        worldId: asString(body.worldId),
+        projectId: asString(body.projectId),
+        workdir: asString(body.workdir),
       });
       if (!forked) {
         sendError(res, "Task not found", 404);
@@ -938,6 +943,20 @@ async function dispatchOrchestratorRoutes(
         return true;
       }
       sendJson(res, usage);
+      return true;
+    }
+
+    // GET /tasks/:taskId/trace-usage — per-trace roll-up over the ingested
+    // sub-agent trajectory files (#13775 item 5). Distinct from /usage (ACP
+    // session frames); this attributes the sub-agents' inner model-call spend
+    // to the shared traceId so a task shows its whole logical-run cost.
+    if (method === "GET" && sub === "trace-usage" && segments.length === 2) {
+      const traceUsage = await service.getTraceUsage(taskId);
+      if (!traceUsage) {
+        sendError(res, "Task not found", 404);
+        return true;
+      }
+      sendJson(res, traceUsage);
       return true;
     }
 

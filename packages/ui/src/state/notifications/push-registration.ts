@@ -179,15 +179,12 @@ async function addPushListeners(
     });
   });
 
-  await addListener(
-    "registrationError",
-    (error: PushRegistrationError) => {
-      logger.error(
-        { src: "push-registration", platform, error: error.error },
-        "[push-registration] OS push registration failed",
-      );
-    },
-  );
+  await addListener("registrationError", (error: PushRegistrationError) => {
+    logger.error(
+      { src: "push-registration", platform, error: error.error },
+      "[push-registration] OS push registration failed",
+    );
+  });
 
   await addListener(
     "pushNotificationActionPerformed",

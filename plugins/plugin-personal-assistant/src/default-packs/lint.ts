@@ -1,3 +1,5 @@
+import { findBasicEmailSpans } from "@elizaos/core";
+
 /**
  * Prompt-content lint pass for default-pack `promptInstructions`.
  *
@@ -58,13 +60,6 @@ export interface PromptLintFinding {
 const PII_NAMES = ["Jill", "Marco", "Sarah", "Suran", "Sam"] as const;
 
 const PII_REGEX = new RegExp(`\\b(${PII_NAMES.join("|")})\\b`, "g");
-
-/**
- * Concrete email addresses. We match a simple `local@host.tld` shape; any
- * literal email in a default pack is a leak (use owner facts or entity
- * references).
- */
-const EMAIL_REGEX = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
 
 /**
  * Formatted phone numbers. International prefix optional; accepts `+1 555…`,
@@ -160,13 +155,13 @@ export function lintPromptText(args: {
     });
   }
 
-  for (const match of prompt.matchAll(EMAIL_REGEX)) {
+  for (const match of findBasicEmailSpans(prompt)) {
     findings.push({
       packKey,
       recordKey,
       rule: "email_pii",
-      message: `Concrete email address "${match[0]}" embedded in prompt; reference the owner or an EntityStore contact instead.`,
-      match: match[0],
+      message: `Concrete email address "${match.value}" embedded in prompt; reference the owner or an EntityStore contact instead.`,
+      match: match.value,
     });
   }
 

@@ -228,7 +228,12 @@ const remoteModule: RemotePluginModuleManifest = {
       id: "remote-view",
       label: "Remote View",
       viewType: "gui",
+      surface: {
+        isolation: "sandboxed-iframe",
+        capabilities: ["navigate", "storage"],
+      },
       bundleUrl: "https://remote.example/assets/remote-view.js",
+      frameUrl: "https://remote.example/assets/remote-view.html",
     },
   ],
 };
@@ -534,6 +539,11 @@ describe("remote plugin adapter", () => {
     expect(plugin.views?.[0]).toMatchObject({
       id: "remote-view",
       bundleUrl: "https://remote.example/assets/remote-view.js",
+      frameUrl: "https://remote.example/assets/remote-view.html",
+      surface: {
+        isolation: "sandboxed-iframe",
+        capabilities: ["navigate", "storage"],
+      },
     });
     expect(plugin.widgets?.[0]).toMatchObject({
       id: "remote.widget",
@@ -3390,6 +3400,8 @@ describe("remote plugin adapter", () => {
                       id: "device.panel",
                       label: "Device Panel",
                       bundlePath: "/assets/device-panel.js",
+                      framePath: "/assets/device-frame.html",
+                      surface: { isolation: "sandboxed-iframe" },
                     },
                   ],
                 },
@@ -3512,6 +3524,9 @@ describe("remote plugin adapter", () => {
       id: "device.panel",
       bundleUrl:
         "https://device.example/v1/capabilities/assets/device-tools/assets/device-panel.js",
+      frameUrl:
+        "https://device.example/v1/capabilities/assets/device-tools/assets/device-frame.html",
+      surface: { isolation: "sandboxed-iframe" },
     });
     expect(runtime.plugins[0]?.config).toMatchObject({
       remoteCapabilityModuleId: "device-tools",

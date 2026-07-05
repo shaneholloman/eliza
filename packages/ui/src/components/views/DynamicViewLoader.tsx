@@ -78,6 +78,7 @@ import {
 } from "../../state/bounded-view-lru";
 import { installHeapPressureMonitor } from "../../state/heap-pressure-monitor";
 import { useApp } from "../../state/useApp.ts";
+import { getActiveSurfaceRealmScope } from "../../surface-realm-broker";
 import { registerDetailExtension } from "../apps/extensions/registry.ts";
 import {
   formatDetailTimestamp,
@@ -99,6 +100,7 @@ import { Button } from "../ui/button.tsx";
 import { ErrorBoundary } from "../ui/error-boundary";
 import { Input } from "../ui/input.tsx";
 import { Spinner } from "../ui/spinner.tsx";
+import { SandboxedViewFrame } from "./SandboxedViewFrame";
 import {
   navigateToViews,
   ViewErrorState,
@@ -389,7 +391,63 @@ async function importUiComponentsCompat(): Promise<Record<string, unknown>> {
 }
 
 async function importUiRootCompat(): Promise<Record<string, unknown>> {
-  return import("../../index.ts");
+  // The root barrel re-exports the RAW navigation/storage helpers (via
+  // `export * from "./app-navigate-view"` and `export * from "./bridge/index"`),
+  // which reach host `window.history` / `window.localStorage` directly. Exposing
+  // that unbrokered would let an in-process view bypass the manifest broker by
+  // importing from `@elizaos/ui` instead of the wrapped `@elizaos/ui/*` subpaths.
+  // Overlay the SAME wrapped versions the subpath compat modules expose so the
+  // sensitive nav/storage symbols route through the active surface-realm scope no
+  // matter which specifier the view imports; every other root export is untouched.
+  const [root, appNavigateView, bridge] = await Promise.all([
+    import("../../index.ts"),
+    importUiAppNavigateViewCompat(),
+    importUiBridgeCompat(),
+  ]);
+  return { ...root, ...appNavigateView, ...bridge };
+}
+
+async function importUiAppNavigateViewCompat(): Promise<
+  Record<string, unknown>
+> {
+  const appNavigateView = await import("../../app-navigate-view.ts");
+  const scope = getActiveSurfaceRealmScope();
+  return {
+    ...appNavigateView,
+    navigateBrowserPath(path: string): void {
+      if (scope) {
+        scope.navigate(path);
+        return;
+      }
+      appNavigateView.navigateBrowserPath(path);
+    },
+  };
+}
+
+async function importUiBridgeCompat(): Promise<Record<string, unknown>> {
+  const bridge = await import("../../bridge/index.ts");
+  const scope = getActiveSurfaceRealmScope();
+  return {
+    ...bridge,
+    async getStorageValue(key: string): Promise<string | null> {
+      if (scope) return scope.storage.getItem(key);
+      return bridge.getStorageValue(key);
+    },
+    async setStorageValue(key: string, value: string): Promise<void> {
+      if (scope) {
+        scope.storage.setItem(key, value);
+        return;
+      }
+      await bridge.setStorageValue(key, value);
+    },
+    async removeStorageValue(key: string): Promise<void> {
+      if (scope) {
+        scope.storage.removeItem(key);
+        return;
+      }
+      await bridge.removeStorageValue(key);
+    },
+  };
 }
 
 // Framework + host modules the shell always provides to every view bundle:
@@ -416,9 +474,9 @@ const HOST_EXTERNAL_IMPORTERS: Record<string, HostExternalImporter> = {
   "@elizaos/shared": () => importHostExternal("@elizaos/shared"),
   "@elizaos/ui": importUiRootCompat,
   "@elizaos/ui/agent-surface": async () => AgentSurfaceHost,
-  "@elizaos/ui/app-navigate-view": () => import("../../app-navigate-view.ts"),
+  "@elizaos/ui/app-navigate-view": importUiAppNavigateViewCompat,
   "@elizaos/ui/api": () => import("../../api/index.ts"),
-  "@elizaos/ui/bridge": () => import("../../bridge/index.ts"),
+  "@elizaos/ui/bridge": importUiBridgeCompat,
   "@elizaos/ui/components": importUiComponentsCompat,
   "@elizaos/ui/config": () => import("../../config/index.ts"),
   "@elizaos/ui/events": () => import("../../events/index.ts"),
@@ -1120,6 +1178,8 @@ async function handleStandardCapability(
 interface DynamicViewLoaderProps {
   /** The URL of the JS bundle to dynamically import. */
   bundleUrl: string;
+  /** HTML document URL for sandboxed-iframe views. */
+  frameUrl?: string;
   /** Named export inside the bundle to use as the root component. Defaults to "default". */
   componentExport?: string;
   /** The view's stable ID, used in error state messages. */
@@ -1151,6 +1211,7 @@ interface DynamicViewLoaderProps {
  */
 export const DynamicViewLoader = memo(function DynamicViewLoader({
   bundleUrl,
+  frameUrl,
   componentExport = "default",
   viewId,
   viewProps: forwardedViewProps,
@@ -1164,6 +1225,11 @@ export const DynamicViewLoader = memo(function DynamicViewLoader({
     () => resolveSurfaceManifest({ surface }),
     [surface],
   );
+  // A `sandboxed-iframe` view is never imported into the host realm — that is
+  // the whole point of the level. It renders in an `<iframe sandbox>` (#14180)
+  // and talks to the shell only through the postMessage broker, so the in-realm
+  // bundle-load / interact-registry path below is skipped for it.
+  const isSandboxed = resolvedManifest.isolation === "sandboxed-iframe";
   const [bundle, setBundle] = useState<ViewBundleModule | null>(null);
   const [loadError, setLoadError] = useState<Error | null>(null);
   // Incrementing this key invalidates the module cache entry and forces a
@@ -1185,7 +1251,7 @@ export const DynamicViewLoader = memo(function DynamicViewLoader({
   // re-run this effect to invalidate the module cache.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadKey is a manual cache-bust trigger
   useEffect(() => {
-    if (!dynamicLoadingAllowed) return;
+    if (!dynamicLoadingAllowed || isSandboxed) return;
 
     let cancelled = false;
     const lease = acquireBundleModule(bundleUrl, componentExport);
@@ -1212,7 +1278,13 @@ export const DynamicViewLoader = memo(function DynamicViewLoader({
       cancelled = true;
       lease.release();
     };
-  }, [bundleUrl, componentExport, dynamicLoadingAllowed, reloadKey]);
+  }, [
+    bundleUrl,
+    componentExport,
+    dynamicLoadingAllowed,
+    isSandboxed,
+    reloadKey,
+  ]);
 
   // Register this view's interact handler whenever the bundle is loaded.
   // The handler is unregistered on unmount or when the bundle changes.
@@ -1310,9 +1382,40 @@ export const DynamicViewLoader = memo(function DynamicViewLoader({
     setReloadKey((k) => k + 1);
   }, [bundleUrl, componentExport]);
 
-  // iOS App Store and Google Play builds cannot load remote JS at runtime.
+  // iOS App Store and Google Play builds cannot load remote JS or HTML frame
+  // documents at runtime; both execute plugin-provided code.
   if (!dynamicLoadingAllowed) {
     return <ViewRestrictedState viewId={viewId} />;
+  }
+
+  // A sandboxed-iframe view embeds cross-realm through a real HTML document URL.
+  // Never feed the JS module `bundleUrl` to an iframe: `/api/views/:id/bundle.js`
+  // is served as JavaScript and is only valid for host-realm dynamic import.
+  if (isSandboxed) {
+    if (!frameUrl) {
+      return (
+        <ViewErrorState
+          viewId={viewId}
+          error={
+            new Error(
+              "Sandboxed iframe views require a frameUrl HTML document; bundleUrl is a JavaScript module.",
+            )
+          }
+          onRetry={recoverView}
+          onBack={navigateToViews}
+        />
+      );
+    }
+    return (
+      <div ref={containerRef} className="contents">
+        <SandboxedViewFrame
+          viewId={viewId}
+          surface={surface}
+          src={frameUrl}
+          title={viewId}
+        />
+      </div>
+    );
   }
 
   if (loadError) {

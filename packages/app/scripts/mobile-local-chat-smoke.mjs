@@ -15,6 +15,10 @@ import {
   ANDROID_FULL_TURN_FAILURE_RE,
   IOS_FULL_BUN_SMOKE_FAILURE_RE,
 } from "./lib/chat-failure-strings.mjs";
+import {
+  assertMarkerSurvivedRelaunch,
+  buildRelaunchMarker,
+} from "./lib/chat-history-persistence.mjs";
 import { startDeviceE2eHostAgent } from "./lib/host-agent.mjs";
 import { assertInstalledIosAppRendererFresh } from "./lib/ios-renderer-stamp.mjs";
 import { clearIosSmokeDefaults } from "./lib/ios-sim-defaults-hygiene.mjs";
@@ -28,6 +32,10 @@ const appConfigPath = path.join(repoRoot, "packages/app/app.config.ts");
 const iosLocalChatResultDir = path.join(
   repoRoot,
   "packages/app/test-results/ios-local-chat",
+);
+const relaunchPersistenceResultDir = path.join(
+  repoRoot,
+  "packages/app/test-results/relaunch-persistence",
 );
 
 function argValue(name) {
@@ -51,6 +59,7 @@ const androidStageSmokeModel = process.argv.includes(
   "--android-stage-smoke-model",
 );
 const iosBackground = process.argv.includes("--ios-background");
+const relaunchPersistence = process.argv.includes("--relaunch-persistence");
 const iosBackgroundTaskId =
   argValue("--ios-background-task-id") ?? "ai.eliza.tasks.refresh";
 const IOS_FULL_BUN_SMOKE_REQUEST_KEY = "eliza:ios-full-bun-smoke:request";
@@ -198,6 +207,11 @@ Options:
   --android-background             Background Android, force-fire the WorkManager job, and poll /api/health
   --ios-background                 Background iOS, fire a BGTaskScheduler task via LLDB, and poll /api/health
   --ios-background-task-id ID      iOS BGTask identifier to simulate (default: ai.eliza.tasks.refresh)
+  --relaunch-persistence           After the turn, send a unique marker through the live stream path, force-stop +
+                                   relaunch the app, and assert server truth plus rendered transcript proof.
+                                   Android only:
+                                   the iOS on-device agent is IPC-only, so its relaunch check needs the Preferences
+                                   handshake / XCUITest path (#13689).
   --help                           Print this help
 
 Notes:
@@ -1557,6 +1571,71 @@ function takeAndroidScreenshot(context, label) {
   return outPath;
 }
 
+function dumpAndroidUiHierarchy(context, label) {
+  if (!context?.installed) return null;
+  const outDir = path.join(os.tmpdir(), "eliza-android-ui-dumps");
+  fs.mkdirSync(outDir, { recursive: true });
+  const outPath = path.join(
+    outDir,
+    `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.xml`,
+  );
+  const remote = `/sdcard/${path.basename(outPath)}`;
+  if (
+    tryExec(context.adb, [
+      "-s",
+      context.serial,
+      "shell",
+      "uiautomator",
+      "dump",
+      remote,
+    ]) === null
+  ) {
+    return null;
+  }
+  if (
+    tryExec(context.adb, ["-s", context.serial, "pull", remote, outPath]) ===
+    null
+  ) {
+    return null;
+  }
+  tryExec(context.adb, ["-s", context.serial, "shell", "rm", remote]);
+  return outPath;
+}
+
+function readTextFileIfPresent(filePath) {
+  if (!filePath) return "";
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function assertAndroidRenderedTranscript({ context, marker, expectedReply }) {
+  const dumpPath = dumpAndroidUiHierarchy(context, "relaunch-persistence-post");
+  const uiXml = readTextFileIfPresent(dumpPath);
+  const visibleMarker = uiXml.includes(marker);
+  const visibleReply =
+    typeof expectedReply === "string" &&
+    expectedReply.length > 0 &&
+    uiXml.toLowerCase().includes(expectedReply.toLowerCase());
+  if (!visibleMarker && !visibleReply) {
+    const screenshot = takeAndroidScreenshot(
+      context,
+      "relaunch-persistence-render-missing",
+    );
+    throw new Error(
+      `Relaunch-persistence server thread survived, but the Android UI hierarchy did not expose the marker or expected reply after relaunch. ` +
+        `marker=${marker} expectedReply=${expectedReply} uiDump=${dumpPath ?? "<unavailable>"} screenshot=${screenshot ?? "<unavailable>"}`,
+    );
+  }
+  return {
+    uiHierarchyDump: dumpPath,
+    visibleMarker,
+    visibleReply,
+  };
+}
+
 function androidBackgroundServicesReady(services, id) {
   const foregroundCount = services.match(/isForeground=true/g)?.length ?? 0;
   return (
@@ -2434,6 +2513,199 @@ async function runLocalInferenceApiSmoke(
   );
 }
 
+/**
+ * Force-stop and relaunch the installed Android app so its ElizaAgentService is
+ * torn down and re-booted against the same on-device SQLite database — the real
+ * "reopen the app" event whose persistence #13689 asserts. `am force-stop` kills
+ * the whole process (not just the activity), so the next `am start` is a cold
+ * relaunch, not a resume.
+ */
+function relaunchAndroidApp(context) {
+  const id = appId();
+  requireExec(
+    context.adb,
+    ["-s", context.serial, "shell", "am", "force-stop", id],
+    `Failed to force-stop ${id} on ${context.serial}.`,
+  );
+  requireExec(
+    context.adb,
+    ["-s", context.serial, "shell", "am", "start", "-n", `${id}/.MainActivity`],
+    `Failed to relaunch ${id} on ${context.serial}.`,
+  );
+  tryExec(context.adb, [
+    "-s",
+    context.serial,
+    "shell",
+    "am",
+    "start",
+    "-a",
+    "android.intent.action.VIEW",
+    "-d",
+    "elizaos://chat",
+    id,
+  ]);
+}
+
+/**
+ * Re-establish the forwarded HTTP surface after a relaunch. The old adb forward
+ * points at a dead process, and the app rebinds device port 31337 on restart, so
+ * the stale forward is dropped and `waitForAndroidApi` allocates a fresh one and
+ * re-reads the (persisted) local-agent token, then the process-stability gate
+ * ensures the restart settled before we read the thread back.
+ */
+async function reacquireAndroidApiAfterRelaunch(context) {
+  cleanupAndroidAgentForwards(context, "relaunch");
+  const api = await waitForAndroidApi(context);
+  if (!api) {
+    throw new Error(
+      "Android local-agent API did not come back after relaunch; cannot assert chat-history persistence.",
+    );
+  }
+  await waitForAndroidProcessStability(api.apiBase, api.token);
+  return api;
+}
+
+/**
+ * Android relaunch-persistence leg (#13689). Sends a unique marker message
+ * through the real streamed chat path, captures the thread from server truth,
+ * force-stops and cold-relaunches the app, then re-fetches the thread from the
+ * restarted agent and asserts the marker survived. It also requires post-relaunch
+ * rendered proof from the Android accessibility hierarchy, so the lane cannot
+ * pass from a database row that never reappears in the transcript UI.
+ */
+async function verifyAndroidChatHistoryPersistence(context, initialApi) {
+  if (!context?.installed) {
+    const message =
+      "[local-chat-smoke] --relaunch-persistence requested but the Android app is not installed.";
+    if (requireInstalled) throw new Error(message);
+    console.warn(message);
+    return null;
+  }
+
+  let { apiBase, token } = initialApi;
+
+  const created = await requestJson(
+    "POST",
+    "/api/conversations",
+    { title: "Relaunch persistence smoke" },
+    apiBase,
+    token,
+  );
+  const conversationId = created.conversation?.id;
+  if (!conversationId) {
+    throw new Error(
+      "Relaunch-persistence conversation creation did not return an id.",
+    );
+  }
+  const marker = buildRelaunchMarker({
+    platform: "android",
+    runId: conversationId,
+  });
+  const messagesPath = `/api/conversations/${encodeURIComponent(conversationId)}/messages`;
+  const markerPrompt = `${marker}\nReply with exactly these four words: ${ANDROID_FULL_TURN_EXPECTED_REPLY}.`;
+
+  const { done, reply } = await withTransientRetry(
+    "relaunch-persistence streamed marker turn",
+    async () => {
+      const streamText = await requestTextResponse(
+        "POST",
+        `/api/conversations/${encodeURIComponent(conversationId)}/messages/stream`,
+        {
+          text: markerPrompt,
+          channelType: "DM",
+          source: "android-local-relaunch-persistence",
+          metadata: {
+            smoke: "android-relaunch-persistence",
+            marker,
+          },
+        },
+        apiBase,
+        token,
+        ANDROID_FULL_TURN_TIMEOUT_MS,
+      );
+      if (!streamText) {
+        throw new Error(
+          "Relaunch-persistence marker turn returned an empty body.",
+        );
+      }
+      const doneEvent = extractDoneEventFromSse(streamText);
+      return {
+        done: doneEvent,
+        reply: requireUsableFullTurnReply(doneEvent, streamText),
+      };
+    },
+  );
+
+  const beforeBody = await requestJson(
+    "GET",
+    messagesPath,
+    undefined,
+    apiBase,
+    token,
+  );
+  const preShot = takeAndroidScreenshot(context, "relaunch-persistence-pre");
+
+  console.log(
+    `[local-chat-smoke] Relaunch persistence: seeded marker ${marker} into ${conversationId}; force-stopping + relaunching ${appId()}.`,
+  );
+  relaunchAndroidApp(context);
+  const reacquired = await reacquireAndroidApiAfterRelaunch(context);
+  apiBase = reacquired.apiBase;
+  token = reacquired.token;
+
+  const afterBody = await requestJson(
+    "GET",
+    messagesPath,
+    undefined,
+    apiBase,
+    token,
+  );
+  const postShot = takeAndroidScreenshot(context, "relaunch-persistence-post");
+
+  const result = assertMarkerSurvivedRelaunch({
+    marker,
+    beforeBody,
+    afterBody,
+  });
+  const renderedTranscript = assertAndroidRenderedTranscript({
+    context,
+    marker,
+    expectedReply: reply,
+  });
+
+  fs.mkdirSync(relaunchPersistenceResultDir, { recursive: true });
+  const evidencePath = path.join(
+    relaunchPersistenceResultDir,
+    `android-${conversationId}.json`,
+  );
+  fs.writeFileSync(
+    evidencePath,
+    `${JSON.stringify(
+      {
+        platform: "android",
+        conversationId,
+        marker,
+        result,
+        liveStream: {
+          reply,
+          usage: done?.usage ?? null,
+        },
+        preRelaunchScreenshot: preShot,
+        postRelaunchScreenshot: postShot,
+        renderedTranscript,
+        afterRelaunchServerThread: afterBody,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  console.log(
+    `[local-chat-smoke] Relaunch persistence PASSED: marker survived (${result.beforeCount} → ${result.afterCount} message(s) from server truth) and rendered proof was visible. Evidence: ${evidencePath}`,
+  );
+  return result;
+}
+
 async function main() {
   let androidContext = null;
   let iosContext = null;
@@ -2469,6 +2741,14 @@ async function main() {
 
     if (apiBase) {
       await runLocalInferenceApiSmoke(apiBase, authTokenArg);
+      if (relaunchPersistence) {
+        // The harness does not own the --api-base process, so it cannot force a
+        // real app relaunch; the relaunch-persistence leg is a device-driven
+        // lane (Android below).
+        console.warn(
+          "[local-chat-smoke] --relaunch-persistence is N/A with --api-base: the harness does not own the agent process and cannot relaunch it. Use --platform android against an installed app.",
+        );
+      }
       return;
     }
 
@@ -2483,7 +2763,26 @@ async function main() {
           );
         }
         await runLocalInferenceApiSmoke(androidApi.apiBase, androidApi.token);
+        if (relaunchPersistence) {
+          await verifyAndroidChatHistoryPersistence(androidContext, androidApi);
+        }
       }
+    }
+
+    if (
+      relaunchPersistence &&
+      (platform === "ios" || platform === "both") &&
+      !apiBase
+    ) {
+      // The iOS on-device agent runs in-process over the Capacitor IPC bridge
+      // (no HTTP port the harness can reach), so it cannot re-fetch the thread
+      // via GET /messages here. Its relaunch-persistence leg belongs to the
+      // Preferences-handshake / XCUITest path (#13689 item 1) — surface it as an
+      // explicit N/A rather than a silent skip.
+      const message =
+        "[local-chat-smoke] --relaunch-persistence is N/A on iOS from this harness: the on-device agent is IPC-only. Implement the iOS leg via the Preferences handshake or an XCUITest that relaunches and asserts the marker bubble (#13689).";
+      if (requireInstalled && platform === "ios") throw new Error(message);
+      console.warn(message);
     }
 
     if (iosBackground && (platform === "ios" || platform === "both")) {

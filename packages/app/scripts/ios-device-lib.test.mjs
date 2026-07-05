@@ -5,6 +5,8 @@
  * (`bun run --cwd packages/app test`), i.e. the root test:client lane.
  */
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildRequireChatDecision,
@@ -13,14 +15,17 @@ import {
   summarizeChatSkipAccounting,
 } from "./ios-device-capture.mjs";
 import {
+  assertDeviceUnlocked,
   buildCodesignPlan,
   buildIosXcuitestShardPlan,
   buildOnlyTestingIdentifier,
   buildPlistXml,
+  buildSimctlListappsArgs,
   CONSOLE_SIGTRAP_SIGNATURE,
   classifyCodesignPreflight,
   classifyConsoleExit,
   classifyIsolatedReruns,
+  classifyXcresultSummaryForGate,
   DEFAULT_IOS_XCUITEST_SHARDS,
   deriveSigningEntitlements,
   evaluateRunnerStaleness,
@@ -28,7 +33,10 @@ import {
   extractXctestrunAppPaths,
   findDeviceRecord,
   findUncoveredIosXcuitestEntries,
+  formatDeviceUnlockWaitMessage,
+  hasBundleKeyInSimctlListappsOutput,
   isBenignIosAppAbsence,
+  normalizeDeviceLockState,
   normalizeProvisioningProfile,
   PlistData,
   parseCliArgs,
@@ -43,6 +51,7 @@ import {
   safeShardName,
   selectProvisioningProfile,
   selectSigningIdentity,
+  shouldRunIosXcuitestCoverageGuard,
   sweepXctestrunDependentProductPaths,
 } from "./ios-device-lib.mjs";
 
@@ -54,6 +63,12 @@ const CERT_SHA1 = crypto
   .update(CERT_DER)
   .digest("hex")
   .toUpperCase();
+
+function appScriptPath(scriptName) {
+  const packageRelative = path.join(process.cwd(), "scripts", scriptName);
+  if (fs.existsSync(packageRelative)) return packageRelative;
+  return path.join(process.cwd(), "packages/app/scripts", scriptName);
+}
 
 function profilePlist({
   name = "iOS Team Provisioning Profile: ai.elizaos.app",
@@ -699,6 +714,156 @@ describe("extractXctestrunAppPaths", () => {
   });
 });
 
+describe("classifyXcresultSummaryForGate", () => {
+  it("passes a summary with at least one passed test", () => {
+    const verdict = classifyXcresultSummaryForGate({
+      result: "Passed",
+      passedTests: 2,
+      skippedTests: 1,
+      failedTests: 0,
+    });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.reason).toBeNull();
+  });
+
+  it("fails an explicit zero-passed summary", () => {
+    const verdict = classifyXcresultSummaryForGate({
+      result: "Passed",
+      passedTests: 0,
+      skippedTests: 4,
+      failedTests: 0,
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.reason).toMatch(/passedTests=0/);
+  });
+
+  it("fails a recursively all-skipped summary", () => {
+    const verdict = classifyXcresultSummaryForGate({
+      testNodes: [
+        {
+          name: "AppUITests",
+          result: "Skipped",
+          children: [{ name: "BootCaptureUITests", result: "Skipped" }],
+        },
+      ],
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.reason).toMatch(/Skipped/);
+  });
+
+  it("handles Xcode-style wrapped numeric values", () => {
+    const verdict = classifyXcresultSummaryForGate({
+      metrics: {
+        testsCount: { _value: "3" },
+        passedTests: { _value: "1" },
+        skippedTests: { _value: "2" },
+      },
+    });
+    expect(verdict.ok).toBe(true);
+    expect(verdict.stats.total).toBe(3);
+    expect(verdict.stats.passed).toBe(1);
+  });
+});
+
+describe("ios-device-capture strict summary gate", () => {
+  it("keeps test-summary classification behind --strict-gate", () => {
+    const source = fs.readFileSync(
+      appScriptPath("ios-device-capture.mjs"),
+      "utf8",
+    );
+    const summaryWriteIndex = source.indexOf("test-summary.json");
+    const strictGateIndex = source.indexOf(
+      "if (strictGate)",
+      summaryWriteIndex,
+    );
+    const classifierIndex = source.indexOf(
+      "classifyXcresultSummaryForGate",
+      summaryWriteIndex,
+    );
+    expect(strictGateIndex).toBeGreaterThan(summaryWriteIndex);
+    expect(classifierIndex).toBeGreaterThan(strictGateIndex);
+  });
+});
+
+describe("iOS simulator listapps proof (#13571)", () => {
+  it("uses the Xcode 26 positional listapps form without the removed -j flag", () => {
+    expect(buildSimctlListappsArgs("SIM-UDID")).toEqual([
+      "simctl",
+      "listapps",
+      "SIM-UDID",
+    ]);
+    expect(buildSimctlListappsArgs("SIM-UDID")).not.toContain("-j");
+  });
+
+  it("matches bundle keys in simctl listapps plist output", () => {
+    const plist = `
+      {
+        "com.apple.Preferences" = {
+          ApplicationType = System;
+        };
+        "ai.elizaos.app" = {
+          ApplicationType = User;
+          CFBundleDisplayName = Eliza;
+        };
+      }
+    `;
+
+    expect(hasBundleKeyInSimctlListappsOutput(plist, "ai.elizaos.app")).toBe(
+      true,
+    );
+    expect(
+      hasBundleKeyInSimctlListappsOutput(plist, "ai.elizaos.missing"),
+    ).toBe(false);
+  });
+
+  it("escapes regex characters in bundle identifiers", () => {
+    const plist = `
+      {
+        "ai.elizaos.app.beta+qa" = {
+          ApplicationType = User;
+        };
+      }
+    `;
+
+    expect(
+      hasBundleKeyInSimctlListappsOutput(plist, "ai.elizaos.app.beta+qa"),
+    ).toBe(true);
+    expect(hasBundleKeyInSimctlListappsOutput(plist, "aiXelizaosXapp")).toBe(
+      false,
+    );
+  });
+});
+
+describe("iOS strict-gate coverage guard (#13571)", () => {
+  it("runs the coverage guard only for the default full AppUITests lane", () => {
+    expect(
+      shouldRunIosXcuitestCoverageGuard({
+        onlyTesting: null,
+        strictGate: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("skips the full-matrix coverage guard when strict-gate narrows to boot health", () => {
+    expect(
+      shouldRunIosXcuitestCoverageGuard({
+        onlyTesting: null,
+        strictGate: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("skips the default coverage guard for explicit only-testing shards", () => {
+    expect(
+      shouldRunIosXcuitestCoverageGuard({
+        onlyTesting:
+          "AppUITests/BootCaptureUITests/testBootReachesHomeOrErrorCard",
+        strictGate: false,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("resolveXctestrunTestRoot", () => {
   it("replaces __TESTROOT__ in nested strings, preserving other value types", () => {
     const when = new Date("2026-07-01T00:00:00Z");
@@ -765,6 +930,91 @@ describe("device resolution", () => {
     }
     expect(findDeviceRecord(payload, "nope")).toBeNull();
     expect(findDeviceRecord({}, "anything")).toBeNull();
+  });
+});
+
+describe("device lock-state preflight", () => {
+  const device = {
+    identifier: "59EBB356-BC44-5AA2-91F1-E6AAE756BB86",
+    name: "MoonCycles",
+  };
+
+  it("normalizes top-level and nested lockState payloads", () => {
+    expect(
+      normalizeDeviceLockState({
+        passcodeRequired: true,
+        unlockedSinceBoot: true,
+      }),
+    ).toMatchObject({ locked: true, reason: "passcode required" });
+    expect(
+      normalizeDeviceLockState({
+        result: {
+          lockState: { passcodeRequired: false, unlockedSinceBoot: false },
+        },
+      }),
+    ).toMatchObject({ locked: true, reason: "not unlocked since boot" });
+    expect(
+      normalizeDeviceLockState({
+        result: { passcodeRequired: false, unlockedSinceBoot: true },
+      }),
+    ).toMatchObject({ locked: false, reason: null });
+  });
+
+  it("formats an operator-visible unlock instruction", () => {
+    expect(
+      formatDeviceUnlockWaitMessage({
+        device,
+        timeoutSeconds: 30,
+        reason: "passcode required",
+      }),
+    ).toBe(
+      "MoonCycles (59EBB356-BC44-5AA2-91F1-E6AAE756BB86) is locked (passcode required); unlock the phone and keep it awake. Waiting up to 30s.",
+    );
+  });
+
+  it("waits until lockState becomes usable", async () => {
+    const states = [
+      { passcodeRequired: true, unlockedSinceBoot: true },
+      { passcodeRequired: false, unlockedSinceBoot: true },
+    ];
+    const notifications = [];
+    const sleeps = [];
+    let nowMs = 0;
+    const result = await assertDeviceUnlocked({
+      device,
+      probeLockState: () => states.shift(),
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        nowMs += ms;
+      },
+      now: () => nowMs,
+      notify: (message) => notifications.push(message),
+      waitSeconds: 30,
+      pollIntervalSeconds: 5,
+    });
+    expect(result.locked).toBe(false);
+    expect(sleeps).toEqual([5000]);
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toContain("unlock the phone");
+  });
+
+  it("times out distinctly when the phone stays locked", async () => {
+    let nowMs = 0;
+    await expect(
+      assertDeviceUnlocked({
+        device,
+        probeLockState: () => ({
+          passcodeRequired: true,
+          unlockedSinceBoot: true,
+        }),
+        sleep: async (ms) => {
+          nowMs += ms;
+        },
+        now: () => nowMs,
+        waitSeconds: 1,
+        pollIntervalSeconds: 1,
+      }),
+    ).rejects.toThrow(/Timed out before the device became usable/);
   });
 });
 
@@ -1155,6 +1405,20 @@ describe("buildIosXcuitestShardPlan (#13686)", () => {
       false,
     );
   });
+
+  it("treats a terminate of a not-running app as benign (fresh-container reset)", () => {
+    // `simctl terminate <udid> <bundle>` exits non-zero with this message when
+    // the app is installed but not currently running — the exact state a
+    // per-shard reset hits when it terminates before uninstalling (#13571).
+    expect(
+      isBenignIosAppAbsence(
+        'The request to terminate "ai.elizaos.app" failed. found nothing to terminate',
+      ),
+    ).toBe(true);
+    expect(
+      isBenignIosAppAbsence("No matching processes belonging to you"),
+    ).toBe(true);
+  });
 });
 
 describe("evaluateRunnerStaleness (#13566)", () => {
@@ -1210,7 +1474,6 @@ describe("evaluateRunnerStaleness (#13566)", () => {
     expect(decision.newestSource).toBe(null);
   });
 });
-
 
 describe("ios-device-capture agent availability preflight (#13569)", () => {
   it("prefers the configured iOS API base over the cloud health fallback", () => {
@@ -1293,7 +1556,8 @@ describe("ios-device-capture agent availability preflight (#13569)", () => {
         "MessageGestureUITests/testSendsMessage()",
         "OnboardingChatUITests/testFirstReply()",
       ],
-      message: "2 chat legs skipped: agent never ready (not-ready(ready=false))",
+      message:
+        "2 chat legs skipped: agent never ready (not-ready(ready=false))",
     });
   });
 

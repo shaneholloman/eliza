@@ -661,6 +661,78 @@ describe("NativeAcpClient terminal actions", () => {
       },
     });
   });
+
+  it("protects the session git index from terminal env overrides", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "native-acp-"));
+    const agentProc = queueProc();
+    queueProc();
+    const client = new NativeAcpClient({
+      command: "agent-acp",
+      cwd,
+      approvalPreset: "autonomous",
+      env: {
+        PATH: process.env.PATH,
+        GIT_INDEX_FILE: "/tmp/eliza-acp/git-indexes/session-safe/index",
+        ACP_GIT_INDEX_FILE: "/tmp/eliza-acp/git-indexes/session-safe/index",
+        ACP_REAL_GIT: "/usr/bin/git",
+        ACP_GIT_BASELINE_SHA: "abc123",
+      },
+    });
+    const started = client.start();
+    await waitForWrites(agentProc, 1);
+    emitJson(agentProc, { jsonrpc: "2.0", id: 1, result: {} });
+    await started;
+
+    emitJson(agentProc, {
+      jsonrpc: "2.0",
+      id: "terminal-protected-env",
+      method: "terminal/create",
+      params: {
+        command: "node",
+        args: ["-v"],
+        cwd,
+        env: [
+          { name: "GIT_INDEX_FILE", value: "/tmp/attacker-index" },
+          { name: "GIT_DIR", value: "/tmp/attacker-git-dir" },
+          { name: "GIT_WORK_TREE", value: "/tmp/attacker-work-tree" },
+          { name: "git_index_file", value: "/tmp/lower-index" },
+          { name: "git_dir", value: "/tmp/lower-git-dir" },
+          { name: "Git_Work_Tree", value: "/tmp/mixed-work-tree" },
+          {
+            name: "ACP_GIT_INDEX_FILE",
+            value: "/tmp/attacker-acp-index",
+          },
+          { name: "ACP_REAL_GIT", value: "/tmp/attacker-git" },
+          {
+            name: "ACP_GIT_BASELINE_SHA",
+            value: "attacker-baseline",
+          },
+          { name: "acp_git_index_file", value: "/tmp/lower-acp-index" },
+          { name: "Acp_Real_Git", value: "/tmp/mixed-acp-git" },
+        ],
+      },
+    });
+    await waitForSpawnCalls(2);
+
+    const env = spawnMock.mock.calls[1]?.[2]?.env as
+      | Record<string, string>
+      | undefined;
+    expect(env?.GIT_INDEX_FILE).toBe(
+      "/tmp/eliza-acp/git-indexes/session-safe/index",
+    );
+    expect(env?.ACP_GIT_INDEX_FILE).toBe(
+      "/tmp/eliza-acp/git-indexes/session-safe/index",
+    );
+    expect(env?.ACP_REAL_GIT).toBe("/usr/bin/git");
+    expect(env?.ACP_GIT_BASELINE_SHA).toBe("abc123");
+    expect(env).not.toHaveProperty("GIT_DIR");
+    expect(env).not.toHaveProperty("GIT_WORK_TREE");
+    expect(env).not.toHaveProperty("git_index_file");
+    expect(env).not.toHaveProperty("git_dir");
+    expect(env).not.toHaveProperty("Git_Work_Tree");
+    expect(env).not.toHaveProperty("acp_git_index_file");
+    expect(env).not.toHaveProperty("Acp_Real_Git");
+  });
 });
 
 describe("splitCommandLine", () => {

@@ -51,11 +51,9 @@ function renderHome(): void {
 /** The launch-core directory (mirrors the sidebar cut exactly). */
 const EXPECTED_LINKS = [
   "/dashboard/agents",
-  "/dashboard/apps",
   "/dashboard/billing",
   "/dashboard/api-keys",
   "/dashboard/account",
-  "/dashboard/organization",
 ];
 
 describe("DashboardHomePage", () => {
@@ -76,6 +74,7 @@ describe("DashboardHomePage", () => {
     for (const to of EXPECTED_LINKS) {
       expect(hrefs, `missing console link ${to}`).toContain(to);
     }
+    expect(hrefs).not.toContain("/dashboard/organization");
   });
 
   it("links Add funds to the billing console page", () => {

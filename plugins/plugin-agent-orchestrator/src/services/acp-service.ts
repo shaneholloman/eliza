@@ -14,10 +14,23 @@
  * SIGTERM/SIGINT handler fans out to every live instance so multi-tenant hosts,
  * test runners, and hot-reload cycles don't leak per-instance listeners.
  */
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import {
+  type ChildProcessWithoutNullStreams,
+  spawn,
+  spawnSync,
+} from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  readdir,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import {
@@ -44,7 +57,7 @@ import {
   resolveCodingAccountStrategy,
   selectCodingAccount,
 } from "./coding-account-selection.js";
-import { readConfigMcpServers } from "./config-env.js";
+import { readConfigEnvKey, readConfigMcpServers } from "./config-env.js";
 import {
   applyCredentialProxyEnv,
   resolveOrchestratorCredentialProxyConfig,
@@ -187,6 +200,34 @@ export function computeSessionWorkdir(
   return isolate ? resolve(base, `task-${sessionId}`) : resolve(base);
 }
 
+function findGitBinaryForAcp(): string {
+  for (const dir of (process.env.PATH ?? "").split(":")) {
+    if (!dir) continue;
+    const candidate = join(dir, "git");
+    if (existsSync(candidate)) return candidate;
+  }
+  return "git";
+}
+
+async function runGitForAcp(
+  workdir: string,
+  args: string[],
+): Promise<string | undefined> {
+  const result = spawnSync("git", ["-C", workdir, ...args], {
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+    timeout: 5_000,
+    maxBuffer: 1024 * 1024,
+    windowsHide: true,
+  });
+  if (result.status !== 0) return undefined;
+  const stdout = result.stdout;
+  const text =
+    stdout instanceof Uint8Array
+      ? Buffer.from(stdout).toString("utf8")
+      : String(stdout ?? "");
+  return text.trim();
+}
+
 /**
  * True iff `workdir` is a throwaway scratch dir AcpService itself created under
  * its default temp root — a `task-<sessionId>` directory directly beneath
@@ -217,8 +258,266 @@ export function isAcpScratchDirName(name: string): boolean {
 }
 const ACP_METADATA_ISOLATED_WORKDIR = "isolatedWorkdir";
 const ACP_METADATA_WORKDIR_ROOT = "workdirRoot";
+const ACP_METADATA_GIT_INDEX_FILE = "gitIndexFile";
+const ACP_METADATA_GIT_INDEX_BASE_FILE = "gitIndexBaseFile";
+const ACP_METADATA_GIT_WRAPPER_DIR = "gitWrapperDir";
 const MAX_CAPTURED_TOOL_OUTPUT_CHARS = 12_000;
 const TOOL_OUTPUT_END_MARKER = "[/tool output]";
+const SESSION_GIT_WRAPPER = `#!/usr/bin/env node
+const { spawn, spawnSync } = require("node:child_process");
+const { randomUUID } = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+const git = process.env.ACP_REAL_GIT || "git";
+const indexFile = process.env.ACP_GIT_INDEX_FILE;
+const baseline = process.env.ACP_GIT_BASELINE_SHA;
+if (indexFile) process.env.GIT_INDEX_FILE = indexFile;
+delete process.env.ACP_GIT_INDEX_FILE;
+delete process.env.ACP_GIT_BASELINE_SHA;
+delete process.env.ACP_REAL_GIT;
+const args = process.argv.slice(2);
+function commandInfo(argv) {
+  const prefix = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--") return { cmd: undefined, prefix };
+    if (arg === "-C" || arg === "-c" || arg === "--git-dir" || arg === "--work-tree" || arg === "--namespace") {
+      prefix.push(arg, argv[i + 1]);
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--git-dir=") || arg.startsWith("--work-tree=") || arg.startsWith("--namespace=")) {
+      prefix.push(arg);
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      prefix.push(arg);
+      continue;
+    }
+    return { cmd: arg, prefix };
+  }
+  return { cmd: undefined, prefix };
+}
+function run(argv, opts = {}) {
+  return spawnSync(git, argv, { stdio: "inherit", env: process.env, ...opts });
+}
+// A per-worktree commit is not one atomic git operation: we read-tree HEAD to
+// rebuild this session's index onto the current tip, replay the staged diff, then
+// git commit re-reads HEAD for the parent. Two sessions sharing one worktree
+// (isolate:false) run this wrapper as two separate processes; if the other's
+// commit lands between our read-tree and our commit, our tree (built from the
+// older HEAD) silently reverts it (#14183). Serialize that window across
+// processes with an exclusive lockfile in the worktree's own git dir (where HEAD
+// lives), so isolated worktrees — which have distinct git dirs and HEADs — never
+// contend, while shared ones can't interleave.
+const LOCK_POLL_MS = Number.parseInt(process.env.ACP_COMMIT_LOCK_POLL_MS || "25", 10);
+const LOCK_WAIT_MS = Number.parseInt(process.env.ACP_COMMIT_LOCK_WAIT_MS || "120000", 10);
+// A lock becomes reclaimable once its mtime is older than this. It sits below
+// LOCK_WAIT_MS so a crashed holder whose PID was recycled to an unrelated live
+// process is reclaimed by a waiter before that waiter's acquire deadline (#14202)
+// — otherwise the dead lock would wedge the worktree until the 120s timeout.
+// Live holders keep the mtime fresh through a detached heartbeat because the
+// wrapper blocks in spawnSync while git commit/pre-commit hooks run.
+const LOCK_STALE_MS = Number.parseInt(process.env.ACP_COMMIT_LOCK_STALE_MS || "30000", 10);
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+function readLock(lockPath) {
+  try {
+    const raw = fs.readFileSync(lockPath, "utf8");
+    let owner = {};
+    try {
+      owner = JSON.parse(raw);
+    } catch {
+      const pid = Number.parseInt(raw, 10);
+      if (Number.isInteger(pid) && pid > 0) owner = { pid };
+    }
+    return { raw, owner };
+  } catch (err) {
+    if (err.code === "ENOENT") return undefined;
+    throw err;
+  }
+}
+function lockIsStale(lockPath) {
+  const lock = readLock(lockPath);
+  if (!lock) return undefined;
+  let st;
+  try {
+    st = fs.statSync(lockPath);
+  } catch (err) {
+    if (err.code === "ENOENT") return undefined;
+    throw err;
+  }
+  const mtimeStale = Date.now() - st.mtimeMs > LOCK_STALE_MS;
+  const pid = Number(lock.owner.pid);
+  if (Number.isInteger(pid) && pid > 0) {
+    // A live PID proves only that *some* process owns that number — not that it
+    // is our holder, which may have crashed with its PID since recycled to an
+    // unrelated live process. So the mtime backstop is consulted for a live PID
+    // too: a real holder refreshes mtime via lock.verify() well within
+    // LOCK_STALE_MS and never trips it, while a recycled PID cannot keep a dead
+    // holder's lock wedged until the acquire deadline (#14202 companion defect).
+    return !processAlive(pid) || mtimeStale ? lock : undefined;
+  }
+  return mtimeStale ? lock : undefined;
+}
+function startLockHeartbeat(lockPath, expected) {
+  const interval = Math.max(10, Math.min(1000, Math.floor(LOCK_STALE_MS / 4)));
+  const script = [
+    "const fs=require('node:fs');",
+    "const lockPath=process.argv[1];",
+    "const parentPid=Number(process.argv[2]);",
+    "const token=process.argv[3];",
+    "const interval=Number(process.argv[4]);",
+    "function alive(pid){try{process.kill(pid,0);return true;}catch(err){return err.code==='EPERM';}}",
+    "function tick(){",
+    " if(!alive(parentPid)) process.exit(0);",
+    " let owner;",
+    " try{owner=JSON.parse(fs.readFileSync(lockPath,'utf8'));}catch{process.exit(0);}",
+    " if(!owner||owner.pid!==parentPid||owner.token!==token) process.exit(0);",
+    " const now=new Date();",
+    " try{fs.utimesSync(lockPath,now,now);}catch{process.exit(0);}",
+    "}",
+    "tick();",
+    "setInterval(tick,interval);",
+  ].join("");
+  const child = spawn(process.execPath, ["-e", script, lockPath, String(expected.pid), expected.token, String(interval)], {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+  return child;
+}
+function stealStaleLock(lockPath, staleRaw) {
+  const claimPath = lockPath + ".stale-" + process.pid + "-" + randomUUID();
+  try {
+    fs.linkSync(lockPath, claimPath);
+  } catch (err) {
+    if (err.code === "ENOENT") return true;
+    throw err;
+  }
+  try {
+    const claimedRaw = fs.readFileSync(claimPath, "utf8");
+    if (claimedRaw !== staleRaw) return false;
+    let lockStat;
+    let claimStat;
+    try {
+      lockStat = fs.statSync(lockPath);
+      claimStat = fs.statSync(claimPath);
+    } catch (err) {
+      if (err.code === "ENOENT") return true;
+      throw err;
+    }
+    if (lockStat.dev !== claimStat.dev || lockStat.ino !== claimStat.ino) return false;
+    fs.unlinkSync(lockPath);
+    return true;
+  } finally {
+    fs.rmSync(claimPath, { force: true });
+  }
+}
+function resolveGitDir(prefix) {
+  const res = spawnSync(git, [...prefix, "rev-parse", "--absolute-git-dir"], { encoding: "utf8" });
+  if (res.status !== 0) return undefined;
+  const dir = (res.stdout || "").trim();
+  return dir || undefined;
+}
+function acquireCommitLock(gitDir) {
+  const lockPath = path.join(gitDir, "eliza-acp-commit.lock");
+  const token = process.pid + ":" + randomUUID();
+  const ownerRecord = { pid: process.pid, token, createdAt: Date.now() };
+  const owner = JSON.stringify(ownerRecord);
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    let fd;
+    try {
+      fd = fs.openSync(lockPath, "wx");
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      const staleLock = lockIsStale(lockPath);
+      if (staleLock && stealStaleLock(lockPath, staleLock.raw)) {
+        continue;
+      }
+      if (Date.now() >= deadline) throw new Error("eliza-acp: timed out acquiring commit lock at " + lockPath);
+      sleepSync(LOCK_POLL_MS);
+      continue;
+    }
+    fs.writeSync(fd, owner);
+    fs.fsyncSync(fd);
+    const heartbeat = startLockHeartbeat(lockPath, ownerRecord);
+    let released = false;
+    const owns = () => {
+      const lock = readLock(lockPath);
+      return lock?.owner?.token === token && Number(lock.owner.pid) === process.pid;
+    };
+    const verify = () => {
+      if (!owns()) throw new Error("eliza-acp: commit lock ownership was lost at " + lockPath);
+      fs.futimesSync(fd, new Date(), new Date());
+    };
+    const release = () => {
+      if (released) return;
+      released = true;
+      try {
+        heartbeat.kill();
+      } catch {
+        // error-policy:J6 best-effort teardown; heartbeat exits once the lock is gone.
+      }
+      fs.closeSync(fd);
+      if (owns()) fs.rmSync(lockPath, { force: true });
+    };
+    process.on("exit", release);
+    return { release, verify };
+  }
+}
+const info = commandInfo(args);
+if (indexFile && baseline && info.cmd === "commit") {
+  // The diff reads only this session's staged index vs its baseline, so it does
+  // not depend on HEAD and stays outside the lock.
+  const diff = spawnSync(git, [...info.prefix, "diff", "--cached", "--binary", baseline], {
+    env: process.env,
+    encoding: "buffer",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (diff.status !== 0) process.exit(diff.status || 1);
+  const gitDir = resolveGitDir(info.prefix);
+  const lock = gitDir ? acquireCommitLock(gitDir) : { release: () => {}, verify: () => {} };
+  let exitStatus = 0;
+  let exitSignal;
+  if (diff.stdout.length > 0) {
+    lock.verify();
+    const reset = run([...info.prefix, "read-tree", "HEAD"]);
+    if (reset.status !== 0) exitStatus = reset.status || 1;
+    if (exitStatus === 0) lock.verify();
+    if (exitStatus === 0) {
+      const apply = spawnSync(git, [...info.prefix, "apply", "--cached", "--whitespace=nowarn", "-"], {
+        input: diff.stdout,
+        stdio: ["pipe", "inherit", "inherit"],
+        env: process.env,
+      });
+      if (apply.status !== 0) exitStatus = apply.status || 1;
+    }
+  }
+  if (exitStatus === 0) {
+    lock.verify();
+    const result = run(args);
+    exitSignal = result.signal;
+    exitStatus = result.status ?? 1;
+  }
+  lock.release();
+  if (exitSignal) process.kill(process.pid, exitSignal);
+  process.exit(exitStatus);
+}
+const result = run(args);
+if (result.signal) process.kill(process.pid, result.signal);
+process.exit(result.status ?? 1);
+`;
 const ACP_HEALTH_CHECK_INTERVAL_MS = 60_000;
 // Terminal (stopped/errored) sessions are kept this long for any post-completion
 // reference, then reclaimed by the health-check sweep so the durable session
@@ -584,6 +883,129 @@ export class AcpService extends Service {
 
   private acpxStateRoot(): string {
     return join(homedir(), ".acpx");
+  }
+
+  private acpGitIndexRoot(sessionId: string): string {
+    return join(this.acpxStateRoot(), "git-indexes", sessionId);
+  }
+
+  private async prepareSessionGitIndex(
+    workdir: string,
+    sessionId: string,
+    baselineSha?: string,
+  ): Promise<
+    | {
+        env: Record<string, string>;
+        metadata: Record<string, string>;
+      }
+    | undefined
+  > {
+    const insideWorkTree = await runGitForAcp(workdir, [
+      "rev-parse",
+      "--is-inside-work-tree",
+    ]);
+    if (insideWorkTree !== "true") return undefined;
+
+    let repoIndex = await runGitForAcp(workdir, [
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-path",
+      "index",
+    ]);
+    if (!repoIndex) {
+      repoIndex = await runGitForAcp(workdir, [
+        "rev-parse",
+        "--git-path",
+        "index",
+      ]);
+    }
+    if (!repoIndex) return undefined;
+    repoIndex = resolve(workdir, repoIndex);
+
+    try {
+      const st = await stat(repoIndex);
+      if (!st.isFile()) return undefined;
+    } catch {
+      // error-policy:J3 unborn or exotic repos can lack an index; fall back to
+      // default git behavior rather than spawning with an invalid empty index.
+      return undefined;
+    }
+
+    const root = this.acpGitIndexRoot(sessionId);
+    const wrapperDir = join(root, "bin");
+    const wrapperFile = join(wrapperDir, "git");
+    const indexFile = join(root, "index");
+    const baseFile = join(root, "index.base");
+    await mkdir(wrapperDir, { recursive: true });
+    await copyFile(repoIndex, baseFile);
+    await copyFile(repoIndex, indexFile);
+    await writeFile(wrapperFile, SESSION_GIT_WRAPPER, "utf8");
+    await chmod(wrapperFile, 0o755);
+    return {
+      env: {
+        ACP_GIT_INDEX_FILE: indexFile,
+        ACP_REAL_GIT: findGitBinaryForAcp(),
+        GIT_INDEX_FILE: indexFile,
+        PATH: `${wrapperDir}:${process.env.PATH ?? ""}`,
+        ...(baselineSha ? { ACP_GIT_BASELINE_SHA: baselineSha } : {}),
+      },
+      metadata: {
+        [ACP_METADATA_GIT_INDEX_FILE]: indexFile,
+        [ACP_METADATA_GIT_INDEX_BASE_FILE]: baseFile,
+        [ACP_METADATA_GIT_WRAPPER_DIR]: wrapperDir,
+        ...(baselineSha ? { codingBaselineSha: baselineSha } : {}),
+      },
+    };
+  }
+
+  private gitIndexEnvForSession(
+    session: SessionInfo,
+  ): Record<string, string> | undefined {
+    const gitIndexFile = session.metadata?.[ACP_METADATA_GIT_INDEX_FILE];
+    const wrapperDir = session.metadata?.[ACP_METADATA_GIT_WRAPPER_DIR];
+    if (typeof gitIndexFile !== "string" || !gitIndexFile.trim()) {
+      return undefined;
+    }
+    return {
+      ACP_GIT_INDEX_FILE: gitIndexFile,
+      ACP_REAL_GIT: findGitBinaryForAcp(),
+      GIT_INDEX_FILE: gitIndexFile,
+      ...(typeof wrapperDir === "string" && wrapperDir.trim()
+        ? { PATH: `${wrapperDir}:${process.env.PATH ?? ""}` }
+        : {}),
+      ...(typeof session.metadata?.codingBaselineSha === "string"
+        ? { ACP_GIT_BASELINE_SHA: session.metadata.codingBaselineSha }
+        : {}),
+    };
+  }
+
+  private async removeOwnedGitIndex(session: SessionInfo): Promise<void> {
+    const gitIndexFile = session.metadata?.[ACP_METADATA_GIT_INDEX_FILE];
+    if (typeof gitIndexFile !== "string" || !gitIndexFile.trim()) return;
+    const root = this.acpGitIndexRoot(session.id);
+    if (!this.isPathUnderRoot(gitIndexFile, root)) {
+      this.log(
+        "warn",
+        "git-index cleanup refused: index outside session root",
+        {
+          sessionId: session.id,
+          gitIndexFile,
+          root,
+        },
+      );
+      return;
+    }
+    try {
+      await rm(root, { recursive: true, force: true });
+    } catch (err) {
+      // error-policy:J6 best-effort per-session index reclaim; terminal session
+      // cleanup must continue and a future sweep can retry the state dir.
+      this.log("warn", "failed to reclaim session git index", {
+        sessionId: session.id,
+        gitIndexFile,
+        error: errorMessage(err),
+      });
+    }
   }
 
   private async cleanStaleLocks(): Promise<void> {
@@ -1083,6 +1505,20 @@ export class AcpService extends Service {
       const baselineSha = await captureBaselineSha(workdir);
       const baselineDirty = await captureBaselineDirty(workdir);
 
+      // Give each concurrent ACP session its own copied git index so sequential
+      // commits in the SAME worktree never drop another session's staged tree.
+      // Returns undefined when the workspace isn't a git repo; the per-session
+      // wrapper git refreshes the alternate index from HEAD before each commit.
+      const gitIndexIsolation = await this.prepareSessionGitIndex(
+        workdir,
+        id,
+        baselineSha,
+      );
+      const sessionEnv: Record<string, string> = {
+        ...(opts.env ?? {}),
+        ...(gitIndexIsolation?.env ?? {}),
+      };
+
       // Multi-account selection: pick the least-used (default) linked subscription
       // for this agent type and inject its credentials into the spawn env so the
       // sub-agent authenticates AS that account. Returns null (and we keep the
@@ -1141,6 +1577,7 @@ export class AcpService extends Service {
         ...(baselineSha && baselineDirty.length > 0
           ? { codingBaselineDirty: baselineDirty }
           : {}),
+        ...(gitIndexIsolation?.metadata ?? {}),
         ...(resolvedAccount ? { account: resolvedAccount.meta } : {}),
         slotClass,
       };
@@ -1183,6 +1620,7 @@ export class AcpService extends Service {
       if (this.transportMode === "native") {
         const result = await this.spawnNativeSession(id, session, {
           ...opts,
+          env: sessionEnv,
           customCredentials,
         });
         if (opts.initialTask?.trim()) {
@@ -1233,7 +1671,7 @@ export class AcpService extends Service {
         workdir,
         args,
         env: this.buildEnv(
-          opts.env,
+          sessionEnv,
           customCredentials,
           opts.model,
           agentType,
@@ -1436,8 +1874,13 @@ export class AcpService extends Service {
 
     // The cli transport spawns a fresh subprocess per prompt, so re-inject the
     // session's selected-account credentials (the native transport keeps the
-    // spawn-time client, which already has them).
+    // spawn-time client, which already has them) and the per-session git index
+    // env that keeps same-repo sessions from sharing one mutable index file.
     const promptCredentials = await this.accountCredentialsForSession(session);
+    const promptEnv: Record<string, string> = {
+      ...(opts.env ?? {}),
+      ...(this.gitIndexEnvForSession(session) ?? {}),
+    };
     const result = await this.runAcpx({
       sessionId,
       sessionName: session.name ?? session.id,
@@ -1445,7 +1888,7 @@ export class AcpService extends Service {
       workdir: session.workdir,
       args,
       env: this.buildEnv(
-        opts.env,
+        promptEnv,
         promptCredentials,
         opts.model,
         session.agentType,
@@ -1518,6 +1961,7 @@ export class AcpService extends Service {
       // before teardown). Accounting-only — the registry never rm's ACP dirs.
       this.workspaceRegistry.markTerminal(session.workdir);
       void this.revokeModelLease(sessionId, "cancelSession:native");
+      await this.removeOwnedGitIndex(session);
       return;
     }
     const active = this.activeProcesses.get(sessionId);
@@ -1540,6 +1984,7 @@ export class AcpService extends Service {
     await this.store.updateStatus(sessionId, "cancelled");
     this.workspaceRegistry.markTerminal(session.workdir);
     void this.revokeModelLease(sessionId, "cancelSession");
+    await this.removeOwnedGitIndex(session);
   }
 
   async closeSession(sessionId: string): Promise<void> {
@@ -1559,6 +2004,7 @@ export class AcpService extends Service {
         }
       }
       await this.removeOwnedScratchWorkdir(session);
+      await this.removeOwnedGitIndex(session);
       return;
     }
     await this.stopTrackedProcess(sessionId);
@@ -1585,6 +2031,7 @@ export class AcpService extends Service {
       response: this.lastOutput(sessionId),
     });
     await this.removeOwnedScratchWorkdir(session);
+    await this.removeOwnedGitIndex(session);
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -1598,6 +2045,7 @@ export class AcpService extends Service {
       });
     });
     await this.removeOwnedScratchWorkdir(session);
+    await this.removeOwnedGitIndex(session);
     await this.store.delete(sessionId);
     this.outputBuffers.delete(sessionId);
     this.changedPathsBySession.delete(sessionId);
@@ -2907,6 +3355,9 @@ export class AcpService extends Service {
     // emitter is called from deep transport paths; revocation is idempotent.
     if (LEASE_REVOKE_EVENTS.has(event)) {
       void this.revokeModelLease(sessionId, `event:${event}`);
+      void this.store.get(sessionId).then((session) => {
+        if (session) void this.removeOwnedGitIndex(session);
+      });
     }
   }
 
@@ -3127,6 +3578,25 @@ export class AcpService extends Service {
     // OS vars like `Path` with native casing, which a child must not inherit
     // alongside an uppercase duplicate).
     const env: NodeJS.ProcessEnv = forwardableSubAgentEnv(process.env);
+    // #14118: the raw owner cloud key is broker-gated by default. When an
+    // operator opts INTO forwarding it and a key actually landed in the child
+    // env, surface it — an autonomous child now holds the owner's Cloud bearer,
+    // which the broker-first path exists to avoid.
+    if (
+      isCloudKeyForwardingEnabled() &&
+      Object.keys(env).some((key) => key.startsWith("ELIZAOS_CLOUD"))
+    ) {
+      this.log(
+        "warn",
+        "ELIZA_FORWARD_CLOUD_KEY_TO_SUBAGENTS is set: forwarding the owner's raw ELIZAOS_CLOUD* creds into the sub-agent env (broker-first is bypassed). The child now holds the owner Cloud key — prefer the parent-agent broker (apps.create / containers.create) and the credential bridge instead.",
+        {
+          forwardedCloudKeys: Object.keys(env).filter((key) =>
+            key.startsWith("ELIZAOS_CLOUD"),
+          ),
+          childSessionId,
+        },
+      );
+    }
     for (const [key, value] of Object.entries(customCredentials ?? {})) {
       if (typeof value !== "string") continue;
       // customCredentials arrive with the spawn request, not from the parent's
@@ -3653,16 +4123,51 @@ export function canonicalForwardedEnvKey(key: string): string {
   return FORWARDED_SYSTEM_ENV.has(key.toUpperCase()) ? key.toUpperCase() : key;
 }
 
-export function shouldForwardEnv(key: string): boolean {
+/**
+ * Config key that opts a spawn INTO forwarding the owner's raw `ELIZAOS_CLOUD*`
+ * creds (the live Cloud API key + URL) into every child env. Default OFF: a
+ * sub-agent reaches Cloud through the parent-agent broker instead (`apps.create`
+ * / `containers.create` — spend-capped, confirmation-gated), so the owner key
+ * never lands in an autonomous child's env where it can leak into files, logs,
+ * or artifacts (#14093 had to redact stdout for exactly this class of leak).
+ * The one value a self-serving monetized container genuinely needs at RUNTIME
+ * (its own upstream cloud bearer) is fetched through the owner-approved,
+ * single-use credential bridge, not force-forwarded. Set to `1` only for a flow
+ * the broker cannot serve yet.
+ */
+const FORWARD_CLOUD_KEY_CONFIG = "ELIZA_FORWARD_CLOUD_KEY_TO_SUBAGENTS";
+
+/**
+ * Whether the operator opted into forwarding raw `ELIZAOS_CLOUD*` creds into
+ * child envs (see {@link FORWARD_CLOUD_KEY_CONFIG}). Reads config-env so a UI or
+ * service.env toggle takes effect without a restart; default OFF.
+ */
+export function isCloudKeyForwardingEnabled(): boolean {
+  const raw = readConfigEnvKey(FORWARD_CLOUD_KEY_CONFIG)?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+/**
+ * The per-var forwarding predicate. `forwardCloudKey` (default false) opts a
+ * spawn into forwarding the owner's raw `ELIZAOS_CLOUD*` creds — pure so the
+ * gate is unit-testable without touching config; `forwardableSubAgentEnv`
+ * resolves the flag from config-env once per build.
+ */
+export function shouldForwardEnv(
+  key: string,
+  forwardCloudKey = false,
+): boolean {
   return (
     FORWARDED_SYSTEM_ENV.has(key.toUpperCase()) ||
     key.startsWith("ACPX_AUTH_") ||
     key.startsWith("ELIZA_") ||
     // The live Cloud creds use the ELIZAOS_ prefix (ELIZAOS_CLOUD_API_KEY /
-    // ELIZAOS_CLOUD_URL), which the broad ELIZA_ rule above does NOT match. A
-    // spawned monetized-app build needs them to register the app (POST
-    // /api/v1/apps) without hunting the filesystem for the key.
-    key.startsWith("ELIZAOS_CLOUD") ||
+    // ELIZAOS_CLOUD_URL), which the broad ELIZA_ rule above does NOT match.
+    // Broker-first (#14118): a child does NOT get the raw owner key by default —
+    // it registers/deploys via the parent broker (spend-gated) and fetches any
+    // container-runtime secret via the owner-approved credential bridge. Only the
+    // explicit ELIZA_FORWARD_CLOUD_KEY_TO_SUBAGENTS opt-in restores raw forwarding.
+    (forwardCloudKey && key.startsWith("ELIZAOS_CLOUD")) ||
     // Parent-context bridge session id (ELIZA_HOOK_PORT already passes via the
     // ELIZA_ prefix). Without this the loopback /api/coding-agents/<id>/* bridge
     // is unreachable from an ACP-spawned sub-agent.
@@ -3699,9 +4204,12 @@ export function shouldForwardEnv(key: string): boolean {
  * DENY_ENV_PATTERNS) match shouldForwardEnv — e.g. via the broad ELIZA_ prefix —
  * yet must never reach a coding sub-agent, so the deny check runs first.
  */
-export function isEnvForwardableToSubAgent(key: string): boolean {
+export function isEnvForwardableToSubAgent(
+  key: string,
+  forwardCloudKey = false,
+): boolean {
   if (isDeniedSubAgentEnvKey(key)) return false;
-  return shouldForwardEnv(key);
+  return shouldForwardEnv(key, forwardCloudKey);
 }
 
 /**
@@ -3713,11 +4221,12 @@ export function isEnvForwardableToSubAgent(key: string): boolean {
  */
 export function forwardableSubAgentEnv(
   source: Record<string, string | undefined>,
+  forwardCloudKey = isCloudKeyForwardingEnabled(),
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(source)) {
     if (typeof value !== "string") continue;
-    if (!isEnvForwardableToSubAgent(key)) continue;
+    if (!isEnvForwardableToSubAgent(key, forwardCloudKey)) continue;
     out[canonicalForwardedEnvKey(key)] = value;
   }
   return out;

@@ -10,6 +10,7 @@
  *   GET  /api/views/search?q=&limit=   — hybrid keyword+semantic ranked search (JSON)
  *   GET  /api/views/:id                — single view metadata (JSON)
  *   GET  /api/views/:id/bundle.js      — compiled view bundle (JS)
+ *   GET  /api/views/:id/frame.html     — sandboxed iframe document (HTML)
  *   GET  /api/views/:id/<asset>        — compiled bundle chunk/asset
  *   GET  /api/views/:id/hero           — hero image (image/*)
  *   POST /api/views/:id/navigate       — broadcast shell navigation event (JSON)
@@ -59,11 +60,13 @@ import {
   detectClientPlatform,
   isDynamicLoadingAllowed,
 } from "./platform-detect.ts";
+import { normalizeWsClientId } from "./server-helpers-auth.ts";
 import type { ViewRegistryEntry } from "./view-registry-types.ts";
 import {
   findHeroOnDisk,
   generateViewHeroSvg,
   getBundleDiskPath,
+  getFrameDiskPath,
   getView,
   listViews,
 } from "./views-registry.ts";
@@ -152,6 +155,42 @@ const STANDARD_CAPABILITY_IDS: ReadonlySet<string> = new Set<string>([
   ...Object.values(STANDARD_CAPABILITIES),
   ...AGENT_SURFACE_CAPABILITY_IDS,
 ]);
+
+const READ_ONLY_VIEW_CAPABILITIES: ReadonlySet<string> = new Set<string>([
+  STANDARD_CAPABILITIES.GET_STATE,
+  STANDARD_CAPABILITIES.GET_TEXT,
+  "list-elements",
+  "describe-element",
+  "get-focus",
+  "get-agent-state",
+]);
+
+function isSurfaceBrokeredCapability(capability: string): boolean {
+  return (
+    STANDARD_CAPABILITY_IDS.has(capability) ||
+    AGENT_SURFACE_CAPABILITY_IDS.has(capability)
+  );
+}
+
+function isReadOnlyViewCapability(capability: string): boolean {
+  return READ_ONLY_VIEW_CAPABILITIES.has(capability);
+}
+
+function viewManifestAllowsCapability(
+  entry: ViewRegistryEntry,
+  capability: string,
+): boolean {
+  if (!isSurfaceBrokeredCapability(capability)) return true;
+  if (isReadOnlyViewCapability(capability)) return true;
+  return entry.surface?.capabilities?.includes("agent-surface") === true;
+}
+
+function capabilityDeniedMessage(viewId: string, capability: string): string {
+  return (
+    `View "${viewId}" is not granted capability "${capability}" ` +
+    "(its surface manifest does not grant `agent-surface`)"
+  );
+}
 
 /** Module-level map of pending interact requests awaiting a frontend result. */
 const pendingInteractRequests = new PendingRequestMap();
@@ -249,6 +288,8 @@ export interface ViewsRouteContext
   developerMode?: boolean;
   /** Broadcast an arbitrary payload to all connected WebSocket clients. */
   broadcastWs?: (payload: object) => void;
+  /** Broadcast a payload only to WebSocket clients bound to one client id. */
+  broadcastWsToClientId?: (clientId: string, payload: object) => number;
   /** Agent runtime — used by the semantic search endpoint. */
   runtime?: IAgentRuntime | null;
 }
@@ -361,10 +402,10 @@ export async function handleViewsRoutes(
     // user enabled, so kind-gating is a client responsibility.
     const allViews = listViews({ includeAllKinds: true, viewType });
     // On restricted platforms (iOS/Android store builds), only surface views
-    // without a dynamic bundle URL (already in-process).
+    // without dynamic code URLs (already in-process).
     const filtered = dynamicAllowed
       ? allViews
-      : allViews.filter((v) => !v.bundleUrl);
+      : allViews.filter((v) => !v.bundleUrl && !v.frameUrl);
     // Annotate each entry with `builtin: true` when it comes from the shell.
     const views = filtered.map((v) => ({
       ...v,
@@ -587,6 +628,89 @@ export async function handleViewsRoutes(
         raw.setHeader("X-Content-Hash", `sha256-${contentHash}`);
       }
     }
+    raw.end?.(method === "HEAD" ? undefined : data);
+    return true;
+  }
+
+  // ── GET/HEAD /api/views/:id/frame.html ───────────────────────────────────
+  if ((method === "GET" || method === "HEAD") && subResource === "frame.html") {
+    const clientPlatform = detectClientPlatform(req);
+    if (!isDynamicLoadingAllowed(clientPlatform)) {
+      error(
+        res,
+        "Dynamic view frame loading is not permitted on this platform.",
+        403,
+      );
+      return true;
+    }
+
+    const viewType = parseViewTypeParam(url.searchParams.get("viewType"));
+    const entry = getView(id, { viewType });
+    if (!entry) {
+      error(res, `View "${id}" not found`, 404);
+      return true;
+    }
+
+    const framePath = getFrameDiskPath(entry);
+    if (!framePath) {
+      error(res, `View "${id}" has no sandbox frame document configured.`, 404);
+      return true;
+    }
+
+    let stat: import("node:fs").Stats;
+    try {
+      stat = await fs.stat(framePath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        error(res, `Sandbox frame document not built for view "${id}".`, 404);
+      } else {
+        logger.error(
+          { src: "ViewsRoutes", viewId: id, framePath, err },
+          `[ViewsRoutes] Failed to stat sandbox frame for view "${id}"`,
+        );
+        error(res, `Failed to read sandbox frame for view "${id}"`, 500);
+      }
+      return true;
+    }
+
+    let data: Buffer;
+    try {
+      data = method === "HEAD" ? Buffer.alloc(0) : await fs.readFile(framePath);
+    } catch (err) {
+      logger.error(
+        { src: "ViewsRoutes", viewId: id, framePath, err },
+        `[ViewsRoutes] Failed to read sandbox frame for view "${id}"`,
+      );
+      error(res, `Failed to read sandbox frame for view "${id}"`, 500);
+      return true;
+    }
+
+    const etagRaw = `${stat.mtimeMs}-${stat.size}`;
+    const etag = `"${createHash("sha256").update(etagRaw).digest("hex").slice(0, 16)}"`;
+    if (req.headers["if-none-match"] === etag) {
+      const raw304 = res as {
+        writeHead?: (status: number, headers: Record<string, string>) => void;
+        end?: () => void;
+      };
+      raw304.writeHead?.(304, {});
+      raw304.end?.();
+      return true;
+    }
+
+    const raw = res as {
+      writeHead?: (
+        status: number,
+        headers: Record<string, string | number>,
+      ) => void;
+      end?: (chunk?: unknown) => void;
+    };
+    raw.writeHead?.(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Length": stat.size,
+      "Cache-Control": "no-cache",
+      "X-Content-Type-Options": "nosniff",
+      ETag: etag,
+    });
     raw.end?.(method === "HEAD" ? undefined : data);
     return true;
   }
@@ -919,7 +1043,8 @@ export async function handleViewsRoutes(
       () => null,
     );
     const elements = normalizeActiveViewElements(body?.elements);
-    const accepted = setActiveViewElements(id, elements);
+    const clientId = resolveViewInteractClientId(req, body);
+    const accepted = setActiveViewElements(id, elements, clientId);
     json(res, { ok: true, viewId: id, accepted, count: elements.length });
     return true;
   }
@@ -979,13 +1104,11 @@ export async function handleViewsRoutes(
       `[ViewsRoutes] Activate element "${elementId}" on view "${id}"`,
     );
 
-    const dispatch = await dispatchViewInteract(
-      entry,
-      id,
-      capability,
-      params,
-      ctx.broadcastWs,
-    );
+    const dispatch = await dispatchViewInteract(entry, id, capability, params, {
+      broadcastWs: ctx.broadcastWs,
+      broadcastWsToClientId: ctx.broadcastWsToClientId,
+      clientId: resolveTargetViewClientId(id, req, body),
+    });
 
     json(res, {
       ok: dispatch.success,
@@ -1087,6 +1210,11 @@ export async function handleViewsRoutes(
       `[ViewsRoutes] Interact with view "${id}" capability="${capability}"`,
     );
 
+    if (!viewManifestAllowsCapability(entry, capability)) {
+      error(res, capabilityDeniedMessage(id, capability), 403);
+      return true;
+    }
+
     if (typeof entry.serverInteract === "function") {
       try {
         const result = await entry.serverInteract(capability, params);
@@ -1122,16 +1250,46 @@ export async function handleViewsRoutes(
 
     // Register the pending slot before broadcasting — avoids a race where the
     // frontend responds before we start waiting.
-    const resultPromise = pendingInteractRequests.waitFor(requestId, timeoutMs);
-
-    ctx.broadcastWs?.({
+    const targetClientId = resolveTargetViewClientId(id, req, body);
+    const frame = {
       type: "view:interact",
       viewId: id,
       viewType: entry.viewType,
       capability,
       params,
       requestId,
-    });
+    };
+
+    if (!targetClientId) {
+      json(res, {
+        requestId,
+        success: false,
+        error:
+          "Missing client id for frontend view interaction. Provide X-ElizaOS-Client-Id or clientId.",
+      });
+      return true;
+    }
+
+    if (typeof ctx.broadcastWsToClientId !== "function") {
+      json(res, {
+        requestId,
+        success: false,
+        error: "Targeted view interaction delivery is unavailable.",
+      });
+      return true;
+    }
+
+    // Register the pending slot before sending — avoids a race where the
+    // frontend responds before we start waiting.
+    const resultPromise = pendingInteractRequests.waitFor(requestId, timeoutMs);
+    const delivered = ctx.broadcastWsToClientId(targetClientId, frame);
+    if (delivered <= 0) {
+      pendingInteractRequests.resolve(requestId, {
+        requestId,
+        success: false,
+        error: `No connected view client "${targetClientId}" is available for "${id}".`,
+      });
+    }
 
     try {
       const result = await resultPromise;
@@ -1168,6 +1326,12 @@ export interface ViewInteractDispatchResult {
   error?: string;
 }
 
+interface ViewInteractTransport {
+  broadcastWs?: (payload: object) => void;
+  broadcastWsToClientId?: (clientId: string, payload: object) => number;
+  clientId?: string | null;
+}
+
 /**
  * Dispatch a capability to a view, reusing the established interact semantics:
  * a `serverInteract` handler when the view declares one, else a frontend
@@ -1180,15 +1344,23 @@ export async function dispatchViewInteract(
   viewId: string,
   capability: string,
   params: Record<string, unknown>,
-  broadcastWs?: (payload: object) => void,
+  transport: ViewInteractTransport,
   timeoutMs = 5_000,
 ): Promise<ViewInteractDispatchResult> {
   const requestId = randomUUID();
 
+  if (!viewManifestAllowsCapability(entry, capability)) {
+    return {
+      requestId,
+      success: false,
+      error: capabilityDeniedMessage(viewId, capability),
+    };
+  }
+
   if (typeof entry.serverInteract === "function") {
     try {
       const result = await entry.serverInteract(capability, params);
-      broadcastWs?.({
+      transport.broadcastWs?.({
         type: "view:event",
         viewEventType: `view:${viewId}:updated`,
         payload: { viewId, capability },
@@ -1207,8 +1379,24 @@ export async function dispatchViewInteract(
     }
   }
 
+  if (!transport.clientId) {
+    return {
+      requestId,
+      success: false,
+      error:
+        "Missing client id for frontend view interaction. Provide X-ElizaOS-Client-Id or clientId.",
+    };
+  }
+  if (typeof transport.broadcastWsToClientId !== "function") {
+    return {
+      requestId,
+      success: false,
+      error: "Targeted view interaction delivery is unavailable.",
+    };
+  }
+
   const resultPromise = pendingInteractRequests.waitFor(requestId, timeoutMs);
-  broadcastWs?.({
+  const delivered = transport.broadcastWsToClientId(transport.clientId, {
     type: "view:interact",
     viewId,
     viewType: entry.viewType,
@@ -1216,6 +1404,13 @@ export async function dispatchViewInteract(
     params,
     requestId,
   });
+  if (delivered <= 0) {
+    pendingInteractRequests.resolve(requestId, {
+      requestId,
+      success: false,
+      error: `No connected view client "${transport.clientId}" is available for "${viewId}".`,
+    });
+  }
   try {
     const result = (await resultPromise) as ViewInteractResult;
     return {
@@ -1235,6 +1430,35 @@ export async function dispatchViewInteract(
       error: `View "${viewId}" did not respond to capability "${capability}" within ${timeoutMs}ms`,
     };
   }
+}
+
+function firstHeaderValue(value: string | string[] | undefined): string | null {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
+}
+
+function resolveViewInteractClientId(
+  req: Pick<http.IncomingMessage, "headers">,
+  body: Record<string, unknown> | null | undefined,
+): string | null {
+  return (
+    normalizeWsClientId(firstHeaderValue(req.headers["x-elizaos-client-id"])) ??
+    normalizeWsClientId(firstHeaderValue(req.headers["x-eliza-client-id"])) ??
+    normalizeWsClientId(body?.clientId)
+  );
+}
+
+function resolveTargetViewClientId(
+  viewId: string,
+  req: Pick<http.IncomingMessage, "headers">,
+  body: Record<string, unknown> | null | undefined,
+): string | null {
+  const explicit = resolveViewInteractClientId(req, body);
+  const active = getActiveViewContext();
+  const mountedOwner =
+    active?.viewId === viewId ? (active.clientId ?? null) : null;
+  if (!mountedOwner) return explicit;
+  return !explicit || explicit === mountedOwner ? mountedOwner : null;
 }
 
 function resultSuccess(result: unknown): boolean {

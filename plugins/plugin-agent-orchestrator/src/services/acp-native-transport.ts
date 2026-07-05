@@ -484,12 +484,14 @@ export class NativeAcpClient {
       stringValue(params?.cwd) ?? this.opts.cwd,
     );
     const spawnCommand = terminalSpawnCommand(command, args);
+    const env = {
+      ...this.opts.env,
+      ...envArrayToRecord(params?.env),
+    };
+    protectTerminalGitEnv(env, this.opts.env);
     const proc = spawn(spawnCommand.command, spawnCommand.args, {
       cwd,
-      env: {
-        ...this.opts.env,
-        ...envArrayToRecord(params?.env),
-      },
+      env,
       stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
@@ -758,6 +760,34 @@ function envArrayToRecord(value: unknown): Record<string, string> {
     env[name] = stringValue(record?.value) ?? "";
   }
   return env;
+}
+
+function protectTerminalGitEnv(
+  env: Record<string, string | undefined>,
+  trusted: NodeJS.ProcessEnv | undefined,
+): void {
+  const protectedKeys = new Set([
+    "GIT_INDEX_FILE",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "ACP_GIT_INDEX_FILE",
+    "ACP_REAL_GIT",
+    "ACP_GIT_BASELINE_SHA",
+  ]);
+  for (const key of Object.keys(env)) {
+    if (protectedKeys.has(key.toUpperCase())) delete env[key];
+  }
+  for (const key of [
+    "GIT_INDEX_FILE",
+    "ACP_GIT_INDEX_FILE",
+    "ACP_REAL_GIT",
+    "ACP_GIT_BASELINE_SHA",
+  ]) {
+    const value = trusted?.[key];
+    if (typeof value === "string") {
+      env[key] = value;
+    }
+  }
 }
 
 function ensureInsideCwd(cwd: string, requested: string | undefined): string {

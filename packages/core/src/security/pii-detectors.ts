@@ -26,6 +26,7 @@
  */
 
 import { createHash } from "../utils/crypto-compat";
+import { findBasicEmailSpans } from "./basic-email";
 import { findAllMnemonicPhrases } from "./bip39-wordlist";
 
 /** A single PII / token class detector. */
@@ -226,7 +227,8 @@ export const PII_DETECTORS: readonly PiiDetector[] = [
 	// RFC-5322-ish email (case-insensitive).
 	{
 		kind: "email",
-		pattern: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+		pattern: /$/g,
+		findSpans: (text) => findBasicEmailSpans(text),
 	},
 	// Credit card / PAN. Matched as a contiguous 13–19 digit BLOCK, or as
 	// card-style fixed groups (4-4-4-N, or Amex 4-6-5) separated by a single space

@@ -42,8 +42,6 @@ const packsDir = path.resolve(here, "..", "src", "default-packs");
 const PII_NAMES = ["Jill", "Marco", "Sarah", "Suran", "Sam"];
 const PII_REGEX = new RegExp(`\\b(${PII_NAMES.join("|")})\\b`, "g");
 
-const EMAIL_REGEX = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
-
 const PHONE_REGEX =
   /(?:\+\d{1,3}[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]\d{3}[\s.-]\d{4}\b/g;
 
@@ -61,6 +59,76 @@ const OWNER_FACT_TIME_PATTERNS = [
   /quietHours/i,
   /HH:MM/,
 ];
+
+function basicEmailValid(value) {
+  const at = value.indexOf("@");
+  if (at <= 0 || at !== value.lastIndexOf("@")) return false;
+  if (/\s/.test(value)) return false;
+  const domain = value.slice(at + 1);
+  return domain.length >= 3 && domain.slice(1, -1).includes(".");
+}
+
+function isEmailAtomChar(code) {
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    code === 33 ||
+    code === 35 ||
+    code === 36 ||
+    code === 37 ||
+    code === 38 ||
+    code === 39 ||
+    code === 42 ||
+    code === 43 ||
+    code === 45 ||
+    code === 47 ||
+    code === 63 ||
+    code === 94 ||
+    code === 95 ||
+    code === 96 ||
+    code === 123 ||
+    code === 124 ||
+    code === 125 ||
+    code === 126 ||
+    code === 46
+  );
+}
+
+function isDomainChar(code) {
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    code === 45 ||
+    code === 46
+  );
+}
+
+function findBasicEmailSpans(text) {
+  const spans = [];
+  let i = 0;
+  while (i < text.length) {
+    const at = text.indexOf("@", i);
+    if (at === -1) break;
+    let start = at - 1;
+    while (start >= 0 && isEmailAtomChar(text.charCodeAt(start))) start -= 1;
+    start += 1;
+    let end = at + 1;
+    while (end < text.length && isDomainChar(text.charCodeAt(end))) end += 1;
+    while (end > at + 1) {
+      const last = text.charCodeAt(end - 1);
+      if (last !== 45 && last !== 46) break;
+      end -= 1;
+    }
+    if (start < at && end > at + 1) {
+      const value = text.slice(start, end);
+      if (basicEmailValid(value)) spans.push({ value, start, end });
+    }
+    i = Math.max(end, at + 1);
+  }
+  return spans;
+}
 
 const CONDITIONAL_REGEX =
   /\b(if user(?:'s)?|when [A-Za-z_]+\s*[=:]+|if owner|if the user is|if name is|when name is|unless owner|unless user|else if\b|case [A-Za-z_]+ when\b)/gi;
@@ -151,13 +219,13 @@ function lintPromptText(packKey, recordIndex, prompt) {
       match: m[0],
     });
   }
-  for (const m of prompt.matchAll(EMAIL_REGEX)) {
+  for (const m of findBasicEmailSpans(prompt)) {
     findings.push({
       rule: "email_pii",
       packKey,
       recordIndex,
-      message: `Concrete email address "${m[0]}" embedded in prompt; reference the owner or an EntityStore contact instead.`,
-      match: m[0],
+      message: `Concrete email address "${m.value}" embedded in prompt; reference the owner or an EntityStore contact instead.`,
+      match: m.value,
     });
   }
   for (const m of prompt.matchAll(PHONE_REGEX)) {
