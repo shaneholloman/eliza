@@ -138,9 +138,69 @@ interface CfDomainCheckEntry {
   reason?: string;
 }
 
+/**
+ * A registrable domain's Cloudflare wholesale price was missing or unparseable.
+ *
+ * Distinct error so the price boundary FAILS CLOSED instead of fabricating a
+ * NaN price. Pre-fix `Math.round(Number(entry.pricing.registration_cost) * 100)`
+ * had NO finite guard: a malformed / absent / non-numeric `registration_cost`
+ * (a CF API shape drift or a partial `pricing` object) yielded
+ * `priceUsdCents: NaN`. That NaN flowed into `computeDomainPrice` →
+ * `totalUsdCents: NaN` → the buy route's `deductCredits({ amount: NaN / 100 })`,
+ * where the `amount <= 0` positive-amount guard is BYPASSED (`NaN <= 0` is
+ * `false`) and `'NaN'::numeric` (a valid Postgres value) poisons `credit_balance`;
+ * the check/search routes also render a `$NaN` quote to the user. Throwing here
+ * makes the route surface a clean 502 rather than charge against an unpriceable
+ * quote. (error-policy: fail-closed on a money-out boundary)
+ */
+export class CorruptRegistrarPriceError extends Error {
+  constructor(domain: string, field: "registration_cost" | "renewal_cost", rawValue: unknown) {
+    super(
+      `Cloudflare returned an unparseable ${field} for a registrable domain "${domain}": ` +
+        `${JSON.stringify(rawValue)}. Refusing to quote or charge against a NaN price.`,
+    );
+    this.name = "CorruptRegistrarPriceError";
+  }
+}
+
+/**
+ * Parse a Cloudflare wholesale price string into integer USD cents, fail-closed.
+ *
+ * A legitimate free/zero price ("0", "0.00") is allowed — some TLDs/promos can be
+ * $0 — but a missing / non-numeric / non-finite / negative price throws so a
+ * fabricated NaN can never reach the credit debit. Rounds to the nearest cent
+ * exactly as the previous inline `Math.round(... * 100)` did.
+ */
+export function parseWholesaleUsdCents(
+  domain: string,
+  field: "registration_cost" | "renewal_cost",
+  rawValue: unknown,
+): number {
+  if (typeof rawValue !== "string" && typeof rawValue !== "number") {
+    throw new CorruptRegistrarPriceError(domain, field, rawValue);
+  }
+  const asString = typeof rawValue === "number" ? String(rawValue) : rawValue.trim();
+  if (asString.length === 0) {
+    throw new CorruptRegistrarPriceError(domain, field, rawValue);
+  }
+  const dollars = Number(asString);
+  if (!Number.isFinite(dollars) || dollars < 0) {
+    throw new CorruptRegistrarPriceError(domain, field, rawValue);
+  }
+  return Math.round(dollars * 100);
+}
+
 function fromCheckEntry(entry: CfDomainCheckEntry): AvailabilityResult {
-  const reg = entry.pricing ? Math.round(Number(entry.pricing.registration_cost) * 100) : 0;
-  const renew = entry.pricing ? Math.round(Number(entry.pricing.renewal_cost) * 100) : undefined;
+  // Only a registrable domain carries a `pricing` object we could charge against;
+  // a non-registrable one keeps priceUsdCents:0 (never buyable) unchanged. When
+  // pricing IS present the price MUST parse — a NaN here would silently bypass the
+  // buy route's positive-amount debit guard.
+  const reg = entry.pricing
+    ? parseWholesaleUsdCents(entry.name, "registration_cost", entry.pricing.registration_cost)
+    : 0;
+  const renew = entry.pricing
+    ? parseWholesaleUsdCents(entry.name, "renewal_cost", entry.pricing.renewal_cost)
+    : undefined;
   return {
     domain: entry.name,
     available: entry.registrable,
