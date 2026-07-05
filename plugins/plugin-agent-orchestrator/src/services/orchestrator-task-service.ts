@@ -32,6 +32,7 @@ import { basename, dirname, join } from "node:path";
 import {
   getTrajectoryContext,
   type IAgentRuntime,
+  projectWorldId,
   type RecordedTrajectory,
   resolveStateDir,
   resolveTrajectoryGate,
@@ -149,7 +150,6 @@ import {
   PARENT_AGENT_BROKER_MANIFEST_ENTRY,
 } from "./parent-agent-broker.js";
 import {
-  deriveProjectWorldId,
   resolveBoundProjectCloudAppId,
   resolveTaskProjectId,
   resolveTaskSpawnWorkdir,
@@ -2186,16 +2186,20 @@ export class OrchestratorTaskService extends Service {
    * persisted on the record — only the resolved `projectId` is. No match leaves
    * the task unbound, preserving per-session workdir re-resolution.
    *
-   * A bound task is also stamped with the project's memory world (#13776 D3), so
-   * its subagents are partitioned to the project and never see another project's
-   * injected context. A caller-supplied `worldId` is authoritative and wins —
-   * only an unset one is filled from the binding.
+   * A bound task is also stamped with the project's memory world (#13776 D3),
+   * derived per-agent via core's `projectWorldId(agentId, projectId)` — the
+   * single source of truth (#14171); Worlds are agent-scoped, so the runtime's
+   * agentId is part of the derivation. Its subagents are thus partitioned to the
+   * project and never see another project's injected context. A caller-supplied
+   * `worldId` is authoritative and wins — only an unset one is filled from the
+   * binding.
    */
   private bindProject(input: CreateTaskInput): CreateTaskInput {
     const projectId = resolveTaskProjectId(input);
     const { workdir: _workdir, ...rest } = input;
     const worldId =
-      rest.worldId ?? (projectId ? deriveProjectWorldId(projectId) : undefined);
+      rest.worldId ??
+      (projectId ? projectWorldId(this.runtime.agentId, projectId) : undefined);
     return { ...rest, projectId, worldId };
   }
 

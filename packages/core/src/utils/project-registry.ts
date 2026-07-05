@@ -44,12 +44,12 @@ export interface ProjectRecord {
 	 * elizaOS world this project's memory/knowledge is partitioned into, so a
 	 * subagent working project B never sees project A's injected context (#13776
 	 * design D3): a free partition in the existing memory schema, no column
-	 * change. Deterministically derived from the project id via the
-	 * `project:<id>` {@link stringToUuid} convention (see {@link PROJECT_WORLD_ID_PREFIX}),
-	 * so every process derives the same world without coordinating through the
-	 * file. Persisted so future project CRUD/UI can read it without re-deriving;
-	 * the derivation at the orchestrator task bind seam (`project-binding.ts`)
-	 * remains the source of truth stamped onto a task.
+	 * change. Derived per-agent via core's `projectWorldId(agentId, id)` — the
+	 * single source of truth (#14171) — as `stringToUuid("project:<id>:<agentId>")`;
+	 * Worlds are agent-scoped (`World.agentId`), so two agents on the same project
+	 * get distinct worlds. Persisted so future project CRUD/UI can read it without
+	 * re-deriving; the orchestrator task bind seam stamps the same core derivation
+	 * onto each task.
 	 */
 	worldId?: string;
 	/** macOS security-scoped bookmark for the picked folder, when present. */
@@ -63,12 +63,13 @@ export interface ProjectRecord {
 }
 
 /**
- * `stringToUuid` seed prefix for a project's memory world. Kept here (not the
- * plugin) so the string convention lives with the record it stamps; the
- * orchestrator bind seam derives `stringToUuid(PROJECT_WORLD_ID_PREFIX + id)`
- * without duplicating the literal. Importing `stringToUuid` into this pre-DB,
- * import-time module would pull the heavy `utils.ts` barrel, so the derivation
- * stays at the plugin seam that already depends on it.
+ * `stringToUuid` seed prefix for a project's memory world, mirroring
+ * `PROJECT_WORLD_PREFIX` in `project-memory-scope.ts` where the canonical
+ * derivation lives. Kept next to the record it stamps for documentation, but
+ * the world itself is derived ONLY through core's per-agent
+ * `projectWorldId(agentId, id)` (#14171) — `stringToUuid("project:<id>:<agentId>")`
+ * — never `stringToUuid(prefix + id)` alone, which would drop the agent scope
+ * and reintroduce the cross-agent collision #14171 fixed.
  */
 export const PROJECT_WORLD_ID_PREFIX = "project:";
 

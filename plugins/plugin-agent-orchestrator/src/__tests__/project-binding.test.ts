@@ -10,15 +10,16 @@ import { join } from "node:path";
 import {
   getProjectById,
   logger,
+  projectWorldId,
   setActiveProject,
   stringToUuid,
+  type UUID,
   upsertProject,
   writeWorkspaceFolderConfig,
 } from "@elizaos/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   bindProjectCloudApp,
-  deriveProjectWorldId,
   findProjectByWorkdir,
   resolveBoundProjectCloudAppId,
   resolveBoundProjectWorkdir,
@@ -190,14 +191,25 @@ describe("project-binding", () => {
     });
   });
 
-  it("deriveProjectWorldId is deterministic in the project id and matches the stringToUuid convention", () => {
-    // #13776 D3: the world must be reproducible from the id alone so the agent
-    // runtime, desktop picker, and bind seam all land on the same partition
-    // without coordinating through disk.
-    const a = deriveProjectWorldId("proj-1");
-    expect(deriveProjectWorldId("proj-1")).toBe(a);
-    expect(deriveProjectWorldId("proj-2")).not.toBe(a);
-    expect(a).toBe(stringToUuid("project:proj-1"));
+  it("project world-id derivation is single-sourced on core's per-agent projectWorldId (#14171)", () => {
+    // #13776 D3 / #14171: a project's memory world is derived ONCE, in core, as
+    // `projectWorldId(agentId, id)` — per-agent because Worlds are agent-scoped
+    // (`World.agentId`). The plugin bind seam delegates to it (no second
+    // derivation), so this pins the contract the whole system now shares.
+    const agentA = "00000000-0000-4000-8000-0000000000a1" as UUID;
+    const agentB = "00000000-0000-4000-8000-0000000000b2" as UUID;
+
+    // Deterministic in (agent, project).
+    const a = projectWorldId(agentA, "proj-1");
+    expect(projectWorldId(agentA, "proj-1")).toBe(a);
+    // Distinct per project AND per agent (agent-scoped Worlds — the #14171 fix).
+    expect(projectWorldId(agentA, "proj-2")).not.toBe(a);
+    expect(projectWorldId(agentB, "proj-1")).not.toBe(a);
+
+    // Mirrors the createUniqueUuid convention: `project:<id>:<agentId>`.
+    expect(a).toBe(stringToUuid(`project:proj-1:${agentA}`));
+    // Mutation guard: NOT the old agentId-less global form the bug reintroduced.
+    expect(a).not.toBe(stringToUuid("project:proj-1"));
     expect(a).toMatch(/^[0-9a-f-]{36}$/);
   });
 
