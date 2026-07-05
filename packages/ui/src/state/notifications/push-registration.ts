@@ -64,6 +64,7 @@ const defaultDeps: PushRegistrationDeps = {
 };
 
 let startPromise: Promise<void> | null = null;
+let listenerPromise: Promise<void> | null = null;
 /** The most recent token we POSTed, so a re-fired `registration` is a no-op. */
 let registeredToken: string | null = null;
 
@@ -138,7 +139,36 @@ async function startPushRegistration(
     if (status.receive !== "granted") return false;
   }
 
-  await plugin.addListener("registration", (token: PushRegistrationToken) => {
+  await ensurePushListeners(deps, plugin, platform);
+
+  await plugin.register();
+  return true;
+}
+
+function ensurePushListeners(
+  deps: PushRegistrationDeps,
+  plugin: PushNotificationsPluginLike,
+  platform: "ios" | "android",
+): Promise<void> {
+  listenerPromise ??= addPushListeners(deps, plugin, platform).catch(
+    (error: unknown) => {
+      listenerPromise = null;
+      throw error;
+    },
+  );
+  return listenerPromise;
+}
+
+async function addPushListeners(
+  deps: PushRegistrationDeps,
+  plugin: PushNotificationsPluginLike,
+  platform: "ios" | "android",
+): Promise<void> {
+  const addListener = plugin.addListener;
+  if (typeof addListener !== "function") {
+    throw new Error("PushNotifications.addListener is unavailable");
+  }
+  await addListener("registration", (token: PushRegistrationToken) => {
     void onRegistration(deps, platform, token).catch((error: unknown) => {
       // error-policy:J1 transport boundary — a failed token POST leaves
       // registeredToken null so the next `registration` retries; surface it.
@@ -149,7 +179,7 @@ async function startPushRegistration(
     });
   });
 
-  await plugin.addListener(
+  await addListener(
     "registrationError",
     (error: PushRegistrationError) => {
       logger.error(
@@ -159,16 +189,13 @@ async function startPushRegistration(
     },
   );
 
-  await plugin.addListener(
+  await addListener(
     "pushNotificationActionPerformed",
     (action: PushActionPerformed) => {
       const deepLink = deepLinkFromAction(action);
       if (deepLink) deps.navigate(deepLink);
     },
   );
-
-  await plugin.register();
-  return true;
 }
 
 /** Drop this device's token server-side and locally (logout / revoke). */
@@ -184,5 +211,6 @@ export async function unregisterPushToken(
 /** Test-only reset of the module-level registration guards. */
 export function __resetPushRegistrationForTests(): void {
   startPromise = null;
+  listenerPromise = null;
   registeredToken = null;
 }
