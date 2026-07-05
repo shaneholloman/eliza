@@ -12,6 +12,7 @@ import { appsRepository } from "../../db/repositories/apps";
 import { userCharactersRepository } from "../../db/repositories/characters";
 import { containersRepository } from "../../db/repositories/containers";
 import { conversationsRepository } from "../../db/repositories/conversations";
+import { parseOrganizationCreditBalance } from "../../db/repositories/organizations-credit-balance-numeric";
 import { getInitialCredits } from "../signup-credits";
 import { generateInviteToken, hashInviteToken } from "../utils/invite-tokens";
 import { logger } from "../utils/logger";
@@ -261,10 +262,27 @@ export class InvitesService {
     }
 
     const organization = await organizationsService.getById(organizationId);
-    if (organization && Number(organization.credit_balance) > getInitialCredits()) {
-      throw new Error(
-        "You cannot join another organization while your current organization holds credits beyond the signup grant. Contact support to transfer them first.",
+    if (organization) {
+      // Fail closed on a corrupt `credit_balance` (#13415). This guard exists to
+      // stop an owner vacating (and thereby auto-deleting) a solo org that still
+      // holds credits beyond the signup grant. `credit_balance` is a Postgres
+      // NUMERIC (string at read); the previous bare `Number(...)` failed OPEN on
+      // an unreadable value (`'NaN'::numeric` migration artifact / manual edit
+      // reads back `"NaN"`): `NaN > getInitialCredits()` is FALSE, so the guard
+      // was bypassed and the org — with whatever real credits it held — was
+      // vacated and deleted downstream (`cleanUpVacatedSoloOrganization` ->
+      // `organizationsService.delete`), silently destroying the balance. Parsing
+      // fail-closed makes a corrupt balance BLOCK the vacate (surfaced as the
+      // same "contact support" boundary) instead of silently losing credits.
+      const creditBalance = parseOrganizationCreditBalance(
+        organization.credit_balance,
+        "credit_balance",
       );
+      if (creditBalance > getInitialCredits()) {
+        throw new Error(
+          "You cannot join another organization while your current organization holds credits beyond the signup grant. Contact support to transfer them first.",
+        );
+      }
     }
   }
 
