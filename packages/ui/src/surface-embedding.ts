@@ -18,9 +18,12 @@
  * is the single decision point that selects it.
  *
  * Consumer: `packages/ui/src/components/pages/BrowserWorkspaceView.tsx` (the tab
- * render branch). The per-platform target table {@link NATIVE_WEBVIEW_EMBEDDINGS}
- * is the typed, greppable statement of which native primitive each platform uses
- * and its process/storage-sharing policy — read alongside the catalogue.
+ * render branch). Per-platform native targets (named by the catalogue): desktop
+ * Electron/Electrobun `WebContentsView` (CEF out-of-process frame, per-tab
+ * `persist:` partition) — wired today; iOS `WKWebView` on a dedicated
+ * `WKProcessPool` with its own `WKWebsiteDataStore`, and Android `WebView` with
+ * an out-of-process renderer — the mobile shell has no Browser view yet, so
+ * those degrade to `sandboxed-iframe` until the native mode lands (#14181).
  */
 
 import type { SurfaceIsolationLevel } from "@elizaos/core";
@@ -78,66 +81,4 @@ export function resolveBrowserTabRenderPath(input: {
   // both land here: a sandboxed, in-realm iframe. Third-party content is served
   // cross-origin so the sandbox is meaningful.
   return "sandboxed-iframe";
-}
-
-/** The platforms that provide a native child web-content surface. */
-export const NATIVE_WEBVIEW_PLATFORMS = ["desktop", "ios", "android"] as const;
-
-/** A platform that can host the `native-webview` embedding. */
-export type NativeWebviewPlatform = (typeof NATIVE_WEBVIEW_PLATFORMS)[number];
-
-/**
- * The native primitive + process/storage policy each platform uses to embed
- * `native-webview` content. The durable, typed answer to "what actually hosts
- * the Browser view's page content, and how isolated is it" per platform.
- */
-export interface NativeWebviewEmbedding {
-  readonly platform: NativeWebviewPlatform;
-  /** The native primitive that hosts the child web content. */
-  readonly primitive: string;
-  /**
-   * The defining property of this level: the embedded content runs in a
-   * renderer process distinct from the host shell's renderer, so its crash or
-   * heavy load cannot take down the shell and its realm is not shared.
-   */
-  readonly separateRendererProcess: true;
-  /** The web-storage sharing policy between the child surface and the host. */
-  readonly storagePolicy: string;
-}
-
-/**
- * The per-platform `native-webview` embedding target. Desktop is wired today
- * (the Browser view mounts the CEF OOPIF `<electrobun-webview renderer="cef">`
- * with a per-tab storage partition); iOS/Android name the native primitive and
- * process/storage policy the mobile shell embeds the Browser view with.
- */
-export const NATIVE_WEBVIEW_EMBEDDINGS: Readonly<
-  Record<NativeWebviewPlatform, NativeWebviewEmbedding>
-> = {
-  desktop: {
-    platform: "desktop",
-    primitive: "Electron/Electrobun WebContentsView (CEF out-of-process frame)",
-    separateRendererProcess: true,
-    storagePolicy: "per-tab persistent partition (persist:<tab-partition>)",
-  },
-  ios: {
-    platform: "ios",
-    primitive: "WKWebView backed by a dedicated WKProcessPool",
-    separateRendererProcess: true,
-    storagePolicy:
-      "own WKWebsiteDataStore, not shared with the app's host web view",
-  },
-  android: {
-    platform: "android",
-    primitive: "WebView with out-of-process renderer (renderer isolation)",
-    separateRendererProcess: true,
-    storagePolicy: "app-scoped WebView storage behind an isolated renderer",
-  },
-};
-
-/** The native embedding descriptor for a platform. */
-export function nativeWebviewEmbedding(
-  platform: NativeWebviewPlatform,
-): NativeWebviewEmbedding {
-  return NATIVE_WEBVIEW_EMBEDDINGS[platform];
 }
