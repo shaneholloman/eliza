@@ -36,7 +36,7 @@ export type VoiceSelfTestMode =
   | "wav-direct"
   | "mic-capture"
   | "inject-transcript";
-export type VoiceSelfTestPlatform = "web" | "android" | "desktop";
+export type VoiceSelfTestPlatform = "web" | "android" | "desktop" | "ios";
 
 export interface VoiceSelfTestStage {
   stage: "asr" | "send" | "tts";

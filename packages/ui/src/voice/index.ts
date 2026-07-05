@@ -130,3 +130,16 @@ export {
   type WakeNameMatch,
   type WakeNameMatchOptions,
 } from "./wake-name-match";
+export {
+  EXPECTED_PHRASE,
+  KNOWN_PHRASE_WAV_DATA_URL,
+} from "./voice-selftest/fixtures/known-phrase";
+export {
+  runVoiceSelfTest,
+  type StageStatus,
+  type VoiceSelfTestMode,
+  type VoiceSelfTestOptions,
+  type VoiceSelfTestPlatform,
+  type VoiceSelfTestReport,
+  type VoiceSelfTestStage,
+} from "./voice-selftest/voice-selftest-harness";

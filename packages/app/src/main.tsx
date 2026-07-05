@@ -175,6 +175,7 @@ import { decideChatOverlayToggle } from "./desktop-hotkey";
 import { runEmbedHandshake } from "./embed-bootstrap";
 import { registerAppHostExternalImporters } from "./host-externals";
 import { runIosAttachmentSmokeIfRequested } from "./ios-attachment-smoke";
+import { runIosVoiceSelfTestSmokeIfRequested } from "./ios-voice-selftest-smoke";
 import {
   apiBaseToDeviceBridgeUrl,
   type IosRuntimeConfig,
@@ -1838,6 +1839,15 @@ async function initializePlatform(): Promise<void> {
       boundedPreferenceWrite(() => Preferences.remove({ key })),
     writeResult: writeIosPreferenceSmokeResult,
     waitForElement: waitForIosOnboardingElement,
+    readStorageSnapshot: readIosOnboardingSmokeStorageSnapshot,
+  });
+  void runIosVoiceSelfTestSmokeIfRequested({
+    isIOS,
+    client,
+    getPreference: boundedPreferenceGet,
+    removePreference: (key) =>
+      boundedPreferenceWrite(() => Preferences.remove({ key })),
+    writeResult: writeIosPreferenceSmokeResult,
     readStorageSnapshot: readIosOnboardingSmokeStorageSnapshot,
   });
 
