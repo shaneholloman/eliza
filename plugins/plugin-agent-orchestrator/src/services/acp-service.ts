@@ -101,6 +101,11 @@ import {
   TERMINAL_SESSION_STATUSES,
 } from "./types.js";
 import { captureBaselineDirty, captureBaselineSha } from "./workspace-diff.js";
+import {
+  getSharedWorkspaceRegistry,
+  resolveDiskBudgetConfig,
+  type WorkspaceRegistry,
+} from "./workspace-registry.js";
 
 type RuntimeLike = IAgentRuntime & {
   logger?: Partial<
@@ -384,12 +389,18 @@ export class AcpService extends Service {
   private readonly changedPathsBySession = new Map<string, Set<string>>();
   private started = false;
   private healthCheckTimer: NodeJS.Timeout | undefined;
+  // Shared across every AcpService + CodingWorkspaceService in the process so a
+  // single disk cap spans both scratch and git-workspace consumers (#13773).
+  private readonly workspaceRegistry: WorkspaceRegistry;
 
   constructor(runtime: IAgentRuntime, opts: { store?: SessionStore } = {}) {
     super(runtime);
     this.runtime = runtime as RuntimeLike;
     this.logger = this.runtime.logger as RuntimeLogger;
     this.store = opts.store ?? new InMemorySessionStore();
+    this.workspaceRegistry = getSharedWorkspaceRegistry((level, msg, ctx) =>
+      this.log(level, msg, ctx),
+    );
     this.cliPath = this.setting("ELIZA_ACP_CLI") ?? "acpx";
     this.transportMode =
       normalizeTransportMode(
@@ -635,6 +646,35 @@ export class AcpService extends Service {
     }
   }
 
+  /**
+   * Run the shared disk-backpressure gate before creating an isolated scratch
+   * dir under `targetRoot`. Throws (fails the spawn loudly) when the total cap
+   * or the free-disk floor cannot be satisfied even after evicting terminal git
+   * workspaces — a spawn that would overflow the disk must surface, not proceed
+   * and fabricate a session that fills the volume (the 3.6TB-class leak, #13773).
+   */
+  private async enforceWorkspaceDiskBudget(targetRoot: string): Promise<void> {
+    const config = resolveDiskBudgetConfig((key) => this.setting(key));
+    const decision = await this.workspaceRegistry.checkDiskBudget(
+      targetRoot,
+      config,
+    );
+    if (decision.reclaimedCount > 0) {
+      this.log("info", "workspace disk budget reclaimed terminal workspaces", {
+        targetRoot,
+        reclaimedCount: decision.reclaimedCount,
+        reclaimedBytes: decision.reclaimedBytes,
+      });
+    }
+    if (!decision.allowed) {
+      throw new Error(
+        `workspace disk budget exceeded (${decision.reason}): ` +
+          `used=${decision.usedBytes} free=${decision.freeBytes} ` +
+          `cap=${config.capBytes} minFree=${config.minFreeBytes} root=${targetRoot}`,
+      );
+    }
+  }
+
   private configuredScratchRoots(): string[] {
     const roots = [
       this.setting("ELIZA_ACP_WORKSPACE_ROOT"),
@@ -700,6 +740,10 @@ export class AcpService extends Service {
     }
     try {
       await rm(session.workdir, { recursive: true, force: true });
+      // Drop the shared-cap accounting entry only after the dir is gone, so a
+      // failed rm below leaves the record for startup GC to retry rather than
+      // silently uncounting bytes still on disk.
+      this.workspaceRegistry.unregister(session.workdir);
       this.log("debug", "reclaimed session scratch dir", {
         sessionId: session.id,
         workdir: session.workdir,
@@ -707,6 +751,7 @@ export class AcpService extends Service {
     } catch (err) {
       // error-policy:J6 best-effort scratch reclaim on teardown; surface the
       // failure so the leak is observable, then let the startup GC retry it.
+      this.workspaceRegistry.markTerminal(session.workdir);
       this.log("warn", "failed to reclaim session scratch dir", {
         sessionId: session.id,
         workdir: session.workdir,
@@ -993,7 +1038,22 @@ export class AcpService extends Service {
     // otherwise share the configured root / DEFAULT_WORKDIR_ROOT.
     const isolate = opts.workdir ? opts.isolateWorkdir === true : true;
     const workdir = computeSessionWorkdir(baseWorkdir, id, isolate);
+    // Disk backpressure: only isolated spawns create a throwaway `task-*` dir we
+    // own, so only they are gated + accounted. A self-checkout / explicit routed
+    // workdir is caller-owned and never touched by the registry. Refusing here
+    // (over the total cap or below the free-disk floor) fails the spawn loudly
+    // rather than letting the mkdir fill the disk — the 3.6TB-class leak (#13773).
+    if (isolate) {
+      await this.enforceWorkspaceDiskBudget(resolve(baseWorkdir));
+    }
     await mkdir(workdir, { recursive: true });
+    // Register AFTER a successful mkdir so an unregistered path is never
+    // reclaimable. ACP scratch is accounting-only here — its session-store GC
+    // (removeOwnedScratchWorkdir / cleanOrphanedScratchWorkdirs) stays the sole
+    // deleter; the registry just counts it against the shared cap.
+    if (isolate) {
+      this.workspaceRegistry.register("acp-scratch", workdir, id);
+    }
     // The parent-agent broker is only reachable when the SubAgentRouter is bound
     // to the ACP event stream; gate every broker advertisement (manual section,
     // SKILLS.md broker entry) on that so a child is never told about a bridge it
@@ -1089,35 +1149,121 @@ export class AcpService extends Service {
       lastActivityAt: now,
       metadata: mergedMetadata,
     };
-    // Atomic check-and-reserve: enforces the session limit for this slot class
-    // and inserts under a single mutex so concurrent spawns can't overshoot the
-    // cap (the old separate enforceSessionLimit()/store.create() left a
-    // read-then-act race). Throws SessionCapError when the class is full.
-    await this.reserveSessionSlot(session, slotClass);
+    // A spawn that throws after the isolated `task-*` dir is created must not
+    // leak it: the session never becomes durable, so on any failure below we rm
+    // the orphaned dir and drop its registry entry. Without this the dir stays
+    // `live` in the registry, pinning the shared cap for the life of the process
+    // (#13803 review blocker #2: auth/transport/lease failures + cancels leaked).
+    try {
+      // Atomic check-and-reserve: enforces the session limit for this slot class
+      // and inserts under a single mutex so concurrent spawns can't overshoot the
+      // cap (the old separate enforceSessionLimit()/store.create() left a
+      // read-then-act race). Throws SessionCapError when the class is full.
+      await this.reserveSessionSlot(session, slotClass);
 
-    // Mint the per-spawn model lease BEFORE the transport branch, so the leased
-    // token (not the static gateway token) is what buildEnv injects into the
-    // child. Fail-closed refusals (credit-gate / strict no-broker / strict mint
-    // failure) throw here; undo the reserved slot so a refused spawn leaves no
-    // orphan session record. No-op when gateway mode / lease broker are off.
-    await this.mintSpawnLease(id, agentType, opts.timeoutMs);
+      // Mint the per-spawn model lease BEFORE the transport branch, so the leased
+      // token (not the static gateway token) is what buildEnv injects into the
+      // child. Fail-closed refusals (credit-gate / strict no-broker / strict mint
+      // failure) throw here; undo the reserved slot so a refused spawn leaves no
+      // orphan session record. No-op when gateway mode / lease broker are off.
+      await this.mintSpawnLease(id, agentType, opts.timeoutMs);
 
-    // App-build tasks lose the parent's deploy contract at the spawn boundary.
-    // Re-attach it ONCE here, before the transport branch, so BOTH the native
-    // and the CLI/acpx paths host the app and report a verified URL. No-op for
-    // non-app tasks; applied only to the initial task, never to follow-up sends.
-    const initialTask =
-      opts.initialTask && opts.initialTask.trim().length > 0
-        ? augmentTaskWithDeployGuidance(opts.initialTask, undefined, {
-            monetized: opts.monetized,
+      // App-build tasks lose the parent's deploy contract at the spawn boundary.
+      // Re-attach it ONCE here, before the transport branch, so BOTH the native
+      // and the CLI/acpx paths host the app and report a verified URL. No-op for
+      // non-app tasks; applied only to the initial task, never to follow-up sends.
+      const initialTask =
+        opts.initialTask && opts.initialTask.trim().length > 0
+          ? augmentTaskWithDeployGuidance(opts.initialTask, undefined, {
+              monetized: opts.monetized,
+            })
+          : opts.initialTask;
+
+      if (this.transportMode === "native") {
+        const result = await this.spawnNativeSession(id, session, {
+          ...opts,
+          customCredentials,
+        });
+        if (opts.initialTask?.trim()) {
+          const keepAliveAfterComplete =
+            (opts.metadata as Record<string, unknown> | undefined)
+              ?.keepAliveAfterComplete === true;
+          void this.sendPrompt(id, initialTask ?? "", {
+            timeoutMs: resolveInitialTaskPromptTimeoutMs(opts.timeoutMs),
+            model: opts.model,
           })
-        : opts.initialTask;
+            .catch((err: unknown) => {
+              // error-policy:J5 fire-and-forget initial prompt; the underlying
+              // failure is also surfaced by sendPrompt (errored status + error event).
+              this.log("error", "initial prompt failed", {
+                sessionId: id,
+                agentType,
+                promptLength: initialTask?.length ?? 0,
+                promptPreview: preview(initialTask ?? ""),
+                error: errorMessage(err),
+              });
+            })
+            .finally(() => {
+              if (keepAliveAfterComplete) return;
+              void this.closeInitialTaskSession(id);
+            });
+        }
+        return result;
+      }
 
-    if (this.transportMode === "native") {
-      const result = await this.spawnNativeSession(id, session, {
-        ...opts,
-        customCredentials,
+      const args = this.baseArgs({
+        workdir,
+        approvalPreset,
+        timeoutMs: opts.timeoutMs,
+        model: opts.model,
       });
+      args.push(
+        ...this.agentCommandArgs(agentType, [
+          "sessions",
+          "new",
+          "--name",
+          name,
+        ]),
+      );
+      const result = await this.runAcpx({
+        sessionId: id,
+        sessionName: name,
+        agentType,
+        workdir,
+        args,
+        env: this.buildEnv(
+          opts.env,
+          customCredentials,
+          opts.model,
+          agentType,
+          id,
+        ),
+      });
+
+      if (result.code !== 0) {
+        const message = this.classifyExitError(result.code, result.stderr);
+        await this.store.updateStatus(id, "errored", message);
+        this.emitSessionEvent(id, "error", {
+          message,
+          exitCode: result.code,
+          stderr: result.stderr,
+        });
+        throw new Error(message);
+      }
+
+      const readyPatch: Partial<SessionInfo> = {
+        status: "ready",
+        pid: undefined,
+        lastActivityAt: new Date(),
+      };
+      await this.store.update(id, readyPatch);
+      this.emitSessionEvent(id, "ready", {
+        sessionId: id,
+        name,
+        agentType,
+        workdir,
+      });
+
       if (opts.initialTask?.trim()) {
         const keepAliveAfterComplete =
           (opts.metadata as Record<string, unknown> | undefined)
@@ -1142,85 +1288,39 @@ export class AcpService extends Service {
             void this.closeInitialTaskSession(id);
           });
       }
-      return result;
+
+      const updated = await this.store.get(id);
+      const sessionSnapshot: SessionInfo = { ...session, status: "ready" };
+      return toSpawnResult(updated ?? sessionSnapshot);
+    } catch (err) {
+      if (isolate) {
+        await this.discardOrphanedScratchOnSpawnFailure(workdir);
+      }
+      throw err;
     }
+  }
 
-    const args = this.baseArgs({
-      workdir,
-      approvalPreset,
-      timeoutMs: opts.timeoutMs,
-      model: opts.model,
-    });
-    args.push(
-      ...this.agentCommandArgs(agentType, ["sessions", "new", "--name", name]),
-    );
-    const result = await this.runAcpx({
-      sessionId: id,
-      sessionName: name,
-      agentType,
-      workdir,
-      args,
-      env: this.buildEnv(
-        opts.env,
-        customCredentials,
-        opts.model,
-        agentType,
-        id,
-      ),
-    });
-
-    if (result.code !== 0) {
-      const message = this.classifyExitError(result.code, result.stderr);
-      await this.store.updateStatus(id, "errored", message);
-      this.emitSessionEvent(id, "error", {
-        message,
-        exitCode: result.code,
-        stderr: result.stderr,
+  /**
+   * Reclaim the isolated scratch dir created for a spawn that then failed before
+   * becoming durable, and drop its registry entry so it stops counting against
+   * the shared cap. Only ever called with a `task-<id>` dir spawnSession itself
+   * mkdir'd this call, so the rm target is unambiguously owned; a failure to
+   * remove is surfaced but not fatal — startup GC reclaims a stubborn dir.
+   */
+  private async discardOrphanedScratchOnSpawnFailure(
+    workdir: string,
+  ): Promise<void> {
+    this.workspaceRegistry.unregister(workdir);
+    try {
+      await rm(workdir, { recursive: true, force: true });
+    } catch (err) {
+      // error-policy:J6 best-effort reclaim of a failed-spawn scratch dir; the
+      // leak is surfaced and the startup GC retries it on the next boot.
+      this.log("warn", "failed to reclaim scratch dir after spawn failure", {
+        workdir,
+        error: errorMessage(err),
       });
-      throw new Error(message);
     }
-
-    const readyPatch: Partial<SessionInfo> = {
-      status: "ready",
-      pid: undefined,
-      lastActivityAt: new Date(),
-    };
-    await this.store.update(id, readyPatch);
-    this.emitSessionEvent(id, "ready", {
-      sessionId: id,
-      name,
-      agentType,
-      workdir,
-    });
-
-    if (opts.initialTask?.trim()) {
-      const keepAliveAfterComplete =
-        (opts.metadata as Record<string, unknown> | undefined)
-          ?.keepAliveAfterComplete === true;
-      void this.sendPrompt(id, initialTask ?? "", {
-        timeoutMs: resolveInitialTaskPromptTimeoutMs(opts.timeoutMs),
-        model: opts.model,
-      })
-        .catch((err: unknown) => {
-          // error-policy:J5 fire-and-forget initial prompt; the underlying
-          // failure is also surfaced by sendPrompt (errored status + error event).
-          this.log("error", "initial prompt failed", {
-            sessionId: id,
-            agentType,
-            promptLength: initialTask?.length ?? 0,
-            promptPreview: preview(initialTask ?? ""),
-            error: errorMessage(err),
-          });
-        })
-        .finally(() => {
-          if (keepAliveAfterComplete) return;
-          void this.closeInitialTaskSession(id);
-        });
-    }
-
-    const updated = await this.store.get(id);
-    const sessionSnapshot: SessionInfo = { ...session, status: "ready" };
-    return toSpawnResult(updated ?? sessionSnapshot);
   }
 
   /**
@@ -1399,6 +1499,11 @@ export class AcpService extends Service {
         session.acpxSessionId ?? session.agentSessionId ?? session.id,
       );
       await this.store.updateStatus(sessionId, "cancelled");
+      // Stop the scratch dir counting against the shared cap the moment the
+      // session is terminal; the actual rm still happens on close/delete via
+      // removeOwnedScratchWorkdir (a cancelled session may be reopened/inspected
+      // before teardown). Accounting-only — the registry never rm's ACP dirs.
+      this.workspaceRegistry.markTerminal(session.workdir);
       void this.revokeModelLease(sessionId, "cancelSession:native");
       return;
     }
@@ -1420,6 +1525,7 @@ export class AcpService extends Service {
       });
     }
     await this.store.updateStatus(sessionId, "cancelled");
+    this.workspaceRegistry.markTerminal(session.workdir);
     void this.revokeModelLease(sessionId, "cancelSession");
   }
 
