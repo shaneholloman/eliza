@@ -24,6 +24,22 @@ import { DockerSSHClient } from "./docker-ssh";
 import { type DiskHealthVerdict, diskHealthVerdict, probeNodeDiskUsage } from "./node-disk-manager";
 
 // ---------------------------------------------------------------------------
+// Pre-pull self-heal bookkeeping (see recoverAfterFailedPrePull)
+// ---------------------------------------------------------------------------
+
+/** Per-node consecutive pre-pull failures + last auto-heal timestamp. Cleared
+ * on the first successful pull. In-memory: the provisioning worker is a single
+ * long-lived process, and a restart is itself a clean slate. */
+const prePullFailureState = new Map<
+  string,
+  { consecutiveFailures: number; lastSelfHealMs: number }
+>();
+/** Consecutive failed pre-pulls on a node before an auto docker restart. */
+const PREPULL_SELF_HEAL_FAILURE_THRESHOLD = 2;
+/** Minimum gap between auto docker restarts on the same node (anti-restart-loop). */
+const PREPULL_SELF_HEAL_COOLDOWN_MS = 30 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -471,18 +487,20 @@ export class DockerNodeManager {
           };
         }
 
+        const ssh = DockerSSHClient.getClient(
+          node.hostname,
+          node.ssh_port ?? undefined,
+          node.host_key_fingerprint ?? undefined,
+          node.ssh_user ?? undefined,
+        );
         try {
-          const ssh = DockerSSHClient.getClient(
-            node.hostname,
-            node.ssh_port ?? undefined,
-            node.host_key_fingerprint ?? undefined,
-            node.ssh_user ?? undefined,
-          );
           await ssh.connect();
           await ssh.exec(
             ["docker pull", ...dockerPlatformFlag(platform), shellQuote(image)].join(" "),
             5 * 60 * 1000,
           );
+          // Success: clear any prior wedge / self-heal bookkeeping for this node.
+          prePullFailureState.delete(node.node_id);
           return {
             nodeId: node.node_id,
             hostname: node.hostname,
@@ -496,6 +514,15 @@ export class DockerNodeManager {
             image,
             error: message,
           });
+          // A timed-out `docker pull` is NOT stopped by DockerSSHClient's
+          // channel-close (that only sends SIGHUP, which a detached `docker
+          // pull` ignores), so it keeps running. Left alone, orphaned pulls
+          // pile up until dockerd's pull coordinator wedges and every later
+          // pull dedups onto the stuck one and hangs forever — the outage that
+          // previously required a manual `systemctl restart docker`. SIGKILL
+          // the orphans so retries start clean, and auto-recover an
+          // already-wedged daemon when self-heal is enabled.
+          await this.recoverAfterFailedPrePull(ssh, node);
           return {
             nodeId: node.node_id,
             hostname: node.hostname,
@@ -506,6 +533,67 @@ export class DockerNodeManager {
         }
       }),
     );
+  }
+
+  /**
+   * Cleanup + optional self-heal after a pre-pull fails on a node.
+   *
+   * (a) Always SIGKILL any orphaned `docker pull` processes. DockerSSHClient's
+   *     timeout only closes the ssh channel (SIGHUP), which `docker pull`
+   *     ignores — so without this the timed-out pull keeps running and the
+   *     next cycle's pull dedups onto it and hangs, escalating into a wedged
+   *     dockerd pull coordinator that never lands the image.
+   * (b) If a node keeps failing (its daemon is already wedged) and self-heal
+   *     is enabled, restart docker once per cooldown to recover automatically
+   *     instead of paging an operator. `live-restore` (node bootstrap
+   *     daemon.json) keeps running agent containers alive across the restart.
+   */
+  private async recoverAfterFailedPrePull(
+    ssh: DockerSSHClient,
+    node: DockerNode,
+  ): Promise<void> {
+    // (a) Kill SIGHUP-immune orphaned pulls so retries start from a clean daemon.
+    try {
+      await ssh.exec("pkill -9 -f 'docker pull ' || true", 20_000);
+    } catch (killError) {
+      logger.warn("[docker-node-manager] Failed to reap orphaned docker pull after pre-pull failure", {
+        nodeId: node.node_id,
+        error: killError instanceof Error ? killError.message : String(killError),
+      });
+    }
+
+    // (b) Track consecutive failures; auto-recover a wedged daemon when enabled.
+    const state = prePullFailureState.get(node.node_id) ?? {
+      consecutiveFailures: 0,
+      lastSelfHealMs: 0,
+    };
+    state.consecutiveFailures += 1;
+    prePullFailureState.set(node.node_id, state);
+
+    if (!containersEnv.prePullSelfHealRestartEnabled()) return;
+    if (state.consecutiveFailures < PREPULL_SELF_HEAL_FAILURE_THRESHOLD) return;
+    if (Date.now() - state.lastSelfHealMs < PREPULL_SELF_HEAL_COOLDOWN_MS) return;
+
+    logger.error(
+      "[docker-node-manager] Pre-pull wedged repeatedly; auto-restarting docker to self-heal",
+      {
+        nodeId: node.node_id,
+        hostname: node.hostname,
+        consecutiveFailures: state.consecutiveFailures,
+      },
+    );
+    try {
+      // Requires live-restore=true on the node so running agents survive.
+      await ssh.exec("systemctl restart docker", 90_000);
+      state.lastSelfHealMs = Date.now();
+      state.consecutiveFailures = 0;
+      prePullFailureState.set(node.node_id, state);
+    } catch (restartError) {
+      logger.error("[docker-node-manager] Self-heal docker restart failed", {
+        nodeId: node.node_id,
+        error: restartError instanceof Error ? restartError.message : String(restartError),
+      });
+    }
   }
 
   // ---- Runtime Container Inspection -------------------------------------
