@@ -14,15 +14,11 @@
 
 import { BRAND_PATHS, LOGO_FILES } from "@elizaos/shared/brand";
 import {
-  Bot,
-  Building2,
-  CreditCard,
-  Grid3x3,
-  Home,
-  KeyRound,
-  User,
-} from "lucide-react";
-import { type ReactNode, useCallback, useState } from "react";
+  type ReactNode,
+  useCallback,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Link, Navigate, useLocation } from "react-router-dom";
 import {
   DashboardHeader,
@@ -33,49 +29,53 @@ import {
   PageHeaderProvider,
   usePageHeader,
 } from "../../cloud-ui/components/layout";
+import { hasHydratableStewardToken } from "../lib/steward-session";
 import { useSessionAuth } from "../lib/use-session-auth";
+import {
+  CONSOLE_OVERVIEW_NAV_ITEM,
+  CONSOLE_SURFACES,
+} from "./console-surfaces";
 
 /**
- * The console nav: one flat list, launch-core surfaces only (nubs's cut,
- * 2026-07-04 — manage account, funds, agents, apps, API keys). Everything
- * else (my-agents, mcps, analytics, api-explorer, monetization, connectors,
- * security) stays REGISTERED and deep-linkable — it just isn't advertised
- * here until it earns its slot back. One unsectioned list means no section
- * titles at all, which also settles the Account/Account double-label.
+ * The console nav is one flat list so sidebar section labels never compete
+ * with Account and Organization route labels. Specialist routes stay registered
+ * for deep links but are not promoted into the default console chrome.
  */
 const CONSOLE_NAV_SECTIONS: DashboardSidebarSection[] = [
   {
     items: [
-      { id: "overview", label: "Overview", href: "/dashboard", icon: Home },
-      { id: "agents", label: "Agents", href: "/dashboard/agents", icon: Bot },
-      { id: "apps", label: "Apps", href: "/dashboard/apps", icon: Grid3x3 },
-      {
-        id: "billing",
-        label: "Billing",
-        href: "/dashboard/billing",
-        icon: CreditCard,
-      },
-      {
-        id: "api-keys",
-        label: "API Keys",
-        href: "/dashboard/api-keys",
-        icon: KeyRound,
-      },
-      {
-        id: "account",
-        label: "Account",
-        href: "/dashboard/account",
-        icon: User,
-      },
-      {
-        id: "organization",
-        label: "Organization",
-        href: "/dashboard/organization",
-        icon: Building2,
-      },
+      CONSOLE_OVERVIEW_NAV_ITEM,
+      ...CONSOLE_SURFACES.map(({ id, label, href, icon }) => ({
+        id,
+        label,
+        href,
+        icon,
+      })),
     ],
   },
 ];
+
+function subscribeToStewardTokenChanges(listener: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener("storage", listener);
+  window.addEventListener("steward-token-sync", listener);
+  return () => {
+    window.removeEventListener("storage", listener);
+    window.removeEventListener("steward-token-sync", listener);
+  };
+}
+
+function readHydratableStewardTokenSnapshot(): boolean {
+  return hasHydratableStewardToken();
+}
+
+function useHasHydratableStewardToken(): boolean {
+  return useSyncExternalStore(
+    subscribeToStewardTokenChanges,
+    readHydratableStewardTokenSnapshot,
+    () => false,
+  );
+}
 
 function renderRouterLink({
   href,
@@ -134,6 +134,7 @@ export function ConsoleShell({
 }): React.JSX.Element {
   const location = useLocation();
   const session = useSessionAuth();
+  const hasHydratableToken = useHasHydratableStewardToken();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const toggleSidebar = useCallback(() => setSidebarOpen((v) => !v), []);
 
@@ -143,6 +144,24 @@ export function ConsoleShell({
   // (#13709: expired staging session showed exactly that). returnTo brings
   // them straight back after re-auth.
   if (session.ready && !session.authenticated) {
+    // Post-OAuth hydration window: the login page persists the token and
+    // navigates here BEFORE the auth provider consumes it, so for ~1-2s the
+    // session reads ready-but-unauthenticated. Redirecting then bounces the
+    // user back to the sign-in form — which reads as "login didn't work"
+    // (nubs, #13406). Hold only for a non-expired, identity-bearing token:
+    // expired/malformed tokens already read as signed-out in useSessionAuth and
+    // must redirect immediately. The storage/sync subscription above makes a
+    // provider clear transition re-render this branch into the login redirect.
+    if (hasHydratableToken) {
+      return (
+        <div
+          aria-busy="true"
+          className="flex min-h-dvh items-center justify-center bg-bg text-sm text-muted"
+        >
+          Signing you in…
+        </div>
+      );
+    }
     const returnTo = encodeURIComponent(
       `${location.pathname}${location.search}`,
     );

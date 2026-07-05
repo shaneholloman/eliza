@@ -178,6 +178,12 @@ export async function startDesktopTestBridgeServer(): Promise<
         return;
       }
 
+      if (pathname === "/main-window/minimize" && method === "POST") {
+        await getDesktopManager().minimizeWindow();
+        json(res, 200, { ok: true });
+        return;
+      }
+
       if (pathname === "/main-window/bounds") {
         const snapshot = getCurrentMainWindowSnapshot();
         if (!snapshot.present) {
@@ -273,6 +279,19 @@ export async function startDesktopTestBridgeServer(): Promise<
           invoked ? 200 : 404,
           invoked ? { ok: true, id } : { error: "shortcut is not registered" },
         );
+        return;
+      }
+
+      if (pathname === "/notifications" && method === "GET") {
+        json(res, 200, {
+          notifications: getDesktopManager().getNotificationDiagnostics(),
+        });
+        return;
+      }
+
+      if (pathname === "/notifications" && method === "DELETE") {
+        getDesktopManager().clearNotificationDiagnostics();
+        json(res, 200, { ok: true });
         return;
       }
 
