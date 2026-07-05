@@ -1,5 +1,5 @@
 {
-  "generatedFrom": "node packages/scripts/lint-lane-coverage.mjs --json on origin/develop (050adf180, 2026-07-05)",
+  "generatedFrom": "node packages/scripts/lint-lane-coverage.mjs --json on origin/develop (2579e7b75e, 2026-07-05)",
   "issue": "https://github.com/elizaOS/eliza/issues/13620",
   "policy": "This file is the baseline for enforcing lint-lane-coverage without --dry-run. New unsuppressed issues fail; stale entries fail and should be removed.",
   "summary": {
