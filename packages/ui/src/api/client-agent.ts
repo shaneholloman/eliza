@@ -1276,12 +1276,13 @@ function map202ToResumeProgressStatus(body: unknown): AgentStatus {
   const resumeProgress = { ...parsed, observedAt: Date.now() };
   // An in-flight resume is honest progress, not "unreachable": report a
   // starting state carrying the proxy's progress so `deriveAgentReady` stays
-  // false (correct — not ready yet) while the UI can distinguish it.
+  // false (correct — not ready yet) while the UI can distinguish it. Leave
+  // `canRespond` unknown here; `false` is reserved for the authoritative
+  // no-provider signal and would make a transient cloud wake look misconfigured.
   return {
     state: "starting",
     agentName: "Eliza",
     model: undefined,
-    canRespond: false,
     uptime: undefined,
     startedAt: undefined,
     resumeProgress,

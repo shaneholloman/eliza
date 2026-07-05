@@ -64,7 +64,8 @@ describe("ElizaClient.getStatus cloud resume progress (#14040 sub-defect 2)", ()
 
     // Explicit progress state — NOT undefined/unreachable, NOT a thrown error.
     expect(status.state).toBe("starting");
-    expect(status.canRespond).toBe(false);
+    // A transient cloud wake is not an authoritative no-provider signal.
+    expect(status.canRespond).toBeUndefined();
     expect(status.resumeProgress).toMatchObject({
       status: "starting",
       jobId: "resume-job-42",
