@@ -54,7 +54,6 @@ const EXPECTED_LINKS = [
   "/dashboard/billing",
   "/dashboard/api-keys",
   "/dashboard/account",
-  "/dashboard/organization",
 ];
 
 describe("DashboardHomePage", () => {
@@ -75,6 +74,7 @@ describe("DashboardHomePage", () => {
     for (const to of EXPECTED_LINKS) {
       expect(hrefs, `missing console link ${to}`).toContain(to);
     }
+    expect(hrefs).not.toContain("/dashboard/organization");
   });
 
   it("links Add funds to the billing console page", () => {
