@@ -225,9 +225,12 @@ const BrowserWorkspaceView = lazyNamedView(
   () => import("./components/pages/BrowserWorkspaceView"),
   "BrowserWorkspaceView",
 );
-const TranscriptsPageView = lazyNamedView(
-  () => import("./components/transcripts/TranscriptsPage"),
-  "TranscriptsPage",
+// #13594: `/apps/transcripts` is now the chrome-minimal LIVE-meeting affordance
+// only — recordings were folded into the Knowledge hub. The full recordings
+// browser (TranscriptsPage) is no longer routed.
+const LiveMeetingPageView = lazyNamedView(
+  () => import("./components/transcripts/LiveMeetingPage"),
+  "LiveMeetingPage",
 );
 const CameraPageView = lazyNamedView(
   () => import("./components/pages/CameraPageView"),
@@ -1204,7 +1207,7 @@ function buildStaticTabRenderers(): Record<
     plugins: wrap(<PluginsPageView />),
     skills: wrap(<SkillsView />),
     trajectories: wrap(<TrajectoriesView />),
-    transcripts: wrap(<TranscriptsPageView />),
+    transcripts: wrap(<LiveMeetingPageView />),
     // Relationships is a Character-family section: the shared CharacterSectionNav
     // (passed as `nav`) owns the "Character" header + strip, so the view renders
     // headerless.

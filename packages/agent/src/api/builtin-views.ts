@@ -162,12 +162,25 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
     id: "documents",
     viewKind: "system",
     label: "Knowledge",
-    description: "Agent knowledge documents, uploads, and retrieval sources",
+    description:
+      "The multimedia knowledge hub — documents, images, audio, video, and transcripts, filtered by media type and scope, with a unified reader",
     icon: "FileText",
     heroImagePath: "assets/view-heroes/character.png",
     path: "/character/documents",
     order: 51,
-    tags: ["documents", "knowledge", "files", "uploads", "retrieval"],
+    tags: [
+      "documents",
+      "knowledge",
+      "files",
+      "uploads",
+      "retrieval",
+      "transcripts",
+      "audio",
+      "video",
+      "images",
+      "media",
+      "attachments",
+    ],
     relatedActions: ["OWNER_DOCUMENTS"],
     anticipatoryIntent:
       "Offer to triage the newest ingested attachments/documents — summarize, tag, or file them — grounded in the recent-attachment counts.",
@@ -225,19 +238,23 @@ export const BUILTIN_VIEWS: ViewDeclaration[] = [
     visibleInManager: true,
   },
   {
+    // Folded into the Knowledge hub (#13594): transcript records read in the hub
+    // under its Transcripts media-format facet + word-synced reader. This entry
+    // stays only as the chrome-minimal LIVE-meeting affordance (#11856) — a
+    // deep-link surface, not a separate manager view or launcher tile.
     id: "transcripts",
     viewKind: "system",
-    label: "Transcripts",
+    label: "Live meeting",
     description:
-      "Recorded voice transcripts — play, scrub, and read with word sync",
+      "Join a live meeting and capture its transcript; recorded transcripts read in the Knowledge hub",
     icon: "AudioLines",
     heroImagePath: "assets/view-heroes/transcripts.png",
     path: "/apps/transcripts",
     order: 71,
-    tags: ["transcript", "voice", "recording", "audio"],
+    tags: ["transcript", "voice", "recording", "audio", "meeting"],
     anticipatoryIntent:
       "Offer to summarize or extract action items from the most recent voice transcripts, grounded in the recent-transcript count.",
-    visibleInManager: true,
+    visibleInManager: false,
   },
   {
     id: "memories",
