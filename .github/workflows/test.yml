@@ -129,6 +129,27 @@ jobs:
             --output "$GITHUB_OUTPUT" \
             --summary "$GITHUB_STEP_SUMMARY"
 
+  test-runner-vacuous-green-guard:
+    name: Test-runner vacuous-green guard
+    needs: changes
+    # #13620/#12342: this guard protects the ordinary PR path from runner lanes
+    # that collect no real tests or swallow a failure as "no tests found".
+    # Keep it outside path gates and outside the opt-in `ci:full` heavy family.
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          submodules: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Test-runner vacuous-green guard
+        run: bun test packages/scripts/__tests__/run-all-tests-vacuous-green-guard.test.ts
+
   server-tests:
     name: Server Tests
     needs: changes
@@ -1392,6 +1413,7 @@ jobs:
     if: ${{ !cancelled() && always() }}
     needs:
       - changes
+      - test-runner-vacuous-green-guard
       - merge-quality-gate
       - server-tests
       - client-tests
@@ -1415,6 +1437,7 @@ jobs:
           set -u
           echo "=== Required test job results ==="
           echo "changes:          ${{ needs.changes.result }}"
+          echo "runner guard:     ${{ needs.test-runner-vacuous-green-guard.result }}"
           echo "merge-quality-gate:${{ needs.merge-quality-gate.result }}"
           echo "server-tests:     ${{ needs.server-tests.result }}"
           echo "client-tests:     ${{ needs.client-tests.result }}"
@@ -1431,6 +1454,7 @@ jobs:
           bad=0
           for pair in \
             "changes:${{ needs.changes.result }}" \
+            "test-runner-vacuous-green-guard:${{ needs.test-runner-vacuous-green-guard.result }}" \
             "merge-quality-gate:${{ needs.merge-quality-gate.result }}" \
             "server-tests:${{ needs.server-tests.result }}" \
             "client-tests:${{ needs.client-tests.result }}" \
