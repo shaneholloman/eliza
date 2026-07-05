@@ -119,7 +119,10 @@ export async function getCurrentUserFromRequest(
     const playwrightTestUser = await getPlaywrightTestUserFromHeader(cookieHeader);
     if (playwrightTestUser) return playwrightTestUser;
 
-    const stewardToken = readStewardAccessCookieFromHeader(cookieHeader, getCloudAwareEnv().ENVIRONMENT);
+    const stewardToken = readStewardAccessCookieFromHeader(
+      cookieHeader,
+      getCloudAwareEnv().ENVIRONMENT,
+    );
     if (!stewardToken) return null;
 
     const tokenHash = hashToken(stewardToken);

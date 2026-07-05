@@ -41,7 +41,6 @@ describe("canMutateLegacyStewardCookies", () => {
   });
 });
 
-
 describe("readStewardAccessCookieFromHeader", () => {
   const beforeCutoff = LEGACY_STEWARD_COOKIE_FALLBACK_EXPIRES_AT_MS - 1;
   const atCutoff = LEGACY_STEWARD_COOKIE_FALLBACK_EXPIRES_AT_MS;
