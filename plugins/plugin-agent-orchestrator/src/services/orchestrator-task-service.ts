@@ -145,6 +145,7 @@ import {
   PARENT_AGENT_BROKER_MANIFEST_ENTRY,
 } from "./parent-agent-broker.js";
 import {
+  deriveProjectWorldId,
   resolveTaskProjectId,
   resolveTaskSpawnWorkdir,
 } from "./project-binding.js";
@@ -2151,11 +2152,18 @@ export class OrchestratorTaskService extends Service {
    * a registered project. The `workdir` hint is stripped so it is never
    * persisted on the record — only the resolved `projectId` is. No match leaves
    * the task unbound, preserving per-session workdir re-resolution.
+   *
+   * A bound task is also stamped with the project's memory world (#13776 D3), so
+   * its subagents are partitioned to the project and never see another project's
+   * injected context. A caller-supplied `worldId` is authoritative and wins —
+   * only an unset one is filled from the binding.
    */
   private bindProject(input: CreateTaskInput): CreateTaskInput {
     const projectId = resolveTaskProjectId(input);
     const { workdir: _workdir, ...rest } = input;
-    return { ...rest, projectId };
+    const worldId =
+      rest.worldId ?? (projectId ? deriveProjectWorldId(projectId) : undefined);
+    return { ...rest, projectId, worldId };
   }
 
   /**

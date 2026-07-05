@@ -10,11 +10,13 @@ import { join } from "node:path";
 import {
   logger,
   setActiveProject,
+  stringToUuid,
   upsertProject,
   writeWorkspaceFolderConfig,
 } from "@elizaos/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  deriveProjectWorldId,
   findProjectByWorkdir,
   resolveBoundProjectWorkdir,
   resolveTaskProjectId,
@@ -183,6 +185,17 @@ describe("project-binding", () => {
       expect(r.workdir).toBe("/tmp/explicit");
       expect(r.lockWorkdir).toBe(false);
     });
+  });
+
+  it("deriveProjectWorldId is deterministic in the project id and matches the stringToUuid convention", () => {
+    // #13776 D3: the world must be reproducible from the id alone so the agent
+    // runtime, desktop picker, and bind seam all land on the same partition
+    // without coordinating through disk.
+    const a = deriveProjectWorldId("proj-1");
+    expect(deriveProjectWorldId("proj-1")).toBe(a);
+    expect(deriveProjectWorldId("proj-2")).not.toBe(a);
+    expect(a).toBe(stringToUuid("project:proj-1"));
+    expect(a).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it("a projectId bound via the legacy workspace-folder.json synthesis resolves back to its workdir", () => {

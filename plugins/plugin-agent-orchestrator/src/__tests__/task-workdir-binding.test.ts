@@ -10,12 +10,12 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { IAgentRuntime } from "@elizaos/core";
-import { upsertProject } from "@elizaos/core";
+import { type IAgentRuntime, upsertProject } from "@elizaos/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AcpService } from "../services/acp-service.js";
 import { OrchestratorTaskService } from "../services/orchestrator-task-service.js";
 import { OrchestratorTaskStore } from "../services/orchestrator-task-store.js";
+import { deriveProjectWorldId } from "../services/project-binding.js";
 import type { SpawnOptions, SpawnResult } from "../services/types.js";
 
 /** ACP stand-in that records the workdir each spawn was handed and echoes it
@@ -455,6 +455,88 @@ describe("durable task→workdir binding (#13776)", () => {
       // A follow-up spawn with no workdir reuses the attach-pinned binding.
       await service.spawnAgentForTask(taskId, { task: "continue" });
       expect(acp.spawns.at(0)?.workdir).toBe(firstDir);
+    } finally {
+      await service.stop().catch(() => undefined);
+    }
+  });
+});
+
+// #13776 D3: creating a task bound to a project must stamp the project's memory
+// world onto the record, so the task's subagents are partitioned to that
+// project. Drives the REAL OrchestratorTaskService.createTask (which calls the
+// private bindProject) over a real projects.json under an isolated state dir.
+describe("project memory-world stamping at bind time (#13776 D3)", () => {
+  let stateDir: string;
+  let savedStateDir: string | undefined;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(path.join(os.tmpdir(), "project-world-"));
+    savedStateDir = process.env.ELIZA_STATE_DIR;
+    process.env.ELIZA_STATE_DIR = stateDir;
+  });
+
+  afterEach(() => {
+    if (savedStateDir === undefined) delete process.env.ELIZA_STATE_DIR;
+    else process.env.ELIZA_STATE_DIR = savedStateDir;
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("stamps the bound project's derived worldId onto a workdir-bound task", async () => {
+    const project = upsertProject({ name: "repo-a", localPath: firstDir });
+    const store = new OrchestratorTaskStore({ backend: "memory" });
+    const acp = makeWorkdirCapturingAcp();
+    const service = new OrchestratorTaskService(makeRuntime(acp.service), {
+      store,
+    });
+    await service.start();
+    try {
+      // No explicit projectId/worldId: bind by realpath-matching the workdir.
+      const detail = await service.createTask({
+        title: "bound task",
+        goal: "work in project A",
+        acceptanceCriteria: [],
+        workdir: firstDir,
+      });
+      expect(detail.projectId).toBe(project.id);
+      expect(detail.worldId).toBe(deriveProjectWorldId(project.id));
+      // Persisted, not just returned.
+      const record = await store.getTask(detail.id);
+      expect(record?.task.projectId).toBe(project.id);
+      expect(record?.task.worldId).toBe(deriveProjectWorldId(project.id));
+    } finally {
+      await service.stop().catch(() => undefined);
+    }
+  });
+
+  it("leaves an unbound task's worldId untouched and lets an explicit worldId win", async () => {
+    const project = upsertProject({ name: "repo-a", localPath: firstDir });
+    const store = new OrchestratorTaskStore({ backend: "memory" });
+    const acp = makeWorkdirCapturingAcp();
+    const service = new OrchestratorTaskService(makeRuntime(acp.service), {
+      store,
+    });
+    await service.start();
+    try {
+      // Unbound (no matching project): worldId stays null, not fabricated.
+      const unbound = await service.createTask({
+        title: "unbound",
+        goal: "no project match",
+        acceptanceCriteria: [],
+        workdir: overrideDir,
+      });
+      expect(unbound.projectId).toBeNull();
+      expect(unbound.worldId).toBeNull();
+
+      // A caller-supplied worldId is authoritative even when a project binds.
+      const explicit = await service.createTask({
+        title: "explicit world",
+        goal: "work in project A",
+        acceptanceCriteria: [],
+        workdir: firstDir,
+        worldId: "caller-world",
+      });
+      expect(explicit.projectId).toBe(project.id);
+      expect(explicit.worldId).toBe("caller-world");
     } finally {
       await service.stop().catch(() => undefined);
     }
