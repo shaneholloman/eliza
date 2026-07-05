@@ -13,15 +13,6 @@
  */
 
 import { BRAND_PATHS, LOGO_FILES } from "@elizaos/shared/brand";
-import {
-  Bot,
-  Building2,
-  CreditCard,
-  Grid3x3,
-  Home,
-  KeyRound,
-  User,
-} from "lucide-react";
 import { type ReactNode, useCallback, useState } from "react";
 import { Link, Navigate, useLocation } from "react-router-dom";
 import {
@@ -34,45 +25,26 @@ import {
   usePageHeader,
 } from "../../cloud-ui/components/layout";
 import { useSessionAuth } from "../lib/use-session-auth";
+import {
+  CONSOLE_OVERVIEW_NAV_ITEM,
+  CONSOLE_SURFACES,
+} from "./console-surfaces";
 
 /**
- * The console nav: one flat list, launch-core surfaces only (nubs's cut,
- * 2026-07-04 — manage account, funds, agents, apps, API keys). Everything
- * else (my-agents, mcps, analytics, api-explorer, monetization, connectors,
- * security) stays REGISTERED and deep-linkable — it just isn't advertised
- * here until it earns its slot back. One unsectioned list means no section
- * titles at all, which also settles the Account/Account double-label.
+ * The console nav is one flat list so sidebar section labels never compete
+ * with Account and Organization route labels. Specialist routes stay registered
+ * for deep links but are not promoted into the default console chrome.
  */
 const CONSOLE_NAV_SECTIONS: DashboardSidebarSection[] = [
   {
     items: [
-      { id: "overview", label: "Overview", href: "/dashboard", icon: Home },
-      { id: "agents", label: "Agents", href: "/dashboard/agents", icon: Bot },
-      { id: "apps", label: "Apps", href: "/dashboard/apps", icon: Grid3x3 },
-      {
-        id: "billing",
-        label: "Billing",
-        href: "/dashboard/billing",
-        icon: CreditCard,
-      },
-      {
-        id: "api-keys",
-        label: "API Keys",
-        href: "/dashboard/api-keys",
-        icon: KeyRound,
-      },
-      {
-        id: "account",
-        label: "Account",
-        href: "/dashboard/account",
-        icon: User,
-      },
-      {
-        id: "organization",
-        label: "Organization",
-        href: "/dashboard/organization",
-        icon: Building2,
-      },
+      CONSOLE_OVERVIEW_NAV_ITEM,
+      ...CONSOLE_SURFACES.map(({ id, label, href, icon }) => ({
+        id,
+        label,
+        href,
+        icon,
+      })),
     ],
   },
 ];
