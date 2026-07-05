@@ -277,6 +277,27 @@ async function resolveFallbackTokenRate(params: {
 }
 
 function computeCostFromEntry(entry: PreparedPricingEntry, quantity: number): FlatOperationCost {
+  // Defense-in-depth money-boundary guard. Candidate selection already drops
+  // non-finite prices (see `chooseBestCandidatePricingEntry`), so a resolved
+  // entry reaching here should always carry a real price. Re-assert it anyway:
+  // `asDecimal(NaN).mul(quantity)` silently yields a `NaN` charge that then
+  // poisons the credit debit / earnings ledger with no error. If a corrupt
+  // price ever reaches this sink via any future path, fail closed with an
+  // explicit error the caller surfaces (5xx / refuse) rather than billing NaN.
+  if (!Number.isFinite(entry.unitPrice)) {
+    logger.error("ai-pricing: refusing to bill a non-finite catalog price", {
+      provider: entry.provider,
+      model: entry.model,
+      productFamily: entry.productFamily,
+      chargeType: entry.chargeType,
+      unit: entry.unit,
+      unitPrice: entry.unitPrice,
+    });
+    throw new Error(
+      `Corrupt catalog price for ${entry.productFamily}:${entry.chargeType} ${entry.provider}/${entry.model}; refusing to bill a non-finite rate`,
+    );
+  }
+
   const baseCost = asDecimal(entry.unitPrice).mul(quantity);
   const markedUp = applyPlatformMarkup(baseCost);
 
@@ -412,12 +433,47 @@ export async function calculateTextCostFromCatalog(params: {
     ? null
     : await resolveMissingSide("output", params.outputTokens);
 
-  const inputUnitPrice = inputEntry
-    ? asDecimal(inputEntry.unitPrice)
-    : asDecimal(inputFallback?.unitPrice ?? 0);
-  const outputUnitPrice = outputEntry
-    ? asDecimal(outputEntry.unitPrice)
-    : asDecimal(outputFallback?.unitPrice ?? 0);
+  // Defense-in-depth money-boundary guard mirroring `computeCostFromEntry`.
+  // Candidate selection already drops non-finite catalog prices, but the token
+  // path builds the Decimal directly rather than going through that sink, so
+  // re-assert finiteness before `asDecimal(...).mul(tokens)` — a `NaN` unit
+  // price would otherwise bill `NaN` inference silently. A zero-token side
+  // costs $0 at any rate, so only a side that actually bills tokens fails
+  // closed on a corrupt resolved price.
+  const resolveTokenUnitPrice = (
+    chargeType: "input" | "output",
+    entry: PreparedPricingEntry | null,
+    fallback: FallbackTokenRate | null,
+    tokens: number,
+  ) => {
+    const unitPrice = entry ? entry.unitPrice : (fallback?.unitPrice ?? 0);
+    if (tokens > 0 && !Number.isFinite(unitPrice)) {
+      logger.error("ai-pricing: refusing to bill a non-finite token price", {
+        canonicalModel,
+        provider: params.provider,
+        billingSource: params.billingSource,
+        chargeType,
+        unitPrice,
+      });
+      throw new Error(
+        `Corrupt catalog price for ${productFamily}:${chargeType} ${canonicalModel}; refusing to bill a non-finite rate`,
+      );
+    }
+    return asDecimal(unitPrice);
+  };
+
+  const inputUnitPrice = resolveTokenUnitPrice(
+    "input",
+    inputEntry,
+    inputFallback,
+    params.inputTokens,
+  );
+  const outputUnitPrice = resolveTokenUnitPrice(
+    "output",
+    outputEntry,
+    outputFallback,
+    params.outputTokens,
+  );
 
   const baseInputCost = inputUnitPrice.mul(params.inputTokens);
   const baseOutputCost = outputUnitPrice.mul(params.outputTokens);
