@@ -548,18 +548,19 @@ export class DockerNodeManager {
    *     instead of paging an operator. `live-restore` (node bootstrap
    *     daemon.json) keeps running agent containers alive across the restart.
    */
-  private async recoverAfterFailedPrePull(
-    ssh: DockerSSHClient,
-    node: DockerNode,
-  ): Promise<void> {
+  private async recoverAfterFailedPrePull(ssh: DockerSSHClient, node: DockerNode): Promise<void> {
     // (a) Kill SIGHUP-immune orphaned pulls so retries start from a clean daemon.
     try {
       await ssh.exec("pkill -9 -f 'docker pull ' || true", 20_000);
     } catch (killError) {
-      logger.warn("[docker-node-manager] Failed to reap orphaned docker pull after pre-pull failure", {
-        nodeId: node.node_id,
-        error: killError instanceof Error ? killError.message : String(killError),
-      });
+      // error-policy:J6 best-effort cleanup must not mask the original pre-pull failure.
+      logger.warn(
+        "[docker-node-manager] Failed to reap orphaned docker pull after pre-pull failure",
+        {
+          nodeId: node.node_id,
+          error: killError instanceof Error ? killError.message : String(killError),
+        },
+      );
     }
 
     // (b) Track consecutive failures; auto-recover a wedged daemon when enabled.
@@ -589,6 +590,7 @@ export class DockerNodeManager {
       state.consecutiveFailures = 0;
       prePullFailureState.set(node.node_id, state);
     } catch (restartError) {
+      // error-policy:J6 best-effort self-heal must report failure while preserving caller status.
       logger.error("[docker-node-manager] Self-heal docker restart failed", {
         nodeId: node.node_id,
         error: restartError instanceof Error ? restartError.message : String(restartError),
