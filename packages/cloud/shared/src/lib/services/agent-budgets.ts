@@ -172,18 +172,18 @@ class AgentBudgetService {
     }
 
     // Reset daily spent if needed
-    await this.maybeResetDailySpent(budget);
+    const currentBudget = await this.maybeResetDailySpent(budget);
 
     // Calculate available budget
-    const allocated = new Decimal(budget.allocated_budget);
-    const spent = new Decimal(budget.spent_budget);
+    const allocated = new Decimal(currentBudget.allocated_budget);
+    const spent = new Decimal(currentBudget.spent_budget);
     const available = allocated.minus(spent);
 
     // Check daily limit if set
     let dailyRemaining: number | null = null;
-    if (budget.daily_limit) {
-      const dailyLimit = new Decimal(budget.daily_limit);
-      const dailySpent = new Decimal(budget.daily_spent);
+    if (currentBudget.daily_limit) {
+      const dailyLimit = new Decimal(currentBudget.daily_limit);
+      const dailySpent = new Decimal(currentBudget.daily_spent);
       dailyRemaining = dailyLimit.minus(dailySpent).toNumber();
 
       if (dailyRemaining < estimatedCost) {
@@ -752,18 +752,28 @@ class AgentBudgetService {
     return tomorrow;
   }
 
-  private async maybeResetDailySpent(budget: AgentBudget): Promise<void> {
+  private async maybeResetDailySpent(budget: AgentBudget): Promise<AgentBudget> {
     const now = new Date();
     if (budget.daily_reset_at && now >= budget.daily_reset_at) {
+      const dailyResetAt = this.getNextDailyReset();
       await dbWrite
         .update(agentBudgets)
         .set({
           daily_spent: "0.0000",
-          daily_reset_at: this.getNextDailyReset(),
+          daily_reset_at: dailyResetAt,
           updated_at: now,
         })
         .where(eq(agentBudgets.id, budget.id));
+
+      return {
+        ...budget,
+        daily_spent: "0.0000",
+        daily_reset_at: dailyResetAt,
+        updated_at: now,
+      };
     }
+
+    return budget;
   }
 
   private async sendLowBudgetAlert(agentId: string, balance: number): Promise<boolean> {

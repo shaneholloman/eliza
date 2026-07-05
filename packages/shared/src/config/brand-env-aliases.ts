@@ -140,6 +140,10 @@ export function buildBrandEnvSyncAliases(prefix: string): BrandEnvAliasPair[] {
       "vite" in definition && definition.vite
         ? `VITE_${normalizedPrefix}_${definition.brandSuffix}`
         : `${normalizedPrefix}_${definition.brandSuffix}`;
-    return [brandKey, definition.syncElizaKey ?? definition.elizaKey] as const;
+    const elizaKey =
+      "syncElizaKey" in definition
+        ? (definition.syncElizaKey ?? definition.elizaKey)
+        : definition.elizaKey;
+    return [brandKey, elizaKey] as const;
   });
 }
