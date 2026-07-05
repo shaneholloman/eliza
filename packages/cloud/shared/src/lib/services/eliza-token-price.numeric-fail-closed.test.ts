@@ -187,6 +187,18 @@ describe("ElizaTokenPriceService.getPrice (cached-price seam)", () => {
       { success: true, source: "corrupt-source", priceUsd: Number.NaN },
     ]);
 
-    await expect(service.getPrice("base")).rejects.toThrow(/Unable to fetch elizaOS price/);
+    await expect(service.getPrice("base")).rejects.toThrow(/unusable elizaOS price/);
+  });
+
+  it("REGRESSION: a fresh dust source cannot disappear from quorum validation", async () => {
+    findFirst.mockResolvedValue(null);
+    vi.spyOn(seam, "fetchFromMultipleSources").mockResolvedValue([
+      { success: true, source: "coingecko", priceUsd: 0.02 },
+      { success: true, source: "dexscreener", priceUsd: 0 },
+    ]);
+    const cacheSpy = vi.spyOn(seam, "cachePrice").mockResolvedValue(undefined);
+
+    await expect(service.getPrice("base")).rejects.toThrow(/unusable elizaOS price/);
+    expect(cacheSpy).not.toHaveBeenCalled();
   });
 });

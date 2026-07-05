@@ -392,9 +392,26 @@ export class ElizaTokenPriceService {
    * Throws if prices deviate too much or all sources fail.
    */
   private validatePrices(prices: PriceFetchResult[], network: SupportedNetwork): PriceQuote {
-    const successfulPrices = prices.filter(
+    const successfulSources = prices.filter((p) => p.success);
+    const invalidSuccessfulPrices = successfulSources.filter(
       (p) =>
-        p.success &&
+        p.priceUsd === undefined ||
+        !Number.isFinite(p.priceUsd) ||
+        p.priceUsd < MIN_ELIZA_PRICE_USD,
+    );
+    if (invalidSuccessfulPrices.length > 0) {
+      logger.error(`[ElizaPrice] Price source returned an unusable price for ${network}`, {
+        prices: invalidSuccessfulPrices.map((p) => ({
+          source: p.source,
+          price: p.priceUsd,
+        })),
+        minAllowed: MIN_ELIZA_PRICE_USD,
+      });
+      throw new Error("Price source returned an unusable elizaOS price");
+    }
+
+    const successfulPrices = successfulSources.filter(
+      (p) =>
         p.priceUsd !== undefined &&
         Number.isFinite(p.priceUsd) &&
         p.priceUsd >= MIN_ELIZA_PRICE_USD,
