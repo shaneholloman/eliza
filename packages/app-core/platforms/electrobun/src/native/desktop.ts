@@ -26,8 +26,6 @@ import os from "node:os";
 import path from "node:path";
 import {
   clearWorkspaceFolderConfig,
-  setActiveProject,
-  upsertProject,
   writeWorkspaceFolderConfig,
 } from "@elizaos/core";
 import Electrobun, {
@@ -305,6 +303,16 @@ const WINDOWS_IDLE_POWERSHELL_SCRIPT = [
 // DesktopManager
 // ============================================================================
 
+export interface NotificationDiagnosticsEntry {
+  id: string;
+  title: string;
+  body?: string;
+  silent?: boolean;
+  shownAt: number;
+}
+
+const MAX_NOTIFICATION_DIAGNOSTICS = 50;
+
 /**
  * Desktop Manager — handles all native desktop features for Electrobun.
  *
@@ -331,6 +339,7 @@ export class DesktopManager {
   private trayPopoverBlurHideTimer: ReturnType<typeof setTimeout> | null = null;
   private shortcuts: Map<string, ShortcutOptions> = new Map();
   private notificationCounter = 0;
+  private notificationDiagnostics: NotificationDiagnosticsEntry[] = [];
   private sendToWebview: SendToWebview | null = null;
   private _windowFocused = true;
   private _windowHidden = false;
@@ -1467,14 +1476,29 @@ X-GNOME-Autostart-enabled=true
     options: NotificationOptions,
   ): Promise<{ id: string }> {
     const id = `notification_${++this.notificationCounter}`;
-
-    // Electrobun Utils.showNotification — fire-and-forget, no event callbacks
-    Utils.showNotification({
+    const payload = {
       title: options.title,
       body: options.body,
       subtitle: undefined,
       silent: options.silent,
+    };
+
+    // Electrobun Utils.showNotification — fire-and-forget, no event callbacks
+    Utils.showNotification(payload);
+
+    this.notificationDiagnostics.push({
+      id,
+      title: payload.title,
+      body: payload.body,
+      silent: payload.silent,
+      shownAt: Date.now(),
     });
+    if (this.notificationDiagnostics.length > MAX_NOTIFICATION_DIAGNOSTICS) {
+      this.notificationDiagnostics.splice(
+        0,
+        this.notificationDiagnostics.length - MAX_NOTIFICATION_DIAGNOSTICS,
+      );
+    }
 
     return { id };
   }
@@ -1482,6 +1506,14 @@ X-GNOME-Autostart-enabled=true
   async closeNotification(_options: { id: string }): Promise<void> {
     // Electrobun does not support programmatic notification dismissal.
     // No-op.
+  }
+
+  getNotificationDiagnostics(): NotificationDiagnosticsEntry[] {
+    return this.notificationDiagnostics.map((entry) => ({ ...entry }));
+  }
+
+  clearNotificationDiagnostics(): void {
+    this.notificationDiagnostics = [];
   }
 
   // MARK: - Power Monitor
@@ -2519,28 +2551,6 @@ X-GNOME-Autostart-enabled=true
     } catch (err) {
       logger.warn(
         `[desktop:pickWorkspaceFolder] writeWorkspaceFolderConfig failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
-    // Register the pick as a first-class Project and make it active, so the
-    // agent runtime resolves the workspace from the project registry (the
-    // higher-priority successor to workspace-folder.json). Non-fatal: the
-    // legacy write above already bridged the pick, so a registry failure only
-    // costs the recents/switcher entry.
-    try {
-      const project = upsertProject({
-        name: path.basename(selectedPath) || selectedPath,
-        localPath: selectedPath,
-        bookmark,
-      });
-      setActiveProject(project.id);
-    } catch (err) {
-      // error-policy:J6 best-effort registry write; the legacy workspace-folder
-      // bridge above already applied the pick, so failure here only drops the
-      // recents/switcher entry — warn and continue.
-      logger.warn(
-        `[desktop:pickWorkspaceFolder] project registry upsert failed: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
