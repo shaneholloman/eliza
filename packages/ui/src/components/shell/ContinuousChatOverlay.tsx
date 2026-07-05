@@ -46,8 +46,6 @@ import {
   CHAT_PREFILL_EVENT,
   type ChatPrefillEventDetail,
   ELIZA_BACK_INTENT_EVENT,
-  TUTORIAL_CHAT_CONTROL_EVENT,
-  type TutorialChatControlDetail,
 } from "../../events";
 import {
   TOUCH_TAP_MOVE_SLOP as OUTSIDE_SHEET_TAP_SLOP,
@@ -72,6 +70,7 @@ import {
 import { useConversationMessages } from "../../state/ConversationMessagesContext.hooks";
 import { goHome, goLauncher } from "../../state/shell-surface-store";
 import { useViewChatBinding } from "../../state/view-chat-binding";
+import { tryHandleTutorialText } from "../../tutorial/tutorial-action-channel";
 import { copyTextToClipboard } from "../../utils/clipboard";
 import {
   CHAT_UPLOAD_ACCEPT,
@@ -1631,6 +1630,20 @@ export function ContinuousChatOverlay({
         inputRef.current?.focus();
         return;
       }
+      // Explicit tutorial commands ("start/stop/restart tutorial") drive the
+      // chat-native tour locally — never an agent turn. Text-only: a turn
+      // carrying images is a real message, not a command. Sits BEFORE the
+      // canSend gate because the tour is fully client-side and must work with
+      // the agent stopped.
+      if (trimmed && images.length === 0 && tryHandleTutorialText(trimmed)) {
+        clearChatDraft(activeConversationIdRef.current);
+        setDraft("");
+        setSlashDismissed(false);
+        setPendingImages([]);
+        setImageError(null);
+        inputRef.current?.focus();
+        return;
+      }
       // Post-onboarding: a stopped agent can't take a turn.
       if (!canSend) return;
       // Successful submit: drop the persisted draft for this conversation NOW
@@ -2549,59 +2562,6 @@ export function ContinuousChatOverlay({
     expand();
   }, [hasRevealableThread, expand]);
 
-  // Interactive tour control: the tutorial drives the chat into a clean, known
-  // state at the start of each frame (so the spotlight always lands on the right
-  // control) and pre-fills the composer for the guided "ask to navigate" demo.
-  // Decoupled via a window event so the tour never reaches into these internals.
-  React.useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-    const onControl = (event: Event) => {
-      const detail = (event as CustomEvent<TutorialChatControlDetail>).detail;
-      if (!detail) return;
-      // Defense-in-depth for the onboarding lock: while first-run pins the sheet
-      // at FULL, a stray/adversarial tutorial-control event (rest/reset →
-      // collapse, prefill → un-pill) must not move it. The tour only starts
-      // AFTER completeFirstRun, so this never fires in the real flow — it just
-      // closes the one collapse seam outside the gated funnel.
-      if (firstRunOpen) return;
-      switch (detail.action) {
-        case "pill":
-          setMode("pill");
-          // Leaving FULL without goToDetent: drop full-bleed with it, or the
-          // stale `maximized` re-applies on the NEXT return to full (surprise
-          // edge-to-edge). Only the FULL detent may be maximized.
-          setMaximized(false);
-          inputRef.current?.blur();
-          break;
-        case "rest":
-          // goToDetent("collapsed") → input mode, which un-pills.
-          goToDetent("collapsed");
-          break;
-        case "expand":
-          goToDetent("full");
-          break;
-        case "prefill":
-          setMode((m) => (m === "pill" ? "input" : m));
-          setDraft(detail.text ?? "");
-          requestAnimationFrame(() => inputRef.current?.focus());
-          break;
-        case "reset":
-          // Tour ended (cancel / complete): restore a normal interactive chat.
-          // A frame may have collapsed it to the pill, where the composer is
-          // `inert` — clear inert imperatively (React clears it only on the next
-          // render, too late for the stranded input), drop the tour's prefilled
-          // draft, and goToDetent("collapsed") un-pills back to the input bar.
-          contentRef.current?.removeAttribute("inert");
-          setDraft("");
-          goToDetent("collapsed");
-          break;
-      }
-    };
-    window.addEventListener(TUTORIAL_CHAT_CONTROL_EVENT, onControl);
-    return () =>
-      window.removeEventListener(TUTORIAL_CHAT_CONTROL_EVENT, onControl);
-  }, [goToDetent, firstRunOpen, setDraft]);
-
   React.useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const onPrefill = (event: Event) => {
@@ -3026,10 +2986,10 @@ export function ContinuousChatOverlay({
       return undefined;
     }
 
-    // Surfaces painted ABOVE the chat glass (tutorial at Z_TUTORIAL, any open
-    // Radix dialog) must win the tap — the swallower otherwise eats their first
-    // tap AND collapses the chat under them. "Tap outside collapses" is only
-    // for the background view.
+    // Surfaces painted ABOVE the chat glass (notification sheet/panel at
+    // Z_NOTIFICATION_OVERLAY, any open Radix dialog) must win the tap — the
+    // swallower otherwise eats their first tap AND collapses the chat under
+    // them. "Tap outside collapses" is only for the background view.
     const isAboveShellOverlay = (target: EventTarget | null): boolean =>
       target instanceof Element &&
       !!target.closest('[data-above-shell-overlay], [role="dialog"]');

@@ -42,6 +42,10 @@ import {
 } from "../navigation";
 import { getFrontendPlatform } from "../platform/platform-guards";
 import { applyThemeToDocument } from "../themes/apply-theme";
+import {
+  tryHandleTutorialAction,
+  tryHandleTutorialText,
+} from "../tutorial/tutorial-action-channel";
 import { copyTextToClipboard } from "../utils";
 import { RESYNC_EVENT, type ResyncEventDetail } from "./AppContext.hooks";
 import {
@@ -1190,6 +1194,10 @@ function AppProviderInner({
       // to cloud / retry / download) are consumed by the model-status conductor
       // and NEVER reach the server — regardless of onboarding state.
       if (tryHandleModelAction(text)) return Promise.resolve();
+      // Tutorial choice picks (`__tutorial__:` prefix) are likewise consumed
+      // unconditionally — a tap on a leftover tour widget in an old transcript
+      // must never become a literal chat message to the agent.
+      if (tryHandleTutorialAction(text)) return Promise.resolve();
       const firstRunIsComplete = firstRunComplete === true;
       switch (
         classifyActionMessage(text, firstRunIsComplete, {
@@ -1214,6 +1222,9 @@ function AppProviderInner({
           tryHandleFirstRunText(text);
           return Promise.resolve();
         case "send":
+          // Explicit "start/stop/restart tutorial" commands drive the tour
+          // locally; every other message flows to the real send untouched.
+          if (tryHandleTutorialText(text)) return Promise.resolve();
           return rawSendActionMessage(text);
       }
     },
