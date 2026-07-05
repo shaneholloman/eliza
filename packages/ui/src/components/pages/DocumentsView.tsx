@@ -873,6 +873,7 @@ export function DocumentsView({
           threshold: 0.3,
           limit: 20,
           ...(scopeFilter !== "all" ? { scope: scopeFilter } : {}),
+          ...(facet !== "all" ? { knowledgeFacet: facet } : {}),
         });
         setSearchResults(result.results);
       } catch (err) {
@@ -893,7 +894,7 @@ export function DocumentsView({
         setSearchResults([]);
       }
     },
-    [scopeFilter, setActionNotice, t],
+    [facet, scopeFilter, setActionNotice, t],
   );
 
   const handleDelete = useCallback(
