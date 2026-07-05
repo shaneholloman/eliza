@@ -7,8 +7,8 @@
 import { describe, expect, it } from "vitest";
 import {
   canMutateLegacyStewardCookies,
-  LEGACY_STEWARD_COOKIES,
   LEGACY_STEWARD_COOKIE_FALLBACK_EXPIRES_AT_MS,
+  LEGACY_STEWARD_COOKIES,
   readStewardAccessCookieFromHeader,
   stewardCookieNames,
 } from "./steward-cookies";
@@ -84,7 +84,11 @@ describe("readStewardAccessCookieFromHeader", () => {
       ),
     ).toBe("prod");
     expect(
-      readStewardAccessCookieFromHeader("steward-token=local", undefined, atCutoff),
+      readStewardAccessCookieFromHeader(
+        "steward-token=local",
+        undefined,
+        atCutoff,
+      ),
     ).toBe("local");
   });
 });
