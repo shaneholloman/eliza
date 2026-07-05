@@ -86,13 +86,13 @@ import { SensitiveRequestBlock } from "../chat/MessageContent";
 import { findChoiceRegions } from "../chat/message-choice-parser";
 import { ThinkingBlock } from "../chat/ThinkingBlock";
 import { withTranscriptMarker } from "../chat/TranscriptViewerOverlay";
-import { ToolCallEventLog } from "../tool-events/ToolCallEventLog";
 import { ChatMessage } from "../composites/chat/chat-message";
 import type {
   ChatMessageData,
   ChatMessageRenderContext,
 } from "../composites/chat/chat-types";
 import { TurnStatus } from "../composites/chat/chat-typing-indicator";
+import { ToolCallEventLog } from "../tool-events/ToolCallEventLog";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
@@ -636,9 +636,12 @@ function TurnStatusIndicator({
   );
 }
 
-// After this long still booting, the banner escalates to a "taking longer than
-// usual" state with a settings escape, so a stuck boot never reads as a silent
-// hang. Exported for the unit test (see the __-seam note below).
+// After this long WITHOUT OBSERVED PROGRESS still booting, the banner escalates
+// to a "taking longer than usual" state with a settings escape, so a truly
+// stuck boot never reads as a silent hang — but a slow-yet-progressing boot
+// does NOT trip it (#14040 sub-defect 3): the escalation keys off
+// absence-of-progress, not raw elapsed wall-clock. Exported for the unit test
+// (see the __-seam note below).
 export const BOOT_SLOW_AFTER_MS = 90_000;
 
 // Grace before the banner appears: a warm agent leaves the "booting" phase
@@ -659,19 +662,36 @@ export function BootStatusIndicator({
   agentName,
   onOpenSettings,
   reduce,
+  progressSignal,
 }: {
   agentName: string;
   onOpenSettings?: () => void;
   reduce?: boolean;
+  /**
+   * A token that changes whenever fresh boot progress is observed (#14040
+   * sub-defect 3). The slow-boot escalation restarts its timer on each change,
+   * so a slow-but-progressing boot never trips "taking longer than usual" while
+   * a genuinely stalled boot still escalates. When `undefined` (no progress
+   * channel available) the timer falls back to raw-elapsed escalation — the
+   * prior behaviour — by keying off a stable token.
+   */
+  progressSignal?: string;
 }): React.JSX.Element {
-  // Local elapsed timing is the only boot signal the overlay has (agentStatus
-  // carries no boot-start timestamp), and it suffices: the parent unmounts this
-  // the instant readiness flips, so the timer never outlives the boot.
+  // Escalate on ABSENCE of progress, not raw elapsed time (#14040 sub-defect
+  // 3): the timer is (re)armed on mount AND whenever `progressSignal` changes,
+  // so each fresh progress observation pushes the "taking longer than usual"
+  // threshold out by another window. A boot that keeps reporting progress never
+  // trips it; a stalled boot (token stable for BOOT_SLOW_AFTER_MS) still does.
+  // The parent unmounts this the instant readiness flips, so the timer never
+  // outlives the boot.
   const [slow, setSlow] = React.useState(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: progressSignal is the RESET trigger, not read in the body — re-running the effect on each change restarts the escalation window (that IS the fix for #14040 sub-defect 3). Removing it would revert to raw-elapsed escalation.
   React.useEffect(() => {
+    // Fresh progress clears any prior escalation and restarts the window.
+    setSlow(false);
     const id = window.setTimeout(() => setSlow(true), BOOT_SLOW_AFTER_MS);
     return () => window.clearTimeout(id);
-  }, []);
+  }, [progressSignal]);
   return (
     <div
       role="status"
@@ -932,6 +952,7 @@ export function ContinuousChatOverlay({
   const {
     messages,
     phase,
+    bootProgressSignal,
     responding,
     turnStatus,
     send,
@@ -3666,6 +3687,7 @@ export function ContinuousChatOverlay({
           agentName={agentName}
           onOpenSettings={openSettings}
           reduce={reduce}
+          progressSignal={bootProgressSignal}
         />
       ) : null}
 
