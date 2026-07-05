@@ -179,6 +179,7 @@ function isAncestor(runSha, servedCommit) {
 }
 
 function emitOutput(result) {
+  // biome-ignore lint/suspicious/noUndeclaredEnvVars: GitHub Actions provides this path for step outputs.
   const outFile = process.env.GITHUB_OUTPUT;
   const shouldDeploy = result.decision === "deploy";
   const lines = [
@@ -234,6 +235,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       "deploy-freshness-guard-cli: unexpected error, failing open (deploy)",
     );
     console.error(err);
+    // biome-ignore lint/suspicious/noUndeclaredEnvVars: GitHub Actions provides this path for step outputs.
     const outFile = process.env.GITHUB_OUTPUT;
     if (outFile) {
       fs.appendFileSync(
