@@ -12,6 +12,7 @@ import {
   ensureDeviceRegistered,
   makeAscClient,
   mintDevelopmentProfile,
+  profileCoversRequest,
   provision,
   resolveAscCredentials,
   validateBundleIds,
@@ -204,10 +205,76 @@ describe("ensureDeviceRegistered / ensureBundleId — idempotent", () => {
 });
 
 describe("mintDevelopmentProfile", () => {
-  it("deletes a same-named profile then recreates it", async () => {
+  it("reuses a valid same-named profile without destructive refresh", async () => {
     const fetchImpl = mockFetch({
-      "GET /v1/profiles": { body: { data: [{ id: "OLD" }] } },
-      "DELETE /v1/profiles/OLD": { body: {} },
+      "GET /v1/profiles": {
+        body: {
+          data: [
+            {
+              id: "EXISTING",
+              attributes: { name: "n", uuid: "U", profileContent: "AA==" },
+              relationships: {
+                bundleId: { data: { type: "bundleIds", id: "B1" } },
+                devices: { data: [{ type: "devices", id: "DEV1" }] },
+                certificates: {
+                  data: [{ type: "certificates", id: "C1" }],
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+    const asc = makeAscClient({ jwt: "t", fetchImpl });
+    const p = await mintDevelopmentProfile(asc, {
+      name: "n",
+      bundleIdRef: "B1",
+      deviceIds: ["DEV1"],
+      certificateIds: ["C1"],
+    });
+    expect(p.id).toBe("EXISTING");
+    expect(fetchImpl.calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      "GET /v1/profiles",
+    ]);
+  });
+
+  it("fails closed when a same-named profile does not cover the request", async () => {
+    const fetchImpl = mockFetch({
+      "GET /v1/profiles": {
+        body: {
+          data: [
+            {
+              id: "OLD",
+              attributes: { name: "n", uuid: "U", profileContent: "AA==" },
+              relationships: {
+                bundleId: { data: { type: "bundleIds", id: "B1" } },
+                devices: { data: [{ type: "devices", id: "OTHER-DEVICE" }] },
+                certificates: {
+                  data: [{ type: "certificates", id: "C1" }],
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+    const asc = makeAscClient({ jwt: "t", fetchImpl });
+    await expect(
+      mintDevelopmentProfile(asc, {
+        name: "n",
+        bundleIdRef: "B1",
+        deviceIds: ["DEV1"],
+        certificateIds: ["C1"],
+      }),
+    ).rejects.toThrow(/Refusing to delete/);
+    expect(fetchImpl.calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      "GET /v1/profiles",
+    ]);
+  });
+
+  it("mints a new development profile when no same-named profile exists", async () => {
+    const fetchImpl = mockFetch({
+      "GET /v1/profiles": { body: { data: [] } },
       "POST /v1/profiles": {
         status: 201,
         body: {
@@ -228,7 +295,6 @@ describe("mintDevelopmentProfile", () => {
     expect(p.id).toBe("NEW");
     expect(fetchImpl.calls.map((c) => `${c.method} ${c.path}`)).toEqual([
       "GET /v1/profiles",
-      "DELETE /v1/profiles/OLD",
       "POST /v1/profiles",
     ]);
     const post = fetchImpl.calls.find((c) => c.method === "POST");
@@ -236,6 +302,47 @@ describe("mintDevelopmentProfile", () => {
     expect(post.body.data.relationships.devices.data).toEqual([
       { type: "devices", id: "DEV1" },
     ]);
+  });
+});
+
+describe("profileCoversRequest", () => {
+  it("requires bundle, requested device, and every requested certificate", () => {
+    const profile = {
+      relationships: {
+        bundleId: { data: { id: "B1" } },
+        devices: { data: [{ id: "DEV1" }, { id: "DEV2" }] },
+        certificates: { data: [{ id: "C1" }, { id: "C2" }] },
+      },
+    };
+
+    expect(
+      profileCoversRequest(profile, {
+        bundleIdRef: "B1",
+        deviceIds: ["DEV1"],
+        certificateIds: ["C1", "C2"],
+      }),
+    ).toBe(true);
+    expect(
+      profileCoversRequest(profile, {
+        bundleIdRef: "B2",
+        deviceIds: ["DEV1"],
+        certificateIds: ["C1", "C2"],
+      }),
+    ).toBe(false);
+    expect(
+      profileCoversRequest(profile, {
+        bundleIdRef: "B1",
+        deviceIds: ["DEV3"],
+        certificateIds: ["C1", "C2"],
+      }),
+    ).toBe(false);
+    expect(
+      profileCoversRequest(profile, {
+        bundleIdRef: "B1",
+        deviceIds: ["DEV1"],
+        certificateIds: ["C1", "C3"],
+      }),
+    ).toBe(false);
   });
 });
 
