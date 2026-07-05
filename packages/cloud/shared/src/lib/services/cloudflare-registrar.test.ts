@@ -84,6 +84,10 @@ describe("parseWholesaleUsdCents (money-out price boundary)", () => {
       "N/A",
       "free",
       "$10.99",
+      "1e3",
+      "0x10",
+      "0b10",
+      "+10.99",
       "",
       "   ",
       undefined,
@@ -106,6 +110,23 @@ describe("parseWholesaleUsdCents (money-out price boundary)", () => {
         returned = undefined;
       }
       expect(returned).toBeUndefined();
+    }
+  });
+
+  it("attaches structured error metadata for repair and escalation", () => {
+    try {
+      parseWholesaleUsdCents("bad.example", "registration_cost", "0x10");
+      throw new Error("expected parseWholesaleUsdCents to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CorruptRegistrarPriceError);
+      expect((error as CorruptRegistrarPriceError).code).toBe("CORRUPT_REGISTRAR_PRICE");
+      expect((error as CorruptRegistrarPriceError).context).toEqual({
+        domain: "bad.example",
+        field: "registration_cost",
+        rawValue: "0x10",
+        reason: "value is not a plain decimal money amount",
+      });
+      expect((error as CorruptRegistrarPriceError).severity).toBe("fatal");
     }
   });
 
@@ -154,5 +175,46 @@ describe("fromCheckEntry price parsing (behavior-preserving for valid prices)", 
     expect(availability.available).toBe(true);
     expect(Number.isFinite(availability.priceUsdCents)).toBe(true);
     expect(availability.priceUsdCents).toBeGreaterThanOrEqual(0);
+  });
+
+  it("throws when Cloudflare marks a domain registrable but omits pricing", async () => {
+    const savedEnvironment = process.env.ENVIRONMENT;
+    const savedStub = process.env.ELIZA_CF_REGISTRAR_DEV_STUB;
+    const savedAccount = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const savedToken = process.env.CLOUDFLARE_API_TOKEN;
+    const savedFetch = globalThis.fetch;
+
+    process.env.ENVIRONMENT = "development";
+    delete process.env.ELIZA_CF_REGISTRAR_DEV_STUB;
+    process.env.CLOUDFLARE_ACCOUNT_ID = "account-test";
+    process.env.CLOUDFLARE_API_TOKEN = "token-test";
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          success: true,
+          errors: [],
+          messages: [],
+          result: {
+            domains: [{ name: "missing-price.example", registrable: true }],
+          },
+        }),
+        { status: 200 },
+      );
+
+    try {
+      await expect(
+        cloudflareRegistrarService.checkAvailability("missing-price.example"),
+      ).rejects.toThrow(CorruptRegistrarPriceError);
+    } finally {
+      if (savedEnvironment === undefined) delete process.env.ENVIRONMENT;
+      else process.env.ENVIRONMENT = savedEnvironment;
+      if (savedStub === undefined) delete process.env.ELIZA_CF_REGISTRAR_DEV_STUB;
+      else process.env.ELIZA_CF_REGISTRAR_DEV_STUB = savedStub;
+      if (savedAccount === undefined) delete process.env.CLOUDFLARE_ACCOUNT_ID;
+      else process.env.CLOUDFLARE_ACCOUNT_ID = savedAccount;
+      if (savedToken === undefined) delete process.env.CLOUDFLARE_API_TOKEN;
+      else process.env.CLOUDFLARE_API_TOKEN = savedToken;
+      globalThis.fetch = savedFetch;
+    }
   });
 });
