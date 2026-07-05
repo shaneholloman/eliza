@@ -39,14 +39,6 @@ const RETENTION_DAYS = Number.parseInt(
  */
 const REDACT_PATTERNS: { re: RegExp; label: string }[] = [
   { re: /sk-[A-Za-z0-9_-]{20,}/g, label: "<API_KEY>" },
-  {
-    re: /[A-Za-z0-9_-]{20,}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
-    label: "<EMAIL>",
-  },
-  {
-    re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
-    label: "<EMAIL>",
-  },
   { re: /(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}/g, label: "<GH_TOKEN>" },
   { re: /xox[bpars]-[A-Za-z0-9-]{10,}/g, label: "<SLACK_TOKEN>" },
   { re: /0x[a-fA-F0-9]{40}/g, label: "<ETH_ADDR>" },
@@ -54,8 +46,82 @@ const REDACT_PATTERNS: { re: RegExp; label: string }[] = [
   { re: /\b\d{13,19}\b/g, label: "<CARD>" },
 ];
 
+function basicEmailValid(value: string): boolean {
+  const at = value.indexOf("@");
+  if (at <= 0 || at !== value.lastIndexOf("@")) return false;
+  if (/\s/.test(value)) return false;
+  const domain = value.slice(at + 1);
+  return domain.length >= 3 && domain.slice(1, -1).includes(".");
+}
+
+function isEmailAtomChar(code: number): boolean {
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    code === 33 ||
+    code === 35 ||
+    code === 36 ||
+    code === 37 ||
+    code === 38 ||
+    code === 39 ||
+    code === 42 ||
+    code === 43 ||
+    code === 45 ||
+    code === 47 ||
+    code === 63 ||
+    code === 94 ||
+    code === 95 ||
+    code === 96 ||
+    code === 123 ||
+    code === 124 ||
+    code === 125 ||
+    code === 126 ||
+    code === 46
+  );
+}
+
+function isDomainChar(code: number): boolean {
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    code === 45 ||
+    code === 46
+  );
+}
+
+function redactEmails(line: string): string {
+  let out = "";
+  let last = 0;
+  let i = 0;
+  while (i < line.length) {
+    const at = line.indexOf("@", i);
+    if (at === -1) break;
+    let start = at - 1;
+    while (start >= 0 && isEmailAtomChar(line.charCodeAt(start))) start -= 1;
+    start += 1;
+    let end = at + 1;
+    while (end < line.length && isDomainChar(line.charCodeAt(end))) end += 1;
+    while (end > at + 1) {
+      const tail = line.charCodeAt(end - 1);
+      if (tail !== 45 && tail !== 46) break;
+      end -= 1;
+    }
+    const value = line.slice(start, end);
+    if (start < at && basicEmailValid(value)) {
+      out += line.slice(last, start);
+      out += "<EMAIL>";
+      last = end;
+    }
+    i = Math.max(end, at + 1);
+  }
+  if (last === 0) return line;
+  return out + line.slice(last);
+}
+
 export function redactTranscriptLine(line: string): string {
-  let out = line;
+  let out = redactEmails(line);
   for (const { re, label } of REDACT_PATTERNS) {
     out = out.replace(re, label);
   }

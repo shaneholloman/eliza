@@ -29,6 +29,7 @@
  * (string replace), never by offset. Recognizers should still fill offsets when
  * they can (regex/gazetteer do) so overlap resolution is precise.
  */
+import { findBasicEmailSpans } from "./basic-email";
 
 /** A detected named-entity span. Offsets are best-effort (see module note). */
 export interface EntitySpan {
@@ -93,7 +94,6 @@ const STREET_ADDRESS =
 	/\b\d{1,6}[A-Za-z]?\s+(?:[A-Z][A-Za-z.'-]+\s+){1,4}(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Lane|Ln|Drive|Dr|Court|Ct|Way|Terrace|Ter|Place|Pl|Circle|Cir|Highway|Hwy|Parkway|Pkwy|Loop|Trail|Trl|Plaza|Square|Sq|Row|Alley|Crescent|Cres|Pike|Walk|Path)\b\.?(?:\s*(?:#|Apt\.?|Suite|Ste\.?|Unit)\s*\w+)?(?:,\s*[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)*)?(?:,\s*[A-Z]{2})?(?:\s+\d{5}(?:-\d{4})?)?/g;
 
 // Reuse the same well-tested email/phone shapes the secret-swap detectors use.
-const EMAIL = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
 const PHONE =
 	/(?<!\d)(?:\+?1[ .-]?)?(?:\(\d{3}\)[ .-]?|\d{3}[ .-])\d{3}[ .-]?\d{4}(?!\d)|\+[1-9]\d{7,14}(?!\d)/g;
 
@@ -101,19 +101,25 @@ const PHONE =
 export class RegexEntityRecognizer implements PiiEntityRecognizer {
 	readonly name = "regex";
 	private readonly detectors: { kind: string; pattern: RegExp }[];
+	private readonly detectEmail: boolean;
 
 	constructor(options: RegexEntityRecognizerOptions = {}) {
 		this.detectors = [];
+		this.detectEmail = options.email === true;
 		if (options.address !== false) {
 			this.detectors.push({ kind: "address", pattern: STREET_ADDRESS });
 		}
-		if (options.email) this.detectors.push({ kind: "email", pattern: EMAIL });
 		if (options.phone) this.detectors.push({ kind: "phone", pattern: PHONE });
 	}
 
 	recognize(text: string): Promise<EntitySpan[]> {
 		const spans: EntitySpan[] = [];
 		if (text) {
+			if (this.detectEmail) {
+				for (const span of findBasicEmailSpans(text)) {
+					spans.push({ kind: "email", ...span });
+				}
+			}
 			for (const { kind, pattern } of this.detectors) {
 				pattern.lastIndex = 0;
 				for (const match of text.matchAll(pattern)) {

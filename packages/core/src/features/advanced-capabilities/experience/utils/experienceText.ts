@@ -8,6 +8,7 @@
  * normalized-substring, Jaccard, and containment thresholds. Consumed by
  * ExperienceService for keyword derivation and dedupe maintenance.
  */
+import { redactBasicEmails } from "../../../../security/basic-email";
 import type { Experience } from "../types.ts";
 
 /** Minimal interface of ExperienceService used by this module. */
@@ -53,8 +54,7 @@ const MAX_EXPERIENCE_KEYWORDS = 12;
 export function sanitizeExperienceText(text: string): string {
 	if (!text) return "Unknown context";
 
-	return text
-		.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, "[EMAIL]")
+	return redactBasicEmails(text)
 		.replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, "[IP]")
 		.replace(/\/Users\/[^/\s]+/g, "/Users/[USER]")
 		.replace(/\/home\/[^/\s]+/g, "/home/[USER]")

@@ -5,6 +5,7 @@
  * supporting both conversational and form-based collection flows.
  */
 
+import { basicEmailValid } from "../../../security/basic-email";
 import type { SecretType } from "../types.ts";
 
 /**
@@ -183,7 +184,7 @@ export const COMMON_API_KEY_SETTINGS: Record<string, Partial<SetupSetting>> = {
 		required: false,
 		dependsOn: ["TWITTER_USERNAME"],
 		type: "credential",
-		validation: (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value),
+		validation: (value: string) => basicEmailValid(value),
 	},
 	TWITTER_2FA_SECRET: {
 		name: "Twitter 2FA Secret",
