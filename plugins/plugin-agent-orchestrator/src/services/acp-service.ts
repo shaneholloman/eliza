@@ -1296,6 +1296,7 @@ export class AcpService extends Service {
   }
 
   async deleteSession(sessionId: string): Promise<void> {
+    const session = await this.requireSession(sessionId);
     await this.closeSession(sessionId).catch((err: unknown) => {
       // error-policy:J6 best-effort close before delete; a teardown failure must
       // not block removing the session record + satellite maps below.
@@ -1304,6 +1305,7 @@ export class AcpService extends Service {
         error: errorMessage(err),
       });
     });
+    await this.reclaimOwnedScratchDir(session);
     await this.store.delete(sessionId);
     this.outputBuffers.delete(sessionId);
     this.changedPathsBySession.delete(sessionId);
