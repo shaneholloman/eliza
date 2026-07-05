@@ -2,6 +2,7 @@
 
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useDocumentTitle } from "../lib/use-document-title";
 
 // The shared page shell resolves titles through the cloud i18n hook; mock it to
 // return the provided defaultValue so the assertions read the literal copy.
@@ -60,5 +61,20 @@ describe("ConsolePage", () => {
     // Title-less pages (the surface owns document.title) must never mount the
     // title effect, so the existing title is preserved verbatim.
     expect(document.title).toBe("Owned by surface");
+  });
+
+  it("keeps the console page title authoritative when a child surface also sets a title", () => {
+    function SurfaceWithOwnTitle() {
+      useDocumentTitle("Surface-owned title");
+      return <div>security body</div>;
+    }
+
+    render(
+      <ConsolePage titleKey="cloud.security.metaTitle" titleDefault="Security">
+        <SurfaceWithOwnTitle />
+      </ConsolePage>,
+    );
+
+    expect(document.title).toBe("Security");
   });
 });

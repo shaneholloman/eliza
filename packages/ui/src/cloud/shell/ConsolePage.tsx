@@ -57,10 +57,10 @@ export function ConsolePage({
 }: ConsolePageProps) {
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6 md:px-6 md:py-8">
+      {children}
       {titleKey ? (
         <ConsolePageTitle titleKey={titleKey} titleDefault={titleDefault} />
       ) : null}
-      {children}
     </div>
   );
 }
