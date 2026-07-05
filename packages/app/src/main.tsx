@@ -420,6 +420,21 @@ function getWindowUrlSearchParams(): URLSearchParams {
   return new URLSearchParams(search || hashSearch);
 }
 
+function applyRuntimeChooserOverrideFromUrl(): void {
+  const params = getWindowUrlSearchParams();
+  if (params.get("enableRuntimeChooser") !== "1") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem("eliza:enable-runtime-chooser", "1");
+    removeUrlParameter("enableRuntimeChooser");
+  } catch (error) {
+    // error-policy:J3 storage/history can be unavailable in constrained webviews; keep booting.
+    logger.warn("[App] Failed to persist runtime chooser override", { error });
+  }
+}
+
 function applyCloudPairSessionToken(): void {
   if (typeof window === "undefined") return;
   try {
@@ -463,6 +478,7 @@ if (shouldInstallMainWindowFirstRunPatches(windowShellRoute)) {
 installLocalProviderCloudPreferencePatch(client);
 installDesktopPermissionsClientPatch(client);
 applyCloudPairSessionToken();
+applyRuntimeChooserOverrideFromUrl();
 
 // NOTE: do not gate on isElizaOS() here — that requires the `ElizaOS/` UA
 // marker which only AOSP/branded device images carry, so it excluded the
