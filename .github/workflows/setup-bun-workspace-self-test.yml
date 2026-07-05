@@ -13,7 +13,7 @@ permissions:
 jobs:
   protoc-github-fallback:
     name: forced protoc GitHub fallback
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
