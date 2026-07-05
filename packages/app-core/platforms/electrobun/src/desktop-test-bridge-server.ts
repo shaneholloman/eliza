@@ -9,6 +9,7 @@ import {
 import {
   clearDesktopNotificationTestRecords,
   getDesktopManager,
+  installDesktopNotificationTestRecorder,
   readDesktopNotificationTestRecords,
 } from "./native/desktop";
 import { findFirstAvailableLoopbackPort } from "./native/loopback-port";
@@ -116,6 +117,7 @@ export async function startDesktopTestBridgeServer(): Promise<
 
   process.env.ELIZA_DESKTOP_TEST_BRIDGE_URL = baseUrl;
   process.env.ELIZA_DESKTOP_TEST_BRIDGE_TOKEN = token;
+  installDesktopNotificationTestRecorder();
 
   const server = http.createServer(async (req, res) => {
     try {

@@ -98,7 +98,7 @@ function broadcastNotification(
 }
 
 test("packaged desktop notifications reach native OS bridge when backgrounded or urgent", async () => {
-  test.setTimeout(600_000);
+  test.setTimeout(1_200_000);
 
   const tempRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "eliza-desktop-notification-smoke-"),

@@ -311,16 +311,22 @@ export interface DesktopNotificationTestRecord {
 }
 
 const desktopNotificationTestRecords: DesktopNotificationTestRecord[] = [];
+let notificationTestRecorderInstalled = false;
+let nextRecordedNotificationId = 0;
 
 function shouldRecordDesktopNotificationsForTests(): boolean {
   return process.env.ELIZA_DESKTOP_TEST_BRIDGE_ENABLED === "1";
 }
 
 function recordDesktopNotificationForTests(
-  record: DesktopNotificationTestRecord,
+  payload: Omit<DesktopNotificationTestRecord, "id" | "recordedAt">,
 ): void {
   if (!shouldRecordDesktopNotificationsForTests()) return;
-  desktopNotificationTestRecords.push(record);
+  desktopNotificationTestRecords.push({
+    id: `notification_${++nextRecordedNotificationId}`,
+    ...payload,
+    recordedAt: new Date().toISOString(),
+  });
   if (desktopNotificationTestRecords.length > 50) {
     desktopNotificationTestRecords.splice(
       0,
@@ -329,11 +335,35 @@ function recordDesktopNotificationForTests(
   }
 }
 
+export function installDesktopNotificationTestRecorder(): void {
+  if (!shouldRecordDesktopNotificationsForTests()) return;
+  if (notificationTestRecorderInstalled) return;
+  notificationTestRecorderInstalled = true;
+
+  const originalShowNotification = Utils.showNotification.bind(Utils);
+  Utils.showNotification = ((payload: {
+    title: string;
+    body?: string;
+    subtitle?: string;
+    silent?: boolean;
+  }) => {
+    originalShowNotification(payload);
+    recordDesktopNotificationForTests({
+      title: payload.title,
+      body: payload.body,
+      subtitle: payload.subtitle,
+      silent: payload.silent,
+    });
+  }) as typeof Utils.showNotification;
+}
+
 export function readDesktopNotificationTestRecords(): DesktopNotificationTestRecord[] {
+  installDesktopNotificationTestRecorder();
   return desktopNotificationTestRecords.map((record) => ({ ...record }));
 }
 
 export function clearDesktopNotificationTestRecords(): void {
+  installDesktopNotificationTestRecorder();
   desktopNotificationTestRecords.length = 0;
 }
 
@@ -1510,13 +1540,12 @@ X-GNOME-Autostart-enabled=true
       silent: options.silent,
     };
 
-    // Electrobun Utils.showNotification — fire-and-forget, no event callbacks
+    // Electrobun Utils.showNotification — fire-and-forget, no event callbacks.
+    // The test bridge records by wrapping Utils.showNotification itself, so the
+    // packaged e2e fails if this native OS-notification call is removed or
+    // renamed.
+    installDesktopNotificationTestRecorder();
     Utils.showNotification(nativePayload);
-    recordDesktopNotificationForTests({
-      id,
-      ...nativePayload,
-      recordedAt: new Date().toISOString(),
-    });
 
     return { id };
   }
