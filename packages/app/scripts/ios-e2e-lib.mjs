@@ -10,10 +10,10 @@
  *
  * The load-bearing invariant these encode is the orchestrator's contract:
  * it must fail LOUDLY and must never report success vacuously. That is why
- * `planIosE2eSteps` distinguishes the build step (setup) from the three
- * *verification* legs (auth / local-chat / cloud) and `assertNonVacuousPlan`
- * refuses a run that would print "ALL iOS E2E PASSED" without exercising a
- * single real device path. Runs under the packages/app vitest suite
+ * `planIosE2eSteps` distinguishes setup/optional cloud work from the two
+ * simulator-app verification legs (auth / local-chat), and
+ * `assertNonVacuousPlan` refuses a run that would print "ALL iOS E2E PASSED"
+ * without exercising a single real app path. Runs under the packages/app vitest suite
  * (`bun run --cwd packages/app test`), i.e. the root test:client lane.
  */
 
@@ -23,7 +23,7 @@ export const DEFAULT_IOS_SIMULATOR = "iPhone 16 Pro";
 // device-path assertions. Order is the run order and is load-bearing: install
 // must precede any launch, auth registers the deep-link before chat drives it.
 export const IOS_E2E_STEP_IDS = ["build", "auth", "local-chat", "cloud"];
-export const IOS_E2E_VERIFICATION_STEP_IDS = ["auth", "local-chat", "cloud"];
+export const IOS_E2E_VERIFICATION_STEP_IDS = ["auth", "local-chat"];
 
 /**
  * Parse the orchestrator argv into an explicit flag record. Kept total (every
@@ -78,25 +78,26 @@ export function planIosE2eSteps(flags) {
     steps.push({
       id: "cloud",
       label: "cloud route: real provisioning probe",
-      verification: true,
+      verification: false,
     });
   }
   return steps;
 }
 
 /**
- * Guard against a vacuous green: a run that skips every verification leg would
- * otherwise sail to "ALL iOS E2E PASSED" having proven nothing. The
- * orchestrator's whole point is loud proof, so refuse that combination up front
- * with an actionable message instead of exiting 0.
+ * Guard against a vacuous green: a run that skips every simulator-app
+ * verification leg would otherwise sail to "ALL iOS E2E PASSED" having proven
+ * no app/auth/chat path. Cloud is useful optional coverage, but it is not a
+ * substitute for exercising the installed simulator app, so refuse those
+ * combinations up front with an actionable message instead of exiting 0.
  */
 export function assertNonVacuousPlan(steps) {
   const verifying = steps.filter((s) => s.verification);
   if (verifying.length === 0) {
     throw new Error(
-      "refusing to run: every verification leg (auth / local-chat / cloud) is skipped, " +
-        "so the orchestrator would report success without proving any device path. " +
-        "Drop a --skip-* flag or add --cloud.",
+      "refusing to run: every simulator-app verification leg (auth / local-chat) is skipped, " +
+        "so the orchestrator would report success without proving the installed app path. " +
+        "Drop --skip-auth or --skip-local-chat; --cloud alone is not enough.",
     );
   }
   return verifying;

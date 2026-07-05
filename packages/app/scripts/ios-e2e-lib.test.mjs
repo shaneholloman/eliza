@@ -108,11 +108,12 @@ describe("planIosE2eSteps", () => {
     }
   });
 
-  it("marks only auth/local-chat/cloud as verification legs", () => {
+  it("marks only auth/local-chat as simulator-app verification legs", () => {
     const steps = planIosE2eSteps({ ...full, cloud: true });
     const verifying = steps.filter((s) => s.verification).map((s) => s.id);
     expect(verifying).toEqual(IOS_E2E_VERIFICATION_STEP_IDS);
     expect(steps.find((s) => s.id === "build").verification).toBe(false);
+    expect(steps.find((s) => s.id === "cloud").verification).toBe(false);
   });
 });
 
@@ -143,14 +144,28 @@ describe("assertNonVacuousPlan", () => {
     expect(() => assertNonVacuousPlan([])).toThrow(/refusing to run/i);
   });
 
-  it("passes when only the cloud leg survives", () => {
+  it("throws when only the cloud leg survives (cloud is optional, not app proof)", () => {
     const steps = planIosE2eSteps({
       skipBuild: true,
       skipAuth: true,
       skipLocalChat: true,
       cloud: true,
     });
-    expect(() => assertNonVacuousPlan(steps)).not.toThrow();
+    expect(steps.map((s) => s.id)).toEqual(["cloud"]);
+    expect(() => assertNonVacuousPlan(steps)).toThrow(
+      /cloud alone is not enough/i,
+    );
+  });
+
+  it("throws when build and cloud survive without auth or local chat", () => {
+    const steps = planIosE2eSteps({
+      skipBuild: false,
+      skipAuth: true,
+      skipLocalChat: true,
+      cloud: true,
+    });
+    expect(steps.map((s) => s.id)).toEqual(["build", "cloud"]);
+    expect(() => assertNonVacuousPlan(steps)).toThrow(/auth \/ local-chat/i);
   });
 });
 
