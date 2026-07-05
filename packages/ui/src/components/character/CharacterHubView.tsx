@@ -720,7 +720,6 @@ export function CharacterHubView({
             onDocumentsChange={handleDocumentsChange}
             onSelectedDocumentIdChange={setSelectedDocumentId}
             selectedDocumentId={selectedDocumentId}
-            showSelectorRail={false}
           />
         </ShellViewAgentSurface>
       );

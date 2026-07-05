@@ -89,6 +89,12 @@ type DocumentListOptions = {
   timeRangeStart?: string;
   timeRangeEnd?: string;
   tags?: string[];
+  /** Media-format facet (#13594): image | audio | video | pdf | text |
+   *  transcript | file. Matched server-side against `metadata.mediaFormat` or
+   *  the `media-format:<format>` tag (#13593). */
+  mediaFormat?: string;
+  /** Source-room filter (#13593): scope the list to one chat/room. */
+  roomId?: string;
 };
 
 type DocumentUploadRequest = {
@@ -119,6 +125,8 @@ type DocumentSearchOptions = {
   timeRangeStart?: string;
   timeRangeEnd?: string;
   tags?: string[];
+  mediaFormat?: string;
+  roomId?: string;
 };
 
 type InboxMessagesOptions = {
@@ -232,6 +240,8 @@ function appendDocumentFilterParams(
   setTruthyStringParam(params, "addedBy", options?.addedBy);
   setTruthyStringParam(params, "timeRangeStart", options?.timeRangeStart);
   setTruthyStringParam(params, "timeRangeEnd", options?.timeRangeEnd);
+  setTruthyStringParam(params, "mediaFormat", options?.mediaFormat);
+  setTruthyStringParam(params, "roomId", options?.roomId);
   appendTagsParam(params, options?.tags);
 }
 
