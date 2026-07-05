@@ -1217,6 +1217,90 @@ describe("OrchestratorTaskService — task status guards", () => {
     expect(detail.status).toBe("interrupted");
     expect(must(detail.sessions[0], "session").status).toBe("stop_failed");
   });
+
+  // #14105: the operator stop paths used to write `status: "interrupted"`
+  // directly, so a terminal task (done/failed/archived) still holding a live
+  // keepAlive session whose ACP stop fails was stomped to `interrupted` —
+  // `done → interrupted` is not a legal transition-table edge and this broke the
+  // terminal-immutability invariant #13830 enforces. Routing through
+  // advanceTaskStatus makes the illegal edge a no-op.
+  it("does NOT move a terminal `done` task to interrupted when stopTaskAgent hits an unavailable ACP", async () => {
+    const { service, store } = makeServiceWithStore();
+    const task = await service.createTask(createInput());
+    const sessionId = await addStoredSession(store, task.id);
+    // Terminal `done` while a `ready` (live) session is still on the record.
+    await store.updateTask(task.id, {
+      status: "done",
+      closedAt: new Date().toISOString(),
+    });
+
+    await expect(service.stopTaskAgent(task.id, sessionId)).rejects.toThrow(
+      /ACP service unavailable/,
+    );
+
+    const detail = must(await service.getTask(task.id), "detail");
+    expect(detail.status).toBe("done");
+    // The session-level stop failure is still recorded for observability.
+    expect(must(detail.sessions[0], "session").status).toBe("stop_failed");
+  });
+
+  it("does NOT regress a terminal `done` task to interrupted when archive's session stop fails", async () => {
+    const acp = new FakeAcp();
+    const { service, store } = makeServiceWithStore(acp);
+    await service.start();
+    const task = await service.createTask(createInput());
+    const sessionId = await addStoredSession(store, task.id);
+    await store.updateTask(task.id, {
+      status: "done",
+      closedAt: new Date().toISOString(),
+    });
+    acp.failStop = true;
+
+    // stopActiveSessions throws on the failed stop before archive fields land;
+    // the terminal task must stay `done` (pre-#14105 it was stomped to
+    // `interrupted` first — `done → interrupted` is an illegal edge).
+    await expect(service.archiveTask(task.id)).rejects.toThrow(
+      /Failed to stop/,
+    );
+    const detail = must(await service.getTask(task.id), "detail");
+    expect(detail.status).toBe("done");
+    expect(must(detail.sessions[0], "session").status).toBe("stop_failed");
+    void sessionId;
+  });
+
+  it("archives a terminal `done` task through the transition table when no live session blocks the stop", async () => {
+    const { service, store } = makeServiceWithStore();
+    const task = await service.createTask(createInput());
+    await store.updateTask(task.id, {
+      status: "done",
+      closedAt: new Date().toISOString(),
+    });
+
+    // No active sessions → stopActiveSessions is a no-op → archive resolves the
+    // target via nextTaskStatus(done, "archived") (a live table edge, not a
+    // literal write).
+    const archived = must(await service.archiveTask(task.id), "archived");
+    expect(archived.status).toBe("archived");
+    expect(archived.archivedAt).toBeTruthy();
+  });
+
+  it("still interrupts a NON-terminal task when archive's session stop fails", async () => {
+    const acp = new FakeAcp();
+    const { service, store } = makeServiceWithStore(acp);
+    await service.start();
+    const task = await service.createTask(createInput());
+    await addStoredSession(store, task.id); // leaves task `active`
+    acp.failStop = true;
+
+    // stopActiveSessions throws a RecoveryConflictError on the failed stop; the
+    // active task legally advances to `interrupted` (active → interrupted is a
+    // table edge) before the throw, so archive is not reached.
+    await expect(service.archiveTask(task.id)).rejects.toThrow(
+      /Failed to stop/,
+    );
+    const detail = must(await service.getTask(task.id), "detail");
+    expect(detail.status).toBe("interrupted");
+  });
 });
 
 describe("OrchestratorTaskService — usage telemetry", () => {
