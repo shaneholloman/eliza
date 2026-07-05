@@ -9,7 +9,6 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { writeWorkspaceFolderConfig } from "./workspace-folder-config.ts";
 import {
 	getActiveProject,
 	getProjectById,
@@ -19,6 +18,7 @@ import {
 	upsertProject,
 	writeProjectRegistry,
 } from "./project-registry.ts";
+import { writeWorkspaceFolderConfig } from "./workspace-folder-config.ts";
 
 describe("project-registry", () => {
 	let stateDir: string;
@@ -113,6 +113,33 @@ describe("project-registry", () => {
 
 		// No projects.json was written by the read.
 		expect(() => readFileSync(projectRegistryPath(env), "utf8")).toThrow();
+	});
+
+	it("synthesized legacy project keeps a stable id across reads and across the first real upsert", () => {
+		writeWorkspaceFolderConfig(
+			{ path: "/tmp/legacy-folder", bookmark: null },
+			env,
+		);
+
+		// The synthesized registry is re-minted per read; the id must not change,
+		// or a task bound during the migration window could never resolve its
+		// project again (#13776 bound-workdir lock would silently no-op).
+		const first = readProjectRegistry(env)?.projects[0]?.id;
+		const second = readProjectRegistry(env)?.projects[0]?.id;
+		expect(first).toBeTruthy();
+		expect(second).toBe(first);
+
+		// The first real write (upsert keyed by localPath) persists the SAME id,
+		// so bindings minted during the migration window survive the switch to
+		// projects.json.
+		const persisted = upsertProject(
+			{ name: "legacy-folder", localPath: "/tmp/legacy-folder" },
+			env,
+		);
+		expect(persisted.id).toBe(first);
+		expect(getProjectById(persisted.id, env)?.localPath).toBe(
+			"/tmp/legacy-folder",
+		);
 	});
 
 	it("writeProjectRegistry round-trips through disk", () => {
