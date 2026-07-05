@@ -4,7 +4,10 @@
  * when the checkout has a `.git` directory.
  */
 import { describe, expect, it } from "vitest";
-import { shouldSkipBuildStamp } from "./build.mjs";
+import {
+  removeEmittedBuildStamp,
+  shouldSkipBuildStamp,
+} from "./build-stamp.mjs";
 
 const env = (overrides = {}) => ({
   ELIZA_BUILD_STAMP: undefined,
@@ -53,5 +56,17 @@ describe("shouldSkipBuildStamp", () => {
         env({ ELIZA_BUILD_STAMP: "1", VITE_ENVIRONMENT: "production" }),
       ),
     ).toBe(false);
+  });
+
+  it("removes emitted build-info assets from Vite production bundles", () => {
+    const bundle = {
+      "assets/app.js": { type: "chunk" },
+      "build-info.json": { type: "asset" },
+      "/build-info.json": { type: "asset" },
+    };
+
+    removeEmittedBuildStamp(bundle);
+
+    expect(bundle).toEqual({ "assets/app.js": { type: "chunk" } });
   });
 });
