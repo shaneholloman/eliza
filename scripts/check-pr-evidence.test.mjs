@@ -1,3 +1,9 @@
+/**
+ * Tests for the pull request evidence checker. The fixtures model the PR body
+ * instead of shelling out so the gate's parsing rules stay deterministic and
+ * cheap to run in PR workflows.
+ */
+
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -17,20 +23,16 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = join(HERE, "..", ".github", "pull_request_template.md");
 
-/**
- * Build a PR body with one marked-up Evidence-Gate row per id. `overrides` maps
- * an evidence-row id to the checkbox line(s) that follow its marker; omitted ids
- * default to a satisfied row.
- */
 function buildBody(overrides = {}) {
   const defaults = {
     "before-screenshots":
       "- [ ] Before screenshots `N/A - backend-only change, no UI surface`.",
     "after-screenshots":
       "- [ ] After screenshots `N/A - backend-only change, no UI surface`.",
-    "walkthrough-video": "- [x] A video walkthrough of the flow is attached.",
+    "walkthrough-video":
+      "- [x] A video walkthrough: .github/issue-evidence/13676-video.mp4",
     "backend-logs":
-      "- [ ] Backend logs: see .github/issue-evidence/13622-backend.txt",
+      "- [ ] Backend logs: see .github/issue-evidence/13676-backend.txt",
     "frontend-logs": "- [ ] Frontend logs `N/A - no frontend change`.",
     "llm-trajectory":
       "- [ ] Real-LLM trajectory: [report](https://example.com/report.json)",
@@ -44,13 +46,13 @@ function buildBody(overrides = {}) {
 }
 
 describe("check-pr-evidence parser", () => {
-  it("passes when every evidence row is filled (artifact / checked / N/A-reason)", () => {
+  it("passes when every evidence row has an artifact or N/A reason", () => {
     const { ok, findings } = evaluatePrEvidence(buildBody());
     assert.equal(ok, true);
-    assert.ok(findings.every((f) => f.status === "ok"));
+    assert.ok(findings.every((finding) => finding.status === "ok"));
   });
 
-  it("fails on a single blank row (unchecked boilerplate, no artifact, no N/A)", () => {
+  it("fails on a single blank row", () => {
     const { ok, findings } = evaluatePrEvidence(
       buildBody({
         "backend-logs":
@@ -58,22 +60,35 @@ describe("check-pr-evidence parser", () => {
       }),
     );
     assert.equal(ok, false);
-    const row = findings.find((f) => f.id === "backend-logs");
-    assert.equal(row.status, "blank");
-    // The other rows stay ok — one blank row does not poison the rest.
     assert.equal(
-      findings.filter((f) => f.status === "ok").length,
+      findings.find((finding) => finding.id === "backend-logs").status,
+      "blank",
+    );
+    assert.equal(
+      findings.filter((finding) => finding.status === "ok").length,
       REQUIRED_EVIDENCE_ROWS.length - 1,
     );
   });
 
-  it("passes when every row is marked `N/A - <reason>` with a concrete reason", () => {
+  it("fails when a row is checked without an artifact or N/A reason", () => {
+    const { ok, findings } = evaluatePrEvidence(
+      buildBody({
+        "backend-logs": "- [x] Backend logs attached.",
+      }),
+    );
+    assert.equal(ok, false);
+    assert.equal(
+      findings.find((finding) => finding.id === "backend-logs").status,
+      "blank",
+    );
+  });
+
+  it("passes when every row is marked `N/A - <reason>`", () => {
     const body = REQUIRED_EVIDENCE_ROWS.map(
       ({ id }) =>
         `<!-- evidence-row:${id} -->\n- [ ] row \`N/A - not applicable to this change\`.`,
     ).join("\n\n");
-    const { ok } = evaluatePrEvidence(body);
-    assert.equal(ok, true);
+    assert.equal(evaluatePrEvidence(body).ok, true);
   });
 
   it("fails on a bare `N/A` with no reason", () => {
@@ -81,44 +96,47 @@ describe("check-pr-evidence parser", () => {
       buildBody({ "backend-logs": "- [ ] Backend logs N/A" }),
     );
     assert.equal(ok, false);
-    assert.equal(findings.find((f) => f.id === "backend-logs").status, "blank");
+    assert.equal(
+      findings.find((finding) => finding.id === "backend-logs").status,
+      "blank",
+    );
   });
 
-  it("reports a required row as `missing` when its marker is absent", () => {
+  it("reports a required row as missing when its marker is absent", () => {
     const body = REQUIRED_EVIDENCE_ROWS.slice(1)
-      .map(({ id }) => `<!-- evidence-row:${id} -->\n- [x] done`)
+      .map(({ id }) => `<!-- evidence-row:${id} -->\n- [ ] N/A - covered elsewhere`)
       .join("\n\n");
     const { ok, findings } = evaluatePrEvidence(body);
     assert.equal(ok, false);
     assert.equal(
-      findings.find((f) => f.id === "before-screenshots").status,
+      findings.find((finding) => finding.id === "before-screenshots").status,
       "missing",
     );
   });
 
-  it("treats an empty body as all-missing (fails closed)", () => {
+  it("treats an empty body as all-missing", () => {
     const { ok, findings } = evaluatePrEvidence("");
     assert.equal(ok, false);
-    assert.ok(findings.every((f) => f.status === "missing"));
+    assert.ok(findings.every((finding) => finding.status === "missing"));
   });
 });
 
-describe("check-pr-evidence row-satisfaction primitives", () => {
-  it("hasNaWithReason accepts `-`, `:`, and dash separators with a real reason", () => {
+describe("check-pr-evidence row primitives", () => {
+  it("accepts N/A separators with a real reason", () => {
     assert.equal(hasNaWithReason("N/A - backend-only, no UI"), true);
     assert.equal(hasNaWithReason("N/A: nothing to show here"), true);
     assert.equal(hasNaWithReason("N/A \u2014 no domain artifacts"), true);
     assert.equal(hasNaWithReason("NA - agent change only"), true);
   });
 
-  it("hasNaWithReason rejects bare or reasonless N/A", () => {
+  it("rejects bare or placeholder N/A reasons", () => {
     assert.equal(hasNaWithReason("N/A"), false);
     assert.equal(hasNaWithReason("N/A -"), false);
     assert.equal(hasNaWithReason("N/A - "), false);
-    assert.equal(hasNaWithReason("some prose without na"), false);
+    assert.equal(hasNaWithReason("N/A - <reason>."), false);
   });
 
-  it("hasArtifactReference detects links, URLs, and issue-evidence paths", () => {
+  it("detects links, URLs, and issue-evidence paths", () => {
     assert.equal(hasArtifactReference("[report](https://x/y.json)"), true);
     assert.equal(
       hasArtifactReference("see https://github.com/o/r/assets/1"),
@@ -126,65 +144,62 @@ describe("check-pr-evidence row-satisfaction primitives", () => {
     );
     assert.equal(
       hasArtifactReference(
-        "committed under .github/issue-evidence/13622-a.png",
+        "committed under .github/issue-evidence/13676-a.png",
       ),
       true,
     );
-    assert.equal(hasArtifactReference("just some words, no artifact"), false);
+    assert.equal(hasArtifactReference("just words, no artifact"), false);
   });
 
-  it("isChecked recognises a ticked checkbox only", () => {
+  it("detects checked checkboxes without treating them as evidence", () => {
     assert.equal(isChecked("- [x] done"), true);
     assert.equal(isChecked("- [X] done"), true);
     assert.equal(isChecked("- [ ] not done"), false);
+    assert.equal(isRowSatisfied("- [x] done"), false);
   });
 
-  it("isRowSatisfied requires checked OR N/A-reason OR artifact", () => {
-    assert.equal(isRowSatisfied("- [x] anything"), true);
+  it("requires N/A-reason or artifact to satisfy a row", () => {
     assert.equal(isRowSatisfied("- [ ] `N/A - not applicable`"), true);
     assert.equal(isRowSatisfied("- [ ] [proof](https://e/x.png)"), true);
     assert.equal(
       isRowSatisfied(
-        "- [ ] Before full-page screenshots ... or marked `N/A - <reason>`.",
+        "- [ ] Before screenshots are attached, or marked `N/A - <reason>`.",
       ),
       false,
-      "unedited boilerplate (the literal <reason> placeholder) must not satisfy the gate",
     );
   });
 });
 
 describe("check-pr-evidence marker extraction", () => {
-  it("captures the checkbox line plus indented continuation lines per marker", () => {
+  it("captures the checkbox line plus indented continuation lines", () => {
     const body = [
       "<!-- evidence-row:backend-logs -->",
       "- [ ] Backend logs show the real code path firing end to end,",
       "      or are marked `N/A - no backend path in this change`.",
       "",
       "<!-- evidence-row:frontend-logs -->",
-      "- [x] Frontend logs attached.",
+      "- [ ] Frontend logs: .github/issue-evidence/13676-frontend.txt",
     ].join("\n");
     const rows = extractEvidenceRows(body);
     assert.ok(rows.get("backend-logs").includes("N/A - no backend path"));
-    assert.ok(rows.get("frontend-logs").includes("[x]"));
+    assert.ok(rows.get("frontend-logs").includes("13676-frontend.txt"));
   });
 
-  it("bounds the last row's block so trailing sections/links do not bleed in", () => {
-    // The last marker runs to EOF; a link in a section below must NOT satisfy
-    // the (blank) row above it.
+  it("bounds the last row so trailing links do not bleed in", () => {
     const body = [
       "<!-- evidence-row:domain-artifacts -->",
       "- [ ] Domain artifacts are attached where applicable, or marked `N/A - <reason>`.",
       "",
       "# Evidence Details",
       "",
-      "See [the runner](https://example.com/report.json) and `bun run test:e2e:record`.",
+      "See [the runner](https://example.com/report.json).",
     ].join("\n");
     const rows = extractEvidenceRows(body);
     assert.ok(!rows.get("domain-artifacts").includes("example.com"));
     assert.equal(isRowSatisfied(rows.get("domain-artifacts")), false);
   });
 
-  it("boundRowBlock stops at the first blank line / heading", () => {
+  it("boundRowBlock stops at the first blank line or heading", () => {
     const block = [
       "- [ ] row text",
       "      continued indented line",
@@ -207,11 +222,10 @@ describe("check-pr-evidence against the real PR template", () => {
     }
   });
 
-  it("fails the unedited template (all rows are `<reason>` boilerplate)", () => {
+  it("fails the unedited template", () => {
     const template = readFileSync(TEMPLATE_PATH, "utf8");
     const { ok, findings } = evaluatePrEvidence(template);
     assert.equal(ok, false);
-    // Every row of the pristine template is unfilled boilerplate.
-    assert.ok(findings.every((f) => f.status === "blank"));
+    assert.ok(findings.every((finding) => finding.status === "blank"));
   });
 });
