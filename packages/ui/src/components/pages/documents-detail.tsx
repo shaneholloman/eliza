@@ -29,6 +29,7 @@ import type {
   DocumentFragmentRecord,
 } from "../../api/client-types-chat";
 import { useAppSelector } from "../../state";
+import { formatByteSize, resolveAppAssetUrl } from "../../utils";
 import { safeAttachmentUrl } from "../../utils/attachment-url";
 import {
   canShareFiles,
@@ -36,7 +37,6 @@ import {
   filenameForMime,
   shareAttachment,
 } from "../../utils/download-share";
-import { formatByteSize, resolveAppAssetUrl } from "../../utils";
 import { PagePanel } from "../composites/page-panel";
 import { TranscriptPlayer } from "../transcripts/TranscriptPlayer";
 import { Button } from "../ui/button";
@@ -612,6 +612,7 @@ export function DocumentViewer({
 
       {fullscreen && mediaBlock ? (
         // biome-ignore lint/a11y/noStaticElementInteractions: backdrop click-to-close; the "Exit full screen" button + Escape-equivalent Close button below are the keyboard paths.
+        // biome-ignore lint/a11y/useKeyWithClickEvents: the semantic close button is the keyboard path; backdrop click is a pointer convenience.
         <div
           data-testid="reader-fullscreen"
           className="fixed inset-0 z-50 flex flex-col bg-black/90 p-4 sm:p-8"
@@ -635,6 +636,7 @@ export function DocumentViewer({
             </Button>
           </div>
           {/* biome-ignore lint/a11y/noStaticElementInteractions: stops backdrop close when interacting with the media itself. */}
+          {/* biome-ignore lint/a11y/useKeyWithClickEvents: this container only cancels backdrop pointer clicks; it is not an action target. */}
           <div
             className="flex min-h-0 flex-1 items-center justify-center"
             onClick={(event) => event.stopPropagation()}

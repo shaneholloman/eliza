@@ -68,23 +68,23 @@ import {
   getDocumentTypeLabel,
 } from "./documents-detail.helpers";
 import {
+  BULK_UPLOAD_TARGET_BYTES,
   DEFAULT_DOCUMENT_UPLOAD_SCOPE,
   DOCUMENT_UPLOAD_ACCEPT,
   type DocumentUploadFile,
   type DocumentUploadOptions,
   getDocumentUploadFilename,
   isSupportedDocumentFile,
-  BULK_UPLOAD_TARGET_BYTES,
   LARGE_FILE_WARNING_BYTES,
   MAX_BULK_REQUEST_DOCUMENTS,
   MAX_UPLOAD_REQUEST_BYTES,
   shouldReadDocumentFileAsText,
 } from "./documents-upload.helpers";
 import {
-  type KnowledgeFacet,
-  KNOWLEDGE_FACETS,
   documentMatchesFacet,
   documentMediaFormat,
+  KNOWLEDGE_FACETS,
+  type KnowledgeFacet,
   knowledgeFacetCounts,
   knowledgeFacetIcon,
   knowledgeFacetLabel,
@@ -297,7 +297,6 @@ const KnowledgeListItem = memo(function KnowledgeListItem({
 export function DocumentsView({
   fileInputId,
   inModal,
-  embedded = false,
   standalone = false,
   onDocumentsChange,
   onSelectedDocumentIdChange,
@@ -305,7 +304,6 @@ export function DocumentsView({
 }: {
   fileInputId?: string;
   inModal?: boolean;
-  embedded?: boolean;
   /** Own the top-level "Knowledge" header in list state (the `/documents`
    *  route). Off when the hub is embedded under another view's chrome. */
   standalone?: boolean;
@@ -965,10 +963,12 @@ export function DocumentsView({
       activeId={scopeFilter}
       onSelect={(id) => setScopeFilter(id as DocumentScopeFilter)}
       className="py-1"
-      entries={SCOPE_FILTER_OPTIONS.map(({ value, labelKey, defaultLabel }) => ({
-        id: value,
-        label: t(labelKey, { defaultValue: defaultLabel }),
-      }))}
+      entries={SCOPE_FILTER_OPTIONS.map(
+        ({ value, labelKey, defaultLabel }) => ({
+          id: value,
+          label: t(labelKey, { defaultValue: defaultLabel }),
+        }),
+      )}
     />
   );
 
