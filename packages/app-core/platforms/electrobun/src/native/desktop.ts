@@ -301,6 +301,42 @@ const WINDOWS_IDLE_POWERSHELL_SCRIPT = [
   "[int][System.Environment]::TickCount - [int]$info.dwTime",
 ].join(" ");
 
+export interface DesktopNotificationTestRecord {
+  id: string;
+  title: string;
+  body: string | undefined;
+  subtitle: string | undefined;
+  silent: boolean | undefined;
+  recordedAt: string;
+}
+
+const desktopNotificationTestRecords: DesktopNotificationTestRecord[] = [];
+
+function shouldRecordDesktopNotificationsForTests(): boolean {
+  return process.env.ELIZA_DESKTOP_TEST_BRIDGE_ENABLED === "1";
+}
+
+function recordDesktopNotificationForTests(
+  record: DesktopNotificationTestRecord,
+): void {
+  if (!shouldRecordDesktopNotificationsForTests()) return;
+  desktopNotificationTestRecords.push(record);
+  if (desktopNotificationTestRecords.length > 50) {
+    desktopNotificationTestRecords.splice(
+      0,
+      desktopNotificationTestRecords.length - 50,
+    );
+  }
+}
+
+export function readDesktopNotificationTestRecords(): DesktopNotificationTestRecord[] {
+  return desktopNotificationTestRecords.map((record) => ({ ...record }));
+}
+
+export function clearDesktopNotificationTestRecords(): void {
+  desktopNotificationTestRecords.length = 0;
+}
+
 // ============================================================================
 // DesktopManager
 // ============================================================================
@@ -1467,13 +1503,19 @@ X-GNOME-Autostart-enabled=true
     options: NotificationOptions,
   ): Promise<{ id: string }> {
     const id = `notification_${++this.notificationCounter}`;
-
-    // Electrobun Utils.showNotification — fire-and-forget, no event callbacks
-    Utils.showNotification({
+    const nativePayload = {
       title: options.title,
       body: options.body,
       subtitle: undefined,
       silent: options.silent,
+    };
+
+    // Electrobun Utils.showNotification — fire-and-forget, no event callbacks
+    Utils.showNotification(nativePayload);
+    recordDesktopNotificationForTests({
+      id,
+      ...nativePayload,
+      recordedAt: new Date().toISOString(),
     });
 
     return { id };

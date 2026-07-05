@@ -6,7 +6,11 @@ import {
   evaluateInCurrentMainWindow,
   getCurrentMainWindowSnapshot,
 } from "./main-window-runtime";
-import { getDesktopManager } from "./native/desktop";
+import {
+  clearDesktopNotificationTestRecords,
+  getDesktopManager,
+  readDesktopNotificationTestRecords,
+} from "./native/desktop";
 import { findFirstAvailableLoopbackPort } from "./native/loopback-port";
 import { getScreenCaptureManager } from "./native/screencapture";
 import type { WindowBounds } from "./rpc-schema";
@@ -139,6 +143,19 @@ export async function startDesktopTestBridgeServer(): Promise<
           mainWindow: getCurrentMainWindowSnapshot(),
           shell: shellState,
         });
+        return;
+      }
+
+      if (pathname === "/notifications" && method === "GET") {
+        json(res, 200, {
+          notifications: readDesktopNotificationTestRecords(),
+        });
+        return;
+      }
+
+      if (pathname === "/notifications" && method === "DELETE") {
+        clearDesktopNotificationTestRecords();
+        json(res, 200, { ok: true });
         return;
       }
 

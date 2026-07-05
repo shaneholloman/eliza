@@ -76,6 +76,15 @@ export interface DesktopWindowBounds {
   height: number;
 }
 
+export interface DesktopNotificationRecord {
+  id: string;
+  title: string;
+  body: string | undefined;
+  subtitle: string | undefined;
+  silent: boolean | undefined;
+  recordedAt: string;
+}
+
 interface PackagedStartOptions {
   bridgeHealthTimeoutMs?: number;
   shellReadyTimeoutMs?: number;
@@ -820,6 +829,25 @@ export class PackagedDesktopHarness {
   async getState(): Promise<DesktopTestBridgeState> {
     return await fetchJson<DesktopTestBridgeState>(`${this.bridgeUrl}/state`, {
       headers: { Authorization: `Bearer ${this.bridgeToken}` },
+    });
+  }
+
+  async getNotifications(): Promise<DesktopNotificationRecord[]> {
+    const response = await fetchJson<{
+      notifications: DesktopNotificationRecord[];
+    }>(`${this.bridgeUrl}/notifications`, {
+      headers: { Authorization: `Bearer ${this.bridgeToken}` },
+    });
+    return response.notifications;
+  }
+
+  async clearNotifications(): Promise<void> {
+    await fetchJson<{ ok: boolean }>(`${this.bridgeUrl}/notifications`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${this.bridgeToken}`,
+        "Content-Type": "application/json",
+      },
     });
   }
 
