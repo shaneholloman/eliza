@@ -1054,11 +1054,12 @@ export class AcpService extends Service {
     if (isolate) {
       this.workspaceRegistry.register("acp-scratch", workdir, id);
     }
-    // A spawn that throws after the isolated `task-*` dir is created must not
-    // leak it: the session never becomes durable, so on any failure below we rm
-    // the orphaned dir and drop its registry entry. Without this the dir stays
-    // `live` in the registry, pinning the shared cap for the life of the process
-    // (#13803 review blocker #2: auth/transport/lease failures + cancels leaked).
+    // A spawn that throws after the isolated `task-*` dir is created but before
+    // reserveSessionSlot persists a durable session must not leak it. Once the
+    // session is reserved, the workdir belongs to that durable session record
+    // (including errored transport exits) and must remain inspectable until the
+    // normal session teardown/GC path reclaims it.
+    let sessionReserved = false;
     try {
       // The parent-agent broker is only reachable when the SubAgentRouter is bound
       // to the ACP event stream; gate every broker advertisement (manual section,
@@ -1160,6 +1161,7 @@ export class AcpService extends Service {
       // cap (the old separate enforceSessionLimit()/store.create() left a
       // read-then-act race). Throws SessionCapError when the class is full.
       await this.reserveSessionSlot(session, slotClass);
+      sessionReserved = true;
 
       // Mint the per-spawn model lease BEFORE the transport branch, so the leased
       // token (not the static gateway token) is what buildEnv injects into the
@@ -1293,8 +1295,12 @@ export class AcpService extends Service {
       const sessionSnapshot: SessionInfo = { ...session, status: "ready" };
       return toSpawnResult(updated ?? sessionSnapshot);
     } catch (err) {
-      if (isolate) {
+      if (isolate && !sessionReserved) {
         await this.discardOrphanedScratchOnSpawnFailure(workdir);
+      } else if (isolate) {
+        // Durable failed spawns should not pin the shared cap forever, but their
+        // workdir stays on disk for inspection until session teardown owns the rm.
+        this.workspaceRegistry.markTerminal(workdir);
       }
       throw err;
     }

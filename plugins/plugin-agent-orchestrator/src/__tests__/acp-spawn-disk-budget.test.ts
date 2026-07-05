@@ -97,6 +97,43 @@ describe("AcpService spawn disk-budget + registry (#13773)", () => {
     expect(registry.size()).toBe(before);
   });
 
+  it("keeps the workdir for a durable errored session when acpx exits nonzero", async () => {
+    const root = tmpRoot();
+    const store = new InMemorySessionStore();
+    const svc = new AcpService(
+      makeRuntime({
+        ELIZA_ACP_WORKSPACE_ROOT: root,
+      }) as never,
+      { store },
+    );
+    (svc as unknown as { started: boolean }).started = true;
+    (
+      svc as unknown as {
+        runAcpx: () => Promise<{ code: number; stdout: string; stderr: string }>;
+      }
+    ).runAcpx = async () => ({
+      code: 42,
+      stdout: "",
+      stderr: "transport refused",
+    });
+
+    await expect(
+      svc.spawnSession({ agentType: "opencode", slotClass: "worker" }),
+    ).rejects.toThrow();
+
+    const scratchDirs = readdirSync(root).filter((n) => n.startsWith("task-"));
+    expect(scratchDirs).toHaveLength(1);
+    const scratchDir = scratchDirs[0] ?? "";
+    expect(scratchDir).not.toBe("");
+    const [session] = await store.list();
+    expect(session?.status).toBe("errored");
+    expect(session?.workdir).toContain(scratchDir);
+
+    const registry = getSharedWorkspaceRegistry();
+    expect(registry.has(session?.workdir ?? "")).toBe(true);
+    expect(registry.isLive(session?.workdir ?? "")).toBe(false);
+  });
+
   it("refuses a spawn when the free-disk floor cannot be met", async () => {
     const root = tmpRoot();
     const store = new InMemorySessionStore();

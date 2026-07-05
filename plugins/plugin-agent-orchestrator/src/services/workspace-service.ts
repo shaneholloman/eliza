@@ -696,13 +696,15 @@ export class CodingWorkspaceService {
     if (!workspace) {
       throw new Error(`Workspace ${workspaceId} not found`);
     }
-    return gitCreatePR(
+    const pullRequest = await gitCreatePR(
       this.workspaceService,
       workspace,
       workspaceId,
       options,
       (msg) => this.log(msg),
     );
+    this.markWorkspaceTerminal(workspaceId);
+    return pullRequest;
   }
 
   // === Delegated GitHub / Issue Management ===
@@ -823,6 +825,23 @@ export class CodingWorkspaceService {
     }
     this.workspaces.delete(workspaceId);
     this.log(`Removed workspace ${workspaceId}`);
+  }
+
+  /**
+   * Release a full-clone workspace from active use while keeping it on disk for
+   * later inspection. The shared registry may evict released clones under disk
+   * pressure; worktrees are deliberately excluded because their bytes belong to
+   * the parent clone and cleanup remains parent-owned.
+   */
+  markWorkspaceTerminal(workspaceId: string): void {
+    const workspace = this.workspaces.get(workspaceId);
+    if (!workspace) {
+      throw new Error(`Workspace ${workspaceId} not found`);
+    }
+    if (!workspace.isWorktree) {
+      this.workspaceRegistry.markTerminal(workspace.path);
+    }
+    this.log(`Released workspace ${workspaceId} for disk-pressure reclaim`);
   }
 
   onEvent(callback: WorkspaceEventCallback): () => void {

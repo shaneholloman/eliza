@@ -13,15 +13,19 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_WORKSPACE_DISK_CAP_BYTES,
   DEFAULT_WORKSPACE_MIN_FREE_BYTES,
+  getSharedWorkspaceRegistry,
   measureDirBytes,
   parseByteSetting,
+  resetSharedWorkspaceRegistry,
   resolveDiskBudgetConfig,
   WorkspaceRegistry,
 } from "../services/workspace-registry.js";
+import { CodingWorkspaceService } from "../services/workspace-service.js";
 
 const roots: string[] = [];
 
 afterEach(() => {
+  resetSharedWorkspaceRegistry();
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -123,6 +127,49 @@ describe("WorkspaceRegistry cap enforcement", () => {
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toBe("cap-exceeded");
     expect(existsSync(liveWs)).toBe(true);
+  });
+});
+
+describe("CodingWorkspaceService registry lifecycle", () => {
+  it("marks retained full-clone workspaces terminal so disk pressure can reclaim them", async () => {
+    const root = tmpRoot("wsreg-service-");
+    const workspacePath = join(root, "clone-retained");
+    await makeDirWithBytes(workspacePath, 8192);
+    resetSharedWorkspaceRegistry();
+    const registry = getSharedWorkspaceRegistry();
+    const service = new CodingWorkspaceService({
+      getSetting: () => undefined,
+    } as never);
+    (
+      service as unknown as {
+        workspaces: Map<
+          string,
+          {
+            id: string;
+            path: string;
+            branch: string;
+            baseBranch: string;
+            isWorktree: boolean;
+            repo: string;
+            status: string;
+          }
+        >;
+      }
+    ).workspaces.set("ws-retained", {
+      id: "ws-retained",
+      path: workspacePath,
+      branch: "feature/test",
+      baseBranch: "develop",
+      isWorktree: false,
+      repo: "https://github.com/elizaOS/eliza.git",
+      status: "ready",
+    });
+    registry.register("git-workspace", workspacePath, "ws-retained");
+
+    service.markWorkspaceTerminal("ws-retained");
+    await registry.checkDiskBudget(root, { capBytes: 0 });
+
+    expect(existsSync(workspacePath)).toBe(false);
   });
 });
 
