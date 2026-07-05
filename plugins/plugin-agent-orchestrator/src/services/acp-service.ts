@@ -1054,107 +1054,107 @@ export class AcpService extends Service {
     if (isolate) {
       this.workspaceRegistry.register("acp-scratch", workdir, id);
     }
-    // The parent-agent broker is only reachable when the SubAgentRouter is bound
-    // to the ACP event stream; gate every broker advertisement (manual section,
-    // SKILLS.md broker entry) on that so a child is never told about a bridge it
-    // cannot use.
-    const brokerWired = isParentAgentBrokerWired(this.runtime);
-    // Give the sub-agent its eliza-context + non-interactive operating manual on
-    // disk (where every backend reads it) — only when the workspace is bare, so
-    // a real repo's own AGENTS.md/CLAUDE.md is never clobbered.
-    await writeWorkspaceIdentity(workdir, { brokerWired });
-    // Write SKILLS.md into every spawn workspace so a child can discover (and
-    // request, via the parent) the parent's installed skills — not just the
-    // economics loop. The broker skill is advertised only when wired; the
-    // recommended-slugs / ViewKind extras are opt-in via opts.skillsManifest.
-    await this.writeSkillsManifest(workdir, id, brokerWired, opts);
-
-    // Record the workspace HEAD + already-dirty files at spawn so the change
-    // set captured at task_complete is scoped to exactly what this sub-agent
-    // did (and excludes pre-existing churn it never touched). Empty/undefined
-    // when the workspace isn't a git repo — capture then relies on the agent's
-    // own edit/write tool-call paths.
-    const baselineSha = await captureBaselineSha(workdir);
-    const baselineDirty = await captureBaselineDirty(workdir);
-
-    // Multi-account selection: pick the least-used (default) linked subscription
-    // for this agent type and inject its credentials into the spawn env so the
-    // sub-agent authenticates AS that account. Returns null (and we keep the
-    // single-account behavior) when no accounts are linked.
-    const accountStrategy = resolveCodingAccountStrategy(
-      this.setting("ELIZA_CODING_ACCOUNT_STRATEGY"),
-    );
-    const resolvedAccount = await selectCodingAccount(agentType, {
-      sessionKey: id,
-      ...(accountStrategy ? { strategy: accountStrategy } : {}),
-    });
-    const customCredentials = resolvedAccount
-      ? {
-          ...(opts.customCredentials ?? {}),
-          ...resolvedAccount.selection.envPatch,
-        }
-      : opts.customCredentials;
-    if (resolvedAccount) {
-      this.log("info", "coding account selected for spawn", {
-        sessionId: id,
-        agentType,
-        providerId: resolvedAccount.meta.providerId,
-        accountId: resolvedAccount.meta.accountId,
-        label: resolvedAccount.meta.label,
-        strategy: resolvedAccount.meta.strategy,
-      });
-    } else {
-      // A degraded pool must not hard-fail a spawn, but it must not degrade
-      // invisibly either (#9960). Warn loudly only when accounts are connected
-      // yet none are healthy — a benign empty pool stays quiet.
-      const fallbackWarning = diagnoseCodingAccountFallback(agentType);
-      if (fallbackWarning) {
-        this.log("warn", "coding account pool degraded to single-account", {
-          sessionId: id,
-          agentType,
-          detail: fallbackWarning,
-        });
-      }
-    }
-
-    const now = new Date();
-    // Stamp the capacity class onto the session so getCapacity() (and the
-    // admission queue that reads it) can count worker vs system slots off the
-    // durable record. Always persisted — a worker session carries slotClass so
-    // the accounting never has to infer "worker" from an absent field.
-    const slotClass: SessionSlotClass = opts.slotClass ?? "worker";
-    const mergedMetadata: Record<string, unknown> = {
-      ...(opts.metadata ?? {}),
-      ...(isolate
-        ? {
-            [ACP_METADATA_ISOLATED_WORKDIR]: true,
-            [ACP_METADATA_WORKDIR_ROOT]: resolve(baseWorkdir),
-          }
-        : {}),
-      ...(baselineSha ? { codingBaselineSha: baselineSha } : {}),
-      ...(baselineSha && baselineDirty.length > 0
-        ? { codingBaselineDirty: baselineDirty }
-        : {}),
-      ...(resolvedAccount ? { account: resolvedAccount.meta } : {}),
-      slotClass,
-    };
-    const session: SessionInfo = {
-      id,
-      name,
-      agentType,
-      workdir,
-      status: "running",
-      approvalPreset,
-      createdAt: now,
-      lastActivityAt: now,
-      metadata: mergedMetadata,
-    };
     // A spawn that throws after the isolated `task-*` dir is created must not
     // leak it: the session never becomes durable, so on any failure below we rm
     // the orphaned dir and drop its registry entry. Without this the dir stays
     // `live` in the registry, pinning the shared cap for the life of the process
     // (#13803 review blocker #2: auth/transport/lease failures + cancels leaked).
     try {
+      // The parent-agent broker is only reachable when the SubAgentRouter is bound
+      // to the ACP event stream; gate every broker advertisement (manual section,
+      // SKILLS.md broker entry) on that so a child is never told about a bridge it
+      // cannot use.
+      const brokerWired = isParentAgentBrokerWired(this.runtime);
+      // Give the sub-agent its eliza-context + non-interactive operating manual on
+      // disk (where every backend reads it) — only when the workspace is bare, so
+      // a real repo's own AGENTS.md/CLAUDE.md is never clobbered.
+      await writeWorkspaceIdentity(workdir, { brokerWired });
+      // Write SKILLS.md into every spawn workspace so a child can discover (and
+      // request, via the parent) the parent's installed skills — not just the
+      // economics loop. The broker skill is advertised only when wired; the
+      // recommended-slugs / ViewKind extras are opt-in via opts.skillsManifest.
+      await this.writeSkillsManifest(workdir, id, brokerWired, opts);
+
+      // Record the workspace HEAD + already-dirty files at spawn so the change
+      // set captured at task_complete is scoped to exactly what this sub-agent
+      // did (and excludes pre-existing churn it never touched). Empty/undefined
+      // when the workspace isn't a git repo — capture then relies on the agent's
+      // own edit/write tool-call paths.
+      const baselineSha = await captureBaselineSha(workdir);
+      const baselineDirty = await captureBaselineDirty(workdir);
+
+      // Multi-account selection: pick the least-used (default) linked subscription
+      // for this agent type and inject its credentials into the spawn env so the
+      // sub-agent authenticates AS that account. Returns null (and we keep the
+      // single-account behavior) when no accounts are linked.
+      const accountStrategy = resolveCodingAccountStrategy(
+        this.setting("ELIZA_CODING_ACCOUNT_STRATEGY"),
+      );
+      const resolvedAccount = await selectCodingAccount(agentType, {
+        sessionKey: id,
+        ...(accountStrategy ? { strategy: accountStrategy } : {}),
+      });
+      const customCredentials = resolvedAccount
+        ? {
+            ...(opts.customCredentials ?? {}),
+            ...resolvedAccount.selection.envPatch,
+          }
+        : opts.customCredentials;
+      if (resolvedAccount) {
+        this.log("info", "coding account selected for spawn", {
+          sessionId: id,
+          agentType,
+          providerId: resolvedAccount.meta.providerId,
+          accountId: resolvedAccount.meta.accountId,
+          label: resolvedAccount.meta.label,
+          strategy: resolvedAccount.meta.strategy,
+        });
+      } else {
+        // A degraded pool must not hard-fail a spawn, but it must not degrade
+        // invisibly either (#9960). Warn loudly only when accounts are connected
+        // yet none are healthy — a benign empty pool stays quiet.
+        const fallbackWarning = diagnoseCodingAccountFallback(agentType);
+        if (fallbackWarning) {
+          this.log("warn", "coding account pool degraded to single-account", {
+            sessionId: id,
+            agentType,
+            detail: fallbackWarning,
+          });
+        }
+      }
+
+      const now = new Date();
+      // Stamp the capacity class onto the session so getCapacity() (and the
+      // admission queue that reads it) can count worker vs system slots off the
+      // durable record. Always persisted — a worker session carries slotClass so
+      // the accounting never has to infer "worker" from an absent field.
+      const slotClass: SessionSlotClass = opts.slotClass ?? "worker";
+      const mergedMetadata: Record<string, unknown> = {
+        ...(opts.metadata ?? {}),
+        ...(isolate
+          ? {
+              [ACP_METADATA_ISOLATED_WORKDIR]: true,
+              [ACP_METADATA_WORKDIR_ROOT]: resolve(baseWorkdir),
+            }
+          : {}),
+        ...(baselineSha ? { codingBaselineSha: baselineSha } : {}),
+        ...(baselineSha && baselineDirty.length > 0
+          ? { codingBaselineDirty: baselineDirty }
+          : {}),
+        ...(resolvedAccount ? { account: resolvedAccount.meta } : {}),
+        slotClass,
+      };
+      const session: SessionInfo = {
+        id,
+        name,
+        agentType,
+        workdir,
+        status: "running",
+        approvalPreset,
+        createdAt: now,
+        lastActivityAt: now,
+        metadata: mergedMetadata,
+      };
       // Atomic check-and-reserve: enforces the session limit for this slot class
       // and inserts under a single mutex so concurrent spawns can't overshoot the
       // cap (the old separate enforceSessionLimit()/store.create() left a
