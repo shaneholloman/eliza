@@ -303,6 +303,16 @@ const WINDOWS_IDLE_POWERSHELL_SCRIPT = [
 // DesktopManager
 // ============================================================================
 
+export interface NotificationDiagnosticsEntry {
+  id: string;
+  title: string;
+  body?: string;
+  silent?: boolean;
+  shownAt: number;
+}
+
+const MAX_NOTIFICATION_DIAGNOSTICS = 50;
+
 /**
  * Desktop Manager — handles all native desktop features for Electrobun.
  *
@@ -322,12 +332,14 @@ export class DesktopManager {
   private trayPopoverWindow: BrowserWindow | null = null;
   private trayPopoverConfig: TrayPopoverConfig | null = null;
   private trayPopoverVisible = false;
+  private trayPopoverLastAnchorBounds: Rect | null = null;
   // Deferred blur-to-dismiss: blur schedules a hide ~200ms out; a tray-icon
   // re-click (which fires blur then tray-clicked) cancels the pending hide and
   // toggles closed instead, so a click on the icon never double-fires.
   private trayPopoverBlurHideTimer: ReturnType<typeof setTimeout> | null = null;
   private shortcuts: Map<string, ShortcutOptions> = new Map();
   private notificationCounter = 0;
+  private notificationDiagnostics: NotificationDiagnosticsEntry[] = [];
   private sendToWebview: SendToWebview | null = null;
   private _windowFocused = true;
   private _windowHidden = false;
@@ -421,12 +433,24 @@ export class DesktopManager {
     mainWindowPresent: boolean;
     windowVisible: boolean;
     windowFocused: boolean;
+    shortcuts: Array<{ id: string; accelerator: string }>;
+    trayPopover: {
+      configured: boolean;
+      windowPresent: boolean;
+      visible: boolean;
+      lastAnchorBounds: Rect | null;
+    };
   }> {
     return {
       trayPresent: Boolean(this.tray),
       mainWindowPresent: Boolean(this.mainWindow),
       windowVisible: (await this.isWindowVisible()).visible,
       windowFocused: this._windowFocused,
+      shortcuts: Array.from(this.shortcuts.values()).map((shortcut) => ({
+        id: shortcut.id,
+        accelerator: shortcut.accelerator,
+      })),
+      trayPopover: this.getTrayPopoverDiagnostics(),
     };
   }
 
@@ -900,6 +924,18 @@ export class DesktopManager {
     accelerator: string;
   }): Promise<{ registered: boolean }> {
     return { registered: GlobalShortcut.isRegistered(options.accelerator) };
+  }
+
+  pressRegisteredShortcut(options: { id: string }): boolean {
+    const shortcut = this.shortcuts.get(options.id);
+    if (!shortcut) {
+      return false;
+    }
+    this.send("desktopShortcutPressed", {
+      id: shortcut.id,
+      accelerator: shortcut.accelerator,
+    });
+    return true;
   }
 
   // MARK: - Auto Launch
@@ -1440,14 +1476,29 @@ X-GNOME-Autostart-enabled=true
     options: NotificationOptions,
   ): Promise<{ id: string }> {
     const id = `notification_${++this.notificationCounter}`;
-
-    // Electrobun Utils.showNotification — fire-and-forget, no event callbacks
-    Utils.showNotification({
+    const payload = {
       title: options.title,
       body: options.body,
       subtitle: undefined,
       silent: options.silent,
+    };
+
+    // Electrobun Utils.showNotification — fire-and-forget, no event callbacks
+    Utils.showNotification(payload);
+
+    this.notificationDiagnostics.push({
+      id,
+      title: payload.title,
+      body: payload.body,
+      silent: payload.silent,
+      shownAt: Date.now(),
     });
+    if (this.notificationDiagnostics.length > MAX_NOTIFICATION_DIAGNOSTICS) {
+      this.notificationDiagnostics.splice(
+        0,
+        this.notificationDiagnostics.length - MAX_NOTIFICATION_DIAGNOSTICS,
+      );
+    }
 
     return { id };
   }
@@ -1455,6 +1506,14 @@ X-GNOME-Autostart-enabled=true
   async closeNotification(_options: { id: string }): Promise<void> {
     // Electrobun does not support programmatic notification dismissal.
     // No-op.
+  }
+
+  getNotificationDiagnostics(): NotificationDiagnosticsEntry[] {
+    return this.notificationDiagnostics.map((entry) => ({ ...entry }));
+  }
+
+  clearNotificationDiagnostics(): void {
+    this.notificationDiagnostics = [];
   }
 
   // MARK: - Power Monitor
@@ -2059,6 +2118,20 @@ X-GNOME-Autostart-enabled=true
     return this.trayPopoverVisible;
   }
 
+  getTrayPopoverDiagnostics(): {
+    configured: boolean;
+    windowPresent: boolean;
+    visible: boolean;
+    lastAnchorBounds: Rect | null;
+  } {
+    return {
+      configured: Boolean(this.trayPopoverConfig),
+      windowPresent: Boolean(this.trayPopoverWindow),
+      visible: this.trayPopoverVisible,
+      lastAnchorBounds: this.trayPopoverLastAnchorBounds,
+    };
+  }
+
   /** Read the tray icon's screen bounds; zero-rect on any failure or no tray. */
   private readTrayBounds(): Rect {
     const zero: Rect = { x: 0, y: 0, width: 0, height: 0 };
@@ -2125,6 +2198,7 @@ X-GNOME-Autostart-enabled=true
 
     this.clearTrayPopoverBlurTimer();
     const frame = this.resolveTrayPopoverFrame();
+    this.trayPopoverLastAnchorBounds = frame;
 
     if (this.trayPopoverWindow) {
       const win = this.trayPopoverWindow;
@@ -2177,6 +2251,7 @@ X-GNOME-Autostart-enabled=true
     win.on("close", () => {
       this.trayPopoverWindow = null;
       this.trayPopoverVisible = false;
+      this.trayPopoverLastAnchorBounds = null;
       this.clearTrayPopoverBlurTimer();
     });
 
@@ -2220,6 +2295,7 @@ X-GNOME-Autostart-enabled=true
       );
     }
     this.trayPopoverWindow = null;
+    this.trayPopoverLastAnchorBounds = null;
   }
 
   // MARK: - Clipboard

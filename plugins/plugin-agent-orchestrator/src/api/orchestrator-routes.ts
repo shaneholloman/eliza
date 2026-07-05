@@ -32,6 +32,7 @@ import type {
   OrchestratorTaskPriority,
   TaskProviderPolicy,
 } from "../services/orchestrator-task-types.js";
+import { AdmissionQueueFullError } from "../services/types.js";
 import type { RouteContext } from "./route-utils.js";
 import {
   asBoolean,
@@ -236,6 +237,13 @@ async function dispatchOrchestratorRoutes(
     return true;
   }
 
+  // GET /api/orchestrator/capacity — live worker/system slot accounting plus the
+  // ordered admission queue, for the dashboard's cap-pressure surface (#13772).
+  if (method === "GET" && pathname === `${PREFIX}/capacity`) {
+    sendJson(res, await service.getCapacityOverview());
+    return true;
+  }
+
   // GET /api/orchestrator/accounts — connected coding accounts, selection
   // strategy, and the live sub-agent → account assignment map.
   if (method === "GET" && pathname === `${PREFIX}/accounts`) {
@@ -283,6 +291,7 @@ async function dispatchOrchestratorRoutes(
       status: query.get("status") ?? undefined,
       search: query.get("search") ?? undefined,
       includeArchived: query.get("includeArchived") === "true",
+      projectId: query.get("projectId") ?? undefined,
       limit: parseLimit(query.get("limit")),
     });
     sendJson(res, { tasks });
@@ -932,6 +941,20 @@ async function dispatchOrchestratorRoutes(
       return true;
     }
 
+    // GET /tasks/:taskId/trace-usage — per-trace roll-up over the ingested
+    // sub-agent trajectory files (#13775 item 5). Distinct from /usage (ACP
+    // session frames); this attributes the sub-agents' inner model-call spend
+    // to the shared traceId so a task shows its whole logical-run cost.
+    if (method === "GET" && sub === "trace-usage" && segments.length === 2) {
+      const traceUsage = await service.getTraceUsage(taskId);
+      if (!traceUsage) {
+        sendError(res, "Task not found", 404);
+        return true;
+      }
+      sendJson(res, traceUsage);
+      return true;
+    }
+
     // /tasks/:taskId/agents
     if (sub === "agents") {
       // POST /tasks/:taskId/agents  — add a sub-agent
@@ -953,7 +976,14 @@ async function dispatchOrchestratorRoutes(
             task: asString(body.task),
           });
         } catch (error) {
-          // error-policy:J1 route boundary — spawn failure becomes a 500 response.
+          // error-policy:J1 route boundary — a full admission queue is
+          // back-pressure the caller must see (429); any other spawn failure
+          // becomes a 500. A plain SessionCapError should no longer reach here:
+          // spawnAgentForTask parks it in the queue instead of throwing.
+          if (error instanceof AdmissionQueueFullError) {
+            sendError(res, error.message, 429);
+            return true;
+          }
           sendError(
             res,
             error instanceof Error ? error.message : "Failed to spawn agent",
@@ -965,7 +995,9 @@ async function dispatchOrchestratorRoutes(
           sendError(res, "Task not found", 404);
           return true;
         }
-        sendJson(res, task, 201);
+        // 202 when the spawn was parked at the session cap (task carries the
+        // admission DTO with its queue position); 201 when a session spawned.
+        sendJson(res, task, task.admission ? 202 : 201);
         return true;
       }
       // POST /tasks/:taskId/agents/:sessionId/stop

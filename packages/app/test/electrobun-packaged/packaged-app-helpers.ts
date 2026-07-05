@@ -54,7 +54,27 @@ export interface DesktopTestBridgeState {
     mainWindowPresent: boolean;
     windowVisible: boolean;
     windowFocused: boolean;
+    shortcuts?: Array<{ id: string; accelerator: string }>;
+    trayPopover?: {
+      configured: boolean;
+      windowPresent: boolean;
+      visible: boolean;
+      lastAnchorBounds: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      } | null;
+    };
   };
+}
+
+export interface DesktopNotificationDiagnostic {
+  id: string;
+  title: string;
+  body?: string;
+  silent?: boolean;
+  shownAt: number;
 }
 
 export interface DesktopWindowBounds {
@@ -858,6 +878,16 @@ export class PackagedDesktopHarness {
     });
   }
 
+  async minimizeMainWindow(): Promise<void> {
+    await fetchJson<{ ok: boolean }>(`${this.bridgeUrl}/main-window/minimize`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.bridgeToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+  }
+
   async waitForState(
     predicate: (state: DesktopTestBridgeState) => boolean,
     message: string,
@@ -963,6 +993,52 @@ export class PackagedDesktopHarness {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ action }),
+    });
+  }
+
+  async toggleTrayPopover(): Promise<
+    NonNullable<DesktopTestBridgeState["shell"]["trayPopover"]>
+  > {
+    const response = await fetchJson<{
+      ok: boolean;
+      trayPopover: NonNullable<DesktopTestBridgeState["shell"]["trayPopover"]>;
+    }>(`${this.bridgeUrl}/tray/popover/toggle`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.bridgeToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    return response.trayPopover;
+  }
+
+  async pressShortcut(id: string): Promise<void> {
+    await fetchJson<{ ok: boolean }>(`${this.bridgeUrl}/shortcut/press`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.bridgeToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ id }),
+    });
+  }
+
+  async readNotifications(): Promise<DesktopNotificationDiagnostic[]> {
+    const response = await fetchJson<{
+      notifications: DesktopNotificationDiagnostic[];
+    }>(`${this.bridgeUrl}/notifications`, {
+      headers: { Authorization: `Bearer ${this.bridgeToken}` },
+    });
+    return response.notifications;
+  }
+
+  async clearNotifications(): Promise<void> {
+    await fetchJson<{ ok: boolean }>(`${this.bridgeUrl}/notifications`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${this.bridgeToken}`,
+        "Content-Type": "application/json",
+      },
     });
   }
 }

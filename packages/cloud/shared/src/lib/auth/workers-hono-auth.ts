@@ -24,20 +24,15 @@ import {
   verifyPlaywrightTestSessionToken,
 } from "./playwright-test-session";
 import { verifyStewardTokenCached } from "./steward-client";
+import { readStewardAccessCookieFromHeader } from "./steward-cookies";
 
 function readStewardCookie(c: AppContext): string | null {
-  return readCookie(c, "steward-token");
-}
-
-function readCookie(c: AppContext, name: string): string | null {
-  const cookieHeader = c.req.header("cookie") ?? "";
-  for (const part of cookieHeader.split(";")) {
-    const [k, ...rest] = part.trim().split("=");
-    if (k === name) {
-      return decodeURIComponent(rest.join("=")) || null;
-    }
-  }
-  return null;
+  return (
+    readStewardAccessCookieFromHeader(
+      c.req.header("cookie") ?? null,
+      c.env?.ENVIRONMENT,
+    ) ?? null
+  );
 }
 
 function readBearer(c: AppContext): string | null {

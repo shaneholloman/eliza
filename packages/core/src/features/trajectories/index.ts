@@ -17,6 +17,7 @@
  */
 import crypto from "node:crypto";
 import { createUniqueUuid } from "../../entities";
+import { resolveTraceCorrelationFromEnv } from "../../runtime/trace-correlation";
 import type { TrajectoryFinalStatus } from "../../trajectory-utils";
 import type {
 	IAgentRuntime,
@@ -168,6 +169,10 @@ async function buildTrajectoryMetadata(
 		"sourceConversationId",
 		"scenarioId",
 		"batchId",
+		// Correlation join key (#13775) stamped on message.metadata at the turn
+		// boundary before MESSAGE_RECEIVED so the DB trajectory shares the file
+		// recorder's traceId.
+		"traceId",
 	]) {
 		copyJsonMetadataField(metadata, meta, key);
 	}
@@ -232,6 +237,21 @@ export const trajectoriesPlugin: Plugin = {
 				}
 				const meta = message.metadata as Record<string, unknown>;
 
+				// Trace correlation (#13775): on emit-first paths (the agent API chat
+				// route and connectors that emit MESSAGE_RECEIVED before calling
+				// messageService.handleMessage) this handler runs BEFORE message.ts
+				// mints the turn's traceId, so the DB row would persist a NULL
+				// trace_id and never join the file trajectory. Mint at the first
+				// touchpoint instead: inherit a spawning parent's ELIZA_TRACE_ID, else
+				// a fresh id, and stamp message.metadata so message.ts reuses it.
+				if (
+					typeof meta.traceId !== "string" ||
+					meta.traceId.trim().length === 0
+				) {
+					meta.traceId =
+						resolveTraceCorrelationFromEnv().traceId ?? crypto.randomUUID();
+				}
+
 				const logger = TrajectoriesService.resolveFromRuntime(runtime);
 				if (!logger) return;
 
@@ -247,11 +267,13 @@ export const trajectoriesPlugin: Plugin = {
 					);
 					const scenarioId = readNonEmptyString(trajectoryMetadata.scenarioId);
 					const batchId = readNonEmptyString(trajectoryMetadata.batchId);
+					const traceId = readNonEmptyString(trajectoryMetadata.traceId);
 					const trajectoryId = await logger.startTrajectory(runtime.agentId, {
 						source: source ?? (meta.source as string) ?? "chat",
 						metadata: trajectoryMetadata,
 						...(scenarioId ? { scenarioId } : {}),
 						...(batchId ? { batchId } : {}),
+						...(traceId ? { traceId } : {}),
 					});
 
 					const normalizedTrajectoryId =

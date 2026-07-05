@@ -617,7 +617,11 @@ export class ElizaSandboxService {
     // filled from the org's pooled credentials. Merged only into this
     // in-memory bootstrap payload (→ settings.secrets via
     // buildRuntimeBootstrapAgent) — never persisted to environment_vars.
-    // Strict fallback: on any pool failure the env passes through unchanged.
+    // A provider with no eligible pooled credential leaves the env unchanged
+    // (the registry degrades a missing/unhealthy pool to null, its J4); a
+    // genuine internal pool fault propagates and fails provisioning closed —
+    // consistent with the decrypt/create throws above — rather than silently
+    // booting an agent missing a credential it was meant to receive.
     const pooledEnv = await applyPooledCredentialsToBootstrapEnv({
       organizationId: rec.organization_id,
       userId: rec.user_id,
@@ -1433,40 +1437,19 @@ export class ElizaSandboxService {
 
         await this.ensureRuntimeAgentStarted(runtimeRec);
 
-        // 4. Restore from backup (reconstructs incrementals back to a full).
-        const backup = await agentSandboxesRepository.getLatestBackup(rec.id);
-        if (backup) {
-          const restoreState = await agentSandboxesRepository.getReconstructedBackupState(
-            backup.id,
-          );
-          if (restoreState) {
-            try {
-              await this.pushState(handle.bridgeUrl, restoreState, { trusted: true });
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              if (
-                rec.execution_tier !== "custom" ||
-                !message.startsWith("State restore failed: HTTP 404")
-              ) {
-                throw error;
-              }
-              logger.info(
-                "[agent-sandbox] Backup restore skipped: custom image has no restore endpoint",
-                {
-                  agentId: rec.id,
-                  backupId: backup.id,
-                },
-              );
-            }
-          } else {
-            logger.warn("[agent-sandbox] Backup restore skipped: reconstructed state was null", {
-              agentId: rec.id,
-              backupId: backup.id,
-            });
-          }
-        }
-
-        // 5. Mark running + persist provider-specific metadata
+        // 4. Mark running + persist provider-specific metadata.
+        //
+        // This write happens BEFORE the backup restore on purpose: the status
+        // column is the reachability gate — the dedicated-agent proxy
+        // synthesizes a 202 "starting" for EVERY request (including the
+        // launcher's /api/status poll) until status='running'. The container is
+        // serving from this moment (health checked, runtime agent started), so
+        // gating the flip on the restore tail made a responsive agent read as
+        // "waking" for the whole restore — the launcher escalated to "taking
+        // longer than usual" while chat already answered (#14038). A restore
+        // failure still flips the row out of 'running' via the catch below
+        // (ghost cleanup → retry or markError), so 'running' never sticks on a
+        // failed provision.
         const updateData: Parameters<typeof agentSandboxesRepository.update>[1] = {
           status: "running",
           sandbox_id: handle.sandboxId,
@@ -1500,6 +1483,39 @@ export class ElizaSandboxService {
         // already reactivate; do it here so ALL provision paths re-enter billing.
         // Idempotent + exempt-guarded (ne billing_status 'exempt').
         await agentBillingRepository.reactivateSandboxBillingAfterFunding(rec.id, new Date());
+
+        // 5. Restore from backup (reconstructs incrementals back to a full).
+        const backup = await agentSandboxesRepository.getLatestBackup(rec.id);
+        if (backup) {
+          const restoreState = await agentSandboxesRepository.getReconstructedBackupState(
+            backup.id,
+          );
+          if (restoreState) {
+            try {
+              await this.pushState(handle.bridgeUrl, restoreState, { trusted: true });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (
+                rec.execution_tier !== "custom" ||
+                !message.startsWith("State restore failed: HTTP 404")
+              ) {
+                throw error;
+              }
+              logger.info(
+                "[agent-sandbox] Backup restore skipped: custom image has no restore endpoint",
+                {
+                  agentId: rec.id,
+                  backupId: backup.id,
+                },
+              );
+            }
+          } else {
+            logger.warn("[agent-sandbox] Backup restore skipped: reconstructed state was null", {
+              agentId: rec.id,
+              backupId: backup.id,
+            });
+          }
+        }
 
         logger.info("[agent-sandbox] Provisioned", {
           agentId: rec.id,

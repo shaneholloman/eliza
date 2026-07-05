@@ -30,6 +30,7 @@ import type {
   ChatActionResultSummary,
   ChatFailureKind,
   ChatTokenUsage,
+  ChatToolCallEvent,
   ChatTurnStatus,
   ConnectionStateInfo,
   ConversationChannelType,
@@ -81,11 +82,18 @@ type StreamChatEvent = {
   actionResults?: ChatActionResultSummary[];
   // `type: "status"` carries the in-flight phase flat on the event (the server
   // spreads ChatTurnStatus into the SSE payload), so `kind` + the optional
-  // action/tool name live alongside the discriminator.
+  // action/tool name live alongside the discriminator. `type: "tool"` likewise
+  // spreads ChatToolCallEvent flat, so `phase` / `callId` / args / result / error
+  // share the event shape.
   kind?: ChatTurnStatus["kind"];
   label?: string;
   actionName?: string;
   toolName?: string;
+  phase?: ChatToolCallEvent["phase"];
+  callId?: string;
+  args?: Record<string, unknown>;
+  result?: unknown;
+  error?: string;
   usage?: {
     promptTokens?: number;
     completionTokens?: number;
@@ -149,6 +157,33 @@ function parseChatTurnStatus(parsed: StreamChatEvent): ChatTurnStatus | null {
       : {}),
     ...(typeof parsed.toolName === "string" && parsed.toolName
       ? { toolName: parsed.toolName }
+      : {}),
+  };
+}
+
+const CHAT_TOOL_PHASES: ReadonlySet<ChatToolCallEvent["phase"]> = new Set<
+  ChatToolCallEvent["phase"]
+>(["call", "result", "error"]);
+
+/** Build a typed ChatToolCallEvent from a `type: "tool"` SSE event, or null when
+ *  the phase/callId/toolName are missing/unknown (a future server phase is
+ *  ignored, not crashed on). */
+function parseChatToolCallEvent(
+  parsed: StreamChatEvent,
+): ChatToolCallEvent | null {
+  if (!parsed.phase || !CHAT_TOOL_PHASES.has(parsed.phase)) return null;
+  if (typeof parsed.callId !== "string" || !parsed.callId) return null;
+  if (typeof parsed.toolName !== "string" || !parsed.toolName) return null;
+  return {
+    phase: parsed.phase,
+    callId: parsed.callId,
+    toolName: parsed.toolName,
+    ...(parsed.args && typeof parsed.args === "object"
+      ? { args: parsed.args }
+      : {}),
+    ...(parsed.result !== undefined ? { result: parsed.result } : {}),
+    ...(typeof parsed.error === "string" && parsed.error
+      ? { error: parsed.error }
       : {}),
   };
 }
@@ -278,6 +313,7 @@ function applyStreamChatDataLine(
   state: StreamChatState,
   onToken: (token: string, accumulatedText?: string) => void,
   onStatus?: (status: ChatTurnStatus) => void,
+  onToolEvent?: (event: ChatToolCallEvent) => void,
 ): boolean {
   const parsed = parseStreamChatDataLine(line);
   if (!parsed) return false;
@@ -290,6 +326,14 @@ function applyStreamChatDataLine(
     if (onStatus) {
       const status = parseChatTurnStatus(parsed);
       if (status) onStatus(status);
+    }
+    return false;
+  }
+  if (parsed.type === "tool") {
+    // Additive: an inline tool-call step (call → result/error). Non-terminal.
+    if (onToolEvent) {
+      const event = parseChatToolCallEvent(parsed);
+      if (event) onToolEvent(event);
     }
     return false;
   }
@@ -781,6 +825,15 @@ export class ElizaClient {
        *  loop starts waiting (#8628). Lets the chat surface a `waking` status
        *  while the agent boots. */
       onResuming?: () => void;
+      /** Skip the bounded 202 resume-retry loop and return the FIRST 202 body
+       *  as-is (#14040 sub-defect 2). The chat/stream path wants the eventual
+       *  real reply, so it keeps the loop; the readiness/status poll instead
+       *  wants to surface the 202 progress body (`{status:"starting",jobId,
+       *  retryAfterMs}`) as an honest "resuming" state on EVERY tick, rather
+       *  than blocking ~30s then throwing `agent_resuming` (which the poll
+       *  swallowed → spinner with no progress). Implies `allowNonOk` for the
+       *  202. */
+      skipResume?: boolean;
     },
   ): Promise<Response> {
     if (!this.apiAvailable) {
@@ -816,6 +869,12 @@ export class ElizaClient {
     // loop entirely, so ordinary requests are byte-for-byte unaffected.
     let resumeRetries = 0;
     if (res.status === 202) options?.onResuming?.();
+    // Status/readiness poll opts out of the wait-and-retry loop: it wants the
+    // live 202 progress body back immediately so it can render honest progress
+    // (#14040 sub-defect 2). Return the first 202 response untouched.
+    if (res.status === 202 && options?.skipResume) {
+      return res;
+    }
     while (res.status === 202 && resumeRetries < RESUME_MAX_RETRIES) {
       if (init?.signal?.aborted) break;
       await sleepUnlessAborted(resumeRetryDelayMs(res), init?.signal);
@@ -1055,7 +1114,20 @@ export class ElizaClient {
   async fetch<T>(
     path: string,
     init?: RequestInit,
-    options?: { allowNonOk?: boolean; timeoutMs?: number },
+    options?: {
+      allowNonOk?: boolean;
+      timeoutMs?: number;
+      /** Skip the 202 resume-retry loop (see `rawRequest.skipResume`). */
+      skipResume?: boolean;
+      /**
+       * Called with the (bounded-read, best-effort-parsed) body when the FIRST
+       * response is a 202 and `skipResume` is set — lets the status poll map the
+       * cloud resume-progress body to a real value WITHOUT bypassing the shared
+       * bounded body-read / timeout logic (#14040 sub-defect 2). Non-202
+       * responses go through the normal strict-parse path unchanged.
+       */
+      on202?: (body: unknown) => T;
+    },
   ): Promise<T> {
     const res = await this.rawRequest(
       path,
@@ -1070,6 +1142,23 @@ export class ElizaClient {
     );
     if (res.status === 204) {
       return undefined as T;
+    }
+    // 202 resume-progress (status poll only): read the body with the SAME
+    // bounded budget as any other body (never an unbounded `res.text()` — a
+    // stalled body must time out, not wedge the 1.5s poll), best-effort parse,
+    // and hand it to the caller's mapper. The proxy body is advisory, so a
+    // non-JSON 202 is tolerated (mapper still gets `undefined`).
+    if (res.status === 202 && options?.on202) {
+      const raw = await this.readBodyText(res, path, options?.timeoutMs, init);
+      let body: unknown;
+      if (raw !== "") {
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          // error-policy:J3 untrusted 202 progress body defaults to an explicit starting progress state.
+        }
+      }
+      return options.on202(body);
     }
     const text = await this.readBodyText(res, path, options?.timeoutMs, init);
     if (text === "") {
@@ -1272,24 +1361,10 @@ export class ElizaClient {
           string,
           unknown
         >;
-        const type = data.type as string;
-        const handlers = this.wsHandlers.get(type);
-        if (handlers?.size) {
-          for (const handler of handlers) {
-            handler(data);
-          }
-        } else {
-          this.rememberReplayableWsEvent(type, data);
-        }
-        // Also fire "all" handlers
-        const allHandlers = this.wsHandlers.get("*");
-        if (allHandlers) {
-          for (const handler of allHandlers) {
-            handler(data);
-          }
-        }
+        this.dispatchWsData(data);
       } catch {
-        // ignore parse errors
+        // error-policy:J3 untrusted socket frame — a malformed frame is dropped;
+        // the parsed-and-fanned path is dispatchWsData, exercised by tests.
       }
     };
 
@@ -1486,6 +1561,39 @@ export class ElizaClient {
     };
   }
 
+  // Single fan-out for a parsed incoming WS frame: deliver to the type's
+  // handlers (or backlog for later replay), then to the wildcard handlers. The
+  // live socket's onmessage and the test-only deliver hook share this so the
+  // dispatch path has one implementation.
+  private dispatchWsData(data: Record<string, unknown>): void {
+    const type = data.type as string;
+    const handlers = this.wsHandlers.get(type);
+    if (handlers?.size) {
+      for (const handler of handlers) {
+        handler(data);
+      }
+    } else {
+      this.rememberReplayableWsEvent(type, data);
+    }
+    const allHandlers = this.wsHandlers.get("*");
+    if (allHandlers) {
+      for (const handler of allHandlers) {
+        handler(data);
+      }
+    }
+  }
+
+  /**
+   * Deliver a synthetic incoming WS frame through the real handler fan-out —
+   * the same path the live socket's `onmessage` runs. Lets integration tests
+   * and headless render fixtures drive stream-consuming stores (the inline
+   * task-activity pipeline, #13536) with genuine server payload shapes and no
+   * socket, so the on-wire reconstruction seam is exercised, not bypassed.
+   */
+  deliverWsMessageForTest(data: Record<string, unknown>): void {
+    this.dispatchWsData(data);
+  }
+
   disconnectWs(): void {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -1553,6 +1661,9 @@ export class ElizaClient {
     /** Additive: in-flight phase changes (thinking / streaming / running_action
      *  / waking …). Omitting it leaves the token/done/error behaviour unchanged. */
     onStatus?: (status: ChatTurnStatus) => void,
+    /** Additive: inline tool-call steps (call → result/error) for the thread's
+     *  tool rows. Omitting it leaves token/done/error behaviour unchanged. */
+    onToolEvent?: (event: ChatToolCallEvent) => void,
   ): Promise<{
     text: string;
     agentName: string;
@@ -1701,7 +1812,15 @@ export class ElizaClient {
         buffer = buffer.slice(eventBreak.index + eventBreak.length);
         for (const line of rawEvent.split(/\r?\n/)) {
           if (!line.startsWith("data:")) continue;
-          if (applyStreamChatDataLine(line, streamState, onToken, onStatus)) {
+          if (
+            applyStreamChatDataLine(
+              line,
+              streamState,
+              onToken,
+              onStatus,
+              onToolEvent,
+            )
+          ) {
             buffer = "";
             // error-policy:J6 best-effort reader teardown after terminal done.
             void reader
@@ -1719,7 +1838,13 @@ export class ElizaClient {
     if (!streamState.receivedDone && buffer.trim()) {
       for (const line of buffer.split(/\r?\n/)) {
         if (line.startsWith("data:")) {
-          applyStreamChatDataLine(line, streamState, onToken, onStatus);
+          applyStreamChatDataLine(
+            line,
+            streamState,
+            onToken,
+            onStatus,
+            onToolEvent,
+          );
         }
       }
     }

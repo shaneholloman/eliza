@@ -4,6 +4,7 @@
  */
 import { transcriptPlainText } from "@elizaos/shared/transcripts";
 import {
+  ArrowDown,
   FileText,
   Film,
   LayoutGrid,
@@ -91,6 +92,7 @@ import type {
   ChatMessageRenderContext,
 } from "../composites/chat/chat-types";
 import { TurnStatus } from "../composites/chat/chat-typing-indicator";
+import { ToolCallEventLog } from "../tool-events/ToolCallEventLog";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
@@ -485,14 +487,17 @@ function SheetGrabber({
         "appearance-none border-0 bg-transparent text-left",
         // ABSOLUTELY positioned over the panel top (zero layout height — it
         // floats slightly on top of the input row, so collapsed height == the
-        // input bar). Keep the invisible hit target local to the visible handle:
-        // it should be forgiving, not register drags far above the bar.
+        // input bar). The grab target is WIDE (a swipe-up from anywhere across
+        // the composer's top edge opens the chat — the lock-screen "swipe up to
+        // open" affordance) but STAYS ABOVE the input row so it never steals
+        // taps meant for the textarea / +/mic controls below it.
         // z-20 keeps it above the input row (z-10) so it always wins the drag.
-        "absolute left-1/2 top-0.5 z-20 -translate-x-1/2 flex cursor-grab touch-none select-none items-center justify-center px-16 py-2 active:cursor-grabbing",
-        // The hit zone reaches only a small distance above the panel and stops
-        // at the handle's own bottom, so the handle does not steal taps intended
-        // for the composer or feel like it starts in empty space.
-        "before:absolute before:-inset-x-4 before:-top-4 before:bottom-0 before:content-['']",
+        "absolute inset-x-6 top-0.5 z-20 flex cursor-grab touch-none select-none items-center justify-center py-2 active:cursor-grabbing",
+        // The invisible hit target reaches a comfortable distance ABOVE the
+        // panel (a swipe-up begun in the empty field just over the composer is
+        // caught) and STOPS at the handle's own bottom, so it never overlaps the
+        // interactive composer row beneath — taps fall through to the input.
+        "before:absolute before:-inset-x-2 before:-top-6 before:bottom-0 before:content-['']",
         "   ",
       )}
     >
@@ -560,8 +565,11 @@ function PillHandle({
       aria-hidden={pilled ? undefined : true}
       className={cn(
         // The bar hugs the BOTTOM (small pb) where the collapsed input sat — not
-        // floating mid-air; the tall pt keeps a generous upward grab/flick zone.
-        "h-auto w-auto cursor-grab touch-none select-none items-end rounded-none bg-transparent px-16 pb-1.5 pt-10 hover:bg-transparent active:cursor-grabbing",
+        // floating mid-air; the tall pt + full width keep a generous upward grab/
+        // flick zone so a swipe-up from anywhere across the bottom opens the chat
+        // (the lock-screen affordance). Flex-center keeps the capsule centred
+        // while the invisible hit area spans wide.
+        "flex h-auto w-full cursor-grab touch-none select-none items-end justify-center rounded-none bg-transparent px-8 pb-1.5 pt-10 hover:bg-transparent active:cursor-grabbing",
         // Interactive only while pilled. When NOT pilled the (faded) handle must
         // let taps fall through to the composer textarea below it — otherwise its
         // tall hit zone steals the tap and the keyboard never opens.
@@ -628,9 +636,12 @@ function TurnStatusIndicator({
   );
 }
 
-// After this long still booting, the banner escalates to a "taking longer than
-// usual" state with a settings escape, so a stuck boot never reads as a silent
-// hang. Exported for the unit test (see the __-seam note below).
+// After this long WITHOUT OBSERVED PROGRESS still booting, the banner escalates
+// to a "taking longer than usual" state with a settings escape, so a truly
+// stuck boot never reads as a silent hang — but a slow-yet-progressing boot
+// does NOT trip it (#14040 sub-defect 3): the escalation keys off
+// absence-of-progress, not raw elapsed wall-clock. Exported for the unit test
+// (see the __-seam note below).
 export const BOOT_SLOW_AFTER_MS = 90_000;
 
 // Grace before the banner appears: a warm agent leaves the "booting" phase
@@ -651,19 +662,36 @@ export function BootStatusIndicator({
   agentName,
   onOpenSettings,
   reduce,
+  progressSignal,
 }: {
   agentName: string;
   onOpenSettings?: () => void;
   reduce?: boolean;
+  /**
+   * A token that changes whenever fresh boot progress is observed (#14040
+   * sub-defect 3). The slow-boot escalation restarts its timer on each change,
+   * so a slow-but-progressing boot never trips "taking longer than usual" while
+   * a genuinely stalled boot still escalates. When `undefined` (no progress
+   * channel available) the timer falls back to raw-elapsed escalation — the
+   * prior behaviour — by keying off a stable token.
+   */
+  progressSignal?: string;
 }): React.JSX.Element {
-  // Local elapsed timing is the only boot signal the overlay has (agentStatus
-  // carries no boot-start timestamp), and it suffices: the parent unmounts this
-  // the instant readiness flips, so the timer never outlives the boot.
+  // Escalate on ABSENCE of progress, not raw elapsed time (#14040 sub-defect
+  // 3): the timer is (re)armed on mount AND whenever `progressSignal` changes,
+  // so each fresh progress observation pushes the "taking longer than usual"
+  // threshold out by another window. A boot that keeps reporting progress never
+  // trips it; a stalled boot (token stable for BOOT_SLOW_AFTER_MS) still does.
+  // The parent unmounts this the instant readiness flips, so the timer never
+  // outlives the boot.
   const [slow, setSlow] = React.useState(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: progressSignal is the RESET trigger, not read in the body — re-running the effect on each change restarts the escalation window (that IS the fix for #14040 sub-defect 3). Removing it would revert to raw-elapsed escalation.
   React.useEffect(() => {
+    // Fresh progress clears any prior escalation and restarts the window.
+    setSlow(false);
     const id = window.setTimeout(() => setSlow(true), BOOT_SLOW_AFTER_MS);
     return () => window.clearTimeout(id);
-  }, []);
+  }, [progressSignal]);
   return (
     <div
       role="status"
@@ -824,6 +852,13 @@ function renderOverlayMessageBody(
           <SensitiveRequestBlock request={message.secretRequest} />
         </div>
       ) : null}
+      {message.toolEvents?.length ? (
+        <div className="pointer-events-auto mt-2 flex flex-col gap-1.5">
+          {message.toolEvents.map((event) => (
+            <ToolCallEventLog key={event.callId ?? event.id} event={event} />
+          ))}
+        </div>
+      ) : null}
       {!ctx?.suppressReasoning && message.reasoning?.trim() ? (
         <ThinkingBlock reasoning={message.reasoning} />
       ) : null}
@@ -849,6 +884,7 @@ function shellToChatMessageData(m: ShellMessage): ChatMessageData {
     ...(m.source ? { source: m.source } : {}),
     ...(m.failureKind ? { failureKind: m.failureKind } : {}),
     ...(m.reasoning ? { reasoning: m.reasoning } : {}),
+    ...(m.toolEvents?.length ? { toolEvents: m.toolEvents } : {}),
     ...(m.attachments ? { attachments: m.attachments } : {}),
     ...(m.secretRequest ? { secretRequest: m.secretRequest } : {}),
   };
@@ -916,6 +952,7 @@ export function ContinuousChatOverlay({
   const {
     messages,
     phase,
+    bootProgressSignal,
     responding,
     turnStatus,
     send,
@@ -1377,7 +1414,11 @@ export function ContinuousChatOverlay({
   // (pre-paint — the thread never flashes at the top), a NEW line re-pins with
   // a smooth glide while the reader rests at the bottom, streaming growth
   // follows in a single rAF, and a reader who scrolled up is never yanked.
-  const { scrollRef: threadRef } = useThreadAutoScroll<HTMLDivElement>({
+  const {
+    scrollRef: threadRef,
+    atBottom: threadAtBottom,
+    jumpToLatest,
+  } = useThreadAutoScroll<HTMLDivElement>({
     growthKey: `${visibleMessages.length}:${lastId ?? ""}:${lastContent.length}`,
     lineKey: lastId ?? "",
     enabled: threadPresented,
@@ -3498,16 +3539,23 @@ export function ContinuousChatOverlay({
         // Full-bleed fills the screen edge-to-edge: NO overlay bottom padding,
         // so the glass panel reaches the true bottom (no orange gap). The
         // gesture-zone clearance moves INSIDE the composer row (below) so the
-        // input still sits above the home-gesture bar. Non-full-bleed anchors the
-        // composer down: it clears the home-gesture inset (max safe-area /
-        // android inset) and nothing more, so it sits low with no dead gap
-        // beneath. The floor layer below paints that inset zone with the home
-        // surface so it reads continuous, not as a black bar.
+        // input still sits above the home-gesture bar. Non-full-bleed anchors
+        // the composer LOW, lock-screen style. The OS reports a ~34px bottom
+        // safe-area on a home-indicator phone, but the indicator itself is a
+        // thin (~5px) bar seated ~8px off the true bottom — clearing the WHOLE
+        // safe-area floats the pill ~34px up over a dead band. So clear only
+        // what the indicator needs: 60% of the reported inset (clears the bar +
+        // its own margin; the 44px min tap target and the OS bar stay
+        // untouched) with a 0.5rem floor so a device with NO inset still keeps
+        // a hair of breathing room. This seats the pill just above the home
+        // indicator instead of hovering. The floor layer below paints the
+        // reclaimed strip with the home surface so it reads continuous, not as
+        // a black bar.
         paddingBottom: fullBleed
           ? 0
           : keyboardLiftActive
             ? "0.75rem"
-            : "calc(var(--eliza-mobile-nav-offset, 0px) + max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)))",
+            : "calc(var(--eliza-mobile-nav-offset, 0px) + max(max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)) * 0.6, 0.5rem))",
       }}
       data-testid="continuous-chat-overlay"
       data-open={sheetOpen ? "true" : undefined}
@@ -3639,6 +3687,7 @@ export function ContinuousChatOverlay({
           agentName={agentName}
           onOpenSettings={openSettings}
           reduce={reduce}
+          progressSignal={bootProgressSignal}
         />
       ) : null}
 
@@ -3803,6 +3852,14 @@ export function ContinuousChatOverlay({
           <span className="sr-only" data-testid="chat-detent-probe">
             {`chat-detent:${detentLabel}`}
           </span>
+          {/* AX-tree mirror of data-maximized (#13531). `detentLabel` folds the
+              full-bleed MAXIMIZED state into "full" (both rest at the top), so the
+              detent probe alone cannot tell them apart — the on-device XCUITest
+              maximize/restore leg reads this separate probe to observe whether the
+              chat committed to edge-to-edge full-bleed. */}
+          <span className="sr-only" data-testid="chat-maximized-probe">
+            {`chat-maximized:${fullBleed ? "true" : "false"}`}
+          </span>
           {firstRunProbe ? (
             <span className="sr-only" data-testid="onboarding-state-probe">
               {`onboarding-step:${firstRunProbe.step} onboarding-choices:${firstRunProbe.choices}`}
@@ -3862,7 +3919,8 @@ export function ContinuousChatOverlay({
                 while maximized (full-bleed) — where the SheetGrabber isn't
                 rendered — so a downward pull starting in the top 20% animates
                 the edge-to-edge view back into the inset overlay. `z-10` sits
-                UNDER the header (`z-20`) so the launcher button keeps its taps;
+                UNDER the header (`z-20`) but above the transcript so the
+                launcher button keeps its taps while real pulls still hit the zone;
                 this strip catches pulls on the surrounding empty header space.
                 Keyboard-operable (Enter/Space/ArrowDown restore) so the
                 gesture-only affordance stays WCAG 2.1.1 operable. */}
@@ -3882,7 +3940,7 @@ export function ContinuousChatOverlay({
                     restoreFromMaximizedGuarded();
                   }
                 }}
-                className="pointer-events-auto absolute inset-x-0 top-0 z-10 touch-none bg-transparent"
+                className="pointer-events-auto absolute inset-x-0 top-0 z-[15] touch-none bg-transparent"
                 style={{ height: `${MAXIMIZE_RESTORE_ZONE_VH * 100}%` }}
               />
             ) : null}
@@ -3991,6 +4049,7 @@ export function ContinuousChatOverlay({
               >
                 <motion.div
                   id="continuous-thread"
+                  data-testid="chat-thread-scroll"
                   ref={threadRef}
                   role="log"
                   aria-label="conversation history"
@@ -4112,6 +4171,20 @@ export function ContinuousChatOverlay({
                     </AnimatePresence>
                   </div>
                 </motion.div>
+                {sheetOpen && hasThread && !threadAtBottom ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={jumpToLatest}
+                    aria-label="jump to latest message"
+                    data-testid="chat-jump-to-latest"
+                    className="absolute bottom-3 left-1/2 z-[3] flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-full border border-border-strong bg-surface/95 px-3 text-xs font-medium text-txt shadow-lg transition-colors hover:bg-bg-hover"
+                  >
+                    <ArrowDown className="h-3.5 w-3.5" aria-hidden />
+                    <span>Jump to latest</span>
+                  </Button>
+                ) : null}
               </motion.div>
             ) : null}
             {/* Pending image attachments + any read error, just above the input. */}

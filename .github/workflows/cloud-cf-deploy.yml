@@ -25,6 +25,11 @@ name: Cloud CF Deploy
 # providers directly and uses OpenRouter as the backup):
 #   OPENROUTER_API_KEY, CEREBRAS_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY,
 #   GROQ_API_KEY, AI_GATEWAY_API_KEY, FAL_KEY, ELEVENLABS_API_KEY, VAST_API_KEY, VAST_BASE_URL.
+# Media/voice secrets, likewise published when configured (#13406):
+#   FAL_API_KEY (the video provider registry reads FAL_KEY ?? FAL_API_KEY),
+#   ELIZA_VOICE_CATALOG_SIGNING_KEY_BASE64 + ELIZA_VOICE_CATALOG_PUBLIC_KEY_BASE64
+#   (Ed25519 keypair for the signed voice-model catalog; the catalog route 503s
+#   while the signing key is unset).
 #
 # Source: cloud/.github/workflows/cf-deploy.yml in the original elizaOS/cloud repo.
 
@@ -61,6 +66,15 @@ on:
         options:
           - staging
           - production
+      force:
+        # Bypass the deploy freshness guard (#14083). The guard SKIPS a deploy
+        # when this run's SHA is an ancestor of the currently-served build (a
+        # stale zombie run clobbering a newer bundle — #14082). Set force=true
+        # for an INTENTIONAL rollback to an older ref.
+        description: Bypass the freshness guard (intentional rollback to an older ref)
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   # Serialize branch deploys (push + workflow_dispatch) per ref so the shared-host
@@ -438,7 +452,16 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
           FAL_KEY: ${{ secrets.FAL_KEY }}
+          # fal key under its alternate name: the video provider registry reads
+          # FAL_KEY ?? FAL_API_KEY, and prod carries it as FAL_API_KEY (#13406).
+          FAL_API_KEY: ${{ secrets.FAL_API_KEY }}
           ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          # Ed25519 keypair for the signed voice-model catalog —
+          # /v1/voice-models/catalog 503s while the signing key is unset
+          # (#13406). publish_secret no-ops with a notice while these are
+          # unset, so they publish on every redeploy once ops adds them.
+          ELIZA_VOICE_CATALOG_SIGNING_KEY_BASE64: ${{ secrets.ELIZA_VOICE_CATALOG_SIGNING_KEY_BASE64 }}
+          ELIZA_VOICE_CATALOG_PUBLIC_KEY_BASE64: ${{ secrets.ELIZA_VOICE_CATALOG_PUBLIC_KEY_BASE64 }}
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
           VAST_BASE_URL: ${{ secrets.VAST_BASE_URL }}
           # Platform key the Worker forwards as X-Steward-Platform-Key so per-org
@@ -486,7 +509,10 @@ jobs:
             GROQ_API_KEY \
             AI_GATEWAY_API_KEY \
             FAL_KEY \
+            FAL_API_KEY \
             ELEVENLABS_API_KEY \
+            ELIZA_VOICE_CATALOG_SIGNING_KEY_BASE64 \
+            ELIZA_VOICE_CATALOG_PUBLIC_KEY_BASE64 \
             VAST_API_KEY \
             VAST_BASE_URL \
             STEWARD_PLATFORM_KEYS
@@ -494,13 +520,30 @@ jobs:
             publish_secret "$name"
           done
 
-      - name: Deploy to Cloudflare Workers
+      # Freshness guard (#14083): skip a stale Worker deploy about to roll the
+      # API back behind the currently-served `/api/health` commit stamp.
+      # Fail-open on missing/old stamps; force=true bypasses for rollbacks.
+      - name: Deploy freshness guard
+        id: freshness
         if: steps.cf.outputs.configured == 'true'
+        working-directory: ${{ env.CHECKOUT_DIR }}
+        env:
+          SERVED_URL: ${{ steps.env.outputs.deploy_environment == 'production' && 'https://api.elizacloud.ai' || 'https://api-staging.elizacloud.ai' }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true }}
+        run: |
+          node packages/scripts/cloud/deploy-freshness-guard-cli.mjs \
+            --run-sha "$GITHUB_SHA" \
+            --served-url "$SERVED_URL" \
+            --served-path /api/health \
+            $([ "$FORCE" = "true" ] && echo --force)
+
+      - name: Deploy to Cloudflare Workers
+        if: steps.cf.outputs.configured == 'true' && steps.freshness.outputs.should_deploy == 'true'
         working-directory: ${{ env.CHECKOUT_DIR }}/packages/cloud/api
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: bunx wrangler deploy ${{ steps.env.outputs.wrangler_args }}
+        run: bunx wrangler deploy ${{ steps.env.outputs.wrangler_args }} --var ELIZA_DEPLOY_COMMIT:"$GITHUB_SHA"
 
       - name: Clean temp checkout
         if: always()
@@ -791,8 +834,28 @@ jobs:
             fi
           fi
 
+      # Freshness guard (#14083): SKIP this deploy when THIS run's SHA is an
+      # ancestor of the currently-served build's commit — i.e. a stale zombie
+      # run (stuck queued through a freeze) is about to clobber a NEWER bundle
+      # (the #14082 regression: staging fell back to a pre-#13410 ref hours
+      # after newer builds were live). Fail-open: any ambiguous signal deploys;
+      # only a provably-stale run is skipped. workflow_dispatch force=true
+      # bypasses for intentional rollbacks.
+      - name: Deploy freshness guard
+        id: freshness
+        if: steps.cf.outputs.configured == 'true' && github.event_name != 'pull_request'
+        working-directory: ${{ env.CHECKOUT_DIR }}
+        env:
+          SERVED_URL: ${{ ((github.event_name == 'workflow_dispatch' && inputs.environment == 'production') || github.ref == 'refs/heads/main') && 'https://elizacloud.ai' || 'https://staging.elizacloud.ai' }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true }}
+        run: |
+          node packages/scripts/cloud/deploy-freshness-guard-cli.mjs \
+            --run-sha "$GITHUB_SHA" \
+            --served-url "$SERVED_URL" \
+            $([ "$FORCE" = "true" ] && echo --force)
+
       - name: Deploy to Cloudflare Pages
-        if: steps.cf.outputs.configured == 'true'
+        if: steps.cf.outputs.configured == 'true' && (github.event_name == 'pull_request' || steps.freshness.outputs.should_deploy == 'true')
         working-directory: ${{ env.CHECKOUT_DIR }}/packages/app
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -1150,8 +1213,24 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: bunx wrangler pages project create eliza-app --production-branch=main 2>/dev/null || true
 
+      # Freshness guard (#14083): skip a stale zombie run about to clobber a
+      # newer served build. Fail-open on any ambiguous signal; force=true
+      # bypasses for rollbacks. See the console job for the full rationale.
+      - name: Deploy freshness guard
+        id: freshness
+        if: steps.cf.outputs.configured == 'true' && github.event_name != 'pull_request'
+        working-directory: ${{ env.CHECKOUT_DIR }}
+        env:
+          SERVED_URL: ${{ ((github.event_name == 'workflow_dispatch' && inputs.environment == 'production') || github.ref == 'refs/heads/main') && 'https://app.elizacloud.ai' || 'https://app-staging.elizacloud.ai' }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true }}
+        run: |
+          node packages/scripts/cloud/deploy-freshness-guard-cli.mjs \
+            --run-sha "$GITHUB_SHA" \
+            --served-url "$SERVED_URL" \
+            $([ "$FORCE" = "true" ] && echo --force)
+
       - name: Deploy to Cloudflare Pages
-        if: steps.cf.outputs.configured == 'true'
+        if: steps.cf.outputs.configured == 'true' && (github.event_name == 'pull_request' || steps.freshness.outputs.should_deploy == 'true')
         working-directory: ${{ env.CHECKOUT_DIR }}/packages/app
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
