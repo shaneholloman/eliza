@@ -61,8 +61,8 @@ export function CloudOverviewSection() {
     elizaCloudDisconnecting,
     elizaCloudLoginBusy,
     elizaCloudUserId,
-    handleCloudDisconnect,
     handleCloudLogin,
+    handleCloudSignOut,
     setActionNotice,
     t,
   } = useAppSelectorShallow((s) => ({
@@ -70,8 +70,8 @@ export function CloudOverviewSection() {
     elizaCloudDisconnecting: s.elizaCloudDisconnecting,
     elizaCloudLoginBusy: s.elizaCloudLoginBusy,
     elizaCloudUserId: s.elizaCloudUserId,
-    handleCloudDisconnect: s.handleCloudDisconnect,
     handleCloudLogin: s.handleCloudLogin,
+    handleCloudSignOut: s.handleCloudSignOut,
     setActionNotice: s.setActionNotice,
     t: s.t,
   }));
@@ -87,7 +87,7 @@ export function CloudOverviewSection() {
   }, [handleCloudLogin, setActionNotice]);
 
   const handleSignOut = useCallback(() => {
-    void handleCloudDisconnect().catch((error) => {
+    void handleCloudSignOut().catch((error) => {
       setActionNotice(
         error instanceof Error
           ? error.message
@@ -96,7 +96,7 @@ export function CloudOverviewSection() {
         5000,
       );
     });
-  }, [handleCloudDisconnect, setActionNotice]);
+  }, [handleCloudSignOut, setActionNotice]);
 
   const { ref, agentProps } = useAgentElement<HTMLButtonElement>({
     id: "cloud-connect",

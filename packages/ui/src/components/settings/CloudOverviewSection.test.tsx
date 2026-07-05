@@ -26,6 +26,7 @@ function seedCloudOverviewState(
     elizaCloudUserId: string | null;
     handleCloudDisconnect: () => Promise<void>;
     handleCloudLogin: () => Promise<void>;
+    handleCloudSignOut: () => Promise<void>;
   }> = {},
 ) {
   __setAppValueForTests({
@@ -38,6 +39,8 @@ function seedCloudOverviewState(
       overrides.handleCloudDisconnect ?? vi.fn(async () => undefined),
     handleCloudLogin:
       overrides.handleCloudLogin ?? vi.fn(async () => undefined),
+    handleCloudSignOut:
+      overrides.handleCloudSignOut ?? vi.fn(async () => undefined),
     setActionNotice: vi.fn(),
   } as never);
 }
@@ -51,10 +54,12 @@ afterEach(() => {
 describe("CloudOverviewSection", () => {
   it("exposes a sign-out action for connected Cloud accounts", () => {
     const handleCloudDisconnect = vi.fn(async () => undefined);
+    const handleCloudSignOut = vi.fn(async () => undefined);
     seedCloudOverviewState({
       elizaCloudConnected: true,
       elizaCloudUserId: "user-123",
       handleCloudDisconnect,
+      handleCloudSignOut,
     });
 
     render(<CloudOverviewSection />);
@@ -64,7 +69,8 @@ describe("CloudOverviewSection", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
 
-    expect(handleCloudDisconnect).toHaveBeenCalledTimes(1);
+    expect(handleCloudSignOut).toHaveBeenCalledTimes(1);
+    expect(handleCloudDisconnect).not.toHaveBeenCalled();
   });
 
   it("does not show the sign-out row before Cloud is connected", () => {

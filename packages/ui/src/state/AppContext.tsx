@@ -934,6 +934,7 @@ function AppProviderInner({
     pollCloudCredits,
     handleCloudLogin,
     handleCloudDisconnect,
+    handleCloudSignOut,
   } = cloudHook;
 
   // ── Clipboard ──────────────────────────────────────────────────────
@@ -2112,6 +2113,7 @@ function AppProviderInner({
       completeFirstRun,
       handleCloudLogin,
       handleCloudDisconnect,
+      handleCloudSignOut,
       switchAgentProfile,
       loadUpdateStatus,
       handleChannelChange,
@@ -2493,6 +2495,7 @@ function AppProviderInner({
       completeFirstRun,
       handleCloudLogin,
       handleCloudDisconnect,
+      handleCloudSignOut,
       switchAgentProfile,
       loadUpdateStatus,
       handleChannelChange,

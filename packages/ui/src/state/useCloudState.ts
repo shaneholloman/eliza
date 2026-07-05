@@ -31,6 +31,7 @@ import {
   invokeDesktopBridgeRequestWithTimeout,
   isElectrobunRuntime,
 } from "../bridge";
+import { clearStaleStewardSession } from "../cloud/shell/StewardProviderShared";
 import { getBootConfig, setBootConfig } from "../config/boot-config";
 import { dispatchElizaCloudStatusUpdated } from "../events";
 import { isElizaCloudRuntimeLocked } from "../first-run/mobile-runtime-mode";
@@ -1032,6 +1033,40 @@ export function useCloudState({
     [disconnectLocked, elizaCloudConnected, pollCloudCredits, setActionNotice],
   );
 
+  const handleCloudSignOut = useCallback(async (): Promise<void> => {
+    elizaCloudDisconnectInFlightRef.current = true;
+    setElizaCloudDisconnecting(true);
+
+    try {
+      clearStaleStewardSession();
+      setElizaCloudEnabled(false);
+      setElizaCloudConnected(false);
+      publishElizaCloudVoiceSnapshot(setElizaCloudHasPersistedKey, {
+        apiConnected: false,
+        enabled: false,
+        cloudVoiceProxyAvailable: false,
+        hasPersistedApiKey: false,
+      });
+      setElizaCloudVoiceProxyAvailable(false);
+      setElizaCloudCredits(null);
+      setElizaCloudCreditsLow(false);
+      setElizaCloudCreditsCritical(false);
+      setElizaCloudAuthRejected(false);
+      setElizaCloudCreditsError(null);
+      setElizaCloudUserId(null);
+      setElizaCloudStatusReason(null);
+      setElizaCloudLoginError(null);
+      setElizaCloudLoginFallbackUrl(null);
+      lastElizaCloudPollConnectedRef.current = false;
+      elizaCloudPreferDisconnectedUntilLoginRef.current = true;
+      setActionNotice("Signed out of Eliza Cloud.", "success", 5000);
+    } finally {
+      elizaCloudDisconnectInFlightRef.current = false;
+      setElizaCloudDisconnecting(false);
+      void pollCloudCredits();
+    }
+  }, [pollCloudCredits, setActionNotice]);
+
   // ── Effects ────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -1155,5 +1190,6 @@ export function useCloudState({
     pollCloudCredits,
     handleCloudLogin,
     handleCloudDisconnect,
+    handleCloudSignOut,
   };
 }
