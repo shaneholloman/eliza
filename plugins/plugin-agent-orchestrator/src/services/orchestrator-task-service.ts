@@ -1005,10 +1005,6 @@ export class OrchestratorTaskService extends Service {
         break;
       }
       case "error": {
-        await this.store.updateSession(sessionId, {
-          status: "errored",
-          stoppedAt: Date.now(),
-        });
         const failureKind = str(record.failureKind);
         const message = str(record.message) ?? "";
         if (
@@ -1026,6 +1022,21 @@ export class OrchestratorTaskService extends Service {
             message,
           );
         }
+        // A late error for a session that already delivered its result is a
+        // teardown race (the process dropped its state AFTER task_complete
+        // posted), not a work failure — the router suppresses its respawn for
+        // exactly this case (router-loop-guard `state_lost` completion claim).
+        // It must not overwrite the `completed` session record with `errored`,
+        // inflate the crash-retry budget, or knock a `validating` task back to
+        // `active` mid-verification (that aborts validateTask — status is no
+        // longer `validating` — and wedges the task with no live worker). The
+        // raw event is already on the task timeline via recordSessionEvent.
+        const prior = (await this.store.findSession(sessionId))?.session;
+        if (prior?.status === "completed") break;
+        await this.store.updateSession(sessionId, {
+          status: "errored",
+          stoppedAt: Date.now(),
+        });
         await this.advanceTaskOnSessionError(taskId, sessionId, {
           failureKind,
           message,
@@ -2561,7 +2572,10 @@ export class OrchestratorTaskService extends Service {
         correction,
         "validation_failed",
       );
-      await this.store.updateTask(taskId, { status: "active" });
+      // Route the validating→active retry through the transition table so an
+      // operator archive/pause that landed while the judge was running is not
+      // stomped by a direct status write (illegal moves drop as no-ops).
+      await this.advanceTaskStatus(taskId, "validation_failed");
     } catch (sendErr) {
       // error-policy:J1 boundary — a failed corrective send becomes a structured
       // escalation (event + waiting_on_user), never a silent stall.
