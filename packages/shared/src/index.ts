@@ -8,13 +8,14 @@ export * from "./api/agent-api-types.js";
 export * from "./api/command-transport-types.js";
 export * from "./api/http-helpers.js";
 export * from "./api/route-helpers.js";
-// Leaf modules (no internal collisions)
 export * from "./app-hero-art.js";
 // Email-classification primitives — canonical two-stage classifier + the
 // untrusted-content fence. Dependency-free beyond @elizaos/core; consumed by
 // inbox-curation and finance bill-extraction in
 // @elizaos/plugin-personal-assistant.
 export * from "./apps/index.js";
+// Leaf modules (no internal collisions)
+export * from "./automation-node-contributors.js";
 // Awareness + themes barrels
 export * from "./awareness/index.js";
 export * from "./character-presets.characters.js";

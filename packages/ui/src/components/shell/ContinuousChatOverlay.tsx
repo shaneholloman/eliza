@@ -4,6 +4,7 @@
  */
 import { transcriptPlainText } from "@elizaos/shared/transcripts";
 import {
+  ArrowDown,
   FileText,
   Film,
   LayoutGrid,
@@ -84,6 +85,7 @@ import { SensitiveRequestBlock } from "../chat/MessageContent";
 import { findChoiceRegions } from "../chat/message-choice-parser";
 import { ThinkingBlock } from "../chat/ThinkingBlock";
 import { withTranscriptMarker } from "../chat/TranscriptViewerOverlay";
+import { ToolCallEventLog } from "../tool-events/ToolCallEventLog";
 import { ChatMessage } from "../composites/chat/chat-message";
 import type {
   ChatMessageData,
@@ -823,6 +825,13 @@ function renderOverlayMessageBody(
           <SensitiveRequestBlock request={message.secretRequest} />
         </div>
       ) : null}
+      {message.toolEvents?.length ? (
+        <div className="pointer-events-auto mt-2 flex flex-col gap-1.5">
+          {message.toolEvents.map((event) => (
+            <ToolCallEventLog key={event.callId ?? event.id} event={event} />
+          ))}
+        </div>
+      ) : null}
       {!ctx?.suppressReasoning && message.reasoning?.trim() ? (
         <ThinkingBlock reasoning={message.reasoning} />
       ) : null}
@@ -848,6 +857,7 @@ function shellToChatMessageData(m: ShellMessage): ChatMessageData {
     ...(m.source ? { source: m.source } : {}),
     ...(m.failureKind ? { failureKind: m.failureKind } : {}),
     ...(m.reasoning ? { reasoning: m.reasoning } : {}),
+    ...(m.toolEvents?.length ? { toolEvents: m.toolEvents } : {}),
     ...(m.attachments ? { attachments: m.attachments } : {}),
     ...(m.secretRequest ? { secretRequest: m.secretRequest } : {}),
   };
@@ -1376,7 +1386,11 @@ export function ContinuousChatOverlay({
   // (pre-paint — the thread never flashes at the top), a NEW line re-pins with
   // a smooth glide while the reader rests at the bottom, streaming growth
   // follows in a single rAF, and a reader who scrolled up is never yanked.
-  const { scrollRef: threadRef } = useThreadAutoScroll<HTMLDivElement>({
+  const {
+    scrollRef: threadRef,
+    atBottom: threadAtBottom,
+    jumpToLatest,
+  } = useThreadAutoScroll<HTMLDivElement>({
     growthKey: `${visibleMessages.length}:${lastId ?? ""}:${lastContent.length}`,
     lineKey: lastId ?? "",
     enabled: threadPresented,
@@ -3763,6 +3777,14 @@ export function ContinuousChatOverlay({
           <span className="sr-only" data-testid="chat-detent-probe">
             {`chat-detent:${detentLabel}`}
           </span>
+          {/* AX-tree mirror of data-maximized (#13531). `detentLabel` folds the
+              full-bleed MAXIMIZED state into "full" (both rest at the top), so the
+              detent probe alone cannot tell them apart — the on-device XCUITest
+              maximize/restore leg reads this separate probe to observe whether the
+              chat committed to edge-to-edge full-bleed. */}
+          <span className="sr-only" data-testid="chat-maximized-probe">
+            {`chat-maximized:${fullBleed ? "true" : "false"}`}
+          </span>
           {firstRunProbe ? (
             <span className="sr-only" data-testid="onboarding-state-probe">
               {`onboarding-step:${firstRunProbe.step} onboarding-choices:${firstRunProbe.choices}`}
@@ -3822,7 +3844,8 @@ export function ContinuousChatOverlay({
                 while maximized (full-bleed) — where the SheetGrabber isn't
                 rendered — so a downward pull starting in the top 20% animates
                 the edge-to-edge view back into the inset overlay. `z-10` sits
-                UNDER the header (`z-20`) so the launcher button keeps its taps;
+                UNDER the header (`z-20`) but above the transcript so the
+                launcher button keeps its taps while real pulls still hit the zone;
                 this strip catches pulls on the surrounding empty header space.
                 Keyboard-operable (Enter/Space/ArrowDown restore) so the
                 gesture-only affordance stays WCAG 2.1.1 operable. */}
@@ -3842,7 +3865,7 @@ export function ContinuousChatOverlay({
                     restoreFromMaximizedGuarded();
                   }
                 }}
-                className="pointer-events-auto absolute inset-x-0 top-0 z-10 touch-none bg-transparent"
+                className="pointer-events-auto absolute inset-x-0 top-0 z-[15] touch-none bg-transparent"
                 style={{ height: `${MAXIMIZE_RESTORE_ZONE_VH * 100}%` }}
               />
             ) : null}
@@ -3951,6 +3974,7 @@ export function ContinuousChatOverlay({
               >
                 <motion.div
                   id="continuous-thread"
+                  data-testid="chat-thread-scroll"
                   ref={threadRef}
                   role="log"
                   aria-label="conversation history"
@@ -4072,6 +4096,20 @@ export function ContinuousChatOverlay({
                     </AnimatePresence>
                   </div>
                 </motion.div>
+                {sheetOpen && hasThread && !threadAtBottom ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={jumpToLatest}
+                    aria-label="jump to latest message"
+                    data-testid="chat-jump-to-latest"
+                    className="absolute bottom-3 left-1/2 z-[3] flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-full border border-border-strong bg-surface/95 px-3 text-xs font-medium text-txt shadow-lg transition-colors hover:bg-bg-hover"
+                  >
+                    <ArrowDown className="h-3.5 w-3.5" aria-hidden />
+                    <span>Jump to latest</span>
+                  </Button>
+                ) : null}
               </motion.div>
             ) : null}
             {/* Pending image attachments + any read error, just above the input. */}

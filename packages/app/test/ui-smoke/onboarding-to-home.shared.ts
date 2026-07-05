@@ -7,6 +7,11 @@ import path from "node:path";
 import { expect, type Locator, type Page, type Route } from "@playwright/test";
 import { installDefaultAppRoutes } from "./helpers";
 import { captureScreenshotWithQualityRetry } from "./helpers/screenshot-quality";
+import {
+  seedStewardSession,
+  setStewardSession,
+  UI_SMOKE_STEWARD_OPAQUE_TOKEN,
+} from "./helpers/test-auth";
 
 // Shared onboarding → home → launcher fixtures, route mocks, and assertions
 // for the desktop-Chromium (onboarding-to-home.spec.ts) and mobile-viewport
@@ -604,17 +609,14 @@ export async function installHomeRoutes(
 // bound base owns the app-shell routes (`supportsFullAppShellRoutes` → true),
 // the cloud finish persists first-run exactly once — same `persistFirstRun`
 // funnel as Local — so the POST-once contract holds across runtimes.
-export const CLOUD_AUTH_TOKEN = "ui-smoke-onboarding-cloud-token";
+export const CLOUD_AUTH_TOKEN = UI_SMOKE_STEWARD_OPAQUE_TOKEN;
 export const CLOUD_AGENT_ID = "ui-smoke-cloud-agent-1";
 export const CLOUD_AGENT_NAME = "Smoke Cloud Agent";
 
 /** Inject the cloud session token before React boots (getCloudAuthToken reads
  *  the canonical steward-session store first). */
 export async function injectCloudAuthToken(page: Page): Promise<void> {
-  await page.addInitScript((token) => {
-    // STEWARD_TOKEN_KEY from @elizaos/shared/steward-session-client.
-    window.localStorage.setItem("steward_session_token", token);
-  }, CLOUD_AUTH_TOKEN);
+  await seedStewardSession(page, { token: CLOUD_AUTH_TOKEN });
 }
 
 export async function installCloudRoutes(
@@ -1168,9 +1170,7 @@ export async function completeCloudOnlyOnboardingToHome(
   // onboarding must complete. The click therefore tolerates the button
   // collapsing/unmounting under it (poll won) instead of chasing a detached
   // element until the test times out.
-  await page.evaluate((token) => {
-    window.localStorage.setItem("steward_session_token", token);
-  }, CLOUD_AUTH_TOKEN);
+  await setStewardSession(page, { token: CLOUD_AUTH_TOKEN });
   try {
     await page
       .getByTestId(RUNTIME_CHOICE("cloud"))
