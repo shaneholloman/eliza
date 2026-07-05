@@ -221,14 +221,24 @@ describe("recordUsage, NUMERIC money reads fail closed (#13415)", () => {
   test("REGRESSION: corrupt credits_per_request THROWS before charging (was free MCP call)", async () => {
     mcpRow = makeRow({ credits_per_request: "NaN" as unknown as string });
 
-    await expect(
-      userMcpsService.recordUsage({
+    try {
+      await userMcpsService.recordUsage({
         mcpId: "mcp-1",
         organizationId: CONSUMER_ORG,
         toolName: "get_weather",
         paymentType: "credits",
-      }),
-    ).rejects.toBeInstanceOf(CorruptMcpBillingNumberError);
+      });
+      throw new Error("expected recordUsage to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CorruptMcpBillingNumberError);
+      expect((error as CorruptMcpBillingNumberError).code).toBe("CORRUPT_MCP_BILLING_NUMBER");
+      expect((error as CorruptMcpBillingNumberError).context).toEqual({
+        field: "credits_per_request",
+        rawValue: "NaN",
+        min: 0,
+      });
+      expect((error as CorruptMcpBillingNumberError).severity).toBe("fatal");
+    }
 
     // NOTHING happened: no charge, no creator credit, no earnings, no ledger row.
     expect(deductCalls).toHaveLength(0);

@@ -5,6 +5,7 @@
  * Handles CRUD, revenue distribution, and discovery.
  */
 
+import { ElizaError } from "@elizaos/core";
 import crypto from "crypto";
 import { mcpUsageRepository, type UserMcp, userMcpsRepository } from "../../db/repositories";
 import { cache } from "../cache/client";
@@ -130,10 +131,15 @@ export type PublicUserMcp = Omit<UserMcp, "external_endpoint" | "created_by_user
  * We fail closed at read time so the whole MCP call is refused before any
  * charge/credit/earnings side-effect runs.
  */
-export class CorruptMcpBillingNumberError extends Error {
-  constructor(field: string, rawValue: unknown) {
-    super(`[UserMcps] corrupt MCP billing value for ${field}: ${JSON.stringify(rawValue)}`);
-    this.name = "CorruptMcpBillingNumberError";
+export class CorruptMcpBillingNumberError extends ElizaError {
+  override readonly name = "CorruptMcpBillingNumberError";
+
+  constructor(field: string, rawValue: unknown, bounds: { min?: number; max?: number } = {}) {
+    super(`[UserMcps] corrupt MCP billing value for ${field}: ${JSON.stringify(rawValue)}`, {
+      code: "CORRUPT_MCP_BILLING_NUMBER",
+      context: { field, rawValue, ...bounds },
+      severity: "fatal",
+    });
   }
 }
 
@@ -166,7 +172,7 @@ function parseMcpBillingNumber(
     (options.min !== undefined && parsed < options.min) ||
     (options.max !== undefined && parsed > options.max)
   ) {
-    throw new CorruptMcpBillingNumberError(field, value);
+    throw new CorruptMcpBillingNumberError(field, value, options);
   }
   return parsed;
 }
