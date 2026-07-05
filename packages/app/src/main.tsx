@@ -180,6 +180,7 @@ import {
   type IosRuntimeConfig,
   resolveIosRuntimeConfig,
 } from "./ios-runtime";
+import { runIosVoiceSelfTestSmokeIfRequested } from "./ios-voice-selftest-smoke";
 import { startKeyboardDictationSession } from "./keyboard-dictation";
 import {
   createMobileLifecycle,
@@ -1854,6 +1855,15 @@ async function initializePlatform(): Promise<void> {
       boundedPreferenceWrite(() => Preferences.remove({ key })),
     writeResult: writeIosPreferenceSmokeResult,
     waitForElement: waitForIosOnboardingElement,
+    readStorageSnapshot: readIosOnboardingSmokeStorageSnapshot,
+  });
+  void runIosVoiceSelfTestSmokeIfRequested({
+    isIOS,
+    client,
+    getPreference: boundedPreferenceGet,
+    removePreference: (key) =>
+      boundedPreferenceWrite(() => Preferences.remove({ key })),
+    writeResult: writeIosPreferenceSmokeResult,
     readStorageSnapshot: readIosOnboardingSmokeStorageSnapshot,
   });
 
