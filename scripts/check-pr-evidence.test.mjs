@@ -83,6 +83,18 @@ describe("check-pr-evidence parser", () => {
     );
   });
 
+  it("fails when every required row is checked without artifacts or N/A reasons", () => {
+    const checkedRows = Object.fromEntries(
+      REQUIRED_EVIDENCE_ROWS.map(({ id, label }) => [
+        id,
+        `- [x] ${label} attached.`,
+      ]),
+    );
+    const { ok, findings } = evaluatePrEvidence(buildBody(checkedRows));
+    assert.equal(ok, false);
+    assert.ok(findings.every((finding) => finding.status === "blank"));
+  });
+
   it("passes when every row is marked `N/A - <reason>`", () => {
     const body = REQUIRED_EVIDENCE_ROWS.map(
       ({ id }) =>
