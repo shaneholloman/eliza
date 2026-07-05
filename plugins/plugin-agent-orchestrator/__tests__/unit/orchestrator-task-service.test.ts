@@ -165,12 +165,14 @@ async function settleStatus(
   taskId: string,
   status: string,
 ): Promise<void> {
-  await expect
-    .poll(async () => must(await service.getTask(taskId), "task").status, {
-      timeout: 5000,
-      interval: 25,
-    })
-    .toBe(status);
+  const deadline = Date.now() + 5000;
+  let last: string | undefined;
+  while (Date.now() < deadline) {
+    last = must(await service.getTask(taskId), "task").status;
+    if (last === status) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  expect(last).toBe(status);
 }
 
 /** A started service with one task and one spawned (ready) session, plus the
