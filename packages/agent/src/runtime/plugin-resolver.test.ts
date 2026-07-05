@@ -95,3 +95,70 @@ describe("resolvePlugins manifest discovery", () => {
     }
   });
 });
+
+describe("resolvePlugins boot-phase split for model providers (#14038)", () => {
+  // A configured model provider is first-turn capability: it must load in the
+  // BLOCKING phase (before the runtime reports ready/canRespond), never the
+  // deferred wave. Driven through the real resolver with an on-disk drop-in
+  // package carrying a model-provider package name, plus a non-provider
+  // drop-in proving the deferred wave still owns everything else.
+  it("loads a model-provider plugin in the blocking phase and excludes it from the deferred phase", async () => {
+    const previousCwd = process.cwd();
+    const workspace = await mkdtemp(path.join(tmpdir(), "eliza-plugin-phase-"));
+    const dropinsDir = path.join(workspace, "dropin-plugins");
+    const writeDropIn = async (dirName: string, packageName: string) => {
+      const root = path.join(dropinsDir, dirName);
+      await mkdir(root, { recursive: true });
+      await writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          name: packageName,
+          version: "0.0.0-test",
+          type: "module",
+          main: "./index.js",
+        }),
+        "utf8",
+      );
+      await writeFile(
+        path.join(root, "index.js"),
+        `export default { name: ${JSON.stringify(packageName)}, description: "phase-split test fixture.", views: [] };\n`,
+        "utf8",
+      );
+    };
+
+    try {
+      // The provider fixture reuses a real PROVIDER_PLUGIN_MAP package name so
+      // the phase filter classifies it as a model provider; the plain fixture
+      // is an ordinary custom plugin.
+      await writeDropIn("deepseek", "@elizaos/plugin-deepseek");
+      await writeDropIn("plain", "@dropins/plugin-plainfixture");
+      process.chdir(workspace);
+      const config = {
+        plugins: {
+          allow: [],
+          entries: {},
+          load: { paths: [dropinsDir] },
+        },
+      };
+
+      const blocking = await resolvePlugins(config, {
+        quiet: true,
+        phase: "blocking",
+      });
+      const blockingNames = blocking.map((p) => p.name);
+      expect(blockingNames).toContain("@elizaos/plugin-deepseek");
+      expect(blockingNames).not.toContain("@dropins/plugin-plainfixture");
+
+      const deferred = await resolvePlugins(config, {
+        quiet: true,
+        phase: "deferred",
+      });
+      const deferredNames = deferred.map((p) => p.name);
+      expect(deferredNames).not.toContain("@elizaos/plugin-deepseek");
+      expect(deferredNames).toContain("@dropins/plugin-plainfixture");
+    } finally {
+      process.chdir(previousCwd);
+      await rm(workspace, { recursive: true, force: true });
+    }
+  }, 120_000);
+});

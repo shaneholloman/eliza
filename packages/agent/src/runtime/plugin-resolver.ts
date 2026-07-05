@@ -41,6 +41,7 @@ import {
 import {
   CHANNEL_PLUGIN_MAP,
   collectPluginNames,
+  MODEL_PROVIDER_PLUGIN_NAMES,
   OPTIONAL_PLUGIN_MAP,
   type PluginLoadReasons,
   resolvePluginPackageAlias,
@@ -1603,6 +1604,15 @@ async function discoverPluginCandidatesUncached(): Promise<
  */
 export type PluginResolutionPhase = "all" | "blocking" | "deferred";
 
+/**
+ * Model-provider plugin names the most recent blocking-phase resolve claimed
+ * (kept in its load set). The deferred pass excludes exactly this set so the
+ * two phases partition providers deterministically even though the static
+ * plugin registry — which decides mobile loadability — grows between the
+ * passes. Reset at the start of every blocking-phase resolve.
+ */
+const blockingPhaseClaimedProviderNames = new Set<string>();
+
 export async function resolvePlugins(
   config: ElizaConfig,
   opts?: {
@@ -1769,11 +1779,49 @@ export async function resolvePlugins(
 
   if (phase !== "all") {
     const beforePhaseFilter = pluginsToLoad.size;
+    // Model-provider plugins in the load set are blocking alongside
+    // BLOCKING_CORE_PLUGINS: a TEXT_GENERATION handler is the one capability a
+    // chat turn cannot answer without, so a configured provider must register
+    // before the runtime flips ready (agentState `running`, `canRespond`, and
+    // the warming-gate release all key off that flip). Left in the deferred
+    // wave, the readiness signal reads not-ready while early turns answer
+    // "no LLM provider configured" (#14038).
+    //
+    // Mobile bundles can only import statically registered modules, and the
+    // deferred static wave has not run when the blocking pass resolves — so on
+    // mobile a provider is promoted only when its module is already loadable
+    // (the boot pre-registers configured providers' statics up front). The
+    // deferred pass then excludes exactly the set the blocking pass claimed
+    // (recorded below) rather than re-deriving it from the static registry,
+    // which grows between the two passes — re-deriving would classify a
+    // provider deferred in the blocking pass but blocking in the deferred
+    // pass, dropping it from both.
+    if (phase === "blocking") {
+      blockingPhaseClaimedProviderNames.clear();
+      for (const pluginName of pluginsToLoad) {
+        if (!MODEL_PROVIDER_PLUGIN_NAMES.has(pluginName)) continue;
+        const loadableNow =
+          !isMobilePlatform() ||
+          Boolean(STATIC_ELIZA_PLUGINS[pluginName]) ||
+          Boolean(STATIC_ELIZA_PLUGIN_LOADERS[pluginName]);
+        if (loadableNow) {
+          blockingPhaseClaimedProviderNames.add(pluginName);
+        }
+      }
+    }
     for (const pluginName of Array.from(pluginsToLoad)) {
       if (forceIncludePluginNames.has(pluginName)) {
+        if (
+          phase === "blocking" &&
+          MODEL_PROVIDER_PLUGIN_NAMES.has(pluginName)
+        ) {
+          blockingPhaseClaimedProviderNames.add(pluginName);
+        }
         continue;
       }
-      const isBlocking = blockingPluginSet.has(pluginName);
+      const isBlocking =
+        blockingPluginSet.has(pluginName) ||
+        blockingPhaseClaimedProviderNames.has(pluginName);
       if (
         (phase === "blocking" && !isBlocking) ||
         (phase === "deferred" && isBlocking)
