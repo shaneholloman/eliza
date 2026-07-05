@@ -107,8 +107,10 @@ describe("DockerNodeManager pre-pull recovery", () => {
     const commands: string[] = [];
     mocks.exec.mockImplementation((command: string) => {
       commands.push(command);
-      if (command.startsWith("docker pull ")) {
-        return Promise.reject(new Error("pull timed out"));
+      if (command.includes('wait "$pid"')) {
+        return Promise.reject(
+          new Error("[docker-ssh] Command timed out after 300000ms on node: sh [redacted]"),
+        );
       }
       return Promise.resolve("");
     });
@@ -122,12 +124,17 @@ describe("DockerNodeManager pre-pull recovery", () => {
     expect(result).toMatchObject({
       nodeId: "prepull-reap-node",
       status: "failed",
-      error: "pull timed out",
+      error: "[docker-ssh] Command timed out after 300000ms on node: sh [redacted]",
     });
-    expect(commands).toEqual([
-      "docker pull --platform 'linux/amd64' 'ghcr.io/elizaos/eliza:test'",
-      "pkill -9 -f 'docker pull ' || true",
-    ]);
+    expect(commands).toHaveLength(2);
+    expect(commands[0]).toContain("docker pull");
+    expect(commands[0]).toContain("ghcr.io/elizaos/eliza:test");
+    expect(commands[0]).toContain("/tmp/eliza-prepull-");
+    expect(commands[0]).toContain("printf");
+    expect(commands[1]).toContain("/proc/$pid/cmdline");
+    expect(commands[1]).toContain("ghcr.io/elizaos/eliza:test");
+    expect(commands[1]).toContain('kill -9 "$pid"');
+    expect(commands.join("\n")).not.toContain("pkill");
   });
 
   test("auto-restarts docker only after repeated failed pre-pulls when enabled", async () => {
@@ -138,8 +145,10 @@ describe("DockerNodeManager pre-pull recovery", () => {
     const commands: string[] = [];
     mocks.exec.mockImplementation((command: string) => {
       commands.push(command);
-      if (command.startsWith("docker pull ")) {
-        return Promise.reject(new Error("pull timed out"));
+      if (command.includes('wait "$pid"')) {
+        return Promise.reject(
+          new Error("[docker-ssh] Command timed out after 300000ms on node: sh [redacted]"),
+        );
       }
       return Promise.resolve("");
     });
@@ -148,12 +157,11 @@ describe("DockerNodeManager pre-pull recovery", () => {
     await manager.prePullAgentImageOnAvailableNodes("ghcr.io/elizaos/eliza:test", "linux/amd64");
     await manager.prePullAgentImageOnAvailableNodes("ghcr.io/elizaos/eliza:test", "linux/amd64");
 
-    expect(commands).toEqual([
-      "docker pull --platform 'linux/amd64' 'ghcr.io/elizaos/eliza:test'",
-      "pkill -9 -f 'docker pull ' || true",
-      "docker pull --platform 'linux/amd64' 'ghcr.io/elizaos/eliza:test'",
-      "pkill -9 -f 'docker pull ' || true",
-      "systemctl restart docker",
-    ]);
+    expect(commands.filter((command) => command.includes('wait "$pid"'))).toHaveLength(2);
+    expect(commands.filter((command) => command.includes("/proc/$pid/cmdline"))).toHaveLength(2);
+    expect(commands.filter((command) => command.includes("systemctl restart docker"))).toHaveLength(
+      1,
+    );
+    expect(commands.join("\n")).not.toContain("pkill");
   });
 });
