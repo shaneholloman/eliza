@@ -31,6 +31,7 @@
  *    - Mitigation: Multi-source validation + TWAP smoothing
  */
 
+import { ElizaError } from "@elizaos/core";
 import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { dbRead, dbWrite } from "../../db/client";
 import { elizaTokenPrices } from "../../db/schemas/token-redemptions";
@@ -59,14 +60,20 @@ import { type SupportedNetwork } from "./eliza-token-price";
 const PLAIN_DECIMAL_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)$/;
 
 /** Thrown when a NUMERIC money/price field can't be parsed to a finite number. */
-export class CorruptTwapNumericError extends Error {
+export class CorruptTwapNumericError extends ElizaError {
+  override readonly name = "CorruptTwapNumericError";
   readonly field: string;
   readonly rawValue: unknown;
+
   constructor(field: string, rawValue: unknown) {
     super(
       `[TWAP] corrupt NUMERIC value for ${field}: ${JSON.stringify(rawValue)} is not valid for this money surface`,
+      {
+        code: "CORRUPT_TWAP_NUMERIC",
+        context: { field, rawValue },
+        severity: "fatal",
+      },
     );
-    this.name = "CorruptTwapNumericError";
     this.field = field;
     this.rawValue = rawValue;
   }
@@ -242,10 +249,11 @@ export class TWAPPriceOracle {
    */
   async recordPriceSample(network: SupportedNetwork, price: number, source: string): Promise<void> {
     const now = new Date();
+    const parsedPrice = parseTwapNumeric("price_usd", price, { allowZero: false });
 
     await dbWrite.insert(elizaTokenPrices).values({
       network,
-      price_usd: String(price),
+      price_usd: String(parsedPrice),
       source,
       fetched_at: now,
       expires_at: new Date(now.getTime() + TWAP_CONFIG.TWAP_WINDOW_MS * 2),

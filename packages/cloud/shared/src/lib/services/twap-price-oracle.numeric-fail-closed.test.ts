@@ -17,6 +17,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 // ---------------------------------------------------------------------------
 let nextSampleRows: Array<{ price: unknown; timestamp: Date; source: string }> = [];
 let nextExecuteRows: Array<{ rows: Array<Record<string, unknown>> }> = [];
+const insertedPriceSamples: Array<Record<string, unknown>> = [];
 let executeCallIndex = 0;
 
 mock.module("../../db/client", () => ({
@@ -34,7 +35,13 @@ mock.module("../../db/client", () => ({
       return result;
     },
   },
-  dbWrite: {},
+  dbWrite: {
+    insert: () => ({
+      values: async (row: Record<string, unknown>) => {
+        insertedPriceSamples.push(row);
+      },
+    }),
+  },
 }));
 
 const { TWAPPriceOracle, parseTwapNumeric, CorruptTwapNumericError } = await import(
@@ -48,6 +55,7 @@ function sample(price: unknown) {
 beforeEach(() => {
   nextSampleRows = [];
   nextExecuteRows = [];
+  insertedPriceSamples.length = 0;
   executeCallIndex = 0;
 });
 
@@ -115,7 +123,33 @@ describe("parseTwapNumeric (fail-closed boundary)", () => {
       const err = e as InstanceType<typeof CorruptTwapNumericError>;
       expect(err.field).toBe("usd_value");
       expect(err.rawValue).toBe("oops");
+      expect(err.code).toBe("CORRUPT_TWAP_NUMERIC");
+      expect(err.context).toEqual({ field: "usd_value", rawValue: "oops" });
+      expect(err.severity).toBe("fatal");
       expect(err.message).toContain("usd_value");
+    }
+  });
+});
+
+describe("recordPriceSample fail-closed write boundary", () => {
+  test("records a healthy positive sample", async () => {
+    const oracle = new TWAPPriceOracle();
+
+    await oracle.recordPriceSample("base", 0.0125, "test-source");
+
+    expect(insertedPriceSamples).toHaveLength(1);
+    expect(insertedPriceSamples[0].price_usd).toBe("0.0125");
+  });
+
+  test("REGRESSION: invalid sample prices throw before any DB write", async () => {
+    const oracle = new TWAPPriceOracle();
+
+    for (const price of [Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+      insertedPriceSamples.length = 0;
+      await expect(oracle.recordPriceSample("base", price, "bad-source")).rejects.toBeInstanceOf(
+        CorruptTwapNumericError,
+      );
+      expect(insertedPriceSamples).toHaveLength(0);
     }
   });
 });
