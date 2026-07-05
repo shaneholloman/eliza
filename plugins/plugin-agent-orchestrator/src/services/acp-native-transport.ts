@@ -766,12 +766,27 @@ function protectTerminalGitEnv(
   env: Record<string, string | undefined>,
   trusted: NodeJS.ProcessEnv | undefined,
 ): void {
-  const protectedKeys = new Set(["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE"]);
+  const protectedKeys = new Set([
+    "GIT_INDEX_FILE",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "ACP_GIT_INDEX_FILE",
+    "ACP_REAL_GIT",
+    "ACP_GIT_BASELINE_SHA",
+  ]);
   for (const key of Object.keys(env)) {
     if (protectedKeys.has(key.toUpperCase())) delete env[key];
   }
-  if (typeof trusted?.GIT_INDEX_FILE === "string") {
-    env.GIT_INDEX_FILE = trusted.GIT_INDEX_FILE;
+  for (const key of [
+    "GIT_INDEX_FILE",
+    "ACP_GIT_INDEX_FILE",
+    "ACP_REAL_GIT",
+    "ACP_GIT_BASELINE_SHA",
+  ]) {
+    const value = trusted?.[key];
+    if (typeof value === "string") {
+      env[key] = value;
+    }
   }
 }
 
