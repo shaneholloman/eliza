@@ -4361,7 +4361,13 @@ export class OrchestratorTaskService extends Service {
     const candidates: Array<{ id: string; createdAt: number }> = [];
     for (const session of sessions) {
       if (TERMINAL_SESSION_STATUSES.has(session.status)) continue;
-      const taskId = this.sessionTaskIndex.get(session.id);
+      // Resolve via `resolveTaskId`, not the in-memory `sessionTaskIndex`
+      // directly: after a parent restart the index is empty but pre-restart
+      // keepAlive sessions are still live, so the session→task mapping only
+      // exists in the durable store. Reading the index alone leaves this guard
+      // unable to reclaim any pre-restart session, starving queued tasks behind
+      // zombie sessions whose owning tasks are already terminal (#14106).
+      const taskId = await this.resolveTaskId(session.id);
       if (!taskId) continue;
       const doc = await this.store.getTask(taskId);
       if (!doc || !TERMINAL_TASK_STATUSES.has(doc.task.status)) continue;
