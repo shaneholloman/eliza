@@ -10,9 +10,11 @@ import {
   Cloud,
   CreditCard,
   KeyRound,
+  LogOut,
   Plug,
   Rocket,
   Store,
+  UserRound,
 } from "lucide-react";
 import { useCallback } from "react";
 import { useAgentElement } from "../../agent-surface";
@@ -56,13 +58,19 @@ const CLOUD_FEATURES = [
 export function CloudOverviewSection() {
   const {
     elizaCloudConnected,
+    elizaCloudDisconnecting,
     elizaCloudLoginBusy,
+    elizaCloudUserId,
+    handleCloudDisconnect,
     handleCloudLogin,
     setActionNotice,
     t,
   } = useAppSelectorShallow((s) => ({
     elizaCloudConnected: s.elizaCloudConnected,
+    elizaCloudDisconnecting: s.elizaCloudDisconnecting,
     elizaCloudLoginBusy: s.elizaCloudLoginBusy,
+    elizaCloudUserId: s.elizaCloudUserId,
+    handleCloudDisconnect: s.handleCloudDisconnect,
     handleCloudLogin: s.handleCloudLogin,
     setActionNotice: s.setActionNotice,
     t: s.t,
@@ -77,6 +85,18 @@ export function CloudOverviewSection() {
       );
     });
   }, [handleCloudLogin, setActionNotice]);
+
+  const handleSignOut = useCallback(() => {
+    void handleCloudDisconnect().catch((error) => {
+      setActionNotice(
+        error instanceof Error
+          ? error.message
+          : "Could not sign out of Eliza Cloud.",
+        "error",
+        5000,
+      );
+    });
+  }, [handleCloudDisconnect, setActionNotice]);
 
   const { ref, agentProps } = useAgentElement<HTMLButtonElement>({
     id: "cloud-connect",
@@ -133,6 +153,41 @@ export function CloudOverviewSection() {
               : "This build keeps agent runtime and local connectors on your machine unless you choose to connect Cloud.",
           })}
         />
+        {elizaCloudConnected ? (
+          <SettingsRow
+            icon={UserRound}
+            label={t("settings.cloudOverview.accountLabel", {
+              defaultValue: "Cloud account",
+            })}
+            description={
+              elizaCloudUserId
+                ? t("settings.cloudOverview.accountDescription", {
+                    defaultValue: "Signed in as {{id}}",
+                    id: elizaCloudUserId,
+                  })
+                : t("settings.cloudOverview.accountDescriptionNoId", {
+                    defaultValue: "Signed in on this device.",
+                  })
+            }
+            control={
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSignOut}
+                disabled={elizaCloudDisconnecting}
+              >
+                <LogOut className="h-4 w-4" aria-hidden />
+                {elizaCloudDisconnecting
+                  ? t("settings.cloudOverview.signingOut", {
+                      defaultValue: "Signing out...",
+                    })
+                  : t("settings.cloudOverview.signOut", {
+                      defaultValue: "Sign out",
+                    })}
+              </Button>
+            }
+          />
+        ) : null}
       </SettingsGroup>
 
       <SettingsGroup
