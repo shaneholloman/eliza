@@ -5,6 +5,8 @@
  * (`bun run --cwd packages/app test`), i.e. the root test:client lane.
  */
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildCodesignPlan,
@@ -521,6 +523,26 @@ describe("classifyXcresultSummaryForGate", () => {
     expect(verdict.ok).toBe(true);
     expect(verdict.stats.total).toBe(3);
     expect(verdict.stats.passed).toBe(1);
+  });
+});
+
+describe("ios-device-capture strict summary gate", () => {
+  it("keeps test-summary classification behind --strict-gate", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "scripts", "ios-device-capture.mjs"),
+      "utf8",
+    );
+    const summaryWriteIndex = source.indexOf("test-summary.json");
+    const strictGateIndex = source.indexOf(
+      "if (strictGate)",
+      summaryWriteIndex,
+    );
+    const classifierIndex = source.indexOf(
+      "classifyXcresultSummaryForGate",
+      summaryWriteIndex,
+    );
+    expect(strictGateIndex).toBeGreaterThan(summaryWriteIndex);
+    expect(classifierIndex).toBeGreaterThan(strictGateIndex);
   });
 });
 

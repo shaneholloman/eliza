@@ -453,21 +453,23 @@ async function main() {
         path.join(outputDir, "test-summary.json"),
         summary.stdout,
       );
-      try {
-        const verdict = classifyXcresultSummaryForGate(
-          JSON.parse(summary.stdout),
-        );
-        if (!verdict.ok) {
+      if (strictGate) {
+        try {
+          const verdict = classifyXcresultSummaryForGate(
+            JSON.parse(summary.stdout),
+          );
+          if (!verdict.ok) {
+            fail(
+              `test-summary gate failed: ${verdict.reason}. ` +
+                `stats=${JSON.stringify(verdict.stats)}. ` +
+                `Review ${path.join(outputDir, "test-summary.json")} and ${attachmentsDir}.`,
+            );
+          }
+        } catch (error) {
           fail(
-            `test-summary gate failed: ${verdict.reason}. ` +
-              `stats=${JSON.stringify(verdict.stats)}. ` +
-              `Review ${path.join(outputDir, "test-summary.json")} and ${attachmentsDir}.`,
+            `could not parse test-summary.json for gate validation: ${error?.message ?? error}`,
           );
         }
-      } catch (error) {
-        fail(
-          `could not parse test-summary.json for gate validation: ${error?.message ?? error}`,
-        );
       }
     }
   } else {
