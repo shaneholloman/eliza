@@ -222,3 +222,28 @@ test("REGRESSION: cost is never returned as NaN for a corrupt catalog price", as
   expect(Number.isNaN(result.inputCost)).toBe(false);
   expect(Number.isNaN(result.outputCost)).toBe(false);
 });
+
+test("REGRESSION: a negative catalog price never returns a negative charge", async () => {
+  const negativeOnly: CatalogRow[] = [
+    row("solo/negative-price", "input", "language", "token", "-0.000001"),
+    row("solo/negative-price", "output", "language", "token", "-0.000002"),
+  ];
+  negativeOnly.forEach((r) => {
+    r.provider = "solo";
+  });
+  seedCatalog.push(...negativeOnly);
+  try {
+    __clearPersistedPricingCache();
+    await expect(
+      calculateTextCostFromCatalog({
+        model: "negative-price",
+        provider: "solo",
+        inputTokens: 1000,
+        outputTokens: 500,
+      }),
+    ).rejects.toThrow("refusing to bill unknown-priced inference");
+  } finally {
+    seedCatalog.splice(seedCatalog.length - negativeOnly.length, negativeOnly.length);
+    __clearPersistedPricingCache();
+  }
+});

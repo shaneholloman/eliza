@@ -278,14 +278,15 @@ async function resolveFallbackTokenRate(params: {
 
 function computeCostFromEntry(entry: PreparedPricingEntry, quantity: number): FlatOperationCost {
   // Defense-in-depth money-boundary guard. Candidate selection already drops
-  // non-finite prices (see `chooseBestCandidatePricingEntry`), so a resolved
+  // non-finite/non-positive prices (see `chooseBestCandidatePricingEntry`), so a resolved
   // entry reaching here should always carry a real price. Re-assert it anyway:
-  // `asDecimal(NaN).mul(quantity)` silently yields a `NaN` charge that then
-  // poisons the credit debit / earnings ledger with no error. If a corrupt
+  // `asDecimal(NaN).mul(quantity)` silently yields a `NaN` charge; a negative
+  // price creates a negative debit. Either poisons the credit debit / earnings
+  // ledger with no error. If a corrupt
   // price ever reaches this sink via any future path, fail closed with an
   // explicit error the caller surfaces (5xx / refuse) rather than billing NaN.
-  if (!Number.isFinite(entry.unitPrice)) {
-    logger.error("ai-pricing: refusing to bill a non-finite catalog price", {
+  if (!Number.isFinite(entry.unitPrice) || entry.unitPrice <= 0) {
+    logger.error("ai-pricing: refusing to bill an invalid catalog price", {
       provider: entry.provider,
       model: entry.model,
       productFamily: entry.productFamily,
@@ -294,7 +295,7 @@ function computeCostFromEntry(entry: PreparedPricingEntry, quantity: number): Fl
       unitPrice: entry.unitPrice,
     });
     throw new Error(
-      `Corrupt catalog price for ${entry.productFamily}:${entry.chargeType} ${entry.provider}/${entry.model}; refusing to bill a non-finite rate`,
+      `Corrupt catalog price for ${entry.productFamily}:${entry.chargeType} ${entry.provider}/${entry.model}; refusing to bill an invalid rate`,
     );
   }
 
@@ -434,12 +435,12 @@ export async function calculateTextCostFromCatalog(params: {
     : await resolveMissingSide("output", params.outputTokens);
 
   // Defense-in-depth money-boundary guard mirroring `computeCostFromEntry`.
-  // Candidate selection already drops non-finite catalog prices, but the token
+  // Candidate selection already drops non-finite/non-positive catalog prices, but the token
   // path builds the Decimal directly rather than going through that sink, so
   // re-assert finiteness before `asDecimal(...).mul(tokens)` — a `NaN` unit
-  // price would otherwise bill `NaN` inference silently. A zero-token side
-  // costs $0 at any rate, so only a side that actually bills tokens fails
-  // closed on a corrupt resolved price.
+  // price would otherwise bill `NaN` inference silently, and a negative price
+  // would credit the caller. A zero-token side costs $0 at any rate, so only a
+  // side that actually bills tokens fails closed on a corrupt resolved price.
   const resolveTokenUnitPrice = (
     chargeType: "input" | "output",
     entry: PreparedPricingEntry | null,
@@ -447,8 +448,8 @@ export async function calculateTextCostFromCatalog(params: {
     tokens: number,
   ) => {
     const unitPrice = entry ? entry.unitPrice : (fallback?.unitPrice ?? 0);
-    if (tokens > 0 && !Number.isFinite(unitPrice)) {
-      logger.error("ai-pricing: refusing to bill a non-finite token price", {
+    if (tokens > 0 && (!Number.isFinite(unitPrice) || unitPrice <= 0)) {
+      logger.error("ai-pricing: refusing to bill an invalid token price", {
         canonicalModel,
         provider: params.provider,
         billingSource: params.billingSource,
@@ -456,7 +457,7 @@ export async function calculateTextCostFromCatalog(params: {
         unitPrice,
       });
       throw new Error(
-        `Corrupt catalog price for ${productFamily}:${chargeType} ${canonicalModel}; refusing to bill a non-finite rate`,
+        `Corrupt catalog price for ${productFamily}:${chargeType} ${canonicalModel}; refusing to bill an invalid rate`,
       );
     }
     return asDecimal(unitPrice);
