@@ -1232,6 +1232,13 @@ export class AcpService extends Service {
    * adds the recommended-slug highlight and Cloud ViewKind contract for
    * app-building tasks. Best-effort — a failed write warns and the spawn
    * proceeds without the manifest.
+   *
+   * Skips a workspace that already carries its own `SKILLS.md` — a non-isolated
+   * spawn (routed self-checkout / explicit project workdir, `isolate=false`)
+   * runs inside a real repo whose own `SKILLS.md` must never be clobbered. This
+   * mirrors {@link writeWorkspaceIdentity}'s bare-workspace guard for
+   * AGENTS.md/CLAUDE.md; an isolated `task-<id>` scratch dir is always empty so
+   * the guard is a no-op there.
    */
   private async writeSkillsManifest(
     workdir: string,
@@ -1239,6 +1246,7 @@ export class AcpService extends Service {
     brokerWired: boolean,
     opts: SpawnOptions,
   ): Promise<void> {
+    if (existsSync(join(workdir, "SKILLS.md"))) return;
     try {
       const manifest = await buildSkillsManifest(this.runtime, {
         ...(opts.skillsManifest?.recommendedSlugs
