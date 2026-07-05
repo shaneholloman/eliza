@@ -7,7 +7,11 @@
 import { mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
-import { setActiveProject, upsertProject } from "@elizaos/core";
+import {
+  setActiveProject,
+  upsertProject,
+  writeWorkspaceFolderConfig,
+} from "@elizaos/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   findProjectByWorkdir,
@@ -65,5 +69,24 @@ describe("project-binding", () => {
     expect(resolveBoundProjectWorkdir(p.id, env)).toBe("/tmp/bound-project");
     expect(resolveBoundProjectWorkdir("stale-id", env)).toBeNull();
     expect(resolveBoundProjectWorkdir(undefined, env)).toBeNull();
+  });
+
+  it("a projectId bound via the legacy workspace-folder.json synthesis resolves back to its workdir", () => {
+    // Migration window: workspace-folder.json exists, projects.json does not.
+    // The synthesized registry is minted fresh on every read, so the bind
+    // (createTask) and the later resolve (follow-up spawn) see two separate
+    // syntheses — the id must be stable between them or the #13776
+    // bound-workdir lock silently no-ops for every legacy install.
+    const legacyDir = mkdtempSync(join(os.tmpdir(), "legacy-workdir-"));
+    try {
+      writeWorkspaceFolderConfig({ path: legacyDir, bookmark: null }, env);
+
+      const bound = resolveTaskProjectId({ workdir: legacyDir }, env);
+      expect(bound).toBeTruthy();
+      expect(resolveTaskProjectId({ workdir: legacyDir }, env)).toBe(bound);
+      expect(resolveBoundProjectWorkdir(bound, env)).toBe(legacyDir);
+    } finally {
+      rmSync(legacyDir, { recursive: true, force: true });
+    }
   });
 });
