@@ -16,8 +16,12 @@ import {
   hasArtifactReference,
   hasNaWithReason,
   isChecked,
+  parseLabels,
+  requiresSurfaceArtifacts,
   isRowSatisfied,
+  isRowSatisfiedForContext,
   REQUIRED_EVIDENCE_ROWS,
+  SURFACE_ARTIFACT_ROW_IDS,
 } from "./check-pr-evidence.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -103,6 +107,40 @@ describe("check-pr-evidence parser", () => {
     assert.equal(evaluatePrEvidence(body).ok, true);
   });
 
+  it("fails UI-labeled PRs when screenshot/video rows are only N/A", () => {
+    const body = REQUIRED_EVIDENCE_ROWS.map(
+      ({ id }) =>
+        `<!-- evidence-row:${id} -->\n- [ ] row \`N/A - not applicable to this change\`.`,
+    ).join("\n\n");
+    const { ok, findings } = evaluatePrEvidence(body, REQUIRED_EVIDENCE_ROWS, {
+      labels: "ui",
+    });
+    assert.equal(ok, false);
+    for (const id of SURFACE_ARTIFACT_ROW_IDS) {
+      assert.equal(
+        findings.find((finding) => finding.id === id).status,
+        "artifact-required",
+      );
+    }
+  });
+
+  it("passes UI-labeled PRs when screenshot/video rows have concrete artifacts", () => {
+    const { ok, findings } = evaluatePrEvidence(
+      buildBody({
+        "before-screenshots":
+          "- [ ] Before screenshots: .github/issue-evidence/13622-before.png",
+        "after-screenshots":
+          "- [ ] After screenshots: .github/issue-evidence/13622-after.png",
+        "walkthrough-video":
+          "- [ ] Walkthrough video: .github/issue-evidence/13622-demo.webm",
+      }),
+      REQUIRED_EVIDENCE_ROWS,
+      { labels: "frontend" },
+    );
+    assert.equal(ok, true);
+    assert.ok(findings.every((finding) => finding.status === "ok"));
+  });
+
   it("fails on a bare `N/A` with no reason", () => {
     const { ok, findings } = evaluatePrEvidence(
       buildBody({ "backend-logs": "- [ ] Backend logs N/A" }),
@@ -170,6 +208,12 @@ describe("check-pr-evidence row primitives", () => {
     assert.equal(isRowSatisfied("- [x] done"), false);
   });
 
+  it("normalizes labels and detects surface labels", () => {
+    assert.deepEqual(parseLabels("bug, UI\nNative"), ["bug", "ui", "native"]);
+    assert.equal(requiresSurfaceArtifacts("testing,backend"), false);
+    assert.equal(requiresSurfaceArtifacts(["ci", "Frontend"]), true);
+  });
+
   it("requires N/A-reason or artifact to satisfy a row", () => {
     assert.equal(isRowSatisfied("- [ ] `N/A - not applicable`"), true);
     assert.equal(isRowSatisfied("- [ ] [proof](https://e/x.png)"), true);
@@ -178,6 +222,22 @@ describe("check-pr-evidence row primitives", () => {
         "- [ ] Before screenshots are attached, or marked `N/A - <reason>`.",
       ),
       false,
+    );
+  });
+
+  it("requires artifacts when artifact-required mode is enabled", () => {
+    assert.equal(
+      isRowSatisfiedForContext("- [ ] `N/A - no UI`", {
+        artifactRequired: true,
+      }),
+      false,
+    );
+    assert.equal(
+      isRowSatisfiedForContext(
+        "- [ ] .github/issue-evidence/13622-ui.png",
+        { artifactRequired: true },
+      ),
+      true,
     );
   });
 });

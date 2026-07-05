@@ -19,7 +19,31 @@ export const REQUIRED_EVIDENCE_ROWS = [
   { id: "domain-artifacts", label: "Domain artifacts" },
 ];
 
+export const SURFACE_EVIDENCE_LABELS = ["ui", "frontend", "native"];
+export const SURFACE_ARTIFACT_ROW_IDS = [
+  "before-screenshots",
+  "after-screenshots",
+  "walkthrough-video",
+];
+
 const MARKER_RE = /<!--\s*evidence-row:([a-z0-9-]+)\s*-->/gi;
+
+export function parseLabels(value) {
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((label) => parseLabels(label))
+      .filter((label, index, labels) => labels.indexOf(label) === index);
+  }
+  return String(value ?? "")
+    .split(/[\n,]/)
+    .map((label) => label.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+export function requiresSurfaceArtifacts(labels) {
+  const labelSet = new Set(parseLabels(labels));
+  return SURFACE_EVIDENCE_LABELS.some((label) => labelSet.has(label));
+}
 
 export function hasNaWithReason(text) {
   const match = text.match(/\bN\/?A\b\s*[-:\u2013\u2014]\s*(\S[\s\S]*?)$/im);
@@ -49,6 +73,14 @@ export function isChecked(rowText) {
 
 export function isRowSatisfied(rowText) {
   return hasNaWithReason(rowText) || hasArtifactReference(rowText);
+}
+
+export function isRowSatisfiedForContext(
+  rowText,
+  { artifactRequired = false } = {},
+) {
+  if (artifactRequired) return hasArtifactReference(rowText);
+  return isRowSatisfied(rowText);
 }
 
 export function boundRowBlock(block) {
@@ -101,16 +133,25 @@ export function extractEvidenceRows(body) {
 export function evaluatePrEvidence(
   body,
   requiredRows = REQUIRED_EVIDENCE_ROWS,
+  options = {},
 ) {
   const rows = extractEvidenceRows(body ?? "");
+  const surfaceArtifactsRequired = requiresSurfaceArtifacts(options.labels);
   const findings = requiredRows.map(({ id, label }) => {
     if (!rows.has(id)) return { id, label, status: "missing" };
     const rowText = rows.get(id);
     if (rowText.length === 0) return { id, label, status: "blank" };
+    const artifactRequired =
+      surfaceArtifactsRequired && SURFACE_ARTIFACT_ROW_IDS.includes(id);
+    if (artifactRequired && !hasArtifactReference(rowText)) {
+      return { id, label, status: "artifact-required" };
+    }
     return {
       id,
       label,
-      status: isRowSatisfied(rowText) ? "ok" : "blank",
+      status: isRowSatisfiedForContext(rowText, { artifactRequired })
+        ? "ok"
+        : "blank",
     };
   });
   return {
@@ -142,6 +183,8 @@ function usage() {
 
 Options:
   --body-file <path>  Read the PR body from a file (default: stdin).
+  --labels <labels>   Comma-separated PR labels; ui/frontend/native require
+                      concrete screenshot/video artifacts.
   --json              Print machine-readable findings JSON.
   --self-test         Run the planted-fixture self-check.
   --help, -h          Show this help.
@@ -215,6 +258,25 @@ function runSelfTest() {
   }
 
   {
+    const body = REQUIRED_EVIDENCE_ROWS.map(
+      ({ id }) =>
+        `<!-- evidence-row:${id} -->\n- [ ] row \`N/A - not applicable to this change\`.`,
+    ).join("\n\n");
+    const { ok, findings } = evaluatePrEvidence(body, REQUIRED_EVIDENCE_ROWS, {
+      labels: "ui",
+    });
+    if (ok) failures.push("ui-labeled all-N/A fixture should fail");
+    const screenshots = findings.filter((finding) =>
+      SURFACE_ARTIFACT_ROW_IDS.includes(finding.id),
+    );
+    if (screenshots.some((finding) => finding.status !== "artifact-required")) {
+      failures.push(
+        "ui-labeled screenshot/video rows should require artifacts",
+      );
+    }
+  }
+
+  {
     const { ok } = evaluatePrEvidence(
       buildFixtureBody({ "backend-logs": "- [ ] Backend logs N/A" }),
     );
@@ -240,7 +302,7 @@ function runSelfTest() {
     for (const failure of failures) console.error(`  - ${failure}`);
     process.exit(1);
   }
-  console.log("check-pr-evidence self-test passed (6 cases).");
+  console.log("check-pr-evidence self-test passed (7 cases).");
 }
 
 function main() {
@@ -255,7 +317,11 @@ function main() {
   }
 
   const body = readBody(args);
-  const { ok, findings } = evaluatePrEvidence(body);
+  const labelsIdx = args.indexOf("--labels");
+  const labels = labelsIdx === -1 ? "" : (args[labelsIdx + 1] ?? "");
+  const { ok, findings } = evaluatePrEvidence(body, REQUIRED_EVIDENCE_ROWS, {
+    labels,
+  });
 
   if (args.includes("--json")) {
     console.log(JSON.stringify({ ok, findings }, null, 2));
@@ -272,13 +338,17 @@ function main() {
     const bad = findings.filter((finding) => finding.status !== "ok");
     console.error(
       `\nEvidence gate FAILED: ${bad.length} row(s) blank or missing. ` +
-        "Attach an artifact link/path or write `N/A - <reason>` on each row.",
+        "Attach an artifact link/path or write `N/A - <reason>` on each row. " +
+        "For ui/frontend/native PRs, before/after screenshots and walkthrough video require concrete artifact links/paths.",
     );
     process.exit(1);
   }
   console.log("\nEvidence gate passed: all required rows satisfied.");
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   main();
 }
