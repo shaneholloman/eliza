@@ -5,6 +5,9 @@
 - Wired `packages/scripts/__tests__/run-all-tests-vacuous-green-guard.test.ts`
   into `.github/workflows/scenario-pr.yml` next to the other explicit
   `packages/scripts/__tests__` contracts.
+- Wired the same guard into `.github/workflows/test.yml` as an always-on
+  ordinary PR job required by the `ci-ok` aggregate, so the guard no longer
+  depends on the opt-in `ci:full` heavy scenario family.
 - Hardened the guard's "valid min-tasks floor succeeds" case to use a
   self-contained temporary workspace fixture instead of depending on
   `@elizaos/agent` being present in sparse worktrees.
@@ -19,9 +22,11 @@ Passed:
 ```bash
 bun test packages/scripts/__tests__/run-all-tests-vacuous-green-guard.test.ts
 bunx @biomejs/biome check \
+  .github/workflows/test.yml \
   .github/workflows/scenario-pr.yml \
+  .github/issue-evidence/13620-runner-guard-ci.md \
   packages/scripts/__tests__/run-all-tests-vacuous-green-guard.test.ts
-ruby -e 'require "yaml"; YAML.load_file(".github/workflows/scenario-pr.yml"); puts "workflow yaml ok"'
+bunx yaml-lint .github/workflows/test.yml .github/workflows/scenario-pr.yml
 git diff --check
 ```
 

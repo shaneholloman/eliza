@@ -1,8 +1,10 @@
-// Pins the --min-tasks vacuous-green guard in run-all-tests.mjs (#12342): a lane
-// that a filter/shard/glob collapses to (near-)zero collected tasks must fail
-// loudly (exit 3) instead of exiting green having asserted nothing. Runs the
-// real runner in --plan/collection mode with a filter that matches no package —
-// no vitest is spawned, so the harness is deterministic and fast.
+/**
+ * Pins the run-all-tests.mjs vacuous-green guards (#12342/#13620).
+ *
+ * The suite spawns the real runner against temporary workspace packages so a
+ * lane that collects no tasks, swallows a failure as "no tests found", or hides
+ * a test-file mismatch cannot exit green without exercising the runner path.
+ */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
