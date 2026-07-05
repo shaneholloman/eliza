@@ -553,7 +553,7 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
                     className={cn(
                       "px-2.5 py-1 text-xs rounded-sm transition-colors",
                       settings.purchaseSharePercentage === preset
-                        ? "bg-orange-500/20 text-txt border border-orange-500/30"
+                        ? "bg-orange-500/20 text-white border border-orange-500/30"
                         : "bg-surface text-neutral-400 hover:bg-surface border border-transparent",
                     )}
                     onClick={() =>
@@ -571,7 +571,7 @@ export function AppMonetizationSettings({ app }: AppMonetizationSettingsProps) {
               <Button
                 onClick={handleSave}
                 disabled={!hasChanges || isSaving}
-                className="w-full bg-[var(--brand-orange)] hover:bg-[#e54f00] text-txt disabled:bg-surface disabled:text-muted"
+                className="w-full bg-[var(--brand-orange)] hover:bg-[#e54f00] text-white disabled:bg-surface disabled:text-muted"
               >
                 {isSaving ? (
                   <Loader2 className="h-4 w-4 animate-spin mr-2" />
