@@ -305,6 +305,10 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     tone: "accent",
     hue: "accent",
     labelKey: "settings.sections.voice.label",
+    // Hidden for MVP — voice runs on the bundled Kokoro TTS with no user
+    // selection; a summary row lives in Models & Providers. Kept registered so
+    // the `/settings voice` deep-link still resolves.
+    developerOnly: true,
     Component: VoiceSectionMount,
   },
   {
@@ -421,6 +425,8 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     tone: "neutral",
     hue: "slate",
     labelKey: "settings.sections.updates.label",
+    // Hidden for MVP (kept registered so its route/deep-link still resolves).
+    developerOnly: true,
     Component: ReleaseCenterView,
   },
   {
@@ -445,6 +451,8 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     tone: "warn",
     hue: "amber",
     labelKey: "settings.sections.secrets.label",
+    // Hidden for MVP (kept registered so its route/deep-link still resolves).
+    developerOnly: true,
     Component: SecretsManagerSection,
   },
   {
@@ -481,6 +489,8 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     // into your host"). Meaningless for a cloud mobile user — the cloud
     // "Sessions & Privacy" section covers real account security on cloud.
     hideOnCloud: true,
+    // Hidden for MVP (kept registered so its route/deep-link still resolves).
+    developerOnly: true,
     Component: SecuritySettingsSection,
   },
 
@@ -517,6 +527,9 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     titleKey: "settings.sections.cloudAgents.title",
     defaultTitle: "Eliza Cloud Agents",
     order: 1.55,
+    // Hidden for MVP — agent management renders inside the single "Eliza
+    // Cloud" tab (CloudOverviewSection). Deep-link still resolves.
+    developerOnly: true,
     Component: CloudAgentsSection,
   },
   // "My Runtimes" — manage + switch between local / cloud-dedicated /
