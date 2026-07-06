@@ -27,6 +27,7 @@ export function formatError(error: unknown): string {
   try {
     return JSON.stringify(error) ?? String(error);
   } catch {
+    // error-policy:J3 untrusted error values may not be JSON-serializable.
     return String(error);
   }
 }
@@ -168,6 +169,7 @@ export function parseJsonModelOutput(raw: string): unknown | null {
   try {
     return JSON.parse(candidate) as unknown;
   } catch {
+    // error-policy:J3 malformed model JSON renders as an explicit invalid result.
     return null;
   }
 }
