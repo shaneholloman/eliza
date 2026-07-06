@@ -30,6 +30,7 @@
  */
 import type { AgentNotification, NotificationCategory } from "@elizaos/core";
 import { tierForPriority } from "@elizaos/core";
+import { logger } from "@elizaos/logger";
 import { ChevronDown, ChevronUp, Clock, Flag } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { haptics } from "../../bridge/capacitor-bridge";
@@ -161,8 +162,13 @@ function loadSortMode(): NotificationSortMode {
 function storeSortMode(mode: NotificationSortMode): void {
   try {
     window.localStorage.setItem(SORT_MODE_STORAGE_KEY, mode);
-  } catch {
-    // Persistence is best-effort; the in-memory toggle still works.
+  } catch (err) {
+    // error-policy:J6 best-effort UI persistence — a failed write (private
+    // mode / quota) just means the sort toggle won't survive reload; the
+    // in-memory state still works. Keep it observable rather than silent.
+    logger.debug(
+      `[NotificationsHomeCenter] sort-mode persist skipped: ${String(err)}`,
+    );
   }
 }
 
