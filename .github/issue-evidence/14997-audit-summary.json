@@ -1,0 +1,407 @@
+{
+  "pr": 14997,
+  "generatedAt": "2026-07-06T08:04:48.901Z",
+  "command": "ELIZA_NODE_PATH=\"$(bunx node@24 -p process.execPath)\" bun run --cwd packages/app audit:app; then ELIZA_MVP_OCR_ENGINE=packaged bun run --cwd packages/app audit:ocr after refreshing install links",
+  "playwrightCapture": {
+    "passed": 365,
+    "failed": 0,
+    "reportEntries": 364,
+    "verdicts": {
+      "good": 328,
+      "needs-work": 11,
+      "needs-eyeball": 25
+    },
+    "nonGood": [
+      {
+        "slug": "builtin-inventory",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-work"
+      },
+      {
+        "slug": "builtin-plugins",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "builtin-plugins",
+        "viewport": "mobile-landscape",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "builtin-skills",
+        "viewport": "mobile-landscape",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "builtin-fine-tuning",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-work"
+      },
+      {
+        "slug": "builtin-fine-tuning",
+        "viewport": "ipad-portrait",
+        "verdict": "needs-work"
+      },
+      {
+        "slug": "builtin-runtime",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "builtin-runtime",
+        "viewport": "mobile-landscape",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "builtin-runtime",
+        "viewport": "desktop-landscape",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "builtin-runtime",
+        "viewport": "ipad-portrait",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "builtin-logs",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "builtin-logs",
+        "viewport": "mobile-landscape",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "builtin-background",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-work"
+      },
+      {
+        "slug": "builtin-background",
+        "viewport": "mobile-landscape",
+        "verdict": "needs-work"
+      },
+      {
+        "slug": "builtin-background",
+        "viewport": "desktop-landscape",
+        "verdict": "needs-work"
+      },
+      {
+        "slug": "builtin-background",
+        "viewport": "ipad-portrait",
+        "verdict": "needs-work"
+      },
+      {
+        "slug": "plugin-calendar-gui",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-calendar-gui",
+        "viewport": "mobile-landscape",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-calendar-gui",
+        "viewport": "ipad-portrait",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-goals-gui",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-goals-gui",
+        "viewport": "mobile-landscape",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-health-gui",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-health-gui",
+        "viewport": "mobile-landscape",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-inbox-gui",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-inbox-gui",
+        "viewport": "mobile-landscape",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-relationships-gui",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-relationships-gui",
+        "viewport": "mobile-landscape",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-model-tester-gui",
+        "viewport": "mobile-landscape",
+        "verdict": "needs-work"
+      },
+      {
+        "slug": "plugin-wallet-gui",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-work"
+      },
+      {
+        "slug": "plugin-screenshare-gui",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-screenshare-gui",
+        "viewport": "mobile-landscape",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-screenshare-gui",
+        "viewport": "ipad-portrait",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-trajectory-logger-gui",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-trajectory-logger-gui",
+        "viewport": "mobile-landscape",
+        "verdict": "needs-eyeball"
+      },
+      {
+        "slug": "plugin-training-gui",
+        "viewport": "mobile-portrait",
+        "verdict": "needs-work"
+      },
+      {
+        "slug": "plugin-training-gui",
+        "viewport": "ipad-portrait",
+        "verdict": "needs-work"
+      }
+    ],
+    "hoverProbeFailures": [
+      "builtin-transcripts mobile-portrait Join meeting hover probe timeout",
+      "builtin-transcripts mobile-landscape Join meeting hover probe timeout",
+      "builtin-transcripts desktop-landscape Join meeting hover probe timeout",
+      "builtin-transcripts ipad-portrait Join meeting hover probe timeout"
+    ]
+  },
+  "ocrTriage": {
+    "total": 364,
+    "summary": {
+      "total": 364,
+      "verified": 80,
+      "broken": 16,
+      "needsEyeball": 268,
+      "regressions": 16,
+      "knownRegressions": 0,
+      "newRegressions": 16
+    },
+    "newRegressions": [
+      {
+        "slug": "builtin-apps",
+        "viewport": "mobile-landscape",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: Messages | Settings | Wallet | Automations | Knowledge"
+        ]
+      },
+      {
+        "slug": "builtin-apps",
+        "viewport": "mobile-portrait",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: Messages | Settings | Wallet | Automations | Knowledge"
+        ]
+      },
+      {
+        "slug": "builtin-apps",
+        "viewport": "ipad-portrait",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: Messages | Settings | Wallet | Automations | Knowledge"
+        ]
+      },
+      {
+        "slug": "builtin-apps",
+        "viewport": "desktop-landscape",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: Messages | Settings | Wallet | Automations | Knowledge"
+        ]
+      },
+      {
+        "slug": "builtin-character-select",
+        "viewport": "mobile-landscape",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: About Me | Style Rules | Chat Examples | Post Examples"
+        ]
+      },
+      {
+        "slug": "builtin-chat",
+        "viewport": "mobile-portrait",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: Ask  | Good evening | Good morning | Good afternoon | what's up | Welcome"
+        ]
+      },
+      {
+        "slug": "builtin-logs",
+        "viewport": "mobile-landscape",
+        "domVerdict": "needs-eyeball",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: All levels | Search logs | All tags"
+        ]
+      },
+      {
+        "slug": "builtin-relationships",
+        "viewport": "mobile-landscape",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: No relationships yet | Search people | Connect your platforms"
+        ]
+      },
+      {
+        "slug": "builtin-transcripts",
+        "viewport": "mobile-landscape",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: No transcripts yet | transcri | recording"
+        ]
+      },
+      {
+        "slug": "builtin-transcripts",
+        "viewport": "mobile-portrait",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: No transcripts yet | transcri | recording"
+        ]
+      },
+      {
+        "slug": "builtin-transcripts",
+        "viewport": "ipad-portrait",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: No transcripts yet | transcri | recording"
+        ]
+      },
+      {
+        "slug": "builtin-transcripts",
+        "viewport": "desktop-landscape",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: No transcripts yet | transcri | recording"
+        ]
+      },
+      {
+        "slug": "builtin-views",
+        "viewport": "mobile-landscape",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: Messages | Settings | Wallet | Automations | Knowledge"
+        ]
+      },
+      {
+        "slug": "builtin-views",
+        "viewport": "mobile-portrait",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: Messages | Settings | Wallet | Automations | Knowledge"
+        ]
+      },
+      {
+        "slug": "builtin-views",
+        "viewport": "ipad-portrait",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: Messages | Settings | Wallet | Automations | Knowledge"
+        ]
+      },
+      {
+        "slug": "builtin-views",
+        "viewport": "desktop-landscape",
+        "domVerdict": "good",
+        "ocrVerdict": "broken",
+        "reasons": [
+          "missing expected content: Messages | Settings | Wallet | Automations | Knowledge"
+        ]
+      }
+    ]
+  },
+  "relevantManualReview": {
+    "mobileHome": {
+      "artifact": ".github/issue-evidence/14997-home-mobile-portrait.png",
+      "assessment": "Home/chat rest state is uncluttered: ambient wallpaper, time/weather, Todos widget, gesture hint, collapsed composer. No seeded notifications are present in this audit state.",
+      "palette": {
+        "buckets": {
+          "neutral": 0.6345,
+          "orange": 0.3609,
+          "white": 0.0045,
+          "black": 0.0002
+        },
+        "topSwatches": [
+          "#b89898",
+          "#a89898",
+          "#c89898",
+          "#e8a898",
+          "#f8b888",
+          "#d89898"
+        ]
+      }
+    },
+    "desktopHome": {
+      "artifact": ".github/issue-evidence/14997-home-desktop-landscape.png",
+      "assessment": "Desktop home/chat rest state remains sparse: centered widget, gesture hint above composer, ambient wallpaper, no notification shade at rest.",
+      "palette": {
+        "buckets": {
+          "orange": 0.8404,
+          "neutral": 0.1589,
+          "white": 0.0006,
+          "black": 0.0001
+        },
+        "topSwatches": [
+          "#e8a898",
+          "#f8b898",
+          "#f8a898",
+          "#f8b888",
+          "#d89898",
+          "#f8a888"
+        ]
+      }
+    },
+    "notificationShade": {
+      "directProof": "packages/ui jsdom regression: HomeScreen opens seeded notification shade, clicks /settings notification row, asserts navigateDeepLink(\"/settings\") and shade unmounts.",
+      "limitation": "The app-wide aesthetic audit does not seed/open the notification shade state, so screenshots prove home rest state only; unit coverage proves the deep-link close behavior directly."
+    }
+  }
+}
