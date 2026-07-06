@@ -214,6 +214,14 @@ const CHAT_PANEL_THEME = {
   "--accent-foreground": "#120c08",
 } as React.CSSProperties;
 
+// The drag-handle bar color. Set EXPLICITLY (not `bg-muted-strong`) because the
+// SheetGrabber renders OUTSIDE the fieldset that scopes CHAT_PANEL_THEME, so a
+// token-based color there resolves to the ambient app theme — which is dark on a
+// light surface, making the handle render BLACK (the "handle is black sometimes"
+// bug: the open-sheet grabber was black while the in-panel pill bar was white).
+// This warm near-white matches the panel's `--muted-strong` in every context.
+const HANDLE_BAR_COLOR = "rgba(255, 247, 240, 0.86)";
+
 // Shared easing for the overlay's cheap motion path. Open/close must stay
 // opacity/translate only: animating blur/filter or scaling a scrollable
 // transcript repaints too much of the viewport and visibly janks on laptops.
@@ -560,10 +568,11 @@ function SheetGrabber({
           "h-1.5 w-12 rounded-full opacity-100 transition-colors duration-300",
           // Pulse while the mic is hot / a reply is speaking: the warm bar
           // breathes instead of sitting static, the "audio is on" cue.
-          glow
-            ? "animate-pulse bg-accent motion-reduce:animate-none"
-            : "bg-muted-strong",
+          glow && "animate-pulse bg-accent motion-reduce:animate-none",
         )}
+        // Explicit fixed color (see HANDLE_BAR_COLOR) so the grabber — rendered
+        // outside the panel theme — never inherits a dark ambient token.
+        style={glow ? undefined : { backgroundColor: HANDLE_BAR_COLOR }}
       />
     </motion.button>
   );
@@ -635,10 +644,11 @@ function PillHandle({
           "h-1.5 w-12 rounded-full opacity-100 transition-colors duration-300",
           // Same pulse as the SheetGrabber bar: while audio is on and the chat
           // is collapsed to the pill, the pill itself pulses.
-          glow
-            ? "animate-pulse bg-accent motion-reduce:animate-none"
-            : "bg-muted-strong",
+          glow && "animate-pulse bg-accent motion-reduce:animate-none",
         )}
+        // Same explicit color as the grabber bar so the two are pixel-identical
+        // through the crossfade (HANDLE_BAR_COLOR).
+        style={glow ? undefined : { backgroundColor: HANDLE_BAR_COLOR }}
       />
     </Button>
   );
@@ -1252,6 +1262,7 @@ export function ContinuousChatOverlay({
         .catch(() => {
           // Interrupted by a fresh gesture (stop) — keep the promotion resident.
         });
+      return controls;
     },
     [stopThreadAnimation, threadHeight, setDraggingState],
   );
@@ -2408,6 +2419,18 @@ export function ContinuousChatOverlay({
     markLayoutShiftIntent();
     const next = evalHeaderVisible(h);
     setHeaderVisible((prev) => (prev === next ? prev : next));
+    // Unmount the collapse-preview transcript once the height has actually
+    // sprung to rest at 0 — closeSheet keeps it mounted so the panel follows the
+    // spring down instead of snapping. Gated so it never fires mid-drag (a
+    // pill-drag sits at h=0 while dragging) or while the sheet is open.
+    if (
+      h <= 1 &&
+      !draggingRef.current &&
+      !sheetOpen &&
+      dragPreviewVisibleRef.current
+    ) {
+      setDragPreviewMounted(false);
+    }
   });
   // Re-evaluate on settled-state changes that don't tick the height (programmatic
   // pill/maximize/open with the spring already at rest).
@@ -2500,15 +2523,6 @@ export function ContinuousChatOverlay({
   // Side inset (12→0px), corner radius (inset radius→0), and the composer bottom
   // inset (full→0), each scaled by the spring so they collapse/return together.
   const overlayPadX = useTransform(fullBleedT, [0, 1], [12, 0]);
-  // Light hairline on the composer that fades in as the sheet is dragged up into
-  // full-bleed (maximize). It gives the input a defined field against the
-  // full-screen backdrop; at the pill/inset detents fullBleedT is 0, so the
-  // border is fully transparent and the resting composer is unchanged.
-  const composerBorderColor = useTransform(
-    fullBleedT,
-    [0, 1],
-    ["rgba(255,255,255,0)", "rgba(255,255,255,0.16)"],
-  );
   // The panel WRAPPER's max-width rides the same morph: 48rem (max-w-3xl; the
   // compact landscape affordance is 13rem) widening to the full viewport as the
   // shape goes edge-to-edge. Discrete classes popped the width only when the
@@ -2676,7 +2690,17 @@ export function ContinuousChatOverlay({
       stopOpenProgressAnimation();
       threadHeight.set(0);
       openProgress.set(1);
+      setDragPreviewMounted(false);
     } else {
+      // Keep the transcript MOUNTED through the collapse spring. `setMode("input")`
+      // above flips `sheetOpen` false, which alone would unmount the thread this
+      // very frame — the panel would then snap to the composer height instantly
+      // while the `threadHeight` spring animated a now-unmounted element's
+      // flex-basis (the "jerky, too-fast collapse" — 415px in one frame). The
+      // drag-preview mount keeps the thread laid out so the panel height actually
+      // follows the spring down; the settle listener below unmounts it once the
+      // height reaches 0 (robust to the [baseH] effect re-issuing the spring).
+      setDragPreviewMounted(true);
       animateThreadHeight(0);
       // Settle the pill morph to the input's resting end explicitly: a drag
       // that dipped past the bottom left openProgress below 1, and the
@@ -2692,6 +2716,7 @@ export function ContinuousChatOverlay({
     stopOpenProgressAnimation,
     animateThreadHeight,
     animateOpenProgress,
+    setDragPreviewMounted,
   ]);
 
   // Collapse the whole chat to the bottom pill capsule — the shared landing for
@@ -5231,9 +5256,11 @@ export function ContinuousChatOverlay({
                 // No divider above the composer — spacing separates it from the
                 // thread; the sheet is one continuous glass surface (#10710).
                 "relative z-10 flex min-w-0 shrink-0 items-center gap-1.5 px-2 py-2 sm:gap-2",
-                // A transparent hairline is always reserved (no layout shift);
-                // its color fades in via `composerBorderColor` only as the sheet
-                // maximizes into full-bleed, framing the input as a field.
+                // The composer must read IDENTICALLY in every state — pill,
+                // inset chat, and full-screen — the only difference being the
+                // handle above it. So it carries no border in any mode (a
+                // transparent hairline is kept only to reserve layout, never
+                // colored); the sheet is one continuous glass surface (#10710).
                 "rounded-3xl border border-transparent",
                 // Always the transcript's centered column (a no-op at rest) so
                 // the composer sits under the messages through the morph and at
@@ -5245,7 +5272,6 @@ export function ContinuousChatOverlay({
               // clearance itself — except while the keyboard is up, which
               // already covers that zone.
               style={{
-                borderColor: composerBorderColor,
                 ...(fullBleed && !keyboardLiftActive
                   ? {
                       paddingBottom:

@@ -1171,6 +1171,54 @@ async function runFingerTrackingSuite(page) {
   );
 }
 
+if (process.env.ANIM_PROBE) {
+  const page = await browser.newPage({ viewport: { width: 420, height: 880 } });
+  attachConsole(page, sink);
+  await gotoFixture(page);
+  await page.waitForSelector('[data-testid="chat-sheet"]');
+  await page.waitForTimeout(700);
+  // Sample the panel height every rAF for `ms` while running `action`.
+  const sampleCurve = async (label, action, ms = 700) => {
+    await page.evaluate(() => {
+      globalThis.__curve = [];
+      const el = document.querySelector('[data-testid="chat-sheet"]');
+      const t0 = performance.now();
+      const tick = () => {
+        globalThis.__curve.push({
+          t: Math.round(performance.now() - t0),
+          h: Math.round(el.getBoundingClientRect().height),
+        });
+        if (performance.now() - t0 < 800) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    await action();
+    await page.waitForTimeout(ms);
+    const curve = await page.evaluate(() => globalThis.__curve);
+    // Report: settle time (last change), and per-frame max delta (jerk).
+    let maxStep = 0;
+    let settleT = 0;
+    for (let i = 1; i < curve.length; i += 1) {
+      const d = Math.abs(curve[i].h - curve[i - 1].h);
+      if (d > maxStep) maxStep = d;
+      if (d > 1) settleT = curve[i].t;
+    }
+    const heights = curve.map((c) => c.h);
+    console.log(
+      `${label}: settle≈${settleT}ms, maxStep=${maxStep}px/frame, range ${Math.min(...heights)}→${Math.max(...heights)}px, frames=${curve.length}`,
+    );
+    return curve;
+  };
+  const tap = (sel) => async () => {
+    await page.getByTestId(sel).click();
+  };
+  await sampleCurve("EXPAND (tap grabber, input→half)", tap("chat-sheet-grabber"));
+  await page.waitForTimeout(SETTLE);
+  await sampleCurve("COLLAPSE (tap grabber, half→input)", tap("chat-sheet-grabber"));
+  await browser.close();
+  process.exit(0);
+}
+
 if (process.env.FINGER_PROBE) {
   const page = await browser.newPage({ viewport: { width: 420, height: 880 } });
   attachConsole(page, sink);
