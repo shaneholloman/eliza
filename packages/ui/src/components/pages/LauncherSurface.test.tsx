@@ -122,15 +122,19 @@ describe("LauncherSurface", () => {
     expect(screen.getAllByTestId("launcher-tile-wallet")).toHaveLength(1);
   });
 
-  it("hydrates persisted launcher recents on first mount", () => {
+  it("does not render a Recents zone even with persisted recents (removed as duplicate noise)", () => {
+    // Recency is still recorded on launch (other surfaces read it) but the
+    // launcher no longer surfaces a Recents row, it only mirrored the top of
+    // All Apps two rows down (#13453 deslop).
     saveLauncherRecents(["browser", "wallet"]);
 
     render(<LauncherSurface />);
 
-    expect(screen.getByRole("heading", { name: "Recents" })).toBeTruthy();
-    expect(screen.getByTestId("launcher-zone-recents")).toBeTruthy();
-    expect(screen.getByTestId("launcher-recents-tile-browser")).toBeTruthy();
-    expect(screen.getByTestId("launcher-recents-tile-wallet")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Recents" })).toBeNull();
+    expect(screen.queryByTestId("launcher-zone-recents")).toBeNull();
+    // The apps themselves still exist once, in All Apps.
+    expect(screen.getByTestId("launcher-tile-browser")).toBeTruthy();
+    expect(screen.getAllByTestId("launcher-tile-wallet")).toHaveLength(1);
   });
 
   it("hides native-OS tiles off the AOSP fork and shows them on it", () => {

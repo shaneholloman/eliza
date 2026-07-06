@@ -17,7 +17,6 @@ import { getActiveViewModality } from "../../platform/platform-guards";
 import { useAppSelectorShallow } from "../../state";
 import {
   loadLauncherFavorites,
-  loadLauncherRecents,
   recordLauncherRecent,
   saveLauncherFavorites,
 } from "../../state/persistence";
@@ -27,7 +26,6 @@ import {
   canonicalLauncherId,
   curateLauncherPages,
   curateLauncherZones,
-  LAUNCHER_RECENTS_ZONE_LIMIT,
 } from "./launcher-curation";
 
 export const LauncherSurface = React.memo(
@@ -40,9 +38,6 @@ export const LauncherSurface = React.memo(
     const activeModality = React.useMemo(() => getActiveViewModality(), []);
     const isAosp = React.useMemo(() => isAospShellEnabled(), []);
 
-    const [recentIds, setRecentIds] = React.useState<string[]>(() =>
-      loadLauncherRecents(),
-    );
     const [favoriteIds, setFavoriteIds] = React.useState<string[]>(() =>
       loadLauncherFavorites(),
     );
@@ -72,13 +67,8 @@ export const LauncherSurface = React.memo(
     );
 
     const zones = React.useMemo(
-      () =>
-        curateLauncherZones(page, {
-          recentIds,
-          favoriteIds,
-          recentsLimit: LAUNCHER_RECENTS_ZONE_LIMIT,
-        }),
-      [page, recentIds, favoriteIds],
+      () => curateLauncherZones(page, { favoriteIds }),
+      [page, favoriteIds],
     );
 
     const handleToggleFavorite = React.useCallback((entry: ViewEntry) => {
@@ -93,7 +83,9 @@ export const LauncherSurface = React.memo(
     }, []);
 
     const handleLaunch = React.useCallback((entry: ViewEntry) => {
-      setRecentIds(recordLauncherRecent(canonicalLauncherId(entry.id)));
+      // Recency is still recorded (other surfaces read it) but no longer drives a
+      // launcher zone, the Recents row was removed as duplicate noise (#13453).
+      recordLauncherRecent(canonicalLauncherId(entry.id));
       const path = entry.path ?? `/apps/${entry.id}`;
       try {
         if (typeof window === "undefined") return;

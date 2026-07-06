@@ -362,23 +362,16 @@ export function normalizeLauncherLabel(label: string): string {
     .trim();
 }
 
-/** How many tiles the Recents zone surfaces (one grid row on desktop). */
-export const LAUNCHER_RECENTS_ZONE_LIMIT = 8;
-
-/** A named launcher zone (Recents / Favorites / All Apps) with its tiles. */
+/** A named launcher zone (Favorites / All Apps) with its tiles. */
 export interface LauncherZone {
-  key: "recents" | "favorites" | "all";
+  key: "favorites" | "all";
   label: string;
   entries: ViewEntry[];
 }
 
 export interface LauncherZoneOptions {
-  /** Canonical launcher ids launched most-recent-first (already de-duped). */
-  recentIds: readonly string[];
   /** Canonical launcher ids the user pinned, in pin order. */
   favoriteIds: readonly string[];
-  /** How many Recents tiles to surface. */
-  recentsLimit: number;
 }
 
 /**
@@ -393,21 +386,25 @@ export function allAppsZone(entries: ViewEntry[]): LauncherZone[] {
 
 /**
  * Partition a curated launcher page into the named zones the launcher renders:
- * Recents (most-recently-launched, capped), Favorites (user-pinned), and All
- * Apps (the full curated page, in curation order). Recents and Favorites are
- * projections OVER the curated page — an id that is not a currently-visible tile
- * (uninstalled, gated off) is silently skipped, so a stale recent/favorite can
+ * Favorites (user-pinned) and All Apps (the full curated page, in curation
+ * order).
+ *
+ * The Recents zone was removed (#13453 launcher deslop): it only mirrored the
+ * top of All Apps two rows down, the same Settings/Wallet/Tasks tiles, so it
+ * was pure duplicate visual noise, not a meaningful recency signal. Favorites
+ * are a projection OVER the curated page, an id that is not a currently-visible
+ * tile (uninstalled, gated off) is silently skipped, so a stale favorite can
  * never resurrect a hidden tile. All Apps always lists every visible tile so the
- * launcher stays complete even when a tile is also pinned/recent. Empty Recents
- * / Favorites zones are omitted by the caller (this returns them empty so the
- * shape is stable for tests).
+ * launcher stays complete even when a tile is also pinned. The empty Favorites
+ * zone is omitted by the caller (this returns it empty so the shape is stable
+ * for tests).
  */
 export function curateLauncherZones(
   page: ViewEntry[],
-  { recentIds, favoriteIds, recentsLimit }: LauncherZoneOptions,
+  { favoriteIds }: LauncherZoneOptions,
 ): LauncherZone[] {
   const byId = new Map(page.map((entry) => [entry.id, entry]));
-  const pickInOrder = (ids: readonly string[], limit?: number): ViewEntry[] => {
+  const pickInOrder = (ids: readonly string[]): ViewEntry[] => {
     const picked: ViewEntry[] = [];
     const seen = new Set<string>();
     for (const rawId of ids) {
@@ -417,17 +414,11 @@ export function curateLauncherZones(
       if (!entry) continue;
       seen.add(id);
       picked.push(entry);
-      if (limit != null && picked.length >= limit) break;
     }
     return picked;
   };
 
   return [
-    {
-      key: "recents",
-      label: "Recents",
-      entries: pickInOrder(recentIds, recentsLimit),
-    },
     {
       key: "favorites",
       label: "Favorites",
