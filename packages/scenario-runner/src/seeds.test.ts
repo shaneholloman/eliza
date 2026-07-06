@@ -38,6 +38,19 @@ type LifeOpsIntentForTest = {
   metadata: Record<string, unknown>;
 };
 
+type LifeOpsReminderAttemptForTest = {
+  id: string;
+  planId: string;
+  channel: string;
+  stepIndex: number;
+  attemptedAt: string | null;
+  outcome: string;
+  connectorRef: string | null;
+  deliveryMetadata: Record<string, unknown>;
+  reviewAt?: string | null;
+  reviewStatus?: string | null;
+};
+
 let activeServer: http.Server | null = null;
 const originalGoogleBase = process.env.ELIZA_MOCK_GOOGLE_BASE;
 
@@ -460,6 +473,124 @@ describe("scenario memory seeds", () => {
           id: "di-board-call-meeting:watch",
           target: "specific",
           targetDeviceId: "watch",
+        }),
+      );
+    } finally {
+      await harness.cleanup();
+    }
+  }, 120_000);
+
+  it("maps push delivery and ladder state seeds into reminder attempts", async () => {
+    const harness = await createRealTestRuntime({
+      withLLM: false,
+      characterName: "scenario-reminder-attempt-seed-test",
+    });
+    try {
+      const ctx = {
+        runtime: harness.runtime,
+        scenarioId: "push.failed-delivery-retry-on-secondary-channel",
+        now: "2026-07-06T14:00:00.000Z",
+      } as ScenarioContext;
+
+      const failedResult = await applyScenarioSeedStep(ctx, {
+        type: "memory",
+        content: {
+          kind: "push-delivery-attempt",
+          channel: "ntfy",
+          topic: "eliza-shaw-mobile",
+          result: "failed",
+          statusCode: 503,
+          attemptedAt: "2026-07-06T13:58:00.000Z",
+        },
+      } satisfies ScenarioSeedStep);
+      const ladderResult = await applyScenarioSeedStep(
+        {
+          ...ctx,
+          scenarioId: "push.voice-call-as-last-resort",
+        } as ScenarioContext,
+        {
+          type: "memory",
+          content: {
+            kind: "ladder-state",
+            history: [
+              {
+                channel: "desktop",
+                at: "2026-07-06T13:30:00.000Z",
+                ackedAt: null,
+              },
+              {
+                channel: "mobile",
+                at: "2026-07-06T13:38:00.000Z",
+                ackedAt: null,
+              },
+              {
+                channel: "sms",
+                at: "2026-07-06T13:48:00.000Z",
+                ackedAt: null,
+              },
+            ],
+            urgency: "critical",
+          },
+        } satisfies ScenarioSeedStep,
+      );
+
+      expect(failedResult).toBeUndefined();
+      expect(ladderResult).toBeUndefined();
+      const { LifeOpsRepository } = (await import(
+        "../../../plugins/plugin-personal-assistant/src/lifeops/repository.ts"
+      )) as {
+        LifeOpsRepository: new (
+          runtime: AgentRuntime,
+        ) => {
+          listReminderAttempts: (
+            agentId: string,
+            filter?: Record<string, unknown>,
+          ) => Promise<LifeOpsReminderAttemptForTest[]>;
+        };
+      };
+      const repository = new LifeOpsRepository(harness.runtime);
+      const failedAttempts = await repository.listReminderAttempts(
+        String(harness.runtime.agentId),
+        {
+          planId:
+            "scenario-reminder-plan:push.failed-delivery-retry-on-secondary-channel:ntfy push",
+        },
+      );
+      expect(failedAttempts).toContainEqual(
+        expect.objectContaining({
+          channel: "ntfy",
+          outcome: "blocked_connector",
+          connectorRef: "ntfy:eliza-shaw-mobile",
+          deliveryMetadata: expect.objectContaining({
+            source: "scenario-seed",
+            scenarioId: "push.failed-delivery-retry-on-secondary-channel",
+            statusCode: 503,
+            result: "failed",
+            topic: "eliza-shaw-mobile",
+          }),
+        }),
+      );
+
+      const ladderAttempts = await repository.listReminderAttempts(
+        String(harness.runtime.agentId),
+        { planId: "scenario-ladder:push.voice-call-as-last-resort" },
+      );
+      expect(ladderAttempts.map((attempt) => attempt.channel)).toEqual([
+        "desktop",
+        "mobile",
+        "sms",
+      ]);
+      expect(ladderAttempts).toContainEqual(
+        expect.objectContaining({
+          channel: "sms",
+          stepIndex: 2,
+          outcome: "delivered_unread",
+          reviewAt: "2026-07-06T14:00:00.000Z",
+          reviewStatus: "no_response",
+          deliveryMetadata: expect.objectContaining({
+            scenarioId: "push.voice-call-as-last-resort",
+            urgency: "critical",
+          }),
         }),
       );
     } finally {

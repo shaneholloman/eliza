@@ -50,6 +50,24 @@ type LifeOpsScheduledTask = Record<string, unknown> & {
   metadata?: Record<string, unknown>;
 };
 
+type LifeOpsReminderAttempt = Record<string, unknown> & {
+  id: string;
+  agentId: string;
+  planId: string;
+  ownerType: "occurrence" | "calendar_event";
+  ownerId: string;
+  occurrenceId: string | null;
+  channel: string;
+  stepIndex: number;
+  scheduledFor: string;
+  attemptedAt: string | null;
+  outcome: string;
+  connectorRef: string | null;
+  deliveryMetadata: Record<string, unknown>;
+  reviewAt?: string | null;
+  reviewStatus?: string | null;
+};
+
 type LifeOpsRepositoryInstance = {
   createDefinition: (definition: LifeOpsTaskDefinition) => Promise<unknown>;
   upsertOccurrence: (occurrence: LifeOpsOccurrence) => Promise<unknown>;
@@ -62,6 +80,11 @@ type LifeOpsRepositoryInstance = {
     agentId: string,
     filter?: Record<string, unknown>,
   ) => Promise<LifeOpsScheduledTask[]>;
+  createReminderAttempt: (attempt: LifeOpsReminderAttempt) => Promise<unknown>;
+  listReminderAttempts: (
+    agentId: string,
+    options?: Record<string, unknown>,
+  ) => Promise<LifeOpsReminderAttempt[]>;
 };
 
 type LifeOpsRepositoryConstructor = {
@@ -239,6 +262,36 @@ type DeviceIntentMemorySeed = {
   dispatchedTo?: unknown;
   actionUrl?: unknown;
   expiresAt?: unknown;
+};
+
+type ReminderAttemptMemorySeed = {
+  kind?: unknown;
+  type?: unknown;
+  id?: unknown;
+  title?: unknown;
+  channel?: unknown;
+  sentAt?: unknown;
+  readAt?: unknown;
+  attemptedAt?: unknown;
+  scheduledFor?: unknown;
+  priority?: unknown;
+  urgency?: unknown;
+  result?: unknown;
+  statusCode?: unknown;
+  topic?: unknown;
+};
+
+type LadderStateMemorySeed = {
+  kind?: unknown;
+  type?: unknown;
+  history?: unknown;
+  urgency?: unknown;
+};
+
+type LadderHistoryEntry = {
+  channel?: unknown;
+  at?: unknown;
+  ackedAt?: unknown;
 };
 
 type MemoryContactSeed = {
@@ -1126,6 +1179,139 @@ async function seedDeviceIntentMemory(
   return undefined;
 }
 
+function normalizeReminderAttemptChannel(value: unknown): string {
+  const channel = readNonEmptyString(value)?.toLowerCase();
+  if (
+    channel === "desktop" ||
+    channel === "mobile" ||
+    channel === "sms" ||
+    channel === "voice" ||
+    channel === "phone_call" ||
+    channel === "ntfy" ||
+    channel === "in_app"
+  ) {
+    return channel === "phone_call" ? "voice" : channel;
+  }
+  return "in_app";
+}
+
+function normalizeReminderAttemptOutcome(
+  seed: ReminderAttemptMemorySeed,
+): string {
+  const result = readNonEmptyString(seed.result)?.toLowerCase();
+  if (result === "failed" || result === "blocked") {
+    return "blocked_connector";
+  }
+  if (readNonEmptyString(seed.readAt)) {
+    return "delivered_read";
+  }
+  if ("readAt" in seed && seed.readAt === null) {
+    return "delivered_unread";
+  }
+  return "delivered";
+}
+
+async function seedReminderAttemptMemory(
+  ctx: ScenarioContext,
+  seed: ReminderAttemptMemorySeed,
+  index = 0,
+  planIdOverride?: string,
+): Promise<string | undefined> {
+  const runtime = requireRuntime(ctx);
+  const channel = normalizeReminderAttemptChannel(seed.channel);
+  const attemptedAt =
+    readIsoDate(seed.attemptedAt) ??
+    readIsoDate(seed.sentAt) ??
+    readScenarioNow(ctx);
+  const scheduledFor = (
+    readIsoDate(seed.scheduledFor) ?? attemptedAt
+  ).toISOString();
+  const title =
+    readNonEmptyString(seed.title) ??
+    (channel === "ntfy" ? "ntfy push" : "Scenario push attempt");
+  const planId =
+    planIdOverride ??
+    `scenario-reminder-plan:${ctx.scenarioId ?? "unknown"}:${title}`;
+  const outcome = normalizeReminderAttemptOutcome(seed);
+  const urgency =
+    readNonEmptyString(seed.urgency) ??
+    readNonEmptyString(seed.priority) ??
+    "medium";
+  const reviewAt =
+    outcome === "delivered_unread" || outcome === "delivered"
+      ? readScenarioNow(ctx).toISOString()
+      : null;
+  const { LifeOpsRepository } = await loadLifeOps();
+  await LifeOpsRepository.bootstrapSchema(runtime);
+  const repository = new LifeOpsRepository(runtime);
+  await repository.createReminderAttempt({
+    id:
+      readNonEmptyString(seed.id) ??
+      `${planId}:attempt:${index}:${channel}:${attemptedAt.toISOString()}`,
+    agentId: String(runtime.agentId),
+    planId,
+    ownerType: "occurrence",
+    ownerId: planId,
+    occurrenceId: null,
+    channel,
+    stepIndex: index,
+    scheduledFor,
+    attemptedAt: attemptedAt.toISOString(),
+    outcome,
+    connectorRef: readNonEmptyString(seed.topic)
+      ? `${channel}:${readNonEmptyString(seed.topic)}`
+      : null,
+    deliveryMetadata: {
+      source: "scenario-seed",
+      scenarioId: ctx.scenarioId ?? null,
+      title,
+      urgency,
+      priority: readNonEmptyString(seed.priority) ?? urgency,
+      readAt: readNonEmptyString(seed.readAt),
+      statusCode: readOptionalNumber(seed.statusCode),
+      result: readNonEmptyString(seed.result),
+      topic: readNonEmptyString(seed.topic),
+    },
+    reviewAt,
+    reviewStatus: reviewAt ? "no_response" : null,
+  });
+  return undefined;
+}
+
+async function seedLadderStateMemory(
+  ctx: ScenarioContext,
+  seed: LadderStateMemorySeed,
+): Promise<string | undefined> {
+  if (!Array.isArray(seed.history) || seed.history.length === 0) {
+    return "ladder-state seed requires a non-empty history array";
+  }
+  const planId = `scenario-ladder:${ctx.scenarioId ?? "unknown"}`;
+  for (const [index, entry] of seed.history.entries()) {
+    const record =
+      entry && typeof entry === "object" && !Array.isArray(entry)
+        ? (entry as LadderHistoryEntry)
+        : null;
+    if (!record) {
+      return "ladder-state history entries must be objects";
+    }
+    const result = await seedReminderAttemptMemory(
+      ctx,
+      {
+        kind: "push-delivery-attempt",
+        title: `Ladder rung ${index + 1}`,
+        channel: record.channel,
+        attemptedAt: record.at,
+        readAt: record.ackedAt ?? null,
+        urgency: seed.urgency,
+      },
+      index,
+      planId,
+    );
+    if (typeof result === "string") return result;
+  }
+  return undefined;
+}
+
 async function seedContact(
   ctx: ScenarioContext,
   seed: ContactSeed,
@@ -1233,11 +1419,20 @@ async function seedMemory(
   if (memoryType === "device-intent") {
     return seedDeviceIntentMemory(ctx, content as DeviceIntentMemorySeed);
   }
+  if (
+    memoryType === "push-delivery-attempt" ||
+    memoryType === "outbound-push-attempt"
+  ) {
+    return seedReminderAttemptMemory(ctx, content as ReminderAttemptMemorySeed);
+  }
+  if (memoryType === "ladder-state") {
+    return seedLadderStateMemory(ctx, content as LadderStateMemorySeed);
+  }
   if (memoryType !== null) {
     // A seed the runner cannot land must fail the scenario, never no-op:
     // a silently dropped seed fabricates the premise the checks grade
     // against (#14631 — the "seeded VIP fact" the model never received).
-    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity/user-state/focus-window-active/queued-push/device-intent, or plain { text } for a durable owner fact`;
+    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity/user-state/focus-window-active/queued-push/device-intent/push-delivery-attempt/outbound-push-attempt/ladder-state, or plain { text } for a durable owner fact`;
   }
   const text = readNonEmptyString((content as { text?: unknown }).text);
   if (!text) {
