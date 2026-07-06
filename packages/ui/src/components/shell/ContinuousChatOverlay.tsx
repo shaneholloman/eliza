@@ -7,11 +7,10 @@ import {
   ArrowDown,
   FileText,
   Film,
-  LayoutGrid,
+  Home,
   Loader2,
   Mic,
   Music,
-  RotateCcw,
   Search,
   SendHorizontal,
 } from "lucide-react";
@@ -180,6 +179,30 @@ const EMPTY_SLASH_CONTROLLER: SlashCommandController = {
  * in isolation (stories / harness) with a mock. The app wraps it in a small
  * context-reading mount (see App.tsx) that supplies the shared controller.
  */
+
+// The chat floats over arbitrary app surfaces, including theme-app where
+// `--card` is brand orange. Keep the sheet's local tokens dark and self-owned so
+// open/maximized chat never turns into a transparent-looking orange overlay.
+const CHAT_PANEL_THEME = {
+  "--bg": "#120c08",
+  "--bg-hover": "rgba(255, 255, 255, 0.08)",
+  "--bg-muted": "rgba(255, 255, 255, 0.06)",
+  "--card": "#1d130c",
+  "--card-foreground": "#fff7f0",
+  "--surface": "rgba(255, 255, 255, 0.06)",
+  "--txt": "#fff7f0",
+  "--text": "#fff7f0",
+  "--text-strong": "#ffffff",
+  "--foreground": "#fff7f0",
+  "--muted": "rgba(255, 247, 240, 0.68)",
+  "--muted-strong": "rgba(255, 247, 240, 0.86)",
+  "--muted-foreground": "rgba(255, 247, 240, 0.68)",
+  "--border": "rgba(255, 255, 255, 0.18)",
+  "--border-strong": "rgba(255, 255, 255, 0.34)",
+  "--ring": "rgba(255, 247, 240, 0.8)",
+  "--accent": "#ff7a3d",
+  "--accent-foreground": "#120c08",
+} as React.CSSProperties;
 
 // Shared easing for the overlay's cheap motion path. Open/close must stay
 // opacity/translate only: animating blur/filter or scaling a scrollable
@@ -405,7 +428,7 @@ function HeaderButton({
   disabled,
   testId,
 }: {
-  icon: typeof LayoutGrid;
+  icon: typeof Home;
   label: string;
   onClick: () => void;
   active?: boolean;
@@ -890,7 +913,6 @@ export function ContinuousChatOverlay({
     unlockAudio,
     openSettings,
     navigateHome,
-    clearConversation,
     currentTab,
     stop,
     speak,
@@ -3914,6 +3936,7 @@ export function ContinuousChatOverlay({
           // openProgress, so pill → input is a continuous scale + crossfade.
           // maxHeight keeps it from spilling off the top (thread scrolls instead).
           style={{
+            ...CHAT_PANEL_THEME,
             maxHeight: panelMaxH,
             // Full-bleed must be exactly scale 1 — a sub-1 morph scale with a
             // bottom transform-origin would drop the top edge below the status
@@ -3973,15 +3996,9 @@ export function ContinuousChatOverlay({
               // #9141 battery gate) is needed anymore since the fill is opaque; a
               // faint top-sheen gradient (backgroundImage below) still reads as
               // glass. The collapsed pill stays chrome-free via glassOpacity fade.
-              // Use `--card` (defined in BOTH themes: the ember `--surface-1`
-              // in dark, the warm off-white in light) rather than `--surface-1`
-              // directly — `--surface-1` is only declared under `.dark`, so an
-              // inline `var(--surface-1)` would compute to transparent in light
-              // mode and re-open the very see-through panel this fixes. The
-              // fallback keeps it opaque even if a theme ever drops `--card`.
-              backgroundColor: fullBleed
-                ? "var(--bg)"
-                : "var(--card, var(--surface-1))",
+              // `--card` / `--bg` are scoped by CHAT_PANEL_THEME on the fieldset,
+              // not inherited from the orange app theme behind the overlay.
+              backgroundColor: fullBleed ? "var(--bg)" : "var(--card)",
               backgroundImage:
                 "linear-gradient(180deg, var(--surface) 0%, transparent 24%)",
               // Full-bleed: extend the glass UP through the safe-area-top so the
@@ -4102,10 +4119,9 @@ export function ContinuousChatOverlay({
             {/* Sheet header — shown at the HALF detent and up (not just FULL).
               One infinite thread (#13531): no maximize/minimize (that's a
               vertical pull now) and no clear/new-chat (the thread never resets).
-              Right: one Launcher/Home launcher. Settings lives inside the
-              Launcher grid, so the chat header stops acting like a second app
-              nav bar. The left slot is intentionally empty so the launcher
-              stays anchored right. */}
+              Left: search only. Right: one Home button back to the launcher.
+              Settings lives inside the Launcher grid, so the chat header stops
+              acting like a second app nav bar. */}
             {threadPresented ? (
               <motion.div
                 // Mounted while the sheet is open, or while an upward drag is
@@ -4137,13 +4153,11 @@ export function ContinuousChatOverlay({
                   "relative z-20 flex shrink-0 items-center justify-between gap-1.5 overflow-hidden px-3",
                 )}
               >
-                {/* Left cluster (#14279): a quiet search entry point + a
-                    non-destructive “fresh chat” control. Search opens the shared
-                    MessageSearchPanel over the transcript; clear starts a new
-                    greeted thread WITHOUT discarding the current one (it stays
-                    reachable — selecting it re-loads its history, and scroll-up
-                    pages older turns). Both are locked while onboarding pins the
-                    sheet so the chat stays front and center. */}
+                {/* Left cluster: search is the ONLY left control. The thread is
+                    one infinite conversation — there is deliberately no
+                    new-chat/refresh button (scroll-up pages older turns, search
+                    jumps anywhere). Locked while onboarding pins the sheet so
+                    the chat stays front and center. */}
                 <div className="flex items-center gap-1.5">
                   <HeaderButton
                     icon={Search}
@@ -4152,16 +4166,6 @@ export function ContinuousChatOverlay({
                     disabled={firstRunOpen}
                     onClick={() => (searchOpen ? closeSearch() : openSearch())}
                     testId="chat-full-search"
-                  />
-                  <HeaderButton
-                    icon={RotateCcw}
-                    label="new chat"
-                    disabled={firstRunOpen}
-                    onClick={() => {
-                      closeSearch();
-                      clearConversation?.();
-                    }}
-                    testId="chat-full-clear"
                   />
                 </div>
                 {transcriptionMode ? (
@@ -4173,9 +4177,25 @@ export function ContinuousChatOverlay({
                   </div>
                 ) : null}
                 <div className="flex items-center gap-1.5">
+                  {/* Voice on/off: the top-bar master control for bidirectional
+                      voice. Same semantics as a composer-mic tap (hands-free
+                      conversation on/off; ends transcription when live), so
+                      there is exactly ONE voice state machine. */}
                   <HeaderButton
-                    icon={LayoutGrid}
-                    label="launcher"
+                    icon={Mic}
+                    label={
+                      handsFree || recording || transcriptionMode
+                        ? "turn voice off"
+                        : "turn voice on"
+                    }
+                    active={handsFree || recording || transcriptionMode}
+                    disabled={firstRunOpen}
+                    onClick={handleMicClick}
+                    testId="chat-full-voice"
+                  />
+                  <HeaderButton
+                    icon={Home}
+                    label="home"
                     // A close-and-navigate control — locked while onboarding
                     // pins the sheet (the chat must stay front and center).
                     disabled={firstRunOpen}
@@ -4296,7 +4316,7 @@ export function ContinuousChatOverlay({
                   // horizontal scrollbar strip across the sheet on iOS — the
                   // "weird side scroll thingy." This transcript only ever scrolls
                   // vertically; pin the horizontal axis closed.
-                  className="relative flex min-h-0 w-full flex-1 touch-pan-y flex-col overflow-y-auto overflow-x-hidden overscroll-contain px-5 [scrollbar-width:none] [-webkit-overflow-scrolling:touch] [&::-webkit-scrollbar]:hidden"
+                  className="relative flex min-h-0 w-full flex-1 touch-pan-y flex-col overflow-y-auto overflow-x-hidden overscroll-contain px-5 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[rgba(255,247,240,0.22)] [scrollbar-width:none] [-webkit-overflow-scrolling:touch] [&::-webkit-scrollbar]:hidden"
                   style={{ opacity: threadContentOpacity }}
                 >
                   {/* Empty-thread loading: a fresh/cleared chat awaiting its
