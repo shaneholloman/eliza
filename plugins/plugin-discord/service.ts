@@ -515,7 +515,6 @@ export class DiscordService extends Service implements IDiscordService {
 	voiceManager?: VoiceManager;
 	private channelDebouncer?: ChannelDebouncer;
 	private _loginFailed = false;
-	private userSelections: Map<string, Record<string, unknown>> = new Map();
 	private timeouts: ReturnType<typeof setTimeout>[] = [];
 	public clientReadyPromise: Promise<void> | null = null;
 	/**
@@ -1356,9 +1355,6 @@ export class DiscordService extends Service implements IDiscordService {
 			},
 			set commandRegistrationQueue(value: Promise<void>) {
 				parent.commandRegistrationQueue = value;
-			},
-			get userSelections() {
-				return parent.userSelections;
 			},
 			get timeouts() {
 				return parent.timeouts;
@@ -3603,8 +3599,6 @@ export class DiscordService extends Service implements IDiscordService {
 			state.channelDebouncer = undefined;
 		}
 		this.channelDebouncer = undefined;
-
-		this.userSelections.clear();
 
 		for (const state of states) {
 			try {

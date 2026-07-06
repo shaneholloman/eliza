@@ -26,6 +26,7 @@ import {
 	type Guild,
 	type GuildMember,
 	type Interaction,
+	type MessageComponentInteraction,
 	PermissionsBitField,
 	type TextChannel,
 } from "discord.js";
@@ -59,7 +60,6 @@ export interface InteractionServiceInternals {
 	runtime: ICompatRuntime;
 	character: DiscordService["character"];
 	slashCommands: DiscordSlashCommand[];
-	userSelections: Map<string, Record<string, unknown>>;
 	timeouts: ReturnType<typeof setTimeout>[];
 	discordSettings: DiscordSettings;
 	clientReadyPromise: Promise<void> | null;
@@ -68,6 +68,21 @@ export interface InteractionServiceInternals {
 	getChannelType(channel: Channel): Promise<ChannelType>;
 	registerSlashCommands(commands: DiscordSlashCommand[]): Promise<void>;
 	refreshOwnerDiscordUserIds(client: DiscordClient): Promise<void>;
+}
+
+/**
+ * Acknowledge a component interaction so Discord clears the client-side loading
+ * state, tolerating a stale interaction that another handler — or Discord's own
+ * three-second window — already acknowledged.
+ */
+async function acknowledgeComponentInteraction(
+	interaction: MessageComponentInteraction,
+): Promise<void> {
+	try {
+		await interaction.deferUpdate();
+	} catch {
+		// error-policy:J6 a stale interaction may already be acknowledged.
+	}
 }
 
 /**
@@ -199,7 +214,14 @@ export async function handleInteractionCreate(
 		service.runtime.emitEvent(DiscordEventTypes.MODAL_SUBMIT, modalPayload);
 	}
 
-	// Handle message component interactions (buttons, dropdowns, etc.)
+	// Message component interactions. The in-chat widget system only ever emits
+	// codec buttons (a choice / followup tap): a button whose custom_id was
+	// produced by the shared interaction codec. Decode it and replay the answer
+	// as an ordinary user turn — mirroring the dashboard's send-the-value
+	// behavior — so choice scopes and orchestrator turns route identically across
+	// every surface. Any other component (a raw button or select from a
+	// third-party integration) carries no built-in submit semantics, so it is
+	// only acknowledged to clear the client-side loading state.
 	if (interaction.isMessageComponent()) {
 		service.runtime.logger.debug(
 			{
@@ -209,257 +231,58 @@ export async function handleInteractionCreate(
 			},
 			"Received component interaction",
 		);
-		const interactionUser = interaction.user;
-		const userId = interactionUser?.id;
-		const interactionMessage = interaction.message;
-		const messageId = interactionMessage?.id;
 
-		if (!service.userSelections.has(userId)) {
-			service.userSelections.set(userId, {});
-		}
-		const userSelections = service.userSelections.get(userId);
-		if (!userSelections) {
-			service.runtime.logger.error(
-				{
-					src: "plugin:discord",
-					agentId: service.runtime.agentId,
-					entityId: userId,
+		if (interaction.isButton() && isInteractionCallback(interaction.customId)) {
+			const decoded = decodeCallback(interaction.customId);
+			await acknowledgeComponentInteraction(interaction);
+			if (!decoded) {
+				return;
+			}
+			const memory: Memory = {
+				id: createUniqueUuid(service.runtime, `cbq-${interaction.id}`),
+				entityId,
+				agentId: service.runtime.agentId,
+				roomId,
+				content: {
+					text: decoded.value,
+					source: "discord",
+					channelType: type,
 				},
-				"User selections map unexpectedly missing",
-			);
+				metadata: {
+					type: MemoryType.MESSAGE,
+					source: "discord",
+					accountId,
+				},
+				createdAt: Date.now(),
+			};
+			const callback: HandlerCallback = async (content) => {
+				const channel = interaction.channel as TextChannel | null;
+				if (!content.text || !channel || typeof channel.send !== "function") {
+					return [];
+				}
+				const render = renderDiscordInteractions(content);
+				await sendMessageInChunks(
+					channel,
+					render.text,
+					"",
+					[],
+					render.components.length > 0 ? render.components : undefined,
+					service.runtime,
+				);
+				return [];
+			};
+			const messageService = getMessageService(service.runtime);
+			if (messageService) {
+				await messageService.handleMessage(service.runtime, memory, callback);
+			}
 			return;
 		}
 
-		try {
-			if (interaction.isStringSelectMenu()) {
-				service.runtime.logger.debug(
-					{
-						src: "plugin:discord",
-						agentId: service.runtime.agentId,
-						entityId: userId,
-						customId: interaction.customId,
-						values: interaction.values,
-					},
-					"Values selected",
-				);
-
-				const existingSelections =
-					(userSelections[messageId] as Record<string, unknown>) || {};
-				userSelections[messageId] = {
-					...existingSelections,
-					[interaction.customId]: interaction.values,
-				};
-
-				service.runtime.logger.debug(
-					{
-						src: "plugin:discord",
-						agentId: service.runtime.agentId,
-						messageId,
-						selections: userSelections[messageId],
-					},
-					"Current selections for message",
-				);
-
-				await interaction.deferUpdate();
-			}
-
-			if (interaction.isButton()) {
-				// Interaction-protocol answer: a button whose custom_id was produced
-				// by the shared codec (a choice / followup tap). Decode it and replay
-				// as an ordinary user turn — mirroring the dashboard's send-the-value
-				// behavior — so choice scopes and orchestrator turns route identically
-				// across surfaces. Ack first to clear the button's loading state.
-				if (isInteractionCallback(interaction.customId)) {
-					const decoded = decodeCallback(interaction.customId);
-					try {
-						await interaction.deferUpdate();
-					} catch {
-						// best-effort: a stale interaction may already be acknowledged
-					}
-					if (decoded) {
-						const memory: Memory = {
-							id: createUniqueUuid(service.runtime, `cbq-${interaction.id}`),
-							entityId,
-							agentId: service.runtime.agentId,
-							roomId,
-							content: {
-								text: decoded.value,
-								source: "discord",
-								channelType: type,
-							},
-							metadata: {
-								type: MemoryType.MESSAGE,
-								source: "discord",
-								accountId,
-							},
-							createdAt: Date.now(),
-						};
-						const callback: HandlerCallback = async (content) => {
-							const channel = interaction.channel as TextChannel | null;
-							if (
-								!content.text ||
-								!channel ||
-								typeof channel.send !== "function"
-							) {
-								return [];
-							}
-							const render = renderDiscordInteractions(content);
-							await sendMessageInChunks(
-								channel,
-								render.text,
-								"",
-								[],
-								render.components.length > 0 ? render.components : undefined,
-								service.runtime,
-							);
-							return [];
-						};
-						const messageService = getMessageService(service.runtime);
-						if (messageService) {
-							await messageService.handleMessage(
-								service.runtime,
-								memory,
-								callback,
-							);
-						}
-					}
-					return;
-				}
-
-				service.runtime.logger.debug(
-					{
-						src: "plugin:discord",
-						agentId: service.runtime.agentId,
-						entityId: userId,
-						customId: interaction.customId,
-					},
-					"Button pressed",
-				);
-				const formSelections = userSelections[messageId] || {};
-
-				service.runtime.logger.debug(
-					{
-						src: "plugin:discord",
-						agentId: service.runtime.agentId,
-						formSelections,
-					},
-					"Form data being submitted",
-				);
-
-				const fallbackTimeout = setTimeout(async () => {
-					const index = service.timeouts.indexOf(fallbackTimeout);
-					if (index > -1) {
-						service.timeouts.splice(index, 1);
-					}
-
-					if (!interaction.replied && !interaction.deferred) {
-						try {
-							await interaction.deferUpdate();
-							service.runtime.logger.debug(
-								{
-									src: "plugin:discord",
-									agentId: service.runtime.agentId,
-									customId: interaction.customId,
-								},
-								"Acknowledged button interaction via fallback",
-							);
-						} catch (ackError) {
-							service.runtime.logger.debug(
-								{
-									src: "plugin:discord",
-									agentId: service.runtime.agentId,
-									error:
-										ackError instanceof Error
-											? ackError.message
-											: String(ackError),
-								},
-								"Fallback acknowledgement skipped",
-							);
-						}
-					}
-				}, 2500);
-				service.timeouts.push(fallbackTimeout);
-
-				const earlyCheckTimeout = setTimeout(() => {
-					if (interaction.replied || interaction.deferred) {
-						clearTimeout(fallbackTimeout);
-						const index = service.timeouts.indexOf(fallbackTimeout);
-						if (index > -1) {
-							service.timeouts.splice(index, 1);
-						}
-					}
-					const earlyIndex = service.timeouts.indexOf(earlyCheckTimeout);
-					if (earlyIndex > -1) {
-						service.timeouts.splice(earlyIndex, 1);
-					}
-				}, 2000);
-				service.timeouts.push(earlyCheckTimeout);
-
-				const interactionPayload: EventPayload & {
-					accountId?: string;
-					interaction: {
-						customId: string;
-						componentType: number;
-						type: number;
-						user: string;
-						messageId: string;
-						selections: Record<string, unknown>;
-					};
-					discordInteraction: Interaction;
-				} = {
-					runtime: service.runtime,
-					source: "discord",
-					accountId,
-					interaction: {
-						customId: interaction.customId,
-						componentType: interaction.componentType,
-						type: interaction.type,
-						user: userId,
-						messageId,
-						selections: formSelections as Record<string, unknown>,
-					},
-					discordInteraction: interaction,
-				};
-				service.runtime.emitEvent(["DISCORD_INTERACTION"], interactionPayload);
-
-				delete userSelections[messageId];
-				service.runtime.logger.debug(
-					{
-						src: "plugin:discord",
-						agentId: service.runtime.agentId,
-						messageId,
-					},
-					"Cleared selections for message",
-				);
-			}
-		} catch (error) {
-			service.runtime.logger.error(
-				{
-					src: "plugin:discord",
-					agentId: service.runtime.agentId,
-					error: error instanceof Error ? error.message : String(error),
-				},
-				"Error handling component interaction",
-			);
-			try {
-				await interaction.followUp({
-					content: "There was an error processing your interaction.",
-					ephemeral: true,
-				});
-			} catch (followUpError) {
-				service.runtime.logger.error(
-					{
-						src: "plugin:discord",
-						agentId: service.runtime.agentId,
-						error:
-							followUpError instanceof Error
-								? followUpError.message
-								: String(followUpError),
-					},
-					"Error sending follow-up message",
-				);
-			}
-		}
+		// Non-codec component: acknowledge so Discord clears the loading state.
+		// No repo code produces selects or non-codec buttons, so there is nothing
+		// to submit — acking avoids a client-side "This interaction failed"
+		// without reviving a dead dispatch path.
+		await acknowledgeComponentInteraction(interaction);
 	}
 }
 

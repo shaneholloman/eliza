@@ -281,14 +281,6 @@ export interface DiscordComponentOptions {
 	style?: number;
 	/** Link-style (style 5) button target; mutually exclusive with custom_id. */
 	url?: string;
-	placeholder?: string;
-	min_values?: number;
-	max_values?: number;
-	options?: Array<{
-		label: string;
-		value: string;
-		description?: string;
-	}>;
 }
 
 export interface DiscordActionRow {
