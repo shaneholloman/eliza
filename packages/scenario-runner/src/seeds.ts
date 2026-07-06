@@ -36,9 +36,40 @@ type LifeOpsOccurrence = Record<string, unknown> & {
   state: LifeOpsOccurrenceState;
 };
 
+type LifeOpsCalendarEventSeedInput = {
+  id: string;
+  externalId: string;
+  agentId: string;
+  provider: "google" | "apple_calendar";
+  side: "owner" | "agent";
+  calendarId: string;
+  title: string;
+  description: string;
+  location: string;
+  status: string;
+  startAt: string;
+  endAt: string;
+  isAllDay: boolean;
+  timezone: string | null;
+  htmlLink: string | null;
+  conferenceLink: string | null;
+  organizer: Record<string, unknown> | null;
+  attendees: Record<string, unknown>[];
+  metadata: Record<string, unknown>;
+  syncedAt: string;
+  updatedAt: string;
+  connectorAccountId?: string;
+  grantId?: string;
+  accountEmail?: string;
+};
+
 type LifeOpsRepositoryInstance = {
   createDefinition: (definition: LifeOpsTaskDefinition) => Promise<unknown>;
   upsertOccurrence: (occurrence: LifeOpsOccurrence) => Promise<unknown>;
+  upsertCalendarEvent: (
+    event: LifeOpsCalendarEventSeedInput,
+    side?: LifeOpsCalendarEventSeedInput["side"],
+  ) => Promise<unknown>;
 };
 
 type LifeOpsRepositoryConstructor = {
@@ -70,12 +101,18 @@ type LifeOpsRepositoryModule = {
 // Loaded lazily so this module can be built without pulling app-lifeops into the
 // scenario-runner rootDir (app-lifeops is only available at runtime).
 async function loadLifeOps() {
-  const defaultsSpecifier: string =
-    "../../../plugins/plugin-personal-assistant/src/lifeops/defaults.ts";
-  const engineSpecifier: string =
-    "../../../plugins/plugin-personal-assistant/src/lifeops/engine.ts";
-  const repositorySpecifier: string =
-    "../../../plugins/plugin-personal-assistant/src/lifeops/repository.ts";
+  const defaultsSpecifier = new URL(
+    "../../../plugins/plugin-personal-assistant/src/lifeops/defaults.ts",
+    import.meta.url,
+  ).href;
+  const engineSpecifier = new URL(
+    "../../../plugins/plugin-personal-assistant/src/lifeops/engine.ts",
+    import.meta.url,
+  ).href;
+  const repositorySpecifier = new URL(
+    "../../../plugins/plugin-personal-assistant/src/lifeops/repository.ts",
+    import.meta.url,
+  ).href;
   const [
     { resolveDefaultWindowPolicy },
     { materializeDefinitionOccurrences },
@@ -200,6 +237,37 @@ const TRAVEL_FACT_MEMORY_KINDS = new Set([
   "upgrade-offer",
   "calendar-focus-window",
 ]);
+
+type CalendarEventMemorySeed = MemoryContactSeed & {
+  externalId?: unknown;
+  calendarId?: unknown;
+  provider?: unknown;
+  side?: unknown;
+  title?: unknown;
+  description?: unknown;
+  location?: unknown;
+  status?: unknown;
+  startAt?: unknown;
+  endAt?: unknown;
+  durationMinutes?: unknown;
+  isAllDay?: unknown;
+  timezone?: unknown;
+  timeZone?: unknown;
+  htmlLink?: unknown;
+  url?: unknown;
+  conferenceLink?: unknown;
+  joinLink?: unknown;
+  organizer?: unknown;
+  attendees?: unknown;
+  metadata?: unknown;
+  connectorAccountId?: unknown;
+  grantId?: unknown;
+  accountEmail?: unknown;
+  cancelled?: unknown;
+  canceled?: unknown;
+  cancelledAt?: unknown;
+  canceledAt?: unknown;
+};
 
 type ConnectorStatusLike = {
   state: "ok" | "degraded" | "disconnected";
@@ -332,6 +400,12 @@ function readOptionalNumber(value: unknown): number | undefined {
 
 function readOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function readOptionalRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function readPositiveInteger(value: unknown): number | undefined {
@@ -615,6 +689,156 @@ function buildContactEntityId(runtime: AgentRuntime, name: string): UUID {
   return stringToUuid(`scenario-contact-${name}-${runtime.agentId}`) as UUID;
 }
 
+function normalizeCalendarProvider(
+  value: unknown,
+): LifeOpsCalendarEventSeedInput["provider"] | null {
+  const provider = readNonEmptyString(value);
+  if (provider === "google" || provider === "apple_calendar") {
+    return provider;
+  }
+  return provider ? null : "google";
+}
+
+function normalizeCalendarSide(
+  value: unknown,
+): LifeOpsCalendarEventSeedInput["side"] | null {
+  const side = readNonEmptyString(value);
+  if (side === "owner" || side === "agent") {
+    return side;
+  }
+  return side ? null : "owner";
+}
+
+function normalizeIsoDate(value: unknown): string | null {
+  const raw = readNonEmptyString(value);
+  if (!raw) return null;
+  const timestamp = Date.parse(raw);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
+function normalizeCalendarAttendees(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    return [entry as Record<string, unknown>];
+  });
+}
+
+function calendarEventMetadata(
+  ctx: ScenarioContext,
+  seed: CalendarEventMemorySeed,
+): Record<string, unknown> {
+  const authored = readOptionalRecord(seed.metadata);
+  const joinLink =
+    readNonEmptyString(seed.joinLink) ??
+    readNonEmptyString(seed.conferenceLink);
+  const cancelledAt =
+    normalizeIsoDate(seed.cancelledAt) ?? normalizeIsoDate(seed.canceledAt);
+  return {
+    ...(authored ?? {}),
+    source: "scenario-seed",
+    kind: "calendar-event",
+    ...(ctx.scenarioId ? { scenarioId: ctx.scenarioId } : {}),
+    ...(joinLink ? { joinLink } : {}),
+    ...(cancelledAt ? { cancelledAt } : {}),
+  };
+}
+
+function normalizeCalendarEventSeed(
+  ctx: ScenarioContext,
+  runtime: AgentRuntime,
+  seed: CalendarEventMemorySeed,
+): LifeOpsCalendarEventSeedInput | string {
+  const provider = normalizeCalendarProvider(seed.provider);
+  if (!provider) {
+    return "calendar-event memory seed provider must be google or apple_calendar";
+  }
+  const side = normalizeCalendarSide(seed.side);
+  if (!side) {
+    return "calendar-event memory seed side must be owner or agent";
+  }
+  const title = readNonEmptyString(seed.title);
+  if (!title) {
+    return "calendar-event memory seed requires a title";
+  }
+  const startAt = normalizeIsoDate(seed.startAt);
+  if (!startAt) {
+    return "calendar-event memory seed requires a valid startAt timestamp";
+  }
+  const durationMinutes = readPositiveInteger(seed.durationMinutes) ?? 30;
+  const endAt =
+    normalizeIsoDate(seed.endAt) ??
+    new Date(Date.parse(startAt) + durationMinutes * 60_000).toISOString();
+  if (Date.parse(endAt) <= Date.parse(startAt)) {
+    return "calendar-event memory seed endAt must be after startAt";
+  }
+
+  const id =
+    readNonEmptyString(seed.id) ??
+    stringToUuid(
+      `scenario-calendar-event:${ctx.scenarioId ?? "unknown"}:${title}:${startAt}`,
+    );
+  const externalId = readNonEmptyString(seed.externalId) ?? id;
+  const cancelled =
+    readOptionalBoolean(seed.cancelled) ?? readOptionalBoolean(seed.canceled);
+  const status =
+    readNonEmptyString(seed.status) ?? (cancelled ? "cancelled" : "confirmed");
+  const conferenceLink =
+    readNonEmptyString(seed.conferenceLink) ??
+    readNonEmptyString(seed.joinLink);
+  const connectorAccountId = readNonEmptyString(seed.connectorAccountId);
+  const grantId = readNonEmptyString(seed.grantId);
+  const accountEmail = readNonEmptyString(seed.accountEmail);
+  const nowIso = readScenarioNow(ctx).toISOString();
+  return {
+    id,
+    externalId,
+    agentId: String(runtime.agentId),
+    provider,
+    side,
+    calendarId: readNonEmptyString(seed.calendarId) ?? "primary",
+    title,
+    description: readNonEmptyString(seed.description) ?? "",
+    location: readNonEmptyString(seed.location) ?? "",
+    status,
+    startAt,
+    endAt,
+    isAllDay: readOptionalBoolean(seed.isAllDay) ?? false,
+    timezone:
+      readNonEmptyString(seed.timezone) ??
+      readNonEmptyString(seed.timeZone) ??
+      null,
+    htmlLink: readNonEmptyString(seed.htmlLink) ?? readNonEmptyString(seed.url),
+    conferenceLink,
+    organizer: readOptionalRecord(seed.organizer),
+    attendees: normalizeCalendarAttendees(seed.attendees),
+    metadata: calendarEventMetadata(ctx, seed),
+    syncedAt: nowIso,
+    updatedAt: nowIso,
+    ...(connectorAccountId ? { connectorAccountId } : {}),
+    ...(grantId ? { grantId } : {}),
+    ...(accountEmail ? { accountEmail } : {}),
+  };
+}
+
+async function seedCalendarEventMemory(
+  ctx: ScenarioContext,
+  seed: CalendarEventMemorySeed,
+): Promise<string | undefined> {
+  const runtime = requireRuntime(ctx);
+  const { LifeOpsRepository } = await loadLifeOps();
+  await LifeOpsRepository.bootstrapSchema(runtime);
+  const event = normalizeCalendarEventSeed(ctx, runtime, seed);
+  if (typeof event === "string") {
+    return event;
+  }
+  const repository = new LifeOpsRepository(runtime);
+  await repository.upsertCalendarEvent(event, event.side);
+  return undefined;
+}
+
 async function seedContact(
   ctx: ScenarioContext,
   seed: ContactSeed,
@@ -709,11 +933,14 @@ async function seedMemory(
     const text = formatStructuredMemoryFact(memoryType, content);
     return writeDurableFact(ctx, text, { seedKind: memoryType });
   }
+  if (memoryType === "calendar-event") {
+    return seedCalendarEventMemory(ctx, content as CalendarEventMemorySeed);
+  }
   if (memoryType !== null) {
     // A seed the runner cannot land must fail the scenario, never no-op:
     // a silently dropped seed fabricates the premise the checks grade
     // against (#14631 — the "seeded VIP fact" the model never received).
-    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity, travel profile/trip/booking/upgrade-offer/calendar-focus-window, or plain { text } for a durable owner fact`;
+    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity/calendar-event, travel profile/trip/booking/upgrade-offer/calendar-focus-window, or plain { text } for a durable owner fact`;
   }
   const text = readNonEmptyString((content as { text?: unknown }).text);
   if (!text) {
