@@ -56,7 +56,7 @@ Continuous motion values: `threadHeight` (px, finger-tracked), `openProgress`
 | Flick up | FULL. |
 | Flick down | free rest above half steps to HALF first; at/below half → INPUT. |
 | Slow drag | magnetism: ≤ 64px at the bottom → INPUT (PILL when the gesture started above half+64 or overshot the bottom ≥ 40px); near half/full → that detent; gaps → FREE rest. |
-| Held over-pull ≥ 75px past FULL, or a long haul from ≤ HALF sweeping ≥ 80% of the screen | MAXIMIZED (the inset→edge-to-edge shape morphs under the finger over the last 150px). |
+| Held over-pull past FULL | tracks the finger 1:1: the panel grows from the inset FULL height to the full-bleed ceiling across the REAL pixel gap (`fullPanelMaxH − insetPanelMaxH`), the shape morph (corners/insets/width) a pure function of that height. Release with the morph ≥ half complete — or a long haul from ≤ HALF sweeping ≥ 80% of the screen — commits MAXIMIZED; short of it, springs back to FULL. Rubber-band only past the full-bleed ceiling. |
 | Held drag past the bottom ≥ 40px overshoot | PILL (chat → input → pill in one motion). |
 | Tap scrim/outside | keyboard up → dismiss keyboard; else collapse to INPUT. |
 | Escape | collapse to INPUT. |
@@ -89,5 +89,6 @@ continues past it.
 - Only FULL may carry `maximized`; every other landing clears it.
 - `openProgress` always settles to 0 (pill) or 1 (anything else) on release — never strands mid-morph.
 - Detent changes fire exactly one haptic; sub-threshold releases fire none.
-- While maximized the content column keeps `max-w-3xl` — the background morphs edge-to-edge; the text does not reflow.
+- The live drag is 1:1 with the pointer everywhere: down through the detents into the pill morph, and up from FULL through the maximize over-pull to the screen edge — no dead zones, no rubber-band until the true ceiling.
+- The content columns (header/transcript/composer) are ALWAYS the centered `max-w-3xl` reading width — through the morph and at full-bleed only the glass (wrapper width, insets, corners, height cap — all driven by `fullBleedT`) grows; the text never reflows.
 - Every collapse to INPUT/PILL blurs the composer (keyboard drops).

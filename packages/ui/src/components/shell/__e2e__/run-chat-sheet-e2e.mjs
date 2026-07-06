@@ -461,13 +461,22 @@ async function runDragSuite(p, pointer, tag) {
     `[${pointer}] restore-zone pull → no longer maximized`,
   );
 
-  // drag BEYOND full (held) → rubber-band, not 1:1
+  // drag BEYOND full (held) → the panel keeps tracking the finger 1:1 into the
+  // maximize morph (growing toward the full-bleed ceiling, corners squaring in
+  // lock-step); rubber-band only past the ceiling. The mouse position must
+  // match the height exactly — no dead zone at the FULL detent.
   await gesture(p, 260, { pointer, hold: true });
   await p.waitForTimeout(120);
   const beyondH = await sheetHeight(p);
+  const vhNow = await viewportH(p);
   assert(
-    beyondH > fullH - 4 && beyondH < fullH + 80,
-    `[${pointer}] BEYOND full rubber-bands (got ${Math.round(beyondH)}, full ${fullH}, raw would be ~${fullH + 260})`,
+    beyondH > fullH + 60 && beyondH < vhNow + 120,
+    `[${pointer}] BEYOND full keeps tracking the finger 1:1 into the morph (got ${Math.round(beyondH)}, full ${fullH}, raw ${fullH + 260})`,
+  );
+  const beyondBox = await p.getByTestId("chat-sheet").boundingBox();
+  assert(
+    !!beyondBox && beyondBox.x <= 4,
+    `[${pointer}] BEYOND full the shape morph follows the height (panel x=${Math.round(beyondBox?.x ?? -1)} → edge-to-edge under the finger)`,
   );
   await snap(p, `${tag}-beyond-full-rubberband`);
   await release(p, pointer, 260);
@@ -2651,6 +2660,7 @@ const errorLevel = sink.logs.filter((l) => l.startsWith("[error]"));
 assert(sink.errors.length === 0, `no uncaught page errors (${sink.errors.length})`);
 if (sink.errors.length) for (const e of sink.errors) console.error(`  ⚠ ${e}`);
 assert(errorLevel.length === 0, `no error-level console messages (${errorLevel.length})`);
+if (errorLevel.length) for (const e of errorLevel) console.error(`  ⚠ ${e}`);
 if (!ONLY_AUTOSCROLL) {
   assert(
     sink.logs.some(

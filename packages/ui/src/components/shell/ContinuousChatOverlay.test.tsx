@@ -1601,8 +1601,9 @@ describe("ContinuousChatOverlay", () => {
 
     expect(screen.queryByTestId("chat-composer-clear-debug")).toBeNull();
     // Width is constrained on the panel's wrapper (which also holds the absolute
-    // drag handle); the input row is a single, non-wrapping flex row.
-    expect(panel.parentElement?.className).toContain("max-w-3xl");
+    // drag handle) via the morph-driven inline max-width — 48rem (768px) at rest,
+    // widening to the viewport only as the maximize morph completes.
+    expect(panel.parentElement?.style.maxWidth).toBe("768px");
     expect(bar?.className).toContain("flex");
     expect(bar?.className).not.toContain("flex-wrap");
     expect(input.className).toContain("flex-1");
