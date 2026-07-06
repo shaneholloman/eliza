@@ -39,6 +39,9 @@ import {
 	normalizeWalletRpcProviderId,
 	type PermissionId,
 	resolveInitialWalletRpcSelections,
+	VOICE_SETTINGS_APPLY_EVENT,
+	type VoiceSettingsApplyPayload,
+	WALLET_RPC_PROVIDER_OPTIONS,
 	type WalletConfigStatus,
 	type WalletRpcChain,
 	type WalletRpcSelections,
@@ -352,17 +355,23 @@ const PERMISSIONS_REQUEST_KEYS: Readonly<Record<string, SettingsWritableKey>> =
 
 type UpdateChannel = "stable" | "beta" | "nightly";
 
+/**
+ * The slice of the /api/update/status contract the chat narration consumes.
+ * Deliberately a subset of the shared AgentUpdateStatus contract: this action
+ * never reads dist-tags, channel version maps, or install internals, so
+ * validating those would reject a payload that is perfectly adequate to narrate.
+ * The essentials (currentVersion, channel, updateAvailable) are required so a
+ * malformed status can never render as a healthy "unknown on unknown".
+ */
 interface UpdateStatusPayload {
-	currentVersion?: string;
-	channel?: string;
-	installMethod?: string;
-	updateAvailable?: boolean;
-	latestVersion?: string | null;
-	lastCheckAt?: string | null;
-	error?: string | null;
-	updateCommand?: string | null;
-	updateInstructions?: string | null;
-	canExecuteUpdate?: boolean;
+	currentVersion: string;
+	channel: string;
+	updateAvailable: boolean;
+	latestVersion: string | null;
+	error: string | null;
+	updateCommand: string | null;
+	updateInstructions: string | null;
+	canExecuteUpdate: boolean;
 }
 
 const UPDATE_CHANNELS = new Set<UpdateChannel>(["stable", "beta", "nightly"]);
@@ -371,23 +380,42 @@ function isUpdateChannel(value: string | null): value is UpdateChannel {
 	return value !== null && UPDATE_CHANNELS.has(value as UpdateChannel);
 }
 
-function readUpdateStatusPayload(data: unknown): UpdateStatusPayload {
-	if (!data || typeof data !== "object") return {};
-	return data as UpdateStatusPayload;
+function readNullableString(value: unknown): string | null {
+	return typeof value === "string" ? value : null;
 }
 
-function describeUpdateStatus(data: unknown): string {
-	const status = readUpdateStatusPayload(data);
-	if (status.error) {
-		return `Update check failed: ${status.error}`;
+/**
+ * Validate the status body, requiring the fields the narration reads. Returns
+ * null for a missing or malformed payload so a broken status route surfaces as
+ * an error instead of a fabricated version pair.
+ */
+function parseUpdateStatusPayload(data: unknown): UpdateStatusPayload | null {
+	if (!data || typeof data !== "object") return null;
+	const record = data as Record<string, unknown>;
+	const { currentVersion, channel, updateAvailable } = record;
+	if (typeof currentVersion !== "string" || currentVersion.length === 0) {
+		return null;
 	}
-	const current = status.currentVersion ?? "unknown";
-	const channel = status.channel ?? "unknown";
+	if (typeof channel !== "string" || channel.length === 0) return null;
+	if (typeof updateAvailable !== "boolean") return null;
+	return {
+		currentVersion,
+		channel,
+		updateAvailable,
+		latestVersion: readNullableString(record.latestVersion),
+		error: readNullableString(record.error),
+		updateCommand: readNullableString(record.updateCommand),
+		updateInstructions: readNullableString(record.updateInstructions),
+		canExecuteUpdate: record.canExecuteUpdate === true,
+	};
+}
+
+function describeUpdateStatus(status: UpdateStatusPayload): string {
 	if (status.updateAvailable) {
 		const latest = status.latestVersion ?? "the latest release";
-		return `Update available: ${current} → ${latest} on ${channel}.`;
+		return `Update available: ${status.currentVersion} → ${latest} on ${status.channel}.`;
 	}
-	return `Current: ${current} on ${channel}.`;
+	return `Current: ${status.currentVersion} on ${status.channel}.`;
 }
 
 function fetchUpdateStatus(
@@ -400,22 +428,57 @@ function fetchUpdateStatus(
 	});
 }
 
+/**
+ * Fetch the update status and collapse it to a usable payload or an honest
+ * failure. The route answers HTTP 200 even when the underlying check failed
+ * (registry unreachable, etc.), so a successful transport is not proof of a
+ * usable status: a populated `error`, an unrecognized body, or a transport
+ * failure all yield ok:false so the SETTINGS action reports the failure instead
+ * of narrating a fabricated or partially-failed status.
+ */
+async function resolveUpdateStatus(
+	routeFetch: SettingsRouteFetch,
+	force: boolean,
+): Promise<SettingsRouteOutcome> {
+	const outcome = await fetchUpdateStatus(routeFetch, force);
+	if (!outcome.ok) return outcome;
+	const status = parseUpdateStatusPayload(outcome.data);
+	if (!status) {
+		return {
+			ok: false,
+			detail: "the update status route returned an unrecognized payload",
+		};
+	}
+	if (status.error) {
+		return { ok: false, detail: `the update check failed: ${status.error}` };
+	}
+	return { ok: true, data: status };
+}
+
 const UPDATES_STATUS_KEY: SettingsWritableKey = {
 	description:
 		"Read the connected agent update status from the same backend route the Release Center uses.",
 	valueType: "command",
-	apply: async ({ routeFetch }) => fetchUpdateStatus(routeFetch, false),
-	successText: (_value, _request, outcome) =>
-		`Release status: ${describeUpdateStatus(outcome.data)}`,
+	apply: ({ routeFetch }) => resolveUpdateStatus(routeFetch, false),
+	successText: (_value, _request, outcome) => {
+		const status = parseUpdateStatusPayload(outcome.data);
+		return status
+			? `Release status: ${describeUpdateStatus(status)}`
+			: "Release status is unavailable.";
+	},
 };
 
 const UPDATES_CHECK_KEY: SettingsWritableKey = {
 	description:
 		"Force an update check through the connected agent update-status route.",
 	valueType: "command",
-	apply: async ({ routeFetch }) => fetchUpdateStatus(routeFetch, true),
-	successText: (_value, _request, outcome) =>
-		`Update check complete. ${describeUpdateStatus(outcome.data)}`,
+	apply: ({ routeFetch }) => resolveUpdateStatus(routeFetch, true),
+	successText: (_value, _request, outcome) => {
+		const status = parseUpdateStatusPayload(outcome.data);
+		return status
+			? `Update check complete. ${describeUpdateStatus(status)}`
+			: "Update check complete, but the status was unavailable.";
+	},
 };
 
 const UPDATES_CHANNEL_KEY: SettingsWritableKey = {
@@ -435,25 +498,48 @@ const UPDATES_CHANNEL_KEY: SettingsWritableKey = {
 			body: { channel: request.value },
 		});
 		if (!channelResult.ok) return channelResult;
-		const status = await fetchUpdateStatus(routeFetch, true);
-		return status.ok ? status : channelResult;
+		// The channel switch is the primary effect and is already persisted. A
+		// forced refresh that fails must be reported as such, never masked by
+		// echoing the channel-write body as if it were a healthy status.
+		const refreshed = await resolveUpdateStatus(routeFetch, true);
+		return {
+			ok: true,
+			data: {
+				channel: request.value,
+				status: refreshed.ok ? refreshed.data : null,
+				refreshError: refreshed.ok
+					? null
+					: (refreshed.detail ?? "the update status could not be refreshed"),
+			},
+		};
 	},
-	successText: (_value, request, outcome) =>
-		`Update channel is ${request.value}. ${describeUpdateStatus(outcome.data)}`,
+	successText: (_value, request, outcome) => {
+		const data = readPlainObject(outcome.data) ?? {};
+		const channel =
+			typeof data.channel === "string" ? data.channel : (request.value ?? "");
+		const refreshError = readNullableString(data.refreshError);
+		if (refreshError) {
+			return `Update channel is ${channel}, but I couldn't refresh the release status: ${refreshError}.`;
+		}
+		const status = parseUpdateStatusPayload(data.status);
+		return status
+			? `Update channel is ${channel}. ${describeUpdateStatus(status)}`
+			: `Update channel is ${channel}.`;
+	},
 };
 
 const UPDATES_APPLY_KEY: SettingsWritableKey = {
 	description:
 		"Report the real apply plan for an available connected-agent update. Chat does not invent a remote installer.",
 	valueType: "command",
-	apply: async ({ routeFetch }) => fetchUpdateStatus(routeFetch, true),
+	apply: ({ routeFetch }) => resolveUpdateStatus(routeFetch, true),
 	successText: (_value, _request, outcome) => {
-		const status = readUpdateStatusPayload(outcome.data);
-		if (status.error) {
-			return `I checked the update plan, but the update check failed: ${status.error}`;
+		const status = parseUpdateStatusPayload(outcome.data);
+		if (!status) {
+			return "I checked for an update, but the status was unavailable.";
 		}
 		if (!status.updateAvailable) {
-			return `No update to apply. ${describeUpdateStatus(outcome.data)}`;
+			return `No update to apply. ${describeUpdateStatus(status)}`;
 		}
 		const instruction =
 			status.updateCommand ??
@@ -673,11 +759,22 @@ const VOICE_CONTINUOUS_ALIASES: ReadonlyMap<string, VoiceContinuousMode> =
 		["on", "always-on"],
 	]);
 
-const DEFAULT_VOICE_SETTINGS_PREFS: VoiceSettingsPrefs = {
+// These defaults fill in a partial/empty `messages.voice` config before it is
+// written back through /api/config, so they MUST equal the values the running
+// capture path uses when it has no stored override — `DEFAULT_LOCAL_ASR_AUTO_STOP`
+// in @elizaos/ui (silenceMs 900, speechRmsThreshold 0.003), which is also what
+// the Voice settings UI (`DEFAULT_VAD_AUTO_STOP`/`DEFAULT_VAD_AUTO_STOP_PREFS`)
+// seeds from. Any other value here would let a chat-issued voice SETTINGS write
+// (e.g. "set voice silence to 1200") silently persist a *different* VAD
+// sensitivity than the Voice UI applies, so the two twins diverge (#14910). The
+// literals are duplicated rather than imported because this server action must
+// not pull the browser capture graph into its bundle; the drift is caught
+// mechanically by a test that imports the canonical constant.
+export const DEFAULT_VOICE_SETTINGS_PREFS: VoiceSettingsPrefs = {
 	continuous: "off",
 	vadAutoStop: {
 		silenceMs: 900,
-		speechRmsThreshold: 0.006,
+		speechRmsThreshold: 0.003,
 	},
 };
 
@@ -808,6 +905,26 @@ function buildVoiceSettingsPrefs(
 	return "provide key=continuous|silence-ms|rms";
 }
 
+// Mirror the applied prefs onto the running shell. Persisting messages.voice
+// alone leaves capture stale: ChatView / useShellController read the localStorage
+// mirrors (loadContinuousChatMode / loadVadAutoStop) that VoiceSectionMount seeds
+// from config, and never re-read config until that section remounts. Broadcasting
+// voice-settings:apply drives useVoiceSettingsApplyChannel to re-seed those
+// mirrors live — the same loopback appearance:apply uses (#14910).
+function voiceSettingsBroadcastRequest(
+	prefs: VoiceSettingsPrefs,
+): SettingsRouteRequest {
+	const payload: VoiceSettingsApplyPayload = {
+		continuous: prefs.continuous,
+		vadAutoStop: prefs.vadAutoStop,
+	};
+	return {
+		method: "POST",
+		path: "/api/views/events/broadcast",
+		body: { type: VOICE_SETTINGS_APPLY_EVENT, payload },
+	};
+}
+
 const VOICE_PREFS_KEY: SettingsWritableKey = {
 	description:
 		"Voice continuous-chat mode and VAD end-of-turn thresholds persisted under messages.voice through /api/config.",
@@ -829,7 +946,13 @@ const VOICE_PREFS_KEY: SettingsWritableKey = {
 			path: "/api/config",
 			body: { messages: { ...messages, voice: next } },
 		});
-		return outcome.ok ? { ...outcome, data: next } : outcome;
+		if (!outcome.ok) return outcome;
+
+		// The action's contract is to change voice behavior in the running app, so
+		// a broadcast failure is a real failure (the shell would stay stale) — not
+		// swallowed, even though config already persisted.
+		const applied = await routeFetch(voiceSettingsBroadcastRequest(next));
+		return applied.ok ? { ...applied, data: next } : applied;
 	},
 	successText: (_value, _request, outcome) => {
 		const next = readVoiceSettingsPrefs({ messages: { voice: outcome.data } });
@@ -852,6 +975,16 @@ const WALLET_RPC_CHAIN_ALIASES: ReadonlyMap<string, WalletRpcChain> = new Map([
 
 const WALLET_RPC_NETWORKS = new Set(["mainnet", "testnet"]);
 
+// Tokens that mean "the managed Eliza Cloud RPC, for every chain" whether they
+// arrive as the key or as the value. Matching values too lets a keyless
+// `value=eliza-cloud` reach the all-chains reset instead of an ambiguity error.
+const WALLET_RPC_CLOUD_TOKENS = new Set([
+	"cloud",
+	"managed",
+	"eliza-cloud",
+	"elizacloud",
+]);
+
 function resolveWalletRpcChain(token: string | null): WalletRpcChain | null {
 	if (!token) return null;
 	return WALLET_RPC_CHAIN_ALIASES.get(token.trim().toLowerCase()) ?? null;
@@ -873,7 +1006,7 @@ function normalizeWalletRpcNetwork(
 
 function readWalletRpcProviderToken(
 	request: SettingsRequest,
-	keyName: string,
+	requestedChain: WalletRpcChain | null,
 	chain: WalletRpcChain,
 ): string | null {
 	const chainSpecific =
@@ -883,13 +1016,28 @@ function readWalletRpcProviderToken(
 				? request.bsc
 				: request.solana;
 	if (chainSpecific) return chainSpecific;
-	const providerTargetChain = resolveWalletRpcChain(request.chain ?? keyName);
-	if (request.provider && providerTargetChain === chain) {
-		return request.provider;
-	}
-	return resolveWalletRpcChain(keyName) === chain ? request.value : null;
+	// `provider=`/`value=` name a provider for exactly ONE chain — the one the
+	// request targeted via `chain=` or a chain-named key. Honoring them for
+	// every chain made a single-chain request rewrite all three selections and
+	// blank the other chains' stored credentials (#14911 follow-up).
+	if (requestedChain !== chain) return null;
+	return request.provider ?? request.value;
 }
 
+function walletRpcProviderError(
+	chain: WalletRpcChain,
+	providerToken: string,
+): Error {
+	const valid = WALLET_RPC_PROVIDER_OPTIONS[chain]
+		.map((option) => option.id)
+		.join(", ");
+	return new Error(
+		`${providerToken} is not a supported ${chain} RPC provider (valid: ${valid})`,
+	);
+}
+
+// Per-chain branches (rather than `selections[chain] = …`) so each assignment
+// keeps the chain-narrowed provider type from normalizeWalletRpcProviderId.
 function applyWalletRpcProviderSelection(
 	selections: WalletRpcSelections,
 	chain: WalletRpcChain,
@@ -897,30 +1045,18 @@ function applyWalletRpcProviderSelection(
 ): void {
 	if (chain === "evm") {
 		const provider = normalizeWalletRpcProviderId("evm", providerToken);
-		if (!provider) {
-			throw new Error(
-				`${providerToken} is not a supported ${chain} RPC provider`,
-			);
-		}
+		if (!provider) throw walletRpcProviderError(chain, providerToken);
 		selections.evm = provider;
 		return;
 	}
 	if (chain === "bsc") {
 		const provider = normalizeWalletRpcProviderId("bsc", providerToken);
-		if (!provider) {
-			throw new Error(
-				`${providerToken} is not a supported ${chain} RPC provider`,
-			);
-		}
+		if (!provider) throw walletRpcProviderError(chain, providerToken);
 		selections.bsc = provider;
 		return;
 	}
 	const provider = normalizeWalletRpcProviderId("solana", providerToken);
-	if (!provider) {
-		throw new Error(
-			`${providerToken} is not a supported ${chain} RPC provider`,
-		);
-	}
+	if (!provider) throw walletRpcProviderError(chain, providerToken);
 	selections.solana = provider;
 }
 
@@ -932,49 +1068,67 @@ function buildWalletRpcSelections(args: {
 	const { current, keyName, request } = args;
 	const selections: WalletRpcSelections = { ...current };
 	const normalizedKey = keyName.trim().toLowerCase();
+	const valueToken = request.value?.trim().toLowerCase() ?? null;
 	const explicitNetwork = normalizeWalletRpcNetwork(
 		request.network ?? (normalizedKey === "network" ? request.value : null),
 	);
+	const allCloud: WalletRpcSelections = {
+		evm: "eliza-cloud",
+		bsc: "eliza-cloud",
+		solana: "eliza-cloud",
+	};
 
-	if (
-		normalizedKey === "cloud" ||
-		normalizedKey === "managed" ||
-		normalizedKey === "eliza-cloud"
-	) {
-		return {
-			selections: {
-				evm: "eliza-cloud",
-				bsc: "eliza-cloud",
-				solana: "eliza-cloud",
-			},
-			network: explicitNetwork,
-		};
+	if (WALLET_RPC_CLOUD_TOKENS.has(normalizedKey)) {
+		// key=cloud resets every chain AND clears the other providers' stored
+		// credentials. A non-cloud value alongside it means the caller named a
+		// specific provider — refuse rather than silently discard it.
+		if (valueToken && !WALLET_RPC_CLOUD_TOKENS.has(valueToken)) {
+			throw new Error(
+				`key=cloud resets every chain to eliza-cloud and cannot take value=${request.value}; use chain=evm|bsc|solana provider=${request.value} to change one chain`,
+			);
+		}
+		return { selections: allCloud, network: explicitNetwork };
 	}
 
+	const requestedChain = resolveWalletRpcChain(request.chain ?? normalizedKey);
+
 	for (const chain of ["evm", "bsc", "solana"] as const) {
-		const providerToken = readWalletRpcProviderToken(request, keyName, chain);
+		const providerToken = readWalletRpcProviderToken(
+			request,
+			requestedChain,
+			chain,
+		);
 		if (!providerToken) continue;
 		applyWalletRpcProviderSelection(selections, chain, providerToken);
 	}
 
-	const chain = resolveWalletRpcChain(request.chain ?? keyName);
-	if (chain) {
-		const providerToken = readWalletRpcProviderToken(request, keyName, chain);
-		if (!providerToken) {
-			throw new Error(`provide provider=<id> or value=<id> for ${chain} RPC`);
+	if (requestedChain) {
+		if (!readWalletRpcProviderToken(request, requestedChain, requestedChain)) {
+			throw new Error(
+				`provide provider=<id> or value=<id> for ${requestedChain} RPC`,
+			);
 		}
-		applyWalletRpcProviderSelection(selections, chain, providerToken);
+		return { selections, network: explicitNetwork };
 	}
 
-	if (
-		!chain &&
-		!request.evm &&
-		!request.bsc &&
-		!request.solana &&
-		!explicitNetwork
-	) {
+	if (!request.evm && !request.bsc && !request.solana && !explicitNetwork) {
+		// No chain scope anywhere in the request. A bare cloud or mainnet/testnet
+		// token still has an unambiguous meaning; a bare provider does not — never
+		// guess a chain, and never fall through to the destructive cloud reset
+		// (#14911 follow-up: that reset used to discard the requested value).
+		const soleToken =
+			valueToken ?? request.provider?.trim().toLowerCase() ?? null;
+		if (soleToken && WALLET_RPC_CLOUD_TOKENS.has(soleToken)) {
+			return { selections: allCloud, network: explicitNetwork };
+		}
+		const impliedNetwork = normalizeWalletRpcNetwork(soleToken);
+		if (impliedNetwork) {
+			return { selections, network: impliedNetwork };
+		}
 		throw new Error(
-			"provide key=evm|bsc|solana value=<provider>, key=cloud, or key=network value=mainnet|testnet",
+			soleToken
+				? `tell me which chain gets ${soleToken}: use chain=evm|bsc|solana provider=${soleToken} (or key=cloud, or key=network value=mainnet|testnet)`
+				: "provide key=evm|bsc|solana value=<provider>, key=cloud, or key=network value=mainnet|testnet",
 		);
 	}
 
@@ -987,7 +1141,7 @@ function describeWalletRpcSelections(selections: WalletRpcSelections): string {
 
 const WALLET_RPC_CONFIG_KEY: SettingsWritableKey = {
 	description:
-		"Select wallet RPC providers without exposing API keys. Use key=evm|bsc|solana value=<provider>, key=cloud, or key=network value=mainnet|testnet.",
+		"Select wallet RPC providers without exposing API keys. Use key=evm|bsc|solana value=<provider> (or chain=<chain> provider=<id>), key=cloud, or key=network value=mainnet|testnet. A chain-scoped request changes that chain only.",
 	valueType: "command",
 	apply: async ({ keyName, request, routeFetch }) => {
 		const current = await routeFetch({
@@ -1311,15 +1465,24 @@ export const SETTINGS_WRITE_REGISTRY: Readonly<
 		kind: "route",
 		summary:
 			"Wallet RPC provider selection and mainnet/testnet mode through the wallet config route. Provider credentials stay out of chat.",
+		// Every alias WALLET_RPC_CHAIN_ALIASES resolves must appear here, or a
+		// `chain=<alias>` request dies at key lookup before the chain resolver
+		// ever runs. `provider` is the neutral default key for requests that
+		// carry only chain=/provider=/value= options (see handleSet).
 		keys: {
 			cloud: WALLET_RPC_CONFIG_KEY,
 			managed: WALLET_RPC_CONFIG_KEY,
 			"eliza-cloud": WALLET_RPC_CONFIG_KEY,
+			elizacloud: WALLET_RPC_CONFIG_KEY,
+			provider: WALLET_RPC_CONFIG_KEY,
 			evm: WALLET_RPC_CONFIG_KEY,
 			eth: WALLET_RPC_CONFIG_KEY,
 			ethereum: WALLET_RPC_CONFIG_KEY,
+			base: WALLET_RPC_CONFIG_KEY,
+			avalanche: WALLET_RPC_CONFIG_KEY,
 			bsc: WALLET_RPC_CONFIG_KEY,
 			bnb: WALLET_RPC_CONFIG_KEY,
+			binance: WALLET_RPC_CONFIG_KEY,
 			solana: WALLET_RPC_CONFIG_KEY,
 			sol: WALLET_RPC_CONFIG_KEY,
 			network: WALLET_RPC_CONFIG_KEY,
@@ -1413,6 +1576,11 @@ export interface SettingsRequest {
 	provider: string | null;
 	chain: string | null;
 	network: string | null;
+	// Per-chain provider tokens (evm=alchemy bsc=nodereal …): the batch form for
+	// changing several wallet RPC selections in one call. Intentionally parsed
+	// but not declared in the action's parameter schema — the planner is steered
+	// to the single-chain chain=/provider= form; these stay for structured
+	// callers and are pinned by the settings tests.
 	evm: string | null;
 	bsc: string | null;
 	solana: string | null;
@@ -1612,11 +1780,15 @@ async function handleSet(
 	}
 
 	// cap.kind === "route"
+	// wallet-rpc must not fall through to the first-registry-key default: that
+	// key is `cloud`, whose write is a destructive all-chains reset. A request
+	// with no key/chain routes to the neutral `provider` key, where
+	// buildWalletRpcSelections resolves the remaining options or refuses.
 	const requestedKeyName =
 		request.namespace ??
 		request.key ??
-		(request.sectionId === "wallet-rpc" && request.chain
-			? request.chain
+		(request.sectionId === "wallet-rpc"
+			? (request.chain?.toLowerCase() ?? "provider")
 			: null) ??
 		(request.sectionId === "permissions" && request.permission
 			? "request"
@@ -1628,7 +1800,10 @@ async function handleSet(
 	const writable = keyName ? cap.keys[keyName] : undefined;
 	if (!writable) {
 		const known = Object.keys(cap.keys).join(", ");
-		const reply = `I don't know how to set "${request.key}" on ${request.sectionId}. I can change: ${known}.`;
+		// Print the key we actually resolved (which may come from chain= or a
+		// namespace), not request.key — that reads as `"null"` when the caller
+		// used a different parameter to name the key.
+		const reply = `I don't know how to set "${keyName ?? request.key}" on ${request.sectionId}. I can change: ${known}.`;
 		await callback?.({ text: reply });
 		return { success: false, text: reply };
 	}

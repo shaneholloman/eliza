@@ -7,14 +7,19 @@
  */
 
 import type { HandlerCallback, IAgentRuntime, Memory } from "@elizaos/core";
-import { APPEARANCE_APPLY_EVENT } from "@elizaos/shared";
+import {
+	APPEARANCE_APPLY_EVENT,
+	VOICE_SETTINGS_APPLY_EVENT,
+} from "@elizaos/shared";
 import {
 	SETTINGS_NON_CATALOG_SECTION_META,
 	SETTINGS_SECTION_META,
 } from "@elizaos/ui/components/settings/settings-section-meta";
+import { DEFAULT_LOCAL_ASR_AUTO_STOP } from "@elizaos/ui/voice/local-asr-capture";
 import { describe, expect, it, vi } from "vitest";
 import {
 	createSettingsAction,
+	DEFAULT_VOICE_SETTINGS_PREFS,
 	parseBooleanValue,
 	parseSettingsRequest,
 	resolveSectionId,
@@ -581,6 +586,181 @@ describe("SETTINGS action: set on an owned route section", () => {
 		expect(texts.join(" ")).toContain("config save failed");
 	});
 
+	// #14910: the SETTINGS voice write is the semantic twin of the Voice UI. Its
+	// defaults are what a partial/empty `messages.voice` config gets filled in
+	// with, so they must equal the values the running capture path uses with no
+	// stored override — otherwise a chat write persists a different VAD
+	// sensitivity than the Voice UI applies. Pin against the canonical constant so
+	// any future drift fails here instead of silently diverging.
+	it("keeps voice VAD defaults in sync with the canonical capture defaults", () => {
+		expect(DEFAULT_VOICE_SETTINGS_PREFS.vadAutoStop).toEqual({
+			silenceMs: DEFAULT_LOCAL_ASR_AUTO_STOP.silenceMs,
+			speechRmsThreshold: DEFAULT_LOCAL_ASR_AUTO_STOP.speechRmsThreshold,
+		});
+	});
+
+	it("fills a partial voice config's missing RMS with the capture default when setting silence", async () => {
+		// Stored config has a continuous mode but no vadAutoStop — the write must
+		// seed the missing speechRmsThreshold with the canonical capture default
+		// (0.003), not a value that diverges from the Voice UI.
+		const routeFetch = vi.fn<SettingsRouteFetch>(async (request) => {
+			if (request.method === "GET") {
+				return {
+					ok: true,
+					data: { messages: { voice: { continuous: "vad-gated" } } },
+				};
+			}
+			return { ok: true };
+		});
+		const { result } = await invoke(
+			{ action: "set", section: "voice", key: "silence-ms", value: "1200" },
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenNthCalledWith(2, {
+			method: "PUT",
+			path: "/api/config",
+			body: {
+				messages: {
+					voice: {
+						continuous: "vad-gated",
+						vadAutoStop: {
+							silenceMs: 1200,
+							speechRmsThreshold:
+								DEFAULT_LOCAL_ASR_AUTO_STOP.speechRmsThreshold,
+						},
+					},
+				},
+			},
+		});
+		expect(result?.success).toBe(true);
+	});
+
+	it("fills an empty voice config's missing silence with the capture default when setting RMS", async () => {
+		// Empty `messages` — setting only the RMS must seed the missing silenceMs
+		// with the canonical capture default (900ms) so the twin stays aligned.
+		const routeFetch = vi.fn<SettingsRouteFetch>(async (request) => {
+			if (request.method === "GET") {
+				return { ok: true, data: { messages: {} } };
+			}
+			return { ok: true };
+		});
+		const { result, texts } = await invoke(
+			{ action: "set", section: "voice", key: "rms", value: "0.01" },
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenNthCalledWith(2, {
+			method: "PUT",
+			path: "/api/config",
+			body: {
+				messages: {
+					voice: {
+						continuous: "off",
+						vadAutoStop: {
+							silenceMs: DEFAULT_LOCAL_ASR_AUTO_STOP.silenceMs,
+							speechRmsThreshold: 0.01,
+						},
+					},
+				},
+			},
+		});
+		expect(result?.success).toBe(true);
+		expect(texts.join(" ")).toContain("speech threshold is 0.01");
+	});
+
+	it("broadcasts voice-settings:apply so the running shell mirrors update", async () => {
+		// #14910: persisting messages.voice alone leaves the live capture path stale;
+		// the action must also broadcast the applied prefs to re-seed the shell's
+		// localStorage mirrors (useVoiceSettingsApplyChannel). Explicit stored VAD
+		// values keep this independent of the default-value fix (#14994).
+		const routeFetch = vi.fn<SettingsRouteFetch>(async (request) => {
+			if (request.method === "GET") {
+				return {
+					ok: true,
+					data: {
+						messages: {
+							voice: {
+								continuous: "off",
+								vadAutoStop: { silenceMs: 1100, speechRmsThreshold: 0.005 },
+							},
+						},
+					},
+				};
+			}
+			return { ok: true };
+		});
+		const { result } = await invoke(
+			{
+				action: "set",
+				section: "voice",
+				key: "continuous",
+				value: "always-on",
+			},
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenCalledTimes(3);
+		expect(routeFetch).toHaveBeenNthCalledWith(3, {
+			method: "POST",
+			path: "/api/views/events/broadcast",
+			body: {
+				type: VOICE_SETTINGS_APPLY_EVENT,
+				payload: {
+					continuous: "always-on",
+					vadAutoStop: { silenceMs: 1100, speechRmsThreshold: 0.005 },
+				},
+			},
+		});
+		expect(result?.success).toBe(true);
+		expect(VOICE_SETTINGS_APPLY_EVENT).toBe("voice-settings:apply");
+	});
+
+	it("surfaces a voice broadcast failure instead of fabricating live-apply", async () => {
+		// The config write can succeed while the broadcast fails; the shell would
+		// then stay on old values, so the action reports failure rather than a
+		// fabricated success (#14910).
+		const routeFetch = vi.fn<SettingsRouteFetch>(async (request) => {
+			if (request.method === "GET") {
+				return {
+					ok: true,
+					data: { messages: { voice: { continuous: "off" } } },
+				};
+			}
+			if (request.method === "PUT") return { ok: true };
+			return { ok: false, detail: "view broadcast failed" };
+		});
+		const { result, texts } = await invoke(
+			{ action: "set", section: "voice", key: "continuous", value: "vad" },
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenCalledTimes(3);
+		expect(result?.success).toBe(false);
+		expect(texts.join(" ")).toContain("view broadcast failed");
+	});
+
+	it("does not broadcast when the voice config write fails", async () => {
+		// Fail-fast: a failed PUT returns before the broadcast, so the shell is
+		// never told about a change that did not persist.
+		const routeFetch = vi.fn<SettingsRouteFetch>(async (request) => {
+			if (request.method === "GET") {
+				return { ok: true, data: { messages: {} } };
+			}
+			return { ok: false, detail: "config save failed" };
+		});
+		const { result } = await invoke(
+			{
+				action: "set",
+				section: "voice",
+				key: "continuous",
+				value: "always-on",
+			},
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenCalledTimes(2);
+		expect(routeFetch).not.toHaveBeenCalledWith(
+			expect.objectContaining({ path: "/api/views/events/broadcast" }),
+		);
+		expect(result?.success).toBe(false);
+	});
+
 	it("dispatches permissions shell off through the backend route", async () => {
 		const routeFetch = vi.fn<SettingsRouteFetch>(async () => ({ ok: true }));
 		const { result, texts } = await invoke(
@@ -1091,6 +1271,304 @@ describe("SETTINGS action: set on an owned route section", () => {
 		expect(texts.join(" ")).toContain("wallet config save failed");
 	});
 
+	/** GET returns the given wallet config; every write succeeds. */
+	function walletConfigRouteFetch(
+		config: Record<string, unknown>,
+	): ReturnType<typeof vi.fn<SettingsRouteFetch>> {
+		return vi.fn<SettingsRouteFetch>(async (request) =>
+			request.method === "GET" ? { ok: true, data: config } : { ok: true },
+		);
+	}
+
+	const ALL_CLOUD_CONFIG = {
+		selectedRpcProviders: {
+			evm: "eliza-cloud",
+			bsc: "eliza-cloud",
+			solana: "eliza-cloud",
+		},
+		walletNetwork: "mainnet",
+		legacyCustomChains: [],
+	};
+
+	const MIXED_PROVIDER_CONFIG = {
+		selectedRpcProviders: {
+			evm: "alchemy",
+			bsc: "nodereal",
+			solana: "helius-birdeye",
+		},
+		walletNetwork: "mainnet",
+		legacyCustomChains: [],
+		alchemyKeySet: true,
+		nodeRealBscRpcSet: true,
+		heliusKeySet: true,
+		birdeyeKeySet: true,
+	};
+
+	// #14949 verify-pass defect 1: chain=/provider= — the action's own declared
+	// parameter form — must scope the write to the requested chain instead of
+	// looping the provider over all three chains.
+	it("applies chain=evm provider=alchemy to the EVM chain only", async () => {
+		const routeFetch = walletConfigRouteFetch(ALL_CLOUD_CONFIG);
+		const { result } = await invoke(
+			{
+				action: "set",
+				section: "wallet-rpc",
+				chain: "evm",
+				provider: "alchemy",
+			},
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenNthCalledWith(2, {
+			method: "PUT",
+			path: "/api/wallet/config",
+			body: {
+				selections: {
+					evm: "alchemy",
+					bsc: "eliza-cloud",
+					solana: "eliza-cloud",
+				},
+				walletNetwork: "mainnet",
+				credentials: {},
+			},
+		});
+		expect(result?.success).toBe(true);
+	});
+
+	it("applies chain=solana provider=helius to Solana only", async () => {
+		const routeFetch = walletConfigRouteFetch(ALL_CLOUD_CONFIG);
+		const { result } = await invoke(
+			{
+				action: "set",
+				section: "wallet-rpc",
+				chain: "solana",
+				provider: "helius",
+			},
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenNthCalledWith(2, {
+			method: "PUT",
+			path: "/api/wallet/config",
+			body: {
+				selections: {
+					evm: "eliza-cloud",
+					bsc: "eliza-cloud",
+					solana: "helius-birdeye",
+				},
+				walletNetwork: "mainnet",
+				credentials: {},
+			},
+		});
+		expect(result?.success).toBe(true);
+	});
+
+	it("keeps other chains' selections and credentials on chain=evm provider=infura", async () => {
+		const routeFetch = walletConfigRouteFetch(MIXED_PROVIDER_CONFIG);
+		const { result } = await invoke(
+			{
+				action: "set",
+				section: "wallet-rpc",
+				chain: "evm",
+				provider: "infura",
+			},
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenNthCalledWith(2, {
+			method: "PUT",
+			path: "/api/wallet/config",
+			body: {
+				selections: {
+					evm: "infura",
+					bsc: "nodereal",
+					solana: "helius-birdeye",
+				},
+				walletNetwork: "mainnet",
+				// Only the credential the EVM chain moved off of is cleared; the
+				// still-selected NodeReal/Helius/Birdeye credentials stay intact.
+				credentials: { ALCHEMY_API_KEY: "" },
+			},
+		});
+		expect(result?.success).toBe(true);
+	});
+
+	it("moves one chain to eliza-cloud without resetting the others", async () => {
+		const routeFetch = walletConfigRouteFetch(MIXED_PROVIDER_CONFIG);
+		const { result } = await invoke(
+			{
+				action: "set",
+				section: "wallet-rpc",
+				chain: "evm",
+				provider: "eliza-cloud",
+			},
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenNthCalledWith(2, {
+			method: "PUT",
+			path: "/api/wallet/config",
+			body: {
+				selections: {
+					evm: "eliza-cloud",
+					bsc: "nodereal",
+					solana: "helius-birdeye",
+				},
+				walletNetwork: "mainnet",
+				credentials: { ALCHEMY_API_KEY: "" },
+			},
+		});
+		expect(result?.success).toBe(true);
+	});
+
+	// #14949 verify-pass defect 2: a keyless request must never fall through to
+	// the destructive all-chains cloud reset, and must never discard the value
+	// the caller asked for.
+	it("refuses a keyless provider value instead of resetting every chain", async () => {
+		const routeFetch = walletConfigRouteFetch(MIXED_PROVIDER_CONFIG);
+		const { result, texts } = await invoke(
+			{ section: "wallet-rpc", value: "alchemy" },
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenCalledTimes(1);
+		expect(result?.success).toBe(false);
+		expect(texts.join(" ")).toContain("chain=evm|bsc|solana provider=alchemy");
+	});
+
+	it("refuses key=cloud with a non-cloud value instead of discarding it", async () => {
+		const routeFetch = walletConfigRouteFetch(MIXED_PROVIDER_CONFIG);
+		const { result, texts } = await invoke(
+			{ action: "set", section: "wallet-rpc", key: "cloud", value: "alchemy" },
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenCalledTimes(1);
+		expect(result?.success).toBe(false);
+		expect(texts.join(" ")).toContain("resets every chain");
+	});
+
+	it("accepts a keyless eliza-cloud value as the all-chains cloud reset", async () => {
+		const routeFetch = walletConfigRouteFetch(ALL_CLOUD_CONFIG);
+		const { result } = await invoke(
+			{ action: "set", section: "wallet-rpc", value: "eliza-cloud" },
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenNthCalledWith(2, {
+			method: "PUT",
+			path: "/api/wallet/config",
+			body: {
+				selections: {
+					evm: "eliza-cloud",
+					bsc: "eliza-cloud",
+					solana: "eliza-cloud",
+				},
+				walletNetwork: "mainnet",
+				credentials: {},
+			},
+		});
+		expect(result?.success).toBe(true);
+	});
+
+	it("treats a keyless mainnet/testnet value as a network switch", async () => {
+		const routeFetch = walletConfigRouteFetch(MIXED_PROVIDER_CONFIG);
+		const { result } = await invoke(
+			{ action: "set", section: "wallet-rpc", value: "testnet" },
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenNthCalledWith(2, {
+			method: "PUT",
+			path: "/api/wallet/config",
+			body: expect.objectContaining({
+				selections: {
+					evm: "alchemy",
+					bsc: "nodereal",
+					solana: "helius-birdeye",
+				},
+				walletNetwork: "testnet",
+			}),
+		});
+		expect(result?.success).toBe(true);
+	});
+
+	// #14949 verify-pass defect 3: every chain alias the resolver accepts must
+	// survive key resolution, and an unknown chain names itself in the error.
+	it("resolves the base alias onto the EVM chain", async () => {
+		const routeFetch = walletConfigRouteFetch(ALL_CLOUD_CONFIG);
+		const { result } = await invoke(
+			{
+				action: "set",
+				section: "wallet-rpc",
+				chain: "base",
+				provider: "alchemy",
+			},
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenNthCalledWith(2, {
+			method: "PUT",
+			path: "/api/wallet/config",
+			body: {
+				selections: {
+					evm: "alchemy",
+					bsc: "eliza-cloud",
+					solana: "eliza-cloud",
+				},
+				walletNetwork: "mainnet",
+				credentials: {},
+			},
+		});
+		expect(result?.success).toBe(true);
+	});
+
+	it("names the unknown chain token in the wallet-rpc key error", async () => {
+		const routeFetch = walletConfigRouteFetch(ALL_CLOUD_CONFIG);
+		const { result, texts } = await invoke(
+			{
+				action: "set",
+				section: "wallet-rpc",
+				chain: "polygon",
+				provider: "alchemy",
+			},
+			routeFetch,
+		);
+		expect(routeFetch).not.toHaveBeenCalled();
+		expect(result?.success).toBe(false);
+		expect(texts.join(" ")).toContain('"polygon"');
+	});
+
+	it("applies per-chain batch options to exactly the named chains", async () => {
+		const routeFetch = walletConfigRouteFetch(MIXED_PROVIDER_CONFIG);
+		const { result } = await invoke(
+			{ action: "set", section: "wallet-rpc", evm: "infura", bsc: "ankr" },
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenNthCalledWith(2, {
+			method: "PUT",
+			path: "/api/wallet/config",
+			body: expect.objectContaining({
+				selections: {
+					evm: "infura",
+					bsc: "ankr",
+					solana: "helius-birdeye",
+				},
+				walletNetwork: "mainnet",
+			}),
+		});
+		expect(result?.success).toBe(true);
+	});
+
+	it("names the chain and its valid providers in the invalid-provider error", async () => {
+		const routeFetch = walletConfigRouteFetch(ALL_CLOUD_CONFIG);
+		const { result, texts } = await invoke(
+			{
+				action: "set",
+				section: "wallet-rpc",
+				chain: "solana",
+				provider: "infura",
+			},
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenCalledTimes(1);
+		expect(result?.success).toBe(false);
+		expect(texts.join(" ")).toContain(
+			"infura is not a supported solana RPC provider (valid: eliza-cloud, helius-birdeye)",
+		);
+	});
+
 	it("surfaces a backend failure instead of fabricating success", async () => {
 		const routeFetch = vi.fn<SettingsRouteFetch>(async () => ({
 			ok: false,
@@ -1444,6 +1922,145 @@ describe("SETTINGS action: set on an owned route section", () => {
 		expect(result?.success).toBe(true);
 		expect(texts.join(" ")).toContain("chat cannot apply it directly");
 		expect(texts.join(" ")).toContain("no remote execution endpoint");
+	});
+
+	it("fails the status read when the update check returned an error", async () => {
+		// The route answers HTTP 200 with `error` populated when the check itself
+		// failed; that must not read as a successful SETTINGS action.
+		const routeFetch = vi.fn<SettingsRouteFetch>(async () => ({
+			ok: true,
+			data: {
+				currentVersion: "1.0.0",
+				channel: "stable",
+				updateAvailable: false,
+				latestVersion: null,
+				error: "registry unreachable: ETIMEDOUT",
+			},
+		}));
+		const { result, texts } = await invoke(
+			{ action: "set", section: "updates", key: "status" },
+			routeFetch,
+		);
+		expect(result?.success).toBe(false);
+		const joined = texts.join(" ");
+		expect(joined).toContain("registry unreachable");
+		expect(joined).not.toContain("unknown");
+	});
+
+	it("fails rather than narrating a healthy status from a malformed payload", async () => {
+		const routeFetch = vi.fn<SettingsRouteFetch>(async () => ({
+			ok: true,
+			// Missing required status fields must never be narrated as a healthy
+			// version/channel pair.
+			data: { channel: "stable" },
+		}));
+		const { result, texts } = await invoke(
+			{ action: "set", section: "updates", key: "status" },
+			routeFetch,
+		);
+		expect(result?.success).toBe(false);
+		const joined = texts.join(" ");
+		expect(joined).toContain("unrecognized payload");
+		expect(joined).not.toContain("unknown on unknown");
+	});
+
+	it("fails the update check when the route body is not a status object", async () => {
+		const routeFetch = vi.fn<SettingsRouteFetch>(async () => ({
+			ok: true,
+			data: "not a status object",
+		}));
+		const { result, texts } = await invoke(
+			{ action: "set", section: "updates", key: "check" },
+			routeFetch,
+		);
+		expect(result?.success).toBe(false);
+		expect(texts.join(" ")).not.toContain("unknown");
+	});
+
+	it("fails the apply plan when the update check errored", async () => {
+		const routeFetch = vi.fn<SettingsRouteFetch>(async () => ({
+			ok: true,
+			data: {
+				currentVersion: "1.0.0",
+				channel: "stable",
+				updateAvailable: false,
+				latestVersion: null,
+				error: "registry unreachable",
+			},
+		}));
+		const { result, texts } = await invoke(
+			{ action: "set", section: "updates", key: "apply" },
+			routeFetch,
+		);
+		expect(result?.success).toBe(false);
+		const joined = texts.join(" ");
+		expect(joined).toContain("the update check failed");
+		expect(joined).not.toContain("unknown");
+	});
+
+	it("surfaces a failed forced refresh after a channel change without fabricating a status", async () => {
+		const routeFetch = vi.fn<SettingsRouteFetch>(async (request) => {
+			if (request.method === "PUT")
+				return { ok: true, data: { channel: "beta" } };
+			return {
+				ok: true,
+				data: {
+					currentVersion: "1.0.0",
+					channel: "beta",
+					updateAvailable: false,
+					latestVersion: null,
+					error: "registry unreachable while refreshing",
+				},
+			};
+		});
+		const { result, texts } = await invoke(
+			{ action: "set", section: "updates", key: "channel", value: "beta" },
+			routeFetch,
+		);
+		// The channel write landed, so the operation succeeded — but the failed
+		// refresh is surfaced, never masked by the channel-write echo.
+		expect(result?.success).toBe(true);
+		const joined = texts.join(" ");
+		expect(joined).toContain("Update channel is beta");
+		expect(joined).toContain("couldn't refresh the release status");
+		expect(joined).toContain("registry unreachable while refreshing");
+		expect(joined).not.toContain("unknown");
+	});
+
+	it("surfaces a transport failure on the forced refresh after a channel change", async () => {
+		const routeFetch = vi.fn<SettingsRouteFetch>(async (request) => {
+			if (request.method === "PUT")
+				return { ok: true, data: { channel: "nightly" } };
+			return {
+				ok: false,
+				detail: "route /api/update/status?force=true returned 503",
+			};
+		});
+		const { result, texts } = await invoke(
+			{ action: "set", section: "updates", key: "channel", value: "nightly" },
+			routeFetch,
+		);
+		expect(result?.success).toBe(true);
+		const joined = texts.join(" ");
+		expect(joined).toContain("Update channel is nightly");
+		expect(joined).toContain("couldn't refresh the release status");
+		expect(joined).toContain("503");
+		expect(joined).not.toContain("unknown");
+	});
+
+	it("does not refresh status when the channel write itself fails", async () => {
+		const routeFetch = vi.fn<SettingsRouteFetch>(async (request) => {
+			if (request.method === "PUT")
+				return { ok: false, detail: "channel write rejected" };
+			return { ok: true, data: {} };
+		});
+		const { result, texts } = await invoke(
+			{ action: "set", section: "updates", key: "channel", value: "beta" },
+			routeFetch,
+		);
+		expect(result?.success).toBe(false);
+		expect(texts.join(" ")).toContain("channel write rejected");
+		expect(routeFetch).toHaveBeenCalledTimes(1);
 	});
 });
 

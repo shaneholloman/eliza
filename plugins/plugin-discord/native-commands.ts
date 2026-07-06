@@ -1,7 +1,7 @@
 /**
  * Turns neutral command specs into Discord REST slash-command payloads with
- * button/menu components. Consumed by the slash-command registration path when
- * syncing commands to the Discord application.
+ * button-based argument menus. Consumed by the slash-command registration path
+ * when syncing commands to the Discord application.
  */
 import {
 	type APIApplicationCommandOption,

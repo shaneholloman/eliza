@@ -52,7 +52,7 @@ plugins/plugin-discord/
   setup-routes.ts             HTTP routes for connector setup state machine (/api/setup/discord/*)
   data-routes.ts              HTTP routes for post-auth data (/api/discord/guilds, channels, subscriptions)
   slash-commands.ts           Slash command registry and dispatcher
-  native-commands.ts          Utilities for building Discord slash commands with button/menu components
+  native-commands.ts          Utilities for building Discord slash commands with button-based argument menus
   catalog-commands.ts         Registers connector-neutral catalog commands (think, reasoning, views, knowledge, plugins, ...) into the slash-command registry, deduplicating against hand-written built-ins
   interactions.ts             Maps neutral agent InteractionBlock output to Discord ActionRow/button components; decodes callback custom_id on button click
   messaging.ts                Text helpers: chunkDiscordText, escapeDiscordMarkdown, extractAllUserMentions, etc.

@@ -6,16 +6,19 @@
   "description": "Evidence-bundle foundation: versioned manifest schema, provenance-stamped bundle builder, integrity verification, and silo ingestors for the unified evidence harness (#14541).",
   "main": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./visual-primitives": "./src/visual-primitives.mjs"
   },
   "scripts": {
     "bundle:create": "bun src/cli.ts create",
     "bundle:verify": "bun src/cli.ts verify",
+    "certify": "bun src/cli.ts certify",
     "certify:keygen": "bun src/certify/cli.ts keygen",
     "certify:rollup": "bun src/certify/cli.ts rollup",
     "certify:sign": "bun src/certify/cli.ts sign",
     "certify:verify": "bun src/certify/cli.ts verify",
     "vision-qa": "bun src/vision-qa/cli.ts",
+    "evidence:gpu-queue": "bun src/queue/cli.ts",
     "video:walkthrough": "bun src/video/cli.ts walkthrough",
     "video:ingest": "bun src/video/cli.ts ingest",
     "test": "node ../scripts/run-vitest.mjs run --config ./vitest.config.ts",

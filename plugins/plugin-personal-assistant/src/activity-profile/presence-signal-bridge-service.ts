@@ -7,6 +7,7 @@
 import crypto from "node:crypto";
 import {
   type ActionEventPayload,
+  type ComposerActivityPayload,
   EventType,
   type IAgentRuntime,
   type MessagePayload,
@@ -358,16 +359,10 @@ export class PresenceSignalBridgeService extends Service {
     await this.captureActivityFromAction(payload);
   };
 
-  private readonly viewSwitchedHandler = async (
-    payload: ViewSwitchedPayload,
+  private readonly composerActivityHandler = async (
+    payload: ComposerActivityPayload,
   ): Promise<void> => {
-    await this.captureActivityFromViewSwitch(payload);
-  };
-
-  private readonly reactionReceivedHandler = async (
-    payload: MessagePayload,
-  ): Promise<void> => {
-    await this.captureActivityFromReaction(payload);
+    await this.captureActivityFromComposer(payload);
   };
 
   static override async start(
@@ -388,10 +383,17 @@ export class PresenceSignalBridgeService extends Service {
       EventType.ACTION_STARTED,
       service.actionStartedHandler,
     );
-    runtime.registerEvent(EventType.VIEW_SWITCHED, service.viewSwitchedHandler);
     runtime.registerEvent(
-      EventType.REACTION_RECEIVED,
-      service.reactionReceivedHandler,
+      EventType.USER_TYPING_STARTED,
+      service.composerActivityHandler,
+    );
+    runtime.registerEvent(
+      EventType.USER_TYPING_PAUSED,
+      service.composerActivityHandler,
+    );
+    runtime.registerEvent(
+      EventType.USER_DRAFT_ABANDONED,
+      service.composerActivityHandler,
     );
     return service;
   }
@@ -418,12 +420,16 @@ export class PresenceSignalBridgeService extends Service {
       this.actionStartedHandler,
     );
     this.runtime.unregisterEvent(
-      EventType.VIEW_SWITCHED,
-      this.viewSwitchedHandler,
+      EventType.USER_TYPING_STARTED,
+      this.composerActivityHandler,
     );
     this.runtime.unregisterEvent(
-      EventType.REACTION_RECEIVED,
-      this.reactionReceivedHandler,
+      EventType.USER_TYPING_PAUSED,
+      this.composerActivityHandler,
+    );
+    this.runtime.unregisterEvent(
+      EventType.USER_DRAFT_ABANDONED,
+      this.composerActivityHandler,
     );
   }
 
@@ -472,94 +478,54 @@ export class PresenceSignalBridgeService extends Service {
     );
   }
 
-  private async captureActivityFromViewSwitch(
-    payload: ViewSwitchedPayload,
+  private async captureActivityFromComposer(
+    payload: ComposerActivityPayload,
   ): Promise<void> {
-    // Only the owner navigating counts as presence. Agent-initiated switches
-    // (action/evaluator navigation) are the agent moving itself, not the owner
-    // being active, so they must not read as owner activity (#14689).
-    if (payload.initiatedBy === "agent") {
-      return;
-    }
-    const viewId =
-      typeof payload.viewId === "string" && payload.viewId.length > 0
-        ? payload.viewId
-        : "unknown";
-    const observedAt = new Date().toISOString();
-    const fingerprint = `view:${viewId}`;
+    const observedAt = payload.occurredAt;
     const observedMs = Date.parse(observedAt);
-    const existing = this.recentFingerprints.get(fingerprint);
-    if (
-      existing !== undefined &&
-      Number.isFinite(observedMs) &&
-      observedMs - existing < DEDUPE_WINDOW_MS
-    ) {
+    if (!Number.isFinite(observedMs)) {
       return;
     }
-    if (Number.isFinite(observedMs)) {
-      this.recentFingerprints.set(fingerprint, observedMs);
+    const conversationId = payload.conversationId ?? "unknown-conversation";
+    const fingerprint = `composer:${payload.activity}:${payload.surface}:${conversationId}:${observedAt}`;
+    const existing = this.recentFingerprints.get(fingerprint);
+    if (existing !== undefined && observedMs - existing < DEDUPE_WINDOW_MS) {
+      return;
     }
+    this.recentFingerprints.set(fingerprint, observedMs);
+
+    const state =
+      payload.activity === "typing_started" ? ("active" as const) : "idle";
     const repository = new LifeOpsRepository(this.runtime);
     await repository.createActivitySignal(
       createLifeOpsActivitySignal({
         agentId: String(this.runtime.agentId),
         source: "app_lifecycle",
-        platform: "agent_view",
-        state: "active",
+        platform: "composer",
+        state,
         observedAt,
-        idleState: "active",
-        idleTimeSeconds: 0,
+        idleState: state,
+        idleTimeSeconds:
+          typeof payload.idleForMs === "number"
+            ? Math.max(0, Math.round(payload.idleForMs / 1000))
+            : 0,
         onBattery: null,
         health: null,
         metadata: {
-          eventType: "VIEW_SWITCHED",
-          viewId,
-          initiatedBy: payload.initiatedBy,
-          deviceId: getDeviceId(),
-        },
-      }),
-    );
-  }
-
-  private async captureActivityFromReaction(
-    payload: MessagePayload,
-  ): Promise<void> {
-    // A tapback/reaction from someone other than the agent is an owner (or
-    // contact) touchpoint. Reuse the message identity readers; skip the agent's
-    // own reactions so the agent reacting does not read as owner presence.
-    const entityId = readMessageEntityId(payload);
-    if (!entityId || entityId === String(this.runtime.agentId)) {
-      return;
-    }
-    const observedAt = readMessageTimestamp(payload);
-    const fingerprint = `${EventType.REACTION_RECEIVED}:${entityId}:${observedAt}`;
-    const observedMs = Date.parse(observedAt);
-    const existing = this.recentFingerprints.get(fingerprint);
-    if (
-      existing !== undefined &&
-      Number.isFinite(observedMs) &&
-      observedMs - existing < DEDUPE_WINDOW_MS
-    ) {
-      return;
-    }
-    if (Number.isFinite(observedMs)) {
-      this.recentFingerprints.set(fingerprint, observedMs);
-    }
-    const repository = new LifeOpsRepository(this.runtime);
-    await repository.createActivitySignal(
-      createLifeOpsActivitySignal({
-        agentId: String(this.runtime.agentId),
-        source: "connector_activity",
-        platform: readPlatform(payload),
-        state: "active",
-        observedAt,
-        idleState: null,
-        idleTimeSeconds: 0,
-        onBattery: null,
-        health: null,
-        metadata: {
-          eventType: "REACTION_RECEIVED",
-          entityId,
+          eventType:
+            payload.activity === "typing_started"
+              ? "USER_TYPING_STARTED"
+              : payload.activity === "typing_paused"
+                ? "USER_TYPING_PAUSED"
+                : "USER_DRAFT_ABANDONED",
+          activity: payload.activity,
+          surface: payload.surface,
+          conversationId,
+          draftLength: payload.draftLength,
+          ...(payload.idleForMs !== undefined
+            ? { idleForMs: payload.idleForMs }
+            : {}),
+          ...(payload.reason ? { reason: payload.reason } : {}),
           deviceId: getDeviceId(),
         },
       }),
@@ -580,6 +546,9 @@ export class PresenceSignalBridgeService extends Service {
       return;
     }
     if (isAgentEntity && !handle) {
+      return;
+    }
+    if (isAgentEntity && eventType === EventType.REACTION_RECEIVED) {
       return;
     }
     const observedAt = readMessageTimestamp(payload);

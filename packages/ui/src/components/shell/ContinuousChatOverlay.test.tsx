@@ -54,6 +54,10 @@ vi.mock("../../utils/clipboard", () => ({
   copyTextToClipboard: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../../chat/report-composer-activity", () => ({
+  reportComposerActivity: vi.fn(),
+}));
+
 import * as React from "react";
 import { client } from "../../api/client";
 import type {
@@ -62,6 +66,7 @@ import type {
   ConversationMessageSearchResult,
   ImageAttachment,
 } from "../../api/client-types-chat";
+import { reportComposerActivity } from "../../chat/report-composer-activity";
 import { CHAT_PREFILL_EVENT, ELIZA_BACK_INTENT_EVENT } from "../../events";
 import {
   LAYOUT_SHIFT_INTENT_ATTR,
@@ -96,6 +101,7 @@ afterEach(() => {
   cleanup();
   resetShellSurfaceForTests();
   setViewChatBinding(null);
+  vi.mocked(reportComposerActivity).mockClear();
   vi.mocked(client.searchConversationMessages).mockReset();
   vi.mocked(Element.prototype.scrollIntoView).mockClear();
   document.getElementById("chat-message-m-hit")?.remove();
@@ -226,6 +232,75 @@ describe("ContinuousChatOverlay", () => {
     });
     expect(screen.getByLabelText("send")).toBeTruthy();
     expect(screen.queryByLabelText("talk")).toBeNull();
+  });
+
+  it("reports typing start and pause from the real composer draft", () => {
+    vi.useFakeTimers();
+    try {
+      render(<ContinuousChatOverlay controller={makeController()} />);
+      fireEvent.change(screen.getByLabelText("message"), {
+        target: { value: "hello" },
+      });
+
+      expect(reportComposerActivity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activity: "typing_started",
+          surface: "continuous_chat_overlay",
+          draftLength: 5,
+        }),
+      );
+      expect(reportComposerActivity).not.toHaveBeenCalledWith(
+        expect.objectContaining({ activity: "typing_paused" }),
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(1_999);
+      });
+      expect(reportComposerActivity).not.toHaveBeenCalledWith(
+        expect.objectContaining({ activity: "typing_paused" }),
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(reportComposerActivity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activity: "typing_paused",
+          surface: "continuous_chat_overlay",
+          draftLength: 5,
+          idleForMs: 2_000,
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports draft_abandoned only when the user clears typed text", () => {
+    const controller = makeController();
+    render(<ContinuousChatOverlay controller={controller} />);
+    const input = screen.getByLabelText("message");
+
+    fireEvent.change(input, { target: { value: "discard me" } });
+    fireEvent.change(input, { target: { value: "" } });
+
+    expect(reportComposerActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activity: "draft_abandoned",
+        surface: "continuous_chat_overlay",
+        draftLength: 0,
+        reason: "cleared",
+      }),
+    );
+
+    vi.mocked(reportComposerActivity).mockClear();
+    fireEvent.change(input, { target: { value: "send me" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(controller.send).toHaveBeenCalledWith("send me");
+    expect(reportComposerActivity).not.toHaveBeenCalledWith(
+      expect.objectContaining({ activity: "draft_abandoned" }),
+    );
   });
 
   it("shows a disabled, no-op send control when the agent can't accept input (canSend false)", () => {
@@ -2592,15 +2667,26 @@ describe("ContinuousChatOverlay single-thread (no chat swipe, #13531)", () => {
     expect(screen.getByTestId("chat-full-launcher")).toBeTruthy();
   });
 
-  it("exposes search + new-chat header controls (#14279)", () => {
+  it("exposes search as the ONLY left header control (no new-chat/refresh)", () => {
     const { controller } = makeSwipeController();
     render(<ContinuousChatOverlay controller={controller} />);
     openSheet();
 
-    // Chat history UX (#14279): a quiet search entry point and a
-    // non-destructive new-chat control live in the header's left cluster.
+    // The thread is one infinite conversation: search is the sole left
+    // control; there is deliberately no new-chat/clear/refresh button.
     expect(screen.getByTestId("chat-full-search")).toBeTruthy();
-    expect(screen.getByTestId("chat-full-clear")).toBeTruthy();
+    expect(screen.queryByTestId("chat-full-clear")).toBeNull();
+  });
+
+  it("toggles hands-free voice from the header voice button", () => {
+    const { controller } = makeSwipeController();
+    render(<ContinuousChatOverlay controller={controller} />);
+    openSheet();
+
+    // The top-bar voice control shares the composer mic's state machine: a
+    // tap enters/exits the hands-free conversation (voice on/off).
+    fireEvent.click(screen.getByTestId("chat-full-voice"));
+    expect(controller.toggleHandsFree).toHaveBeenCalledTimes(1);
   });
 
   it("opens the message-search panel from the header search control (#14279)", () => {
@@ -2726,15 +2812,15 @@ describe("ContinuousChatOverlay single-thread (no chat swipe, #13531)", () => {
     expect(screen.queryByTestId("message-search-empty")).toBeNull();
   });
 
-  it("starts a fresh thread from the header new-chat control (#14279)", () => {
+  it("never invokes clearConversation from the header (no new-chat control)", () => {
     const { controller } = makeSwipeController();
     render(<ContinuousChatOverlay controller={controller} />);
     openSheet();
 
-    fireEvent.click(screen.getByTestId("chat-full-clear"));
-    // Non-destructive: delegates to the controller's clearConversation, which
-    // starts a fresh greeted thread while the prior one stays reachable.
-    expect(controller.clearConversation).toHaveBeenCalledTimes(1);
+    // The new-chat header control was removed: nothing in the header may
+    // reset the thread.
+    expect(screen.queryByTestId("chat-full-clear")).toBeNull();
+    expect(controller.clearConversation).not.toHaveBeenCalled();
   });
 
   it("renders the infinite-scroll top sentinel above a populated flat thread (#14279)", () => {

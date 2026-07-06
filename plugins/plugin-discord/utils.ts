@@ -29,7 +29,6 @@ import {
 	type MessageActionRowComponentBuilder,
 	type MessageCreateOptions,
 	PermissionsBitField,
-	StringSelectMenuBuilder,
 	type TextChannel,
 	ThreadChannel,
 } from "discord.js";
@@ -575,9 +574,9 @@ interface MessageSendOptions {
  * untouched. Returns `undefined` when there is nothing renderable so callers can
  * omit the `components` key entirely.
  *
- * This is the single button/select builder for guild sends and DMs. Discord
- * supports action rows of buttons and string selects in DMs; guild-scoped
- * component types must get an explicit fallback before being added here.
+ * This is the single button builder for guild sends and DMs. Other Discord
+ * component types need a live producer and submit path before being added here;
+ * otherwise callers would render controls the connector cannot handle.
  */
 export function buildDiscordComponents(
 	components: DiscordActionRow[] | undefined,
@@ -633,31 +632,6 @@ export function buildDiscordComponents(
 								}
 								return button;
 							}
-
-							if (comp.type === 3) {
-								const selectMenu = new StringSelectMenuBuilder()
-									.setCustomId(comp.custom_id)
-									.setPlaceholder(comp.placeholder || "Select an option");
-
-								if (typeof comp.min_values === "number") {
-									selectMenu.setMinValues(comp.min_values);
-								}
-								if (typeof comp.max_values === "number") {
-									selectMenu.setMaxValues(comp.max_values);
-								}
-
-								if (Array.isArray(comp.options)) {
-									selectMenu.addOptions(
-										comp.options.map((option) => ({
-											label: option.label,
-											value: option.value,
-											description: option.description,
-										})),
-									);
-								}
-
-								return selectMenu;
-							}
 						} catch (err) {
 							// error-policy:J4 malformed component specs degrade to text-only Discord delivery.
 							logger.error(`Error creating component: ${err}`);
@@ -666,8 +640,7 @@ export function buildDiscordComponents(
 						return null;
 					})
 					.filter(
-						(component): component is ButtonBuilder | StringSelectMenuBuilder =>
-							component !== null,
+						(component): component is ButtonBuilder => component !== null,
 					);
 
 				if (validComponents.length > 0) {

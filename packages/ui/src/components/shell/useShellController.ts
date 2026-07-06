@@ -13,6 +13,10 @@
  * state of their own. ShellControllerContext provides one instance so the pill
  * and the overlay stay in lock-step without double-mounting this hook.
  */
+import {
+  VOICE_SETTINGS_APPLY_EVENT,
+  type VoiceSettingsApplyPayload,
+} from "@elizaos/shared/events";
 import type { TranscriptSegment } from "@elizaos/shared/transcripts";
 import * as React from "react";
 import type {
@@ -23,6 +27,7 @@ import {
   VOICE_CONTROL_EVENT,
   type VoiceControlEventDetail,
 } from "../../events";
+import { useViewEvent } from "../../hooks/useViewEvent";
 import type { HomeModelStatus } from "../../services/local-inference/home-model-status";
 import {
   useChatComposer,
@@ -54,6 +59,10 @@ import {
   type VoiceCaptureHandle,
   type VoiceCaptureState,
 } from "../../voice/voice-capture-factory";
+import {
+  VOICE_CONTINUOUS_MODES,
+  type VoiceContinuousMode,
+} from "../../voice/voice-chat-types";
 import { buildVoiceTurnSignal } from "../../voice/voice-turn-signal";
 import { matchWakeName } from "../../voice/wake-name-match";
 import { useHomeModelStatus } from "../local-inference/useHomeModelStatus";
@@ -280,6 +289,13 @@ function sameStringList(a?: string[], b?: string[]): boolean {
     if (a[i] !== b[i]) return false;
   }
   return true;
+}
+
+function readAppliedContinuousMode(value: unknown): VoiceContinuousMode | null {
+  return typeof value === "string" &&
+    VOICE_CONTINUOUS_MODES.includes(value as VoiceContinuousMode)
+    ? (value as VoiceContinuousMode)
+    : null;
 }
 
 // Granular shallow selection instead of useApp() so the shell controller only
@@ -966,6 +982,17 @@ export function useShellController(): ShellController {
           captureRef.current = null;
           setAnalyser(null);
           setRecording(false);
+          // A hands-free tap optimistically lit the mic ("end conversation")
+          // before the device opened; a denial must roll that back so the button
+          // returns to its resting "talk" state instead of showing a lit,
+          // phantom-capturing conversation the mic never actually started. Mirror
+          // the deliberate tap-off (restore the prior non-always-on mode) so a
+          // reload doesn't re-engage a mic the user can't grant.
+          if (handsFreeRef.current) {
+            saveContinuousChatMode(priorContinuousModeRef.current);
+            setHandsFree(false);
+            handsFreeRef.current = false;
+          }
           // Mic permission denial / capture failure was previously swallowed —
           // the user tapped the mic and nothing happened with no feedback.
           // Surface a clear, actionable notice through the shell's toast channel
@@ -1187,6 +1214,36 @@ export function useShellController(): ShellController {
       if (!responding) startCapture("converse");
     }
   }, [responding, startCapture, stopCapture, voiceOutput]);
+
+  useViewEvent(
+    VOICE_SETTINGS_APPLY_EVENT,
+    React.useCallback(
+      (event) => {
+        const payload = event.payload as VoiceSettingsApplyPayload;
+        const continuous = readAppliedContinuousMode(payload.continuous);
+        if (!continuous) return;
+        saveContinuousChatMode(continuous);
+
+        if (continuous === "always-on") {
+          if (handsFreeRef.current) return;
+          priorContinuousModeRef.current = "off";
+          setHandsFree(true);
+          handsFreeRef.current = true;
+          setIsOpen(true);
+          if (!responding) startCapture("converse");
+          return;
+        }
+
+        priorContinuousModeRef.current = continuous;
+        if (!handsFreeRef.current) return;
+        setHandsFree(false);
+        handsFreeRef.current = false;
+        if (captureRef.current) stopCapture();
+        voiceOutput.stopSpeaking();
+      },
+      [responding, startCapture, stopCapture, voiceOutput],
+    ),
+  );
 
   // "Hey eliza" wake word: a native detection arms a bounded listening window
   // that opens the mic and closes once the agent has responded (or after an idle

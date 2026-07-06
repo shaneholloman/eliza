@@ -15,7 +15,6 @@ import {
   canonicalLauncherId,
   curateLauncherPages,
   curateLauncherZones,
-  LAUNCHER_RECENTS_ZONE_LIMIT,
   normalizeLauncherLabel,
 } from "./launcher-curation";
 
@@ -732,49 +731,39 @@ describe("curateLauncherZones", () => {
     { isAosp: false, enabledKinds: ENABLED, cloudActive: true },
   );
 
-  it("projects Recents and Favorites over the curated page and keeps All Apps exhaustive", () => {
+  it("projects Favorites over the curated page and keeps All Apps exhaustive (no Recents zone)", () => {
     const zones = curateLauncherZones(PAGE, {
-      recentIds: ["browser", "wallet"],
       favoriteIds: ["settings"],
-      recentsLimit: LAUNCHER_RECENTS_ZONE_LIMIT,
     });
-    expect(zones.map((z) => z.key)).toEqual(["recents", "favorites", "all"]);
-    expect(zones[0].entries.map((e) => e.id)).toEqual(["browser", "wallet"]);
-    expect(zones[1].entries.map((e) => e.id)).toEqual(["settings"]);
-    // All Apps is the whole page (a tile is not removed for being recent/pinned).
-    expect(zones[2].entries).toBe(PAGE);
-    expect(zones[2].entries.map((e) => e.id)).toContain("browser");
+    // Recents was removed as duplicate noise (#13453): only Favorites + All Apps.
+    expect(zones.map((z) => z.key)).toEqual(["favorites", "all"]);
+    expect(zones[0].entries.map((e) => e.id)).toEqual(["settings"]);
+    // All Apps is the whole page (a tile is not removed for being pinned).
+    expect(zones[1].entries).toBe(PAGE);
+    expect(zones[1].entries.map((e) => e.id)).toContain("browser");
   });
 
-  it("returns empty Recents/Favorites zones for a first-run launcher", () => {
+  it("returns an empty Favorites zone for a first-run launcher", () => {
     const zones = curateLauncherZones(PAGE, {
-      recentIds: [],
       favoriteIds: [],
-      recentsLimit: LAUNCHER_RECENTS_ZONE_LIMIT,
     });
     expect(zones[0].entries).toEqual([]);
-    expect(zones[1].entries).toEqual([]);
-    expect(zones[2].entries).toBe(PAGE);
+    expect(zones[1].entries).toBe(PAGE);
   });
 
-  it("skips recent/favorite ids that are no longer visible tiles (no resurrection)", () => {
-    // A stale recent for a now-hidden/uninstalled surface must not add a tile
-    // the curated page dropped.
+  it("skips favorite ids that are no longer visible tiles (no resurrection)", () => {
+    // A stale favorite for a now-hidden/uninstalled surface must not add a tile
+    // the curated page dropped; a still-visible one survives.
     const zones = curateLauncherZones(PAGE, {
-      recentIds: ["uninstalled-app", "wallet"],
-      favoriteIds: ["also-gone"],
-      recentsLimit: LAUNCHER_RECENTS_ZONE_LIMIT,
+      favoriteIds: ["also-gone", "wallet"],
     });
     expect(zones[0].entries.map((e) => e.id)).toEqual(["wallet"]);
-    expect(zones[1].entries).toEqual([]);
   });
 
-  it("canonicalizes + de-dupes recent ids and caps the Recents zone", () => {
+  it("canonicalizes + de-dupes favorite ids", () => {
     const zones = curateLauncherZones(PAGE, {
       // `inventory` canonicalizes to `wallet`; the duplicate must collapse.
-      recentIds: ["inventory", "wallet", "browser"],
-      favoriteIds: [],
-      recentsLimit: 2,
+      favoriteIds: ["inventory", "wallet", "browser"],
     });
     expect(zones[0].entries.map((e) => e.id)).toEqual(["wallet", "browser"]);
   });

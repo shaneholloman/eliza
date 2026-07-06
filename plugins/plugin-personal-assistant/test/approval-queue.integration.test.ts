@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRuntime } from "@elizaos/core";
 import { AgentEventService, parseInteractionBlocks } from "@elizaos/core";
+import { schedulingPlugin } from "@elizaos/plugin-scheduling";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createRealTestRuntime } from "../../../packages/test/helpers/real-runtime.ts";
 import { createApprovalQueue } from "../src/lifeops/approval-queue.js";
@@ -25,6 +26,7 @@ import {
   type ApprovalQueue,
   ApprovalStateTransitionError,
 } from "../src/lifeops/approval-queue.types.js";
+import { LifeOpsRepository } from "../src/lifeops/repository.js";
 import { personalAssistantPlugin } from "../src/plugin.js";
 
 let runtime: AgentRuntime;
@@ -98,7 +100,7 @@ function messageInput(
 beforeAll(async () => {
   setIsolatedEnv();
   const result = await createRealTestRuntime({
-    plugins: [personalAssistantPlugin],
+    plugins: [schedulingPlugin, personalAssistantPlugin],
   });
   runtime = result.runtime;
   cleanup = result.cleanup;
@@ -203,6 +205,100 @@ describe("ApprovalQueue integration (real PGlite)", () => {
       unsubscribe();
     }
   }, 60_000);
+
+  it("enqueue creates an owner-visible approval ScheduledTask for connector escalation (#14722)", async () => {
+    const enqueued = await queue.enqueue(
+      messageInput({ subjectUserId: "owner-scheduled-task" }),
+    );
+
+    const repo = new LifeOpsRepository(runtime);
+    const task = await repo.getScheduledTaskByIdempotencyKey(
+      runtime.agentId,
+      `approval:${enqueued.id}`,
+    );
+
+    expect(task).not.toBeNull();
+    expect(task?.kind).toBe("approval");
+    expect(task?.priority).toBe("high");
+    expect(task?.ownerVisible).toBe(true);
+    expect(task?.respectsGlobalPause).toBe(false);
+    expect(task?.subject).toEqual({
+      kind: "self",
+      id: "owner-scheduled-task",
+    });
+    expect(task?.metadata?.approvalRequestId).toBe(enqueued.id);
+    expect(task?.metadata?.approvalAction).toBe("send_message");
+    expect(task?.metadata?.pendingPromptRoomId).toBe(`approval:${enqueued.id}`);
+    expect(task?.completionCheck?.kind).toBe("user_acknowledged");
+    expect(task?.completionCheck?.params).toEqual({ requestId: enqueued.id });
+    expect(task?.escalation?.steps?.map((step) => step.channelKey)).toEqual(
+      expect.arrayContaining(["sms", "telegram", "discord", "imessage"]),
+    );
+    expect(task?.escalation?.steps?.at(-1)?.channelKey).toBe("in_app");
+    expect(task?.promptInstructions).toContain(`approve ${enqueued.id}`);
+    expect(task?.promptInstructions).toContain(`reject ${enqueued.id}`);
+  }, 60_000);
+
+  it("rolls back the approval row when the ScheduledTask cannot be created", async () => {
+    const failedStateDir = mkdtempSync(
+      join(tmpdir(), "approval-queue-schedule-fail-"),
+    );
+    const failedConfigPath = join(failedStateDir, "eliza.json");
+    writeFileSync(
+      failedConfigPath,
+      JSON.stringify({ logging: { level: "error" } }),
+      "utf8",
+    );
+    const previousStateDir = process.env.ELIZA_STATE_DIR;
+    const previousConfigPath = process.env.ELIZA_CONFIG_PATH;
+    const previousPersistConfigPath = process.env.ELIZA_PERSIST_CONFIG_PATH;
+    process.env.ELIZA_STATE_DIR = failedStateDir;
+    process.env.ELIZA_CONFIG_PATH = failedConfigPath;
+    process.env.ELIZA_PERSIST_CONFIG_PATH = failedConfigPath;
+    let failedCleanup: (() => Promise<void>) | null = null;
+    try {
+      const result = await createRealTestRuntime({
+        plugins: [personalAssistantPlugin],
+      });
+      failedCleanup = result.cleanup;
+      const failedQueue = createApprovalQueue(result.runtime, {
+        agentId: result.runtime.agentId,
+      });
+
+      await expect(
+        failedQueue.enqueue(
+          messageInput({ subjectUserId: "owner-schedule-fail" }),
+        ),
+      ).rejects.toThrow("failed to schedule approval task");
+
+      await expect(
+        failedQueue.list({
+          subjectUserId: "owner-schedule-fail",
+          state: null,
+          action: null,
+          limit: 10,
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      await failedCleanup?.();
+      if (previousStateDir === undefined) {
+        delete process.env.ELIZA_STATE_DIR;
+      } else {
+        process.env.ELIZA_STATE_DIR = previousStateDir;
+      }
+      if (previousConfigPath === undefined) {
+        delete process.env.ELIZA_CONFIG_PATH;
+      } else {
+        process.env.ELIZA_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousPersistConfigPath === undefined) {
+        delete process.env.ELIZA_PERSIST_CONFIG_PATH;
+      } else {
+        process.env.ELIZA_PERSIST_CONFIG_PATH = previousPersistConfigPath;
+      }
+      rmSync(failedStateDir, { recursive: true, force: true });
+    }
+  }, 180_000);
 
   it("enqueue → reject records resolver", async () => {
     const enqueued = await queue.enqueue(

@@ -165,6 +165,30 @@ export interface AppearanceApplyPayload extends Record<string, unknown> {
   homeTimeWidgetHidden?: boolean;
 }
 
+export const VOICE_SETTINGS_APPLY_EVENT = "voice-settings:apply" as const;
+
+/**
+ * Payload broadcast on {@link VOICE_SETTINGS_APPLY_EVENT}.
+ *
+ * The SETTINGS voice twin persists these under `messages.voice` via `/api/config`,
+ * but the running capture path (useShellController.startCapture) and ChatView
+ * read the localStorage mirrors VoiceSectionMount seeds — never the config blob.
+ * This payload re-seeds those mirrors live so a chat-driven change reaches the
+ * running shell without a Settings → Voice remount. Fields are optional so a
+ * single-field write does not have to restate the whole voice config.
+ */
+export interface VoiceSettingsApplyPayload extends Record<string, unknown> {
+  /** Continuous-chat mode: off (push-to-talk), vad-gated, or always-on. */
+  continuous?: "off" | "vad-gated" | "always-on";
+  /** VAD end-of-turn thresholds the capture hot path reads. */
+  vadAutoStop?: {
+    /** Trailing silence (ms) that ends a turn in local-ASR capture. */
+    silenceMs: number;
+    /** RMS amplitude (0–1) above which audio is treated as speech. */
+    speechRmsThreshold: number;
+  };
+}
+
 // ── Avatar / VRM ─────────────────────────────────────────────────────────
 export const VRM_TELEPORT_COMPLETE_EVENT =
   "eliza:vrm-teleport-complete" as const;
