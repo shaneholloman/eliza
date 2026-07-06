@@ -359,7 +359,14 @@ NotificationRow.displayName = "NotificationRow";
  * has at least one notification. Mounted inside NotificationsShade (the home
  * pull-up sheet), never pinned on the dashboard itself.
  */
-export function NotificationsHomeCenter(): React.JSX.Element | null {
+export interface NotificationsHomeCenterProps {
+  /** Called after a row activates a safe in-app deep link. */
+  onNavigate?: (deepLink: string) => void;
+}
+
+export function NotificationsHomeCenter({
+  onNavigate,
+}: NotificationsHomeCenterProps = {}): React.JSX.Element | null {
   notificationsHomeCenterRenderObserverForTests?.();
   const { notifications, unreadCount } = useNotifications();
   // No list-level clock tick here (binding pattern, spec §C.4): relative
@@ -383,14 +390,18 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
     syncEdgeFades();
   }, [syncEdgeFades, notifications.length]);
 
-  const openNotification = useCallback((n: AgentNotification) => {
-    if (!n.readAt) void markNotificationRead(n.id);
-    // deepLink is producer/LLM-influenceable - only scheme-checked links
-    // navigate; anything else the tap is just "mark read".
-    if (n.deepLink && isSafeDeepLink(n.deepLink)) {
-      navigateDeepLink(n.deepLink);
-    }
-  }, []);
+  const openNotification = useCallback(
+    (n: AgentNotification) => {
+      if (!n.readAt) void markNotificationRead(n.id);
+      // deepLink is producer/LLM-influenceable - only scheme-checked links
+      // navigate; anything else the tap is just "mark read".
+      if (n.deepLink && isSafeDeepLink(n.deepLink)) {
+        navigateDeepLink(n.deepLink);
+        onNavigate?.(n.deepLink);
+      }
+    },
+    [onNavigate],
+  );
   const dismissNotification = useCallback((id: string) => {
     void removeNotification(id);
   }, []);

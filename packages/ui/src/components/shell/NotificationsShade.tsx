@@ -110,7 +110,7 @@ export function NotificationsShade({
         </button>
         {/* The shared inbox card. Self-hides when empty, which can only happen
             mid-session (clear-all with the shade open) — treat that as done. */}
-        <NotificationsHomeCenter />
+        <NotificationsHomeCenter onNavigate={() => onClose()} />
       </section>
     </div>,
     document.body,
