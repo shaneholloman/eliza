@@ -8,10 +8,17 @@
 // SDK/adb resolution lives in exactly one place and runs on Linux CI, a mac, or
 // Windows without hardcoded "~/Library/Android/sdk" paths.
 import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  RENDERER_BUILD_MANIFEST_FILENAME,
+  readRendererBuildManifest,
+} from "../../../app-core/scripts/lib/renderer-build-manifest.mjs";
+import { readAndroidApkRendererManifest } from "./android-renderer-stamp.mjs";
+import { isDeviceLeased } from "./device-lease.mjs";
 
 const IS_WINDOWS = process.platform === "win32";
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -47,6 +54,7 @@ const APK_CANDIDATES = [
   ),
   path.join(appDir, "android/app/build/outputs/apk/debug/app-debug.apk"),
 ];
+const DEFAULT_RENDERER_DIST = path.join(appDir, "dist");
 
 // ---------------------------------------------------------------------------
 // SDK binary resolution
@@ -269,7 +277,10 @@ export async function ensureEmulatorBooted({
 } = {}) {
   const existing = listDevices(adbBin);
   if (existing.length > 0) {
-    const serial = process.env.ANDROID_SERIAL ?? existing[0];
+    const serial =
+      process.env.ANDROID_SERIAL ??
+      existing.find((candidate) => !isDeviceLeased(`android:${candidate}`)) ??
+      existing[0];
     log(`reusing attached device ${serial}`);
     suppressErrorDialogs(adbBin, serial, log);
     return serial;
@@ -393,6 +404,190 @@ export function isInstalled(adbBin, serial) {
 
 export function installApk(adbBin, serial, apk) {
   adbDevice(adbBin, serial, ["install", "-r", "-d", apk], { stdio: "inherit" });
+}
+
+function sha256File(filePath) {
+  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+export function verifyInstalledApkHash({ localHash, deviceHash } = {}) {
+  if (!localHash) {
+    throw new Error("local APK sha256 is required after install.");
+  }
+  if (!deviceHash) {
+    throw new Error("on-device APK sha256 is required after install.");
+  }
+  if (deviceHash !== localHash) {
+    throw new Error(
+      `on-device APK does not match installed file: device sha256=${deviceHash} local sha256=${localHash}`,
+    );
+  }
+  return { sha256: localHash };
+}
+
+export function readInstalledApkPath(adbBin, serial) {
+  const pmPath = adbTry(adbBin, ["-s", serial, "shell", "pm", "path", APP_ID]);
+  return parseApkPath(pmPath);
+}
+
+export function verifyInstalledApkMatches(adbBin, serial, apkPath) {
+  const remoteApk = readInstalledApkPath(adbBin, serial);
+  if (!remoteApk) {
+    throw new Error(`installed package ${APP_ID} has no base APK path.`);
+  }
+  const deviceHash = adbDevice(adbBin, serial, [
+    "shell",
+    "sha256sum",
+    remoteApk,
+  ])
+    .trim()
+    .split(/\s+/)[0];
+  const localHash = sha256File(apkPath);
+  return verifyInstalledApkHash({ localHash, deviceHash });
+}
+
+function validateRendererStamp(stamp, label) {
+  if (!stamp || typeof stamp !== "object") {
+    throw new Error(`${label} renderer stamp is missing or invalid.`);
+  }
+  if (typeof stamp.buildId !== "string" || stamp.buildId.length === 0) {
+    throw new Error(`${label} renderer stamp has no buildId.`);
+  }
+  return stamp;
+}
+
+export function readFreshAndroidRendererStamp(
+  rendererDist = process.env.ELIZA_ANDROID_RENDERER_DIST ??
+    DEFAULT_RENDERER_DIST,
+) {
+  const stamp = readRendererBuildManifest(path.resolve(rendererDist));
+  return stamp ? validateRendererStamp(stamp, "fresh Android dist") : null;
+}
+
+function parseApkPath(pmPathOutput) {
+  return (
+    pmPathOutput
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => line.replace(/^package:/, ""))
+      .find((line) => /(?:^|\/)base\.apk$/.test(line)) ??
+    pmPathOutput
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => line.replace(/^package:/, ""))
+      .find((line) => line.endsWith(".apk")) ??
+    null
+  );
+}
+
+export function readRendererStampFromApk(apkPath) {
+  return readAndroidApkRendererManifest(apkPath);
+}
+
+export function readInstalledRendererStamp(
+  adbBin,
+  serial,
+  { tmpRoot = os.tmpdir(), log = () => {} } = {},
+) {
+  const remoteApk = readInstalledApkPath(adbBin, serial);
+  if (!remoteApk) return null;
+
+  const tempDir = fs.mkdtempSync(path.join(tmpRoot, "eliza-android-apk-"));
+  const localApk = path.join(tempDir, "base.apk");
+  try {
+    adbDevice(adbBin, serial, ["pull", remoteApk, localApk], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    return readRendererStampFromApk(localApk);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log(`installed renderer stamp unavailable from ${remoteApk}: ${message}`);
+    return null;
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+export function androidDistNeedsBuild({
+  freshStamp,
+  headCommit,
+  requireCapacitorTarget = "android",
+} = {}) {
+  if (!freshStamp) {
+    return {
+      build: true,
+      reason: `dist has no ${RENDERER_BUILD_MANIFEST_FILENAME}`,
+    };
+  }
+  if (
+    freshStamp.capacitorTarget != null &&
+    freshStamp.capacitorTarget !== requireCapacitorTarget
+  ) {
+    return {
+      build: true,
+      reason: `dist capacitorTarget=${freshStamp.capacitorTarget} but this lane bakes ${requireCapacitorTarget}`,
+    };
+  }
+  if (
+    headCommit &&
+    freshStamp.commit &&
+    !String(headCommit).startsWith(String(freshStamp.commit)) &&
+    !String(freshStamp.commit).startsWith(String(headCommit))
+  ) {
+    return {
+      build: true,
+      reason: `dist commit=${freshStamp.commit} but HEAD=${headCommit}`,
+    };
+  }
+  return { build: false, reason: "dist renderer stamp is usable" };
+}
+
+export function androidInstallDecision({ freshStamp, installedStamp } = {}) {
+  if (!freshStamp) {
+    throw new Error("fresh Android renderer stamp is required before install.");
+  }
+  if (!installedStamp) {
+    return {
+      install: true,
+      reason: `installed app has no readable ${RENDERER_BUILD_MANIFEST_FILENAME}`,
+    };
+  }
+  if (installedStamp.buildId !== freshStamp.buildId) {
+    return {
+      install: true,
+      reason: `installed ${installedStamp.buildId} != fresh ${freshStamp.buildId}`,
+    };
+  }
+  return {
+    install: false,
+    reason: `installed buildId matches fresh ${freshStamp.buildId}`,
+  };
+}
+
+export function androidApkNeedsBuild({ freshStamp, apkStamp } = {}) {
+  if (!freshStamp) {
+    throw new Error(
+      "fresh Android renderer stamp is required before APK check.",
+    );
+  }
+  if (!apkStamp) {
+    return {
+      build: true,
+      reason: `APK has no readable ${RENDERER_BUILD_MANIFEST_FILENAME}`,
+    };
+  }
+  if (apkStamp.buildId !== freshStamp.buildId) {
+    return {
+      build: true,
+      reason: `APK ${apkStamp.buildId} != fresh ${freshStamp.buildId}`,
+    };
+  }
+  return {
+    build: false,
+    reason: `APK buildId matches fresh ${freshStamp.buildId}`,
+  };
 }
 
 export function clearAppData(adbBin, serial) {

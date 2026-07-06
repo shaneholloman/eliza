@@ -113,7 +113,8 @@ async function installAgentStoreRoutes(
         const body =
           (route.request().postDataJSON() as { agentName?: string } | null) ??
           {};
-        const id = `agent-${(store.nextId += 1)}`;
+        store.nextId += 1;
+        const id = `agent-${store.nextId}`;
         const agent: StoreAgent = {
           id,
           agentName: body.agentName || id,
@@ -338,16 +339,16 @@ test("cloud agents: list, delete, then reprovision another from Settings", async
 });
 
 /**
- * The shared→dedicated handoff progress pill ({@link CloudHandoffBanner},
- * mounted globally in `App.tsx`). The first-run controller drives this banner
- * off the `ConversationHandoffResult` via the `eliza:cloud-handoff-phase` event;
- * here we drive that same event directly to assert the user-visible
- * `migrating → switched` transition (and the retry path) render in the live app
- * shell — the on-device-legible pill, not a silent swap. The Retry button
- * dispatches `eliza:cloud-handoff-retry` for the agent, which the handoff runner
- * consumes to re-invoke the (idempotent) supervisor.
+ * The shared→dedicated handoff surfaces. There is no floating banner: while a
+ * dedicated container boots, the home-grid agent-provisioning tile shows the
+ * background work (and self-hides on the switch), and a failed/timed-out
+ * handoff speaks IN THE CHAT via the boot-recovery conductor — an assistant
+ * turn whose "Retry setup" control dispatches `eliza:cloud-handoff-retry`,
+ * which the handoff runner consumes to re-invoke the (idempotent) supervisor.
+ * Here we drive the same `eliza:cloud-handoff-phase` event the first-run
+ * controller emits and assert those user-visible surfaces in the live shell.
  */
-test("cloud handoff: the migrating→switched pill is visible, and failures offer Retry", async ({
+test("cloud handoff: home tile tracks migrating→switched, failures speak in chat with Retry setup", async ({
   page,
   baseURL,
 }) => {
@@ -358,8 +359,8 @@ test("cloud handoff: the migrating→switched pill is visible, and failures offe
   await installDefaultAppRoutes(page);
   await openAppPath(page, "/");
 
-  // Capture every retry event the banner dispatches so we can assert the
-  // failure path re-invokes the handoff for the right agent.
+  // Capture every retry event the in-chat control dispatches so we can assert
+  // the failure path re-invokes the handoff for the right agent.
   await page.evaluate(() => {
     const w = globalThis as Record<string, unknown>;
     w.__handoffRetries = [];
@@ -377,31 +378,30 @@ test("cloud handoff: the migrating→switched pill is visible, and failures offe
       );
     }, detail);
 
-  // migrating: the dedicated container is booting; the user keeps chatting.
-  // The app shell (which mounts CloudHandoffBanner + attaches the window
-  // listener) renders after the boot/first-run sequence; a CustomEvent fired
-  // before the listener is attached is simply dropped (not buffered). Re-emit
-  // until the pill lands so the test isn't racing the shell mount.
+  // migrating: a background process with NO floating surface — the old toast
+  // ("you can keep chatting") must never appear; the home-grid provisioning
+  // tile is the durable surface (covered by its own widget rendering, which
+  // this fixture's bare view catalog does not mount).
+  await emitPhase({ agentId: "agent-keep", phase: "migrating" });
+  await expect(page.getByText(/keep chatting/i)).toHaveCount(0);
+
+  // failed: a recoverable failure speaks in the transcript via the
+  // boot-recovery conductor with a specific remedy (instead of a silent
+  // permanent fallback to the shared adapter). The shell (which attaches the
+  // window listener) renders after the boot sequence; a CustomEvent fired
+  // before the listener is attached is simply dropped (not buffered) — re-emit
+  // until the in-chat card lands so the test isn't racing the shell mount.
+  const retrySetup = page.getByTestId("choice-__boot_recovery__:retry-handoff");
   await expect(async () => {
-    await emitPhase({ agentId: "agent-keep", phase: "migrating" });
-    await expect(page.getByText(/keep chatting/i)).toBeVisible({
-      timeout: 1_000,
+    await emitPhase({
+      agentId: "agent-keep",
+      phase: "failed",
+      error: "boot timeout",
     });
+    await expect(retrySetup).toBeVisible({ timeout: 1_000 });
   }).toPass({ timeout: 45_000 });
-
-  // switched: the live client has swapped to the dedicated container.
-  await emitPhase({ agentId: "agent-keep", phase: "switched", imported: 3 });
-  await expect(page.getByText(/now on your dedicated agent/i)).toBeVisible();
-
-  // failed: a recoverable failure surfaces a Retry that re-invokes the handoff
-  // (instead of a silent permanent fallback to the shared adapter).
-  await emitPhase({
-    agentId: "agent-keep",
-    phase: "failed",
-    error: "boot timeout",
-  });
-  await expect(page.getByText(/still on the shared one/i)).toBeVisible();
-  await page.getByTestId("cloud-handoff-retry").click();
+  await expect(page.getByText(/dedicated agent/i).first()).toBeVisible();
+  await retrySetup.click();
   await expect
     .poll(() =>
       page.evaluate(
@@ -411,4 +411,10 @@ test("cloud handoff: the migrating→switched pill is visible, and failures offe
       ),
     )
     .toContain("agent-keep");
+
+  // switched: the dedicated agent attached — the recovery card clears; the
+  // transcript goes quiet instead of celebrating with a floating toast.
+  await emitPhase({ agentId: "agent-keep", phase: "switched", imported: 3 });
+  await expect(retrySetup).toHaveCount(0);
+  await expect(page.getByText(/now on your dedicated agent/i)).toHaveCount(0);
 });

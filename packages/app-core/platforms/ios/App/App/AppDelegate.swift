@@ -19,6 +19,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // `devicectl device copy from` — no console required.
         ElizaStartupTrace.bootstrap()
         ElizaHomeIndicator.install()
+
+        ElizaBrandTint.install(on: window)
+
         UNUserNotificationCenter.current().delegate = self
         BackgroundRunnerPlugin.registerBackgroundTask()
         BackgroundRunnerPlugin.handleApplicationDidFinishLaunching(launchOptions: launchOptions)
@@ -187,6 +190,21 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
             }
         }
         completionHandler()
+    }
+}
+
+/// Native UIKit accent policy for surfaces outside the WebView. The app uses
+/// brand orange as its single accent, so system-presented controls such as
+/// deep-link alerts and share sheets should inherit orange rather than iOS
+/// default blue. The appearance proxy covers future windows; scene delegates
+/// also pass their concrete window because scene-based apps do not reliably set
+/// `AppDelegate.window`.
+enum ElizaBrandTint {
+    private static let orange = UIColor(red: 1.0, green: 0x58 / 255.0, blue: 0.0, alpha: 1.0)
+
+    static func install(on window: UIWindow?) {
+        UIWindow.appearance().tintColor = orange
+        window?.tintColor = orange
     }
 }
 

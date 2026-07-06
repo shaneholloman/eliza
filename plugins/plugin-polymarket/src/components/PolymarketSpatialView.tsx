@@ -15,8 +15,8 @@
 import {
   Button,
   Card,
-  Divider,
   HStack,
+  isEvaluatingToIR,
   List,
   type SpatialTone,
   Text,
@@ -43,8 +43,9 @@ export interface PolymarketSnapshot {
   lastAction?: string;
 }
 
-const MAX_LIST = 24;
-const MAX_OUTCOMES = 3;
+const MAX_LIST = 10;
+const MAX_OUTCOMES = 2;
+const MAX_POSITION_ROWS = 3;
 
 function priceToPercent(price: string | null): number | null {
   if (price == null) return null;
@@ -91,8 +92,11 @@ function readyTone(ready: boolean): SpatialTone {
 }
 
 function ReadinessRow({ status }: { status: PolymarketStatusResponse | null }) {
-  const reads = status?.publicReads.ready ?? false;
-  const trading = status?.trading.ready ?? false;
+  // `publicReads`/`trading` are typed as required but a partial status response
+  // can omit them (#14448); fully optional-chain so a missing block reads as
+  // "off" rather than throwing a raw property-read into the view.
+  const reads = status?.publicReads?.ready ?? false;
+  const trading = status?.trading?.ready ?? false;
   return (
     <HStack gap={2} align="center" wrap>
       <Text style="caption" tone={readyTone(reads)}>
@@ -105,35 +109,21 @@ function ReadinessRow({ status }: { status: PolymarketStatusResponse | null }) {
   );
 }
 
-function OutcomeLine({
-  name,
-  percent,
-  lead,
-}: {
-  name: string;
-  percent: number | null;
-  lead: boolean;
-}) {
-  return (
-    <HStack gap={1} align="center">
-      <Text tone={lead ? "primary" : "default"} grow={1} wrap={false}>
-        {name}
-      </Text>
-      <Text
-        style="caption"
-        tone={lead ? "primary" : "muted"}
-        align="end"
-        width={6}
-      >
-        {percent != null ? `${percent}%` : "n/a"}
-      </Text>
-    </HStack>
-  );
-}
-
 function outcomeSummary(outcome: PolymarketMarket["outcomes"][number]): string {
   const percent = priceToPercent(outcome.price);
   return `${outcome.name} ${percent != null ? `${percent}%` : "n/a"}`;
+}
+
+function compactOutcomeSummary(market: PolymarketMarket): string | null {
+  if (market.outcomes.length > 0) {
+    return market.outcomes.map(outcomeSummary).join(" · ");
+  }
+  const lastTrade = priceToPercent(market.lastTradePrice);
+  if (lastTrade == null) return null;
+  if (market.clobTokenIds.length === 2) {
+    return `Yes ${lastTrade}% · No ${100 - lastTrade}%`;
+  }
+  return `Last trade ${lastTrade}%`;
 }
 
 function MarketRow({
@@ -206,11 +196,38 @@ function MarketRow({
 function MarketDetail({
   market,
   onAction,
+  compact = false,
 }: {
   market: PolymarketMarket;
   onAction?: (action: string) => void;
+  compact?: boolean;
 }) {
-  const lastTrade = priceToPercent(market.lastTradePrice);
+  if (compact) {
+    const lastTrade = priceToPercent(market.lastTradePrice);
+    const compactMetrics = [
+      `Vol ${shortNumber(market.volume) ?? "-"}`,
+      `Liq ${shortNumber(market.liquidity) ?? "-"}`,
+      `Last ${lastTrade != null ? `${lastTrade}%` : "-"}`,
+    ].join(" · ");
+    const compactOutcomes = compactOutcomeSummary(market);
+    return (
+      <VStack gap={1}>
+        <Text style="subheading" wrap>
+          {market.question ?? market.slug ?? market.id}
+        </Text>
+        {compactOutcomes ? (
+          <Text tone="primary" wrap>
+            {compactOutcomes}
+          </Text>
+        ) : null}
+        <Text style="caption" tone="muted" wrap>
+          {compactMetrics}
+        </Text>
+      </VStack>
+    );
+  }
+
+  const top = market.outcomes.slice(0, MAX_OUTCOMES);
   return (
     <VStack gap={1}>
       <Button
@@ -224,50 +241,20 @@ function MarketDetail({
       <Text style="subheading" wrap>
         {market.question ?? market.slug ?? market.id}
       </Text>
-      {market.category ? (
-        <Text style="caption" tone="muted">
-          {market.category}
-        </Text>
-      ) : null}
-
-      <HStack gap={2} wrap>
-        <Text style="caption" tone="muted">
-          {`Volume ${shortNumber(market.volume) ?? "-"}`}
-        </Text>
-        <Text style="caption" tone="muted">
-          {`Liquidity ${shortNumber(market.liquidity) ?? "-"}`}
-        </Text>
-        <Text style="caption" tone="muted">
-          {`Last ${lastTrade != null ? `${lastTrade}%` : "-"}`}
-        </Text>
-      </HStack>
-
-      <Divider label="outcomes" />
-      <List gap={0}>
-        {market.outcomes.map((outcome, i) => (
-          <OutcomeLine
-            key={outcome.name}
-            name={outcome.name}
-            percent={priceToPercent(outcome.price)}
-            lead={i === 0}
-          />
-        ))}
-      </List>
-
-      <Divider label="orderbook tokens" />
-      {market.clobTokenIds.length > 0 ? (
-        <List gap={0}>
-          {market.clobTokenIds.map((tokenId) => (
-            <Text key={tokenId} style="caption" tone="muted" wrap={false}>
-              {tokenId}
+      {top.length > 0 ? (
+        <HStack gap={2} align="center" wrap>
+          {top.map((outcome, i) => (
+            <Text
+              key={outcome.name}
+              style="caption"
+              tone={i === 0 ? "primary" : "muted"}
+              wrap={false}
+            >
+              {outcomeSummary(outcome)}
             </Text>
           ))}
-        </List>
-      ) : (
-        <Text style="caption" tone="muted">
-          no CLOB token ids
-        </Text>
-      )}
+        </HStack>
+      ) : null}
     </VStack>
   );
 }
@@ -312,7 +299,9 @@ function PositionsSection({
   const totalPnl = parseNumber(summary?.totalCashPnl ?? null);
   return (
     <>
-      <Divider label="positions" />
+      <Text style="caption" tone="muted">
+        positions
+      </Text>
       <HStack gap={2} wrap>
         <Text style="caption" tone="muted">{`value ${usd(totalValue)}`}</Text>
         <Text style="caption" tone={pnlTone(totalPnl)}>
@@ -326,7 +315,7 @@ function PositionsSection({
         </Text>
       ) : (
         <List gap={0}>
-          {open.map((position) => (
+          {open.slice(0, MAX_POSITION_ROWS).map((position) => (
             <PositionRow
               key={`${position.conditionId ?? position.marketId ?? position.slug}-${position.outcome}`}
               position={position}
@@ -342,33 +331,45 @@ export interface PolymarketSpatialViewProps {
   snapshot: PolymarketSnapshot;
   /** Dispatch by action id: `market:<id>` (open a market), `detail-back`, `refresh`. */
   onAction?: (action: string) => void;
+  /** True when the shell's compact chat composer reserves the inline-end edge. */
+  compactChatClearance?: boolean;
 }
 
 export function PolymarketSpatialView({
   snapshot,
   onAction,
+  compactChatClearance = false,
 }: PolymarketSpatialViewProps) {
   const { status, markets, selectedMarket, loading, error } = snapshot;
+  const showInlineControls = isEvaluatingToIR();
   const positions = snapshot.positions ?? [];
   const accountReady = status?.account?.ready ?? false;
   const selectedId = selectedMarket?.id ?? null;
   return (
     <Card gap={1} padding={1}>
-      <HStack gap={1} align="center" wrap>
-        <ReadinessRow status={status} />
-        <Text style="caption" tone="muted" grow={1}>
-          {loading ? "loading" : `${markets.length} markets`}
-        </Text>
-        <Button
-          variant="outline"
-          tone="default"
-          agent="refresh"
-          disabled={loading}
-          onPress={() => onAction?.("refresh")}
-        >
-          Refresh
-        </Button>
-      </HStack>
+      {/* The header earns its place only on the list surface; detail mode gives
+          the question the full card. Inline Refresh renders only when evaluating
+          to terminal IR — the GUI agent-surface reaches refresh through the
+          wrapper's hidden control, and the chat composer drives user refresh. */}
+      {!selectedMarket ? (
+        <HStack gap={1} align="center" wrap>
+          <ReadinessRow status={status} />
+          <Text style="caption" tone="muted" grow={1}>
+            {loading ? "loading" : `${markets.length} markets`}
+          </Text>
+          {showInlineControls ? (
+            <Button
+              variant="outline"
+              tone="default"
+              agent="refresh"
+              disabled={loading}
+              onPress={() => onAction?.("refresh")}
+            >
+              Refresh
+            </Button>
+          ) : null}
+        </HStack>
+      ) : null}
 
       {error ? (
         <Text tone="danger" style="caption">
@@ -377,7 +378,11 @@ export function PolymarketSpatialView({
       ) : null}
 
       {selectedMarket ? (
-        <MarketDetail market={selectedMarket} onAction={onAction} />
+        <MarketDetail
+          market={selectedMarket}
+          onAction={onAction}
+          compact={compactChatClearance}
+        />
       ) : (
         <>
           {accountReady ? (
@@ -386,7 +391,9 @@ export function PolymarketSpatialView({
               summary={snapshot.positionsSummary ?? null}
             />
           ) : null}
-          <Divider label="markets" />
+          <Text style="caption" tone="muted">
+            markets
+          </Text>
           {markets.length === 0 ? (
             <Text tone="muted" align="center" style="caption">
               {loading ? "loading markets" : "no markets loaded"}

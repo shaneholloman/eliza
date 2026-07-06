@@ -38,11 +38,13 @@ import {
   __ingestNotificationForTests,
   __resetNotificationStoreForTests,
 } from "../../state/notifications/notification-store";
+import { __resetHomeDismissalsForTests } from "../../widgets/home-dismissal-store";
 import { HomeScreen } from "./HomeScreen";
 
 afterEach(() => {
   cleanup();
   __resetNotificationStoreForTests();
+  __resetHomeDismissalsForTests();
 });
 
 const NATIVE_OS_TILES = ["messages", "phone", "contacts", "camera"];
@@ -110,35 +112,74 @@ describe("HomeScreen", () => {
     expect(screen.queryByText("Pinned")).toBeNull();
   });
 
-  // The pull-down notification sheet is gone: the dashboard notification center
-  // widget is THE notification surface, pinned below the time/weather base.
-  it("has NO pull-down affordance — no pull zone, grabber, or reveal element", () => {
+  // Notifications are hidden until pulled up (Apple idiom): no pinned inbox
+  // card on the dashboard, no legacy pull-down shells.
+  it("has NO pinned notification center or pull-down affordance at rest", () => {
+    __ingestNotificationForTests(makeNotification());
     render(<HomeScreen onOpenTile={vi.fn()} />);
+    expect(screen.queryByTestId("home-notification-center")).toBeNull();
     expect(screen.queryByTestId("home-notification-pull-zone")).toBeNull();
     expect(screen.queryByTestId("home-notification-grabber")).toBeNull();
     expect(screen.queryByTestId("home-notification-reveal")).toBeNull();
     expect(screen.queryByTestId("notification-sheet")).toBeNull();
   });
 
-  it("hides the notification center widget while the inbox is empty", () => {
+  it("hides the notifications pull-up hint while the inbox is empty", () => {
     render(<HomeScreen onOpenTile={vi.fn()} />);
-    expect(screen.queryByTestId("home-notification-center")).toBeNull();
+    expect(screen.queryByTestId("home-notifications-hint")).toBeNull();
+    expect(screen.queryByTestId("notifications-shade")).toBeNull();
+  });
+
+  // GESTURE-HINT OVERLAP FIX (#14945 follow-up): the one-time gesture hint
+  // ("Swipe for apps. Pull chat up. Hold wallpaper to restyle.") sat as the last
+  // flow item in the scroll column, flush against the top of the reserved
+  // composer-clearance zone — on device the floating composer overlapped it and
+  // only the top few pixels of the hint peeked above the composer edge. Its
+  // wrapper must carry an explicit bottom clearance keyed to the composer
+  // footprint + safe area so it can NEVER render under the composer.
+  it("anchors the gesture hint above the floating composer (explicit bottom clearance, never overlapping)", () => {
+    // The gesture hint is a one-time widget; ensure a pristine dismissal store
+    // so it renders on this mount.
+    __resetHomeDismissalsForTests();
+    render(<HomeScreen onOpenTile={vi.fn()} />);
+    const hint = screen.getByTestId("home-gesture-hint");
+    // The hint's positioning wrapper is its parent in the HomeScreen column.
+    const wrapper = hint.parentElement;
+    expect(wrapper).not.toBeNull();
+    const cls = wrapper?.className ?? "";
+    // The wrapper must reserve clearance for the floating composer footprint
+    // (the measured pill height var) plus the bottom safe area, so the hint
+    // always sits fully ABOVE the composer, not behind it.
+    expect(cls).toContain("--eliza-continuous-chat-clearance");
+    expect(cls).toMatch(/safe-area-bottom|android-gesture-inset-bottom/);
   });
 
   it("pins the notification center widget between the base widgets and the WidgetHost once notifications exist", () => {
     __ingestNotificationForTests(makeNotification());
     render(<HomeScreen onOpenTile={vi.fn()} />);
-    const center = screen.getByTestId("home-notification-center");
-    expect(center).toBeTruthy();
-    // Order: time/weather base first, then the notification center, then the
-    // ranked WidgetHost grid.
-    const base = screen.getByTestId("default-home-widgets");
-    const host = screen.getByTestId("home-widget-host");
-    expect(
-      base.compareDocumentPosition(center) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      center.compareDocumentPosition(host) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    // Hidden until pulled up: only the quiet hint pill is on the dashboard.
+    const hint = screen.getByTestId("home-notifications-hint");
+    expect(screen.queryByTestId("notifications-shade")).toBeNull();
+    fireEvent.click(hint);
+    // The shade carries the shared inbox card, grouped by view.
+    expect(screen.getByTestId("notifications-shade")).toBeTruthy();
+    expect(screen.getByTestId("home-notification-center")).toBeTruthy();
+    expect(screen.getByTestId("notification-group-label")).toBeTruthy();
+    // Scrim tap closes the shade.
+    fireEvent.click(screen.getByTestId("notifications-shade-scrim"));
+    expect(screen.queryByTestId("notifications-shade")).toBeNull();
+  });
+
+  it("opens the shade on an upward pull of the hint pill", () => {
+    __ingestNotificationForTests(makeNotification());
+    render(<HomeScreen onOpenTile={vi.fn()} />);
+    const hint = screen.getByTestId("home-notifications-hint");
+    fireEvent.pointerDown(hint, { clientY: 300, pointerId: 1 });
+    // Under the 24px threshold: still hidden.
+    fireEvent.pointerMove(hint, { clientY: 290, pointerId: 1 });
+    expect(screen.queryByTestId("notifications-shade")).toBeNull();
+    // Past the threshold: the shade opens mid-gesture.
+    fireEvent.pointerMove(hint, { clientY: 270, pointerId: 1 });
+    expect(screen.getByTestId("notifications-shade")).toBeTruthy();
   });
 });

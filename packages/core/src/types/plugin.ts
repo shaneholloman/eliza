@@ -8,6 +8,7 @@ import type { AppPackageRouteContext } from "../api/route-helpers";
 import type { ConnectorSourceDefinition } from "../connectors";
 import type { ResponseHandlerEvaluator } from "../runtime/response-handler-evaluators";
 import type { ResponseHandlerFieldEvaluator } from "../runtime/response-handler-field-evaluator";
+import type { AccessContext } from "./access-context";
 import type { Character } from "./agent";
 import type { ChatPreHandler } from "./chat-pre-handler";
 import type { Action, AgentContext, Provider } from "./components";
@@ -109,6 +110,12 @@ export interface RouteHandlerContext {
 	inProcess: boolean;
 	/** true when the HTTP transport has verified this request as loopback/local. */
 	isTrustedLocal?: boolean;
+	/**
+	 * Optional requester identity resolved by the authenticated boundary. Omitted
+	 * means the route is running under today's single-owner local boundary and
+	 * must preserve existing unfiltered behavior.
+	 */
+	accessContext?: AccessContext;
 }
 
 /** Return-shape result produced by a {@link RouteHandler}. */
@@ -603,14 +610,6 @@ export interface PluginWidgetDeclaration {
 	 */
 	componentExport?: string;
 	/**
-	 * Opt-in shared "default" widget sink for the `home` slot (#9143). A plugin
-	 * that has live state but no bundled React component of its own sets this to
-	 * surface that state through one of the shared frontpage widgets instead of
-	 * shipping a component. Ignored unless `slot` is `"home"` and no own
-	 * component is registered for this declaration's `pluginId`/`id`.
-	 */
-	defaultWidget?: "notifications" | "messages" | "activity";
-	/**
 	 * Home-slot attention signals this widget responds to (#9143 priority). When
 	 * the home surface receives a live activity/notification signal of one of
 	 * these kinds, this widget's importance is boosted (decayed by recency) so it
@@ -852,13 +851,16 @@ export interface ViewScopedAction {
  *
  * Views are compiled to JavaScript bundles, served by the agent router at
  * `/api/views/<id>/bundle.js`, and loaded dynamically by the frontend shell
- * via `import()`. On platforms where dynamic code loading is restricted (iOS
- * App Store, Google Play store builds), bundles are pre-compiled into the app
- * binary and the agent serves them from bundled assets — no remote download.
+ * via `import()`. Views that declare `surface.isolation: "sandboxed-iframe"`
+ * instead supply a complete HTML document via `framePath`/`frameUrl`; the shell
+ * mounts that document in `<iframe sandbox>` and never substitutes a JS bundle
+ * URL for it. On platforms where dynamic code loading is restricted (iOS App
+ * Store, Google Play store builds), dynamic bundle/frame URLs are filtered out.
  *
  * The frontend shell:
  *   1. Fetches `GET /api/views` to discover all registered views.
- *   2. Calls `import(bundleUrl)` when a view is first requested.
+ *   2. Calls `import(bundleUrl)` for host-realm views, or mounts `frameUrl` for
+ *      sandboxed iframe views.
  *   3. Mounts `module[componentExport ?? "default"]` in an error boundary.
  *   4. Calls the view's `cleanup()` export on unmount.
  */
@@ -1001,14 +1003,15 @@ export interface ViewDeclaration {
 	 */
 	bundleUrl?: string;
 	/**
-	 * Path from the plugin's package root to a sandbox frame HTML document.
-	 * Required for `surface.isolation: "sandboxed-iframe"` local plugin views;
-	 * the registry resolves this to `/api/views/<id>/frame.html`.
+	 * Path from the plugin's package root to a complete HTML document for
+	 * `surface.isolation: "sandboxed-iframe"` views. The registry resolves this
+	 * to `/api/views/<id>/frame.html`; it is a document URL, never a JS bundle.
 	 */
 	framePath?: string;
 	/**
-	 * Fully resolved sandbox frame document URL for remote/containerized views.
-	 * This is an HTML document URL, not a JavaScript bundle URL.
+	 * Fully resolved HTML document URL for `surface.isolation: "sandboxed-iframe"`
+	 * views served by a remote capability module or container. The shell mounts
+	 * this in `<iframe sandbox>` and must never substitute `bundleUrl` here.
 	 */
 	frameUrl?: string;
 	/** Capabilities the agent can exercise on this view when it is mounted. */

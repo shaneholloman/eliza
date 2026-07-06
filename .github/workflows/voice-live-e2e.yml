@@ -6,6 +6,9 @@ name: Voice Live E2E
 # self-hosted model-heavy nightly / workflow_dispatch lane.
 #
 # What it proves (no mocks at any stage):
+#   - Live Railway voice contract: the free-cloud Kokoro TTS + Whisper STT
+#     services (packages/cloud/services/voice-*) satisfy the exact request shapes
+#     the cloud-api voice routes send, so a dead/drifted service is a red run.
 #   - Real fused ASR: the provisioned libelizainference + ASR bundle
 #     transcribes real speech.
 #   - Real fused Kokoro TTS: the provisioned libelizainference loads the
@@ -18,7 +21,7 @@ name: Voice Live E2E
 # libelizainference build. Its scripts run in require-real mode so a missing
 # model/ABI/credential is a hard failure rather than green skip evidence.
 #
-# Runner provisioning (full handoff: .github/issue-evidence/9454-gpu-runner-provisioning.md):
+# Runner provisioning handoff is tracked in elizaOS/eliza#9454:
 #   The two real jobs default to the online [self-hosted, Linux, X64, eliza]
 #   runners. To repoint at a dedicated GPU box without editing this file, set the
 #   repo variable VOICE_LIVE_RUNNER_LABELS to a JSON array of labels, e.g.
@@ -39,6 +42,11 @@ on:
     - cron: "30 8 * * *"
   workflow_dispatch:
     inputs:
+      run_railway_contract:
+        description: "Run the Railway Kokoro/Whisper live contract lane"
+        required: false
+        default: true
+        type: boolean
       run_macos_electrobun:
         description: "Attempt the macOS Electrobun live-voice matrix lane"
         required: false
@@ -101,6 +109,40 @@ jobs:
           path: ${{ runner.temp }}/voice-platform-matrix
           if-no-files-found: error
 
+  # Live contract against the two Railway voice services (Kokoro TTS + Whisper
+  # STT). It runs the in-repo round-trip test (voice-kokoro-whisper-live.test.ts,
+  # which was referenced by zero workflows) so a dead or drifted service pages as
+  # a red run instead of a silent user report. Hits public HTTPS only, so it runs
+  # on a cheap GitHub-hosted runner — no GPU/self-hosted staging. The service URLs
+  # come from repo variables set at deploy time (see the two service READMEs under
+  # packages/cloud/services/voice-*); the test falls back to its own defaults when
+  # they are unset, so the lane still exercises the provisioned instances.
+  voice-railway-contract:
+    name: Railway Kokoro/Whisper live contract
+    if: ${{ github.event_name == 'schedule' || inputs.run_railway_contract }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ELIZA_VOICE_LIVE_RAILWAY: "1"
+      KOKORO_TTS_URL: ${{ vars.ELIZA_VOICE_KOKORO_TTS_URL }}
+      WHISPER_STT_URL: ${{ vars.ELIZA_VOICE_WHISPER_STT_URL }}
+      WHISPER_STT_MODEL: ${{ vars.ELIZA_VOICE_WHISPER_STT_MODEL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          show-progress: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Run live Railway voice contract
+        run: |
+          set -euo pipefail
+          bun test packages/cloud/api/__tests__/voice-kokoro-whisper-live.test.ts
+
   voice-roundtrip:
     name: Real fused ASR + optional mixed round-trip (self-hosted)
     # Single point of runner config — override with repo var VOICE_LIVE_RUNNER_LABELS.
@@ -134,7 +176,7 @@ jobs:
             fi
           done
           if [ -n "$missing" ]; then
-            echo "::warning title=Voice runner not fully provisioned::Absent GPU/media tools:${missing}. Real round-trip coverage needs the GPU runner from #9454 — see .github/issue-evidence/9454-gpu-runner-provisioning.md"
+            echo "::warning title=Voice runner not fully provisioned::Absent GPU/media tools:${missing}. Real round-trip coverage needs the GPU runner tracked in elizaOS/eliza#9454."
           fi
 
       - name: Setup Node.js
@@ -300,12 +342,12 @@ jobs:
               echo "- asrBundle: $BUNDLE/asr ($( [ -d "$BUNDLE/asr" ] && echo present || echo MISSING ))"
               echo "- missingTools:${missing_tools:-none}"
               echo
-              echo "Provision per .github/issue-evidence/9454-gpu-runner-provisioning.md"
+              echo "Provision the runner per elizaOS/eliza#9454"
               echo "(stage the fused libelizainference.so + the eliza-1-2b ASR"
               echo "bundle), then re-dispatch:"
               echo "  gh workflow run voice-live-e2e.yml --ref develop"
             } | tee "$VOICE_REAL_MATRIX_OUT/SKIPPED.md"
-            echo "::error title=Voice acoustic matrix runner not provisioned::Missing fused libelizainference.so and/or the eliza-1-2b ASR bundle on this self-hosted runner. This lane needs the GPU runner staged per #9454 (.github/issue-evidence/9454-gpu-runner-provisioning.md)."
+            echo "::error title=Voice acoustic matrix runner not provisioned::Missing fused libelizainference.so and/or the eliza-1-2b ASR bundle on this self-hosted runner. This lane needs the GPU runner staged per elizaOS/eliza#9454."
             exit 1
           fi
 
@@ -403,7 +445,7 @@ jobs:
             || true)"
           if [ -z "$FUSED_LIB" ]; then
             echo "FATAL: fused libelizainference.so is not staged on this runner."
-            echo "Provision the lane per .github/issue-evidence/9454-gpu-runner-provisioning.md"
+            echo "Provision the lane per elizaOS/eliza#9454"
             echo "(stage the fused libelizainference.so + the eliza-1-2b ASR bundle)."
             exit 1
           fi

@@ -41,6 +41,10 @@ vi.mock("../../api/client", () => ({
     createTranscript: vi
       .fn()
       .mockResolvedValue({ transcript: { id: "t1", title: "Transcript" } }),
+    // The header search control drives the real client method; per-test the
+    // resolved value is the real `GET /api/conversations/messages/search`
+    // response shape so the query→results→jump path is exercised end to end.
+    searchConversationMessages: vi.fn(),
   },
 }));
 
@@ -50,18 +54,26 @@ vi.mock("../../utils/clipboard", () => ({
   copyTextToClipboard: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../../chat/report-composer-activity", () => ({
+  reportComposerActivity: vi.fn(),
+}));
+
 import * as React from "react";
+import { client } from "../../api/client";
 import type {
   Conversation,
   ConversationMessage,
+  ConversationMessageSearchResult,
   ImageAttachment,
 } from "../../api/client-types-chat";
+import { reportComposerActivity } from "../../chat/report-composer-activity";
 import { CHAT_PREFILL_EVENT, ELIZA_BACK_INTENT_EVENT } from "../../events";
 import {
   LAYOUT_SHIFT_INTENT_ATTR,
   LAYOUT_SHIFT_INTENT_TRANSIENT,
 } from "../../hooks/useLayoutShiftMonitor";
 import { __resetAssistantLaunchPayloadClaimsForTests } from "../../platform/assistant-launch-payload";
+import { __setAppValueForTests } from "../../state/app-store";
 import {
   getShellSurface,
   resetShellSurfaceForTests,
@@ -89,6 +101,13 @@ afterEach(() => {
   cleanup();
   resetShellSurfaceForTests();
   setViewChatBinding(null);
+  vi.mocked(reportComposerActivity).mockClear();
+  vi.mocked(client.searchConversationMessages).mockReset();
+  vi.mocked(Element.prototype.scrollIntoView).mockClear();
+  document.getElementById("chat-message-m-hit")?.remove();
+  // Search-jump tests seed the AppContext store with spies; clear it so the
+  // inert test-fallback proxy backs every other test again.
+  __setAppValueForTests(null);
 });
 
 function makeController(
@@ -168,8 +187,10 @@ function AppComposerHarness({
       chatInput,
       chatSending: false,
       chatPendingImages,
+      chatReplyTarget: null,
       setChatInput,
       setChatPendingImages,
+      setChatReplyTarget: () => {},
     }),
     [chatInput, chatPendingImages],
   );
@@ -211,6 +232,75 @@ describe("ContinuousChatOverlay", () => {
     });
     expect(screen.getByLabelText("send")).toBeTruthy();
     expect(screen.queryByLabelText("talk")).toBeNull();
+  });
+
+  it("reports typing start and pause from the real composer draft", () => {
+    vi.useFakeTimers();
+    try {
+      render(<ContinuousChatOverlay controller={makeController()} />);
+      fireEvent.change(screen.getByLabelText("message"), {
+        target: { value: "hello" },
+      });
+
+      expect(reportComposerActivity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activity: "typing_started",
+          surface: "continuous_chat_overlay",
+          draftLength: 5,
+        }),
+      );
+      expect(reportComposerActivity).not.toHaveBeenCalledWith(
+        expect.objectContaining({ activity: "typing_paused" }),
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(1_999);
+      });
+      expect(reportComposerActivity).not.toHaveBeenCalledWith(
+        expect.objectContaining({ activity: "typing_paused" }),
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(reportComposerActivity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activity: "typing_paused",
+          surface: "continuous_chat_overlay",
+          draftLength: 5,
+          idleForMs: 2_000,
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports draft_abandoned only when the user clears typed text", () => {
+    const controller = makeController();
+    render(<ContinuousChatOverlay controller={controller} />);
+    const input = screen.getByLabelText("message");
+
+    fireEvent.change(input, { target: { value: "discard me" } });
+    fireEvent.change(input, { target: { value: "" } });
+
+    expect(reportComposerActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activity: "draft_abandoned",
+        surface: "continuous_chat_overlay",
+        draftLength: 0,
+        reason: "cleared",
+      }),
+    );
+
+    vi.mocked(reportComposerActivity).mockClear();
+    fireEvent.change(input, { target: { value: "send me" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(controller.send).toHaveBeenCalledWith("send me");
+    expect(reportComposerActivity).not.toHaveBeenCalledWith(
+      expect.objectContaining({ activity: "draft_abandoned" }),
+    );
   });
 
   it("shows a disabled, no-op send control when the agent can't accept input (canSend false)", () => {
@@ -388,17 +478,88 @@ describe("ContinuousChatOverlay", () => {
     expect(overlay.style.paddingBottom).toBe(initialPadding);
   });
 
-  it("seats the resting composer low: 40% of the gesture inset with a 0.5rem floor", () => {
-    // Lock-screen anchoring: at rest the overlay clears only what the home
-    // indicator occupies — 40% of the reported safe-area/gesture inset (≈13.6px
-    // of a 34px iOS inset) — not the whole inset (r3.3 hover) nor 60% (still
-    // ~20px up on device). The 0.5rem floor keeps breathing room on devices
-    // reporting no inset, and the nav offset still stacks on top.
+  it("seats the resting composer above the home indicator: full gesture inset plus a small gap", () => {
+    // Lock-screen anchoring: with the overlay reclaimed to the true physical
+    // bottom, the resting composer should clear the whole home-indicator/
+    // Android gesture inset plus a small visual gap (~34px + 10px on iOS), not
+    // the old 40% inset compensation that was tuned around the collapsed-ICB
+    // float and left a dead band under the composer.
     render(<ContinuousChatOverlay controller={makeController()} />);
     const overlay = screen.getByTestId("continuous-chat-overlay");
     expect(overlay.style.paddingBottom).toBe(
-      "calc(var(--eliza-mobile-nav-offset, 0px) + max(max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)) * 0.4, 0.5rem))",
+      "calc(var(--eliza-mobile-nav-offset, 0px) + max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)) + 0.625rem)",
     );
+  });
+
+  it("publishes side clearance for the compact short-landscape composer", () => {
+    const originalInnerWidth = Object.getOwnPropertyDescriptor(
+      window,
+      "innerWidth",
+    );
+    const originalInnerHeight = Object.getOwnPropertyDescriptor(
+      window,
+      "innerHeight",
+    );
+    const originalResizeObserver = globalThis.ResizeObserver;
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+    class TestResizeObserver {
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+
+    try {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 800,
+      });
+      Object.defineProperty(window, "innerHeight", {
+        configurable: true,
+        value: 390,
+      });
+      vi.stubGlobal("ResizeObserver", TestResizeObserver);
+      rectSpy.mockReturnValue({
+        width: 208,
+        height: 72,
+        x: 0,
+        y: 0,
+        top: 0,
+        right: 208,
+        bottom: 72,
+        left: 0,
+        toJSON: () => ({}),
+      } as DOMRect);
+      document.documentElement.style.removeProperty(
+        "--eliza-continuous-chat-side-clearance",
+      );
+
+      render(<ContinuousChatOverlay controller={makeController()} />);
+
+      expect(
+        document.documentElement.style.getPropertyValue(
+          "--eliza-continuous-chat-side-clearance",
+        ),
+      ).toBe("232px");
+
+      fireEvent.focus(screen.getByLabelText("message"));
+
+      expect(
+        document.documentElement.style.getPropertyValue(
+          "--eliza-continuous-chat-side-clearance",
+        ),
+      ).toBe("0px");
+    } finally {
+      rectSpy.mockRestore();
+      if (originalInnerWidth) {
+        Object.defineProperty(window, "innerWidth", originalInnerWidth);
+      }
+      if (originalInnerHeight) {
+        Object.defineProperty(window, "innerHeight", originalInnerHeight);
+      }
+      vi.stubGlobal("ResizeObserver", originalResizeObserver);
+      document.documentElement.style.removeProperty(
+        "--eliza-continuous-chat-side-clearance",
+      );
+    }
   });
 
   it("renders NO cosmetic bottom-floor strip under the composer (wallpaper owns the zone)", () => {
@@ -527,6 +688,74 @@ describe("ContinuousChatOverlay", () => {
     // The zone stops at the handle's own bottom (before:bottom-0) so it can't
     // overlap the interactive composer controls beneath it.
     expect(grabber.className).toContain("before:bottom-0");
+  });
+
+  // #14331: the overlay mic must pulse whenever a live capture is hot, so its
+  // motion agrees with the accent color (previously it only recolored, never
+  // pulsed, while every sibling surface pulsed). Reduced-motion falls back to the
+  // static accent. The pill/grabber pulse already shipped; pin it here.
+  describe("mic + pill pulse while capture is hot (#14331)", () => {
+    it("does not pulse the mic while idle (neutral resting, no motion)", () => {
+      render(<ContinuousChatOverlay controller={makeController()} />);
+      const mic = screen.getByTestId("chat-composer-mic");
+      expect(mic.className).not.toContain("animate-pulse");
+      expect(mic.className).not.toContain("text-accent");
+    });
+
+    it.each([
+      ["recording", { recording: true }],
+      ["hands-free", { handsFree: true }],
+      ["transcribing", { transcriptionMode: true }],
+    ] as const)("pulses the accent mic while %s", (_label, override) => {
+      render(<ContinuousChatOverlay controller={makeController(override)} />);
+      const mic = screen.getByTestId("chat-composer-mic");
+      expect(mic.className).toContain("animate-pulse");
+      expect(mic.className).toContain("motion-reduce:animate-none");
+      expect(mic.className).toContain("text-accent");
+    });
+
+    it("drops the pulse the moment the capture predicate clears", () => {
+      const { rerender } = render(
+        <ContinuousChatOverlay
+          controller={makeController({ recording: true })}
+        />,
+      );
+      expect(screen.getByTestId("chat-composer-mic").className).toContain(
+        "animate-pulse",
+      );
+      rerender(
+        <ContinuousChatOverlay
+          controller={makeController({ recording: false })}
+        />,
+      );
+      expect(screen.getByTestId("chat-composer-mic").className).not.toContain(
+        "animate-pulse",
+      );
+    });
+
+    it("pulses the collapsed pill bar only while listening (regression guard)", () => {
+      const { rerender } = render(
+        <ContinuousChatOverlay controller={makeController()} />,
+      );
+      const sheet = screen.getByTestId("chat-sheet");
+      const barOf = () =>
+        screen.getByTestId("chat-pill").querySelector("span")?.className ?? "";
+      expect(barOf()).not.toContain("animate-pulse");
+      expect(barOf()).toContain("bg-muted-strong");
+      rerender(
+        <ContinuousChatOverlay
+          controller={makeController({ phase: "listening", recording: true })}
+        />,
+      );
+      const grabber = screen.getByTestId("chat-sheet-grabber");
+      fireEvent.pointerDown(grabber, { clientY: 200, pointerId: 1 });
+      fireEvent.pointerMove(grabber, { clientY: 380, pointerId: 1 });
+      fireEvent.pointerUp(grabber, { clientY: 380, pointerId: 1 });
+      expect(sheet.getAttribute("data-detent")).toBe("pill");
+      expect(barOf()).toContain("animate-pulse");
+      expect(barOf()).toContain("bg-accent");
+      expect(barOf()).toContain("motion-reduce:animate-none");
+    });
   });
 
   it("toggles the sheet open and closed on repeated grabber taps", () => {
@@ -822,8 +1051,8 @@ describe("ContinuousChatOverlay", () => {
     }
     unmount();
 
-    // Active (recording): distinguishable via accent icon color only — never by
-    // reintroducing a background/border fill on the resting-style control.
+    // Active (recording): distinguishable via accent icon color + pulse — never
+    // by reintroducing a background/border fill on the resting-style control.
     render(
       <ContinuousChatOverlay
         controller={makeController({ recording: true })}
@@ -832,15 +1061,16 @@ describe("ContinuousChatOverlay", () => {
     const mic = screen.getByTestId("chat-composer-mic");
     expect(mic.getAttribute("aria-pressed")).toBe("true");
     expect(mic.className).toContain("text-accent");
+    expect(mic.className).toContain("animate-pulse");
+    expect(mic.className).toContain("motion-reduce:animate-none");
     expect(mic.className).not.toMatch(/bg-white/);
     expect(mic.className).not.toMatch(/\bborder\b/);
   });
 
-  it("does not render the resting suggestion strip (feature-flagged off)", () => {
+  it("never renders a resting suggestion strip (removed — the agent is proactive)", () => {
     render(
       <ContinuousChatOverlay controller={makeController({ messages: [] })} />,
     );
-    // SHOW_PROMPT_SUGGESTIONS is off — the resting strip must not mount.
     expect(screen.queryByTestId("chat-suggestions")).toBeNull();
     expect(screen.queryByTestId("chat-suggestion-0")).toBeNull();
   });
@@ -1193,6 +1423,9 @@ describe("ContinuousChatOverlay", () => {
     const log = document.getElementById("continuous-thread");
     expect(log?.querySelectorAll('[data-testid="thread-line"]').length).toBe(3);
     expect(log?.className).toContain("overflow-y-auto");
+    // Vertical-only invariant (#14328): the horizontal axis is pinned closed so
+    // an over-wide child can never turn the transcript into a two-axis scroller.
+    expect(log?.className).toContain("overflow-x-hidden");
     expect(log?.textContent).toContain("one");
   });
 
@@ -2423,15 +2656,181 @@ describe("ContinuousChatOverlay single-thread (no chat swipe, #13531)", () => {
     expect(screen.queryByTestId("conversation-swipe-hint-left")).toBeNull();
   });
 
-  it("exposes no maximize / minimize / clear (new-chat) header buttons", () => {
+  it("exposes no maximize / minimize button (maximize is a pull now)", () => {
     const { controller } = makeSwipeController();
     render(<ContinuousChatOverlay controller={controller} />);
     openSheet();
 
+    // Maximize/minimize became a vertical pull in #13531 — still no button.
     expect(screen.queryByTestId("chat-full-maximize")).toBeNull();
-    expect(screen.queryByTestId("chat-full-clear")).toBeNull();
-    // The launcher (the sole remaining header control) still renders.
+    // The launcher header control still renders.
     expect(screen.getByTestId("chat-full-launcher")).toBeTruthy();
+  });
+
+  it("exposes search as the ONLY left header control (no new-chat/refresh)", () => {
+    const { controller } = makeSwipeController();
+    render(<ContinuousChatOverlay controller={controller} />);
+    openSheet();
+
+    // The thread is one infinite conversation: search is the sole left
+    // control; there is deliberately no new-chat/clear/refresh button.
+    expect(screen.getByTestId("chat-full-search")).toBeTruthy();
+    expect(screen.queryByTestId("chat-full-clear")).toBeNull();
+  });
+
+  it("toggles hands-free voice from the header voice button", () => {
+    const { controller } = makeSwipeController();
+    render(<ContinuousChatOverlay controller={controller} />);
+    openSheet();
+
+    // The top-bar voice control shares the composer mic's state machine: a
+    // tap enters/exits the hands-free conversation (voice on/off).
+    fireEvent.click(screen.getByTestId("chat-full-voice"));
+    expect(controller.toggleHandsFree).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the message-search panel from the header search control (#14279)", () => {
+    const { controller } = makeSwipeController();
+    render(<ContinuousChatOverlay controller={controller} />);
+    openSheet();
+
+    // Panel is closed at rest.
+    expect(screen.queryByTestId("chat-message-search")).toBeNull();
+    // Tapping the search control reveals the search panel over the transcript.
+    fireEvent.click(screen.getByTestId("chat-full-search"));
+    expect(screen.getByTestId("chat-message-search")).toBeTruthy();
+    expect(screen.getByTestId("message-search-panel")).toBeTruthy();
+    // Tapping again toggles it closed.
+    fireEvent.click(screen.getByTestId("chat-full-search"));
+    expect(screen.queryByTestId("chat-message-search")).toBeNull();
+  });
+
+  it("drives the header search → query → jump path against the real search API shape (#14330)", async () => {
+    // Real jump plumbing: the overlay pulls handleSelectConversation from the
+    // AppContext store, so seed it with a spy the jump must call. Mirror the
+    // inert test-fallback proxy (noop for everything else the overlay reads via
+    // other selectors) so only the jump collaborators are observable.
+    const selectSpy = vi.fn<(id: string) => Promise<void>>(async () => {});
+    const aroundSpy = vi.fn(async () => {
+      const anchor = document.createElement("div");
+      anchor.id = "chat-message-m-hit";
+      document.body.appendChild(anchor);
+      return true;
+    });
+    const noop = () => {};
+    __setAppValueForTests(
+      new Proxy({} as never, {
+        get(_t, prop) {
+          if (prop === "handleSelectConversation") return selectSpy;
+          if (prop === "loadConversationMessagesAround") return aroundSpy;
+          if (prop === "t") return (k: string) => k;
+          if (prop === "uiLanguage") return "en";
+          if (prop === "navigation") {
+            return { scheduleAfterTabCommit: (fn: () => void) => fn() };
+          }
+          return noop;
+        },
+      }),
+    );
+
+    // The panel renders exactly what the server route returns; use its real
+    // response shape (ranked hits with snippet/role/createdAt).
+    const hit: ConversationMessageSearchResult = {
+      messageId: "m-hit",
+      conversationId: "conv-42",
+      roomId: "room-1",
+      role: "assistant",
+      text: "the quarterly budget review is on friday",
+      snippet: "the quarterly …budget… review is on friday",
+      createdAt: 1_700_000_000_000,
+      score: 12.5,
+    };
+    vi.mocked(client.searchConversationMessages).mockResolvedValue({
+      results: [hit],
+      count: 1,
+    });
+
+    const { controller } = makeSwipeController();
+    render(<ContinuousChatOverlay controller={controller} />);
+    openSheet();
+
+    fireEvent.click(screen.getByTestId("chat-full-search"));
+    const input = screen.getByTestId("message-search-input");
+    fireEvent.change(input, { target: { value: "budget" } });
+
+    // The debounced (250ms) search calls the real client method and lists the
+    // ranked snippet result.
+    const result = await waitFor(() =>
+      screen.getByTestId("message-search-result"),
+    );
+    expect(client.searchConversationMessages).toHaveBeenCalledWith(
+      "budget",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(result.textContent).toContain("budget");
+
+    // Selecting the hit jumps to its conversation (the real jump plumbing) and
+    // then loads the centered around-window because this fixture starts with no
+    // DOM anchor for the hit.
+    fireEvent.click(result);
+    expect(selectSpy).toHaveBeenCalledWith("conv-42");
+    await waitFor(() =>
+      expect(aroundSpy).toHaveBeenCalledWith("conv-42", "m-hit"),
+    );
+    await waitFor(() =>
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({
+        block: "center",
+        behavior: "smooth",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("chat-message-search")).toBeNull(),
+    );
+  });
+
+  it("renders a distinguishable error state when the search API rejects (#14330)", async () => {
+    // Three-state rule: a rejected search must surface an error render, never a
+    // fabricated empty result.
+    vi.mocked(client.searchConversationMessages).mockRejectedValue(
+      new Error("search route 500"),
+    );
+
+    const { controller } = makeSwipeController();
+    render(<ContinuousChatOverlay controller={controller} />);
+    openSheet();
+
+    fireEvent.click(screen.getByTestId("chat-full-search"));
+    fireEvent.change(screen.getByTestId("message-search-input"), {
+      target: { value: "budget" },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("message-search-error")).toBeTruthy(),
+    );
+    // The error state is NOT the empty state — a caught failure must not read as
+    // "no matches".
+    expect(screen.queryByTestId("message-search-empty")).toBeNull();
+  });
+
+  it("never invokes clearConversation from the header (no new-chat control)", () => {
+    const { controller } = makeSwipeController();
+    render(<ContinuousChatOverlay controller={controller} />);
+    openSheet();
+
+    // The new-chat header control was removed: nothing in the header may
+    // reset the thread.
+    expect(screen.queryByTestId("chat-full-clear")).toBeNull();
+    expect(controller.clearConversation).not.toHaveBeenCalled();
+  });
+
+  it("renders the infinite-scroll top sentinel above a populated flat thread (#14279)", () => {
+    const { controller } = makeSwipeController();
+    render(<ContinuousChatOverlay controller={controller} />);
+    openSheet();
+
+    // The load-older prefetch sentinel mounts above the oldest turn so
+    // useLoadOlderOnScroll can page older history in as the reader scrolls up.
+    expect(screen.getByTestId("chat-transcript-top-sentinel")).toBeTruthy();
   });
 
   // Maximize is a PULL now, not a button (#13531). A big upward over-pull of the
@@ -3178,12 +3577,12 @@ describe("ContinuousChatOverlay — OS assistant / deep-link launch (#9148)", ()
   });
 });
 
-// The cold-boot banner (chat-boot-status) is gated by the parent on a 600ms
-// grace delay so a warm agent — where `phase` is momentarily "booting" on first
-// paint before the status fetch resolves — never flashes it; only a genuine
-// cold boot (still booting past the window) shows it. This exercises that
-// parent gate end-to-end, which the isolated BootStatusIndicator test can't.
-describe("ContinuousChatOverlay — cold-boot banner grace gate", () => {
+// The floating boot pill was removed outright: boot state has NO surface above
+// the chat. A stalled boot speaks INSIDE the transcript via the boot-recovery
+// conductor (use-boot-recovery-conductor.test.tsx covers that path); this pins
+// the overlay's side of the contract — no pill ever, no matter how long the
+// boot runs.
+describe("ContinuousChatOverlay — no floating boot pill", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -3191,106 +3590,29 @@ describe("ContinuousChatOverlay — cold-boot banner grace gate", () => {
     vi.useRealTimers();
   });
 
-  it("does not flash the banner for a warm agent that leaves booting within the grace window", () => {
-    const { rerender } = render(
-      <ContinuousChatOverlay
-        controller={makeController({ phase: "booting" })}
-      />,
-    );
-    // Warm agent: booting only briefly, flips ready before 600ms elapses.
-    act(() => {
-      vi.advanceTimersByTime(300);
-    });
-    rerender(
-      <ContinuousChatOverlay
-        controller={makeController({ phase: "summoned" })}
-      />,
-    );
-    act(() => {
-      vi.advanceTimersByTime(600);
-    });
-    expect(screen.queryByTestId("chat-boot-status")).toBeNull();
-  });
-
-  it("shows the banner once a cold boot outlasts the grace window", () => {
+  it("never renders a floating boot-status pill, even deep into a cold boot", () => {
     render(
       <ContinuousChatOverlay
         controller={makeController({ phase: "booting" })}
       />,
     );
-    expect(screen.queryByTestId("chat-boot-status")).toBeNull();
     act(() => {
-      vi.advanceTimersByTime(600);
+      vi.advanceTimersByTime(120_000);
     });
-    expect(screen.getByTestId("chat-boot-status").textContent).toContain(
-      "Waking",
-    );
-  });
-
-  it("hides the banner the moment the agent becomes ready", () => {
-    const { rerender } = render(
-      <ContinuousChatOverlay
-        controller={makeController({ phase: "booting" })}
-      />,
-    );
-    act(() => {
-      vi.advanceTimersByTime(600);
-    });
-    expect(screen.getByTestId("chat-boot-status")).toBeTruthy();
-    rerender(
-      <ContinuousChatOverlay
-        controller={makeController({ phase: "summoned" })}
-      />,
-    );
     expect(screen.queryByTestId("chat-boot-status")).toBeNull();
   });
 });
 
 // When no LLM/model provider is configured the agent's `canRespond` never flips,
-// so `phase` stays "booting" forever. Without this fix the "Waking …" spinner
-// would spin indefinitely; instead the controller flags `noProviderConfigured`
-// and the overlay suppresses the boot banner (the in-transcript no_provider gate
-// is the real error surface) and stops promising the agent is "waking up".
+// so `phase` stays "booting" forever. The controller flags `noProviderConfigured`
+// and the overlay stops promising the agent is "waking up" — the in-transcript
+// no_provider gate is the real error surface.
 describe("ContinuousChatOverlay — no LLM provider configured", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("suppresses the forever 'Waking …' boot banner when no provider is configured", () => {
-    render(
-      <ContinuousChatOverlay
-        controller={makeController({
-          phase: "booting",
-          noProviderConfigured: true,
-        })}
-      />,
-    );
-    // Well past the 600ms grace window — a cold boot WOULD show the banner here.
-    act(() => {
-      vi.advanceTimersByTime(2000);
-    });
-    // No spinner: the agent is not "waking", it's misconfigured.
-    expect(screen.queryByTestId("chat-boot-status")).toBeNull();
-  });
-
-  it("still shows the boot banner when it IS a genuine warm-up (no no_provider signal)", () => {
-    render(
-      <ContinuousChatOverlay
-        controller={makeController({
-          phase: "booting",
-          noProviderConfigured: false,
-        })}
-      />,
-    );
-    act(() => {
-      vi.advanceTimersByTime(600);
-    });
-    expect(screen.getByTestId("chat-boot-status").textContent).toContain(
-      "Waking",
-    );
   });
 
   it("swaps the 'waking up…' composer placeholder for a Settings CTA hint", () => {

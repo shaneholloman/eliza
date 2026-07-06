@@ -1,13 +1,16 @@
 /**
  * Owner/entity id resolution and world/entity metadata for Discord. Maps
- * Discord user ids to runtime entity ids and builds the world/entity metadata
- * stored on inbound messages.
+ * Discord user ids to runtime entity ids, keeping bot-application owner
+ * aliases separate from Discord team admin grants so message attribution stays
+ * auditable.
  */
 import {
 	createUniqueUuid,
 	type IAgentRuntime,
 	type Metadata,
-	Role,
+	type RolesWorldMetadata,
+	recordOwnerGrant,
+	recordRoleGrant,
 	stringToUuid,
 } from "@elizaos/core";
 
@@ -99,6 +102,19 @@ export function extractDiscordOwnerUserIds(application: unknown): string[] {
 		ownerCandidates.add(teamOwnerId);
 	}
 
+	return [...ownerCandidates];
+}
+
+// Discord team membership_state: 1 = invited (pending), 2 = accepted.
+const TEAM_MEMBERSHIP_ACCEPTED = 2;
+
+export function extractDiscordTeamAdminUserIds(application: unknown): string[] {
+	const applicationRecord = asRecord(application);
+	if (!applicationRecord) {
+		return [];
+	}
+
+	const team = asRecord(applicationRecord.team);
 	const teamMembers = team?.members;
 	// Discord.js returns team.members as a Collection (Map-like), not an Array.
 	// Handle both Array and iterable (Collection/Map) shapes.
@@ -110,18 +126,42 @@ export function extractDiscordOwnerUserIds(application: unknown): string[] {
 					"function"
 			? (teamMembers as Iterable<unknown>)
 			: null;
+	const adminCandidates = new Set<string>();
 	if (memberIterable) {
 		for (const entry of memberIterable) {
 			// Collection/Map yields [key, value] tuples; Array yields values directly.
-			const member = Array.isArray(entry) ? entry[1] : entry;
-			const memberId = readUserIdFromOwnerLike(member);
-			if (memberId) {
-				ownerCandidates.add(memberId);
+			const member = asRecord(Array.isArray(entry) ? entry[1] : entry);
+			if (!member) {
+				continue;
 			}
+			const memberId = readUserIdFromOwnerLike(member);
+			if (!memberId) {
+				continue;
+			}
+			// Connector-admin standing is only for members who actually hold it on
+			// Discord's side: pending invitees (membership_state 1) have not
+			// accepted, and read_only members deliberately hold no write access —
+			// neither may be seeded as an admin (#14712). Members whose state/role
+			// fields are absent (older discord.js payload shapes) are treated as
+			// accepted developers.
+			const membershipStateRaw =
+				member.membershipState ?? member.membership_state;
+			const membershipState =
+				typeof membershipStateRaw === "number" ? membershipStateRaw : null;
+			if (
+				membershipState !== null &&
+				membershipState !== TEAM_MEMBERSHIP_ACCEPTED
+			) {
+				continue;
+			}
+			if (typeof member.role === "string" && member.role === "read_only") {
+				continue;
+			}
+			adminCandidates.add(memberId);
 		}
 	}
 
-	return [...ownerCandidates];
+	return [...adminCandidates];
 }
 
 export function parseDiscordOwnerUserIds(value: unknown): string[] {
@@ -150,25 +190,21 @@ export function buildDiscordWorldMetadata(
 	guildOwnerId: string | undefined,
 ): Metadata | undefined {
 	const ownerId = resolveElizaOwnerEntityId(runtime);
-	const roles: Record<string, Role> = {
-		[ownerId]: Role.OWNER,
-	};
+	const metadata: RolesWorldMetadata = { ownership: { ownerId } };
+	recordOwnerGrant(metadata, ownerId);
 
-	// The Discord guild owner should also be recognized as an owner in their
-	// guild.  Map the guild owner's Discord snowflake to a runtime entity ID
-	// and grant OWNER so that role resolution picks them up even when the bot-
-	// application owner extraction didn't include them.
+	// Discord guild ownership is connector provenance, not app ownership. Record
+	// it through core's canonical grant helper so the role and its source stay
+	// paired, and let the connector-admin whitelist decide at read time whether
+	// the grant can rise above GUEST.
 	if (guildOwnerId && DISCORD_SNOWFLAKE_PATTERN.test(guildOwnerId)) {
 		const guildOwnerEntityId = createUniqueUuid(runtime, guildOwnerId);
 		if (guildOwnerEntityId !== ownerId) {
-			roles[guildOwnerEntityId] = Role.OWNER;
+			recordRoleGrant(metadata, guildOwnerEntityId, "ADMIN", "connector_admin");
 		}
 	}
 
-	return {
-		ownership: { ownerId },
-		roles,
-	};
+	return metadata;
 }
 
 export function buildDiscordEntityMetadata(

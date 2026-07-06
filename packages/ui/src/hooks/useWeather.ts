@@ -3,6 +3,7 @@
  * with permission-gated geolocation and all network/clock work in effects.
  */
 import * as React from "react";
+import { useIntervalWhenDocumentVisible } from "./useDocumentVisibility";
 
 /**
  * Current-conditions weather for the home dashboard's weather widget.
@@ -31,16 +32,14 @@ export type WeatherKind =
 
 export interface Weather {
   status: WeatherStatus;
-  /** Temperature in the user's unit (°F), rounded. Null until ready. */
+  /** Temperature in the locale unit (°C, or °F for US/LR/MM), rounded. Null until ready. */
   temp: number | null;
-  /** Unit label, e.g. "°F". */
+  /** Unit label — "°C" or "°F", from the locale region. */
   unit: string;
   /** Human condition label, e.g. "Partly cloudy". */
   condition: string;
   /** Coarse bucket for icon selection. */
   kind: WeatherKind;
-  /** Resolved place name, e.g. "San Francisco". Empty when unknown. */
-  city: string;
 }
 
 const WEATHER_TTL_MS = 30 * 60_000; // refetch at most every 30 min
@@ -71,6 +70,58 @@ export function describeWeatherCode(code: number): {
   return { kind: "cloudy", condition: "Cloudy" };
 }
 
+/**
+ * The only regions that use Fahrenheit day-to-day: the US (+ its territories,
+ * which resolve to `US`), Liberia, and Myanmar. Everyone else gets Celsius —
+ * the metric default the rest of the MVP audience (international, children,
+ * elderly) expects. Keyed off the locale REGION, never the language.
+ */
+const FAHRENHEIT_REGIONS: ReadonlySet<string> = new Set(["US", "LR", "MM"]);
+
+/**
+ * Open-Meteo `temperature_unit` param + the display label, derived from the
+ * locale's region. A region-less locale (e.g. bare `"en"`) defaults to Celsius
+ * rather than guessing US. Pure; caller resolves the locale once (module-level),
+ * never per render, so the home's determinism gate stays clean.
+ */
+export function temperatureUnitForLocale(locale?: string): {
+  param: "celsius" | "fahrenheit";
+  label: string;
+} {
+  let region: string | null | undefined;
+  try {
+    const loc =
+      locale ??
+      (typeof navigator !== "undefined" ? navigator.language : undefined);
+    if (loc) region = new Intl.Locale(loc).region;
+  } catch {
+    // error-policy:J3 unparseable locale → metric default (never throw here).
+  }
+  return region && FAHRENHEIT_REGIONS.has(region.toUpperCase())
+    ? { param: "fahrenheit", label: "°F" }
+    : { param: "celsius", label: "°C" };
+}
+
+/**
+ * Whether the locale renders time on a 24-hour clock (h23/h24). Resolved from
+ * `Intl.DateTimeFormat().resolvedOptions().hourCycle` so it follows the actual
+ * platform/locale, not a hardcoded AM/PM. Pure; resolve once outside render.
+ */
+export function prefers24HourClock(locale?: string): boolean {
+  try {
+    const hc = new Intl.DateTimeFormat(locale, {
+      hour: "numeric",
+    }).resolvedOptions().hourCycle;
+    return hc === "h23" || hc === "h24";
+  } catch {
+    // error-policy:J3 Intl unavailable → 12-hour (the prior default).
+    return false;
+  }
+}
+
+/** Locale temperature unit, resolved once at module load (never per render). */
+const TEMPERATURE_UNIT = temperatureUnitForLocale();
+
 interface Coords {
   lat: number;
   lon: number;
@@ -82,6 +133,7 @@ function readCache(): CachedWeather | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as CachedWeather;
     if (typeof parsed.fetchedAt !== "number") return null;
+    if (parsed.unit !== TEMPERATURE_UNIT.label) return null;
     return parsed;
   } catch {
     // error-policy:J3 corrupt cache reads as "no cache"; the live fetch is
@@ -101,7 +153,8 @@ function writeCache(value: CachedWeather): void {
 
 /** Has the user ALREADY granted geolocation? We never trigger the OS permission
  *  prompt from the home — precise device location is used only when it's already
- *  allowed; otherwise the coarse IP lookup is the no-prompt default. */
+ *  allowed; otherwise the widget degrades to its unavailable state (no prompt,
+ *  and no IP-lookup fallback — see {@link resolveCoords}). */
 async function geolocationAlreadyGranted(): Promise<boolean> {
   try {
     const perms = navigator.permissions;
@@ -110,7 +163,8 @@ async function geolocationAlreadyGranted(): Promise<boolean> {
     return status.state === "granted";
   } catch {
     // error-policy:J3 Permissions API unsupported (older WebKit) reads as
-    // "not granted" — the coarse IP lookup is the designed no-prompt default.
+    // "not granted" — the widget degrades to its unavailable state (the
+    // designed no-prompt path; no IP-lookup fallback).
     return false;
   }
 }
@@ -120,7 +174,7 @@ async function geolocationAlreadyGranted(): Promise<boolean> {
  * Without existing permission, degrade to unavailable instead of making a
  * browser-side IP lookup that can CORS-fail on hosted app origins.
  */
-async function resolveCoords(): Promise<{ coords: Coords; city: string }> {
+async function resolveCoords(): Promise<Coords> {
   const canUseDevice =
     typeof navigator !== "undefined" &&
     !!navigator.geolocation &&
@@ -135,13 +189,12 @@ async function resolveCoords(): Promise<{ coords: Coords; city: string }> {
     );
   });
 
-  if (deviceCoords) return { coords: deviceCoords, city: "" };
+  if (deviceCoords) return deviceCoords;
   throw new Error("no-location");
 }
 
-async function fetchWeather(): Promise<Weather> {
-  const { coords, city } = await resolveCoords();
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&current=temperature_2m,weather_code&temperature_unit=fahrenheit`;
+async function fetchWeatherAt(coords: Coords): Promise<Weather> {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&current=temperature_2m,weather_code&temperature_unit=${TEMPERATURE_UNIT.param}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`open-meteo ${res.status}`);
   const data = (await res.json()) as {
@@ -154,54 +207,105 @@ async function fetchWeather(): Promise<Weather> {
   return {
     status: "ready",
     temp: Math.round(tempRaw),
-    unit: "°F",
+    unit: TEMPERATURE_UNIT.label,
     condition,
     kind,
-    city,
   };
+}
+
+async function fetchWeather(): Promise<Weather> {
+  return fetchWeatherAt(await resolveCoords());
+}
+
+/**
+ * Resolve coordinates by explicit OS prompt. This is the ONE place allowed to
+ * trigger the geolocation permission dialog — only from a user tap on the
+ * unavailable tile, never on home load (the no-prompt rule stays intact for the
+ * automatic path in {@link resolveCoords}).
+ */
+async function promptForCoords(): Promise<Coords> {
+  if (typeof navigator === "undefined" || !navigator.geolocation)
+    throw new Error("no-geolocation");
+  return new Promise<Coords>((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+      () => reject(new Error("denied")),
+      { timeout: GEO_TIMEOUT_MS, maximumAge: WEATHER_TTL_MS },
+    );
+  });
 }
 
 const LOADING: Weather = {
   status: "loading",
   temp: null,
-  unit: "°F",
+  unit: TEMPERATURE_UNIT.label,
   condition: "",
   kind: "cloudy",
-  city: "",
 };
 
-export function useWeather(): Weather {
-  const [weather, setWeather] = React.useState<Weather>(LOADING);
+export interface WeatherState extends Weather {
+  /**
+   * Tap-to-grant: prompt for OS location once (the only user-initiated prompt),
+   * then load real conditions. Wired to a tap on the unavailable tile.
+   */
+  requestLocation: () => void;
+}
 
-  React.useEffect(() => {
-    let cancelled = false;
-
+export function useWeather(): WeatherState {
+  // Paint cached conditions on the very first render (no flash), then revalidate.
+  const [weather, setWeather] = React.useState<Weather>(() => {
     const cached = readCache();
-    if (cached) {
-      setWeather({ ...cached, status: "ready" });
-      if (Date.now() - cached.fetchedAt < WEATHER_TTL_MS) return;
-    }
+    return cached ? { ...cached, status: "ready" } : LOADING;
+  });
 
-    void fetchWeather()
+  const applyUnavailable = React.useCallback(() => {
+    // Only fall to "unavailable" when we have nothing cached to show.
+    setWeather((prev) =>
+      prev.status === "ready" ? prev : { ...LOADING, status: "unavailable" },
+    );
+  }, []);
+
+  // Cache-first: skip the network while the cached reading is within its TTL, so
+  // the mount effect and the interval below are both cheap on a warm cache.
+  const revalidate = React.useCallback(() => {
+    const cached = readCache();
+    if (cached && Date.now() - cached.fetchedAt < WEATHER_TTL_MS)
+      return Promise.resolve();
+    return fetchWeather()
       .then((next) => {
-        if (cancelled) return;
         setWeather(next);
         writeCache({ ...next, fetchedAt: Date.now() });
       })
       .catch(() => {
-        if (cancelled) return;
-        // Only fall to "unavailable" when we have nothing cached to show.
-        setWeather((prev) =>
-          prev.status === "ready"
-            ? prev
-            : { ...LOADING, status: "unavailable" },
-        );
+        // error-policy:J4 stale/no-location/weather failure renders the
+        // explicit unavailable tile instead of a healthy old reading.
+        setWeather({ ...LOADING, status: "unavailable" });
       });
-
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
-  return weather;
+  React.useEffect(() => {
+    void revalidate();
+  }, [revalidate]);
+
+  // Revalidate while the home stays open — a long-lived session no longer shows
+  // a frozen temperature — but only when the document is visible (no background
+  // polling) and only past the TTL (revalidate is cache-first).
+  useIntervalWhenDocumentVisible(() => {
+    void revalidate();
+  }, WEATHER_TTL_MS);
+
+  const requestLocation = React.useCallback(() => {
+    void promptForCoords()
+      .then((coords) => fetchWeatherAt(coords))
+      .then((next) => {
+        setWeather(next);
+        writeCache({ ...next, fetchedAt: Date.now() });
+      })
+      .catch(applyUnavailable);
+  }, [applyUnavailable]);
+
+  return React.useMemo(
+    () => ({ ...weather, requestLocation }),
+    [weather, requestLocation],
+  );
 }

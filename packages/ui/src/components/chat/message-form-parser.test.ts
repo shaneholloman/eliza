@@ -54,11 +54,51 @@ describe("parseFormBody", () => {
     expect(form?.id.length).toBeGreaterThan(0);
   });
 
+  it("accepts date/time/datetime field types (#14323)", () => {
+    const form = parseFormBody(
+      JSON.stringify({
+        fields: [
+          { name: "day", type: "date" },
+          { name: "at", type: "time" },
+          { name: "exact", type: "datetime" },
+        ],
+      }),
+    );
+    expect(form?.fields.map((f) => f.type)).toEqual([
+      "date",
+      "time",
+      "datetime",
+    ]);
+  });
+
   it("defaults an unknown field type to text", () => {
     const form = parseFormBody(
       JSON.stringify({ fields: [{ name: "x", type: "color" }] }),
     );
     expect(form?.fields[0].type).toBe("text");
+  });
+
+  it("preserves the temporal field types (date, time, datetime)", () => {
+    const form = parseFormBody(
+      JSON.stringify({
+        fields: [
+          { name: "day", type: "date", label: "Day", required: true },
+          { name: "at", type: "time", label: "At" },
+          { name: "when", type: "datetime", label: "When" },
+        ],
+      }),
+    );
+    expect(form?.fields.map((f) => f.type)).toEqual([
+      "date",
+      "time",
+      "datetime",
+    ]);
+    expect(form?.fields[0]).toEqual({
+      name: "day",
+      type: "date",
+      label: "Day",
+      required: true,
+    });
   });
 
   it("drops fields with unsafe or missing names and dedupes by name", () => {
@@ -79,6 +119,30 @@ describe("parseFormBody", () => {
       type: "text",
       label: "First",
     });
+  });
+
+  it("rejects inherited Object field names so malformed blocks degrade to text", () => {
+    const form = parseFormBody(
+      JSON.stringify({
+        fields: [
+          { name: "constructor", type: "text" },
+          { name: "hasOwnProperty", type: "text" },
+          { name: "propertyIsEnumerable", type: "text" },
+          { name: "toString", type: "text" },
+          { name: "safeName", type: "text" },
+        ],
+      }),
+    );
+    expect(form?.fields.map((field) => field.name)).toEqual(["safeName"]);
+
+    const onlyUnsafe = JSON.stringify({
+      fields: [
+        { name: "constructor", type: "text" },
+        { name: "hasOwnProperty", type: "text" },
+      ],
+    });
+    expect(parseFormBody(onlyUnsafe)).toBeNull();
+    expect(findFormRegions(`[FORM]\n${onlyUnsafe}\n[/FORM]`)).toEqual([]);
   });
 
   it("returns null for malformed or empty input rather than throwing", () => {

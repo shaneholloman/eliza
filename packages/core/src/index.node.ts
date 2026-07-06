@@ -102,9 +102,7 @@ export type {
 	ScoreContext,
 	SearchMessagesFilters,
 	SendPolicy,
-	SuggestedAction,
 	TriageOptions,
-	TriagePriority,
 	TriageScore,
 } from "./features/messaging/triage";
 // Cross-platform messaging triage (MESSAGE, MESSAGE, MESSAGE,
@@ -213,15 +211,6 @@ export * from "./runtime/cleanup-scope";
 export * from "./runtime/context-gates";
 export * from "./runtime/context-registry";
 export * from "./runtime/conversation-compaction-hook";
-export {
-	__resetDirectMessageHooksForTests,
-	type DirectMessageHook,
-	type DirectMessageHookInput,
-	getDirectMessageHooks,
-	registerDirectMessageHook,
-	runDirectMessageHooks,
-	unregisterDirectMessageHook,
-} from "./runtime/direct-message-hook";
 export * from "./runtime/execute-planned-tool-call";
 export {
 	detectLocaleFromText,

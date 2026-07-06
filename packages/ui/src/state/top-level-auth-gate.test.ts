@@ -1,11 +1,14 @@
 /**
- * Unit coverage for `firstRunOwnsLoginSurface`, the pure predicate that decides
- * whether the top-level LoginView owns the screen versus in-chat onboarding.
- * Guards the double-login window (onboarding incomplete but coordinator past
- * first-run-required). Pure function, no harness.
+ * Unit coverage for the pure top-level auth predicates. These gates decide
+ * whether the top-level LoginView owns the screen, whether in-chat onboarding
+ * owns it instead, and whether shell pollers must stay unmounted during the
+ * initial auth probe.
  */
 import { describe, expect, it } from "vitest";
-import { firstRunOwnsLoginSurface } from "./top-level-auth-gate";
+import {
+  authProbeShouldHoldShell,
+  firstRunOwnsLoginSurface,
+} from "./top-level-auth-gate";
 
 describe("firstRunOwnsLoginSurface — top-level LoginView vs in-chat onboarding", () => {
   it("yields the login surface while the coordinator is in first-run-required", () => {
@@ -38,5 +41,31 @@ describe("firstRunOwnsLoginSurface — top-level LoginView vs in-chat onboarding
     // or a normal session could be locked out of the top-level login.
     expect(firstRunOwnsLoginSurface("ready", undefined)).toBe(false);
     expect(firstRunOwnsLoginSurface("ready", null)).toBe(false);
+  });
+});
+
+describe("authProbeShouldHoldShell — pre-auth poll suppression", () => {
+  it("holds the shell while auth is loading for a completed returning session", () => {
+    expect(authProbeShouldHoldShell("ready", true, "loading")).toBe(true);
+    expect(authProbeShouldHoldShell("hydrating", true, "loading")).toBe(true);
+  });
+
+  it("does not hold the shell after auth resolves", () => {
+    expect(authProbeShouldHoldShell("ready", true, "authenticated")).toBe(
+      false,
+    );
+    expect(authProbeShouldHoldShell("ready", true, "unauthenticated")).toBe(
+      false,
+    );
+    expect(authProbeShouldHoldShell("ready", true, "server_unavailable")).toBe(
+      false,
+    );
+  });
+
+  it("does not steal the first-run login surface while onboarding owns it", () => {
+    expect(
+      authProbeShouldHoldShell("first-run-required", false, "loading"),
+    ).toBe(false);
+    expect(authProbeShouldHoldShell("ready", false, "loading")).toBe(false);
   });
 });

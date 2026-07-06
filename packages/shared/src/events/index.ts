@@ -6,6 +6,8 @@
  * EmotePicker, ChatView, etc.).
  */
 
+import type { UiLanguage } from "../i18n/language.js";
+
 // ── App lifecycle ────────────────────────────────────────────────────────
 export const COMMAND_PALETTE_EVENT = "eliza:command-palette" as const;
 export const EMOTE_PICKER_EVENT = "eliza:emote-picker" as const;
@@ -149,6 +151,44 @@ export interface BackgroundApplyPayload extends Record<string, unknown> {
   catalogId?: string;
 }
 
+export const APPEARANCE_APPLY_EVENT = "appearance:apply" as const;
+
+/** Payload broadcast on {@link APPEARANCE_APPLY_EVENT}. */
+export interface AppearanceApplyPayload extends Record<string, unknown> {
+  /** Theme mode persisted by the Appearance settings section. */
+  themeMode?: "light" | "dark" | "system";
+  /** Accent preset id, e.g. default, amber, rose, green. */
+  accentId?: string;
+  /** Supported UI language code. */
+  language?: UiLanguage;
+  /** Whether the home time/date widget is hidden. */
+  homeTimeWidgetHidden?: boolean;
+}
+
+export const VOICE_SETTINGS_APPLY_EVENT = "voice-settings:apply" as const;
+
+/**
+ * Payload broadcast on {@link VOICE_SETTINGS_APPLY_EVENT}.
+ *
+ * The SETTINGS voice twin persists these under `messages.voice` via `/api/config`,
+ * but the running capture path (useShellController.startCapture) and ChatView
+ * read the localStorage mirrors VoiceSectionMount seeds — never the config blob.
+ * This payload re-seeds those mirrors live so a chat-driven change reaches the
+ * running shell without a Settings → Voice remount. Fields are optional so a
+ * single-field write does not have to restate the whole voice config.
+ */
+export interface VoiceSettingsApplyPayload extends Record<string, unknown> {
+  /** Continuous-chat mode: off (push-to-talk), vad-gated, or always-on. */
+  continuous?: "off" | "vad-gated" | "always-on";
+  /** VAD end-of-turn thresholds the capture hot path reads. */
+  vadAutoStop?: {
+    /** Trailing silence (ms) that ends a turn in local-ASR capture. */
+    silenceMs: number;
+    /** RMS amplitude (0–1) above which audio is treated as speech. */
+    speechRmsThreshold: number;
+  };
+}
+
 // ── Avatar / VRM ─────────────────────────────────────────────────────────
 export const VRM_TELEPORT_COMPLETE_EVENT =
   "eliza:vrm-teleport-complete" as const;
@@ -175,6 +215,8 @@ export interface ShellNavigateViewPayload {
   layout?: string;
   placement?: string;
   alwaysOnTop?: boolean;
+  /** Opaque target-view deep-link state, validated by the receiving view. */
+  payload?: unknown;
 }
 
 export type ShellNavigateViewWsFrame = ShellNavigateViewPayload & {
@@ -212,6 +254,7 @@ export function normalizeShellNavigateViewPayload(
     layout: readNonEmptyString(data.layout),
     placement: readNonEmptyString(data.placement),
     alwaysOnTop: data.alwaysOnTop === true,
+    ...(Object.hasOwn(data, "payload") ? { payload: data.payload } : {}),
   };
 }
 

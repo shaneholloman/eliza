@@ -12,6 +12,7 @@ import {
   readStringParam,
   successActionResult,
   truncate,
+  userFacingSuccessResult,
 } from "./format.js";
 
 /** Pure param-reading + ActionResult formatting helpers for the coding tools. */
@@ -37,6 +38,17 @@ describe("ActionResult builders", () => {
     });
     expect(successActionResult("ok", { a: 2 }).data).toEqual({ a: 2 });
     expect(successActionResult("ok").data).toBeUndefined();
+  });
+
+  it("userFacingSuccessResult marks the text user-facing (relay opt-in)", () => {
+    const r = userFacingSuccessResult("Wrote 3 bytes to /tmp/x", { bytes: 3 });
+    expect(r.success).toBe(true);
+    expect(r.text).toBe("Wrote 3 bytes to /tmp/x");
+    expect(r.userFacingText).toBe("Wrote 3 bytes to /tmp/x");
+    // verifiedUserFacing stays unset so the evaluator's messageToUser still wins
+    // the happy path — only the failure relay reads userFacingText.
+    expect(r.verifiedUserFacing).toBeUndefined();
+    expect(r.data).toEqual({ bytes: 3 });
   });
 });
 

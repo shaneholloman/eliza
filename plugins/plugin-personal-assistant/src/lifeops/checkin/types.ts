@@ -57,6 +57,21 @@ export interface CheckinBriefingItem {
   readonly occurredAt: string | null;
   readonly href: string | null;
   readonly reason: string | null;
+  readonly signals?: {
+    readonly inbound?: boolean;
+    readonly unread?: boolean;
+    readonly replyNeeded?: boolean;
+    readonly important?: boolean;
+    readonly recent?: boolean;
+    readonly sourcePriority?: number;
+    readonly engagement?: {
+      readonly likeCount: number;
+      readonly replyCount: number;
+      readonly repostCount: number;
+      readonly quoteCount: number;
+      readonly totalCount: number;
+    };
+  };
 }
 
 export interface CheckinBriefingSection {
@@ -116,6 +131,12 @@ export interface RunCheckinRequest {
   readonly roomId?: string;
   readonly now?: Date;
   readonly timezone?: string;
+  /**
+   * Sleep-cycle dispatchers set this false while they are still proving an
+   * actual delivery surface accepted the report. A persisted report is the
+   * local-day idempotency marker, so failed delivery must not write it.
+   */
+  readonly persist?: boolean;
   /**
    * Night-only sleep recap to thread into the night-summary prompt. Built by
    * `processSleepCycleCheckins` from the merged schedule-state record. Ignored

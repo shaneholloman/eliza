@@ -48,7 +48,7 @@ const CELLS = [
   {
     id: "web.fake-mic.roundtrip",
     title:
-      "Web fake-device mic capture -> ASR -> agent -> local TTS + barge-in",
+      "Web fake-device mic capture -> ASR -> agent -> local TTS + barge-in + failure paths (mic-denied / silent / TTS-drop)",
     platform: "web",
     dimensions: {
       transcriptionState: "off",
@@ -69,6 +69,35 @@ const CELLS = [
     env: UI_SMOKE_MATRIX_ENV,
     evidence: ["packages/app/test-results", "e2e-recordings/app/test-results"],
     probe: "web",
+  },
+  {
+    // Opt-in LIVE web round-trip against the real Railway STT/TTS + a live agent
+    // (#14371). Same spec file, but the live `test.describe` only runs (never
+    // skips-as-pass) when ELIZA_VOICE_LIVE_RAILWAY=1; the `webLiveRailway` probe
+    // gates the cell to `skip` until the lane is provisioned.
+    id: "web.live.railway-roundtrip",
+    title:
+      "Web LIVE cloud voice round-trip: injected WAV -> Railway Whisper STT -> live agent -> Railway Kokoro TTS -> non-silent audio",
+    platform: "web",
+    dimensions: {
+      transcriptionState: "off",
+      chimeIn: "should-respond",
+      wakewordContext: "idle-wake",
+      noiseRejection: "quiet",
+      voices: "owner",
+    },
+    class: "live-cloud-voice-roundtrip",
+    command: [
+      "bun",
+      "run",
+      "--cwd",
+      "packages/app",
+      "test:e2e",
+      "test/ui-smoke/voice-realaudio.spec.ts",
+    ],
+    env: UI_SMOKE_MATRIX_ENV,
+    evidence: ["packages/app/test-results", "e2e-recordings/app/test-results"],
+    probe: "webLiveRailway",
   },
   {
     id: "web.fake-mic.transcript-roundtrip",
@@ -117,7 +146,7 @@ const CELLS = [
     ],
     env: UI_SMOKE_MATRIX_ENV,
     evidence: [
-      ".github/issue-evidence/8785-voice-headful",
+      "test-results/evidence/8785-voice-headful",
       "packages/app/test-results",
     ],
     probe: "web",
@@ -145,7 +174,7 @@ const CELLS = [
     ],
     evidence: [
       "$VOICE_REAL_MATRIX_OUT/voice-workbench-real",
-      ".github/issue-evidence/9147-real-audio-matrix-m4max.md",
+      "test-results/evidence/9147-real-audio-matrix-m4max.md",
     ],
     probe: "linuxFused",
   },
@@ -237,7 +266,7 @@ const CELLS = [
       "--slug",
       "voice-ios",
     ],
-    evidence: [`.github/issue-evidence/${ISSUE}-voice-ios-ios-sim.*`],
+    evidence: [`test-results/evidence/${ISSUE}-voice-ios-ios-sim.*`],
     probe: "ios",
   },
   {
@@ -299,7 +328,7 @@ const CELLS = [
     },
     class: "mobile-live-voice",
     command: ["bun", "run", "--cwd", "packages/app", "test:e2e:android:local"],
-    evidence: ["packages/app/test-results", ".github/issue-evidence"],
+    evidence: ["packages/app/test-results", "test-results/evidence"],
     probe: "android",
   },
   {
@@ -380,7 +409,7 @@ const CELLS = [
     },
     class: "stt-evaluation",
     command: ["node", "packages/scripts/stage-b-stt-bench.mjs"],
-    evidence: [".github/issue-evidence/9958-stt-stage-b-eval"],
+    evidence: ["test-results/evidence/9958-stt-stage-b-eval"],
     probe: "stageBSttApple",
   },
   {
@@ -408,7 +437,7 @@ const CELLS = [
 function parseArgs(argv) {
   const args = {
     run: false,
-    out: path.join(".github", "issue-evidence", `${ISSUE}-voice-matrix`),
+    out: path.join("test-results", "evidence", `${ISSUE}-voice-matrix`),
     platforms: new Set(),
     includeHeavy: false,
     requireGreen: false,
@@ -659,6 +688,19 @@ function probeCell(cell) {
       return {
         available: true,
         reason: "Chromium fake-device mic lane is host-runnable",
+      };
+    case "webLiveRailway":
+      if (process.env.ELIZA_VOICE_LIVE_RAILWAY !== "1") {
+        return {
+          available: false,
+          reason:
+            "set ELIZA_VOICE_LIVE_RAILWAY=1 with reachable Railway STT/TTS + a live LLM key",
+        };
+      }
+      return {
+        available: true,
+        reason:
+          "ELIZA_VOICE_LIVE_RAILWAY=1: live cloud voice round-trip enabled",
       };
     case "linuxFused":
       if (process.platform !== "linux")

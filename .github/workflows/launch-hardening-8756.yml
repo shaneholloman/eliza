@@ -46,18 +46,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ELIZA_CLOUD_AUTH_TOKEN: ${{ secrets.ELIZACLOUD_API_KEY }}
           ELIZA_CLOUD_API_BASE: ${{ github.event.inputs.cloud_api_base }}
+          LAUNCH_HARDENING_EVIDENCE_DIR: ${{ runner.temp }}/evidence/8756-launch-hardening-status
         run: |
           set -euo pipefail
+          mkdir -p "$LAUNCH_HARDENING_EVIDENCE_DIR"
           node scripts/cloud/verify-8756-launch-hardening.mjs \
             --branch "${{ github.event.inputs.branch }}" \
             --environment "${{ github.event.inputs.environment }}" \
-            --cloud-report .github/issue-evidence/8756-launch-hardening-status/cloud-provisioning.json
+            --cloud-report "$LAUNCH_HARDENING_EVIDENCE_DIR/cloud-provisioning.json"
 
       - name: Upload #8756 evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: 8756-launch-hardening-status
-          path: .github/issue-evidence/8756-launch-hardening-status/**
+          path: ${{ runner.temp }}/evidence/8756-launch-hardening-status/**
           if-no-files-found: error
           retention-days: 14

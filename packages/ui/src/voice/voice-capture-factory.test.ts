@@ -11,6 +11,7 @@ import {
 } from "./local-asr-capture";
 import {
   isLocalInferenceAsrReady,
+  transcribeCloudWav,
   transcribeLocalInferenceWav,
 } from "./local-asr-transcribe";
 import { createVoiceCapture } from "./voice-capture-factory";
@@ -22,6 +23,7 @@ vi.mock("./local-asr-capture", () => ({
 
 vi.mock("./local-asr-transcribe", () => ({
   isLocalInferenceAsrReady: vi.fn(),
+  transcribeCloudWav: vi.fn(),
   transcribeLocalInferenceWav: vi.fn(),
 }));
 
@@ -37,6 +39,7 @@ vi.mock("../bridge/native-plugins", async (importOriginal) => ({
 const isLocalAsrCaptureSupportedMock = vi.mocked(isLocalAsrCaptureSupported);
 const startLocalAsrRecorderMock = vi.mocked(startLocalAsrRecorder);
 const isLocalInferenceAsrReadyMock = vi.mocked(isLocalInferenceAsrReady);
+const transcribeCloudWavMock = vi.mocked(transcribeCloudWav);
 const transcribeLocalInferenceWavMock = vi.mocked(transcribeLocalInferenceWav);
 const isNativePlatformMock = vi.spyOn(Capacitor, "isNativePlatform");
 const getTalkModePluginMock = vi.mocked(getTalkModePlugin);
@@ -72,6 +75,7 @@ describe("createVoiceCapture", () => {
       text: "Ada Lovelace",
       words: [],
     });
+    transcribeCloudWavMock.mockResolvedValue("Grace Hopper");
     isNativePlatformMock.mockReturnValue(false);
     getTalkModePluginMock.mockReturnValue({} as never);
   });
@@ -201,6 +205,38 @@ describe("createVoiceCapture", () => {
     });
   });
 
+  it("prefers native TalkMode over an explicit local-inference preference on native mobile", async () => {
+    // The on-device Kokoro/ASR default resolves ASR to `local-inference` on
+    // desktop, but on native mobile the local-inference ASR assets are not
+    // staged — the readiness probe can report ready and then 502 at stop() with
+    // no recoverable fallback. So on a native platform the OS recognizer
+    // (TalkMode) must win ahead of the probe even when the caller passes
+    // `asrProvider: "local-inference"`.
+    isNativePlatformMock.mockReturnValue(true);
+    isLocalInferenceAsrReadyMock.mockResolvedValue(true);
+    const talkMode = makeFakeTalkMode();
+    getTalkModePluginMock.mockReturnValue(talkMode as never);
+    const onTranscript = vi.fn();
+
+    const capture = createVoiceCapture({
+      onTranscript,
+      asrProvider: "local-inference",
+    });
+    await capture.start();
+
+    expect(talkMode.start).toHaveBeenCalledTimes(1);
+    expect(startLocalAsrRecorderMock).not.toHaveBeenCalled();
+    // The native path is chosen ahead of the local-inference readiness probe.
+    expect(isLocalInferenceAsrReadyMock).not.toHaveBeenCalled();
+
+    talkMode.emit("transcript", { transcript: "hello", isFinal: true });
+    expect(onTranscript).toHaveBeenLastCalledWith({
+      text: "hello",
+      final: true,
+      backend: "talkmode",
+    });
+  });
+
   it("finalizeOnStop commits the running interim as the final turn (push-to-talk)", async () => {
     isNativePlatformMock.mockReturnValue(true);
     const talkMode = makeFakeTalkMode();
@@ -269,5 +305,108 @@ describe("createVoiceCapture", () => {
     // A hands-free toggle-off must not send a half-finished utterance.
     expect(onTranscript).not.toHaveBeenCalled();
     expect(talkMode.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("eliza-cloud ASR records a WAV and POSTs it to the cloud STT proxy (not Web Speech)", async () => {
+    // The documented web/cloud default: capture the WAV and route it to the
+    // cloud transcriber — NOT the browser recognizer.
+    const wav = new Uint8Array([1, 2, 3, 4]);
+    const stop = vi.fn().mockResolvedValue(wav);
+    startLocalAsrRecorderMock.mockResolvedValue({
+      stop,
+      cancel: vi.fn(),
+      analyser: null,
+    });
+    const onTranscript = vi.fn();
+    const onStateChange = vi.fn();
+    const capture = createVoiceCapture({
+      asrProvider: "eliza-cloud",
+      onTranscript,
+      onStateChange,
+    });
+
+    await capture.start();
+    // The WAV recorder is the capture engine (not browser SpeechRecognition);
+    // the local-inference readiness probe is never consulted for cloud.
+    expect(startLocalAsrRecorderMock).toHaveBeenCalledTimes(1);
+    expect(isLocalInferenceAsrReadyMock).not.toHaveBeenCalled();
+
+    await capture.stop();
+
+    // The recorded WAV is POSTed to the cloud proxy; local-inference transcribe
+    // is NOT used and the cloud transcript is the final segment.
+    expect(transcribeCloudWavMock).toHaveBeenCalledTimes(1);
+    expect(transcribeCloudWavMock).toHaveBeenCalledWith(wav);
+    expect(transcribeLocalInferenceWavMock).not.toHaveBeenCalled();
+    expect(onTranscript).toHaveBeenCalledWith({
+      text: "Grace Hopper",
+      final: true,
+      backend: "cloud",
+      audioWav: wav,
+    });
+    expect(onStateChange).toHaveBeenLastCalledWith("stopped", undefined);
+  });
+
+  it("openai ASR also routes through the cloud STT proxy", async () => {
+    const wav = new Uint8Array([9]);
+    startLocalAsrRecorderMock.mockResolvedValue({
+      stop: vi.fn().mockResolvedValue(wav),
+      cancel: vi.fn(),
+      analyser: null,
+    });
+    const onTranscript = vi.fn();
+    const capture = createVoiceCapture({
+      asrProvider: "openai",
+      onTranscript,
+    });
+
+    await capture.start();
+    await capture.stop();
+
+    expect(transcribeCloudWavMock).toHaveBeenCalledWith(wav);
+    expect(onTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({ backend: "cloud", text: "Grace Hopper" }),
+    );
+  });
+
+  it("cloud STT failure surfaces an error state — no silent browser downgrade", async () => {
+    startLocalAsrRecorderMock.mockResolvedValue({
+      stop: vi.fn().mockResolvedValue(new Uint8Array([1])),
+      cancel: vi.fn(),
+      analyser: null,
+    });
+    transcribeCloudWavMock.mockRejectedValue(new Error("Cloud ASR 502: down"));
+    const onTranscript = vi.fn();
+    const onStateChange = vi.fn();
+    const capture = createVoiceCapture({
+      asrProvider: "eliza-cloud",
+      onTranscript,
+      onStateChange,
+    });
+
+    await capture.start();
+    // Fail-loud: the proxy failure throws + renders the error state; it does NOT
+    // fall back to a browser-final transcript.
+    await expect(capture.stop()).rejects.toThrow(/Cloud ASR 502/);
+    expect(onStateChange).toHaveBeenLastCalledWith("error", expect.any(Error));
+    expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it("falls back to browser ONLY when WAV capture is unsupported for eliza-cloud", async () => {
+    // No getUserMedia/AudioContext → no WAV path exists, so the honest fallback
+    // is the browser recognizer. jsdom has no SpeechRecognition, so start()
+    // rejects — the point is the cloud recorder was never started.
+    isLocalAsrCaptureSupportedMock.mockReturnValue(false);
+    const onStateChange = vi.fn();
+    const capture = createVoiceCapture({
+      asrProvider: "eliza-cloud",
+      onStateChange,
+      onTranscript: vi.fn(),
+    });
+
+    await expect(capture.start()).rejects.toThrow(/SpeechRecognition/);
+    expect(startLocalAsrRecorderMock).not.toHaveBeenCalled();
+    expect(transcribeCloudWavMock).not.toHaveBeenCalled();
+    expect(onStateChange).toHaveBeenLastCalledWith("error", expect.any(Error));
   });
 });

@@ -22,6 +22,7 @@ import type { IAgentRuntime, RegisteredEvaluator } from "../../types/index.ts";
 import type { ServiceClass } from "../../types/plugin.ts";
 // Direct leaf-file imports — see comment lower in this file for the
 // Bun.build mis-rewrite that requires bypassing barrels.
+import { manageExperienceAction } from "./experience/actions/manage-experience.ts";
 import { searchExperiencesAction } from "./experience/actions/search-experiences.ts";
 import { experiencePatternEvaluator } from "./experience/evaluators/experience-items.ts";
 import { experienceProvider } from "./experience/providers/experienceProvider.ts";
@@ -58,6 +59,7 @@ import { messageAction } from "./actions/message.ts";
 import { postAction } from "./actions/post.ts";
 import { updateRoleAction } from "./actions/role.ts";
 import { roomOpAction } from "./actions/room.ts";
+import { preferenceItems } from "./evaluators/preference-items.ts";
 import { reflectionItems } from "./evaluators/reflection-items.ts";
 import { skillItems } from "./evaluators/skill-items.ts";
 import { advancedContactsProvider } from "./providers/contacts.ts";
@@ -91,6 +93,7 @@ export const advancedActions = [
 	...promoteSubactionsToActions(withCanonicalActionDocs(roomOpAction)),
 	withCanonicalActionDocs(updateRoleAction),
 	withCanonicalActionDocs(searchExperiencesAction),
+	withCanonicalActionDocs(manageExperienceAction),
 	...promoteSubactionsToActions(messageAction),
 	...promoteSubactionsToActions(postAction),
 	// Personality actions — keep CHARACTER (legacy) alongside the new
@@ -101,6 +104,7 @@ export const advancedActions = [
 
 export const advancedEvaluators = [
 	...reflectionItems,
+	...preferenceItems,
 	...skillItems,
 	experiencePatternEvaluator,
 ] satisfies readonly RegisteredEvaluator[];

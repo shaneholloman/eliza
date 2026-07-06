@@ -137,6 +137,7 @@ import {
 import { getDiscordSettings } from "./environment";
 import {
 	extractDiscordOwnerUserIds,
+	extractDiscordTeamAdminUserIds,
 	parseDiscordOwnerUserIds,
 	resolveDiscordRuntimeEntityId,
 	resolveElizaOwnerEntityId,
@@ -514,7 +515,6 @@ export class DiscordService extends Service implements IDiscordService {
 	voiceManager?: VoiceManager;
 	private channelDebouncer?: ChannelDebouncer;
 	private _loginFailed = false;
-	private userSelections: Map<string, Record<string, unknown>> = new Map();
 	private timeouts: ReturnType<typeof setTimeout>[] = [];
 	public clientReadyPromise: Promise<void> | null = null;
 	/**
@@ -537,9 +537,9 @@ export class DiscordService extends Service implements IDiscordService {
 	public allowAllSlashCommands: Set<string> = new Set();
 
 	/**
-	 * Resolves owner Discord user IDs from either the explicit
-	 * ELIZA_DISCORD_OWNER_USER_IDS_JSON setting or the Discord application's
-	 * team/owner metadata, and registers them as Discord connector admins.
+	 * Resolves Discord IDs that should alias to the canonical owner entity.
+	 * Discord team members stay separate entities and are registered only as
+	 * connector admins so their messages remain attributable.
 	 * Called from the extracted onReady handler once the client is ready.
 	 */
 	public async refreshOwnerDiscordUserIds(
@@ -554,6 +554,7 @@ export class DiscordService extends Service implements IDiscordService {
 			!(typeof explicitSetting === "string" && explicitSetting.trim() === "");
 
 		let ownerIds: string[];
+		let teamAdminIds: string[] = [];
 		if (hasExplicitSetting) {
 			ownerIds = parseDiscordOwnerUserIds(
 				Array.isArray(explicitSetting)
@@ -582,6 +583,13 @@ export class DiscordService extends Service implements IDiscordService {
 				application = client.application;
 			}
 			ownerIds = [...new Set(extractDiscordOwnerUserIds(application))];
+			teamAdminIds = [
+				...new Set(
+					extractDiscordTeamAdminUserIds(application).filter(
+						(userId) => !ownerIds.includes(userId),
+					),
+				),
+			];
 		}
 
 		this.ownerDiscordUserIds = new Set(ownerIds);
@@ -594,11 +602,17 @@ export class DiscordService extends Service implements IDiscordService {
 				"No Discord owner user IDs resolved — owner will not be recognized from Discord messages. " +
 					"Set ELIZA_DISCORD_OWNER_USER_IDS_JSON to fix this.",
 			);
+		}
+		if (ownerIds.length === 0 && teamAdminIds.length === 0) {
 			return;
 		}
 		const existingWhitelist = getConnectorAdminWhitelist(this.runtime);
 		const nextDiscordAdmins = [
-			...new Set([...(existingWhitelist.discord ?? []), ...ownerIds]),
+			...new Set([
+				...(existingWhitelist.discord ?? []),
+				...ownerIds,
+				...teamAdminIds,
+			]),
 		];
 		setConnectorAdminWhitelist(this.runtime, {
 			...existingWhitelist,
@@ -609,8 +623,9 @@ export class DiscordService extends Service implements IDiscordService {
 				src: "plugin:discord",
 				agentId: this.runtime.agentId,
 				ownerDiscordUserIds: ownerIds,
+				teamAdminDiscordUserIds: teamAdminIds,
 			},
-			"Resolved Discord owner identities for canonical Eliza owner mapping",
+			"Resolved Discord privileged identities for owner mapping and connector admin access",
 		);
 	}
 
@@ -1340,9 +1355,6 @@ export class DiscordService extends Service implements IDiscordService {
 			},
 			set commandRegistrationQueue(value: Promise<void>) {
 				parent.commandRegistrationQueue = value;
-			},
-			get userSelections() {
-				return parent.userSelections;
 			},
 			get timeouts() {
 				return parent.timeouts;
@@ -3587,8 +3599,6 @@ export class DiscordService extends Service implements IDiscordService {
 			state.channelDebouncer = undefined;
 		}
 		this.channelDebouncer = undefined;
-
-		this.userSelections.clear();
 
 		for (const state of states) {
 			try {

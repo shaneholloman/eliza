@@ -1,9 +1,12 @@
 /**
  * RESOLVE_REQUEST action — owner decision surface for the approval queue.
- * Approve, reject, or defer a pending request; on approval it dispatches the
- * queued payload (message send, document signature, travel booking, …) through
- * `executeApprovedRequest`. Owner-gated; the only path that runs a queued
- * external side effect.
+ * Approve or reject a pending request (reject is also the hold verb: "don't
+ * send it for now" terminally cancels the dispatch and a fresh request can be
+ * queued later); on approval it dispatches the queued payload (message send,
+ * document signature, travel booking, …) through `executeApprovedRequest`.
+ * Owner-gated; the only path that runs a queued external side effect. The
+ * planner learns about pending rows from the `pendingApprovals` provider
+ * (../providers/pending-approvals.ts), which routes decisions here (#14630).
  */
 import { hasOwnerAccess } from "@elizaos/agent";
 import type {
@@ -15,6 +18,8 @@ import type {
   Memory,
 } from "@elizaos/core";
 import {
+  appendInteractionBlock,
+  type ChoiceInteraction,
   logger,
   ModelType,
   resolveActionArgs,
@@ -55,8 +60,12 @@ const SUBACTIONS: SubactionsMap<ResolveSubaction> = {
     optional: ["requestId", "reason"],
   },
   reject: {
-    description: "Reject queued action; optional reason, user language.",
-    descriptionCompressed: "reject queued action reason-optional multilingual",
+    description:
+      "Reject queued action so it never dispatches — also the verb for holds " +
+      "('don't send it', 'not yet', 'hold off until I confirm'); a fresh " +
+      "request can be queued later. Optional reason, user language.",
+    descriptionCompressed:
+      "reject/hold queued action (nothing dispatches) reason-optional multilingual",
     required: [],
     optional: ["requestId", "reason"],
   },
@@ -81,6 +90,33 @@ function formatPending(requests: ReadonlyArray<ApprovalRequest>): string {
       return `${i + 1}. id=${r.id} action=${r.action} channel=${r.channel} reason=${r.reason}\n  payload:\n${payloadSummary}`;
     })
     .join("\n");
+}
+
+/** Chip labels stay glanceable; the full reason lives in the queue row. */
+function truncateReason(reason: string, max = 48): string {
+  const trimmed = reason.trim();
+  return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max - 1)}…`;
+}
+
+/**
+ * One-tap request picker for an ambiguous approve/reject (#14733). Each option
+ * value is `<intent> <requestId>` — the tap round-trips it as the owner's next
+ * message, which this action's extraction resolves verbatim (the id is in the
+ * text and the `pendingApprovals` provider lists the same ids).
+ */
+export function buildResolveRequestChoice(
+  intent: ResolveSubaction,
+  pending: ReadonlyArray<ApprovalRequest>,
+): ChoiceInteraction {
+  return {
+    kind: "choice",
+    id: `approval-resolve-${Date.now().toString(36)}`,
+    scope: "approval-resolve",
+    options: pending.slice(0, 5).map((request) => ({
+      value: `${intent} ${request.id}`,
+      label: truncateReason(request.reason),
+    })),
+  };
 }
 
 function parseResolutionJson(raw: unknown): ExtractedResolution {
@@ -124,13 +160,18 @@ async function extractResolution(
   if (pending.length === 0) {
     return { requestId: null, reason: null };
   }
+  // The approve/reject intent was already decided by the planner's verb
+  // choice; extraction only picks WHICH row. With exactly one pending row
+  // there is no selection judgment left, so skip the model call — this keeps
+  // single-approval resolution deterministic (and keyless).
+  const [onlyPending] = pending;
+  if (pending.length === 1 && onlyPending) {
+    return {
+      requestId: onlyPending.id,
+      reason: userText.trim() || `user ${intent}d`,
+    };
+  }
   if (typeof runtime.useModel !== "function") {
-    if (pending.length === 1) {
-      return {
-        requestId: pending[0].id,
-        reason: userText.trim() || `user ${intent}d`,
-      };
-    }
     return { requestId: null, reason: null };
   }
   // LLM resolution path for natural-language approval decisions.
@@ -505,10 +546,15 @@ async function resolveApprovalRequest(
     ? { requestId: explicitRequestId, reason: explicitReason }
     : await extractResolution(runtime, userText, intent, pending);
   if (!extracted.requestId) {
+    // Ambiguous target with pending rows: ask with one-tap chips instead of
+    // demanding a typed id (#14733).
     const text =
       pending.length === 0
         ? "There are no pending approval requests."
-        : "Which request? Please reference it by id or describe it.";
+        : appendInteractionBlock(
+            "Which request?",
+            buildResolveRequestChoice(intent, pending),
+          );
     if (callback) await callback({ text });
     return {
       text,
@@ -607,9 +653,11 @@ export const resolveRequestAction: Action & {
   ],
   description:
     "Approve/reject pending owner-confirmation action: send_email, send_message, book_travel, voice_call, etc. " +
-    "Subactions approve|reject. requestId optional; handler inspects pending queue, infers owner intent, or asks follow-up.",
+    "Subactions approve|reject. Reject also covers holds ('don't send it', 'not yet', 'wait until I confirm') — " +
+    "it terminally cancels the queued dispatch and a fresh request can be queued later. " +
+    "requestId optional; handler inspects pending queue, infers owner intent, or asks follow-up.",
   descriptionCompressed:
-    "approve|reject queue; requestId optional; send_email|send_message|book_travel|voice_call",
+    "approve|reject pending approval queue; reject=hold/don't-send-now (nothing dispatches); requestId optional",
   contexts: [
     "email",
     "messaging",

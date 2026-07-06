@@ -43,6 +43,10 @@ import {
   registerFallbackAnchors,
 } from "./consolidation-policy.js";
 import {
+  renderFailureDispatchResult,
+  renderScheduledDispatchMessage,
+} from "./dispatch-render.js";
+import {
   createEscalationLadderRegistry,
   type EscalationLadderRegistry,
   registerDefaultEscalationLadders,
@@ -92,6 +96,7 @@ export interface ScheduledTaskRunnerDepsBundle {
   activity: ActivitySignalBusView;
   subjectStore: SubjectStoreView;
   channelKeys?: () => ReadonlySet<string>;
+  channelAvailable?: (channelKey: string) => boolean | Promise<boolean>;
   hostCapabilities?: () => ReadonlySet<TaskExecutionProfile>;
   gates?: TaskGateRegistry;
   completionChecks?: CompletionCheckRegistry;
@@ -197,11 +202,32 @@ function createDefaultScheduledTaskDispatcher(
 ): ScheduledTaskDispatcher {
   return {
     async dispatch(record): Promise<DispatchResult> {
+      // `promptInstructions` is a model prompt, never user-facing copy: the
+      // notification body must be the model's rendering of it. A render
+      // failure is a typed, retryable dispatch failure — never fall back to
+      // delivering the raw instruction text.
+      let body: string;
+      try {
+        body = await renderScheduledDispatchMessage(runtime, record);
+      } catch (error) {
+        // error-policy:J1 boundary translation — dispatch outcomes are the
+        // runner's typed contract; the failure also reaches RECENT_ERRORS and
+        // owner escalation via reportError.
+        runtime.reportError(
+          "scheduling:scheduled-task:dispatch-render",
+          error,
+          {
+            taskId: record.taskId,
+            channelKey: record.channelKey,
+          },
+        );
+        return renderFailureDispatchResult(error);
+      }
       const isUrgent = record.intensity === "urgent";
       void getNotifier(runtime)
         ?.notify({
           title: isUrgent ? "Approval needed" : "Reminder",
-          body: record.promptInstructions,
+          body,
           category: isUrgent ? "approval" : "reminder",
           priority: isUrgent ? "urgent" : "normal",
           source: "scheduling",
@@ -337,6 +363,9 @@ function buildRunner(
     subjectStore: deps.subjectStore,
     dispatcher: deps.dispatcher,
     ...(deps.channelKeys ? { channelKeys: deps.channelKeys } : {}),
+    ...(deps.channelAvailable
+      ? { channelAvailable: deps.channelAvailable }
+      : {}),
     ...(deps.hostCapabilities
       ? { hostCapabilities: deps.hostCapabilities }
       : {}),

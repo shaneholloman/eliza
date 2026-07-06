@@ -33,13 +33,7 @@
  *   node harvest-runner.mjs --deterministic --limit 3 --dry-run   # driver self-test
  */
 import { spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  readdirSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -74,14 +68,12 @@ const MANIFEST_PATH = opt("--manifest", path.join(__dirname, "manifest.json"));
 const HARVEST_ROOT = path.resolve(
   opt(
     "--harvest-root",
-    path.join(
-      REPO_ROOT,
-      ".github/issue-evidence/gpt55-training-pipeline/harvest",
-    ),
+    path.join(REPO_ROOT, "reports", "training-harvest", "gpt55", "harvest"),
   ),
 );
 const TSCONFIG = path.join(REPO_ROOT, "tsconfig.json");
-const SCENARIO_TIMEOUT_MS = Number(opt("--item-timeout-ms", "300000")) || 300000;
+const SCENARIO_TIMEOUT_MS =
+  Number(opt("--item-timeout-ms", "300000")) || 300000;
 
 /** Load the provider env object per the precedence documented above. */
 function loadProviderEnv() {
@@ -196,10 +188,13 @@ function runScenario(dirRel, id, providerEnv) {
   if (existsSync(reportPath)) {
     try {
       const report = JSON.parse(readFileSync(reportPath, "utf8"));
-      const sc = (report.scenarios || []).find((x) => x.id === id) || report.scenarios?.[0];
+      const sc =
+        (report.scenarios || []).find((x) => x.id === id) ||
+        report.scenarios?.[0];
       if (sc) {
         verdict.status = sc.status || "error";
-        if (typeof sc.judgeScore === "number") verdict.judgeScore = sc.judgeScore;
+        if (typeof sc.judgeScore === "number")
+          verdict.judgeScore = sc.judgeScore;
       }
     } catch {
       /* leave status=error; stderr.log holds detail */
@@ -265,7 +260,12 @@ function main() {
     ran += 1;
     const { dir, id } = allItems[gi];
     if (RESUME) {
-      const doneMarker = path.join(HARVEST_ROOT, slug(dir), slug(id), "verdict.json");
+      const doneMarker = path.join(
+        HARVEST_ROOT,
+        slug(dir),
+        slug(id),
+        "verdict.json",
+      );
       if (existsSync(doneMarker)) {
         console.log(`[resume] skip (already harvested) ${dir} :: ${id}`);
         continue;

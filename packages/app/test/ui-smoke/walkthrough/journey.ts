@@ -629,6 +629,44 @@ async function sendChatMessage(page: Page, text: string): Promise<void> {
   await page.locator(CHAT_SEND_SELECTOR).first().click();
 }
 
+/**
+ * Drive the open chat sheet to its FULL detent with a real upward flick on the
+ * grabber — the pull gesture that REPLACED the removed `chat-full-maximize`
+ * button (#13531/#14332). A few-step, large-travel drag clears the flick
+ * velocity threshold so the sheet snaps up a detent; retried because a single
+ * flick from a partially-open sheet can land at HALF first. Uses `page.mouse`
+ * so it drives the pointer-generic gesture binding identically at the desktop
+ * and mobile viewports the journey runs at. Full-bleed maximize
+ * (`data-maximized`) is the finickier over-pull gated by the dedicated
+ * chat-thread-gestures + run-chat-sheet-e2e lanes; the walkthrough only needs
+ * the full detent.
+ */
+async function pullChatSheetToFull(page: Page): Promise<void> {
+  const overlay = page.getByTestId("continuous-chat-overlay");
+  const sheet = page.getByTestId("chat-sheet");
+  await expect(overlay).toHaveAttribute("data-open", "true", {
+    timeout: 15_000,
+  });
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if ((await sheet.getAttribute("data-detent")) === "full") return;
+    const box = await page.getByTestId("chat-sheet-grabber").boundingBox();
+    if (!box) throw new Error("no bounding box for chat-sheet-grabber");
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    const travel = Math.min(cy - 4, 560);
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    for (let i = 1; i <= 3; i += 1) {
+      await page.mouse.move(cx, cy - (travel * i) / 3);
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+  }
+  await expect(sheet).toHaveAttribute("data-detent", "full", {
+    timeout: 5_000,
+  });
+}
+
 async function navigateViaAgentEvent(
   page: Page,
   detail: Record<string, unknown>,
@@ -822,13 +860,15 @@ export const JOURNEY_STEPS: readonly JourneyStep[] = [
     id: "tutorial",
     title: "Chat-native tutorial (all 6 steps)",
     expectation:
-      "The /tutorial launcher starts the chat-native tour: one conversational turn per step lands in the live transcript, the send-message step auto-advances on a real composer send, and Done completes the run.",
+      "A typed 'start tutorial' command in the chat composer starts the chat-native tour: one conversational turn per step lands in the live transcript, the send-message step auto-advances on a real composer send, and Done completes the run.",
     async run({ page }) {
-      await openAppPath(page, "/tutorial");
-      await expect(page.getByTestId("tutorial-launcher")).toBeVisible({
-        timeout: 20_000,
-      });
-      await expect(page.getByTestId("tutorial-start")).toBeVisible();
+      // The tour is chat-native — no dedicated view. Start it from the composer.
+      await openAppPath(page, "/chat");
+      const box = composer(page);
+      await expect(box).toBeVisible({ timeout: 20_000 });
+      await box.click();
+      await box.fill("start tutorial");
+      await page.getByTestId("chat-composer-action").click();
       // No overlay engine: the tour is turns in the transcript, nothing dims
       // or locks the shell.
       await expect(page.getByTestId("tutorial-card")).toHaveCount(0);
@@ -841,7 +881,7 @@ export const JOURNEY_STEPS: readonly JourneyStep[] = [
 
       return {
         assertions: [
-          "/tutorial started the chat-native tour (welcome turn in transcript)",
+          "'start tutorial' started the chat-native tour (welcome turn in transcript)",
           "no spotlight card / overlay engine present",
           `tour driven step-by-step: ${walked.join(" → ")}`,
         ],
@@ -1008,40 +1048,20 @@ export const JOURNEY_STEPS: readonly JourneyStep[] = [
   {
     n: "09",
     id: "chat-full-detent",
-    title: "Maximize chat",
+    title: "Expand chat to full",
     expectation:
-      "The chat overlay expands to its full-height detent; the maximize control sets data-detent=full and data-maximized=true.",
+      "An upward flick on the sheet grabber — the pull gesture that replaced the removed maximize button (#13531) — expands the chat overlay to its full-height detent (data-detent=full).",
     async run({ page }) {
-      const maximize = page.getByTestId("chat-full-maximize");
       const sheet = page.getByTestId("chat-sheet");
-      if (await maximize.isVisible().catch(() => false)) {
-        await maximize.click();
-        await expect(sheet).toHaveAttribute("data-detent", "full", {
-          timeout: 10_000,
-        });
-        await expect(sheet).toHaveAttribute("data-maximized", "true", {
-          timeout: 10_000,
-        });
-        return {
-          assertions: [
-            "chat-full-maximize → data-detent=full",
-            "chat-full-maximize → data-maximized=true",
-          ],
-          dom: {
-            detent: await sheet.getAttribute("data-detent"),
-            maximized: await sheet.getAttribute("data-maximized"),
-          },
-        };
-      }
-      // Mobile: no maximize affordance — the overlay is already full-bleed.
-      await expect(page.getByTestId("continuous-chat-overlay")).toHaveAttribute(
-        "data-open",
-        "true",
-      );
+      await pullChatSheetToFull(page);
       return {
         assertions: [
-          "overlay open at full-bleed (mobile has no separate maximize control)",
+          "grabber flick-up → data-detent=full (pull gesture; no maximize button)",
         ],
+        dom: {
+          detent: await sheet.getAttribute("data-detent"),
+          maximized: await sheet.getAttribute("data-maximized"),
+        },
       };
     },
   },

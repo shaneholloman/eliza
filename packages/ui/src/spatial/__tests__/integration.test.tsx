@@ -7,14 +7,18 @@
  * modality. Static/string render (no live headset).
  */
 
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   Card,
   evaluateToSpatialTree,
   HStack,
   SpatialSurface,
   Text,
+  useContinuousChatClearanceActive,
+  useContinuousChatCompactClearanceActive,
+  useContinuousChatSideClearanceActive,
   useSpatialState,
   VStack,
 } from "../index.ts";
@@ -28,7 +32,14 @@ declare global {
 }
 
 afterEach(() => {
+  cleanup();
   window.__elizaXRContext = undefined;
+  document.documentElement.style.removeProperty(
+    "--eliza-continuous-chat-side-clearance",
+  );
+  document.documentElement.style.removeProperty(
+    "--eliza-continuous-chat-clearance",
+  );
 });
 
 describe("SpatialSurface auto-detects the headset modality", () => {
@@ -47,6 +58,177 @@ describe("SpatialSurface auto-detects the headset modality", () => {
       </SpatialSurface>,
     );
     expect(xr).toContain('data-spatial-surface="xr"');
+  });
+
+  it("only reserves floating-chat clearance when the host opts in", () => {
+    const plain = renderToStaticMarkup(
+      <SpatialSurface modality="gui">
+        <Text>plain</Text>
+      </SpatialSurface>,
+    );
+    expect(plain).not.toContain("--eliza-continuous-chat-clearance");
+
+    const hosted = renderToStaticMarkup(
+      <SpatialSurface modality="gui" reserveChatClearance>
+        <Text>hosted</Text>
+      </SpatialSurface>,
+    );
+    expect(hosted).toContain(
+      "padding-bottom:var(--eliza-continuous-chat-clearance, 5.25rem)",
+    );
+    expect(hosted).toContain(
+      "padding-inline-end:var(--eliza-continuous-chat-side-clearance, 0px)",
+    );
+    expect(hosted).toContain("overflow-y:auto");
+  });
+});
+
+function ChatClearanceProbe() {
+  const active = useContinuousChatSideClearanceActive();
+  return <span data-testid="chat-clearance-probe">{String(active)}</span>;
+}
+
+function ChatBottomClearanceProbe() {
+  const active = useContinuousChatClearanceActive();
+  return (
+    <span data-testid="chat-bottom-clearance-probe">{String(active)}</span>
+  );
+}
+
+function ChatCompactClearanceProbe() {
+  const active = useContinuousChatCompactClearanceActive();
+  return (
+    <span data-testid="chat-compact-clearance-probe">{String(active)}</span>
+  );
+}
+
+describe("continuous chat side-clearance hook", () => {
+  it("tracks the shell-published inline-end clearance var", async () => {
+    render(<ChatClearanceProbe />);
+    expect(screen.getByTestId("chat-clearance-probe").textContent).toBe(
+      "false",
+    );
+
+    act(() => {
+      document.documentElement.style.setProperty(
+        "--eliza-continuous-chat-side-clearance",
+        "232px",
+      );
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-clearance-probe").textContent).toBe(
+        "true",
+      ),
+    );
+
+    act(() => {
+      document.documentElement.style.removeProperty(
+        "--eliza-continuous-chat-side-clearance",
+      );
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-clearance-probe").textContent).toBe(
+        "false",
+      ),
+    );
+  });
+
+  it("tracks the shell-published bottom clearance var", async () => {
+    render(<ChatBottomClearanceProbe />);
+    expect(screen.getByTestId("chat-bottom-clearance-probe").textContent).toBe(
+      "false",
+    );
+
+    act(() => {
+      document.documentElement.style.setProperty(
+        "--eliza-continuous-chat-clearance",
+        "96px",
+      );
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("chat-bottom-clearance-probe").textContent,
+      ).toBe("true"),
+    );
+  });
+
+  it("uses compact mode for side clearance or mobile-width bottom clearance", async () => {
+    const originalInnerWidth = Object.getOwnPropertyDescriptor(
+      window,
+      "innerWidth",
+    );
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn((query: string) => ({
+        matches: query.includes("max-width: 767px")
+          ? window.innerWidth <= 767
+          : false,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 390,
+    });
+
+    try {
+      render(<ChatCompactClearanceProbe />);
+      expect(
+        screen.getByTestId("chat-compact-clearance-probe").textContent,
+      ).toBe("false");
+
+      act(() => {
+        document.documentElement.style.setProperty(
+          "--eliza-continuous-chat-clearance",
+          "96px",
+        );
+      });
+      await waitFor(() =>
+        expect(
+          screen.getByTestId("chat-compact-clearance-probe").textContent,
+        ).toBe("true"),
+      );
+
+      act(() => {
+        Object.defineProperty(window, "innerWidth", {
+          configurable: true,
+          value: 1024,
+        });
+        window.dispatchEvent(new Event("resize"));
+      });
+      await waitFor(() =>
+        expect(
+          screen.getByTestId("chat-compact-clearance-probe").textContent,
+        ).toBe("false"),
+      );
+
+      act(() => {
+        document.documentElement.style.setProperty(
+          "--eliza-continuous-chat-side-clearance",
+          "232px",
+        );
+      });
+      await waitFor(() =>
+        expect(
+          screen.getByTestId("chat-compact-clearance-probe").textContent,
+        ).toBe("true"),
+      );
+    } finally {
+      if (originalInnerWidth) {
+        Object.defineProperty(window, "innerWidth", originalInnerWidth);
+      }
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+      });
+    }
   });
 });
 

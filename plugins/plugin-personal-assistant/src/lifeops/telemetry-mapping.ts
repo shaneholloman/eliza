@@ -1,11 +1,11 @@
 /**
- * Shared mapper from a persisted `LifeOpsActivitySignal` into a
- * `LifeOpsTelemetryPayload`. Used by the live writer in
- * `LifeOpsRepository.createActivitySignal` so every signal is mirrored into
- * the canonical `life_telemetry_events` store with a dedupe-stable payload.
+ * Shared mapper from persisted `LifeOpsActivitySignal` records into
+ * `LifeOpsTelemetryPayload` rows. `LifeOpsRepository.createActivitySignal`
+ * calls this on writes so passive signals are mirrored into
+ * `life_telemetry_events` with a dedupe-stable payload.
  *
- * See `eliza/plugins/plugin-personal-assistant/docs/telemetry-event-families.md` §8 for the
- * canonical mapping table.
+ * This file is the canonical mapping table for current signal families; keep
+ * it aligned with the shared `LifeOpsTelemetryPayload` union.
  */
 
 import crypto from "node:crypto";
@@ -16,7 +16,9 @@ import crypto from "node:crypto";
 import { resolveActivitySignalReliability } from "@elizaos/plugin-health/sleep/source-reliability";
 import type {
   LifeOpsActivitySignal,
+  LifeOpsDevicePlatform,
   LifeOpsTelemetryEvent,
+  LifeOpsTelemetryMessageChannel,
   LifeOpsTelemetryPayload,
 } from "@elizaos/shared";
 
@@ -32,6 +34,64 @@ export function deriveTelemetryDedupeKey(
     .update(serialized)
     .digest("hex")
     .slice(0, 48);
+}
+
+function readMetadataString(
+  metadata: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+function hashTelemetryValue(scope: string, value: string): string {
+  return `${scope}:${crypto.createHash("sha256").update(value).digest("hex").slice(0, 32)}`;
+}
+
+function normalizeDevicePlatform(value: string): LifeOpsDevicePlatform {
+  const normalized = value.toLowerCase();
+  if (normalized.includes("ios") && !normalized.includes("ipad")) {
+    return "ios_capacitor";
+  }
+  if (normalized.includes("ipad")) {
+    return "ipados_capacitor";
+  }
+  if (normalized.includes("electrobun")) {
+    return "macos_electrobun";
+  }
+  if (normalized.includes("macos") || normalized.includes("desktop")) {
+    return "macos_desktop";
+  }
+  return "browser_web";
+}
+
+function normalizeMessageChannel(
+  value: string,
+): LifeOpsTelemetryMessageChannel {
+  const normalized = value.toLowerCase();
+  if (normalized.includes("telegram")) return "telegram";
+  if (normalized.includes("discord")) return "discord";
+  if (normalized.includes("imessage")) return "imessage";
+  if (normalized.includes("whatsapp")) return "whatsapp";
+  if (normalized.includes("signal")) return "signal";
+  if (normalized.includes("sms") || normalized.includes("twilio")) {
+    return "sms";
+  }
+  if (normalized.includes("x_dm") || normalized === "x") return "x_dm";
+  if (normalized.includes("gmail") || normalized.includes("email")) {
+    return "gmail";
+  }
+  return "eliza_chat";
+}
+
+function readMessageDirection(
+  metadata: Record<string, unknown>,
+): "inbound" | "outbound_by_owner" {
+  return metadata.direction === "outbound_by_owner"
+    ? "outbound_by_owner"
+    : "inbound";
 }
 
 export function mapSignalToTelemetryPayload(
@@ -59,7 +119,7 @@ export function mapSignalToTelemetryPayload(
     case "page_visibility":
       return {
         family: "device_presence_event",
-        platform: "macos_desktop",
+        platform: normalizeDevicePlatform(signal.platform),
         state: signal.state,
         deviceId: signal.platform,
         isTransition: true,
@@ -103,21 +163,19 @@ export function mapSignalToTelemetryPayload(
     case "connector_activity":
       return {
         family: "message_activity_event",
-        platform: "macos_desktop",
-        channel: "gmail",
-        direction:
-          signal.metadata.direction === "outbound_by_owner"
-            ? "outbound_by_owner"
-            : "inbound",
+        platform: normalizeDevicePlatform(signal.platform),
+        channel: normalizeMessageChannel(
+          readMetadataString(signal.metadata, "channel") ?? signal.platform,
+        ),
+        direction: readMessageDirection(signal.metadata),
         externalMessageId:
-          typeof signal.metadata.externalMessageId === "string"
-            ? signal.metadata.externalMessageId
-            : signal.id,
-        senderHash: "owner",
+          readMetadataString(signal.metadata, "externalMessageId") ?? signal.id,
+        senderHash:
+          readMetadataString(signal.metadata, "senderHash") ??
+          hashTelemetryValue("sender", signal.id),
         conversationHash:
-          typeof signal.metadata.conversationHash === "string"
-            ? signal.metadata.conversationHash
-            : "connector",
+          readMetadataString(signal.metadata, "conversationHash") ??
+          hashTelemetryValue("conversation", signal.platform),
       };
     case "mobile_device":
       return {
@@ -157,6 +215,7 @@ export function buildTelemetryEventFromSignal(
   const reliability = resolveActivitySignalReliability(
     signal.source,
     signal.platform,
+    signal.metadata,
   );
   return {
     id: crypto.randomUUID(),

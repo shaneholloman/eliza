@@ -11,7 +11,7 @@ import { Buffer } from "node:buffer";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 let stateDir: string;
 
@@ -209,6 +209,26 @@ describe("collectReferencedMedia", () => {
     expect(referenced.size).toBe(0);
   });
 
+  it("collects a file referenced only via memory.metadata.audioUrl", () => {
+    const memories = [
+      {
+        // Voice-session transcript knowledge doc: the retained WAV is anchored
+        // by `metadata.audioUrl` (what transcript readers look up) with no
+        // content.attachments entry — it must still be a live referent.
+        content: { text: "Alice: ship the build\nBob: on it" },
+        metadata: {
+          type: "document",
+          source: "transcript",
+          audioUrl: `/api/media/${HASH_A}.wav`,
+        },
+      },
+    ] as unknown as Memory[];
+
+    const referenced = collectReferencedMedia(memories);
+
+    expect(referenced.has(`${HASH_A}.wav`)).toBe(true);
+  });
+
   it("collects an attachment's thumbnailUrl alongside its full-image url", () => {
     // Full image and its downscaled preview are two separate stored files.
     const memories = [
@@ -230,6 +250,56 @@ describe("collectReferencedMedia", () => {
     expect(referenced.has(`${HASH_A}.png`)).toBe(true);
     expect(referenced.has(`${HASH_B}.jpg`)).toBe(true);
     expect(referenced.size).toBe(2);
+  });
+
+  it("collects retained transcript audio referenced only inside content.transcript", () => {
+    const memories = [
+      {
+        content: {
+          text: "voice note",
+          transcript: JSON.stringify({
+            id: "transcript-1",
+            audioUrl: `/api/media/${HASH_A}.wav`,
+          }),
+        },
+        metadata: { source: "transcript" },
+      },
+    ] as unknown as Memory[];
+
+    const referenced = collectReferencedMedia(memories);
+
+    expect(referenced.has(`${HASH_A}.wav`)).toBe(true);
+    expect(referenced.size).toBe(1);
+  });
+
+  it("reports malformed transcript JSON without aborting collection", () => {
+    const diagnostics = {
+      logger: { warn: vi.fn() },
+      reportError: vi.fn(),
+    };
+    const memories = [
+      {
+        id: "transcript-row",
+        content: { transcript: "not-json" },
+        metadata: {
+          source: "transcript",
+          mediaUrl: `/api/media/${HASH_A}.wav`,
+        },
+      },
+    ] as unknown as Memory[];
+
+    const referenced = collectReferencedMedia(memories, diagnostics as never);
+
+    expect(referenced.has(`${HASH_A}.wav`)).toBe(true);
+    expect(diagnostics.logger.warn).toHaveBeenCalledTimes(1);
+    expect(diagnostics.reportError).toHaveBeenCalledWith(
+      "media-gc.transcript-reference",
+      expect.any(SyntaxError),
+      expect.objectContaining({
+        memoryId: "transcript-row",
+        field: "content.transcript",
+      }),
+    );
   });
 });
 
@@ -272,6 +342,143 @@ describe("thumbnail GC protection (data-loss regression)", () => {
     // otherwise the inline preview 404s once GC sweeps the orphaned thumbnail.
     expect(fs.existsSync(mediaPath(full.fileName))).toBe(true);
     expect(fs.existsSync(mediaPath(thumb.fileName))).toBe(true);
+  });
+});
+
+describe("voice-session WAV GC protection (data-loss regression)", () => {
+  function mediaPath(fileName: string): string {
+    return path.join(stateDir, "media", fileName);
+  }
+
+  it("keeps a voice-session WAV referenced only by a transcript document's metadata.audioUrl", () => {
+    // A finished voice session persists its WAV into the media store and
+    // mirrors the transcript into knowledge with `metadata.audioUrl` pointing
+    // at it (plugin-local-inference transcript-knowledge). That document row
+    // is the only reference — there is no content.attachments entry — so the
+    // referenced-set scan must count `audioUrl` or the daily GC deletes the
+    // recording after the grace window (#14806).
+    const wav = persistMediaBytes(
+      Buffer.from("RIFF-voice-session-wav-regression"),
+      "audio/wav",
+    );
+
+    const memories = [
+      {
+        content: { text: "Alice: ship the build\nBob: on it" },
+        metadata: {
+          type: "document",
+          source: "transcript",
+          transcriptId: "t-123",
+          textBacked: true,
+          audioUrl: wav.url,
+        },
+      },
+    ] as unknown as Memory[];
+
+    // Age past the 1h grace window so only the reference set protects it.
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(mediaPath(wav.fileName), old, old);
+
+    gcUnreferencedMedia(collectReferencedMedia(memories));
+
+    expect(fs.existsSync(mediaPath(wav.fileName))).toBe(true);
+  });
+});
+
+describe("MEDIA_GC task end-to-end (real runtime sweep)", () => {
+  function mediaPath(fileName: string): string {
+    return path.join(stateDir, "media", fileName);
+  }
+
+  it("retains transcripts-partition audio through the registered worker and the real getAllMemories sweep", async () => {
+    // Drives the actual production pipe — registered MEDIA_GC worker →
+    // AgentRuntime.getAllMemories partition sweep → collector → store GC —
+    // with only the DB adapter stubbed. This is the path #14751 broke: the
+    // sweep did not include the "transcripts" partition, so the collector
+    // never saw the row and the WAV was deleted after the grace window.
+    const { AgentRuntime } = await import("@elizaos/core");
+    const { registerMediaGcTask } = await import("./media-runtime.ts");
+    type Character = import("@elizaos/core").Character;
+    type IDatabaseAdapter = import("@elizaos/core").IDatabaseAdapter;
+    type Task = import("@elizaos/core").Task;
+
+    const audio = persistMediaBytes(
+      Buffer.from("real-task-path-transcript-audio"),
+      "audio/wav",
+    );
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(mediaPath(audio.fileName), old, old);
+
+    let transcriptRows: Memory[] = [
+      {
+        content: {
+          transcript: JSON.stringify({ id: "t-real", audioUrl: audio.url }),
+        },
+        metadata: { type: "custom", source: "transcript" },
+      } as unknown as Memory,
+    ];
+
+    const runtime = new AgentRuntime({
+      character: { name: "media-gc-task-test" } as Character,
+    });
+    runtime.registerDatabaseAdapter({
+      getMemories: async (params: { tableName: string }) =>
+        params.tableName === "transcripts" ? transcriptRows : [],
+    } as unknown as IDatabaseAdapter);
+
+    registerMediaGcTask(runtime);
+    const worker = runtime.getTaskWorker("MEDIA_GC");
+    expect(worker).toBeDefined();
+
+    await worker?.execute(runtime, {}, undefined as unknown as Task);
+    expect(fs.existsSync(mediaPath(audio.fileName))).toBe(true);
+
+    // Row deleted → next sweep must collect the orphan. If the sweep had
+    // silently failed above (worker catches + warns), this removal assertion
+    // would fail, so the pair cannot pass vacuously.
+    transcriptRows = [];
+    await worker?.execute(runtime, {}, undefined as unknown as Task);
+    expect(fs.existsSync(mediaPath(audio.fileName))).toBe(false);
+  });
+});
+
+describe("transcript audio GC protection (data-loss regression)", () => {
+  function mediaPath(fileName: string): string {
+    return path.join(stateDir, "media", fileName);
+  }
+
+  it("keeps retained transcript audio while the transcript row references it", () => {
+    const audio = persistMediaBytes(
+      Buffer.from("retained-transcript-audio-regression"),
+      "audio/wav",
+    );
+    const memories = [
+      {
+        content: {
+          text: "meeting transcript",
+          transcript: JSON.stringify({
+            id: "transcript-with-audio",
+            audioUrl: audio.url,
+          }),
+        },
+        metadata: { source: "transcript" },
+      },
+    ] as unknown as Memory[];
+
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(mediaPath(audio.fileName), old, old);
+
+    const referencedResult = gcUnreferencedMedia(
+      collectReferencedMedia(memories),
+    );
+
+    expect(fs.existsSync(mediaPath(audio.fileName))).toBe(true);
+    expect(referencedResult.scanned).toBeGreaterThanOrEqual(1);
+
+    const orphanResult = gcUnreferencedMedia(collectReferencedMedia([]));
+
+    expect(fs.existsSync(mediaPath(audio.fileName))).toBe(false);
+    expect(orphanResult.removed).toBeGreaterThanOrEqual(1);
   });
 });
 

@@ -55,9 +55,8 @@ export interface ViewRegistryEntry {
    */
   bundleUrl?: string;
   /**
-   * HTML document URL used for `surface.isolation: "sandboxed-iframe"` views.
-   * This is intentionally separate from `bundleUrl`; JavaScript bundles are not
-   * valid iframe documents.
+   * URL of a complete HTML document for `surface.isolation: "sandboxed-iframe"`
+   * views. This is mounted as an iframe `src`; it is not imported as JS.
    */
   frameUrl?: string;
   /** Named export inside the bundle to mount. Defaults to "default". */
@@ -268,7 +267,6 @@ const TAB_ICON_NAMES: Partial<Record<BuiltinTab, string>> = {
   database: "Database",
   desktop: "Monitor",
   settings: "Settings",
-  tutorial: "Sparkles",
   logs: "ScrollText",
   background: "ImageIcon",
 };

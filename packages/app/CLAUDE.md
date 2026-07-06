@@ -75,6 +75,9 @@ All scripts from this package's `package.json`:
 
 ```bash
 bun run --cwd packages/app dev                        # Vite dev server (renderer only; UI port from ELIZA_UI_PORT, default 2138)
+bun run --cwd packages/app dev:shared                 # Shared long-lived Vite server on deterministic worktree port
+bun run --cwd packages/app dev:status                 # List running shared dev servers (port, worktree, pid)
+bun run --cwd packages/app dev:rebuild                # Trigger explicit Vite full reload for this worktree
 bun run --cwd packages/app build                      # Full app build (scripts/build.mjs)
 bun run --cwd packages/app build:web                  # Vite build only (no capacitor sync)
 bun run --cwd packages/app plugin:build               # Plugin-only build
@@ -84,7 +87,8 @@ bun run --cwd packages/app typecheck                  # tsc --noEmit
 bun run --cwd packages/app test                       # Vitest unit tests
 bun run --cwd packages/app test:watch                 # Vitest watch mode
 bun run --cwd packages/app test:e2e                   # Playwright UI smoke (ui-smoke config)
-bun run --cwd packages/app audit:app                  # All-views visual audit + manual-review stubs
+bun run --cwd packages/app audit:app                  # All-views visual audit + required packaged OCR triage
+bun run --cwd packages/app audit:app:capture          # Raw screenshot capture + manual-review stubs only
 bun run --cwd packages/app test:dev-smoke             # Playwright dev-smoke config
 bun run --cwd packages/app test:hmr                   # HMR smoke tests
 
@@ -120,7 +124,7 @@ bun run --cwd packages/app install:android:adb
 ### iOS device automation (one command each — no Xcode UI, no manual signing)
 
 Agent-drivable pipeline for physical-device work (codifies the proven #11030
-device-boot recipe in `.github/issue-evidence/11030-ios-boot-fix/device-boot-README.md`).
+device-boot recipe).
 Device id comes from `--device <devicectl-id|udid|name>` or `ELIZA_IOS_DEVICE_ID`.
 Lane phones must stay on power with Settings > Display & Brightness > Auto-Lock
 set to Never. The device scripts probe `devicectl device info lockState` before
@@ -277,10 +281,10 @@ bun run --cwd packages/app test:e2e
 - **`predev` / `prebuild` hooks.** Both run `sync-to-public.mjs` to copy shared brand assets (logos, favicons, concepts, banners, backgrounds) into `public/` before Vite starts. Do not delete assets from `public/` manually; re-run the hook instead.
 - See root `AGENTS.md` for architecture rules, naming conventions, and commit workflow.
 
-<!-- BEGIN: evidence-and-e2e-mandate (managed; canonical standard = repo-root PR_EVIDENCE.md) -->
+<!-- BEGIN: evidence-and-e2e-mandate (managed; canonical standard = repo-root AGENTS.md) -->
 ## ⛔ NON-NEGOTIABLE — evidence, trajectories & real end-to-end tests
 
-> The binding, repo-wide standard is **[PR_EVIDENCE.md](../../PR_EVIDENCE.md)**. Read it.
+> The binding, repo-wide standard is **[AGENTS.md](../../AGENTS.md)**. Read it.
 > Nothing in this package is *done* until it is *proven* done — a reviewer must confirm it
 > works **without reading the code**, from the artifacts you attach. This applies to **every**
 > feature, fix, refactor, and chore here. "Tests pass" is not proof; "CI is green" is not proof.
@@ -308,7 +312,7 @@ bun run --cwd packages/app test:e2e
   "follow-up." When unsure, research thoroughly, weigh the options, and ship the best,
   highest-effort, production-ready version. Keep going until every possibility is exhausted.
 
-Artifacts → `.github/issue-evidence/<issue#>-<slug>.<ext>`; attach each evidence type **or**
+Artifacts → attached inline in the PR (MP4 video, JPG screenshots, logs in `<details>`); attach each evidence type **or**
 explicitly mark it N/A with a reason — never leave it blank. If `develop` moved and changed
 behavior, **re-capture** evidence; stale proof is worse than none.
 

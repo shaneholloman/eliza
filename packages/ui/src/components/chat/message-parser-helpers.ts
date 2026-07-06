@@ -90,6 +90,7 @@ export const FENCED_CODE_RE = /```([^\n`]*)\n([\s\S]*?)```/g;
  * must be non-empty so a stray pair of backticks isn't lifted out.
  */
 export const INLINE_CODE_RE = /`([^`\n]+)`/g;
+export const FORM_SUBMIT_DISPLAY_RE = /^\[form:submit\s+([^\]\s]+)\]/;
 
 export const HIDDEN_TAG_BLOCK_RE =
   /<(think|analysis|reasoning|tool_calls?|tools?)\b[^>]*>[\s\S]*?(?:<\/\1>|$)/gi;
@@ -119,6 +120,27 @@ export function normalizeDisplayText(text: string): string {
 
   normalized = stripAssistantStageDirections(normalized);
   return normalized.trim();
+}
+
+export interface FormSubmitDisplay {
+  formId: string;
+  label: string;
+}
+
+export function humanizeFormSubmitId(formId: string): string {
+  return formId.replace(/[-_]+/g, " ").trim() || "form";
+}
+
+/**
+ * User form submissions are transport commands stored in the transcript so the
+ * agent can consume them. Display surfaces render a receipt instead of echoing
+ * the protocol marker or submitted values back to the user.
+ */
+export function parseFormSubmitDisplay(text: string): FormSubmitDisplay | null {
+  const match = FORM_SUBMIT_DISPLAY_RE.exec(text.trimStart());
+  if (!match) return null;
+  const formId = match[1];
+  return { formId, label: humanizeFormSubmitId(formId) };
 }
 
 export function tryParse(s: string): unknown {
@@ -570,6 +592,21 @@ export function buildInlinePluginConfigModel(
   if (plugin.configUiHints) {
     for (const [key, serverHint] of Object.entries(plugin.configUiHints)) {
       auto.hints[key] = { ...auto.hints[key], ...serverHint };
+    }
+  }
+
+  // Progressive disclosure for the in-chat setup card (#14412): when the
+  // plugin declares required params, those are the minimal setup set — every
+  // optional param moves behind ConfigRenderer's existing Advanced disclosure.
+  // The schema's own `required` flag is the minimal-vs-advanced signal; a
+  // server-provided `advanced: false` hint explicitly pins an optional field
+  // in the minimal set. Plugins with no required params keep the heuristic
+  // split from paramsToSchema (an all-Advanced card would render empty).
+  if (pluginParams.some((p) => p.required)) {
+    for (const param of pluginParams) {
+      if (param.required) continue;
+      if (plugin.configUiHints?.[param.key]?.advanced === false) continue;
+      auto.hints[param.key] = { ...auto.hints[param.key], advanced: true };
     }
   }
 

@@ -40,6 +40,20 @@ function renderSlot(
 		});
 	}
 	if (lines.length === 0) return null;
+	const inferredTraits = Object.entries(slot.trait_sources)
+		.filter(([, source]) => source === "agent_inferred")
+		.map(([trait]) => trait);
+	if (inferredTraits.length > 0 || slot.source === "agent_inferred") {
+		// Name the inferred traits when per-trait provenance identifies them
+		// (directive-only inference falls back to a blanket note). The model
+		// should treat inferred style as an observation it can explain and
+		// offer to undo, not a user order.
+		const what =
+			inferredTraits.length > 0 ? inferredTraits.join(", ") : "some of these";
+		lines.push(
+			`- provenance: ${what} inferred from conversation, not explicitly set; offer to adjust if the user objects`,
+		);
+	}
 	return [header, ...lines, footer].join("\n");
 }
 

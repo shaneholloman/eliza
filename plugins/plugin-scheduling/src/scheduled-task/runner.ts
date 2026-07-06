@@ -25,7 +25,11 @@ import type {
   AnchorRegistry,
   ConsolidationRegistry,
 } from "./consolidation-policy.js";
-import { isScheduledTaskDue } from "./due.js";
+import {
+  isScheduledTaskDue,
+  pendingPromptRoomIdForTask,
+  type ScheduledTaskDueDecision,
+} from "./due.js";
 import {
   type EscalationLadderRegistry,
   resetLadderForSnooze,
@@ -283,6 +287,13 @@ export interface ScheduledTaskRunnerDeps {
    * module to keep the spine free of channel-layer dependencies.
    */
   channelKeys?: () => ReadonlySet<string>;
+  /**
+   * Optional live availability probe used while advancing a ladder after a
+   * typed dispatch failure. Hosts that know connector status can skip
+   * disconnected connector-backed channels before parking the next attempt,
+   * so escalation cannot target an unavailable transport by construction.
+   */
+  channelAvailable?: (channelKey: string) => boolean | Promise<boolean>;
   /**
    * Returns the set of `TaskExecutionProfile` values the current host can
    * actually run. The runner consults this AFTER the atomic fire-claim but
@@ -545,6 +556,32 @@ export interface ScheduledTaskRunnerExtras {
    * `null` when the task is not found or has no cursor recorded yet.
    */
   getEscalationCursor(taskId: string): Promise<EscalationCursorView | null>;
+  /**
+   * Project the next wall-clock fire instant for a task, honoring the same
+   * scheduled-override and recurrence rules the runner uses to index
+   * `next_fire_at`. Returns `null` for triggers with no wall-clock time
+   * (`event`/`manual`/`after_task`) or settled non-recurring rows.
+   *
+   * Exposed so consumers that need a due-window view (e.g. the
+   * `SCHEDULED_TASKS` action's "overdue"/"today" list filter) share the one
+   * next-fire computation instead of re-deriving it and drifting from the
+   * indexed value the tick relies on.
+   */
+  resolveNextFireAt(task: ScheduledTask): Promise<string | null>;
+  /**
+   * Evaluate whether a task is due at the runner's current clock, using the
+   * same owner-facts and anchor dependencies as the scheduler tick. Consumers
+   * that present due-window views need this before a future next-fire
+   * projection, otherwise a missed recurring occurrence can be hidden by the
+   * next natural occurrence.
+   */
+  resolveDueDecision(task: ScheduledTask): Promise<ScheduledTaskDueDecision>;
+  /**
+   * Return the owner facts the runner uses for trigger/gate evaluation. This is
+   * exposed for read-only views that must apply the same owner-local timezone
+   * boundary as the scheduler without reaching behind the runner deps port.
+   */
+  resolveOwnerFacts(): Promise<OwnerFactsView>;
 }
 
 export interface ScheduledTaskRunnerHandle
@@ -677,6 +714,21 @@ export function createScheduledTaskRunner(
       ownerFacts,
       anchors: deps.anchors,
     });
+  }
+
+  async function resolveDueDecision(
+    task: ScheduledTask,
+  ): Promise<ScheduledTaskDueDecision> {
+    const ownerFacts = await deps.ownerFacts();
+    return isScheduledTaskDue(task, {
+      now: now(),
+      ownerFacts,
+      anchors: deps.anchors,
+    });
+  }
+
+  async function resolveOwnerFacts(): Promise<OwnerFactsView> {
+    return deps.ownerFacts();
   }
 
   async function schedule(
@@ -1408,13 +1460,35 @@ export function createScheduledTaskRunner(
           fireAtIso,
         });
       }
+      const pendingPromptRoomId = claimed.completionCheck
+        ? pendingPromptRoomIdForTask(claimed, {
+            agentId: deps.agentId,
+            channelKey: dispatchResult.channelKey ?? dispatchChannelKey,
+            target: dispatchResult.target,
+          })
+        : null;
+      if (pendingPromptRoomId) {
+        claimed.metadata.pendingPromptRoomId = pendingPromptRoomId;
+      }
       clearPendingDispatch(claimed);
       await persist(claimed);
-    } else if (pending) {
+    } else {
       // Void dispatchers (e.g. notify-only event emitters) report no typed
       // result; a completed call is success, so drop the continuation.
-      clearPendingDispatch(claimed);
-      await persist(claimed);
+      const pendingPromptRoomId = claimed.completionCheck
+        ? pendingPromptRoomIdForTask(claimed, {
+            agentId: deps.agentId,
+            channelKey: dispatchChannelKey,
+          })
+        : null;
+      if (pendingPromptRoomId) {
+        claimed.metadata = {
+          ...(claimed.metadata ?? {}),
+          pendingPromptRoomId,
+        };
+      }
+      if (pending) clearPendingDispatch(claimed);
+      if (pending || pendingPromptRoomId) await persist(claimed);
     }
     return { kind: "fired", task: claimed };
   }
@@ -1500,11 +1574,14 @@ export function createScheduledTaskRunner(
       }
       case "advance":
       case "surface_degraded": {
-        const nextLadderIndex = ladderIndex + 1;
-        const nextStep = ladder.steps[nextLadderIndex];
-        if (!nextStep) {
+        const next = await findNextAvailableLadderStep(ladder, ladderIndex + 1);
+        if (!next) {
+          if (decision.kind === "surface_degraded") {
+            recordConnectorDegradation(task, decision, fireAtIso);
+          }
           return failTerminal(task, decision.reason, decision.message);
         }
+        const { nextLadderIndex, nextStep } = next;
         const nextAttemptAtIso = new Date(
           Date.parse(fireAtIso) + nextStep.delayMinutes * 60_000,
         ).toISOString();
@@ -1513,14 +1590,7 @@ export function createScheduledTaskRunner(
         task.state.lastDecisionLog = `dispatch advanced to ladder step ${nextLadderIndex} (${nextStep.channelKey}) after ${decision.reason}`;
         setPendingDispatch(task, { stepIndex: nextLadderIndex, attempt: 0 });
         if (decision.kind === "surface_degraded") {
-          task.metadata = {
-            ...(task.metadata ?? {}),
-            connectorDegradation: {
-              reason: decision.reason,
-              message: decision.message,
-              atIso: fireAtIso,
-            },
-          };
+          recordConnectorDegradation(task, decision, fireAtIso);
         }
         await persist(task);
         await logger.log(task.taskId, "escalated", {
@@ -1546,6 +1616,41 @@ export function createScheduledTaskRunner(
         throw new Error("applyDispatchPolicy: unreachable");
       }
     }
+  }
+
+  async function findNextAvailableLadderStep(
+    ladder: ReturnType<typeof resolveEffectiveLadder>,
+    startIndex: number,
+  ): Promise<{
+    nextLadderIndex: number;
+    nextStep: (typeof ladder.steps)[number];
+  } | null> {
+    for (let i = startIndex; i < ladder.steps.length; i++) {
+      const step = ladder.steps[i];
+      if (!step) continue;
+      if (
+        !deps.channelAvailable ||
+        (await deps.channelAvailable(step.channelKey))
+      ) {
+        return { nextLadderIndex: i, nextStep: step };
+      }
+    }
+    return null;
+  }
+
+  function recordConnectorDegradation(
+    task: ScheduledTask,
+    decision: { kind: "surface_degraded"; reason: string; message?: string },
+    fireAtIso: string,
+  ): void {
+    task.metadata = {
+      ...(task.metadata ?? {}),
+      connectorDegradation: {
+        reason: decision.reason,
+        message: decision.message,
+        atIso: fireAtIso,
+      },
+    };
   }
 
   async function failTerminal(
@@ -1685,5 +1790,8 @@ export function createScheduledTaskRunner(
     rolloverStateLog,
     inspectRegistries,
     getEscalationCursor,
+    resolveNextFireAt,
+    resolveDueDecision,
+    resolveOwnerFacts,
   };
 }

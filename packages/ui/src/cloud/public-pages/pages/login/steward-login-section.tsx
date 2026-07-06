@@ -5,15 +5,18 @@
  * (Google / Discord / GitHub), plus the post-redirect OAuth `code` / `#token`
  * consumption + cookie sync.
  *
- * Wallet (SIWE / SIWS) sign-in is intentionally absent: it pulls
- * `@rainbow-me/rainbowkit` + `@solana/*` + `wagmi`, which are not dependencies
- * of `@elizaos/ui`. The wallet branch is gated off (`showWallets` is forced
- * false); email/passkey/OAuth cover the primary sign-in paths.
+ * Wallet (SIWE / SIWS) sign-in is the bounded port of the wallet UI from
+ * `cloud-frontend@4056e0e868` (nubs's call, 2026-07-06): gated on the live
+ * `auth.getProviders()` flags, rendered by `wallet-buttons.tsx` inside the
+ * billing crypto top-up's `StewardWalletProviders` contexts. Both pieces are
+ * React.lazy + mounted only on wallet intent, so wagmi/rainbowkit/@solana stay
+ * out of the login bundle until a wallet button is clicked.
  */
 
 import {
   hasStewardAuthedCookie,
   readStoredStewardToken,
+  StewardSessionError,
   writeStoredStewardToken,
 } from "@elizaos/shared/steward-session-client";
 import type {
@@ -23,7 +26,7 @@ import type {
 } from "@stwd/sdk";
 import { StewardAuth } from "@stwd/sdk";
 import { AlertCircle } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   Navigate,
   useLocation,
@@ -99,7 +102,26 @@ type Provider =
   | "google"
   | "discord"
   | "github"
-  | "twitter";
+  | "twitter"
+  | "ethereum"
+  | "solana";
+
+type WalletKind = "ethereum" | "solana";
+
+// Wallet libs (wagmi / rainbowkit / @solana) are heavy; both pieces load only
+// when the user expresses wallet intent (see `walletButtonsMounted`).
+const StewardWalletProviders = lazy(() =>
+  import("../../../billing/wallet/steward-wallet-providers").then((m) => ({
+    default: m.StewardWalletProviders,
+  })),
+);
+const WalletButtons = lazy(() =>
+  import("./wallet-buttons").then((m) => ({ default: m.WalletButtons })),
+);
+
+function hasAnyWalletProvider(providers: StewardProviders): boolean {
+  return Boolean(providers.siwe || providers.siws);
+}
 
 const DEFAULT_PROVIDERS: StewardProviders = {
   passkey: true,
@@ -122,6 +144,28 @@ function requireCompletedAuth(
     throw new Error("MFA required — not yet supported in this client.");
   }
   return result;
+}
+
+/**
+ * Message for a failed one-time-code exchange. A 401/403/410 from
+ * `steward-nonce-exchange` means the code was rejected — expired, already
+ * consumed, or issued for a different tenant (e.g. a prod code replayed against
+ * staging). That is benign and recoverable: the working sign-in form renders
+ * underneath, so we say "sign in again" instead of surfacing the raw upstream
+ * error, which read as a broken login. Genuine faults (5xx/network) still show
+ * their real message.
+ */
+function describeCodeExchangeError(error: unknown, t: LoginTranslator): string {
+  if (
+    error instanceof StewardSessionError &&
+    (error.status === 401 || error.status === 403 || error.status === 410)
+  ) {
+    return t("cloud.login.callback.codeRejected", {
+      defaultValue:
+        "That sign-in link expired or was already used. Please sign in again below.",
+    });
+  }
+  return getErrorMessage(error, "Could not complete Eliza Cloud sign-in.");
 }
 
 function getCallbackReasonMessage(
@@ -223,6 +267,12 @@ export default function StewardLoginSection() {
   const [step, setStep] = useState<AuthStep>("idle");
   const [loading, setLoading] = useState<Provider | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Wallet libs mount only on intent: the first wallet-button click renders
+  // the (lazy) providers + buttons and auto-starts that wallet's flow.
+  const [walletButtonsMounted, setWalletButtonsMounted] = useState(false);
+  const [autoStartWallet, setAutoStartWallet] = useState<WalletKind | null>(
+    null,
+  );
   const [callbackError, setCallbackError] = useState<string | null>(null);
   const [redirectTo, setRedirectTo] = useState<string | null>(null);
   // Detected once, synchronously, BEFORE the callback-consuming effect below
@@ -244,6 +294,7 @@ export default function StewardLoginSection() {
   const hasOAuthProviders = Boolean(
     providers.google || providers.discord || providers.github,
   );
+  const showWallets = hasAnyWalletProvider(providers);
 
   useEffect(() => {
     if (PLAYWRIGHT_TEST_AUTH_ENABLED) {
@@ -291,12 +342,7 @@ export default function StewardLoginSection() {
         })
         .catch((sessionError) => {
           setCompletingCallback(false);
-          setCallbackError(
-            getErrorMessage(
-              sessionError,
-              "Could not complete Eliza Cloud sign-in.",
-            ),
-          );
+          setCallbackError(describeCodeExchangeError(sessionError, t));
         });
       return;
     }
@@ -333,7 +379,7 @@ export default function StewardLoginSection() {
           getErrorMessage(sessionError, "Could not establish a local session"),
         );
       });
-  }, [searchParams]);
+  }, [searchParams, t]);
 
   useEffect(() => {
     if (PLAYWRIGHT_TEST_AUTH_ENABLED) return;
@@ -530,6 +576,14 @@ export default function StewardLoginSection() {
       oauthOrigin,
       { stewardApiUrl, stewardTenantId: STEWARD_TENANT_ID, codeChallenge },
     );
+  }
+
+  // First wallet click: mount the lazy wallet stack and remember which chain
+  // to auto-start once it's up, so the user doesn't have to click twice.
+  function handleWalletIntent(kind: WalletKind) {
+    setError(null);
+    setWalletButtonsMounted(true);
+    setAutoStartWallet(kind);
   }
 
   if (redirectTo) {
@@ -821,6 +875,83 @@ export default function StewardLoginSection() {
             </Button>
           )}
         </div>
+      )}
+
+      {showWallets && (
+        <>
+          <div className="flex items-center gap-3">
+            <div className="h-px flex-1 bg-border" />
+            <span className="text-xs text-muted">
+              {t("cloud.login.orSignInWallet", {
+                defaultValue: "or sign in with a wallet",
+              })}
+            </span>
+            <div className="h-px flex-1 bg-border" />
+          </div>
+
+          {walletButtonsMounted ? (
+            <Suspense
+              fallback={
+                <div className="flex min-h-touch items-center justify-center py-2.5">
+                  <Spinner />
+                </div>
+              }
+            >
+              <StewardWalletProviders>
+                <WalletButtons
+                  auth={auth}
+                  autoStart={autoStartWallet}
+                  disabled={isLoading}
+                  loadingProvider={
+                    loading === "ethereum" || loading === "solana"
+                      ? (loading as WalletKind)
+                      : null
+                  }
+                  onAutoStartHandled={() => setAutoStartWallet(null)}
+                  onLoadingChange={(kind) => setLoading(kind)}
+                  onSuccess={(result) =>
+                    handleSuccess(result.token, result.refreshToken)
+                  }
+                  onError={(walletError) => {
+                    setError(
+                      walletError.message ||
+                        t("cloud.login.error.walletFailed", {
+                          defaultValue: "Wallet sign-in failed",
+                        }),
+                    );
+                  }}
+                />
+              </StewardWalletProviders>
+            </Suspense>
+          ) : (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {providers.siwe && (
+                <Button
+                  variant="ghost"
+                  type="button"
+                  onClick={() => handleWalletIntent("ethereum")}
+                  disabled={isLoading}
+                  className="flex min-h-touch items-center justify-center gap-2 rounded-md border border-border-strong bg-bg-elevated px-4 py-2.5 text-sm font-semibold text-txt transition-[background-color,border-color,transform] hover:border-border-hover hover:bg-bg-hover active:scale-[0.99] disabled:pointer-events-none disabled:opacity-50"
+                >
+                  {t("cloud.login.wallet.evm", { defaultValue: "EVM wallet" })}
+                </Button>
+              )}
+              {providers.siws && (
+                <Button
+                  variant="ghost"
+                  type="button"
+                  onClick={() => handleWalletIntent("solana")}
+                  disabled={isLoading}
+                  className="flex min-h-touch items-center justify-center gap-2 rounded-md border border-border-strong bg-bg-elevated px-4 py-2.5 text-sm font-semibold text-txt transition-[background-color,border-color,transform] hover:border-border-hover hover:bg-bg-hover active:scale-[0.99] disabled:pointer-events-none disabled:opacity-50"
+                >
+                  {t("cloud.login.wallet.solana", {
+                    defaultValue: "Solana wallet",
+                  })}
+                </Button>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       {error && (

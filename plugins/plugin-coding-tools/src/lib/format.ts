@@ -36,6 +36,24 @@ export function successActionResult(
   };
 }
 
+/**
+ * A success result whose `text` is ALSO marked user-facing. Use only for
+ * mutation confirmations whose text is a clean, user-safe one-liner
+ * ("Wrote N bytes to <path>", "Replaced N occurrences in <path>") — never for
+ * log-shaped output (reads, grep, ls, shell). The planner-loop relays
+ * `userFacingText` verbatim when the post-tool evaluator model call fails, so
+ * the completed write is reported truthfully instead of as a generic failure;
+ * it never guesses the diagnostic `text` of a log-emitting tool into that
+ * channel. `verifiedUserFacing` is deliberately left unset so an explicit
+ * evaluator `messageToUser` still outranks this on the happy path.
+ */
+export function userFacingSuccessResult(
+  text: string,
+  data?: Record<string, unknown>,
+): ActionResult {
+  return { ...successActionResult(text, data), userFacingText: text };
+}
+
 export function readParam<T = unknown>(
   options: unknown,
   name: string,

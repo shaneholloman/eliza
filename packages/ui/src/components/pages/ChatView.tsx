@@ -35,6 +35,7 @@ import { useChatAvatarVoiceBridge } from "../../hooks/useChatAvatarVoiceBridge";
 import { useConnectorSendAsAccount } from "../../hooks/useConnectorSendAsAccount";
 import { useIntervalWhenDocumentVisible } from "../../hooks/useDocumentVisibility";
 import { useLoadOlderOnScroll } from "../../hooks/useLoadOlderOnScroll";
+import { useViewEvent } from "../../hooks/useViewEvent";
 import { claimAssistantLaunchPayloadFromHash } from "../../platform/assistant-launch-payload";
 import {
   CodingAgentControlChip,
@@ -58,7 +59,14 @@ import {
   intakeAttachmentFiles,
   MAX_CHAT_IMAGES,
 } from "../../utils/image-attachment";
-import type { VoiceContinuousMode } from "../../voice/voice-chat-types";
+import {
+  VOICE_SETTINGS_APPLY_EVENT,
+  type VoiceSettingsApplyPayload,
+} from "../../voice/useVoiceSettingsApplyChannel";
+import {
+  VOICE_CONTINUOUS_MODES,
+  type VoiceContinuousMode,
+} from "../../voice/voice-chat-types";
 import { AccountRequiredCard } from "../chat/AccountRequiredCard";
 import { AgentActivityBox } from "../chat/AgentActivityBox";
 import { ConnectorAccountPicker } from "../chat/ConnectorAccountPicker";
@@ -75,6 +83,8 @@ import { ChatAttachmentStrip } from "../composites/chat/chat-attachment-strip";
 import { ChatComposer } from "../composites/chat/chat-composer";
 import { ChatComposerShell } from "../composites/chat/chat-composer-shell";
 import { ChatEmptyState } from "../composites/chat/chat-empty-state";
+import { buildReplyTargetFromMessage } from "../composites/chat/chat-message";
+import { ChatReplyPill } from "../composites/chat/chat-reply-pill";
 import { ChatSourceIcon } from "../composites/chat/chat-source";
 import { ChatThreadLayout } from "../composites/chat/chat-thread-layout";
 import { ChatTranscript } from "../composites/chat/chat-transcript";
@@ -93,6 +103,13 @@ const CHAT_INPUT_MAX_HEIGHT_PX = 200;
 const TYPING_INDICATOR_STALL_MS = 30_000;
 const fallbackTranslate: TranslateFn = (key, options) =>
   typeof options?.defaultValue === "string" ? options.defaultValue : key;
+
+function readAppliedContinuousMode(value: unknown): VoiceContinuousMode | null {
+  return typeof value === "string" &&
+    VOICE_CONTINUOUS_MODES.includes(value as VoiceContinuousMode)
+    ? (value as VoiceContinuousMode)
+    : null;
+}
 
 type ChatViewVariant = "default" | "game-modal";
 type InboxChatSelection = {
@@ -232,8 +249,10 @@ export function ChatView({
     chatInput: rawChatInput,
     chatSending,
     chatPendingImages: rawChatPendingImages,
+    chatReplyTarget,
     setChatInput,
     setChatPendingImages,
+    setChatReplyTarget,
   } = useChatComposer();
   const droppedFiles = Array.isArray(rawDroppedFiles) ? rawDroppedFiles : [];
   const chatInput = typeof rawChatInput === "string" ? rawChatInput : "";
@@ -283,6 +302,11 @@ export function ChatView({
   const [typingStalled, setTypingStalled] = useState(false);
   const [continuousChatMode, setContinuousChatMode] =
     useState<VoiceContinuousMode>(loadContinuousChatMode);
+  useViewEvent(VOICE_SETTINGS_APPLY_EVENT, (event) => {
+    const payload = event.payload as VoiceSettingsApplyPayload;
+    const continuous = readAppliedContinuousMode(payload.continuous);
+    if (continuous) setContinuousChatMode(continuous);
+  });
   const handleContinuousChatModeChange = useCallback(
     (next: VoiceContinuousMode) => {
       setContinuousChatMode(next);
@@ -731,6 +755,16 @@ export function ChatView({
     },
     [handleChatDelete],
   );
+  // Reply arms the composer: set the shared reply target so the next turn
+  // carries replyToMessageId (→ REPLY_CONTEXT) and the pill renders above the
+  // input. Focus the composer so the user can type the reply immediately.
+  const handleReplyMessage = useCallback(
+    (message: ChatMessageData) => {
+      setChatReplyTarget(buildReplyTargetFromMessage(message, agentName));
+      textareaRef.current?.focus();
+    },
+    [setChatReplyTarget, agentName],
+  );
   const renderChatMessageContent = useCallback(
     (message: ChatMessageData) => (
       <MessageContent
@@ -769,6 +803,7 @@ export function ChatView({
           onSpeak={handleSpeakMessage}
           onCopy={handleCopyMessageText}
           onDelete={handleDeleteMessage}
+          onReply={handleReplyMessage}
           onDismissSuggestion={handleDismissSuggestion}
           onAcceptSuggestion={handleAcceptSuggestion}
           renderMessageContent={renderChatMessageContent}
@@ -907,6 +942,22 @@ export function ChatView({
               />
             </div>
           ) : null}
+          {chatReplyTarget ? (
+            <div className="px-1 pb-1">
+              <ChatReplyPill
+                target={chatReplyTarget}
+                onCancel={() => setChatReplyTarget(null)}
+                labels={{
+                  replyingTo: t("chat.replyingTo", {
+                    defaultValue: "Replying to",
+                  }),
+                  cancelReply: t("chat.cancelReply", {
+                    defaultValue: "Cancel reply",
+                  }),
+                }}
+              />
+            </div>
+          ) : null}
           <AgentActivityBox
             sessions={ptySessions}
             onSessionClick={onPtySessionClick ?? focusTerminalSession}
@@ -963,6 +1014,22 @@ export function ChatView({
                 onChange={handleContinuousChatModeChange}
                 disabled={isComposerLocked}
                 data-testid="chat-view-continuous-chat-toggle"
+              />
+            </div>
+          ) : null}
+          {chatReplyTarget ? (
+            <div className="px-1 pb-1">
+              <ChatReplyPill
+                target={chatReplyTarget}
+                onCancel={() => setChatReplyTarget(null)}
+                labels={{
+                  replyingTo: t("chat.replyingTo", {
+                    defaultValue: "Replying to",
+                  }),
+                  cancelReply: t("chat.cancelReply", {
+                    defaultValue: "Cancel reply",
+                  }),
+                }}
               />
             </div>
           ) : null}

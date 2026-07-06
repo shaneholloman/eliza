@@ -4,7 +4,11 @@
  * Pure-function assertions.
  */
 import type { Content } from "@elizaos/core";
-import { decodeCallback } from "@elizaos/core";
+import {
+	buildInteractionUrlResolver,
+	decodeCallback,
+	FORM_FREE_TEXT_INVITE,
+} from "@elizaos/core";
 import { describe, expect, it } from "vitest";
 import { renderDiscordInteractions } from "../interactions";
 
@@ -36,6 +40,24 @@ describe("renderDiscordInteractions", () => {
 		});
 	});
 
+	it("uses Discord's 100-byte custom_id budget for longer callback values", () => {
+		const value = "x".repeat(74);
+		const content: Content = {
+			text: `Approve?\n[CHOICE:approve id=c1]\n${value}=Long callback\n[/CHOICE]`,
+		};
+
+		const out = renderDiscordInteractions(content);
+		expect(out.needsFreeTextReply).toBe(false);
+		expect(out.components).toHaveLength(1);
+		const button = out.components[0]?.components[0];
+		expect(button?.label).toBe("Long callback");
+		expect(button?.custom_id.length).toBe(78);
+		expect(decodeCallback(button?.custom_id)).toEqual({
+			kind: "reply",
+			value,
+		});
+	});
+
 	it("renders a task card as a link button when a url resolver is provided", () => {
 		const id = "abc12345-def6-7890-abcd-ef1234567890";
 		const out = renderDiscordInteractions(
@@ -64,6 +86,43 @@ describe("renderDiscordInteractions", () => {
 		expect(out.components.length).toBeLessThanOrEqual(5);
 	});
 
+	// #14527 — Discord's 5-row cap truncates overflow, but the dropped options
+	// must surface as prose + a free-text invite, never disappear silently.
+	it("surfaces options dropped past the 5-row cap as prose (#14527)", () => {
+		const options = Array.from(
+			{ length: 30 },
+			(_, i) => `o${i}=Option ${i}`,
+		).join("\n");
+		const out = renderDiscordInteractions({
+			text: `Pick one\n[CHOICE:s id=c]\n${options}\n[/CHOICE]`,
+		} as Content);
+		// 5 rows x 5 buttons render natively; options 25-29 overflow to prose.
+		expect(out.components).toHaveLength(5);
+		expect(out.needsFreeTextReply).toBe(true);
+		expect(out.text).toContain("More options (reply with one):");
+		for (let i = 25; i < 30; i++) {
+			expect(out.text).toContain(`Option ${i}`);
+		}
+		expect(out.text).not.toContain("Option 24");
+	});
+
+	// #14527 — Discord's custom_id budget is 100 chars, not Telegram's 64
+	// bytes. A value that fits Discord's own cap must render as a real button
+	// and round-trip through the callback decoder.
+	it("renders option values up to Discord's 100-char custom_id cap (#14527)", () => {
+		const value = "v".repeat(80);
+		const out = renderDiscordInteractions({
+			text: `Pick\n[CHOICE:s id=c1]\n${value}=Long option\n[/CHOICE]`,
+		} as Content);
+		const button = out.components[0]?.components[0];
+		expect(button?.label).toBe("Long option");
+		expect(decodeCallback(button?.custom_id)).toEqual({
+			kind: "reply",
+			value,
+		});
+		expect(out.needsFreeTextReply).toBe(false);
+	});
+
 	it("renders a navigate followup as a link button via resolveNavigateUrl (#8908)", () => {
 		const out = renderDiscordInteractions(
 			{
@@ -78,5 +137,20 @@ describe("renderDiscordInteractions", () => {
 		expect(nav?.url).toBe("https://app.test/orchestrator");
 		expect(reply?.url).toBeUndefined();
 		expect(reply?.custom_id).toBeTruthy();
+	});
+	// #14321 — no hosted /forms/:id page exists; the canonical resolver must not
+	// mint a dead link-out. The form renders as prose + a free-text invite.
+	it("renders a form as prose + free-text fallback, never a dead link (#14321)", () => {
+		const out = renderDiscordInteractions(
+			{
+				text: 'Happy to set that up.\n[FORM]\n{"id":"f1","title":"Set your reminder","fields":[{"name":"when","type":"text"}]}\n[/FORM]',
+			} as Content,
+			buildInteractionUrlResolver("https://app.test"),
+		);
+		expect(out.components).toHaveLength(0);
+		expect(out.needsFreeTextReply).toBe(true);
+		expect(out.text).toContain("Set your reminder");
+		expect(out.text).toContain(FORM_FREE_TEXT_INVITE);
+		expect(out.text).not.toContain("/forms/");
 	});
 });

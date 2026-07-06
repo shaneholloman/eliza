@@ -9,7 +9,14 @@
  */
 
 import crypto from "node:crypto";
-import { createLocalAgentBackup, getAgentEventService } from "@elizaos/agent";
+import {
+  createLocalAgentBackup,
+  getAgentEventService,
+  loadOwnerContactRoutingHints,
+  loadOwnerContactsConfig,
+  resolveOwnerContactWithFallback,
+  resolveOwnerEntityId,
+} from "@elizaos/agent";
 import { getHostExecutionCapabilities } from "@elizaos/app-core/services/task-host-capabilities";
 import { type IAgentRuntime, logger, ServiceType } from "@elizaos/core";
 import type {
@@ -42,13 +49,17 @@ import {
   registerDefaultEscalationLadders,
   registerFallbackAnchors,
   registerScheduledTaskRunnerDeps,
+  renderFailureDispatchResult,
+  renderScheduledDispatchMessage,
   type ScheduledTaskRunnerDepsBundle,
   type ScheduledTaskRunnerHandle,
   type ScheduledTaskStore,
 } from "@elizaos/plugin-scheduling";
+import { assembleMorningBrief } from "../../default-packs/morning-brief.js";
 import { getChannelRegistry } from "../channels/index.js";
 import type { DispatchResult } from "../connectors/contract.js";
 import { decideDispatchPolicy } from "../connectors/dispatch-policy.js";
+import { getConnectorRegistry } from "../connectors/registry.js";
 import { resolveDefaultTimeZone } from "../defaults.js";
 import { resolveGlobalPauseStore } from "../global-pause/store.js";
 import {
@@ -65,6 +76,7 @@ import {
   readActivityProfile,
   registerActivityProfileGates,
 } from "./activity-gates.js";
+import { registerModelMomentCheckGate } from "./moment-judge.js";
 import { createLifeOpsSubjectStoreView } from "./subject-store.js";
 
 interface RepositoryBackedStores {
@@ -295,12 +307,152 @@ function getNotifier(runtime: IAgentRuntime): NotificationEmitter | null {
   return svc && typeof svc.notify === "function" ? svc : null;
 }
 
+function metadataString(
+  metadata: ScheduledTaskDispatchRecord["metadata"],
+  key: string,
+): string | null {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+/**
+ * Compose the owner-facing message for one dispatch. `promptInstructions` is a
+ * model prompt, never user-facing copy, so there are exactly two composition
+ * paths and neither delivers it verbatim:
+ *
+ * - Tasks whose structural `metadata.delegatesAssemblyTo` names the morning
+ *   check-in assembler get the assembled brief's `summaryText` (#14802) —
+ *   real data (meetings, todos, wins) the render prompt alone cannot supply;
+ *   CheckinService already composes that text through the model.
+ * - Everything else renders through `renderScheduledDispatchMessage` (the
+ *   CheckinService model seam): the instruction is the PROMPT, the model's
+ *   output is what the owner sees. Render failure throws and the dispatcher
+ *   translates it into a typed retryable failure — no raw-instruction
+ *   fallback and no canned placeholder copy.
+ */
+async function composeOwnerFacingScheduledTaskText(
+  runtime: IAgentRuntime,
+  record: ScheduledTaskDispatchRecord,
+): Promise<string> {
+  const delegatesAssemblyTo = metadataString(
+    record.metadata,
+    "delegatesAssemblyTo",
+  );
+
+  if (delegatesAssemblyTo === "lifeops:checkin:morning") {
+    try {
+      const assembled = await assembleMorningBrief(runtime, {
+        timezone: resolveDefaultTimeZone(),
+        now: new Date(record.firedAtIso),
+      });
+      const summaryText = assembled.report.summaryText.trim();
+      if (record.metadata) {
+        record.metadata.checkinReportId = assembled.report.reportId;
+        record.metadata.checkinKind = assembled.report.kind;
+      }
+      if (summaryText.length > 0) return summaryText;
+      throw new Error("Morning check-in assembler returned empty summaryText");
+    } catch (error) {
+      // error-policy:J4 designed degrade — the scheduled check-in still
+      // reaches the owner with an honest "couldn't assemble" message instead
+      // of silently dropping the fire; the assembly failure is surfaced via
+      // reportError for RECENT_ERRORS/escalation.
+      runtime.reportError("lifeops:scheduled-task:owner-facing-copy", error, {
+        agentId: runtime.agentId,
+        taskId: record.taskId,
+        firedAtIso: record.firedAtIso,
+        delegatesAssemblyTo,
+      });
+      return "Your morning check-in is ready, but I couldn't assemble the full brief right now.";
+    }
+  }
+
+  return renderScheduledDispatchMessage(runtime, record);
+}
+
 const LOCAL_AGENT_BACKUP_OPERATION = "agent.localBackup";
+const LIFEOPS_OWNER_CONTACTS_LOAD_CONTEXT = {
+  boundary: "lifeops.owner_contacts",
+  operation: "load_owner_contacts",
+  message:
+    "[lifeops] Failed to load owner contacts; using empty owner contacts config.",
+} as const;
 
 function isLocalAgentBackupDispatch(
   record: ScheduledTaskDispatchRecord,
 ): boolean {
   return record.metadata?.systemOperation === LOCAL_AGENT_BACKUP_OPERATION;
+}
+
+function targetNeedsOwnerResolution(
+  channelKey: string,
+  target: string | undefined,
+): boolean {
+  const normalized = normalizeChannelTarget(channelKey, target);
+  return !normalized || normalized === channelKey;
+}
+
+async function resolveOwnerChannelTarget(
+  runtime: IAgentRuntime,
+  channelKey: string,
+): Promise<string | null> {
+  const ownerContacts = loadOwnerContactsConfig(
+    LIFEOPS_OWNER_CONTACTS_LOAD_CONTEXT,
+  );
+  const hints = await loadOwnerContactRoutingHints(runtime, ownerContacts);
+  const hint = hints[channelKey] ?? null;
+  let contactResolution =
+    resolveOwnerContactWithFallback({
+      ownerContacts,
+      source: hint?.source ?? channelKey,
+      ownerEntityId: null,
+    }) ??
+    resolveOwnerContactWithFallback({
+      ownerContacts,
+      source: channelKey,
+      ownerEntityId: null,
+    });
+  if (!contactResolution) {
+    const ownerEntityId = await resolveOwnerEntityId(runtime);
+    contactResolution =
+      resolveOwnerContactWithFallback({
+        ownerContacts,
+        source: hint?.source ?? channelKey,
+        ownerEntityId,
+      }) ??
+      resolveOwnerContactWithFallback({
+        ownerContacts,
+        source: channelKey,
+        ownerEntityId,
+      });
+  }
+  const contact =
+    contactResolution?.contact ??
+    (hint?.source ? ownerContacts[hint.source] : undefined) ??
+    ownerContacts[channelKey];
+  return (
+    hint?.channelId ??
+    contact?.channelId ??
+    hint?.roomId ??
+    contact?.roomId ??
+    hint?.entityId ??
+    contact?.entityId ??
+    null
+  );
+}
+
+async function resolveScheduledTaskChannelTarget(
+  runtime: IAgentRuntime,
+  record: ScheduledTaskDispatchRecord,
+): Promise<string | null> {
+  if (!targetNeedsOwnerResolution(record.channelKey, record.output?.target)) {
+    return (
+      normalizeChannelTarget(record.channelKey, record.output?.target) ?? null
+    );
+  }
+  return resolveOwnerChannelTarget(runtime, record.channelKey);
 }
 
 function deniedDecisionToDispatchResult(
@@ -388,90 +540,11 @@ export function createProductionScheduledTaskDispatcher(opts: {
 
       const registry = getChannelRegistry(opts.runtime);
       const channel = registry?.get(record.channelKey) ?? null;
-      if (!channel?.send) {
-        if (
-          record.channelKey === "in_app" ||
-          record.channelKey === "push" ||
-          record.output?.destination === "in_app_card"
-        ) {
-          // Honest delivery accounting: an in_app dispatch "succeeded" only
-          // if at least one real surface accepted the payload — the live
-          // assistant event bus (transient stream) or the notification
-          // service (durable inbox). Previously this branch returned
-          // ok:true unconditionally, fabricating delivery on hosts where
-          // both surfaces were absent, so nothing ever retried/escalated.
-          let surfacesAccepted = 0;
-          const eventService = getAgentEventService(opts.runtime) as {
-            emit?: (event: {
-              runId: string;
-              stream: string;
-              data: Record<string, unknown>;
-              agentId?: string;
-            }) => void;
-          } | null;
-          if (typeof eventService?.emit === "function") {
-            eventService.emit({
-              runId: crypto.randomUUID(),
-              stream: "assistant",
-              agentId: opts.runtime.agentId,
-              data: {
-                text: record.promptInstructions,
-                source: "lifeops-scheduled-task",
-                taskId: record.taskId,
-                firedAtIso: record.firedAtIso,
-                channelKey: record.channelKey,
-                target: normalizeChannelTarget(
-                  record.channelKey,
-                  record.output?.target,
-                ),
-                ...(record.intensity ? { intensity: record.intensity } : {}),
-                ...(record.contextRequest
-                  ? { contextRequest: record.contextRequest }
-                  : {}),
-              },
-            });
-            surfacesAccepted += 1;
-          }
-          const isUrgent = record.intensity === "urgent";
-          const notifier = getNotifier(opts.runtime);
-          if (notifier) {
-            try {
-              await notifier.notify({
-                title: isUrgent ? "Approval needed" : "Reminder",
-                body: record.promptInstructions,
-                category: isUrgent ? "approval" : "reminder",
-                priority: isUrgent ? "urgent" : "normal",
-                source: "lifeops",
-                groupKey: `lifeops:${record.taskId}`,
-                deepLink: "/chat",
-                data: {
-                  taskId: record.taskId,
-                  firedAtIso: record.firedAtIso,
-                  channelKey: record.channelKey,
-                },
-              });
-              surfacesAccepted += 1;
-            } catch (error) {
-              logger.warn(
-                { src: "lifeops:scheduled-task", error },
-                "Notification emit failed",
-              );
-            }
-          }
-          if (surfacesAccepted === 0) {
-            return {
-              ok: false,
-              reason: "disconnected",
-              userActionable: false,
-              message:
-                "No in-app surface (assistant event bus or notification service) accepted the payload.",
-            };
-          }
-          return {
-            ok: true,
-            messageId: `in_app:${record.taskId}:${record.firedAtIso}`,
-          };
-        }
+      const hasInAppSurfaceFallback =
+        record.channelKey === "in_app" ||
+        record.channelKey === "push" ||
+        record.output?.destination === "in_app_card";
+      if (!channel?.send && !hasInAppSurfaceFallback) {
         return applyDispatchPolicy({
           ok: false,
           reason: "disconnected",
@@ -480,12 +553,131 @@ export function createProductionScheduledTaskDispatcher(opts: {
         });
       }
 
+      // `promptInstructions` is a model prompt, never user-facing copy: every
+      // user-visible surface below (assistant stream, notification body,
+      // connector channel send) delivers the composed owner-facing message —
+      // delegated assembly or the model's rendering. A composition failure is
+      // a typed, retryable dispatch failure — there is deliberately no
+      // raw-instruction fallback, because delivering instruction-voice text
+      // verbatim to the owner was the bug this step exists to fix.
+      let message: string;
+      try {
+        message = await composeOwnerFacingScheduledTaskText(
+          opts.runtime,
+          record,
+        );
+      } catch (error) {
+        // error-policy:J1 boundary translation — dispatch outcomes are the
+        // runner's typed contract; the failure also reaches RECENT_ERRORS and
+        // owner escalation via reportError.
+        opts.runtime.reportError(
+          "lifeops:scheduled-task:dispatch-render",
+          error,
+          { taskId: record.taskId, channelKey: record.channelKey },
+        );
+        return renderFailureDispatchResult(error);
+      }
+
+      if (!channel?.send) {
+        // Honest delivery accounting: an in_app dispatch "succeeded" only
+        // if at least one real surface accepted the payload — the live
+        // assistant event bus (transient stream) or the notification
+        // service (durable inbox). Previously this branch returned
+        // ok:true unconditionally, fabricating delivery on hosts where
+        // both surfaces were absent, so nothing ever retried/escalated.
+        let surfacesAccepted = 0;
+        const eventService = getAgentEventService(opts.runtime) as {
+          emit?: (event: {
+            runId: string;
+            stream: string;
+            data: Record<string, unknown>;
+            agentId?: string;
+          }) => void;
+        } | null;
+        if (typeof eventService?.emit === "function") {
+          eventService.emit({
+            runId: crypto.randomUUID(),
+            stream: "assistant",
+            agentId: opts.runtime.agentId,
+            data: {
+              text: message,
+              source: "lifeops-scheduled-task",
+              taskId: record.taskId,
+              firedAtIso: record.firedAtIso,
+              channelKey: record.channelKey,
+              target: normalizeChannelTarget(
+                record.channelKey,
+                record.output?.target,
+              ),
+              ...(record.intensity ? { intensity: record.intensity } : {}),
+              ...(record.contextRequest
+                ? { contextRequest: record.contextRequest }
+                : {}),
+            },
+          });
+          surfacesAccepted += 1;
+        }
+        const isUrgent = record.intensity === "urgent";
+        const notifier = getNotifier(opts.runtime);
+        if (notifier) {
+          try {
+            await notifier.notify({
+              title: isUrgent ? "Approval needed" : "Reminder",
+              body: message,
+              category: isUrgent ? "approval" : "reminder",
+              priority: isUrgent ? "urgent" : "normal",
+              source: "lifeops",
+              groupKey: `lifeops:${record.taskId}`,
+              deepLink: "/chat",
+              data: {
+                taskId: record.taskId,
+                firedAtIso: record.firedAtIso,
+                channelKey: record.channelKey,
+              },
+            });
+            surfacesAccepted += 1;
+          } catch (error) {
+            logger.warn(
+              { src: "lifeops:scheduled-task", error },
+              "Notification emit failed",
+            );
+          }
+        }
+        if (surfacesAccepted === 0) {
+          return {
+            ok: false,
+            reason: "disconnected",
+            userActionable: false,
+            message:
+              "No in-app surface (assistant event bus or notification service) accepted the payload.",
+          };
+        }
+        return {
+          ok: true,
+          messageId: `in_app:${record.taskId}:${record.firedAtIso}`,
+          channelKey: record.channelKey,
+          target:
+            normalizeChannelTarget(record.channelKey, record.output?.target) ??
+            "in_app",
+        };
+      }
+
+      const target = await resolveScheduledTaskChannelTarget(
+        opts.runtime,
+        record,
+      );
+      if (!target) {
+        return applyDispatchPolicy({
+          ok: false,
+          reason: "disconnected",
+          userActionable: true,
+          message: `Channel "${record.channelKey}" has no resolvable owner target for scheduled task delivery.`,
+        });
+      }
+
       const payload = {
-        target: normalizeChannelTarget(
-          record.channelKey,
-          record.output?.target ?? record.channelKey,
-        ),
-        message: record.promptInstructions,
+        target,
+        message,
         metadata: {
           taskId: record.taskId,
           firedAtIso: record.firedAtIso,
@@ -511,7 +703,15 @@ export function createProductionScheduledTaskDispatcher(opts: {
         if (denied) return applyDispatchPolicy(denied);
       }
 
-      return applyDispatchPolicy(await channel.send(payload));
+      const result = await channel.send(payload);
+      if (result.ok) {
+        return applyDispatchPolicy({
+          ...result,
+          channelKey: record.channelKey,
+          target,
+        });
+      }
+      return applyDispatchPolicy(result);
     },
   };
 }
@@ -561,12 +761,14 @@ function buildLifeOpsRunnerDeps(
   const stores = makeRepositoryBackedStores(opts.runtime, opts.agentId);
 
   const gates = createTaskGateRegistry();
-  // Register the real ActivityProfile-backed readers for circadian_state_in and
-  // no_recent_user_message_in BEFORE the built-ins. registerBuiltInGates is
+  // Register the real ActivityProfile-backed readers for circadian_state_in /
+  // no_recent_user_message_in and the model moment judge for
+  // model_moment_check BEFORE the built-ins. registerBuiltInGates is
   // first-wins, so these production readers take precedence over the generic
   // fallbacks (which stay resolvable when PA is absent, e.g. plugin-health
   // standalone tests).
   registerActivityProfileGates(opts.runtime, gates);
+  registerModelMomentCheckGate(opts.runtime, gates);
   registerBuiltInGates(gates);
 
   const completionChecks = createCompletionCheckRegistry();
@@ -614,6 +816,22 @@ function buildLifeOpsRunnerDeps(
       const registry = getChannelRegistry(opts.runtime);
       if (!registry) return new Set();
       return new Set(registry.list().map((c) => c.kind));
+    },
+    channelAvailable: async (channelKey: string) => {
+      const channelRegistry = getChannelRegistry(opts.runtime);
+      const channel = channelRegistry?.get(channelKey) ?? null;
+      if (!channel) return false;
+      if (!channel.connectorKind) return true;
+      const connector = getConnectorRegistry(opts.runtime)?.get(
+        channel.connectorKind,
+      );
+      if (!connector?.send) return false;
+      try {
+        const status = await connector.status();
+        return status.state !== "disconnected";
+      } catch {
+        return false;
+      }
     },
     hostCapabilities:
       opts.hostCapabilities ??

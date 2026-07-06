@@ -57,13 +57,10 @@ import { CustomActionEditor } from "./components/custom-actions/CustomActionEdit
 import { CustomActionsPanel } from "./components/custom-actions/CustomActionsPanel";
 import { AppsPageView } from "./components/pages/AppsPageView";
 import { PermissionPrimingOverlay } from "./components/permissions/PermissionPrimingOverlay";
-import { ActionBanner } from "./components/shell/ActionBanner";
 import { AssistantOverlay } from "./components/shell/AssistantOverlay";
 import { BugReportModal } from "./components/shell/BugReportModal";
 import { BuildBadge } from "./components/shell/BuildBadge";
 import { ChatSurface } from "./components/shell/ChatSurface";
-import { CloudHandoffBanner } from "./components/shell/CloudHandoffBanner";
-import { ConnectionFailedBanner } from "./components/shell/ConnectionFailedBanner";
 import { ConnectionLostOverlay } from "./components/shell/ConnectionLostOverlay";
 import { ContinuousChatOverlay } from "./components/shell/ContinuousChatOverlay";
 import { HomeLauncherSurface } from "./components/shell/HomeLauncherSurface";
@@ -94,6 +91,7 @@ import {
 } from "./events";
 import { adoptRemoteAgentFirstRun } from "./first-run/adopt-remote-first-run";
 import { persistMobileRuntimeModeForServerTarget } from "./first-run/mobile-runtime-mode";
+import { BootRecoveryConductorMount } from "./first-run/use-boot-recovery-conductor";
 import { FirstRunConductorMount } from "./first-run/use-first-run-conductor";
 import { ModelStatusConductorMount } from "./first-run/use-model-status-conductor";
 import { BugReportProvider, useBugReportState, useContextMenu } from "./hooks";
@@ -126,7 +124,10 @@ import {
   useChatInputRef,
 } from "./state/ChatComposerContext.hooks";
 import { isShellPaintable } from "./state/startup-coordinator";
-import { firstRunOwnsLoginSurface } from "./state/top-level-auth-gate";
+import {
+  authProbeShouldHoldShell,
+  firstRunOwnsLoginSurface,
+} from "./state/top-level-auth-gate";
 import { isLoopbackGatewayHost } from "./state/use-startup-shell-controller";
 import {
   SurfaceRealmScope,
@@ -137,8 +138,12 @@ import { confirmDesktopAction } from "./utils/desktop-dialogs";
 import { VoiceSelfTestShell } from "./voice/voice-selftest/VoiceSelfTestShell";
 import { VoiceWorkbenchShell } from "./voice/voice-selftest/VoiceWorkbenchShell";
 
-const MOBILE_NAV_PADDING_CLASS =
-  "pb-[calc(var(--eliza-mobile-nav-offset,0px)+max(var(--safe-area-bottom,0px),var(--android-gesture-inset-bottom,0px))+var(--eliza-continuous-chat-clearance,5.25rem))]";
+// NOTE (#view-padding-normalize): the full floating-composer + bottom-nav +
+// safe-area bottom clearance is owned EXACTLY ONCE by the scroll region a view
+// mounts into (`TabScrollView` / `TabContentView` inner scroller, complemented
+// by `AppWorkspaceChrome`'s safe-area floor). The routed `<main>`
+// (`routedShellMainClass`) deliberately does NOT re-apply that clearance —
+// doing so double-counted it and left an oversized empty band under every view.
 type ExtractComponent<TValue> =
   TValue extends ComponentType<infer Props> ? ComponentType<Props> : never;
 
@@ -263,10 +268,6 @@ const PhonePageView = lazyNamedView(
 const SettingsView = lazyNamedView(
   () => import("./components/pages/SettingsView"),
   "SettingsView",
-);
-const TutorialView = lazyNamedView(
-  () => import("./components/pages/tutorial/TutorialView"),
-  "TutorialView",
 );
 const StreamView = lazyNamedView(
   () => import("./components/pages/StreamView"),
@@ -572,7 +573,7 @@ function TabScrollView({
       main={
         <div
           data-shell-scroll-region="true"
-          className={`eliza-continuous-chat-scroll flex-1 min-h-0 min-w-0 w-full overflow-y-auto pb-[var(--eliza-continuous-chat-clearance,5.25rem)] ${className}`}
+          className={`eliza-continuous-chat-scroll flex-1 min-h-0 min-w-0 w-full overflow-y-auto pb-[var(--eliza-continuous-chat-clearance,5.25rem)] pe-[var(--eliza-continuous-chat-side-clearance,0px)] ${className}`}
         >
           {children}
         </div>
@@ -598,7 +599,7 @@ function TabContentView({
       main={
         <div
           data-shell-content-region="true"
-          className="eliza-continuous-chat-scroll flex flex-col flex-1 min-h-0 min-w-0 w-full overflow-hidden pb-[var(--eliza-continuous-chat-clearance,5.25rem)]"
+          className="eliza-continuous-chat-scroll flex flex-col flex-1 min-h-0 min-w-0 w-full overflow-hidden pb-[var(--eliza-continuous-chat-clearance,5.25rem)] pe-[var(--eliza-continuous-chat-side-clearance,0px)]"
         >
           {children}
         </div>
@@ -1039,10 +1040,6 @@ function remoteViewAvailable(view: ViewRegistryEntry): boolean {
   return Boolean((view.bundleUrl || view.frameUrl) && view.available !== false);
 }
 
-function remoteViewLoaderUrl(view: ViewRegistryEntry): string | null {
-  return view.bundleUrl ?? view.frameUrl ?? null;
-}
-
 function remoteViewMatchesTab(
   view: ViewRegistryEntry,
   tab: string,
@@ -1103,12 +1100,11 @@ function findRemoteViewForRoute(
 }
 
 function renderRemoteView(view: ViewRegistryEntry, nav?: ReactNode): ReactNode {
-  const loaderUrl = remoteViewLoaderUrl(view);
-  if (!loaderUrl) return null;
+  if (!view.bundleUrl && !view.frameUrl) return null;
   return (
     <TabContentView nav={nav}>
       <DynamicViewLoader
-        bundleUrl={loaderUrl}
+        bundleUrl={view.bundleUrl}
         frameUrl={view.frameUrl}
         componentExport={view.componentExport}
         viewId={view.id}
@@ -1210,36 +1206,33 @@ function ViewLayoutSurface({
           )} eliza-continuous-chat-scroll pb-[calc(0.5rem+var(--eliza-continuous-chat-clearance,5.25rem))]`}
         >
           {entries.length > 0 ? (
-            entries.map((view) => {
-              const loaderUrl = remoteViewLoaderUrl(view);
-              return (
-                <section
-                  key={view.id}
-                  data-testid={`view-layout-pane-${view.id}`}
-                  className={paneClassName}
-                >
-                  <div className="flex h-9 shrink-0 items-center border-b border-border/35 px-2.5">
-                    <span className="truncate text-xs font-medium text-muted">
-                      {view.label}
-                    </span>
-                  </div>
-                  <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-                    {loaderUrl ? (
-                      <DynamicViewLoader
-                        bundleUrl={loaderUrl}
-                        frameUrl={view.frameUrl}
-                        componentExport={view.componentExport}
-                        viewId={view.id}
-                        viewType={view.viewType}
-                        surface={view.surface}
-                      />
-                    ) : (
-                      <ViewRouter routeOverride={routeOverrideForView(view)} />
-                    )}
-                  </div>
-                </section>
-              );
-            })
+            entries.map((view) => (
+              <section
+                key={view.id}
+                data-testid={`view-layout-pane-${view.id}`}
+                className={paneClassName}
+              >
+                <div className="flex h-9 shrink-0 items-center border-b border-border/35 px-2.5">
+                  <span className="truncate text-xs font-medium text-muted">
+                    {view.label}
+                  </span>
+                </div>
+                <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+                  {view.bundleUrl || view.frameUrl ? (
+                    <DynamicViewLoader
+                      bundleUrl={view.bundleUrl}
+                      frameUrl={view.frameUrl}
+                      componentExport={view.componentExport}
+                      viewId={view.id}
+                      viewType={view.viewType}
+                      surface={view.surface}
+                    />
+                  ) : (
+                    <ViewRouter routeOverride={routeOverrideForView(view)} />
+                  )}
+                </div>
+              </section>
+            ))
           ) : (
             <div className="flex min-h-[18rem] items-center justify-center border border-border/45 px-4 text-center text-sm text-muted">
               Requested views are not available.
@@ -1291,6 +1284,8 @@ interface StaticTabRenderContext {
   nativeOsSurfaceEnabled: boolean;
   navigationPath: string;
   settingsInitialSection?: string | null;
+  settingsNavigatePayload?: unknown;
+  settingsNavigateSequence?: number;
   walletNav?: ReactNode;
   characterNav?: ReactNode;
 }
@@ -1319,7 +1314,6 @@ function buildStaticTabRenderers(): Record<
     <TabContentView>{node}</TabContentView>
   );
   return {
-    tutorial: wrap(<TutorialView />),
     chat: () => <ViewUnavailableFallback />,
     browser: () => <BrowserWorkspaceView />,
     stream: () => <StreamView />,
@@ -1358,11 +1352,17 @@ function buildStaticTabRenderers(): Record<
     database: wrap(<DatabasePageView />),
     logs: wrap(<LogsView />),
     desktop: wrap(<DesktopWorkspaceSection />),
-    settings: ({ settingsInitialSection }) => (
+    settings: ({
+      settingsInitialSection,
+      settingsNavigatePayload,
+      settingsNavigateSequence,
+    }) => (
       <TabContentView surface="transparent">
         <SettingsView
           key="settings-root"
           initialSection={settingsInitialSection ?? undefined}
+          navigatePayload={settingsNavigatePayload}
+          navigateSequence={settingsNavigateSequence}
         />
       </TabContentView>
     ),
@@ -1405,6 +1405,8 @@ function renderStaticViewRouterTab({
   nativeOsSurfaceEnabled,
   navigationPath,
   settingsInitialSection,
+  settingsNavigatePayload,
+  settingsNavigateSequence,
   walletNav,
   characterNav,
 }: {
@@ -1412,6 +1414,8 @@ function renderStaticViewRouterTab({
   nativeOsSurfaceEnabled: boolean;
   navigationPath: string;
   settingsInitialSection?: string | null;
+  settingsNavigatePayload?: unknown;
+  settingsNavigateSequence?: number;
   walletNav?: ReactNode;
   characterNav?: ReactNode;
 }): ReactNode {
@@ -1425,6 +1429,8 @@ function renderStaticViewRouterTab({
       nativeOsSurfaceEnabled,
       navigationPath,
       settingsInitialSection,
+      settingsNavigatePayload,
+      settingsNavigateSequence,
       walletNav,
       characterNav,
     });
@@ -1442,6 +1448,8 @@ function renderViewRouterContent({
   appSlug,
   nativeOsSurfaceEnabled,
   settingsInitialSection,
+  settingsNavigatePayload,
+  settingsNavigateSequence,
 }: {
   tab: string;
   dynamicPage: ResolvedDynamicPage | null;
@@ -1452,6 +1460,8 @@ function renderViewRouterContent({
   appSlug: string | null;
   nativeOsSurfaceEnabled: boolean;
   settingsInitialSection?: string | null;
+  settingsNavigatePayload?: unknown;
+  settingsNavigateSequence?: number;
 }): ReactNode {
   if (visibleDynamicPage(dynamicPage, enabledKinds)) {
     return (
@@ -1497,7 +1507,7 @@ function renderViewRouterContent({
     tab,
     appSlug,
   );
-  if (remoteView && remoteViewLoaderUrl(remoteView)) {
+  if (remoteView?.bundleUrl || remoteView?.frameUrl) {
     return renderRemoteView(remoteView, walletNav);
   }
   return renderStaticViewRouterTab({
@@ -1505,6 +1515,8 @@ function renderViewRouterContent({
     nativeOsSurfaceEnabled,
     navigationPath,
     settingsInitialSection,
+    settingsNavigatePayload,
+    settingsNavigateSequence,
     walletNav,
     characterNav,
   });
@@ -1518,9 +1530,13 @@ type ViewRouterRouteOverride = {
 function ViewRouter({
   routeOverride,
   settingsInitialSection,
+  settingsNavigatePayload,
+  settingsNavigateSequence,
 }: {
   routeOverride?: ViewRouterRouteOverride;
   settingsInitialSection?: string | null;
+  settingsNavigatePayload?: unknown;
+  settingsNavigateSequence?: number;
 }) {
   const activeTab = useAppSelector((s) => s.tab);
   const tab = routeOverride?.tab ?? activeTab;
@@ -1569,6 +1585,8 @@ function ViewRouter({
     appSlug,
     nativeOsSurfaceEnabled,
     settingsInitialSection,
+    settingsNavigatePayload,
+    settingsNavigateSequence,
   });
 
   // A distinct lifecycle identity per routed surface: builtin tab id, or
@@ -1632,6 +1650,8 @@ type ShellContentProps = {
   setCustomActionsPanelOpen: (open: boolean) => void;
   setEditingAction: (action: import("./api").CustomActionDef | null) => void;
   settingsInitialSection: string | null;
+  settingsNavigatePayload: unknown;
+  settingsNavigateSequence: number;
   tab: string;
   uiShellMode: string;
   viewLayout: ActiveViewLayout | null;
@@ -1663,18 +1683,25 @@ function ChatRouteShellContent(props: ShellContentProps): ReactNode {
 }
 
 function routedShellMainClass(tab: string): string {
-  // One tight page gutter for every routed view: minimal top so headers sit
-  // right under the chrome, a small side gutter, modest bottom. Views that own
-  // their full surface (browser/apps/views/background) still get zero padding.
+  // One tight page gutter for every routed view: a small side gutter + the
+  // standard `--view-pad-top` content gutter, and NOTHING at the bottom. This
+  // `<main>` is `overflow-hidden` — the real scroll owner (and therefore the
+  // sole owner of the bottom safe-area + floating-composer clearance) is the
+  // view wrapper mounted inside it (`TabScrollView`/`TabContentView`/
+  // `AppWorkspaceChrome`). Adding a bottom pad here on a non-scrolling box
+  // double-counted the clearance the wrapper already reserves, leaving an
+  // oversized empty band under every view (the recurring "too much space at the
+  // bottom" report). Bottom clearance is reserved exactly once, downstream.
+  // Views that own their full surface (browser/apps/views/background) still get
+  // zero padding.
   const pagePadding =
     tab === "browser" ||
     tab === "apps" ||
     tab === "views" ||
     tab === "background"
       ? ""
-      : "px-2 sm:px-3 pt-2 pb-4";
-  const mobilePadding = tab === "browser" ? "" : MOBILE_NAV_PADDING_CLASS;
-  return `flex flex-1 min-h-0 min-w-0 overflow-hidden ${pagePadding} ${mobilePadding}`;
+      : "px-2 sm:px-3 pt-[var(--view-pad-top)]";
+  return `flex flex-1 min-h-0 min-w-0 overflow-hidden ${pagePadding}`;
 }
 
 /**
@@ -1704,7 +1731,11 @@ function RoutedShellContent(props: ShellContentProps): ReactNode {
             onClear={props.onClearViewLayout}
           />
         ) : (
-          <ViewRouter settingsInitialSection={props.settingsInitialSection} />
+          <ViewRouter
+            settingsInitialSection={props.settingsInitialSection}
+            settingsNavigatePayload={props.settingsNavigatePayload}
+            settingsNavigateSequence={props.settingsNavigateSequence}
+          />
         )}
       </main>
     </div>
@@ -2155,6 +2186,9 @@ export function App() {
   const [settingsInitialSection, setSettingsInitialSection] = useState<
     string | null
   >(null);
+  const [settingsNavigatePayload, setSettingsNavigatePayload] =
+    useState<unknown>(undefined);
+  const [settingsNavigateSequence, setSettingsNavigateSequence] = useState(0);
 
   // Desktop tab bar — persisted pinned tabs for the Electrobun shell.
   const {
@@ -2292,6 +2326,8 @@ export function App() {
           `[SettingsNavigate] routing subview "${detail.subview}" to SettingsView initialSection`,
         );
         setSettingsInitialSection(detail.subview);
+        setSettingsNavigatePayload(detail.payload);
+        setSettingsNavigateSequence((sequence) => sequence + 1);
         setTab("settings");
         return;
       }
@@ -2443,6 +2479,8 @@ export function App() {
         setCustomActionsPanelOpen={setCustomActionsPanelOpen}
         setEditingAction={setEditingAction}
         settingsInitialSection={settingsInitialSection}
+        settingsNavigatePayload={settingsNavigatePayload}
+        settingsNavigateSequence={settingsNavigateSequence}
         tab={tab}
         uiShellMode={uiShellMode}
         viewLayout={viewLayout}
@@ -2458,6 +2496,8 @@ export function App() {
       screenBackgroundPolicy,
       customActionsPanelOpen,
       settingsInitialSection,
+      settingsNavigatePayload,
+      settingsNavigateSequence,
       desktopTabBar,
       availableViewsForDesktopTabs,
       viewLayout,
@@ -2507,6 +2547,7 @@ export function App() {
           <ChatOverlayShell />
           <FirstRunConductorMount />
           <ModelStatusConductorMount />
+          <BootRecoveryConductorMount />
         </ShellControllerProvider>
         <BugReportModal />
       </BugReportProvider>
@@ -2534,8 +2575,8 @@ export function App() {
     );
   }
 
-  // Auth gate — once the shell is paintable (agent may still be warming up),
-  // check /api/auth/me. "loading": wait (fall through to the main shell render).
+  // Auth gate — once the shell is paintable, keep poll-heavy shell hooks
+  // unmounted until /api/auth/me resolves for returning sessions.
   // "unauthenticated": render LoginView. "authenticated": proceed.
   // "server_unavailable": show a retryable startup failure.
   if (
@@ -2543,6 +2584,20 @@ export function App() {
     !isPopout &&
     !firstRunOwnsLoginSurface(startupCoordinator.phase, firstRunComplete)
   ) {
+    if (
+      authProbeShouldHoldShell(
+        startupCoordinator.phase,
+        firstRunComplete,
+        authState.phase,
+      )
+    ) {
+      return (
+        <BugReportProvider value={bugReport}>
+          <StartupScreen />
+          <BugReportModal />
+        </BugReportProvider>
+      );
+    }
     if (authState.phase === "server_unavailable") {
       return (
         <BugReportProvider value={bugReport}>
@@ -2578,8 +2633,8 @@ export function App() {
         </BugReportProvider>
       );
     }
-    // While loading the auth state we allow the main shell to continue
-    // rendering (avoids a flash of login screen on refresh when cookies are valid).
+    // The loading phase is handled above so the shell's poll-heavy hooks never
+    // mount until the session is known.
   }
 
   // OS kiosk window — the locked appliance shell: a fullscreen in-window
@@ -2617,6 +2672,17 @@ export function App() {
           // is what lets every view fill edge-to-edge under the notch while the
           // `paddingTop` below keeps CONTENT notch-aware. Locked by
           // App.safe-area-fill.test.ts.
+          //
+          // RECLAIM THE BOTTOM STRIP (#14411): the base height is `h-[100dvh]`
+          // (correct for a desktop browser tab / popout where dvh == the full
+          // window). In the INSTALLED PWA the styles.css standalone blocks pin
+          // #root to 100lvh and reclaim THIS column to 100lvh too (via the
+          // `[data-app-shell-root]` selector), so the app fills full-bleed to
+          // the physical bottom edge instead of leaving the ~59px lvh–dvh strip
+          // as #root's near-black --launch-bg band. The home-indicator safe
+          // area is padded INSIDE the app (the floating composer clears it), so
+          // background content bleeds under the indicator, native-app style.
+          data-app-shell-root=""
           className="relative flex h-[100dvh] w-full max-w-full flex-col overflow-hidden"
           // Reserve a TIGHT status-bar inset: enough to clear the notch/Dynamic
           // Island but no oversized empty band above the content (the repeated
@@ -2659,6 +2725,16 @@ export function App() {
               // very bottom edge; opaque dark elsewhere as the FOUC guard.
               renderSharedAppBackground ? "bg-transparent" : "bg-bg",
             )}
+            // BOTTOM-BAR ROOT CAUSE (device r5): this `fixed inset-0` floor is a
+            // fixed descendant of the fixed body, so its `bottom: 0` anchors to
+            // the ICB that COLLAPSES to the small/layout viewport on the
+            // installed iOS standalone PWA (~59px short of the true 100lvh
+            // bottom). On OPAQUE routes it then stops short and the launch-bg
+            // strip shows below it; on wallpaper routes it is transparent so the
+            // (now-reclaimed) wallpaper owns the edge. Drop it by the same
+            // collapse delta the composer + wallpaper use so the FOUC guard
+            // reaches the physical bottom too. No-op wherever 100lvh === 100dvh.
+            style={{ bottom: "calc(-1 * max(0px, 100lvh - 100dvh))" }}
           />
           {/* The unified app background, mounted once here so it persists
               seamlessly across shared-background routes. It keeps the
@@ -2668,13 +2744,17 @@ export function App() {
           <AppBackground visible={renderSharedAppBackground} />
           {/* Readability scrim for text-dense shared-background views. It sits
               between the wallpaper (z-0) and content (z-10) and covers safe
-              areas too. Opaque or overlay-app routes use the plain underlay
-              instead, so the wallpaper cannot leak through. */}
+              areas too. Settings deliberately shows the LIVE launcher
+              wallpaper behind a 50% dark veil (theme-independent black, not
+              bg/, so light mode never washes it out) — the user can change the
+              background from Settings and watch it apply behind the panel.
+              Opaque or overlay-app routes use the plain underlay instead, so
+              the wallpaper cannot leak through. */}
           {renderSharedAppBackground && isSettingsPage ? (
             <div
               aria-hidden="true"
               data-testid="app-background-scrim"
-              className="pointer-events-none fixed inset-0 z-[1] bg-bg/55"
+              className="pointer-events-none fixed inset-0 z-[1] bg-black/50"
             />
           ) : null}
           {renderOpaqueAppBackground ? (
@@ -2685,10 +2765,7 @@ export function App() {
             />
           ) : null}
           <div className="relative z-10 flex min-h-0 w-full flex-1 flex-col">
-            <ConnectionFailedBanner />
             <SystemWarningBanner />
-            <ActionBanner />
-            <CloudHandoffBanner />
             {shellContent}
           </div>
         </div>
@@ -2737,6 +2814,11 @@ export function App() {
             downloading/loading/missing/errored it seeds ONE live status turn
             with cancel / switch-to-cloud / retry controls. Renders null. */}
         <ModelStatusConductorMount />
+        {/* In-chat boot-recovery card (headless) — a stalled boot or a failed
+            dedicated-agent handoff seeds ONE live turn with re-log-in /
+            try-again / retry-setup controls; the transcript is the only boot
+            status surface (no floating banner). Renders null. */}
+        <BootRecoveryConductorMount />
         {/* In-chat tutorial conductor (headless) — while the tour is active it
             seeds one conversational turn per step into the SAME live transcript
             the overlay renders, narrates through the real voice engine, and

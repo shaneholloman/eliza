@@ -19,7 +19,14 @@ import {
 	isInteractionCallback,
 	MAX_CALLBACK_BYTES,
 } from "./callback";
-import { buildInteractionUrlResolver, toNeutralLayout } from "./layout";
+import {
+	buildInteractionUrlResolver,
+	FORM_FREE_TEXT_INVITE,
+	renderContentInteractionsAsPlainText,
+	renderInteractionsAsPlainText,
+	toNeutralLayout,
+	toPlainTextFallback,
+} from "./layout";
 import {
 	normalizeContentInteractions,
 	stripInteractionMarkers,
@@ -100,6 +107,68 @@ describe("parse", () => {
 		);
 	});
 
+	it("parses temporal field types and round-trips them (#14323)", () => {
+		const text = `[FORM]\n${JSON.stringify({
+			title: "Schedule reminder",
+			fields: [
+				{ name: "day", type: "date", label: "Day", required: true },
+				{ name: "at", type: "time", label: "At" },
+				{ name: "when", type: "datetime", label: "When" },
+			],
+		})}\n[/FORM]`;
+		const { blocks } = parseInteractionBlocks(text);
+		const form = blocks[0] as FormInteraction;
+		expect(form.fields.map((f) => f.type)).toEqual([
+			"date",
+			"time",
+			"datetime",
+		]);
+		// parse ↔ serialize parity: the temporal types survive a round trip.
+		const rt = parseInteractionBlocks(serializeInteractionBlock(form));
+		expect((rt.blocks[0] as FormInteraction).fields.map((f) => f.type)).toEqual(
+			["date", "time", "datetime"],
+		);
+	});
+
+	it("drops a field with an unknown type (core parser is strict)", () => {
+		const text = `[FORM]\n${JSON.stringify({
+			fields: [
+				{ name: "ok", type: "date" },
+				{ name: "bad", type: "color" },
+			],
+		})}\n[/FORM]`;
+		const { blocks } = parseInteractionBlocks(text);
+		const form = blocks[0] as FormInteraction;
+		// unknown "color" is rejected; the valid "date" field survives.
+		expect(form.fields.map((f) => f.name)).toEqual(["ok"]);
+	});
+
+	it("drops inherited Object field names from form blocks (#14489)", () => {
+		const text = `[FORM]\n${JSON.stringify({
+			fields: [
+				{ name: "constructor", type: "text" },
+				{ name: "hasOwnProperty", type: "text" },
+				{ name: "propertyIsEnumerable", type: "text" },
+				{ name: "__proto__", type: "text" },
+				{ name: "ok", type: "text" },
+			],
+		})}\n[/FORM]`;
+		const { blocks } = parseInteractionBlocks(text);
+		const form = blocks[0] as FormInteraction;
+		expect(form.fields.map((f) => f.name)).toEqual(["ok"]);
+
+		const onlyUnsafe = `[FORM]\n${JSON.stringify({
+			fields: [
+				{ name: "constructor", type: "text" },
+				{ name: "hasOwnProperty", type: "text" },
+			],
+		})}\n[/FORM]`;
+		const { blocks: unsafeBlocks, cleanedText } =
+			parseInteractionBlocks(onlyUnsafe);
+		expect(unsafeBlocks).toHaveLength(0);
+		expect(cleanedText).toContain("[FORM]");
+	});
+
 	it("rejects malformed form JSON (left as text)", () => {
 		const text = "[FORM]\n{not json}\n[/FORM]";
 		const { blocks, cleanedText } = parseInteractionBlocks(text);
@@ -175,6 +244,29 @@ describe("serialize", () => {
 		});
 	});
 
+	// #14323 — scheduling forms need native pickers; values submit as
+	// YYYY-MM-DD / HH:mm / YYYY-MM-DDTHH:mm strings.
+	it("parses and round-trips date/time/datetime field types (#14323)", () => {
+		const text = `[FORM]\n${JSON.stringify({
+			id: "sched",
+			title: "Set your reminder",
+			fields: [
+				{ name: "day", type: "date", label: "Day" },
+				{ name: "at", type: "time", label: "At" },
+				{ name: "exact", type: "datetime", label: "Exact moment" },
+			],
+		})}\n[/FORM]`;
+		const { blocks } = parseInteractionBlocks(text);
+		const form = blocks[0] as FormInteraction;
+		expect(form.fields.map((f) => f.type)).toEqual([
+			"date",
+			"time",
+			"datetime",
+		]);
+		const reparsed = parseInteractionBlocks(serializeInteractionBlock(form));
+		expect((reparsed.blocks[0] as FormInteraction).fields).toEqual(form.fields);
+	});
+
 	it("round-trips a form block", () => {
 		const block: FormInteraction = {
 			kind: "form",
@@ -226,9 +318,31 @@ describe("callback codec", () => {
 		expect(encodeReplyCallback(big)).toBeNull();
 	});
 
+	it("uses a caller-provided platform callback limit", () => {
+		const value = "x".repeat(MAX_CALLBACK_BYTES + 10);
+		const data = encodeReplyCallback(value, { maxBytes: 100 });
+		expect(data).not.toBeNull();
+		expect(decodeCallback(data)).toEqual({ kind: "reply", value });
+	});
+
 	it("ignores foreign callback payloads", () => {
 		expect(decodeCallback("discord:somethingelse")).toBeNull();
 		expect(isInteractionCallback(undefined)).toBe(false);
+	});
+
+	// #14527 — the 64-byte default is Telegram's cap, not a universal one.
+	// Discord's custom_id allows 100 chars; a value that fits the platform's
+	// own limit must encode and round-trip through the limit-agnostic decoder.
+	it("honors a per-platform limit larger than the Telegram default (#14527)", () => {
+		const value = "x".repeat(80);
+		expect(encodeReplyCallback(value)).toBeNull();
+		const data = encodeReplyCallback(value, { maxBytes: 100 });
+		expect(data).not.toBeNull();
+		expect(decodeCallback(data)).toEqual({ kind: "reply", value });
+	});
+
+	it("still rejects values past the custom limit", () => {
+		expect(encodeReplyCallback("x".repeat(120), { maxBytes: 100 })).toBeNull();
 	});
 });
 
@@ -249,6 +363,10 @@ describe("layout", () => {
 		const layout = toNeutralLayout(block, { maxButtonsPerRow: 3 });
 		expect(layout.text).toBe("Pick");
 		expect(layout.rows).toHaveLength(2);
+		expect(layout.rows).toEqual([
+			{ buttons: expect.any(Array) },
+			{ buttons: expect.any(Array) },
+		]);
 		const first = layout.rows[0].buttons?.[0];
 		expect(decodeCallback(first?.callbackData)).toEqual({
 			kind: "reply",
@@ -267,6 +385,29 @@ describe("layout", () => {
 		expect(toNeutralLayout(block).needsFallback).toBe(true);
 	});
 
+	it("keeps the default Telegram-safe callback cap unless a platform overrides it", () => {
+		const value = "x".repeat(MAX_CALLBACK_BYTES + 10);
+		const block: ChoiceInteraction = {
+			kind: "choice",
+			id: "i",
+			scope: "s",
+			options: [{ value, label: "Long value" }],
+		};
+
+		const defaultLayout = toNeutralLayout(block);
+		expect(defaultLayout.rows).toEqual([]);
+		expect(defaultLayout.needsFallback).toBe(true);
+
+		const discordLayout = toNeutralLayout(block, { maxCallbackBytes: 100 });
+		const button = discordLayout.rows[0]?.buttons?.[0];
+		expect(button?.label).toBe("Long value");
+		expect(decodeCallback(button?.callbackData)).toEqual({
+			kind: "reply",
+			value,
+		});
+		expect(discordLayout.needsFallback).toBe(false);
+	});
+
 	it("links out a secret block to a resolved url", () => {
 		const block: SecretInteraction = {
 			kind: "secret",
@@ -283,13 +424,39 @@ describe("layout", () => {
 		});
 	});
 
-	it("falls back when a form has no link-out url", () => {
+	it("falls back when a form has no link-out url (#14321)", () => {
+		const block: FormInteraction = {
+			kind: "form",
+			id: "f",
+			title: "Set your reminder",
+			fields: [{ name: "k", type: "text" }],
+		};
+		const layout = toNeutralLayout(block);
+		expect(layout.needsFallback).toBe(true);
+		expect(layout.rows).toHaveLength(0);
+		expect(layout.text).toBe(`Set your reminder\n\n${FORM_FREE_TEXT_INVITE}`);
+	});
+
+	it("invites a free-text reply even when a form has no title or description", () => {
 		const block: FormInteraction = {
 			kind: "form",
 			id: "f",
 			fields: [{ name: "k", type: "text" }],
 		};
-		expect(toNeutralLayout(block).needsFallback).toBe(true);
+		expect(toNeutralLayout(block).text).toBe(FORM_FREE_TEXT_INVITE);
+	});
+
+	it("uses a non-blank form description when the title is blank", () => {
+		const block: FormInteraction = {
+			kind: "form",
+			id: "f",
+			title: "  ",
+			description: "Tell us when to remind you.",
+			fields: [{ name: "k", type: "text" }],
+		};
+		expect(toNeutralLayout(block).text).toBe(
+			`Tell us when to remind you.\n\n${FORM_FREE_TEXT_INVITE}`,
+		);
 	});
 
 	// #8908 — navigate followups render as link-out buttons when a URL resolver
@@ -328,6 +495,184 @@ describe("layout", () => {
 		expect(button?.url).toBeUndefined();
 		expect(button?.callbackData).toBeTruthy();
 	});
+
+	// #14527 — connectors with a roomier callback budget (Discord: 100-char
+	// custom_id) pass maxCallbackBytes so long option values still render as
+	// native buttons instead of dropping to the free-text fallback.
+	it("renders long choice values as buttons under maxCallbackBytes (#14527)", () => {
+		const value = "y".repeat(80);
+		const block: ChoiceInteraction = {
+			kind: "choice",
+			id: "i",
+			scope: "s",
+			options: [{ value, label: "Long" }],
+		};
+		const capped = toNeutralLayout(block);
+		expect(capped.rows).toHaveLength(0);
+		expect(capped.needsFallback).toBe(true);
+
+		const layout = toNeutralLayout(block, { maxCallbackBytes: 100 });
+		const button = layout.rows[0]?.buttons?.[0];
+		expect(layout.needsFallback).toBeFalsy();
+		expect(decodeCallback(button?.callbackData)).toEqual({
+			kind: "reply",
+			value,
+		});
+	});
+
+	it("threads maxCallbackBytes through followup chips (#14527)", () => {
+		const payload = "z".repeat(80);
+		const block: FollowupsInteraction = {
+			kind: "followups",
+			id: "f1",
+			options: [{ kind: "reply", payload, label: "Big" }],
+		};
+		expect(toNeutralLayout(block).rows).toHaveLength(0);
+		const button = toNeutralLayout(block, { maxCallbackBytes: 100 }).rows[0]
+			?.buttons?.[0];
+		expect(decodeCallback(button?.callbackData)).toEqual({
+			kind: "reply",
+			value: payload,
+		});
+	});
+});
+
+describe("plain text fallback", () => {
+	it("renders choice options as a numbered reply list", () => {
+		const block: ChoiceInteraction = {
+			kind: "choice",
+			id: "i",
+			scope: "s",
+			prompt: "Pick a lane",
+			allowCustom: true,
+			options: [
+				{ value: "ship", label: "Ship it" },
+				{ value: "hold", label: "Hold" },
+			],
+		};
+		expect(toPlainTextFallback(block)).toBe(
+			"Pick a lane\n1. Ship it\n2. Hold\nReply with a number or your own answer.",
+		);
+	});
+
+	it("renders forms as title, description, and the free-text invite", () => {
+		const block: FormInteraction = {
+			kind: "form",
+			id: "f",
+			title: "Schedule reminder",
+			description: "Tell me when to check in.",
+			fields: [{ name: "when", type: "datetime" }],
+		};
+		expect(toPlainTextFallback(block)).toBe(
+			`Schedule reminder\n\nTell me when to check in.\n\n${FORM_FREE_TEXT_INVITE}`,
+		);
+	});
+
+	it("renders task deep links and followup suggestions without markers", () => {
+		const task: TaskInteraction = {
+			kind: "task",
+			threadId: "task-1",
+			title: "Review launch checklist",
+		};
+		expect(
+			toPlainTextFallback(task, {
+				resolveUrl: () => "https://app.test/task-1",
+			}),
+		).toBe("Review launch checklist\nhttps://app.test/task-1");
+
+		const followups: FollowupsInteraction = {
+			kind: "followups",
+			id: "f1",
+			options: [
+				{ kind: "navigate", payload: "/tasks", label: "Tasks" },
+				{ kind: "reply", payload: "yes", label: "Yes" },
+				{ kind: "prompt", payload: "explain", label: "Explain" },
+			],
+		};
+		expect(
+			toPlainTextFallback(followups, {
+				resolveNavigateUrl: (payload) => `https://app.test${payload}`,
+			}),
+		).toBe("Suggestions: Tasks (https://app.test/tasks) / Yes / Explain");
+	});
+
+	it("does not inline sensitive requests on text-only transports", () => {
+		const withUrl: SecretInteraction = {
+			kind: "secret",
+			id: "s1",
+			secretKind: "oauth",
+			reason: "Connect GitHub to continue",
+			url: "https://oauth.test/consent",
+		};
+		expect(toPlainTextFallback(withUrl)).toBe(
+			"Connect GitHub to continue\nhttps://oauth.test/consent",
+		);
+
+		const withoutUrl: SecretInteraction = {
+			kind: "secret",
+			id: "s2",
+			secretKind: "secret",
+			reason: "Enter your API key",
+			fields: [{ name: "apiKey", type: "secret" }],
+		};
+		expect(toPlainTextFallback(withoutUrl)).toBe(
+			"Enter your API key\nA secure link for this is not available here yet.",
+		);
+	});
+});
+
+describe("renderInteractionsAsPlainText", () => {
+	it("passes plain text through unchanged", () => {
+		expect(renderInteractionsAsPlainText("just a normal reply")).toEqual({
+			text: "just a normal reply",
+			hadBlocks: false,
+		});
+		expect(renderInteractionsAsPlainText(undefined)).toEqual({
+			text: "",
+			hadBlocks: false,
+		});
+	});
+
+	it("strips a long form before downstream chunking can split marker JSON", () => {
+		const bigForm = JSON.stringify({
+			title: "Trip",
+			description: "Tell me what changed.",
+			fields: [{ name: "a", type: "text", label: "x".repeat(6000) }],
+		});
+		const { text, hadBlocks } = renderInteractionsAsPlainText(
+			`Let's set this up.\n[FORM]\n${bigForm}\n[/FORM]`,
+		);
+
+		expect(hadBlocks).toBe(true);
+		expect(text).not.toContain("[FORM]");
+		expect(text).not.toContain('"fields"');
+		expect(text).not.toContain("xxxx");
+		expect(text).toContain("Trip");
+		expect(text).toContain("Tell me what changed.");
+		expect(text).toContain(FORM_FREE_TEXT_INVITE);
+	});
+});
+
+describe("renderContentInteractionsAsPlainText", () => {
+	it("renders typed secret interactions that have no bracket-marker text form", () => {
+		const { text, hadBlocks } = renderContentInteractionsAsPlainText({
+			text: "Connect this account.",
+			interactions: [
+				{
+					kind: "secret",
+					id: "s1",
+					secretKind: "oauth",
+					reason: "Connect GitHub to continue",
+					url: "https://oauth.test/consent",
+				},
+			],
+		});
+
+		expect(hadBlocks).toBe(true);
+		expect(text).toBe(
+			"Connect this account.\n\nConnect GitHub to continue\nhttps://oauth.test/consent",
+		);
+	});
 });
 
 describe("buildInteractionUrlResolver (#8908)", () => {
@@ -349,13 +694,37 @@ describe("buildInteractionUrlResolver (#8908)", () => {
 		);
 	});
 
-	it("resolves a form block to the hosted form route", () => {
-		const block: FormInteraction = {
+	// #14321 — there is no hosted /forms/:id page and form specs are never
+	// persisted, so a form block must NOT mint a link-out (that would be a dead
+	// route). It resolves to undefined and the layout degrades to a free-text
+	// reply, while a hosted-page block type (task) still resolves its real URL.
+	it("does not mint a link-out for a form block (no hosted page → free-text fallback)", () => {
+		const form: FormInteraction = {
 			kind: "form",
 			id: "form_7",
 			fields: [{ name: "k", type: "text" }],
 		};
-		expect(resolver.resolveUrl?.(block)).toBe("https://app.test/forms/form_7");
+		expect(resolver.resolveUrl?.(form)).toBeUndefined();
+
+		const layout = toNeutralLayout(form, resolver);
+		expect(layout.needsFallback).toBe(true);
+		expect(layout.rows).toEqual([]);
+		// No button anywhere points at the nonexistent /forms/ route.
+		const urls = layout.rows.flatMap((r) => r.buttons ?? []).map((b) => b.url);
+		expect(urls).not.toContain("https://app.test/forms/form_7");
+
+		// A block type that DOES have a hosted page still resolves normally.
+		const task: TaskInteraction = {
+			kind: "task",
+			threadId: "abc-123",
+			title: "Build it",
+		};
+		expect(resolver.resolveUrl?.(task)).toBe(
+			"https://app.test/orchestrator?taskId=abc-123",
+		);
+		expect(toNeutralLayout(task, resolver).rows[0]?.buttons?.[0]?.url).toBe(
+			"https://app.test/orchestrator?taskId=abc-123",
+		);
 	});
 
 	it("resolves navigate payloads (path + viewId) against the base url", () => {

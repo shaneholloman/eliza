@@ -184,12 +184,98 @@ describe("inferBackgroundPlan", () => {
 		).toBeNull();
 	});
 
+	it("renders the in-chat picker for a generic change/choose intent with no target", () => {
+		expect(inferBackgroundPlan("change my background", undefined)).toEqual({
+			op: "pick",
+		});
+		expect(
+			inferBackgroundPlan("let me pick a different wallpaper", undefined),
+		).toEqual({ op: "pick" });
+		expect(
+			inferBackgroundPlan("show me my background options", undefined),
+		).toEqual({ op: "pick" });
+	});
+
+	it("does NOT demote a concrete color/preset request to the picker", () => {
+		// A resolvable color still wins over the generic pick fallback.
+		expect(
+			inferBackgroundPlan("choose a green background", undefined),
+		).toMatchObject({ op: "set", mode: "shader" });
+		expect(
+			inferBackgroundPlan(
+				"change the background to the aurora shader",
+				undefined,
+			),
+		).toMatchObject({ op: "set", mode: "glsl", presetId: "aurora" });
+	});
+
 	it("honors explicit options over text", () => {
 		expect(
 			inferBackgroundPlan("change my background", undefined, {
 				color: "violet",
 			}),
 		).toMatchObject({ op: "set", mode: "shader", color: "#7c3aed" });
+	});
+
+	it("falls through an unknown explicit catalog reference for renderer-side user catalog resolution", () => {
+		expect(
+			inferBackgroundPlan("change my background", undefined, {
+				catalog: "sunset beach",
+			}),
+		).toEqual({
+			op: "set",
+			mode: "catalog",
+			catalogId: "sunset beach",
+			catalogLabel: "sunset beach",
+		});
+	});
+
+	it("passes a quoted catalog reference through without curated matching", () => {
+		expect(
+			inferBackgroundPlan('use "sunset beach" as my background', undefined),
+		).toMatchObject({
+			op: "set",
+			mode: "catalog",
+			catalogId: "sunset beach",
+		});
+	});
+
+	it("does not let an unknown catalog option override explicit image or generate inputs", () => {
+		expect(
+			inferBackgroundPlan("change my background", undefined, {
+				catalog: "sunset beach",
+				imageUrl: "/api/media/generated.png",
+			}),
+		).toEqual({
+			op: "set",
+			mode: "image",
+			imageUrl: "/api/media/generated.png",
+		});
+		expect(
+			inferBackgroundPlan("change my background", undefined, {
+				catalog: "sunset beach",
+				prompt: "a quiet redwood grove",
+			}),
+		).toEqual({
+			op: "set",
+			generatePrompt: "a quiet redwood grove",
+		});
+		expect(
+			inferBackgroundPlan("generate a sunset beach background", undefined, {
+				catalog: "sunset beach",
+			}),
+		).toMatchObject({
+			op: "set",
+			generatePrompt: "sunset beach",
+		});
+	});
+
+	it("keeps ordinary color requests ahead of user-catalog fallback", () => {
+		expect(inferBackgroundPlan("make my background teal")).toMatchObject({
+			op: "set",
+			mode: "shader",
+			colorLabel: "teal",
+		});
 	});
 });
 
@@ -347,6 +433,22 @@ describe("BACKGROUND action handler", () => {
 		expect(replies[0].toLowerCase()).toContain("lava");
 	});
 
+	it("emits the [BACKGROUND] picker marker for a generic change intent (no view event)", async () => {
+		const { action, emitted, replies, callback } = setup();
+		const result = await action.handler(
+			runtime,
+			message("change my background"),
+			undefined,
+			undefined,
+			callback,
+		);
+		// No apply event — the picker widget owns the selection, applied globally
+		// through the persisted background config, not a one-shot view event.
+		expect(emitted).toEqual([]);
+		expect(result.success).toBe(true);
+		expect(replies[0]).toContain("[BACKGROUND]");
+	});
+
 	it("broadcasts a uniform tweak (mode glsl, uniforms only) for a relative ask", async () => {
 		const { action, emitted, replies, callback } = setup();
 		await action.handler(
@@ -502,6 +604,20 @@ describe("BACKGROUND action — catalog name-select + upload handoff (#13538)", 
 			vi.fn(async () => []),
 		);
 		expect(emitted).toEqual([{ op: "set", catalogId: "ocean-deep" }]);
+	});
+
+	it("passes a user-saved catalog reference through for renderer-side lookup", async () => {
+		const { action, emitted, replies, callback } = setup();
+		const result = await action.handler(
+			runtime,
+			message("use my sunset wallpaper"),
+			undefined,
+			undefined,
+			callback,
+		);
+		expect(emitted).toEqual([{ op: "set", catalogId: "sunset" }]);
+		expect(result.success).toBe(true);
+		expect(replies[0]).toContain("sunset");
 	});
 
 	it("an explicit generate wins over a same-named catalog entry", async () => {

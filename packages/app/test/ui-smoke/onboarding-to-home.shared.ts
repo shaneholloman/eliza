@@ -21,8 +21,6 @@ import {
 // route layer live here once and the two specs differ only in browser context
 // (desktop vs Pixel-class touch viewport) and screenshot output directory.
 
-export const SMOKE_GENERATED_AT = "2026-01-01T00:00:00.000Z";
-
 // A tiny silent WAV so a mocked TTS POST returns bytes decodeAudioData accepts
 // on every Chromium build, keeping the page-diagnostics guard clean when the
 // tutorial narrator speaks. The old truncated-mp3 fixture stopped decoding
@@ -130,10 +128,8 @@ function pluginInfo(id: string, name: string) {
 const PLUGIN_SNAPSHOT = [
   pluginInfo("calendar", "Calendar"),
   pluginInfo("goals", "Goals"),
-  pluginInfo("finances", "Finances"),
   pluginInfo("health", "Health"),
-  pluginInfo("relationships", "Relationships"),
-  pluginInfo("agent-orchestrator", "Agent Orchestrator"),
+  pluginInfo("todo", "Todos"),
 ];
 
 async function fulfillJson(
@@ -159,31 +155,6 @@ function requestAllowsBody(route: Route): boolean {
 
 // -- Seeded attention payloads (mirror home-widget-priority.spec) -------------
 
-function moneyDashboard() {
-  return {
-    spending: { netUsd: -125.5 },
-    generatedAt: SMOKE_GENERATED_AT,
-  };
-}
-function moneySources() {
-  return { sources: [{ id: "src-1", status: "active", label: "Checking" }] };
-}
-function moneyRecurring() {
-  const inDays = (n: number) =>
-    new Date(Date.now() + n * 24 * 60 * 60 * 1000).toISOString();
-  return {
-    charges: [
-      {
-        merchantNormalized: "netflix",
-        merchantDisplay: "Netflix",
-        cadence: "monthly",
-        averageAmountUsd: 15.99,
-        nextExpectedAt: inDays(3),
-        category: "entertainment",
-      },
-    ],
-  };
-}
 function goalsPayload() {
   return {
     goals: [
@@ -243,48 +214,6 @@ function sleepRegularity() {
     windowDays: 14,
   };
 }
-function relationshipsPeople() {
-  return {
-    data: [
-      {
-        groupId: "grp-pat",
-        primaryEntityId: "ent-pat",
-        memberEntityIds: ["ent-pat"],
-        displayName: "Pat Doe",
-        aliases: [],
-        platforms: ["discord"],
-        identities: [],
-        emails: [],
-        phones: [],
-        websites: [],
-        preferredCommunicationChannel: null,
-        categories: [],
-        tags: [],
-        factCount: 0,
-        relationshipCount: 1,
-        isOwner: false,
-        profiles: [],
-        lastInteractionAt: "2026-04-01T00:00:00.000Z",
-      },
-    ],
-    stats: { totalPeople: 1, totalRelationships: 1, totalIdentities: 1 },
-  };
-}
-function relationshipsCandidates() {
-  return {
-    data: [
-      {
-        id: "cand-1",
-        entityA: "ent-pat",
-        entityB: "ent-patrick",
-        confidence: 0.88,
-        evidence: { platform: "discord", handle: "pat#1" },
-        status: "pending",
-        proposedAt: SMOKE_GENERATED_AT,
-      },
-    ],
-  };
-}
 function notificationsPayload() {
   return {
     notifications: [
@@ -294,7 +223,7 @@ function notificationsPayload() {
         body: "Your card was declined for the Acme invoice.",
         category: "system",
         priority: "urgent",
-        source: "finances",
+        source: "system",
         createdAt: Date.now(),
         readAt: null,
       },
@@ -530,16 +459,7 @@ export async function installHomeRoutes(
     await fulfillJson(route, { views: VIEW_FIXTURES });
   });
 
-  // Seeded attention data for every per-plugin home widget.
-  await page.route("**/api/lifeops/money/dashboard**", async (route) => {
-    await fulfillJson(route, moneyDashboard());
-  });
-  await page.route("**/api/lifeops/money/recurring**", async (route) => {
-    await fulfillJson(route, moneyRecurring());
-  });
-  await page.route("**/api/lifeops/money/sources**", async (route) => {
-    await fulfillJson(route, moneySources());
-  });
+  // Seeded attention data for kept sparse-home widgets.
   await page.route("**/api/lifeops/goals**", async (route) => {
     await fulfillJson(route, goalsPayload());
   });
@@ -552,14 +472,7 @@ export async function installHomeRoutes(
   await page.route("**/api/lifeops/sleep/regularity**", async (route) => {
     await fulfillJson(route, sleepRegularity());
   });
-  await page.route("**/api/relationships/people**", async (route) => {
-    await fulfillJson(route, relationshipsPeople());
-  });
-  await page.route("**/api/relationships/candidates**", async (route) => {
-    await fulfillJson(route, relationshipsCandidates());
-  });
-
-  // Notification inbox hydrate — the notifications widget + the urgent signal.
+  // Notification inbox hydrate — the pinned center + the urgent signal.
   // (installDefaultAppRoutes registers an empty default; this override wins.)
   await page.route("**/api/notifications**", async (route) => {
     if (route.request().method() !== "GET") {
@@ -790,10 +703,9 @@ export function makeScreenshotter(
 }
 
 // The WidgetSection testIds each widget renders (read from source). The
-// notification inbox is not a ranked tile: it renders in the pinned
-// NotificationsHomeCenter (`home-notification-center`), outside the WidgetHost.
-export const FINANCES_TESTID = "chat-widget-finances-alerts";
-export const GOALS_TESTID = "widget-goals-attention";
+// notification inbox is not a ranked tile: it hides behind the home pull-up
+// hint and renders inside the NotificationsShade, outside the WidgetHost.
+export const TODOS_TESTID = "chat-widget-todos";
 
 // First-run runtime/provider buttons live in the real chat transcript. The
 // headless conductor seeds the ChoiceWidgets and the chat action channel routes
@@ -870,15 +782,35 @@ export async function expectChatFirstOnboarding(page: Page): Promise<Locator> {
 }
 
 /**
- * Assert the overlay AUTO-COLLAPSED on the completion edge: the moment
- * firstRunComplete flips, the sheet drops from the pinned FULL detent to the
- * composer-only resting state (revealing the home), and the composer unlocks.
+ * Assert the overlay settled on the completion edge: the moment
+ * firstRunComplete flips, the sheet springs from the pinned FULL detent down
+ * to the HALF detent (home revealed behind the top half, conversation still in
+ * hand), and the composer unlocks.
  */
-export async function expectOnboardingAutoCollapse(page: Page): Promise<void> {
-  const overlay = page.getByTestId("continuous-chat-overlay");
-  await expect(overlay).not.toHaveAttribute("data-open", "true", {
-    timeout: 30_000,
+export async function expectOnboardingSettleToHalf(page: Page): Promise<void> {
+  await expect(page.getByTestId("chat-sheet")).toHaveAttribute(
+    "data-detent",
+    "half",
+    { timeout: 30_000 },
+  );
+  await expect(page.getByTestId("chat-composer-textarea")).toBeEnabled({
+    timeout: 15_000,
   });
+}
+
+/**
+ * Cloud-only onboarding lands on the home surface with chat available as the
+ * collapsed input, not as the half-open first-run sheet. That keeps the first
+ * post-auth paint focused on home while still proving the composer unlocked.
+ */
+export async function expectOnboardingSettleToCollapsedInput(
+  page: Page,
+): Promise<void> {
+  await expect(page.getByTestId("chat-sheet")).toHaveAttribute(
+    "data-detent",
+    "collapsed",
+    { timeout: 30_000 },
+  );
   await expect(page.getByTestId("chat-composer-textarea")).toBeEnabled({
     timeout: 15_000,
   });
@@ -919,7 +851,7 @@ async function expectPostOnboardingChat(
   tutorial: "start" | "skip",
 ): Promise<void> {
   if (tutorial === "skip") {
-    await expectOnboardingAutoCollapse(page);
+    await expectOnboardingSettleToHalf(page);
     return;
   }
   await expect(page.getByTestId("continuous-chat-overlay")).toHaveAttribute(
@@ -932,30 +864,40 @@ async function expectPostOnboardingChat(
   });
 }
 
-/** Assert the seeded per-plugin home widgets render with their attention data. */
+/** Assert the kept sparse-home widgets render with their seeded data. */
 async function expectPopulatedHome(page: Page): Promise<Locator> {
   const host = page.getByTestId("widget-host-home");
   await expect(host).toBeVisible({ timeout: 30_000 });
-  for (const testId of [FINANCES_TESTID, GOALS_TESTID]) {
-    await expect(
-      host.getByTestId(testId),
-      `home widget ${testId} should render with seeded attention data`,
-    ).toBeVisible({ timeout: 30_000 });
-  }
-  await expect(host.getByTestId(FINANCES_TESTID)).toContainText("Overdrawn");
-  await expect(host.getByTestId(GOALS_TESTID)).toContainText(
+  await expect(
+    host.getByTestId(TODOS_TESTID),
+    "home Todos widget should render with seeded task data",
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(host.getByTestId(TODOS_TESTID)).toContainText(
     "Ship the release",
   );
-  // The seeded urgent notification surfaces in the pinned dashboard center
-  // (below the time/weather base), not as a ranked WidgetHost tile.
-  const notificationCenter = page.getByTestId("home-notification-center");
+  for (const testId of [
+    "chat-widget-finances-alerts",
+    "chat-widget-relationships",
+    "chat-widget-inbox-unread",
+  ]) {
+    await expect(host.getByTestId(testId)).toHaveCount(0);
+  }
+  // The seeded urgent notification hides behind the pull-up hint (Apple
+  // idiom), not as a ranked WidgetHost tile: open the shade to see the row,
+  // then close it so the caller gets the resting home back.
+  const hint = page.getByTestId("home-notifications-hint");
   await expect(
-    notificationCenter,
-    "the pinned notification center should render the seeded inbox",
+    hint,
+    "the notifications pull-up hint should render for the seeded inbox",
   ).toBeVisible({ timeout: 30_000 });
+  await hint.click();
   await expect(
-    notificationCenter.getByTestId("notification-row"),
+    page
+      .getByTestId("home-notification-center")
+      .getByTestId("notification-row"),
   ).toContainText("Payment failed");
+  await page.getByTestId("notifications-shade-scrim").click();
+  await expect(page.getByTestId("notifications-shade")).toHaveCount(0);
   const surface = page.getByTestId("home-launcher-surface");
   await expect(surface).toHaveAttribute("data-page", "home");
   return surface;
@@ -1017,6 +959,7 @@ export async function completeOnboardingToHome(
   const chatOverlay = page.getByTestId("continuous-chat-overlay");
   await expect(chatOverlay).toBeVisible({ timeout: 60_000 });
   await expectPostOnboardingChat(page, tutorial);
+  await dismissPermissionPrimingIfShown(page);
   await expect(page.getByTestId("chat-composer-textarea")).toBeVisible({
     timeout: 30_000,
   });
@@ -1066,12 +1009,13 @@ export async function completeCloudOnboardingToHome(
   await expect(agentChoice).toBeVisible({ timeout: 30_000 });
   await click(agentChoice);
 
-  // 4) Binding done → tutorial offered → land on the home (sheet auto-collapses).
+  // 4) Binding done → tutorial offered → land on the home (sheet settles to half).
   await pickTutorial(page, click, tutorial);
 
   const chatOverlay = page.getByTestId("continuous-chat-overlay");
   await expect(chatOverlay).toBeVisible({ timeout: 60_000 });
   await expectPostOnboardingChat(page, tutorial);
+  await dismissPermissionPrimingIfShown(page);
   await expect(page.getByTestId("chat-composer-textarea")).toBeVisible({
     timeout: 30_000,
   });
@@ -1127,17 +1071,17 @@ export async function expectCloudOnlySignInOnboarding(
 
 /** Post-completion contract shared by every cloud-only path: the real gate
  *  flipped at provisioning success (no tutorial/accent gate), the wrap-up turn
- *  is informational, the sheet auto-collapsed, and first-run persisted once. */
+ *  is informational, chat is available as the collapsed input, and first-run
+ *  persisted once. */
 async function expectCloudOnlyCompletion(
   page: Page,
   state: OnboardingRouteState,
 ): Promise<{ surface: Locator }> {
-  // Completion fires at provisioning success and collapses the sheet in the
-  // same commit — the wrap-up transcript turn is immediately hidden (and may
-  // unmount), so the completion contract is asserted on the durable surfaces:
-  // the collapse itself, the onboarded home, the absent tutorial gate, and the
+  // Completion fires at provisioning success and returns the user to the home
+  // surface with chat collapsed and ready. The durable contract is asserted on
+  // that settle, the onboarded home, the absent tutorial gate, and the
   // exactly-once POST. The wrap-up copy is covered by the conductor unit suite.
-  await expectOnboardingAutoCollapse(page);
+  await expectOnboardingSettleToCollapsedInput(page);
   await dismissPermissionPrimingIfShown(page);
   await expect(page.getByTestId(TUTORIAL_CHOICE("start"))).toHaveCount(0);
   await expect(page.getByTestId(TUTORIAL_CHOICE("skip"))).toHaveCount(0);
@@ -1164,12 +1108,11 @@ export async function completeCloudOnlyOnboardingToHome(
   await expectCloudOnlySignInOnboarding(page);
 
   // The session token lands as the login flow the tap launches completes
-  // (mocked at the storage boundary — same token the poll mock returns). This
-  // deliberately RACES the conductor's 500ms session poll, exactly like a real
-  // login landing while the user reaches for the button: whichever side wins,
-  // onboarding must complete. The click therefore tolerates the button
-  // collapsing/unmounting under it (poll won) instead of chasing a detached
-  // element until the test times out.
+  // (mocked at the storage boundary — same token the poll mock returns).
+  // Seeding it also arms the conductor's 500ms token poll, which can win the
+  // race and complete onboarding BEFORE the tap lands — the button then sits
+  // in a settling sheet and never reads "stable". Bound the click and let the
+  // completion assertions carry the contract either way.
   await setStewardSession(page, { token: CLOUD_AUTH_TOKEN });
   try {
     await page
@@ -1177,8 +1120,7 @@ export async function completeCloudOnlyOnboardingToHome(
       .first()
       .click({ timeout: 8_000 });
   } catch {
-    // Button gone/unstable because the session poll already completed
-    // onboarding — the completion assertions below are the real contract.
+    // The token poll already completed onboarding — nothing left to tap.
   }
 
   return expectCloudOnlyCompletion(page, opts.state);
@@ -1232,6 +1174,7 @@ export async function completeCloudInferenceOnboardingToHome(
   const chatOverlay = page.getByTestId("continuous-chat-overlay");
   await expect(chatOverlay).toBeVisible({ timeout: 60_000 });
   await expectPostOnboardingChat(page, tutorial);
+  await dismissPermissionPrimingIfShown(page);
   await expect(page.getByTestId("chat-composer-textarea")).toBeVisible({
     timeout: 30_000,
   });
@@ -1268,18 +1211,26 @@ export async function completeOtherProviderSettingsHandoff(
 
   await pickTutorial(page, click, tutorial);
 
+  // The Other/configure-later path ships no floating "choose a provider"
+  // banner (removed with ActionBanner): the honest surfaces are in-chat — the
+  // composer placeholder points at Settings while the agent has no provider,
+  // and the transcript's no-provider gate answers a send. Assert the banner
+  // never renders and the placeholder hint does.
   await expect(
     page.getByText("Choose a model provider in Settings before sending", {
       exact: false,
     }),
-  ).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByRole("button", { name: "Open Settings" })).toBeVisible(
-    { timeout: 15_000 },
+  ).toHaveCount(0);
+  await expect(page.getByTestId("chat-composer-textarea")).toHaveAttribute(
+    "placeholder",
+    /Settings/,
+    { timeout: 30_000 },
   );
 
   const chatOverlay = page.getByTestId("continuous-chat-overlay");
   await expect(chatOverlay).toBeVisible({ timeout: 60_000 });
   await expectPostOnboardingChat(page, tutorial);
+  await dismissPermissionPrimingIfShown(page);
   await expect(page.getByTestId("chat-composer-textarea")).toBeVisible({
     timeout: 30_000,
   });
@@ -1321,8 +1272,8 @@ export async function connectRemoteFirstRunToHome(
   const surface = page.getByTestId("home-launcher-surface");
   await expect(surface).toBeVisible({ timeout: 60_000 });
   await expect(surface).toHaveAttribute("data-page", "home");
-  // Remote adoption flips firstRunComplete too — same auto-collapse edge.
-  await expectOnboardingAutoCollapse(page);
+  // Remote adoption flips firstRunComplete too — same settle-to-half edge.
+  await expectOnboardingSettleToHalf(page);
   await dismissPermissionPrimingIfShown(page);
   await expect(page.getByTestId("chat-composer-textarea")).toBeVisible({
     timeout: 30_000,

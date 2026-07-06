@@ -17,6 +17,7 @@ import {
 import type * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_BOOT_CONFIG, setBootConfig } from "./config/boot-config";
+import type { ViewRegistryEntry } from "./hooks/useAvailableViews";
 
 const appState = vi.hoisted(() => ({
   setTab: vi.fn(),
@@ -53,23 +54,36 @@ const dynamicViewLoaderMock = vi.hoisted(() => ({
   render: vi.fn(
     ({
       bundleUrl,
+      frameUrl,
       surface,
       viewId,
       viewType,
     }: {
-      bundleUrl: string;
-      surface?: { capabilities?: string[] };
+      bundleUrl?: string;
+      frameUrl?: string;
+      surface?: { capabilities?: string[]; isolation?: string };
       viewId: string;
       viewType?: string;
     }) => (
       <div
-        data-bundle-url={bundleUrl}
+        data-bundle-url={bundleUrl ?? ""}
+        data-frame-url={frameUrl ?? ""}
         data-surface-capabilities={surface?.capabilities?.join(",") ?? ""}
         data-testid="dynamic-view-loader"
         data-view-id={viewId}
         data-view-type={viewType ?? ""}
       />
     ),
+  ),
+}));
+
+const settingsViewMock = vi.hoisted(() => ({
+  render: vi.fn(
+    (_props: {
+      initialSection?: string;
+      navigatePayload?: unknown;
+      navigateSequence?: number;
+    }) => <div data-testid="settings-view" />,
   ),
 }));
 
@@ -111,7 +125,7 @@ const shopifyView = {
 
 const shopifyAgentSurfaceView = {
   ...shopifyView,
-  surface: { capabilities: ["agent-surface"] },
+  surface: { capabilities: ["agent-surface" as const] },
 };
 
 const calendarView = {
@@ -132,7 +146,14 @@ const sharedCanvasView = {
   path: "/shared-canvas",
   bundleUrl: "/api/views/shared-canvas/bundle.js",
   viewType: "gui" as const,
-  backgroundPolicy: "shared" as const,
+  // Sharing the Home/Launcher wallpaper is grant-gated (#13452): the surface
+  // manifest must declare `background: "shared"` AND the `wallpaper`
+  // capability. A bare `backgroundPolicy: "shared"` resolves to opaque by
+  // design (no view opts into the wallpaper by accident).
+  surface: {
+    background: "shared" as const,
+    capabilities: ["wallpaper"] as const,
+  },
 };
 
 const documentsView = {
@@ -145,7 +166,18 @@ const documentsView = {
   viewType: "gui" as const,
 };
 
-const mockAvailableViews = [
+const sandboxedFrameView = {
+  id: "sandboxed-frame",
+  label: "Sandboxed Frame",
+  available: true,
+  pluginName: "@elizaos/plugin-sandboxed-frame",
+  path: "/apps/sandboxed-frame",
+  frameUrl: "/api/views/sandboxed-frame/frame.html",
+  surface: { isolation: "sandboxed-iframe" as const },
+  viewType: "gui" as const,
+};
+
+const mockAvailableViews: ViewRegistryEntry[] = [
   remoteLedgerView,
   viewsManagerView,
   viewsManagerTuiView,
@@ -249,7 +281,6 @@ vi.mock("./state", async () => {
     backendConnection: { state: "connected" },
     copyToClipboard: vi.fn(),
     databaseSubTab: "overview",
-    dismissActionBanner: vi.fn(),
     dismissSystemWarning: vi.fn(),
     elizaCloudConnected: false,
     elizaCloudVoiceProxyAvailable: false,
@@ -338,10 +369,6 @@ vi.mock("./components/shell/AssistantOverlay", () => ({
   ),
 }));
 
-vi.mock("./components/shell/ConnectionFailedBanner", () => ({
-  ConnectionFailedBanner: () => null,
-}));
-
 vi.mock("./components/shell/SystemWarningBanner", () => ({
   SystemWarningBanner: () => null,
 }));
@@ -357,6 +384,14 @@ vi.mock("./components/chat/SaveCommandModal", () => ({
 vi.mock("./components/pages/ChatView", () => ({
   ChatView: () => <div data-testid="chat-view" />,
   __resetCompanionSpeechMemoryForTests: vi.fn(),
+}));
+
+vi.mock("./components/pages/SettingsView", () => ({
+  SettingsView: (props: {
+    initialSection?: string;
+    navigatePayload?: unknown;
+    navigateSequence?: number;
+  }) => settingsViewMock.render(props),
 }));
 
 vi.mock("./components/character/CharacterEditor", () => ({
@@ -420,6 +455,7 @@ describe("App navigate-view event wiring", () => {
     desktopBridgeMock.invokeDesktopBridgeRequest.mockClear();
     desktopBridgeMock.subscribeDesktopBridgeEvent.mockClear();
     dynamicViewLoaderMock.render.mockClear();
+    settingsViewMock.render.mockClear();
   });
 
   afterEach(() => {
@@ -456,6 +492,33 @@ describe("App navigate-view event wiring", () => {
       expect(appState.setTab).toHaveBeenCalledWith("settings");
     });
     expect(desktopTabsMock.openTab).not.toHaveBeenCalled();
+  });
+
+  it("passes settings navigate payloads into SettingsView for targeted permission priming", async () => {
+    appState.tab = "settings";
+    window.history.replaceState(null, "", "/?shellMode=full");
+    const payload = { permissionRequest: { permission: "microphone" } };
+    render(<App />);
+
+    fireEvent(
+      window,
+      createNavigateViewEvent({
+        viewId: "settings",
+        viewPath: "/settings",
+        subview: "permissions",
+        payload,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(settingsViewMock.render).toHaveBeenCalledWith(
+        expect.objectContaining({
+          initialSection: "permissions",
+          navigatePayload: payload,
+          navigateSequence: 1,
+        }),
+      );
+    });
   });
 
   it("pins remote views and opens remote view windows through App wiring", async () => {
@@ -519,8 +582,39 @@ describe("App navigate-view event wiring", () => {
         .querySelector('[data-shell-content-region="true"]')
         ?.className.includes("pb-[var(--eliza-continuous-chat-clearance"),
     ).toBe(true);
+    expect(
+      container
+        .querySelector('[data-shell-content-region="true"]')
+        ?.className.includes("pe-[var(--eliza-continuous-chat-side-clearance"),
+    ).toBe(true);
     expect(getByTestId("app-opaque-background")).toBeTruthy();
     expect(queryByTestId("app-background-shader")).toBeNull();
+  });
+
+  it("routes frame-only sandboxed views through DynamicViewLoader with frameUrl", async () => {
+    mockAvailableViews.push(sandboxedFrameView);
+    appState.tab = "apps";
+    window.history.replaceState(null, "", "/apps/sandboxed-frame");
+
+    const { getByTestId } = render(<App />);
+
+    await waitFor(() => {
+      expect(dynamicViewLoaderMock.render).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bundleUrl: undefined,
+          frameUrl: "/api/views/sandboxed-frame/frame.html",
+          viewId: "sandboxed-frame",
+          viewType: "gui",
+        }),
+        undefined,
+      );
+    });
+
+    const loader = getByTestId("dynamic-view-loader");
+    expect(loader.getAttribute("data-bundle-url")).toBe("");
+    expect(loader.getAttribute("data-frame-url")).toBe(
+      "/api/views/sandboxed-frame/frame.html",
+    );
   });
 
   it("renders no global corner back button on app routes (removed in favor of per-page back affordances + browser/OS back)", async () => {

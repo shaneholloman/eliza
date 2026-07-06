@@ -190,6 +190,49 @@ component should ship at least a `*.stories.tsx` (states) **and** a `*.test.tsx`
 (behaviour). The live full-app visual audit lives in `packages/app`
 (`audit:app`) and `packages/cloud-frontend` (`audit:cloud`).
 
+### Scroll + tap-target certification (`src/testing/scroll-cert.ts`, #14380)
+
+A UI-library-wide certification harness holds every scrollable / interactive
+widget to four device-review guarantees: **scroll stability**, **keyboard
+interaction geometry**, **safe-area clearance**, and **tap-target minimums**
+(44x44 CSS px). It is two layers, same split as the rest of `src/testing`:
+
+- **Pure verdict math** — `scroll-cert.ts` is `(measurements) -> Violation[]`,
+  proven both ways (RED on a violation, GREEN when it holds) in
+  `scroll-cert.test.ts`. This is the always-trustworthy detector.
+- **DOM sweep** — `widget-cert.ts` walks a rendered widget for interactive
+  controls + scroll containers, reads their boxes through a pluggable
+  `GeometryProvider`, and runs the verdicts into a per-widget `WidgetCertReport`
+  (JSON + rendered summary). Under jsdom (`widget-cert.test.tsx`) geometry is
+  injected via `mapGeometryProvider`; a real browser supplies
+  `liveGeometryProvider` (getBoundingClientRect + getComputedStyle).
+- **Deep layer** — `src/testing/__e2e__/run-widget-cert-e2e.mjs`
+  (`bun run test:widget-cert-e2e`) mounts the widgets in real Chromium/WebKit
+  and runs the SAME sweep against real layout, emitting evidence
+  (`output-widget-cert/{widget-cert.json,widget-cert.txt,<engine>.png}`).
+  Playwright is flaky in CI — the runner SKIPs (exit 0) if the browser can't
+  launch; the vitest static layer is the always-green gate.
+
+**To certify a NEW widget:**
+
+1. Give the widget's scroll container a `data-scroll-cert-scroller` attribute
+   (or reuse `#continuous-thread` / `[data-testid="chat-thread"]`), and make sure
+   every interactive control is a native control / has a `role` / is
+   `tabindex>=0` (the sweep only enforces the tap floor on real controls). A
+   control with an expanded hit area (padding / hitSlop) should report an
+   effective hit box via the provider; a genuinely non-pointer affordance opts
+   out with `data-tap-target="ignore"`.
+2. Add a `certifyWidget("my-widget", root, provider, { dimensions: [...] })` case
+   to `widget-cert.test.tsx` (static, always runs) — pick the dimensions that
+   apply (`scroll`, `tap-target`, `safe-area`, `keyboard`). Inject known-good and
+   known-broken geometry so the cert is proven, not just green-because-empty.
+3. Optionally add the widget to the deep fixture
+   (`__e2e__/widget-cert-fixture.tsx`) so it is also certified against real
+   layout when playwright can run.
+4. A cert FAILURE is an actionable per-control report (code + selector +
+   measurement). This harness only DETECTS — component sizing/layout fixes are
+   owned by the component's lane; route findings there.
+
 ## Config / env vars
 
 This package mostly reads config injected by the host, not raw env vars:
@@ -216,6 +259,19 @@ This package mostly reads config injected by the host, not raw env vars:
   pick it up.
 - **Make a view agent-controllable:** use `useAgentElement` — see
   `src/agent-surface/README.md` for ids/roles/controlled-component rules.
+- **Add a mutating control to a builtin view:** every on-screen mutation in
+  `components/pages/`, `components/settings/`, or `components/character/` must
+  have a registered agent-action twin ("views display, chat controls" — voice
+  has no DOM to click). Two gates enforce this (#14369): the repo-level
+  `node packages/scripts/view-action-ratchet.mjs` (develop-pr lane) fails a new
+  mutating typed-client call or raw write `fetch` until it is mapped to its
+  action in `packages/scripts/view-action-ratchet.registry.json`, given a
+  designed exemption with a reason, or — only with a tracking issue — recorded
+  as a gap; and the per-view handler baseline in
+  `src/testing/builtin-view-action-ratchet.ts` (client test lane) ratchets
+  local handler growth per view. Prefer adding/extending the semantic action
+  over exempting; the generic `useAgentElement` bridge is for third-party
+  plugin views only.
 - **Add a cloud-frontend component:** add under `cloud-ui/components/` and export
   from `cloud-ui/index.ts`; it ships under the `@elizaos/ui/cloud-ui` subpath.
   Import primitives from `../../components/ui/*` — do not create re-export shims
@@ -246,6 +302,15 @@ This package mostly reads config injected by the host, not raw env vars:
 - `ConnectionStatus` exists twice (cloud-ui string union vs. the composite
   component) — the cloud-ui one is intentionally NOT re-exported from the root
   barrel to avoid the collision (see comment in `index.ts`).
+- **Builtin view mutations need semantic action twins.** First-party shell views
+  are covered by `src/testing/builtin-view-action-ratchet.ts`: every local
+  mutation site in the baseline either maps to a semantic action (`SETTINGS`,
+  `SCHEDULED_TASKS`, `BACKGROUND`, etc.) or is explicitly exempt as a diagnostic
+  view. When adding a button/filter/toggle/form handler to a builtin view, add or
+  reuse the action first, then update the ratchet baseline with the reason. The
+  per-site twin mapping (typed-client writes → action ids) is enforced by the
+  repo-level gate — see "Add a mutating control to a builtin view" in the
+  how-to list above.
 - Type root `src/types/index.ts` re-exports from `@elizaos/shared/types`; keep
   shared transport/domain types there rather than redefining them here.
 - **Files / attachments.** The "Files" tab (`components/pages/FilesView.tsx`,
@@ -260,10 +325,10 @@ This package mostly reads config injected by the host, not raw env vars:
 - Build/test conventions and the repo-wide architecture rules live in the root
   AGENTS.md — don't restate them; follow them.
 
-<!-- BEGIN: evidence-and-e2e-mandate (managed; canonical standard = repo-root PR_EVIDENCE.md) -->
+<!-- BEGIN: evidence-and-e2e-mandate (managed; canonical standard = repo-root AGENTS.md) -->
 ## ⛔ NON-NEGOTIABLE — evidence, trajectories & real end-to-end tests
 
-> The binding, repo-wide standard is **[PR_EVIDENCE.md](../../PR_EVIDENCE.md)**. Read it.
+> The binding, repo-wide standard is **[AGENTS.md](../../AGENTS.md)**. Read it.
 > Nothing in this package is *done* until it is *proven* done — a reviewer must confirm it
 > works **without reading the code**, from the artifacts you attach. This applies to **every**
 > feature, fix, refactor, and chore here. "Tests pass" is not proof; "CI is green" is not proof.
@@ -291,7 +356,7 @@ This package mostly reads config injected by the host, not raw env vars:
   "follow-up." When unsure, research thoroughly, weigh the options, and ship the best,
   highest-effort, production-ready version. Keep going until every possibility is exhausted.
 
-Artifacts → `.github/issue-evidence/<issue#>-<slug>.<ext>`; attach each evidence type **or**
+Artifacts → attached inline in the PR (MP4 video, JPG screenshots, logs in `<details>`); attach each evidence type **or**
 explicitly mark it N/A with a reason — never leave it blank. If `develop` moved and changed
 behavior, **re-capture** evidence; stale proof is worse than none.
 

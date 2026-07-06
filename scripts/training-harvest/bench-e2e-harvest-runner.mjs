@@ -91,10 +91,7 @@ const ITEM_TIMEOUT_MS = Number(opt("--item-timeout-ms", "900000")) || 900000;
 const HARVEST_ROOT = path.resolve(
   opt(
     "--harvest-root",
-    path.join(
-      REPO_ROOT,
-      ".github/issue-evidence/gpt55-training-pipeline/harvest",
-    ),
+    path.join(REPO_ROOT, "reports", "training-harvest", "gpt55", "harvest"),
   ),
 );
 

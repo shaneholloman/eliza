@@ -18,7 +18,7 @@ import {
   failureToActionResult,
   readBoolParam,
   readStringParam,
-  successActionResult,
+  userFacingSuccessResult,
 } from "../lib/format.js";
 import { detectSecrets } from "../lib/secrets.js";
 import type { FileStateService } from "../services/file-state-service.js";
@@ -185,7 +185,7 @@ export async function editFileHandler(
   const text = `Replaced ${replacements} occurrence${replacements === 1 ? "" : "s"} in ${resolved} (first at line ${firstLine})`;
   if (callback) await callback({ text, source: "coding-tools" });
 
-  return successActionResult(text, {
+  return userFacingSuccessResult(text, {
     path: resolved,
     replacements,
     firstLine,

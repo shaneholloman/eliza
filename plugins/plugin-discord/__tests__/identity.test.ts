@@ -1,25 +1,28 @@
 /**
- * Unit tests for owner-user-id extraction and parsing from settings
- * (`extractDiscordOwnerUserIds`, `parseDiscordOwnerUserIds`). Pure-function
- * assertions.
+ * Unit tests for Discord owner alias extraction, team-admin extraction, and
+ * owner-id setting parsing. These pure helpers decide whether an inbound
+ * Discord user is collapsed to the canonical owner entity or kept auditable as
+ * their own connector identity.
  */
 import { describe, expect, it } from "vitest";
 import {
+	buildDiscordWorldMetadata,
 	extractDiscordOwnerUserIds,
+	extractDiscordTeamAdminUserIds,
 	parseDiscordOwnerUserIds,
 } from "../identity.ts";
 
 /**
  * Owner-id resolution decides who the Discord bot treats as its owner — a
  * security-sensitive grant. Snowflakes must match Discord's 15-20 digit shape
- * (anything else is rejected, never coerced), extraction must dedupe across the
- * direct owner / team owner / team members shapes (Array OR discord.js
- * Collection), and parse must tolerate JSON-string or array config without
- * letting a malformed id through.
+ * (anything else is rejected, never coerced). Team members are connector-admin
+ * candidates, but they must never be owner aliases because owner aliasing also
+ * rewrites message attribution to the canonical owner entity.
  */
 
 const SNOWFLAKE_A = "123456789012345678";
 const SNOWFLAKE_B = "234567890123456789";
+const SNOWFLAKE_C = "345678901234567890";
 
 describe("extractDiscordOwnerUserIds", () => {
 	it("reads the direct application owner", () => {
@@ -28,7 +31,7 @@ describe("extractDiscordOwnerUserIds", () => {
 		]);
 	});
 
-	it("collects + dedupes team owner and members", () => {
+	it("collects + dedupes direct owner and team owner only", () => {
 		const application = {
 			owner: { id: SNOWFLAKE_A },
 			team: {
@@ -37,19 +40,96 @@ describe("extractDiscordOwnerUserIds", () => {
 			},
 		};
 		const ids = extractDiscordOwnerUserIds(application);
-		expect(ids.sort()).toEqual([SNOWFLAKE_A, SNOWFLAKE_B].sort());
+		expect(ids).toEqual([SNOWFLAKE_A]);
 	});
 
-	it("handles a discord.js Collection (Map of [key, member])", () => {
+	it("reads a team-owned application's team owner as the owner alias", () => {
+		expect(
+			extractDiscordOwnerUserIds({
+				team: {
+					ownerId: SNOWFLAKE_A,
+					members: [{ user: { id: SNOWFLAKE_B } }],
+				},
+			}),
+		).toEqual([SNOWFLAKE_A]);
+	});
+
+	it("does not treat a discord.js team member Collection as owner aliases", () => {
 		const members = new Map([["k", { user: { id: SNOWFLAKE_B } }]]);
-		expect(extractDiscordOwnerUserIds({ team: { members } })).toEqual([
-			SNOWFLAKE_B,
-		]);
+		expect(extractDiscordOwnerUserIds({ team: { members } })).toEqual([]);
 	});
 
 	it("returns [] for non-objects", () => {
 		expect(extractDiscordOwnerUserIds(null)).toEqual([]);
 		expect(extractDiscordOwnerUserIds("nope")).toEqual([]);
+	});
+});
+
+describe("extractDiscordTeamAdminUserIds", () => {
+	it("collects team members from array-shaped application metadata", () => {
+		expect(
+			extractDiscordTeamAdminUserIds({
+				team: { members: [{ user: { id: SNOWFLAKE_B } }] },
+			}),
+		).toEqual([SNOWFLAKE_B]);
+	});
+
+	it("handles a discord.js Collection (Map of [key, member])", () => {
+		const members = new Map([["k", { user: { id: SNOWFLAKE_B } }]]);
+		expect(extractDiscordTeamAdminUserIds({ team: { members } })).toEqual([
+			SNOWFLAKE_B,
+		]);
+	});
+
+	it("returns [] for non-objects", () => {
+		expect(extractDiscordTeamAdminUserIds(null)).toEqual([]);
+		expect(extractDiscordTeamAdminUserIds("nope")).toEqual([]);
+	});
+
+	it("skips pending invitees (membership_state 1) — they have not accepted", () => {
+		expect(
+			extractDiscordTeamAdminUserIds({
+				team: {
+					members: [
+						{ user: { id: SNOWFLAKE_B }, membershipState: 1 },
+						{ user: { id: SNOWFLAKE_C }, membership_state: 1 },
+					],
+				},
+			}),
+		).toEqual([]);
+	});
+
+	it("skips read_only members — they deliberately hold no write access", () => {
+		expect(
+			extractDiscordTeamAdminUserIds({
+				team: {
+					members: [
+						{
+							user: { id: SNOWFLAKE_B },
+							membershipState: 2,
+							role: "read_only",
+						},
+					],
+				},
+			}),
+		).toEqual([]);
+	});
+
+	it("keeps accepted developers and members with absent state/role fields", () => {
+		expect(
+			extractDiscordTeamAdminUserIds({
+				team: {
+					members: [
+						{
+							user: { id: SNOWFLAKE_B },
+							membershipState: 2,
+							role: "developer",
+						},
+						{ user: { id: SNOWFLAKE_C } },
+					],
+				},
+			}),
+		).toEqual([SNOWFLAKE_B, SNOWFLAKE_C]);
 	});
 });
 
@@ -71,5 +151,45 @@ describe("parseDiscordOwnerUserIds", () => {
 		expect(parseDiscordOwnerUserIds("not json")).toEqual([]);
 		expect(parseDiscordOwnerUserIds("")).toEqual([]);
 		expect(parseDiscordOwnerUserIds(42)).toEqual([]);
+	});
+});
+
+describe("buildDiscordWorldMetadata", () => {
+	it("records the app owner as OWNER with owner provenance", () => {
+		const metadata = buildDiscordWorldMetadata(
+			{
+				agentId: "00000000-0000-0000-0000-000000000001",
+				character: { name: "Agent" },
+				getSetting: () => undefined,
+			} as never,
+			undefined,
+		);
+
+		const ownerId = metadata?.ownership?.ownerId;
+		expect(ownerId).toBeTruthy();
+		expect(metadata?.roles?.[ownerId as string]).toBe("OWNER");
+		expect(metadata?.roleSources?.[ownerId as string]).toBe("owner");
+	});
+
+	it("records Discord guild owners as connector-admin sourced ADMIN, not bare OWNER", () => {
+		const metadata = buildDiscordWorldMetadata(
+			{
+				agentId: "00000000-0000-0000-0000-000000000001",
+				character: { name: "Agent" },
+				getSetting: () => undefined,
+			} as never,
+			SNOWFLAKE_A,
+		);
+
+		const ownerId = metadata?.ownership?.ownerId;
+		const guildOwnerEntityId = Object.keys(metadata?.roles ?? {}).find(
+			(entityId) => entityId !== ownerId,
+		);
+
+		expect(guildOwnerEntityId).toBeTruthy();
+		expect(metadata?.roles?.[guildOwnerEntityId as string]).toBe("ADMIN");
+		expect(metadata?.roleSources?.[guildOwnerEntityId as string]).toBe(
+			"connector_admin",
+		);
 	});
 });

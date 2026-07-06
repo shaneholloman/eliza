@@ -53,7 +53,7 @@ function makeInteractiveView(id: string, mountedIds: Set<string>) {
       id,
       label: `${id} view`,
       path: `/${id}`,
-      surface: { capabilities: ["agent-surface"] },
+      surface: { capabilities: ["agent-surface"] as const },
       relatedActions: [] as string[],
       scopedActions: [
         {
@@ -393,6 +393,7 @@ describe("view-scoped action registration reconciliation", () => {
     const incumbent: Action = {
       name: "VIEW_SETTINGS_SET_PROVIDER",
       description: "global incumbent",
+      validate: async () => true,
       handler: async () => undefined,
     };
     runtime.registerAction(incumbent);

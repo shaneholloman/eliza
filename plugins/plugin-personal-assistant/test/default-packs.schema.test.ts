@@ -356,7 +356,7 @@ describe("W1-D default escalation ladders", () => {
     ]);
   });
 
-  it("priority_high_default has 3-step cross-channel ladder", () => {
+  it("priority_high_default has connected-channel candidates ending in in_app", () => {
     expect(DEFAULT_ESCALATION_LADDERS.priority_high_default.steps).toEqual([
       { delayMinutes: 0, channelKey: "in_app", intensity: "soft" },
       { delayMinutes: 15, channelKey: "push", intensity: "normal" },
@@ -420,8 +420,10 @@ describe("W1-D habit-starters pack", () => {
       (r) => r.metadata?.recordKey === HABIT_STARTER_KEYS.stretch,
     );
     expect(stretch?.shouldFire?.compose).toBe("first_deny");
+    // late_evening_skip encoded a timing JUDGMENT; that call now belongs to
+    // the model moment judge, composed after the structural gates (#14677).
     expect(stretch?.shouldFire?.gates.map((g) => g.kind).sort()).toEqual([
-      "late_evening_skip",
+      "model_moment_check",
       "stretch.walk_out_reset",
       "weekend_skip",
     ]);

@@ -146,6 +146,13 @@ function PermissionPrimingModalView({
         showCloseButton
         data-testid="permission-priming-modal"
         aria-describedby="permission-priming-subtitle"
+        // The completion edge leaves the chat sheet open at the HALF detent
+        // (its container stacks at the shell-overlay level), so this modal
+        // must sit above the ambient chat — content and dim both — or the
+        // sheet paints over it and eats its taps (mobile bottom-sheet dialogs
+        // and the half sheet are both bottom-anchored).
+        className="z-[9500]"
+        overlayClassName="z-[9490]"
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -221,10 +228,20 @@ function PrimingCard({
   const t = useAppSelector((s) => s.t);
   const copy = PRIMING_COPY[id];
   const Icon = copy ? (ICONS[copy.icon] ?? ShieldCheck) : ShieldCheck;
-  const title = copy ? t(copy.titleKey, { defaultValue: copy.title }) : id;
+  const fallbackName = id.replaceAll("-", " ");
+  const title = copy
+    ? t(copy.titleKey, { defaultValue: copy.title })
+    : t("permissionpriming.generic.title", {
+        defaultValue: "Allow {{permission}}",
+        permission: fallbackName,
+      });
   const rationale = copy
     ? t(copy.rationaleKey, { defaultValue: copy.rationale })
-    : "";
+    : t("permissionpriming.generic.rationale", {
+        defaultValue:
+          "Enable this permission so I can complete the request you just made.",
+        permission: fallbackName,
+      });
 
   const denied = status === "denied";
 

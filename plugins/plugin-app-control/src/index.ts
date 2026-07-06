@@ -17,12 +17,14 @@ import { agentSwitchAction } from "./actions/agent-switch.js";
 import { appAction, createAppAction } from "./actions/app.js";
 import { backgroundAction } from "./actions/background.js";
 import { modelSwitchAction } from "./actions/model-switch.js";
+import { settingsAction } from "./actions/settings.js";
 import {
 	closeAllViewsAction,
 	closeViewAction,
 	viewsAction,
 } from "./actions/views.js";
 import { createViewsClient } from "./actions/views-client.js";
+import { createChoiceShortcutEvaluator } from "./evaluators/create-choice-shortcut.js";
 import { viewCommandShortcutEvaluator } from "./evaluators/view-command-shortcut.js";
 import { viewContextEvaluator } from "./evaluators/view-context.js";
 import { viewFollowupRoutingEvaluator } from "./evaluators/view-followup-routing.js";
@@ -67,6 +69,22 @@ export {
 	sanctionedModelError,
 } from "./actions/model-switch.js";
 export {
+	createSettingsAction,
+	parseBooleanValue,
+	parseSettingsRequest,
+	resolveSectionId,
+	SETTINGS_WRITE_REGISTRY,
+	type SettingsActionDeps,
+	type SettingsRequest,
+	type SettingsRouteFetch,
+	type SettingsRouteOutcome,
+	type SettingsSectionCapability,
+	type SettingsSectionListing,
+	type SettingsVerb,
+	type SettingsWritableKey,
+	settingsAction,
+} from "./actions/settings.js";
+export {
 	__matcherData,
 	MATCHER_VIEW_IDS,
 	matchViewCommand,
@@ -83,6 +101,7 @@ export type { ViewSummary } from "./actions/views-client.js";
 export { INTENT_VIEW_IDS, resolveIntentView } from "./actions/views-show.js";
 export type { AppControlClient } from "./client/api.js";
 export { createAppControlClient } from "./client/api.js";
+export { createChoiceShortcutEvaluator } from "./evaluators/create-choice-shortcut.js";
 export { viewCommandShortcutEvaluator } from "./evaluators/view-command-shortcut.js";
 export {
 	CONTEXT_VIEWS,
@@ -152,6 +171,7 @@ export const appControlPlugin: Plugin = {
 		backgroundAction,
 		modelSwitchAction,
 		agentSwitchAction,
+		settingsAction,
 	],
 	shortcuts: viewNavigationShortcuts,
 	// Three-stage view-switch cascade:
@@ -169,6 +189,7 @@ export const appControlPlugin: Plugin = {
 	evaluators: [viewContextEvaluator],
 	responseHandlerEvaluators: [
 		viewCommandShortcutEvaluator,
+		createChoiceShortcutEvaluator,
 		viewFollowupRoutingEvaluator,
 	],
 	providers: [availableAppsProvider, currentViewProvider],

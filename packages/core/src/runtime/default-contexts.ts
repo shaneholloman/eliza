@@ -48,8 +48,17 @@ export const DEFAULT_CONTEXT_DEFINITIONS: readonly ContextDefinition[] =
 		{
 			id: "memory",
 			label: "Memory",
+			// Covers both the MEMORY and EXPERIENCE actions, which register under
+			// this context. Naming the mutations (edit/delete/forget) and the
+			// record kinds (memories, facts, learned experiences) is what lets
+			// Stage 1 route "forget that fact" / "delete the experience about X"
+			// here instead of misclassifying them as a `simple` direct reply
+			// (#14623). The bare label "Memory" alone gave the compact-tier
+			// catalog no signal for the destructive verbs.
 			description:
-				"Read, write, and recall agent memories and long-term facts.",
+				"Read, write, recall, edit, and delete the agent's stored memories, long-term facts, and learned experiences — including forgetting a specific memory or experience.",
+			descriptionCompressed:
+				"Agent memories, facts & learned experiences: recall, edit, delete/forget",
 			sensitivity: "personal",
 			cacheScope: "agent",
 			roleGate: { minRole: "USER" },

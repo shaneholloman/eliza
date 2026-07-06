@@ -3,6 +3,8 @@
  * plus a mutable agent-backup state, so PA tests run without pulling in the full agent
  * package.
  */
+
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -179,7 +181,74 @@ export function parseCronExpression(expression: string): {
 
 export function registerEscalationChannel(): void {}
 
-export function getAgentEventService(): null {
+export interface AgentEventServiceStubEvent {
+  runId: string;
+  stream: string;
+  agentId?: string;
+  data: Record<string, unknown>;
+}
+
+interface AgentEventServiceStubState {
+  enabled: boolean;
+  events: AgentEventServiceStubEvent[];
+}
+
+const AGENT_EVENT_SERVICE_STUB_STATE = Symbol.for(
+  "eliza.lifeops.test.agentEventServiceStubState",
+);
+
+function getAgentEventServiceStubState(): AgentEventServiceStubState {
+  const globalWithState = globalThis as typeof globalThis & {
+    [AGENT_EVENT_SERVICE_STUB_STATE]?: AgentEventServiceStubState;
+  };
+  globalWithState[AGENT_EVENT_SERVICE_STUB_STATE] ??= {
+    enabled: false,
+    events: [],
+  };
+  return globalWithState[AGENT_EVENT_SERVICE_STUB_STATE];
+}
+
+/** Enable the capturing event-bus stand-in; disabled (null service) by default. */
+export function enableAgentEventServiceStub(): void {
+  getAgentEventServiceStubState().enabled = true;
+}
+
+export function resetAgentEventServiceStub(): void {
+  const state = getAgentEventServiceStubState();
+  state.enabled = false;
+  state.events = [];
+}
+
+export function getAgentEventServiceStubEvents(): AgentEventServiceStubEvent[] {
+  return [...getAgentEventServiceStubState().events];
+}
+
+export function getAgentEventService(runtime?: {
+  getService?: (serviceType: string) => unknown;
+}): {
+  emit: (event: AgentEventServiceStubEvent) => void;
+} | null {
+  const runtimeService = runtime?.getService?.("agent_event");
+  if (
+    runtimeService &&
+    typeof runtimeService === "object" &&
+    "emit" in runtimeService &&
+    typeof runtimeService.emit === "function"
+  ) {
+    return runtimeService as {
+      emit: (event: AgentEventServiceStubEvent) => void;
+    };
+  }
+  const state = getAgentEventServiceStubState();
+  if (!state.enabled) return null;
+  return {
+    emit: (event) => {
+      state.events.push(event);
+    },
+  };
+}
+
+export function resolveApprovalService(): null {
   return null;
 }
 
@@ -205,14 +274,98 @@ export function loadElizaConfig(): Record<string, unknown> {
   return {};
 }
 
-export function loadOwnerContactsConfig(): Record<string, unknown> {
-  return {};
+function readTestElizaConfig(): Record<string, unknown> {
+  const configPath = process.env.ELIZA_CONFIG_PATH?.trim();
+  if (!configPath) return {};
+  try {
+    return JSON.parse(fs.readFileSync(configPath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+  } catch {
+    return {};
+  }
 }
 
-export async function loadOwnerContactRoutingHints(): Promise<
-  Record<string, unknown>
+export function loadOwnerContactsConfig(): Record<
+  string,
+  { entityId?: string; channelId?: string; roomId?: string }
 > {
-  return {};
+  const config = readTestElizaConfig();
+  const agents = config.agents as
+    | { defaults?: { ownerContacts?: Record<string, unknown> } }
+    | undefined;
+  return (agents?.defaults?.ownerContacts ?? {}) as Record<
+    string,
+    { entityId?: string; channelId?: string; roomId?: string }
+  >;
+}
+
+export async function loadOwnerContactRoutingHints(
+  _runtime: unknown,
+  ownerContacts: Record<
+    string,
+    { entityId?: string; channelId?: string; roomId?: string }
+  >,
+): Promise<Record<string, unknown>> {
+  return Object.fromEntries(
+    Object.entries(ownerContacts).map(([source, contact]) => [
+      source,
+      {
+        source,
+        entityId: contact.entityId ?? null,
+        channelId: contact.channelId ?? null,
+        roomId: contact.roomId ?? null,
+        preferredCommunicationChannel: null,
+        platformIdentities: [],
+        lastResponseAt: null,
+        lastResponseChannel: null,
+        resolvedFrom: "config",
+      },
+    ]),
+  );
+}
+
+export function resolveOwnerContactWithFallback(args: {
+  ownerContacts: Record<
+    string,
+    { entityId?: string; channelId?: string; roomId?: string }
+  >;
+  source: string | null | undefined;
+  ownerEntityId: string | null | undefined;
+}): {
+  source: string;
+  contact: { entityId?: string; channelId?: string; roomId?: string };
+  resolvedFrom: "config" | "owner_entity";
+} | null {
+  const source = typeof args.source === "string" ? args.source.trim() : "";
+  const candidates =
+    source === "telegram"
+      ? ["telegram", "telegram-account", "telegramAccount"]
+      : source === "telegram-account"
+        ? ["telegram-account", "telegramAccount", "telegram"]
+        : source
+          ? [source]
+          : [];
+  for (const candidate of candidates) {
+    const contact = args.ownerContacts[candidate];
+    if (contact) {
+      return {
+        source:
+          candidate === "telegramAccount" ? "telegram-account" : candidate,
+        contact,
+        resolvedFrom: "config",
+      };
+    }
+  }
+  if (source === "discord" && args.ownerEntityId) {
+    return {
+      source,
+      contact: { entityId: args.ownerEntityId },
+      resolvedFrom: "owner_entity",
+    };
+  }
+  return null;
 }
 
 export function saveElizaConfig(): void {}

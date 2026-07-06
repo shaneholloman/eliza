@@ -18,6 +18,7 @@ import { useConfirm, usePrompt } from "../components/ui/confirm-dialog.hooks";
 import { AppBootContext } from "../config/boot-config-react.hooks";
 import { getBootConfig } from "../config/boot-config-store";
 import { BrandingContext, DEFAULT_BRANDING } from "../config/branding";
+import { tryHandleBootRecoveryAction } from "../first-run/boot-recovery-channel";
 import {
   classifyActionMessage,
   getFirstRunCloudLoginFallbackPath,
@@ -199,9 +200,7 @@ function AppProviderInner({
       pendingRestartReasons,
       restartBannerDismissed,
       backendConnection,
-      backendDisconnectedBannerDismissed,
       systemWarnings,
-      actionBanner,
     },
     setConnected,
     setAgentStatus,
@@ -219,11 +218,8 @@ function AppProviderInner({
     dismissRestartBanner,
     showRestartBanner,
     setBackendConnection,
-    dismissBackendBanner: dismissBackendDisconnectedBanner,
     resetBackendConnection,
     dismissSystemWarning,
-    showActionBanner,
-    dismissActionBanner,
     startupStatus,
     lifecycleBusyRef,
     lifecycleActionRef,
@@ -253,13 +249,6 @@ function AppProviderInner({
   const setFirstRunUiRevealNonce = useCallback(
     (_fn: (n: number) => number) => setFirstRunUiRevealNonce_increment(),
     [setFirstRunUiRevealNonce_increment],
-  );
-  const setBackendDisconnectedBannerDismissed = useCallback(
-    (v: boolean) => {
-      if (v) dismissBackendDisconnectedBanner();
-      // Note: only dismissal is supported via the reducer
-    },
-    [dismissBackendDisconnectedBanner],
   );
   const setSystemWarnings = useCallback(
     (v: string[] | ((prev: string[]) => string[])) => {
@@ -323,6 +312,7 @@ function AppProviderInner({
       ptySessions,
       unreadConversations,
       chatPendingImages,
+      chatReplyTarget,
     },
     setChatInput,
     setChatSending,
@@ -341,10 +331,12 @@ function AppProviderInner({
     setAutonomousRunHealthByRunId,
     setPtySessions,
     setChatPendingImages,
+    setChatReplyTarget,
     resetDraftState: resetConversationDraftState,
     activeConversationIdRef,
     chatInputRef,
     chatPendingImagesRef,
+    chatReplyTargetRef,
     conversationsRef,
     conversationMessagesRef,
     conversationHydrationEpochRef,
@@ -655,7 +647,6 @@ function AppProviderInner({
       cloudProvisionedContainer: firstRunCloudProvisionedContainer,
     },
     completionCommittedRef: firstRunCompletionCommittedRefFromHook,
-    completionJustCommittedRef: firstRunCompletionJustCommittedRefFromHook,
   } = firstRun;
 
   const {
@@ -813,8 +804,6 @@ function AppProviderInner({
   const _restartNotificationSignatureRef = useRef<string | null>(null);
   const _heartbeatNotificationKeyRef = useRef<string | null>(null);
   const firstRunCompletionCommittedRef = firstRunCompletionCommittedRefFromHook;
-  const firstRunCompletionJustCommittedRef =
-    firstRunCompletionJustCommittedRefFromHook;
 
   // --- Confirm Modal ---
   const { modalProps } = useConfirm();
@@ -1073,10 +1062,12 @@ function AppProviderInner({
     setCompanionMessageCutoffTs,
     setConversationMessages,
     setUnreadConversations,
+    setChatReplyTarget,
     resetConversationDraftState,
     activeConversationIdRef,
     chatInputRef,
     chatPendingImagesRef,
+    chatReplyTargetRef,
     conversationsRef,
     conversationMessagesRef,
     conversationHydrationEpochRef,
@@ -1096,7 +1087,6 @@ function AppProviderInner({
     pendingRestartReasons,
     setPendingRestart,
     setPendingRestartReasons,
-    setBackendDisconnectedBannerDismissed,
     resetBackendConnection,
     loadConversations,
     loadConversationMessages,
@@ -1198,6 +1188,9 @@ function AppProviderInner({
       // unconditionally — a tap on a leftover tour widget in an old transcript
       // must never become a literal chat message to the agent.
       if (tryHandleTutorialAction(text)) return Promise.resolve();
+      // Same contract for the in-chat boot-recovery card's `__boot_recovery__:`
+      // controls (re-log in / try again / retry setup).
+      if (tryHandleBootRecoveryAction(text)) return Promise.resolve();
       const firstRunIsComplete = firstRunComplete === true;
       switch (
         classifyActionMessage(text, firstRunIsComplete, {
@@ -1536,7 +1529,6 @@ function AppProviderInner({
     setConversations,
     requestGreetingWhenRunningRef,
     firstRunCompletionCommittedRef,
-    firstRunCompletionJustCommittedRef,
     initialTabSetRef,
     activeConversationIdRef,
     elizaCloudPollInterval,
@@ -1684,15 +1676,19 @@ function AppProviderInner({
       chatInput,
       chatSending,
       chatPendingImages,
+      chatReplyTarget,
       setChatInput,
       setChatPendingImages,
+      setChatReplyTarget,
     }),
     [
       chatInput,
       chatSending,
       chatPendingImages,
+      chatReplyTarget,
       setChatInput,
       setChatPendingImages,
+      setChatReplyTarget,
     ],
   );
 
@@ -1796,7 +1792,6 @@ function AppProviderInner({
       pendingRestartReasons,
       restartBannerDismissed,
       backendConnection,
-      backendDisconnectedBannerDismissed,
       pairingEnabled,
       pairingExpiresAt,
       pairingCodeInput,
@@ -2041,14 +2036,10 @@ function AppProviderInner({
       showRestartBanner,
       triggerRestart,
       relaunchDesktop,
-      dismissBackendDisconnectedBanner,
       retryBackendConnection,
       restartBackend,
       systemWarnings,
       dismissSystemWarning,
-      actionBanner,
-      showActionBanner,
-      dismissActionBanner,
       handleChatSend,
       handleChatStop,
       handleChatRetry,
@@ -2174,7 +2165,6 @@ function AppProviderInner({
       pendingRestartReasons,
       restartBannerDismissed,
       backendConnection,
-      backendDisconnectedBannerDismissed,
       pairingEnabled,
       pairingExpiresAt,
       pairingCodeInput,
@@ -2402,7 +2392,6 @@ function AppProviderInner({
       configText,
       activeGamePostMessagePayload,
       systemWarnings,
-      actionBanner,
       setTab,
       setUiShellMode,
       switchUiShellMode,
@@ -2426,12 +2415,9 @@ function AppProviderInner({
       showRestartBanner,
       triggerRestart,
       relaunchDesktop,
-      dismissBackendDisconnectedBanner,
       retryBackendConnection,
       restartBackend,
       dismissSystemWarning,
-      showActionBanner,
-      dismissActionBanner,
       handleChatSend,
       handleChatStop,
       handleChatRetry,

@@ -94,7 +94,7 @@ export const UI_E2E_SUITES = [
       "--check",
     ],
     coverage:
-      "Boots or reuses an Android emulator, starts the deterministic host agent, drives the real Capacitor onboarding flow, and writes emulator screenshot, screenrecord, logcat, and capture logs to issue evidence.",
+      "Boots or reuses an Android emulator, starts the deterministic host agent, drives the real Capacitor onboarding flow, and writes emulator screenshot, screenrecord, logcat, and capture logs to generated native-capture output.",
   },
   {
     name: "ios-sim",
@@ -107,7 +107,7 @@ export const UI_E2E_SUITES = [
       "--check",
     ],
     coverage:
-      "Boots or reuses an iOS Simulator, starts the deterministic host agent, drives first-run onboarding, and writes simulator screenshots, recordVideo output, smoke result JSON, and capture logs to issue evidence.",
+      "Boots or reuses an iOS Simulator, starts the deterministic host agent, drives first-run onboarding, and writes simulator screenshots, recordVideo output, smoke result JSON, and capture logs to generated native-capture output.",
   },
 ];
 

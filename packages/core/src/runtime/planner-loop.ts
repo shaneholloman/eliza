@@ -36,6 +36,7 @@ import {
 	type ToolChoice,
 	type ToolDefinition,
 } from "../types/model";
+import { isModelProviderError } from "../utils/model-errors";
 import { resolveStateDir } from "../utils/state-dir";
 import { computePrefixHashes } from "./context-hash";
 import { appendContextEvent } from "./context-object";
@@ -793,7 +794,41 @@ export async function runPlannerLoop(
 			};
 		}
 
-		const evaluator = await evaluateTrajectory(params, trajectory, iteration);
+		let evaluator: EvaluatorOutput;
+		try {
+			evaluator = await evaluateTrajectory(params, trajectory, iteration);
+		} catch (err) {
+			// error-policy:J4 explicit user-facing degrade - only an EXPECTED
+			// provider/model failure degrades to the completed tool's truthful
+			// output; every other error shape propagates.
+			// The in-loop evaluator is a MODEL call: it decides FINISH/CONTINUE and
+			// synthesizes the user-facing reply from the tool results. When it fails
+			// transiently (a provider 400/429/5xx or a network error) AFTER a
+			// non-terminal tool already executed successfully this turn, propagating
+			// the error discards the completed work and surfaces the generic
+			// "something went wrong" apology — a lie, because the tool did the work
+			// (e.g. FILE wrote the file). Relay the successful tool's own truthful
+			// output deterministically (no further model call, so the same provider
+			// failure cannot recur).
+			// The gate is what keeps this a J4 "only expected error shapes degrade"
+			// handler and not a bug-swallower: a TypeError, a SchemaValidationFailedError,
+			// or any programmer error carries no HTTP status / network code, so it
+			// rethrows and surfaces instead of being masked as a finished turn. With
+			// no successful non-terminal tool to relay, rethrow too — never mask a
+			// real failure.
+			if (!isModelProviderError(err)) throw err;
+			const relay = deterministicSuccessfulToolRelay(trajectory);
+			if (!relay) throw err;
+			params.runtime.logger?.warn?.(
+				{ iteration, err: err instanceof Error ? err.message : String(err) },
+				"[planner-loop] post-tool evaluator model call failed; relaying the completed tool result instead of discarding the turn",
+			);
+			return {
+				status: "finished",
+				trajectory,
+				finalMessage: userSafeFinalMessage(relay, trajectory),
+			};
+		}
 		trajectory.evaluatorOutputs.push(evaluator);
 		appendEvaluatorContextEvent(trajectory, evaluator, iteration);
 
@@ -966,11 +1001,13 @@ const MANDATORY_PLANNER_POLICY_LINES = [
 	"SHELL is for filesystem/process work, not a fallback for chat-message search/recall, memory queries, or agent-history lookups.",
 	"candidateActions naming a tool that is not in this turn's exposed tools list is a dead hint",
 	"TASKS_SPAWN_AGENT is for delegating coding/build/repo work",
+	"Structured chat markers are allowed in messageToUser",
 	"messageToUser and REPLY text must NEVER claim or imply",
 ];
 
 const MANDATORY_PLANNER_POLICY = [
 	"mandatory planner policy:",
+	"- Structured chat markers are allowed in messageToUser when they are the actual user-visible interaction payload: [FORM]\\n{json}\\n[/FORM], [CHOICE:scope id=id]\\nvalue=Label\\n[/CHOICE], [FOLLOWUPS id=id]\\nvalue=Label\\n[/FOLLOWUPS], or [TASK:threadId]Title[/TASK]. The JSON inside [FORM] is form data, not a tool attempt; keep JSON inside the marker and do not emit unrelated JSON.",
 	"- SHELL is for filesystem/process work, not a fallback for chat-message search/recall, memory queries, or agent-history lookups. When the user wants chat-message search/recall, memory queries, or agent-history lookups and no dedicated search action (e.g. SEARCH_MESSAGES, MESSAGE_SEARCH, MEMORY_SEARCH) is exposed, do not run shell greps, echo placeholders, or simulate the search — set messageToUser explaining that the capability is not available this turn.",
 	'- candidateActions naming a tool that is not in this turn\'s exposed tools list is a dead hint — do not invent SHELL/BROWSER/TASKS workarounds to fulfill it. Either an exposed tool genuinely resolves the user\'s intent (call it), or no tool fits (set messageToUser). Never emit echo-placeholder SHELL commands such as: echo "<intent-name>" / echo "placeholder for <ACTION>" / echo "search <X>" as a way to "trigger" a missing capability — placeholder echoes burn cost and produce no progress.',
 	'- TASKS_SPAWN_AGENT is for delegating coding/build/repo work to a coding sub-agent (file edits, shell tooling, building/deploying apps, running tests, opening PRs). It is not a fallback for chat-message recall, memory queries, or agent-history lookups. Spawning a coding sub-agent to "search the Discord channel for messages mentioning X" routinely ends in sub-agent error/timeout and a generic "Sorry, something went wrong" reply to the user. When the user wants chat-message recall and no dedicated search action is exposed, set messageToUser explaining the capability is not available — do not spawn a sub-agent for it.',
@@ -2090,7 +2127,7 @@ async function executeQueuedToolCall(params: {
 		success: result.success,
 		error: isParameterValidationFailure
 			? "parameter_validation_failed"
-			: result.error,
+			: (result.error ?? diagnosticFailureReason(result)),
 		repeatKey: isParameterValidationFailure
 			? "parameter_validation"
 			: toolFailureRepeatKey(params.toolCall),
@@ -2712,12 +2749,12 @@ function terminalMessageFromToolCalls(
  * format into the user channel.
  *
  * Tools that produce real user-facing answers (Q&A, content generation,
- * REPLY) must opt in by setting `userFacingText`. Tools that emit logs
- * (BASH, SHELL, fetchers, file readers) leave it unset; this function
- * then returns undefined and the caller falls through to the evaluator's
- * synthesized reply instead of dumping the log into the channel. The
- * contract is structural: tools declare what is safe to show, the
- * framework never guesses by parsing wrapper text.
+ * mutation confirmations, vetted shell projections) must opt in by setting
+ * `userFacingText`. Tools that only emit logs (raw shell transcripts, fetchers,
+ * file readers) leave it unset; this function then returns undefined and the
+ * caller falls through to the evaluator's synthesized reply instead of dumping
+ * the log into the channel. The contract is structural: tools declare what is
+ * safe to show, the framework never guesses by parsing wrapper text.
  */
 function latestToolResultText(
 	trajectory: PlannerTrajectory,
@@ -2727,6 +2764,35 @@ function latestToolResultText(
 		if (text) {
 			return text;
 		}
+	}
+	return undefined;
+}
+
+/**
+ * Deterministic (no model call) relay of the most recent SUCCESSFUL non-terminal
+ * tool result. Used when a model call LATER in the turn (the post-tool evaluator
+ * synthesis/decision call) fails transiently AFTER a tool already did real work:
+ * relay the tool's own truthful output instead of discarding the work and telling
+ * the user "something went wrong".
+ *
+ * Reads ONLY the tool's opt-in `userFacingText`, upholding the same contract as
+ * {@link latestToolResultText}: the diagnostic `text`/`summary` fields are
+ * log-shaped (shell prompts, exit codes, cwd, raw fetch bodies) and must not be
+ * guessed into the user channel. A tool declares its output safe to show by
+ * setting `userFacingText` — FILE write/edit do so ("Wrote N bytes to <path>"),
+ * as do narrowly vetted shell projections. Raw shell transcripts, fetchers, and
+ * file readers leave it unset, so their logs never leak here. Returns undefined
+ * when no successful non-terminal tool exposed a user-facing result, so genuine
+ * failures still surface.
+ */
+function deterministicSuccessfulToolRelay(
+	trajectory: PlannerTrajectory,
+): string | undefined {
+	for (const step of [...trajectory.steps].reverse()) {
+		if (!step.toolCall || step.result?.success !== true) continue;
+		if (isTerminalToolCall(step.toolCall)) continue;
+		const candidate = getNonEmptyString(step.result.userFacingText);
+		if (candidate) return candidate;
 	}
 	return undefined;
 }
@@ -2944,6 +3010,41 @@ function splitUnavailableToolCalls(
 
 function toolFailureRepeatKey(toolCall: PlannerToolCall): string {
 	return `${toolCall.name}:${stringifyForModel(toolCall.params ?? {})}`;
+}
+
+/**
+ * Recover a diagnostic failure reason from a tool result that reported
+ * `success:false` but carried no typed `error`. The dominant action
+ * convention in this codebase puts the human-readable reason in `text` and a
+ * machine code in `data.error` — e.g. SCHEDULED_TASKS returning
+ * `{ success:false, text:"I need a trigger (once | cron | ...)", data:{ error:"MISSING_TRIGGER" } }`.
+ * The typed `error` field is reserved for thrown `Error`s, so those
+ * validation failures reach the failure tracker with `error` unset.
+ *
+ * Without this recovery, `getFailureSignature` flattens every such failure to
+ * the bare literal `"failed"`, so a repeated-failure abort surfaces the
+ * useless `SCHEDULED_TASKS:failed` instead of naming what the model got wrong
+ * (observed live: the news-heartbeat turn tripped `Repeated tool failure
+ * limit exceeded for SCHEDULED_TASKS:failed`). That violates the
+ * diagnostic-error doctrine (#14873) — a limit abort must read like a real
+ * diagnosis. Prefer the human `text`; fall back to the `data.error` code;
+ * return `undefined` only when the result carries no reason at all, which
+ * preserves the existing `"failed"` fallback for a truly empty failure.
+ *
+ * This only makes the signature MORE specific: the repeated-failure guard
+ * still discriminates by `repeatKey` (the params JSON), so identical failing
+ * calls collapse exactly as before while distinct ones stay distinct.
+ */
+function diagnosticFailureReason(
+	result: PlannerToolResult,
+): string | undefined {
+	const text = typeof result.text === "string" ? result.text.trim() : "";
+	if (text) return text;
+	const dataError = (result.data as { error?: unknown } | undefined)?.error;
+	if (typeof dataError === "string" && dataError.trim()) {
+		return dataError.trim();
+	}
+	return undefined;
 }
 
 /**

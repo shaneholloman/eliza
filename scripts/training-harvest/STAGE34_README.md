@@ -1,7 +1,7 @@
 # Stage 3 (GEPA sweep) + Stage 4 (extract & push) — driver reference
 
 Two drivers that consume the gpt-5.5 harvest tree
-(`.github/issue-evidence/gpt55-training-pipeline/harvest/{scenario,benchmark}/`)
+(`reports/training-harvest/gpt55/harvest/{scenario,benchmark}/`)
 built by `harvest-runner.mjs` / `bench-e2e-harvest-runner.mjs`.
 
 - **Stage 3** turns the harvest's *real agent failures* into GEPA-optimized
@@ -88,7 +88,7 @@ Each task's raw `train` command (what `--run` executes):
 TRAIN_MODEL_PROVIDER=cerebras CEREBRAS_API_KEY=<key> ELIZA_STATE_DIR=<state-dir> \
   bun run --cwd plugins/plugin-training train -- \
     --backend native --optimizer gepa --task <task> \
-    --dataset .github/issue-evidence/gpt55-training-pipeline/s3-gepa/sweep/datasets/<task>.gepa.jsonl
+    --dataset reports/training-harvest/gpt55/s3-gepa/sweep/datasets/<task>.gepa.jsonl
 ```
 
 (`--baseline` is inferred from the dataset's system message when omitted; for

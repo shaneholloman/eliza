@@ -7,7 +7,7 @@
  * executor between setup and the first turn.
  */
 import type { AgentRuntime, UUID } from "@elizaos/core";
-import { stringToUuid } from "@elizaos/core";
+import { MemoryType, stringToUuid } from "@elizaos/core";
 import type {
   ScenarioContext,
   ScenarioSeedStep,
@@ -192,6 +192,14 @@ type MemoryContactSeed = {
   lastContactedAt?: unknown;
   relationshipStatus?: unknown;
 };
+
+const TRAVEL_FACT_MEMORY_KINDS = new Set([
+  "profile",
+  "trip",
+  "booking",
+  "upgrade-offer",
+  "calendar-focus-window",
+]);
 
 type ConnectorStatusLike = {
   state: "ok" | "degraded" | "disconnected";
@@ -686,7 +694,7 @@ async function seedMemory(
 ): Promise<string | undefined> {
   const content = seed.content as MemoryContactSeed | undefined;
   if (!content || typeof content !== "object") {
-    return undefined;
+    return "memory seed requires a content object";
   }
   const memoryType =
     readNonEmptyString(content.kind) ?? readNonEmptyString(content.type);
@@ -697,6 +705,71 @@ async function seedMemory(
   ) {
     return seedContact(ctx, memoryEntityToContactSeed(content, memoryType));
   }
+  if (memoryType && TRAVEL_FACT_MEMORY_KINDS.has(memoryType)) {
+    const text = formatStructuredMemoryFact(memoryType, content);
+    return writeDurableFact(ctx, text, { seedKind: memoryType });
+  }
+  if (memoryType !== null) {
+    // A seed the runner cannot land must fail the scenario, never no-op:
+    // a silently dropped seed fabricates the premise the checks grade
+    // against (#14631 — the "seeded VIP fact" the model never received).
+    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity, travel profile/trip/booking/upgrade-offer/calendar-focus-window, or plain { text } for a durable owner fact`;
+  }
+  const text = readNonEmptyString((content as { text?: unknown }).text);
+  if (!text) {
+    return "memory seed content must carry non-empty text or a contact-like kind";
+  }
+  return writeDurableFact(ctx, text);
+}
+
+function formatStructuredMemoryFact(
+  memoryType: string,
+  content: Record<string, unknown>,
+): string {
+  return [
+    `Scenario-seeded travel ${memoryType} context:`,
+    JSON.stringify(content, null, 2),
+  ].join("\n");
+}
+
+async function writeDurableFact(
+  ctx: ScenarioContext,
+  text: string,
+  metadata: Record<string, unknown> = {},
+): Promise<string | undefined> {
+  // Plain-text memory seeds are owner facts: write a real durable row in the
+  // `facts` table, attributed to the primary room + simulated owner entity,
+  // in the exact shape the fact extractor persists — so the core FACTS
+  // provider retrieves and renders it during turns (durable facts fall back
+  // to highest-prior when keyword relevance misses, so seeded facts surface
+  // even without lexical overlap with the turn text).
+  const runtime = requireRuntime(ctx);
+  const roomId = readNonEmptyString(ctx.primaryRoomId);
+  const entityId = readNonEmptyString(ctx.primaryUserId);
+  if (!roomId || !entityId) {
+    return "memory seed requires ctx.primaryRoomId/primaryUserId (set by the executor before seeds run)";
+  }
+  await runtime.createMemory(
+    {
+      id: stringToUuid(`scenario-fact:${ctx.scenarioId ?? "unknown"}:${text}`),
+      entityId: entityId as UUID,
+      agentId: runtime.agentId,
+      roomId: roomId as UUID,
+      content: { text },
+      metadata: {
+        type: MemoryType.CUSTOM,
+        source: "scenario-seed",
+        confidence: 0.95,
+        kind: "durable",
+        category: "seeded",
+        keywords: [],
+        ...metadata,
+      },
+      createdAt: Date.now(),
+    },
+    "facts",
+    true,
+  );
   return undefined;
 }
 

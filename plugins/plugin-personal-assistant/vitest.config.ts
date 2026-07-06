@@ -58,9 +58,16 @@ const optionalCorePluginStubPackages = new Set([
   "@elizaos/plugin-app-control",
   "@elizaos/plugin-shell",
   "@elizaos/plugin-coding-tools",
+  "@elizaos/plugin-pty",
+  "@elizaos/plugin-birdclaw",
   "@elizaos/plugin-commands",
   "@elizaos/plugin-video",
+  "@elizaos/plugin-vision",
   "@elizaos/plugin-background-runner",
+  "@elizaos/plugin-native-filesystem",
+  "@elizaos/plugin-app-manager",
+  "@elizaos/plugin-elizacloud",
+  "@elizaos/plugin-inbox/plugin",
   "@elizaos/plugin-ollama",
   "@elizaos/plugin-anthropic",
   "@elizaos/plugin-openai",
@@ -102,6 +109,23 @@ const agentSourceJsToTsPlugin = {
   load(id: string) {
     if (!id.startsWith(optionalCorePluginStubPrefix)) return null;
     const packageName = id.slice(optionalCorePluginStubPrefix.length);
+    if (packageName === "@elizaos/plugin-app-control") {
+      return [
+        "export function parseSettingsRequest(input) { return input ?? {}; }",
+        "export function createSettingsAction() {",
+        "  return {",
+        '    name: "SETTINGS_SECTION_TEST_STUB",',
+        '    description: "Test stub for app-control section settings.",',
+        "    examples: [],",
+        "    validate: async () => true,",
+        "    handler: async () => ({ success: false, text: 'settings stub unavailable' }),",
+        "  };",
+        "}",
+        'const plugin = { name: "plugin-app-control-test-stub", description: "Test stub for @elizaos/plugin-app-control", actions: [], providers: [], evaluators: [], services: [] };',
+        "export { plugin };",
+        "export default plugin;",
+      ].join("\n");
+    }
     const name = `${packageName.slice("@elizaos/".length)}-test-stub`;
     return [
       `const plugin = ${JSON.stringify({
@@ -267,6 +291,26 @@ export default defineConfig({
           "index.ts",
         ),
       },
+      {
+        find: /^@elizaos\/contracts\/(.+)$/,
+        replacement: path.join(
+          elizaRoot,
+          "packages",
+          "contracts",
+          "src",
+          "$1.ts",
+        ),
+      },
+      {
+        find: /^@elizaos\/contracts$/,
+        replacement: path.join(
+          elizaRoot,
+          "packages",
+          "contracts",
+          "src",
+          "index.ts",
+        ),
+      },
       // These packages are imported by @elizaos/core while this suite inlines
       // core. Resolve them through Bun's real package-store path so their own
       // nested dependencies remain visible with preserveSymlinks enabled.
@@ -302,6 +346,21 @@ export default defineConfig({
       // the broad `@elizaos/ui/(.+)` stub alias so they win the match.
       { find: /^@elizaos\/ui\/spatial\/tui$/, replacement: uiSpatialTuiSrc },
       { find: /^@elizaos\/ui\/spatial$/, replacement: uiSpatialSrc },
+      // Pure-data settings-section metadata consumed by app-control's settings
+      // action (#14804) — React-free by design, so anchor the real module
+      // ahead of the broad ui stub alias.
+      {
+        find: /^@elizaos\/ui\/components\/settings\/settings-section-meta$/,
+        replacement: path.join(
+          elizaRoot,
+          "packages",
+          "ui",
+          "src",
+          "components",
+          "settings",
+          "settings-section-meta.ts",
+        ),
+      },
       {
         find: /^@elizaos\/ui\/(.+)$/,
         replacement: path.join(lifeopsTestStubsRoot, "ui.ts"),
@@ -358,6 +417,22 @@ export default defineConfig({
           elizaRoot,
           "plugins",
           "plugin-calendar",
+          "src",
+          "$1.ts",
+        ),
+      },
+      // The agent's settings action pulls the shared parser from the
+      // `@elizaos/plugin-app-control/actions/settings` subpath (#14804), but
+      // app-control's build bundles only the barrel — there is no per-file
+      // dist and vitest has no eliza-source condition, so the subpath must be
+      // anchored to source (the bare specifier stays stubbed via
+      // optionalCorePluginStubPackages above).
+      {
+        find: /^@elizaos\/plugin-app-control\/(.+)$/,
+        replacement: path.join(
+          elizaRoot,
+          "plugins",
+          "plugin-app-control",
           "src",
           "$1.ts",
         ),
@@ -461,6 +536,16 @@ export default defineConfig({
           "plugin-goals",
           "src",
           "index.ts",
+        ),
+      },
+      {
+        find: /^@elizaos\/plugin-reminders\/(.+)$/,
+        replacement: path.join(
+          elizaRoot,
+          "plugins",
+          "plugin-reminders",
+          "src",
+          "$1.ts",
         ),
       },
       {
@@ -575,6 +660,16 @@ export default defineConfig({
           "plugin-browser",
           "src",
           "password-manager-bridge.ts",
+        ),
+      },
+      {
+        find: /^@elizaos\/plugin-browser\/schema$/,
+        replacement: path.join(
+          elizaRoot,
+          "plugins",
+          "plugin-browser",
+          "src",
+          "schema.ts",
         ),
       },
       {

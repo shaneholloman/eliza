@@ -105,6 +105,8 @@ vi.mock("../../api", () => ({
   client: { sendWsMessage },
 }));
 
+const AGENT_SURFACE_MANIFEST = { capabilities: ["agent-surface"] } as const;
+
 describe("DynamicViewLoader", () => {
   beforeEach(() => {
     Object.defineProperty(HTMLElement.prototype, "innerText", {
@@ -148,6 +150,68 @@ describe("DynamicViewLoader", () => {
     expect(importBundle).not.toHaveBeenCalledWith(
       expect.stringContaining("/api/views/remote.panel/bundle.js"),
     );
+    const surface = document.querySelector(
+      '[data-spatial-surface="gui"]',
+    ) as HTMLElement | null;
+    expect(surface?.style.overflowY).toBe("auto");
+    expect(surface?.style.paddingBottom).toBe(
+      "var(--eliza-continuous-chat-clearance, 5.25rem)",
+    );
+    expect(surface?.style.paddingInlineEnd).toBe(
+      "var(--eliza-continuous-chat-side-clearance, 0px)",
+    );
+  });
+
+  it("renders sandboxed iframe views from frameUrl and does not import bundleUrl", () => {
+    const importBundle = vi.fn(async () => ({
+      default: function ShouldNotLoad() {
+        return <div>Host realm bundle loaded</div>;
+      },
+    }));
+    window.__ELIZA_DYNAMIC_VIEW_BUNDLE_IMPORT__ = importBundle;
+
+    render(
+      <DynamicViewLoader
+        bundleUrl="/api/views/sandboxed.panel/bundle.js"
+        frameUrl="/api/views/sandboxed.panel/frame.html"
+        viewId="sandboxed.panel"
+        surface={{ isolation: "sandboxed-iframe" }}
+      />,
+    );
+
+    const frame = screen.getByTestId("sandboxed-view-frame-sandboxed.panel");
+    expect(frame.getAttribute("src")).toBe(
+      "/api/views/sandboxed.panel/frame.html",
+    );
+    expect(importBundle).not.toHaveBeenCalled();
+    expect(screen.queryByText("Host realm bundle loaded")).toBeNull();
+  });
+
+  it("fails closed when sandboxed iframe views omit frameUrl", () => {
+    const importBundle = vi.fn(async () => ({
+      default: function ShouldNotLoad() {
+        return <div>Host realm bundle loaded</div>;
+      },
+    }));
+    window.__ELIZA_DYNAMIC_VIEW_BUNDLE_IMPORT__ = importBundle;
+
+    render(
+      <DynamicViewLoader
+        bundleUrl="/api/views/sandboxed.panel/bundle.js"
+        viewId="sandboxed.panel"
+        surface={{ isolation: "sandboxed-iframe" }}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        /require a frameUrl HTML document; bundleUrl is a JavaScript module/,
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("sandboxed-view-frame-sandboxed.panel"),
+    ).toBeNull();
+    expect(importBundle).not.toHaveBeenCalled();
   });
 
   it("registers remote view interact handlers after the bundle loads", async () => {
@@ -165,6 +229,7 @@ describe("DynamicViewLoader", () => {
         bundleUrl={bundleUrl}
         viewId="remote.interactive"
         viewType="gui"
+        surface={AGENT_SURFACE_MANIFEST}
       />,
     );
 
@@ -280,7 +345,13 @@ describe("DynamicViewLoader", () => {
       },
     }));
 
-    render(<DynamicViewLoader bundleUrl={bundleUrl} viewId="focus.view" />);
+    render(
+      <DynamicViewLoader
+        bundleUrl={bundleUrl}
+        viewId="focus.view"
+        surface={AGENT_SURFACE_MANIFEST}
+      />,
+    );
     await screen.findByRole("button", { name: "Create view" });
 
     const { dispatchViewInteract } = await import("./view-interact-registry");
@@ -354,7 +425,13 @@ describe("DynamicViewLoader", () => {
       },
     }));
 
-    render(<DynamicViewLoader bundleUrl={bundleUrl} viewId="form.view" />);
+    render(
+      <DynamicViewLoader
+        bundleUrl={bundleUrl}
+        viewId="form.view"
+        surface={AGENT_SURFACE_MANIFEST}
+      />,
+    );
     await screen.findByRole("button", { name: "Save view" });
 
     const { dispatchViewInteract } = await import("./view-interact-registry");
@@ -429,7 +506,11 @@ describe("DynamicViewLoader", () => {
     }));
 
     render(
-      <DynamicViewLoader bundleUrl={bundleUrl} viewId="form.errors.view" />,
+      <DynamicViewLoader
+        bundleUrl={bundleUrl}
+        viewId="form.errors.view"
+        surface={AGENT_SURFACE_MANIFEST}
+      />,
     );
     await screen.findByDisplayValue("Original");
 
@@ -495,7 +576,13 @@ describe("DynamicViewLoader", () => {
       },
     }));
 
-    render(<DynamicViewLoader bundleUrl={bundleUrl} viewId="sensitive.view" />);
+    render(
+      <DynamicViewLoader
+        bundleUrl={bundleUrl}
+        viewId="sensitive.view"
+        surface={AGENT_SURFACE_MANIFEST}
+      />,
+    );
     await screen.findByDisplayValue("existing-secret");
 
     const { dispatchViewInteract } = await import("./view-interact-registry");
@@ -570,7 +657,13 @@ describe("DynamicViewLoader", () => {
       },
     }));
 
-    render(<DynamicViewLoader bundleUrl={bundleUrl} viewId="missing.focus" />);
+    render(
+      <DynamicViewLoader
+        bundleUrl={bundleUrl}
+        viewId="missing.focus"
+        surface={AGENT_SURFACE_MANIFEST}
+      />,
+    );
     await screen.findByText("No inputs here");
 
     const { dispatchViewInteract } = await import("./view-interact-registry");
@@ -604,7 +697,13 @@ describe("DynamicViewLoader", () => {
       };
     });
 
-    render(<DynamicViewLoader bundleUrl={bundleUrl} viewId="refresh.view" />);
+    render(
+      <DynamicViewLoader
+        bundleUrl={bundleUrl}
+        viewId="refresh.view"
+        surface={AGENT_SURFACE_MANIFEST}
+      />,
+    );
     await screen.findByText("Refresh version 1");
 
     const { dispatchViewInteract } = await import("./view-interact-registry");
@@ -663,7 +762,11 @@ describe("DynamicViewLoader", () => {
     vi.stubGlobal("fetch", fetchHead);
 
     const rendered = render(
-      <DynamicViewLoader bundleUrl={bundleUrl} viewId="hmr.view" />,
+      <DynamicViewLoader
+        bundleUrl={bundleUrl}
+        viewId="hmr.view"
+        surface={AGENT_SURFACE_MANIFEST}
+      />,
     );
     await flushViewLoader();
     expect(screen.getByText("HMR version 1")).toBeTruthy();
@@ -749,6 +852,7 @@ describe("DynamicViewLoader", () => {
         bundleUrl={firstUrl}
         viewId="replace.first"
         viewType="gui"
+        surface={AGENT_SURFACE_MANIFEST}
       />,
     );
     await screen.findByText("First dynamic panel");
@@ -758,6 +862,7 @@ describe("DynamicViewLoader", () => {
         bundleUrl={secondUrl}
         viewId="replace.second"
         viewType="gui"
+        surface={AGENT_SURFACE_MANIFEST}
       />,
     );
     await screen.findByText("Second dynamic panel");

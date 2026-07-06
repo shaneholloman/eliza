@@ -453,7 +453,6 @@ import {
   handleRemoteCapabilityRoutes,
   handleSandboxRouteGroup,
   handleSubscriptionRoutes,
-  handleSuggestionsRoutes,
   handleUpdateRoutes,
   handleViewsRoutes,
   handleWorkbenchRoutes,
@@ -2053,7 +2052,7 @@ async function handleRequest(
 
   if (
     (pathname.startsWith("/api/local-inference") ||
-      pathname === "/api/tts/local-inference" ||
+      pathname.startsWith("/api/tts/local-inference") ||
       pathname.startsWith("/api/asr/local-inference") ||
       pathname.startsWith("/api/voice/audio-frames") ||
       pathname === "/api/voice/playback-frames" ||
@@ -3302,21 +3301,6 @@ async function handleRequest(
       method,
       pathname,
       url,
-      json,
-      error,
-      runtime: state.runtime,
-    })
-  ) {
-    return;
-  }
-
-  // ── Prompt suggestions (/api/suggestions) ─────────────────────────────────
-  if (
-    await handleSuggestionsRoutes({
-      req,
-      res,
-      method,
-      pathname,
       json,
       error,
       runtime: state.runtime,

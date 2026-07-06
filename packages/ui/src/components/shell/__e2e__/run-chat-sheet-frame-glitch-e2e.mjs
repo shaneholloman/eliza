@@ -26,7 +26,7 @@
  * asserts each FIRES — proving the harness is not a no-op.
  *
  * Evidence (frame burst, per-frame diff overlays, opacity trace, summary, logs)
- * → .github/issue-evidence/9142-frame-glitch/.
+ * → test-results/evidence/9142-frame-glitch/.
  *
  * Run: bun run --cwd packages/ui test:chat-sheet-frame-glitch-e2e
  *      add --canary to run the self-test that the detectors fire.
@@ -44,7 +44,6 @@ import { chromium } from "playwright";
 import {
   stubElizaCore,
   stubNodeBuiltins,
-  stubPromptSuggestions,
 } from "../../../testing/e2e-runner/esbuild-stubs.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -52,8 +51,7 @@ const repoRoot = join(here, "..", "..", "..", "..", "..", "..");
 const outDir = join(here, "output-frame-glitch");
 const evidenceDir = join(
   repoRoot,
-  ".github",
-  "issue-evidence",
+  "test-results", "evidence",
   "9142-frame-glitch",
 );
 const CANARY = process.argv.includes("--canary");
@@ -107,10 +105,10 @@ function assert(cond, msg) {
 }
 
 // Bundle the fixture with the shared shell stubs (same as run-chat-sheet-e2e):
-// the API-touching prompt-suggestions hook → a local stub, and @elizaos/core +
-// node builtins (dead at render in the browser) → no-op proxies. The stubs are
-// type-only esbuild consumers, so this node-run harness (which resolves esbuild
-// itself, below) can import them without pulling runtime esbuild.
+// @elizaos/core + node builtins (dead at render in the browser) → no-op
+// proxies. The stubs are type-only esbuild consumers, so this node-run harness
+// (which resolves esbuild itself, below) can import them without pulling
+// runtime esbuild.
 await rm(outDir, { recursive: true, force: true });
 await mkdir(outDir, { recursive: true });
 await mkdir(evidenceDir, { recursive: true });
@@ -124,11 +122,7 @@ const result = await build({
   jsx: "automatic",
   loader: { ".tsx": "tsx", ".ts": "ts" },
   define: { "process.env.NODE_ENV": '"production"' },
-  plugins: [
-    stubPromptSuggestions(join(here, "usePromptSuggestions.stub.ts")),
-    stubElizaCore(),
-    stubNodeBuiltins(),
-  ],
+  plugins: [stubElizaCore(), stubNodeBuiltins()],
   write: false,
 });
 const js = result.outputFiles[0].text;

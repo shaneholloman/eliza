@@ -31,6 +31,7 @@ import {
   getScheduledTaskRunner,
   pendingPromptRoomIdForTask,
 } from "@elizaos/plugin-scheduling";
+import { CheckinService } from "../checkin/checkin-service.js";
 import { resolvePendingPromptsStore } from "../pending-prompts/store.js";
 import { recordTaskStateEntry } from "./scheduler.js";
 
@@ -44,6 +45,62 @@ export interface InboundReplyCompletionResult {
 }
 
 const EMPTY: InboundReplyCompletionResult = { evaluated: [], completed: [] };
+
+function metadataString(
+  metadata: Record<string, unknown> | undefined,
+  key: string,
+): string | null {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+async function acknowledgeCheckinReportForCompletedTask(
+  runtime: IAgentRuntime,
+  task: { taskId: string; kind?: string; metadata?: Record<string, unknown> },
+): Promise<boolean> {
+  if (task.kind !== "checkin") return false;
+  const reportId = metadataString(task.metadata, "checkinReportId");
+  if (!reportId) return false;
+  await new CheckinService(runtime).recordCheckinAcknowledgement({ reportId });
+  logger.info(
+    {
+      src: LOG_SRC,
+      agentId: runtime.agentId,
+      taskId: task.taskId,
+      reportId,
+    },
+    `[InboundReplyCompletion] owner reply acknowledged check-in report ${reportId}`,
+  );
+  return true;
+}
+
+function checkinReportIdFromOwnerReply(message: Memory): string | null {
+  const metadata = (message as { metadata?: Record<string, unknown> }).metadata;
+  return (
+    metadataString(metadata, "checkinReportId") ??
+    metadataString(metadata, "reportId")
+  );
+}
+
+async function acknowledgeCheckinReportFromReplyMetadata(
+  runtime: IAgentRuntime,
+  message: Memory,
+): Promise<boolean> {
+  const reportId = checkinReportIdFromOwnerReply(message);
+  if (!reportId) return false;
+  await new CheckinService(runtime).recordCheckinAcknowledgement({ reportId });
+  logger.info(
+    {
+      src: LOG_SRC,
+      agentId: runtime.agentId,
+      reportId,
+    },
+    `[InboundReplyCompletion] owner reply acknowledged check-in report from reply metadata ${reportId}`,
+  );
+  return true;
+}
 
 /**
  * Evaluate completion checks for fired tasks awaiting a reply in the
@@ -59,21 +116,30 @@ export async function completeFiredTasksOnOwnerReply(
   if (message.entityId === runtime.agentId) return EMPTY;
   if (!(await hasOwnerAccess(runtime, message))) return EMPTY;
 
-  const runner = getScheduledTaskRunner(runtime, {
-    agentId: String(runtime.agentId),
-  });
-  const fired = await runner.list({ status: "fired" });
-  if (fired.length === 0) return EMPTY;
-
   const repliedAtIso =
     typeof message.createdAt === "number" && Number.isFinite(message.createdAt)
       ? new Date(message.createdAt).toISOString()
       : new Date().toISOString();
 
+  const runner = getScheduledTaskRunner(runtime, {
+    agentId: String(runtime.agentId),
+  });
+  const fired = await runner.list({ status: "fired" });
+  if (fired.length === 0) {
+    await acknowledgeCheckinReportFromReplyMetadata(runtime, message);
+    return EMPTY;
+  }
+
   const result: InboundReplyCompletionResult = { evaluated: [], completed: [] };
+  let acknowledgedCheckinReport = false;
   for (const task of fired) {
     if (!task.completionCheck) continue;
-    if (pendingPromptRoomIdForTask(task) !== roomId) continue;
+    if (
+      pendingPromptRoomIdForTask(task, { agentId: String(runtime.agentId) }) !==
+      roomId
+    ) {
+      continue;
+    }
     try {
       const updated = await runner.evaluateCompletion(task.taskId, {
         repliedAtIso,
@@ -90,6 +156,9 @@ export async function completeFiredTasksOnOwnerReply(
           "completed",
           new Date(repliedAtIso),
         );
+        acknowledgedCheckinReport =
+          (await acknowledgeCheckinReportForCompletedTask(runtime, task)) ||
+          acknowledgedCheckinReport;
         logger.info(
           {
             src: LOG_SRC,
@@ -114,6 +183,9 @@ export async function completeFiredTasksOnOwnerReply(
         }`,
       );
     }
+  }
+  if (!acknowledgedCheckinReport) {
+    await acknowledgeCheckinReportFromReplyMetadata(runtime, message);
   }
   return result;
 }

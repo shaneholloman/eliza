@@ -6,8 +6,10 @@ name: Cloud Tests
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main]
+    branches: [develop, main]
     paths:
+      - ".github/actions/cloud-setup-test-env/**"
+      - ".github/workflows/cloud-tests.yml"
       - "packages/cloud/api/**"
       - "packages/cloud/shared/**"
       - "packages/cloud/sdk/**"
@@ -71,6 +73,12 @@ jobs:
 
       - name: Tenant-scope gate (no unscoped pk-only reads of apps data-plane) (#9853)
         run: bun run --cwd packages/cloud/shared check:tenant-scope
+
+  # NOTE: the Worker bundle stub-drift gate (#14422) runs inside
+  # `lint-and-types` above — packages/cloud/api chains `check:worker-bundle`
+  # (wrangler deploy --dry-run) into its `typecheck`, so `verify:cloud` covers
+  # it. Do not re-add a standalone dry-run job: #14474 + #14504 briefly ran it
+  # twice per PR on the saturated runner fleet.
 
   unit-tests:
     runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}

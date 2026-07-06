@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import {
-  HOME_SIGNAL_WEIGHTS,
   type HomeWidgetSignal,
   homeSignalsFromEvents,
   homeSignalsFromNotifications,
@@ -13,7 +12,7 @@ import { resolveWidgetsForSlot, type WidgetPluginState } from "./registry";
 /**
  * End-to-end wiring scenario (#9143): the REAL home widget declarations (their
  * `signalKinds`) + the REAL ranker, fed realistic attention, must surface the
- * widgets that need attention FIRST — "the priority decides what shows up and
+ * widgets that need attention FIRST - "the priority decides what shows up and
  * when". This guards the declaration↔ranker contract (not individual widget
  * rendering, which the per-widget suites cover): if a future edit drops a
  * widget's `signalKinds` or mis-weights a signal, this scenario fails.
@@ -24,13 +23,16 @@ const NOW = 1_700_000_000_000;
 // A runtime plugin snapshot with the per-plugin home widgets enabled + active,
 // so resolveWidgetsForSlot("home", …) returns their real declarations.
 const PLUGINS: WidgetPluginState[] = [
-  { id: "calendar", enabled: true, isActive: true },
-  { id: "goals", enabled: true, isActive: true },
-  { id: "finances", enabled: true, isActive: true },
-  { id: "health", enabled: true, isActive: true },
-  { id: "relationships", enabled: true, isActive: true },
   { id: "agent-orchestrator", enabled: true, isActive: true },
+  { id: "calendar", enabled: true, isActive: true },
+  { id: "feed", enabled: true, isActive: true },
+  { id: "finances", enabled: true, isActive: true },
+  { id: "goals", enabled: true, isActive: true },
+  { id: "health", enabled: true, isActive: true },
+  { id: "inbox", enabled: true, isActive: true },
+  { id: "relationships", enabled: true, isActive: true },
   { id: "todo", enabled: true, isActive: true },
+  { id: "workflow", enabled: true, isActive: true },
 ];
 
 function homeDeclarations() {
@@ -46,128 +48,111 @@ function rankedKeys(signals: HomeWidgetSignal[]): string[] {
   }).map((r) => homeWidgetKey(r.declaration));
 }
 
-describe("home priority — real declarations + ranker scenario (#9143)", () => {
-  it("registers the per-plugin home widgets with attention signalKinds", () => {
+describe("home priority - real declarations + ranker scenario (#9143)", () => {
+  it("registers only the kept home widgets with attention signalKinds", () => {
     const byKey = new Map(homeDeclarations().map((d) => [homeWidgetKey(d), d]));
-    // The five real per-plugin cards resolve on the home slot…
+    // Kept cards resolve on the home slot (spec §B target resident set)…
     for (const key of [
       "calendar/calendar.upcoming",
-      "goals/goals.attention",
-      "finances/finances.alerts",
-      "health/health.sleep",
-      "relationships/relationships.attention",
+      "needs-attention/needs-attention.pending",
+      "todo/todo.items",
     ]) {
       expect(byKey.has(key), `${key} should resolve on home`).toBe(true);
     }
-    // …and each subscribes to at least one attention kind so it can float up.
-    expect(byKey.get("finances/finances.alerts")?.signalKinds).toContain(
-      "escalation",
-    );
-    expect(byKey.get("goals/goals.attention")?.signalKinds).toContain(
-      "escalation",
-    );
+    // …while the demoted/merged residents no longer hold a home declaration:
+    // goals.attention merges into the Today (todo) card and health.sleep +
+    // wallet.balance move to their routed dashboards (spec §E items 3-5).
+    for (const key of [
+      "goals/goals.attention",
+      "health/health.sleep",
+      "wallet/wallet.balance",
+      "agent-orchestrator/agent-orchestrator.activity",
+      "agent-orchestrator/agent-orchestrator.apps",
+      "feed/feed.agent-activity",
+      "workflow/workflow.running",
+      "finances/finances.alerts",
+      "relationships/relationships.attention",
+      "inbox/inbox.unread",
+    ]) {
+      expect(byKey.has(key), `${key} should not resolve on home`).toBe(false);
+    }
+    // The kept calendar card still subscribes to signal kinds so it floats up.
     expect(byKey.get("calendar/calendar.upcoming")?.signalKinds).toContain(
       "reminder",
     );
   });
 
   it("floats the widgets that need attention to the front", () => {
-    // Realistic moment: an urgent notification arrived, finances is overdrawn,
-    // and a goal is at-risk — each contributes a high-weight signal (the urgent
-    // notification via the inbox derivation, finances + goals via their own
-    // self-published attention, exactly as WidgetHost merges them).
+    // Realistic moment: an urgent notification arrived and a goal is at-risk.
+    // The at-risk goal now lives INSIDE the Today (todo) card (spec §E item 5),
+    // so the card self-publishes the goals escalation weight under its OWN key
+    // (`todo/todo.items`) - the merged resident, not a separate goals card.
     const signals: HomeWidgetSignal[] = [
       ...homeSignalsFromNotifications(
         [{ priority: "urgent", timestamp: NOW }],
         homeDeclarations(),
       ),
-      { widgetKey: "finances/finances.alerts", weight: 10, timestamp: NOW },
-      { widgetKey: "goals/goals.attention", weight: 10, timestamp: NOW },
+      { widgetKey: "todo/todo.items", weight: 10, timestamp: NOW },
     ];
 
     const order = rankedKeys(signals);
     const top3 = order.slice(0, 3);
 
-    // The three attention-worthy widgets occupy the front, ahead of every
+    // The two attention-worthy widgets occupy the front, ahead of every
     // quiet widget (which rank by static base order only). Needs-attention
-    // floats purely via the urgent-notification derivation (urgent →
-    // escalation, which it subscribes to); finances/goals ride their own
-    // self-published signals.
+    // floats via the urgent-notification derivation (urgent → escalation);
+    // the Today card rides its merged goal's self-published escalation signal.
     expect(top3).toContain("needs-attention/needs-attention.pending");
-    expect(top3).toContain("finances/finances.alerts");
-    expect(top3).toContain("goals/goals.attention");
+    expect(top3).toContain("todo/todo.items");
 
     // A quiet widget (calendar with no upcoming-event signal) ranks behind them.
     const calendarRank = order.indexOf("calendar/calendar.upcoming");
-    const financesRank = order.indexOf("finances/finances.alerts");
-    expect(financesRank).toBeLessThan(calendarRank);
+    const todoRank = order.indexOf("todo/todo.items");
+    expect(todoRank).toBeLessThan(calendarRank);
+
+    // The demoted goals card no longer appears as a standalone resident.
+    expect(order).not.toContain("goals/goals.attention");
   });
 
-  it("floats orchestrator activity for workflow lifecycle events", () => {
+  it("does not route workflow lifecycle events to removed home cards", () => {
     const signals = homeSignalsFromEvents(
       [{ eventType: "tool_running", timestamp: NOW }],
       homeDeclarations(),
     );
 
-    // A workflow event boosts every workflow-subscribed home widget: the
-    // orchestrator activity card and the curated agent-activity feed tile. Both
-    // float to workflow strength.
-    expect(signals).toContainEqual({
-      widgetKey: "agent-orchestrator/agent-orchestrator.activity",
-      weight: HOME_SIGNAL_WEIGHTS.workflow,
-      timestamp: NOW,
-    });
-    expect(signals).toContainEqual({
-      widgetKey: "feed/feed.agent-activity",
-      weight: HOME_SIGNAL_WEIGHTS.workflow,
-      timestamp: NOW,
-    });
-
-    const order = rankedKeys(signals);
-    // The workflow-boosted widgets sit at the very front, ahead of a quiet
-    // card (needs-attention has no workflow subscription, so it ranks by its
-    // static base order only).
-    expect(order.slice(0, 2)).toEqual(
+    expect(signals.map((s) => s.widgetKey)).not.toEqual(
       expect.arrayContaining([
         "agent-orchestrator/agent-orchestrator.activity",
         "feed/feed.agent-activity",
+        "workflow/workflow.running",
       ]),
     );
-    expect(
-      order.indexOf("agent-orchestrator/agent-orchestrator.activity"),
-    ).toBeLessThan(order.indexOf("needs-attention/needs-attention.pending"));
+
+    const order = rankedKeys(signals);
+    expect(order).not.toEqual(
+      expect.arrayContaining([
+        "agent-orchestrator/agent-orchestrator.activity",
+        "feed/feed.agent-activity",
+        "workflow/workflow.running",
+      ]),
+    );
   });
 
-  it("floats orchestrator errors via workflow, not the escalation rail", () => {
+  it("does not route orchestrator errors to a resident home card", () => {
     const signals = homeSignalsFromEvents(
       [{ eventType: "error", timestamp: NOW }],
       homeDeclarations(),
     );
 
-    // An error lifts the orchestrator card to the top of a quiet home, but at
-    // workflow strength — NOT the weight-10 blocked rail. Transient/recoverable
-    // orchestrator errors are common, so escalation-strength routing would
-    // manufacture false alarms; genuine urgency rides the `blocked` SessionEvent.
-    expect(signals).toContainEqual({
-      widgetKey: "agent-orchestrator/agent-orchestrator.activity",
-      weight: HOME_SIGNAL_WEIGHTS.workflow,
-      timestamp: NOW,
-    });
     expect(
       signals.find(
         (s) => s.widgetKey === "agent-orchestrator/agent-orchestrator.activity",
-      )?.weight,
-    ).toBeLessThan(HOME_SIGNAL_WEIGHTS.blocked);
-    // The error lifts the orchestrator card to the front of a quiet home (the
-    // curated agent-activity feed tile, also workflow-subscribed, floats with
-    // it), both ahead of the quiet needs-attention baseline.
+      ),
+    ).toBeUndefined();
     const order = rankedKeys(signals);
-    expect(order.slice(0, 2)).toContain(
+    expect(order).not.toContain(
       "agent-orchestrator/agent-orchestrator.activity",
     );
-    expect(
-      order.indexOf("agent-orchestrator/agent-orchestrator.activity"),
-    ).toBeLessThan(order.indexOf("needs-attention/needs-attention.pending"));
   });
 
   it("with no live signals, ranks purely by base order (quiet home)", () => {
@@ -175,6 +160,6 @@ describe("home priority — real declarations + ranker scenario (#9143)", () => 
     // needs-attention (order 60) outranks the per-plugin cards (order ≥ 110).
     expect(
       order.indexOf("needs-attention/needs-attention.pending"),
-    ).toBeLessThan(order.indexOf("finances/finances.alerts"));
+    ).toBeLessThan(order.indexOf("calendar/calendar.upcoming"));
   });
 });

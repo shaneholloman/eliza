@@ -218,6 +218,15 @@ describe("v5 planner loop skeleton", () => {
 		);
 	});
 
+	it("allows structured chat markers while still banning arbitrary JSON/tool attempts", () => {
+		expect(plannerTemplate).toContain("arbitrary JSON/tool attempts");
+		expect(plannerTemplate).toContain(
+			"Structured chat markers are allowed in messageToUser",
+		);
+		expect(plannerTemplate).toContain("[FORM]\\n{json}\\n[/FORM]");
+		expect(plannerTemplate).toContain("The JSON inside [FORM] is form data");
+	});
+
 	it("forbids phantom in-flight investigative claims in messageToUser/REPLY (planner side)", () => {
 		// Live regression on 2026-05-26: user asked
 		// "look it up bitch" after the bot honestly declined a current-news
@@ -284,6 +293,10 @@ describe("v5 planner loop skeleton", () => {
 			"Optimized planner without bundled safety policy",
 		);
 		expect(systemContent).toContain("mandatory planner policy:");
+		expect(systemContent).toContain(
+			"Structured chat markers are allowed in messageToUser",
+		);
+		expect(systemContent).toContain("[FORM]\\n{json}\\n[/FORM]");
 		expect(systemContent).toContain(
 			"SHELL is for filesystem/process work, not a fallback for chat-message search/recall",
 		);
@@ -1592,6 +1605,94 @@ describe("v5 planner loop skeleton", () => {
 				evaluate,
 			}),
 		).rejects.toBeInstanceOf(TrajectoryLimitExceeded);
+	});
+
+	it("surfaces the tool's diagnostic reason (not a bare 'failed') when a success:false result carries no typed error (#14873)", async () => {
+		// SCHEDULED_TASKS and most actions report failure as
+		// `{ success:false, text:"<why>", data:{ error:"<CODE>" } }`, reserving the
+		// typed `error` field for thrown Errors. Before the fix the failure
+		// signature flattened every such failure to the literal "failed", so a
+		// repeated-failure abort read `Repeated tool failure limit exceeded for
+		// SCHEDULED_TASKS:failed` — diagnostically useless (observed live on the
+		// news-heartbeat turn). The human reason must survive into the limit error.
+		const runtime = {
+			useModel: vi.fn(async () => ({
+				text: "",
+				toolCalls: [
+					{ id: "call-1", name: "SCHEDULED_TASKS", arguments: { action: "create" } },
+				],
+			})),
+		};
+		const executeToolCall = vi.fn(async () => ({
+			success: false,
+			text: "I need a trigger (once | cron | interval | ...) to schedule a task.",
+			data: { subaction: "create", error: "MISSING_TRIGGER" },
+		}));
+		const evaluate = vi.fn(async () => ({
+			success: false,
+			decision: "CONTINUE" as const,
+			thought: "Retry.",
+		}));
+
+		let thrown: unknown;
+		try {
+			await runPlannerLoop({
+				runtime,
+				context: { id: "ctx" },
+				config: { maxRepeatedFailures: 1 },
+				executeToolCall,
+				evaluate,
+			});
+		} catch (error) {
+			thrown = error;
+		}
+
+		expect(thrown).toBeInstanceOf(TrajectoryLimitExceeded);
+		const message = (thrown as TrajectoryLimitExceeded).message;
+		expect(message).toContain("SCHEDULED_TASKS");
+		expect(message).toContain("I need a trigger");
+		expect(message).not.toContain("SCHEDULED_TASKS:failed");
+	});
+
+	it("falls back to the data.error code when a success:false result has no text (#14873)", async () => {
+		// The `text` projection is the preferred human reason, but a failure that
+		// carries only a machine code in `data.error` must still name that code
+		// rather than degrade to "failed".
+		const runtime = {
+			useModel: vi.fn(async () => ({
+				text: "",
+				toolCalls: [
+					{ id: "call-1", name: "SCHEDULED_TASKS", arguments: { action: "create" } },
+				],
+			})),
+		};
+		const executeToolCall = vi.fn(async () => ({
+			success: false,
+			data: { subaction: "create", error: "MISSING_TRIGGER" },
+		}));
+		const evaluate = vi.fn(async () => ({
+			success: false,
+			decision: "CONTINUE" as const,
+			thought: "Retry.",
+		}));
+
+		let thrown: unknown;
+		try {
+			await runPlannerLoop({
+				runtime,
+				context: { id: "ctx" },
+				config: { maxRepeatedFailures: 1 },
+				executeToolCall,
+				evaluate,
+			});
+		} catch (error) {
+			thrown = error;
+		}
+
+		expect(thrown).toBeInstanceOf(TrajectoryLimitExceeded);
+		expect((thrown as TrajectoryLimitExceeded).message).toContain(
+			"MISSING_TRIGGER",
+		);
 	});
 
 	it("does not count different failed tool parameters as the same repeated failure", async () => {

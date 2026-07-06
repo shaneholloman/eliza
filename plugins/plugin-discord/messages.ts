@@ -15,6 +15,7 @@ import {
 	EventType,
 	type FetchedDocumentUrl as FetchedKnowledgeUrl,
 	fetchDocumentFromUrl,
+	getConnectorAdminWhitelist,
 	type HandlerCallback,
 	type IAgentRuntime,
 	isInAllowlist,
@@ -28,11 +29,13 @@ import {
 	type UUID,
 } from "@elizaos/core";
 import {
+	type ActionRowBuilder,
 	type AttachmentBuilder,
 	type Channel,
 	type Client,
 	ChannelType as DiscordChannelType,
 	type Message as DiscordMessage,
+	type MessageActionRowComponentBuilder,
 	type TextChannel,
 } from "discord.js";
 import { isDiscordUserAddressed } from "./addressing";
@@ -71,6 +74,7 @@ import {
 } from "./types";
 import { createTypingController } from "./typing";
 import {
+	buildDiscordComponents,
 	buildOutboundDiscordAttachment,
 	canSendMessage,
 	extractUrls,
@@ -278,6 +282,40 @@ export async function createDiscordMessageMemoryOnce(
 	return memory;
 }
 
+/** Options handed to `User.send` when delivering a Discord DM reply. */
+export interface DmSendOptions {
+	content: string;
+	files?: AttachmentBuilder[];
+	components?: ActionRowBuilder<MessageActionRowComponentBuilder>[];
+}
+
+/**
+ * Build the option bag for a DM reply using the same widget rows as guild
+ * sends. Discord supports action rows of buttons and string selects in DMs, so
+ * the connector does not need a DM-specific fallback for the component types it
+ * emits.
+ *
+ * `components`/`files` keys are omitted entirely when empty so we never send an
+ * empty `components: []` (which Discord rejects) or an empty `files: []`.
+ *
+ * @param textContent - Prose to send (already normalized, may be the
+ *   "Choose an option:" fallback when the reply is components-only).
+ * @param files - Outbound attachments, if any.
+ * @param components - Already-built discord.js action rows (from
+ *   `buildDiscordComponents`), if any.
+ */
+export function buildDmSendOptions(
+	textContent: string,
+	files: AttachmentBuilder[],
+	components: ActionRowBuilder<MessageActionRowComponentBuilder>[] | undefined,
+): DmSendOptions {
+	return {
+		content: textContent,
+		...(files.length > 0 ? { files } : {}),
+		...(components && components.length > 0 ? { components } : {}),
+	};
+}
+
 /**
  * Class representing a Message Manager for handling Discord messages.
  */
@@ -411,6 +449,16 @@ export class MessageManager {
 		if (policy === "pairing") {
 			// Check static allowlist first (if configured, allow bypass of pairing)
 			if (this.discordSettings.allowFrom?.includes(userId)) {
+				return { allowed: true };
+			}
+
+			// The resolved bot owner and explicitly whitelisted connector admins
+			// (seeded by refreshOwnerDiscordUserIds from the application owner /
+			// team / ELIZA_DISCORD_OWNER_USER_IDS_JSON) are the pairing APPROVERS —
+			// they must never be locked behind their own pairing gate (#14710).
+			const discordAdminIds =
+				getConnectorAdminWhitelist(this.runtime).discord ?? [];
+			if (discordAdminIds.includes(userId)) {
 				return { allowed: true };
 			}
 
@@ -1099,8 +1147,11 @@ export class MessageManager {
 					let messages: DiscordMessage[] = [];
 					if (draftStream?.isStarted() && !draftStream.isDone()) {
 						if (hasText || files.length === 0) {
+							const draftComponents = hasComponents
+								? buildDiscordComponents(rendered.components)
+								: undefined;
 							messages = await runResponseDispatch(() =>
-								draftStream.finalize(textContent),
+								draftStream.finalize(textContent, draftComponents),
 							);
 						} else {
 							await finalizePendingDraft();
@@ -1148,11 +1199,11 @@ export class MessageManager {
 							return [];
 						}
 
+						const dmComponents = hasComponents
+							? buildDiscordComponents(rendered.components)
+							: undefined;
 						const dmMessage = await runResponseDispatch(() =>
-							user.send({
-								content: textContent,
-								files: files.length > 0 ? files : undefined,
-							}),
+							user.send(buildDmSendOptions(textContent, files, dmComponents)),
 						);
 						messages = [dmMessage];
 					} else {

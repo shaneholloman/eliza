@@ -15,6 +15,7 @@
  */
 import {
   type FormEvent,
+  memo,
   type ReactNode,
   useCallback,
   useEffect,
@@ -51,17 +52,23 @@ import { CodeBlock } from "../ui/code-block";
 import { ErrorBoundary } from "../ui/error-boundary";
 import { Input } from "../ui/input";
 import { AccountConnectBlock } from "./AccountConnectBlock";
+import {
+  connectorWidgetModes,
+  defaultConnectorWidgetModeId,
+} from "./inline-connector-modes";
 import { MessageAttachments } from "./MessageAttachments";
 import {
   buildInlinePluginConfigModel,
   isSafeNormalizedPluginId,
   normalizePluginId,
+  parseFormSubmitDisplay,
   parseSegments,
   sensitiveRequestStatusLabel,
   sensitiveRequestTitleLabel,
   splitInlineCode,
 } from "./message-parser-helpers";
 import { ThinkingBlock } from "./ThinkingBlock";
+import { ChatWidgetShell } from "./widgets/chat-widget-shell";
 // Side effect: registers the built-in inline widgets (choice/followups/form/task).
 import "./widgets/inline-builtins";
 import { getInlineWidget } from "./widgets/inline-registry";
@@ -132,6 +139,14 @@ function MessageTextBody({
   text: string;
   boldSlashCommand: boolean;
 }) {
+  const formSubmit = boldSlashCommand ? parseFormSubmitDisplay(text) : null;
+  if (formSubmit) {
+    return (
+      <div className="whitespace-normal">
+        <FormSubmitReceipt label={formSubmit.label} />
+      </div>
+    );
+  }
   const slash = boldSlashCommand ? splitLeadingSlashCommand(text) : null;
   return (
     <div className="whitespace-pre-wrap">
@@ -152,9 +167,27 @@ function MessageTextBody({
   );
 }
 
+export function FormSubmitReceipt({ label }: { label: string }) {
+  return (
+    <div
+      className="inline-flex max-w-full items-center rounded-full border border-border/70 bg-bg px-2.5 py-1 text-xs font-medium text-muted-strong"
+      data-testid="form-submit-receipt"
+    >
+      Submitted {label}
+    </div>
+  );
+}
+
 // ── InlinePluginConfig ──────────────────────────────────────────────
 
-export function InlinePluginConfig({
+// The in-chat connector/plugin setup card for `[CONFIG:pluginId]` markers
+// (#14412). All state (fetch status, field edits, mutations) is internal and
+// the only prop is a primitive, so `memo` makes a transcript-parent re-render
+// (streaming ticks, unrelated store updates) bail out before this subtree —
+// the widget repaints only when its own state changes. Connection status is
+// fetched inside, never derived from props at render, so memo cannot pin a
+// stale status (the NotificationRow lesson).
+export const InlinePluginConfig = memo(function InlinePluginConfig({
   pluginId: rawPluginId,
 }: {
   pluginId: string;
@@ -167,14 +200,18 @@ export function InlinePluginConfig({
   const [saved, setSaved] = useState(false);
   const [enabling, setEnabling] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [dismissed, setDismissed] = useState(false);
+  const [modeChoice, setModeChoice] = useState<string | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
   const mountedRef = useRef(true);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { setActionNotice, loadPlugins, t } = useAppSelectorShallow((s) => ({
-    setActionNotice: s.setActionNotice,
-    loadPlugins: s.loadPlugins,
-    t: s.t,
-  }));
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { setActionNotice, loadPlugins, t, elizaCloudConnected } =
+    useAppSelectorShallow((s) => ({
+      setActionNotice: s.setActionNotice,
+      loadPlugins: s.loadPlugins,
+      t: s.t,
+      elizaCloudConnected: s.elizaCloudConnected,
+    }));
 
   // Track mount state — reset to true on each mount (needed for StrictMode
   // which unmounts/remounts and would leave the ref false otherwise).
@@ -183,6 +220,7 @@ export function InlinePluginConfig({
     return () => {
       mountedRef.current = false;
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
     };
   }, []);
 
@@ -216,6 +254,118 @@ export function InlinePluginConfig({
       () => buildInlinePluginConfigModel(plugin, values),
       [plugin, values],
     );
+
+  // "Connected" is the server's own setup verdict: enabled AND configured.
+  // Hoisted above the early returns so the OAuth polling effect below can
+  // observe it; drives the shell's collapse-on-connect.
+  const connected = Boolean(plugin?.enabled && plugin?.configured);
+
+  // Auth-mode switch (OAuth / token form / local bridge), projected from the
+  // same connector-mode registry the Settings connectors page renders.
+  const modes = useMemo(
+    () =>
+      connectorWidgetModes(pluginId, {
+        elizaCloudConnected: Boolean(elizaCloudConnected),
+      }),
+    [pluginId, elizaCloudConnected],
+  );
+  const selectedModeId =
+    modeChoice ?? defaultConnectorWidgetModeId(pluginId, modes);
+  const selectedMode = modes.find((m) => m.id === selectedModeId) ?? null;
+  // The first non-OAuth mode powers the "use an API key / local setup instead"
+  // fallback link under a sign-in button — the required visible toggle away
+  // from OAuth. Undefined when the connector is OAuth-only.
+  const apiKeyModeId = modes.find((m) => m.kind !== "oauth")?.id ?? undefined;
+
+  // Bounded refetch loop after a sign-in hand-off: the authorization finishes
+  // in another window/app, so the card polls the plugin status until the
+  // server reports connected (or gives up after ~1 minute). Collapse-on-connect
+  // then follows from the status flip — no fabricated success.
+  const beginConnectPolling = useCallback(() => {
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    let remaining = 20;
+    const tick = async () => {
+      remaining -= 1;
+      await fetchPlugin();
+      if (!mountedRef.current) return;
+      if (remaining <= 0) {
+        setSigningIn(false);
+        return;
+      }
+      pollTimerRef.current = setTimeout(() => void tick(), 3000);
+    };
+    pollTimerRef.current = setTimeout(() => void tick(), 3000);
+  }, [fetchPlugin]);
+
+  useEffect(() => {
+    if (!connected) return;
+    setSigningIn(false);
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+  }, [connected]);
+
+  // OAuth sign-in: start the connector's OAuth flow through the agent API and
+  // open the returned authorization URL. https-only (isHttpsAuthorizationUrl)
+  // because the URL is server-supplied data flowing into window.open.
+  const handleOAuthSignIn = useCallback(async () => {
+    setSigningIn(true);
+    setError(null);
+    try {
+      const result = await client.startConnectorAccountOAuth(
+        pluginId,
+        pluginId,
+        {},
+      );
+      const authUrl = result.authUrl;
+      if (!isHttpsAuthorizationUrl(authUrl)) {
+        throw new Error(
+          result.error ??
+            t("messagecontent.OAuthNoAuthUrl", {
+              defaultValue:
+                "The connector did not return an authorization link.",
+            }),
+        );
+      }
+      window.open(authUrl, "_blank", "noopener,noreferrer");
+      beginConnectPolling();
+    } catch (e: unknown) {
+      // error-policy:J4 sign-in failure renders the card's error state
+      if (mountedRef.current) {
+        setSigningIn(false);
+        setError(
+          e instanceof Error
+            ? e.message
+            : t("messagecontent.OAuthStartFailed", {
+                defaultValue: "Couldn't start the sign-in flow.",
+              }),
+        );
+      }
+    }
+  }, [pluginId, beginConnectPolling, t]);
+
+  // Discord desktop pairing is the one local mode with a one-click authorize
+  // (local IPC, same call the Settings panel makes); other local modes render
+  // their env form + guidance instead.
+  const localSignIn = selectedMode?.setupPluginId === "discordlocal";
+  const handleLocalSignIn = useCallback(async () => {
+    setSigningIn(true);
+    setError(null);
+    try {
+      await client.authorizeDiscordLocal();
+      beginConnectPolling();
+    } catch (e: unknown) {
+      // error-policy:J4 sign-in failure renders the card's error state
+      if (mountedRef.current) {
+        setSigningIn(false);
+        setError(
+          e instanceof Error
+            ? e.message
+            : t("messagecontent.LocalSignInFailed", {
+                defaultValue: "Couldn't authorize the desktop app.",
+              }),
+        );
+      }
+    }
+  }, [beginConnectPolling, t]);
 
   const handleChange = useCallback((key: string, value: unknown) => {
     setValues((prev) => ({ ...prev, [key]: value }));
@@ -291,7 +441,13 @@ export function InlinePluginConfig({
             "success",
             4000,
           );
-          setDismissed(true);
+          // Optimistic connect: flip the local status so the shell collapses
+          // to its compact summary immediately. The delayed refetch below
+          // reconciles with the server and re-expands the card if the plugin
+          // actually still needs configuration.
+          setPlugin((prev) =>
+            prev ? { ...prev, enabled: true, configured: true } : prev,
+          );
         }
         // Wait for agent restart then refresh (with cleanup on unmount)
         refreshTimerRef.current = setTimeout(() => void fetchPlugin(), 3000);
@@ -317,17 +473,6 @@ export function InlinePluginConfig({
     [pluginId, plugin, values, fetchPlugin, loadPlugins, setActionNotice, t],
   );
 
-  if (dismissed) {
-    return (
-      <div className="my-2 px-3 py-2 border border-ok/30 bg-ok/5 text-xs text-ok">
-        {t("messagecontent.PluginEnabledInlineNotice", {
-          defaultValue: "{{name}} is enabled.",
-          name: plugin?.name ?? pluginId,
-        })}
-      </div>
-    );
-  }
-
   if (loading) {
     return (
       <div className="my-2 px-3 py-2 border border-border bg-card text-xs text-muted italic">
@@ -351,25 +496,26 @@ export function InlinePluginConfig({
   }
 
   const isEnabled = plugin.enabled;
+  const showConfigForm =
+    schema && hasConfigurableParams && selectedMode?.kind !== "oauth";
 
   return (
-    <div className="my-2 border border-border bg-card overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 bg-bg-hover">
-        <div className="flex items-center gap-2 text-xs font-bold text-txt">
-          {plugin.icon ? (
-            <span className="text-sm">{plugin.icon}</span>
-          ) : (
-            <span className="text-sm opacity-60">{"\u2699\uFE0F"}</span>
-          )}
-          <span>
-            {t("messagecontent.PluginConfigurationTitle", {
-              defaultValue: "{{name}} Configuration",
-              name: plugin.name,
-            })}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
+    <ChatWidgetShell
+      testId="inline-plugin-config"
+      complete={connected}
+      icon={
+        plugin.icon ? (
+          <span className="text-sm">{plugin.icon}</span>
+        ) : (
+          <span className="text-sm opacity-60">{"\u2699\uFE0F"}</span>
+        )
+      }
+      title={t("messagecontent.PluginConfigurationTitle", {
+        defaultValue: "{{name}} Configuration",
+        name: plugin.name,
+      })}
+      status={
+        <>
           {plugin.configured && (
             <span className="text-2xs text-ok font-medium">
               {t("config-field.Configured")}
@@ -386,12 +532,134 @@ export function InlinePluginConfig({
                   defaultValue: "Inactive",
                 })}
           </span>
+        </>
+      }
+      summary={
+        <span className="text-ok">
+          {t("messagecontent.PluginEnabledInlineNotice", {
+            defaultValue: "{{name}} is enabled.",
+            name: plugin.name ?? pluginId,
+          })}
+        </span>
+      }
+    >
+      {/* Auth-mode switch — OAuth / API-key / local-bridge, when the connector
+          declares more than one setup mode. A single-mode connector shows no
+          switch (nothing to choose). */}
+      {modes.length > 1 && (
+        <div
+          className="flex flex-wrap items-center gap-1.5 px-3 pt-3"
+          role="group"
+          aria-label={t("messagecontent.SetupModeLabel", {
+            defaultValue: "Setup method",
+          })}
+          data-testid="inline-plugin-config-modes"
+        >
+          {modes.map((mode) => {
+            const active = mode.id === selectedModeId;
+            return (
+              <button
+                key={mode.id}
+                type="button"
+                aria-pressed={active}
+                title={mode.description}
+                data-testid={`inline-plugin-config-mode-${mode.id}`}
+                onClick={() => {
+                  setModeChoice(mode.id);
+                  setError(null);
+                }}
+                className={`px-3 py-1 h-7 text-2xs font-medium border transition-colors ${
+                  active
+                    ? "border-accent text-accent bg-accent/10"
+                    : "border-border text-muted hover:text-txt hover:border-txt/40"
+                }`}
+              >
+                {mode.label}
+              </button>
+            );
+          })}
         </div>
-      </div>
+      )}
 
-      {/* Form — always shown so user can configure before enabling */}
-      {schema && hasConfigurableParams ? (
+      {/* OAuth sign-in — shown for a cloud/OAuth-shaped mode instead of the env
+          form. The API-key / local fallback is always one click away below. */}
+      {selectedMode?.kind === "oauth" && (
+        <div className="p-3" data-testid="inline-plugin-config-oauth">
+          <Button
+            variant="default"
+            size="sm"
+            className="px-4 py-1.5 h-8 text-xs bg-accent text-accent-fg hover:opacity-90 disabled:opacity-40"
+            onClick={() => void handleOAuthSignIn()}
+            disabled={signingIn}
+            data-testid="inline-plugin-config-oauth-btn"
+          >
+            {signingIn
+              ? t("messagecontent.OAuthSigningIn", {
+                  defaultValue: "Waiting for sign-in…",
+                })
+              : t("messagecontent.OAuthSignIn", {
+                  defaultValue: "Sign in with {{name}}",
+                  name: plugin.name ?? pluginId,
+                })}
+          </Button>
+          {apiKeyModeId && (
+            <button
+              type="button"
+              onClick={() => {
+                setModeChoice(apiKeyModeId);
+                setError(null);
+              }}
+              data-testid="inline-plugin-config-use-apikey"
+              className="mt-2 block text-2xs text-muted underline hover:text-txt"
+            >
+              {t("messagecontent.OAuthUseApiKey", {
+                defaultValue: "Use an API key / local setup instead",
+              })}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Local desktop pairing (Discord IPC): one-click authorize instead of an
+          env form, plus the mode's guidance text. */}
+      {selectedMode?.kind === "local" && localSignIn && (
+        <div className="p-3" data-testid="inline-plugin-config-local">
+          {selectedMode.description && (
+            <p className="mb-2 text-2xs text-muted">
+              {selectedMode.description}
+            </p>
+          )}
+          <Button
+            variant="default"
+            size="sm"
+            className="px-4 py-1.5 h-8 text-xs bg-accent text-accent-fg hover:opacity-90 disabled:opacity-40"
+            onClick={() => void handleLocalSignIn()}
+            disabled={signingIn}
+            data-testid="inline-plugin-config-local-btn"
+          >
+            {signingIn
+              ? t("messagecontent.LocalSigningIn", {
+                  defaultValue: "Pairing…",
+                })
+              : t("messagecontent.LocalSignIn", {
+                  defaultValue: "Authorize the desktop app",
+                })}
+          </Button>
+        </div>
+      )}
+
+      {/* Config form — the env-var / token form for local-config + local-setup
+          modes (and connectors with no declared modes at all). Hidden while an
+          OAuth or one-click-local mode owns the body. */}
+      {showConfigForm ? (
         <div className="p-3">
+          {selectedMode?.description &&
+            selectedMode.kind === "local" &&
+            !localSignIn && (
+              <p className="mb-2 text-2xs text-muted">
+                {selectedMode.description}
+              </p>
+            )}
           <ConfigRenderer
             schema={schema}
             hints={hints}
@@ -402,7 +670,8 @@ export function InlinePluginConfig({
             onChange={handleChange}
           />
         </div>
-      ) : (
+      ) : selectedMode?.kind === "oauth" ||
+        (selectedMode?.kind === "local" && localSignIn) ? null : (
         <div className="px-3 py-2 text-xs text-muted italic">
           {t("messagecontent.NoConfigurablePara")}
         </div>
@@ -410,7 +679,7 @@ export function InlinePluginConfig({
 
       {/* Footer */}
       <div className="flex items-center gap-2 px-3 py-2 flex-wrap">
-        {schema && hasConfigurableParams && (
+        {showConfigForm && (
           <Button
             variant="default"
             size="sm"
@@ -463,9 +732,9 @@ export function InlinePluginConfig({
         {saved && <span className="text-xs text-ok">{t("common.saved")}</span>}
         {error && <span className="text-xs text-danger">{error}</span>}
       </div>
-    </div>
+    </ChatWidgetShell>
   );
-}
+});
 
 // ── UiSpec block ────────────────────────────────────────────────────
 
@@ -1184,8 +1453,19 @@ export function MessageContent({
     );
   }
 
-  // Fast path: single plain-text segment (most messages)
-  if (segments.length === 1 && segments[0].kind === "text") {
+  // Fast path: single plain-text segment (most messages). Assistant turns
+  // that carry reasoning or tool events must NOT take it — the thinking block
+  // and the expandable action log render only on the full path below, and the
+  // common reply shape IS a single text segment, so gating on segments alone
+  // silently dropped both.
+  const hasAssistantExtras =
+    message.role === "assistant" &&
+    Boolean(message.reasoning?.trim() || message.toolEvents?.length);
+  if (
+    !hasAssistantExtras &&
+    segments.length === 1 &&
+    segments[0].kind === "text"
+  ) {
     return (
       <MessageTextBody
         text={segments[0].text}

@@ -29,7 +29,6 @@ import {
 	type MessageActionRowComponentBuilder,
 	type MessageCreateOptions,
 	PermissionsBitField,
-	StringSelectMenuBuilder,
 	type TextChannel,
 	ThreadChannel,
 } from "discord.js";
@@ -568,6 +567,101 @@ interface MessageSendOptions {
 	components?: ActionRowBuilder<MessageActionRowComponentBuilder>[];
 }
 
+/**
+ * Convert the connector's neutral {@link DiscordActionRow} specs (produced by
+ * `renderDiscordInteractions`) into discord.js `ActionRowBuilder`s ready to hand
+ * to `channel.send`/`user.send`. Already-built discord.js rows pass through
+ * untouched. Returns `undefined` when there is nothing renderable so callers can
+ * omit the `components` key entirely.
+ *
+ * This is the single button builder for guild sends and DMs. Other Discord
+ * component types need a live producer and submit path before being added here;
+ * otherwise callers would render controls the connector cannot handle.
+ */
+export function buildDiscordComponents(
+	components: DiscordActionRow[] | undefined,
+): ActionRowBuilder<MessageActionRowComponentBuilder>[] | undefined {
+	if (!components || components.length === 0) {
+		return undefined;
+	}
+
+	try {
+		logger.info(`Components received: ${safeStringify(components)}`);
+
+		if (!Array.isArray(components)) {
+			logger.warn("Components is not an array, skipping component processing");
+			return undefined;
+		}
+
+		if (isDiscordJsComponentArray(components)) {
+			return components;
+		}
+
+		const discordComponents = (components as DiscordActionRow[])
+			.map((row: DiscordActionRow) => {
+				if (!row || typeof row !== "object" || row.type !== 1) {
+					logger.warn("Invalid component row structure, skipping");
+					return null;
+				}
+
+				const actionRow =
+					new ActionRowBuilder<MessageActionRowComponentBuilder>();
+
+				if (!Array.isArray(row.components)) {
+					logger.warn("Row components is not an array, skipping");
+					return null;
+				}
+
+				const validComponents = row.components
+					.map((comp: DiscordComponentOptions) => {
+						if (!comp || typeof comp !== "object") {
+							logger.warn("Invalid component, skipping");
+							return null;
+						}
+
+						try {
+							if (comp.type === 2) {
+								const button = new ButtonBuilder()
+									.setLabel(comp.label || "")
+									.setStyle(comp.style || 1);
+								// Link-style buttons carry a URL and no custom_id.
+								if (comp.url) {
+									button.setURL(comp.url);
+								} else {
+									button.setCustomId(comp.custom_id);
+								}
+								return button;
+							}
+						} catch (err) {
+							// error-policy:J4 malformed component specs degrade to text-only Discord delivery.
+							logger.error(`Error creating component: ${err}`);
+							return null;
+						}
+						return null;
+					})
+					.filter(
+						(component): component is ButtonBuilder => component !== null,
+					);
+
+				if (validComponents.length > 0) {
+					actionRow.addComponents(validComponents);
+					return actionRow;
+				}
+				return null;
+			})
+			.filter(
+				(row): row is ActionRowBuilder<MessageActionRowComponentBuilder> =>
+					row !== null,
+			);
+
+		return discordComponents.length > 0 ? discordComponents : undefined;
+	} catch (error) {
+		// error-policy:J4 malformed component rows degrade to text-only Discord delivery.
+		logger.error(`Error processing components: ${error}`);
+		return undefined;
+	}
+}
+
 export async function sendMessageInChunks(
 	channel: TextChannel,
 	content: string,
@@ -624,113 +718,9 @@ export async function sendMessageInChunks(
 				}
 
 				if (i === messages.length - 1 && components && components.length > 0) {
-					try {
-						logger.info(`Components received: ${safeStringify(components)}`);
-
-						if (!Array.isArray(components)) {
-							logger.warn(
-								"Components is not an array, skipping component processing",
-							);
-						} else if (isDiscordJsComponentArray(components)) {
-							options.components = components;
-						} else {
-							const discordComponents = (components as DiscordActionRow[])
-								.map((row: DiscordActionRow) => {
-									if (!row || typeof row !== "object" || row.type !== 1) {
-										logger.warn("Invalid component row structure, skipping");
-										return null;
-									}
-
-									if (row.type === 1) {
-										const actionRow =
-											new ActionRowBuilder<MessageActionRowComponentBuilder>();
-
-										if (!Array.isArray(row.components)) {
-											logger.warn("Row components is not an array, skipping");
-											return null;
-										}
-
-										const validComponents = row.components
-											.map((comp: DiscordComponentOptions) => {
-												if (!comp || typeof comp !== "object") {
-													logger.warn("Invalid component, skipping");
-													return null;
-												}
-
-												try {
-													if (comp.type === 2) {
-														const button = new ButtonBuilder()
-															.setLabel(comp.label || "")
-															.setStyle(comp.style || 1);
-														// Link-style buttons carry a URL and no custom_id.
-														if (comp.url) {
-															button.setURL(comp.url);
-														} else {
-															button.setCustomId(comp.custom_id);
-														}
-														return button;
-													}
-
-													if (comp.type === 3) {
-														const selectMenu = new StringSelectMenuBuilder()
-															.setCustomId(comp.custom_id)
-															.setPlaceholder(
-																comp.placeholder || "Select an option",
-															);
-
-														if (typeof comp.min_values === "number") {
-															selectMenu.setMinValues(comp.min_values);
-														}
-														if (typeof comp.max_values === "number") {
-															selectMenu.setMaxValues(comp.max_values);
-														}
-
-														if (Array.isArray(comp.options)) {
-															selectMenu.addOptions(
-																comp.options.map((option) => ({
-																	label: option.label,
-																	value: option.value,
-																	description: option.description,
-																})),
-															);
-														}
-
-														return selectMenu;
-													}
-												} catch (err) {
-													logger.error(`Error creating component: ${err}`);
-													return null;
-												}
-												return null;
-											})
-											.filter(
-												(
-													component,
-												): component is
-													| ButtonBuilder
-													| StringSelectMenuBuilder => component !== null,
-											);
-
-										if (validComponents.length > 0) {
-											actionRow.addComponents(validComponents);
-											return actionRow;
-										}
-									}
-									return null;
-								})
-								.filter(
-									(
-										row,
-									): row is ActionRowBuilder<MessageActionRowComponentBuilder> =>
-										row !== null,
-								);
-
-							if (discordComponents.length > 0) {
-								options.components = discordComponents;
-							}
-						}
-					} catch (error) {
-						logger.error(`Error processing components: ${error}`);
+					const built = buildDiscordComponents(components);
+					if (built) {
+						options.components = built;
 					}
 				}
 

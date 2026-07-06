@@ -9,7 +9,7 @@
     "targetCount": 32,
     "notes": [
       "This file is the progress ledger for pack F1 only. Add one entry per authored scenario, across both surfaces (lifeops-bench Python ids and scenario-runner .scenario.ts ids).",
-      "status flips planned -> authored once the scenario file/literal exists; -> verified once a real-LLM run has been captured and hand-reviewed per PR_EVIDENCE.md.",
+      "status flips planned -> authored once the scenario file/literal exists; -> verified once a real-LLM run has been captured and hand-reviewed per AGENTS.md.",
       "scenario-runner SR slice authored under #12776: 4 pr-deterministic keyless canaries (verified via strict LLM proxy) + 10 live-only (authored; live-verify deferred to the key boundary #12781, exactly as pack A1 #13286)."
     ]
   },
@@ -117,6 +117,30 @@
       "surface": "scenario-runner",
       "status": "authored",
       "notes": "live-only; live-verify deferred (#12781). The plainest timed reminder at its literal time, bare confirmation, zero ND scaffolding (negative control floor)."
+    },
+    {
+      "id": "goal-fitness-5k-basic",
+      "pack": "F1",
+      "tier": "T1",
+      "surface": "scenario-runner",
+      "status": "authored",
+      "notes": "live-only for #14355. Non-sleep goal-grounding control: vague 5K aspiration must be pushed for a concrete finish/date/cadence, previewed, then persisted as a grounded active goal."
+    },
+    {
+      "id": "goal-savings-trip-basic",
+      "pack": "F1",
+      "tier": "T1",
+      "surface": "scenario-runner",
+      "status": "authored",
+      "notes": "live-only for #14355. Non-sleep goal-grounding control: trip-savings goal must capture target amount, deadline, transfer cadence, and behind-plan check-in before save."
+    },
+    {
+      "id": "goal-learning-spanish-basic",
+      "pack": "F1",
+      "tier": "T2",
+      "surface": "scenario-runner",
+      "status": "authored",
+      "notes": "live-only for #14355. Non-sleep goal-grounding control: learning goal must be pushed for an evidence signal (10-minute conversation), horizon, and practice cadence before save."
     },
     {
       "id": "f1-adversarial-highstakes-wrong-recipient-payment",

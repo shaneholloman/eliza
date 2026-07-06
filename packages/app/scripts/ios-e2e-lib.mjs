@@ -39,10 +39,12 @@ export function parseIosE2eArgs(argv) {
   return {
     device: val("--device"),
     appPath: val("--app-path"),
+    output: val("--output"),
     skipBuild: has("--skip-build"),
     skipAuth: has("--skip-auth"),
     skipLocalChat: has("--skip-local-chat"),
     cloud: has("--cloud"),
+    noWait: has("--no-wait"),
   };
 }
 

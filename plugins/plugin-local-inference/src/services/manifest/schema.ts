@@ -299,7 +299,7 @@ export const Eliza1FilesSchema = z.object({
 	embedding: z.array(Eliza1FileEntrySchema).optional(),
 	// Optional image-generation artifacts. Most Eliza-1 base bundles do not
 	// carry diffusion weights; those are documented in
-	// packages/research/chip/ELIZA_1_BUNDLE_EXTRAS.json and downloaded on first use. When an
+	// services/manifest/catalog/eliza-1-bundle-extras.json and downloaded on first use. When an
 	// additional bundle ships local image-gen weights inline, list them here
 	// and provide matching `lineage.imagegen`.
 	imagegen: z.array(Eliza1FileEntrySchema).optional(),
@@ -332,7 +332,7 @@ export const Eliza1FilesSchema = z.object({
 	// runtime, so this slot is currently unused-if-shipped. Wiring the native
 	// read + running it on `isFinal` transcript snapshots and fusing via the
 	// single `emotion-attribution.ts` point is a tracked follow-up
-	// (.github/issue-evidence/12216-runtime-status.md). All tiers would ship the
+	// (test-results/evidence/12216-runtime-status.md). All tiers would ship the
 	// same Wav2Small student (the on-device budget is dominated by the LM, not
 	// this small head); a 2b entry bundle may still choose to omit it.
 	emotion: z.array(Eliza1FileEntrySchema).optional(),

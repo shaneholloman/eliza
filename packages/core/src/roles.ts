@@ -17,8 +17,9 @@
  * both resolution paths agree (#12087 Item 6); resolution trusts ONLY connector
  * identity stamped into the Memory, never client-supplied content.metadata; and
  * every access check fails CLOSED — an unknown role ranks below GUEST and an
- * unresolvable sender is treated as USER, never a higher tier. Owner and role
- * grants are recorded explicitly with their source so they stay auditable.
+ * unresolvable connector sender is treated as GUEST while local/API messages
+ * keep the USER fallback they historically used. Owner and role grants are
+ * recorded explicitly with their source so they stay auditable.
  */
 import {
 	getConnectorIdentityMetadataMapping,
@@ -28,6 +29,12 @@ import {
 import { createUniqueUuid } from "./entities";
 import { logger } from "./logger";
 import type { IAgentRuntime, Memory, UUID, World } from "./types";
+import {
+	MESSAGE_SOURCE_AGENT_GREETING,
+	MESSAGE_SOURCE_CLIENT_CHAT,
+	MESSAGE_SOURCE_CODING_AGENT,
+	MESSAGE_SOURCE_SUB_AGENT,
+} from "./types/message-source";
 import { formatError } from "./utils/format-error";
 import { asRecordOrUndefined as asRecord } from "./utils/type-guards";
 
@@ -214,6 +221,60 @@ function getMessageSource(message: Memory): string | undefined {
 		: undefined;
 }
 
+const LOCAL_UNRESOLVED_ROLE_SOURCES = new Set([
+	MESSAGE_SOURCE_CLIENT_CHAT,
+	MESSAGE_SOURCE_SUB_AGENT,
+	MESSAGE_SOURCE_CODING_AGENT,
+	MESSAGE_SOURCE_AGENT_GREETING,
+	"api",
+	"benchmark",
+	"dashboard",
+	"deep-link",
+	"event",
+	"ios-local",
+	"local-voice",
+	"owner_app",
+	"test",
+]);
+
+/**
+ * Role floor used when a real sender exists but no world role can be resolved.
+ * Connector messages must not outrank a fully resolved stranger, so unknown
+ * non-local sources fall to GUEST. Local, owner-app, and harness traffic keeps
+ * USER so no-world control surfaces keep their historical behavior.
+ */
+export function getUnresolvedSenderRoleFloor(message: Memory): RoleName {
+	const source = getMessageSource(message)?.trim().toLowerCase();
+	if (!source || LOCAL_UNRESOLVED_ROLE_SOURCES.has(source)) {
+		return "USER";
+	}
+	return "GUEST";
+}
+
+function hasConnectorStableIdentity(
+	metadata: Record<string, unknown> | null | undefined,
+): boolean {
+	if (!metadata) {
+		return false;
+	}
+
+	for (const rawConnector of Object.values(metadata)) {
+		const connector = asRecord(rawConnector);
+		if (!connector) {
+			continue;
+		}
+
+		for (const field of CONNECTOR_STABLE_ID_FIELDS) {
+			const value = connector[field];
+			if (typeof value === "string" && value.trim().length > 0) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
 function getConnectorMetadataFromMemory(
 	message: Memory,
 ): Record<string, unknown> | undefined {
@@ -225,7 +286,10 @@ function getConnectorMetadataFromMemory(
 
 	const sourceMetadata = asRecord(memoryMetadata?.[source]);
 	if (sourceMetadata) {
-		return { [source]: sourceMetadata };
+		const nestedMetadata = { [source]: sourceMetadata };
+		if (hasConnectorStableIdentity(nestedMetadata)) {
+			return nestedMetadata;
+		}
 	}
 
 	// No nested `metadata[source]` object present. Fall back to the connector's
@@ -460,8 +524,10 @@ async function resolveOwnershipRole(
 		return null;
 	}
 
-	const senderMetadata =
-		options?.liveEntityMetadata ?? (await getEntityMetadata(runtime, entityId));
+	const liveEntityMetadata = options?.liveEntityMetadata;
+	const senderMetadata = hasConnectorStableIdentity(liveEntityMetadata)
+		? liveEntityMetadata
+		: await getEntityMetadata(runtime, entityId);
 
 	for (const ownerId of ownerIds) {
 		if (ownerId === entityId) {
@@ -719,7 +785,14 @@ export async function resolveEntityRole(
 
 	if (explicitRole !== "GUEST") {
 		if (explicitRole === "OWNER") {
-			return hasConfiguredCanonicalOwner(runtime) ? "GUEST" : "OWNER";
+			// A stored OWNER grant is honored only when it was made deliberately
+			// through the role-management gate (source "manual", writable solely by
+			// an existing OWNER via canModifyRole). Connector-written and sourceless
+			// legacy grants fold to GUEST: worlds persisted before #14845 still
+			// carry OWNER grants the old Discord code wrote for every guild owner,
+			// and honoring them whenever no canonical owner is configured made any
+			// guild owner hosting the bot the app-level OWNER (#14707).
+			return explicitSource === "manual" ? "OWNER" : "GUEST";
 		}
 
 		if (explicitSource === "connector_admin") {
@@ -974,7 +1047,8 @@ async function isCanonicalOwner(
  * When there is no access context at all (no runtime / no sender entity — for
  * example local API calls), allow through so local-only usage follows the same
  * lenient path as plugin role gating. But when there IS a real sender whose
- * role simply cannot be resolved, fail CLOSED to USER rank — see below.
+ * role simply cannot be resolved, use the same source-aware floor as Stage 1
+ * context filtering.
  */
 export async function hasRoleAccess(
 	runtime: IAgentRuntime | undefined,
@@ -1009,14 +1083,8 @@ export async function hasRoleAccess(
 	try {
 		const result = await checkRoleFn(context.runtime, context.message);
 		if (!result) {
-			// Fail CLOSED. When the sender's role cannot be resolved (missing or
-			// inaccessible world, no world id on the message), treat them as USER —
-			// the same default the pre-handler tool-call gate uses. Returning `true`
-			// here was fail-OPEN: a real sender whose world resolution failed
-			// cleared an OWNER gate and reached owner-gated capabilities (e.g.
-			// SHELL). Defaulting to USER denies privileged (ADMIN/OWNER) actions to
-			// an unresolvable sender while still allowing basic USER actions.
-			const senderRank = ROLE_RANK.USER;
+			const senderRank =
+				ROLE_RANK[getUnresolvedSenderRoleFloor(context.message)];
 			const requiredRank = ROLE_RANK[requiredRole] ?? 0;
 			return senderRank >= requiredRank;
 		}

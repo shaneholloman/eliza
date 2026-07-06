@@ -403,7 +403,8 @@ export function captureIos({ duration, deps = {} }) {
   }
   const failed = phases.find((phase) => phase.status === "error");
   return lane(failed ? "error" : "captured", failed?.script ?? null, {
-    outputDir: ".github/issue-evidence/ (10198-walkthrough-ios-sim-*.png/.mov)",
+    outputDir:
+      "packages/app/capture-output/ (10198-walkthrough-ios-sim-*.png/.mov)",
     note: failed
       ? `iOS simulator walkthrough stopped after ${failed.script} failed; see phases for exit codes.`
       : "iOS WKWebView has no CDP, so the walkthrough is driven in-app via ios-onboarding-smoke.mjs and mobile-local-chat-smoke.mjs before simctl capture. See DEVICE_MATRIX.md.",
@@ -507,7 +508,8 @@ async function captureAndroid({
     { ANDROID_SERIAL: chosen },
   );
   return lane(code === 0 ? "captured" : "error", null, {
-    outputDir: ".github/issue-evidence/ (10198-walkthrough-android-*.png/.mp4)",
+    outputDir:
+      "packages/app/capture-output/ (10198-walkthrough-android-*.png/.mp4)",
     note: drive
       ? "Android WebView is CDP-drivable: this leg first runs `android-e2e.mjs --skip-local-chat`, then captures the driven app state from the same device."
       : "Passive Android screen capture only; rerun without `--skip-android-drive` to drive `android-e2e.mjs --skip-local-chat` before capture.",

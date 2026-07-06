@@ -17,7 +17,7 @@
  *
  * Generated artifacts stay gitignored (`reports/walkthrough/`, `e2e-recordings/`);
  * only the verdict markdown + JOURNEY.md updates are committed. Final reviewed
- * evidence is copied under `.github/issue-evidence/` per PR_EVIDENCE.md.
+ * evidence is attached inline to the PR per AGENTS.md.
  *
  * Usage:
  *   node scripts/walkthrough-e2e.mjs [--live] [--viewports desktop,mobile]
@@ -36,6 +36,7 @@ import {
 import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveRequiredFfmpeg } from "./lib/ffmpeg.mjs";
 
 /** Pick a free localhost TCP port. The repo runs many concurrent ui-smoke
  * stacks (agent worktrees); the default 2138/31337 collide and silently break a
@@ -106,11 +107,6 @@ function loadEnvFile(file) {
     out[key] = val;
   }
   return out;
-}
-
-function which(bin) {
-  const r = spawnSync("which", [bin], { encoding: "utf8" });
-  return r.status === 0 ? r.stdout.trim() : null;
 }
 
 function run(cmd, args, opts = {}) {
@@ -583,46 +579,42 @@ async function main() {
   // 3) Stitch human-speed recordings.
   const stitched = [];
   if (!args.skipStitch) {
-    const ffmpeg = which("ffmpeg");
-    if (!ffmpeg) {
+    const ffmpeg = resolveRequiredFfmpeg({
+      log: (message) => console.log(`[walkthrough] ${message}`),
+    });
+    const outDir = join(
+      REPO_ROOT,
+      "e2e-recordings",
+      "app",
+      "walkthrough",
+      runId,
+    );
+    mkdirSync(outDir, { recursive: true });
+    const font = detectFont(ffmpeg);
+    if (!font)
       console.warn(
-        "[walkthrough] ffmpeg not found — skipping recording stitch (install ffmpeg to enable).",
+        "[walkthrough] ffmpeg lacks the drawtext filter — stitching paced frames without step captions.",
       );
-    } else {
-      const outDir = join(
-        REPO_ROOT,
-        "e2e-recordings",
-        "app",
-        "walkthrough",
+    for (const vp of args.viewports.split(",").map((v) => v.trim())) {
+      const s = await stitchViewport({
+        ffmpeg,
+        runDir,
+        viewport: vp,
+        outDir,
+        font,
+      });
+      if (s) stitched.push(s);
+    }
+    if (stitched.length) {
+      writeViewerHtml({
+        outDir,
+        runDir,
         runId,
-      );
-      mkdirSync(outDir, { recursive: true });
-      const font = detectFont(ffmpeg);
-      if (!font)
-        console.warn(
-          "[walkthrough] ffmpeg lacks the drawtext filter — stitching paced frames without step captions.",
-        );
-      for (const vp of args.viewports.split(",").map((v) => v.trim())) {
-        const s = await stitchViewport({
-          ffmpeg,
-          runDir,
-          viewport: vp,
-          outDir,
-          font,
-        });
-        if (s) stitched.push(s);
-      }
-      if (stitched.length) {
-        writeViewerHtml({
-          outDir,
-          runDir,
-          runId,
-          lane,
-          stitched,
-          verdictMdPath: verdictMd,
-        });
-        console.log(`[walkthrough] recordings → ${outDir}`);
-      }
+        lane,
+        stitched,
+        verdictMdPath: verdictMd,
+      });
+      console.log(`[walkthrough] recordings → ${outDir}`);
     }
   }
 

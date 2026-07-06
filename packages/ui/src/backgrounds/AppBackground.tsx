@@ -8,8 +8,10 @@ import { lazy, Suspense, useState } from "react";
 import type { ShaderConfig } from "../state/ui-preferences";
 import { DEFAULT_BACKGROUND_COLOR } from "../state/ui-preferences";
 import { useBackgroundConfig } from "../state/useBackgroundConfig";
+import { useVoiceSettingsApplyChannel } from "../voice/useVoiceSettingsApplyChannel";
 import { ImageBackground } from "./ImageBackground";
 import { ShaderBackground } from "./ShaderBackground";
+import { useAppearanceApplyChannel } from "./useAppearanceApplyChannel";
 import { useBackgroundApplyChannel } from "./useBackgroundApplyChannel";
 
 // three.js (~1.5 MB raw / ~320 KB brotli) is only needed for the opt-in GLSL
@@ -72,6 +74,8 @@ export function AppBackground({
 }: AppBackgroundProps = {}): React.JSX.Element | null {
   const { backgroundConfig } = useBackgroundConfig();
   useBackgroundApplyChannel();
+  useAppearanceApplyChannel();
+  useVoiceSettingsApplyChannel();
   if (!visible) return null;
   // Defensive: the app store can return a non-object slice before the provider
   // seeds it (e.g. the test fallback proxy). Fall back to the default shader.

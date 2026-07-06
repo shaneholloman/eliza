@@ -23,6 +23,7 @@ import {
 	canModifyRole,
 	getEntityRole,
 	getLiveEntityMetadataFromMessage,
+	getUnresolvedSenderRoleFloor,
 	hasAtLeastRole,
 	hasRoleAccess,
 	isAdminRank,
@@ -32,6 +33,7 @@ import {
 	ROLE_RANK,
 	recordOwnerGrant,
 	recordRoleGrant,
+	resolveEntityRole,
 	resolveWorldForMessage,
 } from "./roles.ts";
 import {
@@ -141,11 +143,9 @@ describe("isAgentSelf", () => {
 describe("hasRoleAccess — fail-closed on unresolved role", () => {
 	// A message with a real entity/room but no resolvable world (deleted or
 	// inaccessible world, or a source that yields no world id) makes
-	// checkSenderRole return null. That path used to `return true` (fail-OPEN) —
-	// a guest whose world resolution failed cleared the OWNER gate and reached
-	// owner-gated capabilities (e.g. SHELL). It must fail closed to USER rank
-	// (matching the pre-handler default), denying ADMIN/OWNER while still
-	// allowing basic USER actions.
+	// checkSenderRole return null. Connector-originated senders must fall to
+	// GUEST so they do not outrank a fully resolved stranger; local/API harness
+	// traffic keeps USER so no-world local usage still works.
 	const makeRuntime = (settings: Record<string, string> = {}) =>
 		({
 			agentId: "agent-1",
@@ -163,6 +163,40 @@ describe("hasRoleAccess — fail-closed on unresolved role", () => {
 		roomId: "room-1",
 		content: { text: "run df -h on the server", source: "test" },
 	} as unknown as Memory;
+	const connectorMessage = {
+		entityId: "guest-entity-1",
+		roomId: "room-1",
+		content: { text: "run df -h on the server", source: "discord" },
+	} as unknown as Memory;
+
+	it("uses USER only for local unresolved sources", () => {
+		expect(getUnresolvedSenderRoleFloor(guestMessage)).toBe("USER");
+		for (const source of [
+			"api",
+			"dashboard",
+			"owner_app",
+			"local-voice",
+			"sub_agent",
+			"coding-agent",
+		]) {
+			expect(
+				getUnresolvedSenderRoleFloor({
+					...guestMessage,
+					content: { text: `from ${source}`, source },
+				} as unknown as Memory),
+			).toBe("USER");
+		}
+	});
+
+	it("uses GUEST for unresolved connector sources", () => {
+		expect(getUnresolvedSenderRoleFloor(connectorMessage)).toBe("GUEST");
+		expect(
+			getUnresolvedSenderRoleFloor({
+				...connectorMessage,
+				content: { text: "from Telegram", source: "telegram" },
+			} as unknown as Memory),
+		).toBe("GUEST");
+	});
 
 	it("denies OWNER and ADMIN when the sender role cannot be resolved", async () => {
 		const runtime = makeRuntime();
@@ -170,10 +204,16 @@ describe("hasRoleAccess — fail-closed on unresolved role", () => {
 		expect(await hasRoleAccess(runtime, guestMessage, "ADMIN")).toBe(false);
 	});
 
-	it("still allows USER (matches the pre-handler ['USER'] default) and GUEST", async () => {
+	it("still allows USER for unresolved local/API traffic and always allows GUEST", async () => {
 		const runtime = makeRuntime();
 		expect(await hasRoleAccess(runtime, guestMessage, "USER")).toBe(true);
 		expect(await hasRoleAccess(runtime, guestMessage, "GUEST")).toBe(true);
+	});
+
+	it("denies USER for an unresolved connector sender", async () => {
+		const runtime = makeRuntime();
+		expect(await hasRoleAccess(runtime, connectorMessage, "USER")).toBe(false);
+		expect(await hasRoleAccess(runtime, connectorMessage, "GUEST")).toBe(true);
 	});
 
 	it("still allows the canonical owner through the OWNER gate", async () => {
@@ -445,6 +485,43 @@ describe("connector metadata is registry-driven, not Discord-special-cased (#120
 		expect(getLiveEntityMetadataFromMessage(message)).toBeUndefined();
 	});
 
+	it("falls back to declared flat mapping when nested connector metadata has no stable id", () => {
+		const owner = "test:telegram-connector";
+		try {
+			registerConnectorSourceMetadata(
+				"telegram",
+				{
+					identityMetadataMapping: {
+						userIdField: "fromId",
+						nameField: "entityName",
+					},
+				},
+				owner,
+			);
+			const message = {
+				entityId: "e-1",
+				roomId: "room-1",
+				content: { text: "hi", source: "telegram" },
+				metadata: {
+					telegram: { chatId: "chat-1", messageId: "message-1" },
+					fromId: "user-123",
+					entityName: "Ada",
+				},
+			} as unknown as Memory;
+
+			expect(getLiveEntityMetadataFromMessage(message)).toEqual({
+				telegram: {
+					userId: "user-123",
+					id: "user-123",
+					name: "Ada",
+					username: "Ada",
+				},
+			});
+		} finally {
+			unregisterConnectorSourceMetadataOwner(owner);
+		}
+	});
+
 	it("works for a NEW connector purely by registering mapping metadata (no core edit)", () => {
 		const owner = "test:matrix-connector";
 		try {
@@ -475,6 +552,35 @@ describe("connector metadata is registry-driven, not Discord-special-cased (#120
 		} finally {
 			unregisterConnectorSourceMetadataOwner(owner);
 		}
+	});
+
+	it("uses stored sender metadata when live connector metadata has no stable id", async () => {
+		const ownerEntityId = "owner-entity";
+		const senderEntityId = "sender-entity";
+		const runtime = {
+			agentId: "agent-1",
+			getSetting: () => undefined,
+			getRelationships: async () => [],
+			getEntityById: async (id: string) => {
+				if (id === ownerEntityId || id === senderEntityId) {
+					return {
+						id,
+						metadata: { telegram: { id: "telegram-owner" } },
+					};
+				}
+				return null;
+			},
+		} as unknown as IAgentRuntime;
+
+		await expect(
+			resolveEntityRole(
+				runtime,
+				null,
+				{ ownership: { ownerId: ownerEntityId } } as never,
+				senderEntityId,
+				{ liveEntityMetadata: { telegram: { chatId: "chat-1" } } },
+			),
+		).resolves.toBe("OWNER");
 	});
 
 	it("derives the world id from the declared world-id keys (first present wins)", async () => {

@@ -21,10 +21,15 @@
  */
 
 import { Star } from "lucide-react";
-import { memo, useCallback } from "react";
+import { memo, useCallback, useState } from "react";
 import type { ViewEntry } from "../../hooks/view-catalog";
 import { cn } from "../../lib/utils";
 import { emitViewInteraction } from "../../view-telemetry";
+import {
+  WALLPAPER_FLOAT_SHADOW,
+  WALLPAPER_GLASS,
+  WALLPAPER_TEXT,
+} from "../shell/wallpaper-idiom";
 import { Button } from "../ui/button";
 import { ViewTileImage } from "../views/ViewTileImage";
 import type { LauncherZone } from "./launcher-curation";
@@ -47,6 +52,8 @@ interface IconTileProps {
   onLaunch: (entry: ViewEntry) => void;
   onToggleFavorite?: (entry: ViewEntry) => void;
   isFavorite: boolean;
+  /** Reveal the empty-star pin on every tile (touch-first "manage" mode). */
+  showManageFavorites: boolean;
 }
 
 function viewKindBadge(entry: ViewEntry): {
@@ -76,6 +83,7 @@ const IconTile = memo(function IconTile({
   onLaunch,
   onToggleFavorite,
   isFavorite,
+  showManageFavorites,
 }: IconTileProps) {
   const badge = viewKindBadge(entry);
   return (
@@ -94,7 +102,8 @@ const IconTile = memo(function IconTile({
             // owns hover/focus chrome; the inner visual owns color/glyph. Flat —
             // no border; a subtle glass wash is the icon plate (neutral resting →
             // neutral-with-opacity hover).
-            "h-16 w-16 overflow-hidden rounded-2xl bg-white/10 text-white transition-colors hover:bg-white/20",
+            "h-16 w-16 overflow-hidden rounded-2xl transition-colors",
+            WALLPAPER_GLASS.iconPlate,
             // Neutralize Button's default-size padding (px-4 py-2 letterboxed
             // the artwork into a 32×48 inset) and its [&_svg]:size-4 descendant
             // rule (which would shrink the 28px glyph fallback): the artwork
@@ -119,14 +128,18 @@ const IconTile = memo(function IconTile({
             {badge.label}
           </span>
         ) : null}
-        {onToggleFavorite ? (
+        {onToggleFavorite && (isFavorite || showManageFavorites) ? (
           // The pin lives on the tile itself (the only place a launcher-scoped
-          // favorite has meaning). Neutral, hidden until hover/focus so the grid
-          // stays calm; the filled/gold state persists once pinned so a Favorites
-          // member reads as pinned even at rest.
+          // favorite has meaning). The RESTING grid stays calm, icon + label,
+          // nothing else, so the empty-star prompt is NOT painted on every tile
+          // (touch has no hover, so `pointer-coarse:opacity-100` made a second
+          // badge sit permanently on every icon: the "stars are slop" report).
+          // An already-pinned tile shows its filled gold star at rest; the
+          // empty-star affordance appears only on hover/focus (fine pointers) or
+          // while the launcher-level Manage-favorites mode is on (coarse
+          // pointers), keeping a 44px target for touch pinning when asked for.
           <Button
-            variant="ghost"
-            size="icon-sm"
+            unstyled
             data-testid={`launcher-favorite-${entry.id}`}
             aria-pressed={isFavorite}
             aria-label={
@@ -139,21 +152,34 @@ const IconTile = memo(function IconTile({
               onToggleFavorite(entry);
             }}
             className={cn(
-              "absolute -right-2 -top-2 h-6 w-6 rounded-full bg-black/55 p-0 text-white transition-opacity hover:bg-black/70",
+              "absolute -right-3.5 -top-3.5 inline-flex h-11 w-11 items-center justify-center rounded-full border border-border/50 bg-card/85 p-0 text-card-foreground shadow-sm transition-[background-color,opacity,transform] active:scale-[0.98] hover:bg-card",
               isFavorite
                 ? "text-warn opacity-100"
-                : "text-white/80 opacity-0 focus-visible:opacity-100 group-hover:opacity-100",
+                : showManageFavorites
+                  ? "opacity-100"
+                  : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100",
             )}
           >
             <Star
-              className="h-3.5 w-3.5"
+              className="h-4 w-4"
               fill={isFavorite ? "currentColor" : "none"}
               aria-hidden
             />
           </Button>
         ) : null}
       </div>
-      <span className="line-clamp-2 max-w-[4.5rem] text-center text-[11px] font-medium leading-tight text-white [text-shadow:0_1px_3px_rgba(0,0,0,0.55)]">
+      {/* 5.25rem, not the icon's 4rem: the narrowest grid cell (4 cols on a
+          ~380px phone) is ~85px, and the longest single-word label
+          ("Relationships", ~79px at 11px) cannot wrap at a word boundary — a
+          tighter cap clipped it mid-glyph (#14427). line-clamp-2 still wraps
+          multi-word labels. */}
+      <span
+        className={cn(
+          "line-clamp-2 max-w-[5.25rem] text-center text-[11px] font-medium leading-tight",
+          WALLPAPER_TEXT.base,
+          WALLPAPER_FLOAT_SHADOW,
+        )}
+      >
         {entry.label}
       </span>
     </div>
@@ -166,12 +192,14 @@ function LauncherGrid({
   onLaunch,
   onToggleFavorite,
   favoriteIds,
+  showManageFavorites,
 }: {
   entries: ViewEntry[];
   testIdPrefix: string;
   onLaunch: (entry: ViewEntry) => void;
   onToggleFavorite?: (entry: ViewEntry) => void;
   favoriteIds?: ReadonlySet<string>;
+  showManageFavorites: boolean;
 }) {
   return (
     <div className="grid w-full grid-cols-4 gap-x-4 gap-y-5 max-sm:portrait:gap-y-8 sm:grid-cols-5">
@@ -183,6 +211,7 @@ function LauncherGrid({
             onLaunch={onLaunch}
             onToggleFavorite={onToggleFavorite}
             isFavorite={favoriteIds?.has(entry.id) ?? false}
+            showManageFavorites={showManageFavorites}
           />
         </div>
       ))}
@@ -195,7 +224,13 @@ function ZoneHeader({ label }: { label: string }) {
   // card chrome (the launcher paints straight onto the wallpaper).
   return (
     <div className="flex items-center gap-3 px-1">
-      <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/85 [text-shadow:0_1px_3px_rgba(0,0,0,0.55)]">
+      <h2
+        className={cn(
+          "text-[11px] font-semibold uppercase tracking-[0.14em]",
+          WALLPAPER_TEXT.primary,
+          WALLPAPER_FLOAT_SHADOW,
+        )}
+      >
         {label}
       </h2>
       <div className="h-px flex-1 bg-white/20" />
@@ -211,6 +246,12 @@ export function Launcher({
   favoriteIds,
   className,
 }: LauncherProps) {
+  // Touch-first Favorites management: OFF, the resting grid is calm (icon +
+  // label, and a filled gold star only on already-pinned tiles). ON, the
+  // empty-star pin target is revealed on every tile so a coarse-pointer user
+  // (no hover) can pin/unpin. A single overflow control toggles it, the star
+  // affordance is never permanently painted on every icon at rest.
+  const [manageFavorites, setManageFavorites] = useState(false);
   const handleLaunch = useCallback(
     (entry: ViewEntry) => {
       emitViewInteraction({
@@ -246,6 +287,35 @@ export function Launcher({
           className="relative flex min-h-0 flex-1 flex-col items-center overflow-y-auto touch-pan-y px-6 pt-2 pb-8"
         >
           <div className="flex w-full max-w-2xl flex-col gap-6">
+            {onToggleFavorite && !showSkeleton ? (
+              // The single overflow control for touch-first Favorites management,
+              // aligned to the row end so it reads as a quiet utility, not a
+              // per-tile badge. Fine pointers never need it (hover reveals the
+              // pin); it exists so coarse pointers can enter/exit a manage mode
+              // instead of the empty star squatting on every icon.
+              <div className="flex justify-end">
+                <Button
+                  unstyled
+                  data-testid="launcher-manage-favorites"
+                  aria-pressed={manageFavorites}
+                  onClick={() => setManageFavorites((prev) => !prev)}
+                  className={cn(
+                    "inline-flex h-11 items-center gap-1.5 rounded-full px-3 text-[11px] font-semibold transition-colors active:scale-[0.98]",
+                    WALLPAPER_GLASS.iconPlate,
+                    WALLPAPER_TEXT.base,
+                    WALLPAPER_FLOAT_SHADOW,
+                    manageFavorites ? "text-warn" : null,
+                  )}
+                >
+                  <Star
+                    className="h-4 w-4"
+                    fill={manageFavorites ? "currentColor" : "none"}
+                    aria-hidden
+                  />
+                  {manageFavorites ? "Done" : "Edit favorites"}
+                </Button>
+              </div>
+            ) : null}
             {showSkeleton ? (
               <div className="grid w-full grid-cols-4 gap-x-4 gap-y-5 sm:grid-cols-5">
                 {["a", "b", "c", "d", "e", "f", "g", "h"].map((id) => (
@@ -283,6 +353,7 @@ export function Launcher({
                       // projection zones render read-only.
                       onToggleFavorite={isAll ? onToggleFavorite : undefined}
                       favoriteIds={favoriteIds}
+                      showManageFavorites={isAll && manageFavorites}
                     />
                   </section>
                 );

@@ -78,8 +78,6 @@ vi.mock("@elizaos/ui", () => ({
     listProjects: () => calls.listProjects(),
     activateProject: (id: string) => calls.activateProject(id),
   },
-  // Selector returns a stable no-i18n object so the fallback translate runs.
-  useAppSelectorShallow: () => ({ t: undefined }),
   Button: ({
     children,
     ...rest
@@ -88,6 +86,11 @@ vi.mock("@elizaos/ui", () => ({
       {children}
     </button>
   ),
+}));
+
+// Selector returns a stable no-i18n object so the fallback translate runs.
+vi.mock("@elizaos/ui/state", () => ({
+  useAppSelectorShallow: () => ({ t: undefined }),
 }));
 
 import { ProjectSwitcher } from "./ProjectSwitcher";

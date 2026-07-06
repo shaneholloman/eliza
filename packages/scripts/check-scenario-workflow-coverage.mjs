@@ -403,6 +403,28 @@ function workflowScenarioGlobs() {
     .filter((item) => item !== "**/*.scenario.ts");
 }
 
+function scenarioMatrixCoverage() {
+  const globs = workflowScenarioGlobs();
+  const enabled = process.env.ELIZA_SCENARIO_MATRIX_ENABLED === "true";
+  if (enabled) {
+    return {
+      enabled,
+      coveredGlobs: globs,
+      deferredGlobs: [],
+    };
+  }
+  return {
+    enabled,
+    coveredGlobs: [],
+    deferredGlobs: globs.map((glob) => ({
+      glob,
+      issue: "#14695",
+      reason:
+        "tracked in #14695; scenario-matrix.yml is disabled unless ELIZA_SCENARIO_MATRIX_ENABLED=true or a manual dispatch enables it",
+    })),
+  };
+}
+
 const KNOWN_DEFERRED_DEFAULT_SCENARIO_COVERAGE = [
   {
     glob: "packages/test/scenarios/activity/**/*.scenario.ts",
@@ -605,6 +627,7 @@ function scenarioCatalogHtml() {
       ["defaultScenarios", "Default package scenarios"],
       ["includePendingScenarios", "Including pending"],
       ["pluginLifeopsScenarios", "plugin-personal-assistant"],
+      ["pluginHealthScenarios", "plugin-health"],
       ["pluginAppControlScenarios", "plugin-app-control"],
       ["pluginAgentOrchestratorScenarios", "plugin-agent-orchestrator"],
       ["scenarioRunnerScenarios", "scenario-runner tests"],
@@ -616,6 +639,7 @@ function scenarioCatalogHtml() {
         ["Default", s.defaultScenarioCount || 0],
         ["Include pending", s.includePendingScenarioCount || 0],
         ["plugin-personal-assistant", s.pluginLifeopsCount || 0],
+        ["plugin-health", s.pluginHealthCount || 0],
         ["plugin-app-control", s.pluginAppControlCount || 0],
         ["plugin-agent-orchestrator", s.pluginAgentOrchestratorCount || 0],
         ["runner tests", s.scenarioRunnerCount || 0],
@@ -713,6 +737,7 @@ function renderMarkdown(summary, runArtifacts = []) {
     `Default packages/test scenarios: ${summary.defaultScenarioCount}`,
     `With pending included: ${summary.includePendingScenarioCount}`,
     `plugin-personal-assistant scenarios: ${summary.pluginLifeopsCount}`,
+    `plugin-health scenarios: ${summary.pluginHealthCount}`,
     `plugin-app-control scenarios: ${summary.pluginAppControlCount}`,
     `plugin-agent-orchestrator scenarios: ${summary.pluginAgentOrchestratorCount}`,
     `scenario-runner test scenarios: ${summary.scenarioRunnerCount}`,
@@ -812,6 +837,9 @@ function main() {
   const pluginLifeopsIds = listScenarioMetadata(
     "plugins/plugin-personal-assistant/test/scenarios",
   ).map((metadata) => metadata.id);
+  const pluginHealthIds = listScenarioMetadata(
+    "plugins/plugin-health/test/scenarios",
+  ).map((metadata) => metadata.id);
   const pluginAppControlIds = listScenarioMetadata(
     "plugins/plugin-app-control/test/scenarios",
   ).map((metadata) => metadata.id);
@@ -826,6 +854,10 @@ function main() {
     ...scopedScenarioRows(
       "plugins/plugin-personal-assistant/test/scenarios",
       pluginLifeopsIds,
+    ),
+    ...scopedScenarioRows(
+      "plugins/plugin-health/test/scenarios",
+      pluginHealthIds,
     ),
     ...scopedScenarioRows(
       "plugins/plugin-app-control/test/scenarios",
@@ -847,6 +879,7 @@ function main() {
   const laneScanRoots = [
     "packages/test/scenarios",
     "plugins/plugin-personal-assistant/test/scenarios",
+    "plugins/plugin-health/test/scenarios",
     "plugins/plugin-app-control/test/scenarios",
     "plugins/plugin-agent-orchestrator/test/scenarios",
     "packages/scenario-runner/test/scenarios",
@@ -858,8 +891,9 @@ function main() {
     .sort();
 
   const covered = new Set();
+  const matrixCoverage = scenarioMatrixCoverage();
   const coverageGlobs = [
-    ...workflowScenarioGlobs(),
+    ...matrixCoverage.coveredGlobs,
     "packages/test/scenarios/executive-assistant/*.scenario.ts",
     "packages/test/scenarios/connector-certification/*.scenario.ts",
   ];
@@ -868,14 +902,19 @@ function main() {
     .map((scenario) => scenario.id)
     .sort();
   const deferred = new Map();
+  const deferredCoverageGlobs = [
+    ...KNOWN_DEFERRED_DEFAULT_SCENARIO_COVERAGE,
+    ...matrixCoverage.deferredGlobs,
+  ];
   for (const scenario of defaultScenarios) {
-    const match = KNOWN_DEFERRED_DEFAULT_SCENARIO_COVERAGE.find((entry) =>
+    const match = deferredCoverageGlobs.find((entry) =>
       matchesScenarioFileGlobs(scenario.file, [entry.glob]),
     );
     if (match) {
       deferred.set(
         scenario.id,
-        `tracked in ${match.issue}; not currently part of the PR/live matrix`,
+        match.reason ??
+          `tracked in ${match.issue}; not currently part of the PR/live matrix`,
       );
     }
   }
@@ -936,10 +975,14 @@ function main() {
     defaultScenarioCount: defaultIds.length,
     includePendingScenarioCount: includePendingIds.length,
     pluginLifeopsCount: pluginLifeopsIds.length,
+    pluginHealthCount: pluginHealthIds.length,
     pluginAppControlCount: pluginAppControlIds.length,
     pluginAgentOrchestratorCount: pluginAgentOrchestratorIds.length,
     scenarioRunnerCount: scenarioRunnerIds.length,
     allScenarioCount: allScenarioRows.length,
+    scenarioMatrixCoverageEnabled: matrixCoverage.enabled,
+    scenarioMatrixCoveredGlobCount: matrixCoverage.coveredGlobs.length,
+    scenarioMatrixDeferredGlobCount: matrixCoverage.deferredGlobs.length,
     prDeterministicDefaultCount: prDeterministicDefaultIds.length,
     prDeterministicDefaultIds,
     coveredDefaultCount: defaultIds.filter((id) => covered.has(id)).length,
@@ -961,6 +1004,7 @@ function main() {
     "plugin-personal-assistant.txt",
     pluginLifeopsIds,
   );
+  writeList(options.reportDir, "plugin-health.txt", pluginHealthIds);
   writeList(options.reportDir, "plugin-app-control.txt", pluginAppControlIds);
   writeList(
     options.reportDir,
@@ -983,6 +1027,7 @@ function main() {
     defaultScenarios: defaultIds,
     includePendingScenarios: includePendingIds,
     pluginLifeopsScenarios: pluginLifeopsIds,
+    pluginHealthScenarios: pluginHealthIds,
     pluginAppControlScenarios: pluginAppControlIds,
     pluginAgentOrchestratorScenarios: pluginAgentOrchestratorIds,
     scenarioRunnerScenarios: scenarioRunnerIds,

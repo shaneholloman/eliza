@@ -10,6 +10,12 @@
 // capability handler the view bundle re-exports.
 
 import {
+  type AgentElementSnapshot,
+  AgentSurfaceProvider,
+  getViewRegistry,
+  handleAgentSurfaceCapability,
+} from "@elizaos/ui/agent-surface";
+import {
   cleanup,
   fireEvent,
   render,
@@ -199,7 +205,51 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  document.documentElement.style.removeProperty(
+    "--eliza-continuous-chat-clearance",
+  );
 });
+
+function mockMobileBottomComposerClearance(): () => void {
+  const originalInnerWidth = Object.getOwnPropertyDescriptor(
+    window,
+    "innerWidth",
+  );
+  const originalMatchMedia = window.matchMedia;
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: 390,
+  });
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: vi.fn((query: string) => ({
+      matches: query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+  document.documentElement.style.setProperty(
+    "--eliza-continuous-chat-clearance",
+    "96px",
+  );
+  return () => {
+    if (originalInnerWidth) {
+      Object.defineProperty(window, "innerWidth", originalInnerWidth);
+    }
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: originalMatchMedia,
+    });
+    document.documentElement.style.removeProperty(
+      "--eliza-continuous-chat-clearance",
+    );
+  };
+}
 
 describe("PolymarketView — populated markets", () => {
   it("loads status + markets on mount and opens the auto-selected market detail", async () => {
@@ -210,12 +260,12 @@ describe("PolymarketView — populated markets", () => {
     expect(polymarketClient.polymarketMarkets).toHaveBeenCalledWith({
       limit: 25,
     });
-    // Auto-selected markets[0] => detail pane: outcomes + CLOB token ids.
+    // Auto-selected markets[0] => detail pane: compact outcome choices.
     await waitFor(() => expect(agent("detail-back")).toBeTruthy());
     const text = document.body.textContent ?? "";
-    expect(text).toContain("outcomes");
-    expect(text).toContain("orderbook tokens");
-    expect(text).toContain("token-yes");
+    expect(text).toContain("Yes");
+    expect(text).toContain("No");
+    expect(text).not.toContain("token-yes");
   });
 
   it("the markets list shows readiness chips + a DOM-clickable row Open control", async () => {
@@ -243,7 +293,7 @@ describe("PolymarketView — populated markets", () => {
 });
 
 describe("PolymarketView — list -> detail navigation", () => {
-  it("clicking a market row Open opens its detail with outcomes + CLOB token ids", async () => {
+  it("clicking a market row Open opens its detail with compact outcome choices", async () => {
     render(React.createElement(PolymarketView));
     await screen.findByText("Will BTC be above 100k?");
     await backToList();
@@ -252,15 +302,13 @@ describe("PolymarketView — list -> detail navigation", () => {
 
     await waitFor(() => expect(agent("detail-back")).toBeTruthy());
     const text = document.body.textContent ?? "";
-    expect(text).toContain("outcomes");
     expect(text).toContain("Yes");
     expect(text).toContain("No");
-    expect(text).toContain("orderbook tokens");
-    expect(text).toContain("token-yes");
-    expect(text).toContain("token-no");
+    expect(text).not.toContain("token-yes");
+    expect(text).not.toContain("token-no");
   });
 
-  it("a market with no CLOB token ids shows the fallback copy in detail", async () => {
+  it("a market with no orderbook tokens still opens compact detail", async () => {
     mockState({
       markets: [sampleMarket, secondMarket],
       source: sampleMarkets.source,
@@ -273,7 +321,7 @@ describe("PolymarketView — list -> detail navigation", () => {
     await waitFor(() =>
       expect(screen.getByText("Will ETH be above 5k?")).toBeTruthy(),
     );
-    expect(screen.getByText("no CLOB token ids")).toBeTruthy();
+    expect(screen.getByText("Yes 25%")).toBeTruthy();
   });
 
   it("the detail 'back' control returns to the markets list", async () => {
@@ -292,12 +340,40 @@ describe("PolymarketView — list -> detail navigation", () => {
 });
 
 describe("PolymarketView — refresh + error path", () => {
+  it("does not render a duplicate wrapper toolbar above the spatial controls", async () => {
+    render(React.createElement(PolymarketView));
+    await screen.findByText("Will BTC be above 100k?");
+
+    expect(
+      screen.queryByRole("toolbar", { name: "Polymarket controls" }),
+    ).toBeNull();
+    expect(screen.queryByText("All markets")).toBeNull();
+  });
+
+  it("uses the concise detail layout when mobile-width bottom composer clearance is active", async () => {
+    const restore = mockMobileBottomComposerClearance();
+    try {
+      render(React.createElement(PolymarketView));
+      await screen.findByText("Will BTC be above 100k?");
+
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Yes 61% · No 39%");
+      expect(text).not.toContain("orderbook tokens");
+      expect(screen.queryByText("Refresh")).toBeNull();
+      expect(
+        document.querySelector('[data-agent-id="detail-back"]'),
+      ).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
   it("the Refresh control re-loads status + markets", async () => {
     render(React.createElement(PolymarketView));
     await screen.findByText("Will BTC be above 100k?");
     expect(polymarketClient.polymarketMarkets).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(agent("refresh"));
+    fireEvent.click(agent("polymarket-refresh"));
     await waitFor(() =>
       expect(polymarketClient.polymarketMarkets).toHaveBeenCalledTimes(2),
     );
@@ -373,6 +449,110 @@ describe("PolymarketView — terminal interact capabilities", () => {
           size: 1,
         }),
       }),
+    );
+  });
+});
+
+// The visible orange toolbar was removed (#14594); the refresh/detail-back
+// controls now live in an aria-hidden, off-screen wrapper. These assert the
+// agent-surface path still drives them — they remain real registered buttons,
+// keep their handlers, and fire when the agent activates them through the
+// capability bridge (the same `agent-click` route the pill/automation uses),
+// independent of any visible pixel.
+describe("PolymarketView — hidden agent-surface controls fire for the agent", () => {
+  const VIEW = "polymarket-agent-surface-test";
+
+  function renderWithSurface() {
+    return render(
+      <AgentSurfaceProvider viewId={VIEW} viewType="gui">
+        <PolymarketView />
+      </AgentSurfaceProvider>,
+    );
+  }
+
+  it("keeps refresh + detail-back in the DOM but visually + a11y hidden", async () => {
+    renderWithSurface();
+    // Auto-select opens the detail pane, so the detail-back control renders.
+    await screen.findByText("Will BTC be above 100k?");
+    await waitFor(() => expect(agent("detail-back")).toBeTruthy());
+
+    const refreshBtn = document.querySelector<HTMLElement>(
+      '[data-agent-id="polymarket-refresh"]',
+    );
+    const backBtn = document.querySelector<HTMLElement>(
+      '[data-agent-id="polymarket-detail-back"]',
+    );
+    expect(refreshBtn?.tagName).toBe("BUTTON");
+    expect(backBtn?.tagName).toBe("BUTTON");
+    // Clipped off-screen inside an aria-hidden wrapper — not display:none, so the
+    // node stays activatable for the agent surface.
+    expect(refreshBtn?.closest('[aria-hidden="true"]')).toBeTruthy();
+    expect(backBtn?.closest('[aria-hidden="true"]')).toBeTruthy();
+    expect(refreshBtn?.style.clipPath).toContain("inset");
+  });
+
+  it("registers refresh + detail-back as clickable buttons on the surface", async () => {
+    renderWithSurface();
+    await screen.findByText("Will BTC be above 100k?");
+    const registry = getViewRegistry(VIEW, "gui");
+    if (!registry) throw new Error("registry missing");
+    const elements = handleAgentSurfaceCapability(
+      registry,
+      "list-elements",
+      undefined,
+    ) as AgentElementSnapshot[];
+    const ids = elements.map((e) => e.id);
+    expect(ids).toContain("polymarket-refresh");
+    expect(ids).toContain("polymarket-detail-back");
+    const refresh = elements.find((e) => e.id === "polymarket-refresh");
+    expect(refresh?.role).toBe("button");
+    expect(refresh?.clickable).toBe(true);
+  });
+
+  it("re-fetches when the agent activates the hidden refresh control", async () => {
+    renderWithSurface();
+    await screen.findByText("Will BTC be above 100k?");
+    expect(polymarketClient.polymarketMarkets).toHaveBeenCalledTimes(1);
+    const registry = getViewRegistry(VIEW, "gui");
+    if (!registry) throw new Error("registry missing");
+
+    const result = handleAgentSurfaceCapability(registry, "agent-click", {
+      id: "polymarket-refresh",
+    });
+    expect(result).toMatchObject({ ok: true, id: "polymarket-refresh" });
+    await waitFor(() =>
+      expect(polymarketClient.polymarketMarkets).toHaveBeenCalledTimes(2),
+    );
+    expect(polymarketClient.polymarketStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes the open market detail when the agent activates the hidden detail-back control", async () => {
+    renderWithSurface();
+    await screen.findByText("Will BTC be above 100k?");
+    // Mounts on the auto-selected detail pane.
+    await waitFor(() => expect(agent("detail-back")).toBeTruthy());
+    const registry = getViewRegistry(VIEW, "gui");
+    if (!registry) throw new Error("registry missing");
+
+    const result = handleAgentSurfaceCapability(registry, "agent-click", {
+      id: "polymarket-detail-back",
+    });
+    expect(result).toMatchObject({ ok: true, id: "polymarket-detail-back" });
+    // setSelectedMarket(null) returns to the list — the row Open control appears.
+    await waitFor(() => expect(agent("market:market-1")).toBeTruthy());
+  });
+
+  it("still fires the hidden refresh control's own onClick when clicked directly", async () => {
+    renderWithSurface();
+    await screen.findByText("Will BTC be above 100k?");
+    expect(polymarketClient.polymarketMarkets).toHaveBeenCalledTimes(1);
+    const refreshBtn = document.querySelector<HTMLElement>(
+      '[data-agent-id="polymarket-refresh"]',
+    );
+    if (!refreshBtn) throw new Error("hidden refresh control missing");
+    fireEvent.click(refreshBtn);
+    await waitFor(() =>
+      expect(polymarketClient.polymarketMarkets).toHaveBeenCalledTimes(2),
     );
   });
 });

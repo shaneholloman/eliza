@@ -17,6 +17,7 @@
  *  - the runner does NOT pattern-match `promptInstructions`
  */
 
+import { stringToUuid } from "@elizaos/core";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DispatchResult } from "../dispatch-types.js";
@@ -30,6 +31,7 @@ import {
 } from "./consolidation-policy.js";
 import {
   createEscalationLadderRegistry,
+  HIGH_PRIORITY_ESCALATION_CHANNEL_ORDER,
   registerDefaultEscalationLadders,
   resolveEffectiveLadder,
 } from "./escalation.js";
@@ -461,6 +463,124 @@ describe("ScheduledTaskRunner — fire path + gates", () => {
     const fired = await h.runner.fire(task.taskId);
     expect(fired.state.status).toBe("fired");
     expect(fired.state.firedAt).toBeDefined();
+  });
+
+  it("persists connector pending-prompt room id on successful reply-awaited fires", async () => {
+    const h = makeHarness();
+    const task = await h.runner.schedule(
+      baseInput({
+        completionCheck: {
+          kind: "user_replied_within",
+          followupAfterMinutes: 30,
+        },
+        output: { destination: "channel", target: "telegram:chat-123" },
+      }),
+    );
+
+    const fired = await h.runner.fire(task.taskId);
+
+    expect(fired.metadata?.pendingPromptRoomId).toBe(
+      stringToUuid("chat-123:test-agent"),
+    );
+    const [persisted] = await h.runner.list();
+    expect(persisted?.metadata?.pendingPromptRoomId).toBe(
+      stringToUuid("chat-123:test-agent"),
+    );
+  });
+
+  it("persists connector pending-prompt room id from the resolved dispatch target when output is absent", async () => {
+    const dispatch = vi.fn(
+      async (): Promise<DispatchResult> => ({
+        ok: true,
+        channelKey: "telegram",
+        target: "account-1:chat-123",
+        messageId: "telegram-msg-1",
+      }),
+    );
+    const gates = createTaskGateRegistry();
+    registerBuiltInGates(gates);
+    const completionChecks = createCompletionCheckRegistry();
+    registerBuiltInCompletionChecks(completionChecks);
+    const ladders = createEscalationLadderRegistry();
+    registerDefaultEscalationLadders(ladders);
+    const runner = createScheduledTaskRunner({
+      agentId: "test-agent",
+      store: createInMemoryScheduledTaskStore(),
+      logStore: createInMemoryScheduledTaskLogStore(),
+      gates,
+      completionChecks,
+      ladders,
+      anchors: createAnchorRegistry(),
+      consolidation: createConsolidationRegistry(),
+      ownerFacts: async () => ({}),
+      globalPause: { current: async () => ({ active: false }) },
+      activity: { hasSignalSince: () => false },
+      subjectStore: { wasUpdatedSince: () => false },
+      dispatcher: { dispatch },
+      now: () => new Date("2026-05-14T08:00:00.000Z"),
+    });
+    const task = await runner.schedule(
+      baseInput({
+        completionCheck: {
+          kind: "user_replied_within",
+          followupAfterMinutes: 30,
+        },
+        escalation: {
+          steps: [
+            { delayMinutes: 0, channelKey: "telegram", intensity: "soft" },
+          ],
+        },
+      }),
+    );
+
+    const fired = await runner.fire(task.taskId);
+
+    expect(fired.metadata?.pendingPromptRoomId).toBe(
+      stringToUuid("account-1:chat-123:test-agent"),
+    );
+  });
+
+  it("persists the in-app pending-prompt room for reply-awaited fires without output", async () => {
+    const dispatch = vi.fn(
+      async (): Promise<DispatchResult> => ({
+        ok: true,
+        channelKey: "in_app",
+        target: "in_app",
+        messageId: "in-app-msg-1",
+      }),
+    );
+    const gates = createTaskGateRegistry();
+    registerBuiltInGates(gates);
+    const completionChecks = createCompletionCheckRegistry();
+    registerBuiltInCompletionChecks(completionChecks);
+    const runner = createScheduledTaskRunner({
+      agentId: "test-agent",
+      store: createInMemoryScheduledTaskStore(),
+      logStore: createInMemoryScheduledTaskLogStore(),
+      gates,
+      completionChecks,
+      ladders: createEscalationLadderRegistry(),
+      anchors: createAnchorRegistry(),
+      consolidation: createConsolidationRegistry(),
+      ownerFacts: async () => ({}),
+      globalPause: { current: async () => ({ active: false }) },
+      activity: { hasSignalSince: () => false },
+      subjectStore: { wasUpdatedSince: () => false },
+      dispatcher: { dispatch },
+      now: () => new Date("2026-05-14T08:00:00.000Z"),
+    });
+    const task = await runner.schedule(
+      baseInput({
+        completionCheck: {
+          kind: "user_replied_within",
+          followupAfterMinutes: 30,
+        },
+      }),
+    );
+
+    const fired = await runner.fire(task.taskId);
+
+    expect(fired.metadata?.pendingPromptRoomId).toBe("in_app");
   });
 
   it("respectsGlobalPause: paused tasks are skipped with reason global_pause (cross-agent invariant §7.8)", async () => {
@@ -937,7 +1057,9 @@ describe("ScheduledTaskRunner — getEscalationCursor (A6)", () => {
     expect(view).not.toBeNull();
     expect(view?.stepIndex).toBe(-1);
     expect(view?.lastFiredAt).toBe("2026-05-09T12:00:00.000Z");
-    expect(view?.channelKey).toBe("in_app");
+    expect(view?.channelKey).toBe(
+      HIGH_PRIORITY_ESCALATION_CHANNEL_ORDER[0]?.channelKey,
+    );
   });
 
   it("reflects the snooze-reset cursor (lastFiredAt = new fire time)", async () => {
@@ -1574,5 +1696,69 @@ describe("Inspect registries", () => {
         "priority_high_default",
       ]),
     );
+  });
+});
+
+describe("ScheduledTaskRunner — resolveNextFireAt (due-window primitive)", () => {
+  it("projects a once trigger's fire instant and clears it after firing", async () => {
+    const h = makeHarness("2026-05-09T12:00:00.000Z");
+    const task = await h.runner.schedule(
+      baseInput({
+        trigger: { kind: "once", atIso: "2026-05-09T15:00:00.000Z" },
+      }),
+    );
+    expect(await h.runner.resolveNextFireAt(task)).toBe(
+      "2026-05-09T15:00:00.000Z",
+    );
+  });
+
+  it("honors the scheduled-override (snooze) instant over the trigger", async () => {
+    const h = makeHarness("2026-05-09T12:00:00.000Z");
+    const task = await h.runner.schedule(
+      baseInput({
+        trigger: { kind: "cron", expression: "0 9 * * *", tz: "UTC" },
+      }),
+    );
+    const snoozed = await h.runner.apply(task.taskId, "snooze", {
+      untilIso: "2026-05-09T13:30:00.000Z",
+    });
+    expect(await h.runner.resolveNextFireAt(snoozed)).toBe(
+      "2026-05-09T13:30:00.000Z",
+    );
+  });
+
+  it("returns null for triggers with no wall-clock fire time", async () => {
+    const h = makeHarness();
+    const manual = await h.runner.schedule(
+      baseInput({ trigger: { kind: "manual" } }),
+    );
+    expect(await h.runner.resolveNextFireAt(manual)).toBeNull();
+  });
+
+  it("exposes the owner facts used by due and next-fire evaluation", async () => {
+    const h = makeHarness();
+    h.setOwnerFacts({ timezone: "America/New_York" });
+    await expect(h.runner.resolveOwnerFacts()).resolves.toEqual({
+      timezone: "America/New_York",
+    });
+  });
+
+  it("reports a missed cron occurrence as due even when next-fire projects forward", async () => {
+    const h = makeHarness("2026-05-09T12:00:00.000Z");
+    const task = await h.runner.schedule(
+      baseInput({
+        trigger: { kind: "cron", expression: "0 9 * * *", tz: "UTC" },
+        metadata: { createdAtIso: "2026-05-09T00:00:00.000Z" },
+      }),
+    );
+
+    expect(await h.runner.resolveNextFireAt(task)).toBe(
+      "2026-05-10T09:00:00.000Z",
+    );
+    expect(await h.runner.resolveDueDecision(task)).toMatchObject({
+      due: true,
+      reason: "cron_due",
+      occurrenceAtIso: "2026-05-09T09:00:00.000Z",
+    });
   });
 });

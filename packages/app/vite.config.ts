@@ -203,6 +203,10 @@ const pluginBrowserBridgeSrcRoot = path.join(
 );
 const uiPkgRoot = path.join(elizaRoot, "packages/ui");
 const cloudUiPkgRoot = path.join(elizaRoot, "packages/cloud-ui");
+const importConversationsPkgRoot = path.join(
+  elizaRoot,
+  "packages/import-conversations",
+);
 const capacitorCoreEntry = path.join(
   path.dirname(_require.resolve("@capacitor/core/package.json")),
   "dist/index.js",
@@ -1730,7 +1734,6 @@ function isIgnoredWorkspaceGeneratedOutput(normalizedFile: string): boolean {
     normalizedFile.includes("/packages/examples/") ||
     normalizedFile.includes("/packages/feed/") ||
     normalizedFile.includes("/output/generated-cad/") ||
-    normalizedFile.includes("/packages/research/robot/") ||
     normalizedFile.includes("/src/i18n/generated/") ||
     normalizedFile.endsWith(".d.ts") ||
     normalizedFile.endsWith(".d.ts.map") ||
@@ -2546,6 +2549,15 @@ export const INVALID_TRACER_PROVIDER = {};
         find: /^@elizaos\/logger$/,
         replacement: path.resolve(elizaRoot, "packages/logger/src/index.ts"),
       },
+      // Memory import UI uses the browser facade only; keep it on source so
+      // renderer audits do not require building the Node parser package dist.
+      {
+        find: /^@elizaos\/import-conversations\/browser$/,
+        replacement: path.resolve(
+          elizaRoot,
+          "packages/import-conversations/src/browser.ts",
+        ),
+      },
       // When the cloud surface is excluded (ELIZA_DISABLE_WEB_SHELL=1), redirect
       // the two lazy cloud entry points to passthrough stubs — placed BEFORE the
       // broad @elizaos/ui/* alias below (first match wins) so Rollup never
@@ -2594,6 +2606,17 @@ export const INVALID_TRACER_PROVIDER = {};
       {
         find: /^@elizaos\/ui\/(.+)$/,
         replacement: path.join(uiPkgRoot, "src/$1"),
+      },
+      // @elizaos/import-conversations is consumed by @elizaos/ui source during
+      // renderer builds. Resolve it to source so audit/app builds do not depend
+      // on a prebuilt local workspace dist.
+      {
+        find: /^@elizaos\/import-conversations$/,
+        replacement: path.join(importConversationsPkgRoot, "src/index.ts"),
+      },
+      {
+        find: /^@elizaos\/import-conversations\/browser$/,
+        replacement: path.join(importConversationsPkgRoot, "src/browser.ts"),
       },
       {
         find: /^@elizaos\/shared\/brand$/,
@@ -2779,6 +2802,25 @@ export const INVALID_TRACER_PROVIDER = {};
           {
             find: /^@elizaos\/tui$/,
             replacement: path.join(tuiSource, "index.ts"),
+          },
+          // @elizaos/import-conversations resolves from source for the same
+          // reason: the renderer (MemoryViewerView) imports its `/browser`
+          // subpath, whose export map points at dist/ — absent in renderer
+          // builds that don't pre-build the package, failing with "Rollup
+          // failed to resolve import '@elizaos/import-conversations/browser'".
+          {
+            find: /^@elizaos\/import-conversations$/,
+            replacement: path.resolve(
+              elizaRoot,
+              "packages/import-conversations/src/index.ts",
+            ),
+          },
+          {
+            find: /^@elizaos\/import-conversations\/(.+)$/,
+            replacement: path.resolve(
+              elizaRoot,
+              "packages/import-conversations/src/$1.ts",
+            ),
           },
           {
             find: /^@elizaos\/app-core\/first-run\/first-run-config$/,
@@ -3273,7 +3315,6 @@ export const INVALID_TRACER_PROVIDER = {};
         "**/*.d.ts.map",
         "**/*.tsbuildinfo",
         "**/packages/**/output/generated-cad/**",
-        "**/packages/research/robot/**",
         "**/packages/**/src/i18n/generated/**",
         "**/packages/benchmarks/**",
         "**/packages/os/**",

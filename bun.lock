@@ -80,6 +80,7 @@
         "pure-rand": "^8.4.0",
         "react-test-renderer": "^19.0.0",
         "secp256k1": "^5.0.1",
+        "tesseract.js": "^6.0.1",
         "tsx": "^4.21.0",
         "turbo": "^2.9.16",
         "typescript": "^6.0.3",
@@ -104,6 +105,7 @@
         "@elizaos/plugin-agent-orchestrator": "workspace:*",
         "@elizaos/plugin-agent-skills": "workspace:*",
         "@elizaos/plugin-anthropic": "workspace:*",
+        "@elizaos/plugin-aosp-local-inference": "workspace:*",
         "@elizaos/plugin-app-control": "workspace:*",
         "@elizaos/plugin-background-runner": "workspace:*",
         "@elizaos/plugin-birdclaw": "workspace:*",
@@ -242,6 +244,7 @@
         "@elizaos/capacitor-websiteblocker": "workspace:*",
         "@elizaos/capacitor-wifi": "workspace:*",
         "@elizaos/cloud-ui": "workspace:*",
+        "@elizaos/evidence": "workspace:*",
         "@elizaos/logger": "workspace:*",
         "@elizaos/plugin-agent-orchestrator": "workspace:*",
         "@elizaos/plugin-background-runner": "workspace:*",
@@ -288,6 +291,7 @@
         "rollup-plugin-visualizer": "^7.0.1",
         "sharp": "^0.34.5",
         "tailwindcss": "^4.3.1",
+        "tesseract.js": "^6.0.1",
         "typescript": "^6.0.3",
         "uuid": "^14.0.0",
         "vite": "^8.0.0",
@@ -890,6 +894,21 @@
         "@types/node": "^25.0.3",
         "typescript": "^6.0.3",
         "vitest": "^4.0.17",
+      },
+    },
+    "packages/evidence": {
+      "name": "@elizaos/evidence",
+      "version": "0.0.0",
+      "dependencies": {
+        "ffmpeg-static": "^5.3.0",
+        "ffprobe-static": "^3.1.0",
+        "pixelmatch": "^7.2.0",
+        "sharp": "^0.34.5",
+        "zod": "^4.4.3",
+      },
+      "devDependencies": {
+        "@playwright/test": "^1.61.0",
+        "@types/node": "^24.0.0",
       },
     },
     "packages/examples/_plugin": {
@@ -2493,21 +2512,6 @@
         "@types/node": "^24.0.0",
       },
     },
-    "packages/research/robot": {
-      "name": "@elizaos/robot",
-      "version": "2.0.3-beta.7",
-      "dependencies": {
-        "@elizaos/core": "workspace:*",
-      },
-      "devDependencies": {
-        "@biomejs/biome": "2.5.2",
-        "@types/bun": "^1.3.5",
-        "@types/node": "^25.0.3",
-        "typescript": "^6.0.3",
-        "unrun": "^0.3.0",
-        "vitest": "^4.1.4",
-      },
-    },
     "packages/scenario-runner": {
       "name": "@elizaos/scenario-runner",
       "version": "2.0.3-beta.7",
@@ -2568,6 +2572,7 @@
       },
       "devDependencies": {
         "@types/node": "^25.0.0",
+        "fast-check": "^4.8.0",
         "typescript": "^6.0.3",
         "vitest": "^4.0.0",
       },
@@ -2864,6 +2869,7 @@
       },
       "peerDependencies": {
         "@elizaos/core": "workspace:*",
+        "@elizaos/shared": "workspace:*",
         "git-workspace-service": "0.4.5",
       },
     },
@@ -2912,6 +2918,22 @@
         "bun-types": "^1.3.14",
         "typescript": "^6.0.3",
         "vitest": "^4.0.0",
+      },
+      "peerDependencies": {
+        "@elizaos/core": "workspace:*",
+      },
+    },
+    "plugins/plugin-aosp-local-inference": {
+      "name": "@elizaos/plugin-aosp-local-inference",
+      "version": "2.0.3-beta.7",
+      "dependencies": {
+        "@elizaos/core": "workspace:*",
+        "@elizaos/shared": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.3",
+        "bun-types": "1.3.14",
+        "typescript": "^6.0.3",
       },
       "peerDependencies": {
         "@elizaos/core": "workspace:*",
@@ -3502,6 +3524,7 @@
       "dependencies": {
         "@elizaos/agent": "workspace:*",
         "@elizaos/core": "workspace:*",
+        "@elizaos/shared": "workspace:*",
         "@elizaos/ui": "workspace:*",
         "lucide-react": "^1.0.0",
         "ws": "^8.18.0",
@@ -3800,6 +3823,7 @@
         "react": "^19.0.0",
       },
       "devDependencies": {
+        "@elizaos/tui": "workspace:*",
         "@testing-library/react": "^16.3.2",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
@@ -4734,6 +4758,7 @@
         "react": "^19.0.0",
       },
       "devDependencies": {
+        "@elizaos/tui": "workspace:*",
         "@testing-library/react": "^16.3.2",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
@@ -4996,6 +5021,7 @@
         "@elizaos/cloud-routing": "workspace:*",
         "@elizaos/core": "workspace:*",
         "@elizaos/plugin-browser": "workspace:*",
+        "@elizaos/shared": "workspace:*",
       },
       "devDependencies": {
         "tsup": "^8.5.1",
@@ -5168,6 +5194,26 @@
       "peerDependencies": {
         "react": "*",
         "react-dom": "*",
+      },
+    },
+    "plugins/plugin-trajectory-logger": {
+      "name": "@elizaos/plugin-trajectory-logger",
+      "version": "2.0.3-beta.7",
+      "dependencies": {
+        "@elizaos/app-core": "workspace:*",
+        "@elizaos/core": "workspace:*",
+        "@elizaos/shared": "workspace:*",
+        "@elizaos/ui": "workspace:*",
+        "lucide-react": "^1.0.0",
+      },
+      "devDependencies": {
+        "@elizaos/tui": "workspace:*",
+        "tsup": "^8.5.1",
+        "vite": "^8.0.0",
+      },
+      "peerDependencies": {
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
       },
     },
     "plugins/plugin-tunnel": {
@@ -5493,70 +5539,72 @@
     },
   },
   "trustedDependencies": [
-    "nx",
-    "esbuild",
-    "@swc/core",
-    "keccak",
-    "protobufjs",
-    "sharp",
-    "utf-8-validate",
-    "bigint-buffer",
-    "bufferutil",
-    "secp256k1",
     "@elizaos/plugin-starter",
+    "utf-8-validate",
+    "@swc/core",
+    "tesseract.js",
+    "protobufjs",
+    "keccak",
+    "secp256k1",
+    "bufferutil",
     "workerd",
-    "electron",
+    "esbuild",
+    "ffmpeg-static",
+    "sharp",
     "@biomejs/biome",
+    "electron",
+    "nx",
+    "bigint-buffer",
   ],
   "patchedDependencies": {
-    "@solana/rpc@5.5.1": "patches/@solana%2Frpc@5.5.1.patch",
-    "@solana/sysvars@5.5.1": "patches/@solana%2Fsysvars@5.5.1.patch",
-    "@solana/rpc-spec@5.5.1": "patches/@solana%2Frpc-spec@5.5.1.patch",
-    "@solana/rpc-subscriptions@5.5.1": "patches/@solana%2Frpc-subscriptions@5.5.1.patch",
-    "@farcaster/quick-auth@0.0.8": "patches/@farcaster%2Fquick-auth@0.0.8.patch",
     "@solana/rpc-subscriptions-spec@5.5.1": "patches/@solana%2Frpc-subscriptions-spec@5.5.1.patch",
-    "@solana/rpc-types@5.5.1": "patches/@solana%2Frpc-types@5.5.1.patch",
-    "@solana/instruction-plans@5.5.1": "patches/@solana%2Finstruction-plans@5.5.1.patch",
-    "@solana/codecs-strings@5.5.1": "patches/@solana%2Fcodecs-strings@5.5.1.patch",
-    "@solana/nominal-types@5.5.1": "patches/@solana%2Fnominal-types@5.5.1.patch",
-    "@solana/rpc-parsed-types@5.5.1": "patches/@solana%2Frpc-parsed-types@5.5.1.patch",
-    "@solana/fast-stable-stringify@5.5.1": "patches/@solana%2Ffast-stable-stringify@5.5.1.patch",
-    "@solana/rpc-spec-types@5.5.1": "patches/@solana%2Frpc-spec-types@5.5.1.patch",
     "@solana/rpc-transformers@5.5.1": "patches/@solana%2Frpc-transformers@5.5.1.patch",
-    "@solana/codecs-numbers@5.5.1": "patches/@solana%2Fcodecs-numbers@5.5.1.patch",
-    "tsup@8.5.1": "patches/tsup@8.5.1.patch",
-    "@vitest/mocker@4.1.5": "patches/@vitest%2Fmocker@4.1.5.patch",
-    "@solana/codecs-core@5.5.1": "patches/@solana%2Fcodecs-core@5.5.1.patch",
-    "@solana/errors@5.5.1": "patches/@solana%2Ferrors@5.5.1.patch",
-    "@solana/offchain-messages@5.5.1": "patches/@solana%2Foffchain-messages@5.5.1.patch",
-    "electrobun@1.18.1": "patches/electrobun@1.18.1.patch",
-    "@capacitor/ios@8.4.1": "patches/@capacitor%2Fios@8.4.1.patch",
-    "@solana/codecs@5.5.1": "patches/@solana%2Fcodecs@5.5.1.patch",
-    "@solana/transactions@5.5.1": "patches/@solana%2Ftransactions@5.5.1.patch",
-    "vitest@4.1.5": "patches/vitest@4.1.5.patch",
-    "@solana/plugin-core@5.5.1": "patches/@solana%2Fplugin-core@5.5.1.patch",
+    "@solana/fast-stable-stringify@5.5.1": "patches/@solana%2Ffast-stable-stringify@5.5.1.patch",
     "@solana/rpc-transport-http@5.5.1": "patches/@solana%2Frpc-transport-http@5.5.1.patch",
-    "@solana/rpc-subscriptions-api@5.5.1": "patches/@solana%2Frpc-subscriptions-api@5.5.1.patch",
-    "@solana/functional@5.5.1": "patches/@solana%2Ffunctional@5.5.1.patch",
-    "bigint-buffer@1.1.5": "patches/bigint-buffer@1.1.5.patch",
-    "@solana/addresses@5.5.1": "patches/@solana%2Faddresses@5.5.1.patch",
-    "telegraf@4.16.3": "patches/telegraf@4.16.3.patch",
-    "@solana/kit@5.5.1": "patches/@solana%2Fkit@5.5.1.patch",
-    "@solana/assertions@5.5.1": "patches/@solana%2Fassertions@5.5.1.patch",
-    "@solana/codecs-data-structures@5.5.1": "patches/@solana%2Fcodecs-data-structures@5.5.1.patch",
-    "@solana/promises@5.5.1": "patches/@solana%2Fpromises@5.5.1.patch",
-    "@solana/keys@5.5.1": "patches/@solana%2Fkeys@5.5.1.patch",
-    "@solana/transaction-messages@5.5.1": "patches/@solana%2Ftransaction-messages@5.5.1.patch",
-    "@solana/rpc-subscriptions-channel-websocket@5.5.1": "patches/@solana%2Frpc-subscriptions-channel-websocket@5.5.1.patch",
-    "@solana/subscribable@5.5.1": "patches/@solana%2Fsubscribable@5.5.1.patch",
-    "@solana/rpc-api@5.5.1": "patches/@solana%2Frpc-api@5.5.1.patch",
-    "@solana/transaction-confirmation@5.5.1": "patches/@solana%2Ftransaction-confirmation@5.5.1.patch",
-    "@solana/options@5.5.1": "patches/@solana%2Foptions@5.5.1.patch",
-    "@solana/instructions@5.5.1": "patches/@solana%2Finstructions@5.5.1.patch",
-    "@solana/signers@5.5.1": "patches/@solana%2Fsigners@5.5.1.patch",
     "@capacitor/barcode-scanner@3.0.2": "patches/@capacitor%2Fbarcode-scanner@3.0.2.patch",
-    "@solana/accounts@5.5.1": "patches/@solana%2Faccounts@5.5.1.patch",
+    "electrobun@1.18.1": "patches/electrobun@1.18.1.patch",
+    "@solana/transactions@5.5.1": "patches/@solana%2Ftransactions@5.5.1.patch",
+    "@solana/rpc-spec@5.5.1": "patches/@solana%2Frpc-spec@5.5.1.patch",
+    "@solana/codecs-data-structures@5.5.1": "patches/@solana%2Fcodecs-data-structures@5.5.1.patch",
+    "tsup@8.5.1": "patches/tsup@8.5.1.patch",
+    "@solana/codecs-core@5.5.1": "patches/@solana%2Fcodecs-core@5.5.1.patch",
+    "@solana/rpc-spec-types@5.5.1": "patches/@solana%2Frpc-spec-types@5.5.1.patch",
+    "@solana/functional@5.5.1": "patches/@solana%2Ffunctional@5.5.1.patch",
+    "@solana/codecs-numbers@5.5.1": "patches/@solana%2Fcodecs-numbers@5.5.1.patch",
+    "@solana/sysvars@5.5.1": "patches/@solana%2Fsysvars@5.5.1.patch",
+    "bigint-buffer@1.1.5": "patches/bigint-buffer@1.1.5.patch",
+    "@solana/offchain-messages@5.5.1": "patches/@solana%2Foffchain-messages@5.5.1.patch",
+    "@capacitor/ios@8.4.1": "patches/@capacitor%2Fios@8.4.1.patch",
+    "@solana/rpc-parsed-types@5.5.1": "patches/@solana%2Frpc-parsed-types@5.5.1.patch",
+    "@solana/rpc-subscriptions@5.5.1": "patches/@solana%2Frpc-subscriptions@5.5.1.patch",
+    "@solana/keys@5.5.1": "patches/@solana%2Fkeys@5.5.1.patch",
+    "@solana/transaction-confirmation@5.5.1": "patches/@solana%2Ftransaction-confirmation@5.5.1.patch",
+    "@solana/addresses@5.5.1": "patches/@solana%2Faddresses@5.5.1.patch",
+    "@solana/transaction-messages@5.5.1": "patches/@solana%2Ftransaction-messages@5.5.1.patch",
+    "@solana/promises@5.5.1": "patches/@solana%2Fpromises@5.5.1.patch",
+    "@solana/errors@5.5.1": "patches/@solana%2Ferrors@5.5.1.patch",
+    "@solana/nominal-types@5.5.1": "patches/@solana%2Fnominal-types@5.5.1.patch",
+    "@solana/instructions@5.5.1": "patches/@solana%2Finstructions@5.5.1.patch",
+    "@solana/kit@5.5.1": "patches/@solana%2Fkit@5.5.1.patch",
+    "@solana/rpc-api@5.5.1": "patches/@solana%2Frpc-api@5.5.1.patch",
+    "@solana/rpc-types@5.5.1": "patches/@solana%2Frpc-types@5.5.1.patch",
+    "@solana/signers@5.5.1": "patches/@solana%2Fsigners@5.5.1.patch",
+    "@solana/codecs-strings@5.5.1": "patches/@solana%2Fcodecs-strings@5.5.1.patch",
+    "vitest@4.1.5": "patches/vitest@4.1.5.patch",
     "@solana/programs@5.5.1": "patches/@solana%2Fprograms@5.5.1.patch",
+    "@solana/rpc@5.5.1": "patches/@solana%2Frpc@5.5.1.patch",
+    "@solana/assertions@5.5.1": "patches/@solana%2Fassertions@5.5.1.patch",
+    "@solana/options@5.5.1": "patches/@solana%2Foptions@5.5.1.patch",
+    "@farcaster/quick-auth@0.0.8": "patches/@farcaster%2Fquick-auth@0.0.8.patch",
+    "@solana/subscribable@5.5.1": "patches/@solana%2Fsubscribable@5.5.1.patch",
+    "@solana/accounts@5.5.1": "patches/@solana%2Faccounts@5.5.1.patch",
+    "@solana/instruction-plans@5.5.1": "patches/@solana%2Finstruction-plans@5.5.1.patch",
+    "telegraf@4.16.3": "patches/telegraf@4.16.3.patch",
+    "@vitest/mocker@4.1.5": "patches/@vitest%2Fmocker@4.1.5.patch",
+    "@solana/codecs@5.5.1": "patches/@solana%2Fcodecs@5.5.1.patch",
+    "@solana/plugin-core@5.5.1": "patches/@solana%2Fplugin-core@5.5.1.patch",
+    "@solana/rpc-subscriptions-api@5.5.1": "patches/@solana%2Frpc-subscriptions-api@5.5.1.patch",
+    "@solana/rpc-subscriptions-channel-websocket@5.5.1": "patches/@solana%2Frpc-subscriptions-channel-websocket@5.5.1.patch",
   },
   "overrides": {
     "@ai-sdk/gateway": "3.0.109",
@@ -6234,6 +6282,8 @@
 
     "@elizaos/electrobun": ["@elizaos/electrobun@workspace:packages/app-core/platforms/electrobun"],
 
+    "@elizaos/evidence": ["@elizaos/evidence@workspace:packages/evidence"],
+
     "@elizaos/example-a2a-server": ["@elizaos/example-a2a-server@workspace:packages/examples/a2a"],
 
     "@elizaos/example-agent-console": ["@elizaos/example-agent-console@workspace:packages/examples/agent-console"],
@@ -6343,6 +6393,8 @@
     "@elizaos/plugin-anthropic": ["@elizaos/plugin-anthropic@workspace:plugins/plugin-anthropic"],
 
     "@elizaos/plugin-anthropic-proxy": ["@elizaos/plugin-anthropic-proxy@workspace:plugins/plugin-anthropic-proxy"],
+
+    "@elizaos/plugin-aosp-local-inference": ["@elizaos/plugin-aosp-local-inference@workspace:plugins/plugin-aosp-local-inference"],
 
     "@elizaos/plugin-app-control": ["@elizaos/plugin-app-control@workspace:plugins/plugin-app-control"],
 
@@ -6532,6 +6584,8 @@
 
     "@elizaos/plugin-training": ["@elizaos/plugin-training@workspace:plugins/plugin-training"],
 
+    "@elizaos/plugin-trajectory-logger": ["@elizaos/plugin-trajectory-logger@workspace:plugins/plugin-trajectory-logger"],
+
     "@elizaos/plugin-tunnel": ["@elizaos/plugin-tunnel@workspace:plugins/plugin-tunnel"],
 
     "@elizaos/plugin-twitch": ["@elizaos/plugin-twitch@workspace:plugins/plugin-twitch"],
@@ -6569,8 +6623,6 @@
     "@elizaos/prompts": ["@elizaos/prompts@workspace:packages/prompts"],
 
     "@elizaos/registry": ["@elizaos/registry@workspace:packages/registry"],
-
-    "@elizaos/robot": ["@elizaos/robot@workspace:packages/research/robot"],
 
     "@elizaos/scenario-runner": ["@elizaos/scenario-runner@workspace:packages/scenario-runner"],
 
@@ -12278,6 +12330,8 @@
 
     "openapi-typescript-helpers": ["openapi-typescript-helpers@0.0.15", "", {}, "sha512-opyTPaunsklCBpTK8JGef6mfPhLSnyy5a0IN9vKtx3+4aExf+KxEqYwIy3hqkedXIB97u357uLMJsOnm3GVjsw=="],
 
+    "opencollective-postinstall": ["opencollective-postinstall@2.0.3", "", { "bin": { "opencollective-postinstall": "index.js" } }, "sha512-8AV/sCtuzUeTo8gQK5qDZzARrulB3egtLzFgteqB2tcT4Mw7B8Kt7JcDHmltjz6FOAHsvTevk70gZEbhM4ZS9Q=="],
+
     "openid-client": ["openid-client@6.8.4", "", { "dependencies": { "jose": "^6.2.2", "oauth4webapi": "^3.8.5" } }, "sha512-QSw0BA08piujetEwfZsHoTrDpMEha7GDZDicQqVwX4u0ChCjefvjDB++TZ8BTg76UpwhzIQgdvvfgfl3HpCSAw=="],
 
     "option": ["option@0.2.4", "", {}, "sha512-pkEqbDyl8ou5cpq+VsnQbe/WlEy5qS7xPzMS1U55OCG9KPvwFD46zDbxQIj3egJSFc3D+XhYOPUzz49zQAVy7A=="],
@@ -13202,6 +13256,10 @@
 
     "terser": ["terser@5.48.0", "", { "dependencies": { "@jridgewell/source-map": "^0.3.3", "acorn": "^8.15.0", "commander": "^2.20.0", "source-map-support": "~0.5.20" }, "bin": { "terser": "bin/terser" } }, "sha512-J/9An6vs9Us6wKRriSFXBWdRZapREHqFzdNUKk0pmu804EMR6dr6winwo7e5JDxN4xahxQsuysyYFwlwj4XN/Q=="],
 
+    "tesseract.js": ["tesseract.js@6.0.1", "", { "dependencies": { "bmp-js": "^0.1.0", "idb-keyval": "^6.2.0", "is-url": "^1.2.4", "node-fetch": "^2.6.9", "opencollective-postinstall": "^2.0.3", "regenerator-runtime": "^0.13.3", "tesseract.js-core": "^6.0.0", "wasm-feature-detect": "^1.2.11", "zlibjs": "^0.3.1" } }, "sha512-/sPvMvrCtgxnNRCjbTYbr7BRu0yfWDsMZQ2a/T5aN/L1t8wUQN6tTWv6p6FwzpoEBA0jrN2UD2SX4QQFRdoDbA=="],
+
+    "tesseract.js-core": ["tesseract.js-core@6.1.2", "", {}, "sha512-pv4GjmramjdObhDyR1q85Td8X60Puu/lGQn7Kw2id05LLgHhAcWgnz6xSdMCSxBMWjQDmMyDXPTC2aqADdpiow=="],
+
     "text-decoder": ["text-decoder@1.2.7", "", { "dependencies": { "b4a": "^1.6.4" } }, "sha512-vlLytXkeP4xvEq2otHeJfSQIRyWxo/oZGEbXrtEEF9Hnmrdly59sUbzZ/QgyWuLYHctCHxFF4tRQZNQ9k60ExQ=="],
 
     "text-encoding-utf-8": ["text-encoding-utf-8@1.0.2", "", {}, "sha512-8bw4MY9WjdsD2aMtO0OzOCY3pXGYNx2d2FfHRVUKkiCPDWjKuOlhLVASS+pD7VkLTVjW268LYJHwsnPFlBpbAg=="],
@@ -13476,8 +13534,6 @@
 
     "unraw": ["unraw@3.0.0", "", {}, "sha512-08/DA66UF65OlpUDIQtbJyrqTR0jTAlJ+jsnkQ4jxR7+K5g5YG1APZKQSMCE1vqqmD+2pv6+IdEjmopFatacvg=="],
 
-    "unrun": ["unrun@0.3.1", "", { "dependencies": { "rolldown": "^1.0.0" }, "peerDependencies": { "synckit": "^0.11.11" }, "optionalPeers": ["synckit"], "bin": { "unrun": "./dist/cli.mjs" } }, "sha512-onIck/oNnCaytwths1ZVp1LK2Gq2hPoyFhiHebObuUXqR3S0uHuLLaBK8K6mRRgV7Ptip8AnNvaUsgzwWwBZuA=="],
-
     "unstorage": ["unstorage@1.17.5", "", { "dependencies": { "anymatch": "^3.1.3", "chokidar": "^5.0.0", "destr": "^2.0.5", "h3": "^1.15.10", "lru-cache": "^11.2.7", "node-fetch-native": "^1.6.7", "ofetch": "^1.5.1", "ufo": "^1.6.3" }, "peerDependencies": { "@azure/app-configuration": "^1.8.0", "@azure/cosmos": "^4.2.0", "@azure/data-tables": "^13.3.0", "@azure/identity": "^4.6.0", "@azure/keyvault-secrets": "^4.9.0", "@azure/storage-blob": "^12.26.0", "@capacitor/preferences": "^6 || ^7 || ^8", "@deno/kv": ">=0.9.0", "@netlify/blobs": "^6.5.0 || ^7.0.0 || ^8.1.0 || ^9.0.0 || ^10.0.0", "@planetscale/database": "^1.19.0", "@upstash/redis": "^1.34.3", "@vercel/blob": ">=0.27.1", "@vercel/functions": "^2.2.12 || ^3.0.0", "@vercel/kv": "^1 || ^2 || ^3", "aws4fetch": "^1.0.20", "db0": ">=0.2.1", "idb-keyval": "^6.2.1", "ioredis": "^5.4.2", "uploadthing": "^7.4.4" }, "optionalPeers": ["@azure/app-configuration", "@azure/cosmos", "@azure/data-tables", "@azure/identity", "@azure/keyvault-secrets", "@azure/storage-blob", "@capacitor/preferences", "@deno/kv", "@netlify/blobs", "@planetscale/database", "@upstash/redis", "@vercel/blob", "@vercel/functions", "@vercel/kv", "aws4fetch", "db0", "idb-keyval", "ioredis", "uploadthing"] }, "sha512-0i3iqvRfx29hkNntHyQvJTpf5W9dQ9ZadSoRU8+xVlhVtT7jAX57fazYO9EHvcRCfBCyi5YRya7XCDOsbTgkPg=="],
 
     "untildify": ["untildify@4.0.0", "", {}, "sha512-KK8xQ1mkzZeg9inewmFVDNkg3l5LUhoq9kN6iWYB/CC9YMG8HA+c1Q8HwDe6dEX7kErrEVNVBO3fWsVq5iDgtw=="],
@@ -13571,6 +13627,8 @@
     "walker": ["walker@1.0.8", "", { "dependencies": { "makeerror": "1.0.12" } }, "sha512-ts/8E8l5b7kY0vlWLewOkDXMmPdLcVV4GmOQLyxuSswIJsweeFZtAsMF7k1Nszz+TYBQrlYRmzOnr398y1JemQ=="],
 
     "warning": ["warning@4.0.3", "", { "dependencies": { "loose-envify": "^1.0.0" } }, "sha512-rpJyN222KWIvHJ/F53XSZv0Zl/accqHR8et1kpaMTD/fLCRxtV8iX8czMzY7sVZupTI3zcUTg8eycS2kNF9l6w=="],
+
+    "wasm-feature-detect": ["wasm-feature-detect@1.8.0", "", {}, "sha512-zksaLKM2fVlnB5jQQDqKXXwYHLQUVH9es+5TOOHwGOVJOCeRBCiPjwSg+3tN2AdTCzjgli4jijCH290kXb/zWQ=="],
 
     "watchpack": ["watchpack@2.5.2", "", { "dependencies": { "graceful-fs": "^4.1.2" } }, "sha512-6i/00NBjP4yGPs+caKSyRfpTF/8Torsu0MOW3mMzIbhgISFder8i7xbqgHlLMwJrdiN8ndBV3UA1/AfzPSr+jg=="],
 
@@ -13725,6 +13783,8 @@
     "zip-stream": ["zip-stream@4.1.1", "", { "dependencies": { "archiver-utils": "^3.0.4", "compress-commons": "^4.1.2", "readable-stream": "^3.6.0" } }, "sha512-9qv4rlDiopXg4E69k+vMHjNN63YFMe9sZMrdlvKnCjlCRWeCBswPPMPUfx+ipsAWq1LXHe70RcbaHdJJpS6hyQ=="],
 
     "zlib-sync": ["zlib-sync@0.1.10", "", { "dependencies": { "nan": "^2.18.0" } }, "sha512-t7/pYg5tLBznL1RuhmbAt8rNp5tbhr+TSrJFnMkRtrGIaPJZ6Dc0uR4u3OoQI2d6cGlVI62E3Gy6gwkxyIqr/w=="],
+
+    "zlibjs": ["zlibjs@0.3.1", "", {}, "sha512-+J9RrgTKOmlxFSDHo0pI1xM6BLVUv+o0ZT9ANtCxGkjIVCCUdx9alUF8Gm+dGLKbkkkidWIHFDZHDMpfITt4+w=="],
 
     "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 

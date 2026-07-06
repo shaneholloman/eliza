@@ -475,6 +475,7 @@ async function loadRequiredPlugin(pkg: string): Promise<Plugin | null> {
       "../../../plugins/plugin-app-control/src/index.ts"
     )) as {
       appAction?: Action;
+      appControlPlugin?: Plugin;
       backgroundAction?: Action;
       viewsAction?: Action;
     };
@@ -484,6 +485,8 @@ async function loadRequiredPlugin(pkg: string): Promise<Plugin | null> {
       name: "app-control",
       description: "App control deterministic scenario actions",
       actions: [mod.appAction, mod.backgroundAction, mod.viewsAction],
+      responseHandlerEvaluators:
+        mod.appControlPlugin?.responseHandlerEvaluators,
     };
   }
   if (pkg === "@elizaos/plugin-hyperliquid") {
@@ -2102,6 +2105,11 @@ export async function runScenario(
   let interceptor = attachInterceptor(runtime);
   const rooms = resolveScenarioRooms(scenario);
   const primaryRoom = getDefaultScenarioRoom(rooms);
+  // Expose the owner conversation identity to seeds and custom checks:
+  // plain-text memory seeds write durable facts attributed to this room +
+  // entity so the core FACTS provider can surface them during turns.
+  ctx.primaryRoomId = primaryRoom.roomId;
+  ctx.primaryUserId = primaryRoom.userId;
   const variables: ScenarioVariableState = {
     baseNow: new Date(startedAt),
     capturesByName: new Map<string, unknown>(),

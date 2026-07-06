@@ -40,6 +40,7 @@ import {
 import {
   SETTINGS_GROUP_LABEL,
   SETTINGS_GROUP_ORDER,
+  SETTINGS_NON_CATALOG_SECTION_META,
   SETTINGS_SECTION_META,
   type SettingsSectionGroup,
 } from "./settings-section-meta";
@@ -252,6 +253,18 @@ interface BuiltinSectionDefinition {
   Component: ComponentType | LazyExoticComponent<ComponentType>;
 }
 
+const NON_CATALOG_META_BY_ID = new Map(
+  SETTINGS_NON_CATALOG_SECTION_META.map((meta) => [meta.id, meta]),
+);
+
+function nonCatalogMeta(id: string) {
+  const meta = NON_CATALOG_META_BY_ID.get(id);
+  if (!meta) {
+    throw new Error(`Unknown non-catalog settings section "${id}"`);
+  }
+  return meta;
+}
+
 /**
  * The single source of truth for every built-in settings section's full
  * definition (catalog data + visuals + component). Order here is display order
@@ -328,16 +341,9 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     labelKey: "settings.sections.connectors.label",
     Component: ConnectorsSection,
   },
-  {
-    id: "runtime",
-    defaultLabel: "Runtime",
-    group: "system",
-    icon: Server,
-    tone: "neutral",
-    hue: "slate",
-    labelKey: "settings.sections.runtime.label",
-    Component: RuntimeSettingsSection,
-  },
+  // System group order mirrors SETTINGS_SECTION_META: personalization first
+  // (appearance, background), then infrastructure (runtime, wallet, remote
+  // plugins), then maintenance (updates, backups) last.
   {
     id: "appearance",
     defaultLabel: "Appearance",
@@ -361,16 +367,14 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     Component: BackgroundSettingsSection,
   },
   {
-    id: "remote-plugins",
-    defaultLabel: "Remote Plugins",
+    id: "runtime",
+    defaultLabel: "Runtime",
     group: "system",
-    aliases: ["remote"],
-    icon: Puzzle,
-    tone: "accent",
-    hue: "rose",
-    labelKey: "settings.sections.remote-plugins.label",
-    developerOnly: true,
-    Component: RemotePluginHostSection,
+    icon: Server,
+    tone: "neutral",
+    hue: "slate",
+    labelKey: "settings.sections.runtime.label",
+    Component: RuntimeSettingsSection,
   },
   {
     id: "wallet-rpc",
@@ -385,6 +389,18 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     Component: WalletRpcSection,
   },
   {
+    id: "remote-plugins",
+    defaultLabel: "Remote Plugins",
+    group: "system",
+    aliases: ["remote"],
+    icon: Puzzle,
+    tone: "accent",
+    hue: "rose",
+    labelKey: "settings.sections.remote-plugins.label",
+    developerOnly: true,
+    Component: RemotePluginHostSection,
+  },
+  {
     id: "updates",
     defaultLabel: "Updates",
     group: "system",
@@ -397,24 +413,27 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
   },
   {
     id: "advanced",
-    defaultLabel: "Backup & Reset",
+    defaultLabel: "Backups",
     group: "system",
-    aliases: ["fine-tuning"],
+    aliases: ["fine-tuning", "backup", "backups"],
     icon: Archive,
     tone: "neutral",
     hue: "slate",
     labelKey: "settings.sections.backupReset.label",
     Component: AdvancedSection,
   },
+  // Security group order mirrors META: the everyday key store (Vault) first,
+  // then the two permission surfaces, then the host-only remote-access section.
   {
-    id: "app-permissions",
-    defaultLabel: "App Permissions",
+    id: "secrets",
+    defaultLabel: "Vault",
     group: "security",
-    icon: ShieldCheck,
+    aliases: ["vault", "keys"],
+    icon: KeyRound,
     tone: "warn",
     hue: "amber",
-    labelKey: "settings.sections.apppermissions.label",
-    Component: AppPermissionsSection,
+    labelKey: "settings.sections.secrets.label",
+    Component: SecretsManagerSection,
   },
   {
     id: "permissions",
@@ -429,15 +448,14 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     Component: PermissionsSection,
   },
   {
-    id: "secrets",
-    defaultLabel: "Vault",
+    id: "app-permissions",
+    defaultLabel: "App Permissions",
     group: "security",
-    aliases: ["vault", "keys"],
-    icon: KeyRound,
+    icon: ShieldCheck,
     tone: "warn",
     hue: "amber",
-    labelKey: "settings.sections.secrets.label",
-    Component: SecretsManagerSection,
+    labelKey: "settings.sections.apppermissions.label",
+    Component: AppPermissionsSection,
   },
   {
     id: "security",
@@ -462,9 +480,7 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
   // built-in QA route catalog.
   // ---------------------------------------------------------------------------
   {
-    id: "cloud-overview",
-    defaultLabel: "Overview",
-    group: CLOUD_SETTINGS_GROUP_ID,
+    ...nonCatalogMeta("cloud-overview"),
     catalog: false,
     icon: Cloud,
     tone: "accent",
@@ -480,9 +496,7 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
   // overview, while full Cloud-only account/billing/API surfaces remain opt-in
   // through registerCloudSettingsSections().
   {
-    id: "cloud-agents",
-    defaultLabel: "Agents",
-    group: CLOUD_SETTINGS_GROUP_ID,
+    ...nonCatalogMeta("cloud-agents"),
     catalog: false,
     icon: Bot,
     tone: "accent",
@@ -496,9 +510,7 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
   // "My Runtimes" — manage + switch between local / cloud-dedicated /
   // VPS-remote runtimes (the cockpit's runtime registry).
   {
-    id: "my-runtimes",
-    defaultLabel: "My Runtimes",
-    group: "system",
+    ...nonCatalogMeta("my-runtimes"),
     catalog: false,
     icon: Server,
     tone: "neutral",

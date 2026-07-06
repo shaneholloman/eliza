@@ -1,11 +1,12 @@
 # Live Scenario Runner (nightly)
 #
-# Executes the executive-assistant and connector certification
-# scenarios against a live LLM runtime with real connector credentials and
-# uploads the JSON report. Scheduled/default dispatch runs are report-only
-# while this catalog is still being hardened; manual dispatch can opt into
-# failing when any scenario fails or the aggregate LLM-judge score falls below
-# LIFEOPS_JUDGE_THRESHOLD. Missing setup prerequisites still fail loudly.
+# Executes the executive-assistant, connector certification, plugin-health, and
+# app-control scenarios against a live LLM runtime with real connector
+# credentials and uploads the JSON report. Scheduled runs are enforcing: once the
+# runner reaches scenario execution, any scenario failure or aggregate LLM-judge
+# score below LIFEOPS_JUDGE_THRESHOLD fails the lane. Manual dispatch can still opt
+# into report-only mode while debugging by leaving `enforce_gate` false. Missing
+# setup prerequisites fail loudly and still upload a placeholder report artifact.
 #
 # Required repo secrets (self-documented):
 #   LLM provider (at least one):
@@ -35,7 +36,7 @@
 # Optional:
 #   LIFEOPS_JUDGE_THRESHOLD (workflow input, default 0.8)
 #   SCENARIO_FILTER        (comma-separated scenario ids, default all)
-#   SCENARIO_ENFORCE_GATE  (workflow input, default false)
+#   SCENARIO_ENFORCE_GATE  (schedule: enforced; manual input default false)
 #   SKIP_REASON            (required if SCENARIO_SKIP is set)
 #
 # 1Password vault: this workflow's plain `*_API_KEY` secrets are sourced from the
@@ -88,7 +89,7 @@ permissions:
 
 jobs:
   live-scenarios:
-    name: Live scenarios (EA + connectors)
+    name: Live scenarios (EA + connectors + health + app-control)
     runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     timeout-minutes: 120
     steps:
@@ -114,7 +115,30 @@ jobs:
           test -f packages/scenario-runner/src/cli.ts || \
             { echo "scenario-runner CLI missing"; exit 1; }
 
+      - name: Prepare live scenario report placeholder
+        run: |
+          mkdir -p artifacts/scenario-runs/live
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const report = {
+            schema: "eliza_live_scenario_setup_v1",
+            status: "setup_not_completed",
+            generatedAt: new Date().toISOString(),
+            note:
+              "Placeholder written before build/setup. If this file is uploaded unchanged, the workflow failed before scenario execution and no live model trajectory was produced.",
+            scenarios: [],
+            totalCount: 0,
+            passedCount: 0,
+            failedCount: 0
+          };
+          fs.writeFileSync(
+            "artifacts/lifeops-scenario-report.json",
+            `${JSON.stringify(report, null, 2)}\n`,
+          );
+          NODE
+
       - name: Build live scenario runtime packages
+        id: build
         # The live runner executes TypeScript sources directly, but several
         # workspace packages intentionally export dist/* entry points. Because
         # dependency installation ignores postinstall scripts, build only the
@@ -170,7 +194,9 @@ jobs:
 
           package_dirs=(
             plugins/plugin-sql
+            plugins/plugin-app-control
             plugins/plugin-agent-skills
+            plugins/plugin-health
             plugins/plugin-pdf
             plugins/plugin-telegram
             plugins/plugin-whatsapp
@@ -243,11 +269,62 @@ jobs:
           # Run controls
           SCENARIO_FILTER: ${{ inputs.scenario_filter }}
           LIFEOPS_JUDGE_THRESHOLD: ${{ inputs.judge_threshold || '0.8' }}
-          SCENARIO_ENFORCE_GATE: ${{ inputs.enforce_gate && '1' || '0' }}
+          SCENARIO_ENFORCE_GATE: ${{ github.event_name == 'schedule' && '1' || (inputs.enforce_gate && '1' || '0') }}
           SKIP_REASON: ${{ inputs.skip_reason }}
           REPORT_PATH: artifacts/lifeops-scenario-report.json
           RUN_DIR: artifacts/scenario-runs/live
         run: node packages/scripts/run-live-scenarios.mjs
+
+      - name: Run plugin-health live scenarios
+        id: run-health
+        env:
+          # LLM providers
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # Independent LLM judge (#9310): judge on Cerebras, never the model
+          # under test.
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          SCENARIO_JUDGE_REQUIRE_INDEPENDENT: "1"
+          # Run controls
+          SCENARIO_ROOT: plugins/plugin-health/test/scenarios
+          SCENARIO_FILTER: ${{ inputs.scenario_filter }}
+          LIFEOPS_JUDGE_THRESHOLD: ${{ inputs.judge_threshold || '0.8' }}
+          SCENARIO_ENFORCE_GATE: ${{ github.event_name == 'schedule' && '1' || (inputs.enforce_gate && '1' || '0') }}
+          SKIP_REASON: ${{ inputs.skip_reason }}
+          REPORT_PATH: artifacts/plugin-health-scenario-report.json
+          RUN_DIR: artifacts/scenario-runs/plugin-health
+          EXPORT_NATIVE_PATH: artifacts/scenario-runs/plugin-health/native.jsonl
+        run: node packages/scripts/run-live-scenarios.mjs --lane live-only
+
+      - name: Run app-control live scenarios
+        id: run-app-control
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          # LLM providers
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # Independent LLM judge (#9310): judge on Cerebras, never the model
+          # under test.
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          SCENARIO_JUDGE_REQUIRE_INDEPENDENT: "1"
+          # Run controls
+          SCENARIO_ROOT: plugins/plugin-app-control/test/scenarios
+          SCENARIO_FILTER: ${{ inputs.scenario_filter }}
+          LIFEOPS_JUDGE_THRESHOLD: ${{ inputs.judge_threshold || '0.8' }}
+          SCENARIO_ENFORCE_GATE: ${{ github.event_name == 'schedule' && '1' || (inputs.enforce_gate && '1' || '0') }}
+          SKIP_REASON: ${{ inputs.skip_reason }}
+          REPORT_PATH: artifacts/app-control-scenario-report.json
+          RUN_DIR: artifacts/scenario-runs/app-control
+          EXPORT_NATIVE_PATH: artifacts/scenario-runs/app-control/native.jsonl
+        run: node packages/scripts/run-live-scenarios.mjs --lane live-only
 
       - name: Upload scenario report
         if: always()
@@ -256,6 +333,10 @@ jobs:
           name: lifeops-scenario-report
           path: |
             artifacts/lifeops-scenario-report.json
+            artifacts/plugin-health-scenario-report.json
+            artifacts/app-control-scenario-report.json
             artifacts/scenario-runs/live/
+            artifacts/scenario-runs/plugin-health/
+            artifacts/scenario-runs/app-control/
           if-no-files-found: warn
           retention-days: 30

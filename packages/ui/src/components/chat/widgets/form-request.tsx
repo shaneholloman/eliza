@@ -11,7 +11,7 @@
  * message), matching the existing message-action callback wiring.
  */
 
-import { type FormEvent, useCallback, useMemo, useState } from "react";
+import { type FormEvent, memo, useCallback, useMemo, useState } from "react";
 import { ConfigFieldErrors } from "../../config-ui/config-control-primitives";
 import { getConfigInputClassName } from "../../config-ui/config-control-primitives.helpers";
 import { runValidation } from "../../config-ui/ui-renderer.helpers";
@@ -26,11 +26,37 @@ import {
   SelectValue,
 } from "../../ui/select";
 import type { FormFieldSpec, FormRequestSpec } from "../message-form-parser";
+import { formRequestPropsEqual } from "./widget-equality";
 
 export type { FormFieldSpec, FormRequestSpec };
 
 /** Value emitted per field: string for text/number/select, boolean for checkbox. */
 export type FormResultValue = string | boolean;
+
+/**
+ * Map a form field type to the `<input type>` used for the text-like branch
+ * (checkbox and select render their own controls). The temporal types delegate
+ * to the browser's native pickers — `date` → `YYYY-MM-DD`, `time` → `HH:mm`,
+ * `datetime` → `<input type="datetime-local">` yielding `YYYY-MM-DDTHH:mm` —
+ * so no custom picker or dependency is added. Any other type is a plain text
+ * box. Exported for the field-type unit test.
+ */
+export function htmlInputTypeForField(
+  fieldType: FormFieldSpec["type"],
+): string {
+  switch (fieldType) {
+    case "number":
+      return "number";
+    case "date":
+      return "date";
+    case "time":
+      return "time";
+    case "datetime":
+      return "datetime-local";
+    default:
+      return "text";
+  }
+}
 
 export type FormRequestProps = {
   form: FormRequestSpec;
@@ -38,19 +64,51 @@ export type FormRequestProps = {
   onSubmit: (formId: string, values: Record<string, FormResultValue>) => void;
 };
 
+type FormValueRecord = Record<string, FormResultValue>;
+type FormErrorRecord = Record<string, string[]>;
+
 function initialValueFor(field: FormFieldSpec): FormResultValue {
   return field.type === "checkbox" ? false : "";
 }
 
-export function FormRequest({ form, onSubmit }: FormRequestProps) {
-  const [values, setValues] = useState<Record<string, FormResultValue>>(() => {
-    const initial: Record<string, FormResultValue> = {};
+function createFormRecord<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+function copyFormRecord<T>(record: Record<string, T>): Record<string, T> {
+  return Object.assign(createFormRecord<T>(), record);
+}
+
+function getOwnRecordValue<T>(
+  record: Record<string, T>,
+  name: string,
+): T | undefined {
+  return Object.hasOwn(record, name) ? record[name] : undefined;
+}
+
+function toSubmitPayload(values: FormValueRecord): FormValueRecord {
+  return copyFormRecord(values);
+}
+
+// Memoized on the form spec by value (see `formRequestPropsEqual`). This widget
+// holds user-entered field state internally, so it MUST survive the per-token
+// re-parse of the surrounding message: a referential-only memo would see a
+// fresh `form` object each streamed token and remount, wiping half-filled
+// inputs mid-conversation.
+export const FormRequest = memo(function FormRequest({
+  form,
+  onSubmit,
+}: FormRequestProps) {
+  const [values, setValues] = useState<FormValueRecord>(() => {
+    const initial = createFormRecord<FormResultValue>();
     for (const field of form.fields) {
       initial[field.name] = initialValueFor(field);
     }
     return initial;
   });
-  const [errors, setErrors] = useState<Record<string, string[]>>({});
+  const [errors, setErrors] = useState<FormErrorRecord>(() =>
+    createFormRecord<string[]>(),
+  );
   const [submitted, setSubmitted] = useState(false);
 
   const requiredFields = useMemo(
@@ -59,11 +117,15 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
   );
 
   const setValue = useCallback((name: string, value: FormResultValue) => {
-    setValues((prev) => ({ ...prev, [name]: value }));
+    setValues((prev) => {
+      const next = copyFormRecord(prev);
+      next[name] = value;
+      return next;
+    });
   }, []);
 
   const validateField = useCallback(
-    (field: FormFieldSpec, value: FormResultValue) => {
+    (field: FormFieldSpec, value: FormResultValue | undefined) => {
       if (!field.required || field.type === "checkbox") return;
       const fieldErrors = runValidation(
         [
@@ -74,7 +136,11 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
         ],
         value,
       );
-      setErrors((prev) => ({ ...prev, [field.name]: fieldErrors }));
+      setErrors((prev) => {
+        const next = copyFormRecord(prev);
+        next[field.name] = fieldErrors;
+        return next;
+      });
     },
     [],
   );
@@ -84,7 +150,7 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
       event.preventDefault();
       if (submitted) return;
 
-      const nextErrors: Record<string, string[]> = {};
+      const nextErrors = createFormRecord<string[]>();
       for (const field of requiredFields) {
         const fieldErrors = runValidation(
           [
@@ -93,7 +159,7 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
               message: `${field.label ?? field.name} is required`,
             },
           ],
-          values[field.name],
+          getOwnRecordValue(values, field.name),
         );
         if (fieldErrors.length > 0) nextErrors[field.name] = fieldErrors;
       }
@@ -101,7 +167,7 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
       if (Object.keys(nextErrors).length > 0) return;
 
       setSubmitted(true);
-      onSubmit(form.id, values);
+      onSubmit(form.id, toSubmitPayload(values));
     },
     [form.id, onSubmit, requiredFields, submitted, values],
   );
@@ -120,7 +186,8 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
 
       {form.fields.map((field) => {
         const label = field.label ?? field.name;
-        const fieldErrors = errors[field.name];
+        const value = getOwnRecordValue(values, field.name);
+        const fieldErrors = getOwnRecordValue(errors, field.name);
         if (field.type === "checkbox") {
           const checkboxId = `${form.id}-${field.name}`;
           return (
@@ -131,7 +198,7 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
             >
               <Checkbox
                 id={checkboxId}
-                checked={Boolean(values[field.name])}
+                checked={Boolean(value)}
                 disabled={submitted}
                 onCheckedChange={(checked) => setValue(field.name, !!checked)}
               />
@@ -141,7 +208,7 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
         }
         if (field.type === "select") {
           const options = field.options ?? [];
-          const current = String(values[field.name] ?? "");
+          const current = String(value ?? "");
           return (
             <div key={field.name} className="flex flex-col gap-1 text-xs">
               <span className="font-semibold">{label}</span>
@@ -182,7 +249,7 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
             </div>
           );
         }
-        // text / number
+        // text / number / date / time / datetime (native inputs)
         return (
           <div key={field.name} className="flex flex-col gap-1 text-xs">
             <span className="font-semibold">{label}</span>
@@ -192,14 +259,16 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
                 density: "compact",
                 hasError: !!fieldErrors?.length,
               })}
-              type={field.type === "number" ? "number" : "text"}
+              type={htmlInputTypeForField(field.type)}
               name={field.name}
               placeholder={field.placeholder ?? ""}
-              value={String(values[field.name] ?? "")}
+              value={String(value ?? "")}
               disabled={submitted}
               required={field.required}
               onChange={(e) => setValue(field.name, e.currentTarget.value)}
-              onBlur={() => validateField(field, values[field.name])}
+              onBlur={() =>
+                validateField(field, getOwnRecordValue(values, field.name))
+              }
             />
             <ConfigFieldErrors errors={fieldErrors} />
           </div>
@@ -211,4 +280,4 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
       </Button>
     </form>
   );
-}
+}, formRequestPropsEqual);

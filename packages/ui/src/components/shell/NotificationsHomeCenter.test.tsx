@@ -6,7 +6,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mutations are optimistic writes through the API client — mock the transport,
+// Mutations are optimistic writes through the API client - mock the transport,
 // not the store, so mark-read/dismiss/clear exercise the real store paths.
 vi.mock("../../api/client", () => ({
   client: {
@@ -34,6 +34,7 @@ import {
   __ingestNotificationForTests,
   __resetNotificationStoreForTests,
 } from "../../state/notifications/notification-store";
+import { HOME_GLASS_CLASS } from "./home-glass";
 import {
   NotificationsHomeCenter,
   orderDashboardNotifications,
@@ -73,7 +74,7 @@ describe("orderDashboardNotifications", () => {
     const urgentOld = makeNotification({
       priority: "urgent",
       createdAt: 1_600_000_000_000,
-      readAt: 1_600_000_500_000, // read — must NOT sink below unread lows
+      readAt: 1_600_000_500_000, // read - must NOT sink below unread lows
     });
     const normalNew = makeNotification({ priority: "normal" });
     const ordered = orderDashboardNotifications([low, urgentOld, normalNew]);
@@ -178,7 +179,7 @@ describe("NotificationsHomeCenter", () => {
     expect(__getStateForTests().notifications).toHaveLength(0);
   });
 
-  it("keeps a tapped (now read) row in place — order ignores read state", () => {
+  it("keeps a tapped (now read) row in place - order ignores read state", () => {
     const urgent = makeNotification({ priority: "urgent", title: "First" });
     __ingestNotificationForTests(makeNotification({ title: "Second" }));
     __ingestNotificationForTests(urgent);
@@ -206,7 +207,7 @@ describe("NotificationsHomeCenter", () => {
       makeNotification({ priority: "normal", title: "Quiet one" }),
     );
     render(<NotificationsHomeCenter />);
-    // A normal notification is just its line + time — no leading accent rail,
+    // A normal notification is just its line + time - no leading accent rail,
     // no per-row icon chip (the box-in-a-box slop is gone).
     expect(screen.queryByTestId("notification-row-accent")).toBeNull();
     expect(screen.queryByTestId("notification-row-icon")).toBeNull();
@@ -227,13 +228,32 @@ describe("NotificationsHomeCenter", () => {
     expect(screen.getAllByTestId("notification-row-accent")).toHaveLength(2);
   });
 
-  it("is a quiet glass surface, not a heavy filled card", () => {
+  it("uses the shared home glass recipe as the single blur budget owner", () => {
     __ingestNotificationForTests(makeNotification());
     render(<NotificationsHomeCenter />);
     const card = screen.getByTestId("home-notification-center");
-    // Hairline border + translucent surface (lock-screen glass), not the old
-    // opaque `bg-card` box with a solid `border-border`.
+    expect(card.className).toBe(HOME_GLASS_CLASS);
     expect(card.className).toContain("backdrop-blur");
     expect(card.className).not.toContain("border-border");
+  });
+
+  it("renders a count chip when data.count > 1 (§C.3 coalescing)", () => {
+    __ingestNotificationForTests(
+      makeNotification({ title: "3 new files", data: { count: 3 } }),
+    );
+    render(<NotificationsHomeCenter />);
+    const chip = screen.getByTestId("notification-count-chip");
+    // The visible glyph is the count; a visually-hidden suffix names it for AT.
+    expect(chip.textContent).toContain("3");
+    expect(chip.querySelector(".sr-only")?.textContent).toContain("grouped");
+  });
+
+  it("omits the count chip for a single (count ≤ 1 or absent) notification", () => {
+    __ingestNotificationForTests(
+      makeNotification({ title: "one", data: { count: 1 } }),
+    );
+    __ingestNotificationForTests(makeNotification({ title: "plain" }));
+    render(<NotificationsHomeCenter />);
+    expect(screen.queryByTestId("notification-count-chip")).toBeNull();
   });
 });

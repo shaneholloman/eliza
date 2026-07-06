@@ -23,6 +23,7 @@ import { Button } from "../../ui/button";
 
 /** User-facing label per failed engine for the fail-closed TTS banner (#12253). */
 const TTS_ERROR_ENGINE_LABEL: Record<VoiceTtsError["engine"], string> = {
+  "eliza-cloud": "Eliza Cloud voice",
   "local-inference": "on-device voice",
   elevenlabs: "ElevenLabs voice",
   "native-talkmode": "voice",

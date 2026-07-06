@@ -278,10 +278,12 @@ function makeHarness(seedConversations: Conversation[]): Harness {
     setCompanionMessageCutoffTs: vi.fn(),
     setConversationMessages,
     setUnreadConversations,
+    setChatReplyTarget: vi.fn(),
     resetConversationDraftState,
     activeConversationIdRef,
     chatInputRef,
     chatPendingImagesRef,
+    chatReplyTargetRef: { current: null },
     conversationsRef,
     conversationMessagesRef,
     conversationHydrationEpochRef,
@@ -301,7 +303,6 @@ function makeHarness(seedConversations: Conversation[]): Harness {
     pendingRestartReasons: [],
     setPendingRestart: vi.fn(),
     setPendingRestartReasons: vi.fn(),
-    setBackendDisconnectedBannerDismissed: vi.fn(),
     resetBackendConnection: vi.fn(),
     loadPlugins: vi.fn(async () => null),
     elizaCloudEnabled: false,
@@ -501,7 +502,8 @@ describe("rapid conversation switching must never delete a real conversation", (
     // fires deleteConversation("draft-d"), which now rejects.
     await selectAndCommit(result, h, "draft-d", [greetingMessage()]);
     await act(async () => {
-      const selectB = result.current.callbacks.handleSelectConversation("conv-b");
+      const selectB =
+        result.current.callbacks.handleSelectConversation("conv-b");
       // Let the fire-and-forget delete's rejection propagate to its catch.
       await Promise.resolve();
       await Promise.resolve();

@@ -240,10 +240,10 @@ Place it under `android/vendor/eliza/` following AOSP vendor tree conventions. B
 - **AOSP build needs a Linux x86_64 host with KVM** for x86_64/arm64 Cuttlefish; riscv64 runs under QEMU TCG but needs the same AOSP checkout at `AOSP_ROOT`.
 - **Default release manifest path** used by scripts is `packages/os/release/beta-2026-05-16/manifest.json` (set in `os-release-lib.mjs:defaultManifestPath`). This path does not yet exist in the repo — create the directory and manifest file when cutting a release, then update this constant accordingly.
 
-<!-- BEGIN: evidence-and-e2e-mandate (managed; canonical standard = repo-root PR_EVIDENCE.md) -->
+<!-- BEGIN: evidence-and-e2e-mandate (managed; canonical standard = repo-root AGENTS.md) -->
 ## ⛔ NON-NEGOTIABLE — evidence, trajectories & real end-to-end tests
 
-> The binding, repo-wide standard is **[PR_EVIDENCE.md](../../PR_EVIDENCE.md)**. Read it.
+> The binding, repo-wide standard is **[AGENTS.md](../../AGENTS.md)**. Read it.
 > Nothing in this package is *done* until it is *proven* done — a reviewer must confirm it
 > works **without reading the code**, from the artifacts you attach. This applies to **every**
 > feature, fix, refactor, and chore here. "Tests pass" is not proof; "CI is green" is not proof.
@@ -271,7 +271,7 @@ Place it under `android/vendor/eliza/` following AOSP vendor tree conventions. B
   "follow-up." When unsure, research thoroughly, weigh the options, and ship the best,
   highest-effort, production-ready version. Keep going until every possibility is exhausted.
 
-Artifacts → `.github/issue-evidence/<issue#>-<slug>.<ext>`; attach each evidence type **or**
+Artifacts → attached inline in the PR (MP4 video, JPG screenshots, logs in `<details>`); attach each evidence type **or**
 explicitly mark it N/A with a reason — never leave it blank. If `develop` moved and changed
 behavior, **re-capture** evidence; stale proof is worse than none.
 

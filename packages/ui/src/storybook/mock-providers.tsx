@@ -36,15 +36,10 @@ const baseMockApp: Partial<AppContextValue> = {
     uptime: undefined,
     startedAt: undefined,
   },
-  backendDisconnectedBannerDismissed: false,
   commandActiveIndex: 0,
   commandPaletteOpen: false,
   commandQuery: "",
-  dismissBackendDisconnectedBanner: noop,
   dismissSystemWarning: noop,
-  actionBanner: null,
-  showActionBanner: noop,
-  dismissActionBanner: noop,
   navigation: {
     scheduleAfterTabCommit: (fn: () => void) => {
       queueMicrotask(fn);
@@ -63,15 +58,17 @@ const baseMockApp: Partial<AppContextValue> = {
   pendingRestartReasons: [],
   restartBannerDismissed: false,
   systemWarnings: [],
-  t: (key, values) => values?.defaultValue?.toString() ?? key,
   triggerRestart: noopAsync,
   uiLanguage: "en",
 };
 
 function createMockApp(overrides: MockAppOptions = {}): AppContextValue {
+  const uiLanguage = overrides.uiLanguage ?? baseMockApp.uiLanguage ?? "en";
   const value = {
     ...baseMockApp,
+    t: createTranslator(uiLanguage),
     ...overrides,
+    uiLanguage,
     agentStatus:
       overrides.agentStatus === null
         ? null

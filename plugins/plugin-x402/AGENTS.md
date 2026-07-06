@@ -164,10 +164,10 @@ Edit `verifyPayment` in `src/payment-wrapper.ts`. Each strategy must call `repla
 - **Double-wrap guard.** HTTP dispatch checks `isRoutePaymentWrapped` before calling `createPaymentAwareHandler`; the `X402_ROUTE_PAYMENT_WRAPPED` symbol prevents double-wrapping if routes are processed more than once.
 - **Token price math is rational, not float.** `atomicAmountForPriceInCents` uses `BigInt` arithmetic; env price overrides are parsed as exact decimal strings.
 
-<!-- BEGIN: evidence-and-e2e-mandate (managed; canonical standard = repo-root PR_EVIDENCE.md) -->
+<!-- BEGIN: evidence-and-e2e-mandate (managed; canonical standard = repo-root AGENTS.md) -->
 ## ⛔ NON-NEGOTIABLE — evidence, trajectories & real end-to-end tests
 
-> The binding, repo-wide standard is **[PR_EVIDENCE.md](../../PR_EVIDENCE.md)**. Read it.
+> The binding, repo-wide standard is **[AGENTS.md](../../AGENTS.md)**. Read it.
 > Nothing in this package is *done* until it is *proven* done — a reviewer must confirm it
 > works **without reading the code**, from the artifacts you attach. This applies to **every**
 > feature, fix, refactor, and chore here. "Tests pass" is not proof; "CI is green" is not proof.
@@ -195,7 +195,7 @@ Edit `verifyPayment` in `src/payment-wrapper.ts`. Each strategy must call `repla
   "follow-up." When unsure, research thoroughly, weigh the options, and ship the best,
   highest-effort, production-ready version. Keep going until every possibility is exhausted.
 
-Artifacts → `.github/issue-evidence/<issue#>-<slug>.<ext>`; attach each evidence type **or**
+Artifacts → attached inline in the PR (MP4 video, JPG screenshots, logs in `<details>`); attach each evidence type **or**
 explicitly mark it N/A with a reason — never leave it blank. If `develop` moved and changed
 behavior, **re-capture** evidence; stale proof is worse than none.
 

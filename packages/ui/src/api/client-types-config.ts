@@ -173,7 +173,6 @@ export interface PluginInfo {
     developerOnly?: boolean;
     viewKind?: ViewKind;
     componentExport?: string;
-    defaultWidget?: "notifications" | "messages" | "activity";
     signalKinds?: readonly string[];
   }>;
   /**
@@ -1708,6 +1707,7 @@ export type { LifeOpsOccurrenceActionResult } from "@elizaos/shared";
 
 // Voice / TTS config
 export type VoiceProvider =
+  | "eliza-cloud"
   | "elevenlabs"
   | "robot-voice"
   | "edge"

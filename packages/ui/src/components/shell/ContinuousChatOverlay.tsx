@@ -7,11 +7,11 @@ import {
   ArrowDown,
   FileText,
   Film,
-  LayoutGrid,
+  Home,
   Loader2,
   Mic,
   Music,
-  RotateCcw,
+  Search,
   SendHorizontal,
 } from "lucide-react";
 import {
@@ -29,9 +29,11 @@ import * as React from "react";
 import { client } from "../../api/client";
 import type {
   ChatTurnStatus,
+  ConversationMessageSearchResult,
   ImageAttachment,
 } from "../../api/client-types-chat";
 import { useComposerKeydown, useComposerPaste } from "../../chat/composer-core";
+import { reportComposerActivity } from "../../chat/report-composer-activity";
 import {
   parseSlashDraft,
   resolveClientShortcutExecution,
@@ -57,6 +59,7 @@ import {
   LAYOUT_SHIFT_INTENT_ATTR,
   LAYOUT_SHIFT_INTENT_TRANSIENT,
 } from "../../hooks/useLayoutShiftMonitor";
+import { useLoadOlderOnScroll } from "../../hooks/useLoadOlderOnScroll";
 import { usePushToTalk } from "../../hooks/usePushToTalk";
 import { useThreadAutoScroll } from "../../hooks/useThreadAutoScroll";
 import { Z_SHELL_OVERLAY } from "../../lib/floating-layers";
@@ -68,6 +71,7 @@ import {
   useChatComposerOrLocal,
 } from "../../state/ChatComposerContext.hooks";
 import { useConversationMessages } from "../../state/ConversationMessagesContext.hooks";
+import { loadOlderConversationMessages } from "../../state/load-older-conversation-messages";
 import { goHome, goLauncher } from "../../state/shell-surface-store";
 import { useViewChatBinding } from "../../state/view-chat-binding";
 import { tryHandleTutorialText } from "../../tutorial/tutorial-action-channel";
@@ -81,11 +85,21 @@ import {
 } from "../../utils/image-attachment";
 import { InlineWidgetText } from "../chat/InlineWidgetText";
 import { MessageAttachments } from "../chat/MessageAttachments";
-import { SensitiveRequestBlock } from "../chat/MessageContent";
+import {
+  FormSubmitReceipt,
+  SensitiveRequestBlock,
+} from "../chat/MessageContent";
 import { findChoiceRegions } from "../chat/message-choice-parser";
+import { parseFormSubmitDisplay } from "../chat/message-parser-helpers";
+import { MessageSearchPanel } from "../chat/message-search/MessageSearchPanel";
 import { ThinkingBlock } from "../chat/ThinkingBlock";
 import { withTranscriptMarker } from "../chat/TranscriptViewerOverlay";
-import { ChatMessage } from "../composites/chat/chat-message";
+import {
+  buildReplyTargetFromMessage,
+  ChatMessage,
+  getChatMessageAnchorId,
+} from "../composites/chat/chat-message";
+import { ChatReplyPill } from "../composites/chat/chat-reply-pill";
 import type {
   ChatMessageData,
   ChatMessageRenderContext,
@@ -101,18 +115,23 @@ import {
   resolveChatPanelLayout,
 } from "./chat-panel-layout";
 import { SlashCommandMenu, useSlashMenu } from "./SlashCommandMenu";
-import { type ShellMessage, selectVisibleShellMessages } from "./shell-state";
+import {
+  filterRenderableShellMessages,
+  MAX_LOADED_SHELL_WINDOW,
+  MAX_RENDERED_SHELL_MESSAGES,
+  planScrollTopLoadOlder,
+  type ShellMessage,
+} from "./shell-state";
 import { TopicChipsBar } from "./TopicChipsBar";
 import { TopicGroup } from "./TopicGroup";
 import {
   deriveChannelTopics,
   groupMessagesByTopic,
   hasMultipleTopicGroups,
-  humanizeTopicLabel,
 } from "./topic-grouping";
 import { type PullGestureBinding, usePullGesture } from "./use-pull-gesture";
-import { usePromptSuggestions } from "./usePromptSuggestions";
 import type { ConversationNav, ShellController } from "./useShellController";
+import { WALLPAPER_FLOAT_SHADOW, WALLPAPER_TEXT } from "./wallpaper-idiom";
 
 /** No-op slash controller so the overlay renders without a provider (stories). */
 const EMPTY_SLASH_CONTROLLER: SlashCommandController = {
@@ -162,8 +181,29 @@ const EMPTY_SLASH_CONTROLLER: SlashCommandController = {
  * context-reading mount (see App.tsx) that supplies the shared controller.
  */
 
-// Floating (un-scrimmed) text gets a soft shadow so it reads over bright views.
-const FLOAT_SHADOW = "[text-shadow:0_1px_4px_rgba(0,0,0,0.7)]";
+// The chat floats over arbitrary app surfaces, including theme-app where
+// `--card` is brand orange. Keep the sheet's local tokens dark and self-owned so
+// open/maximized chat never turns into a transparent-looking orange overlay.
+const CHAT_PANEL_THEME = {
+  "--bg": "#120c08",
+  "--bg-hover": "rgba(255, 255, 255, 0.08)",
+  "--bg-muted": "rgba(255, 255, 255, 0.06)",
+  "--card": "#1d130c",
+  "--card-foreground": "#fff7f0",
+  "--surface": "rgba(255, 255, 255, 0.06)",
+  "--txt": "#fff7f0",
+  "--text": "#fff7f0",
+  "--text-strong": "#ffffff",
+  "--foreground": "#fff7f0",
+  "--muted": "rgba(255, 247, 240, 0.68)",
+  "--muted-strong": "rgba(255, 247, 240, 0.86)",
+  "--muted-foreground": "rgba(255, 247, 240, 0.68)",
+  "--border": "rgba(255, 255, 255, 0.18)",
+  "--border-strong": "rgba(255, 255, 255, 0.34)",
+  "--ring": "rgba(255, 247, 240, 0.8)",
+  "--accent": "#ff7a3d",
+  "--accent-foreground": "#120c08",
+} as React.CSSProperties;
 
 // Shared easing for the overlay's cheap motion path. Open/close must stay
 // opacity/translate only: animating blur/filter or scaling a scrollable
@@ -223,10 +263,8 @@ const MAXIMIZE_RESTORE_ZONE_VH = 0.2;
 // of resting free — so near-detent releases are deterministic + clean, and only
 // the clear gaps between detents keep the free-drag rest height.
 const SHEET_DETENT_MAGNET = 64;
-
-// Feature flag: the resting one-tap prompt-suggestion strip. Off for now so the
-// composer can be tested without it; flip to true to bring the strip back.
-const SHOW_PROMPT_SUGGESTIONS = false;
+const COMPOSER_TYPING_PAUSE_MS = 2_000;
+const COMPOSER_ACTIVITY_SURFACE = "continuous_chat_overlay";
 
 // A light iOS-style impact on each detent cross. Self-contained + guarded so it
 // is a no-op off-native (and in jsdom tests) without coupling the overlay to the
@@ -323,6 +361,7 @@ function SoftButton({
   onPointerLeave,
   disabled,
   active,
+  pulse,
   testId,
 }: {
   /** A hand-drawn SVG path glyph (legacy), OR pass `icon` for a lucide icon. */
@@ -336,6 +375,8 @@ function SoftButton({
   onPointerLeave?: React.PointerEventHandler<HTMLButtonElement>;
   disabled?: boolean;
   active?: boolean;
+  /** Breathe the accent glyph while a live capture is hot. */
+  pulse?: boolean;
   testId?: string;
 }): React.JSX.Element {
   return (
@@ -362,13 +403,18 @@ function SoftButton({
         // blue.
         "grid h-11 w-11 shrink-0 place-items-center bg-transparent p-0 transition-colors hover:bg-transparent",
         active ? "text-accent" : "text-muted-strong hover:text-txt",
+        // Pulse the accent glyph while capture is hot; reduced-motion falls back
+        // to the static accent without adding background or border chrome.
+        pulse && "animate-pulse motion-reduce:animate-none",
         disabled && "opacity-40",
       )}
     >
       {Icon ? (
         <Icon className="h-[26px] w-[26px]" aria-hidden={true} />
       ) : glyph ? (
-        <Glyph d={glyph} className="h-[30px] w-[30px]" />
+        // Hand-drawn glyphs fill their 36-unit box, so 24px balances their
+        // optical weight against the padded lucide mic/send marks.
+        <Glyph d={glyph} className="h-[24px] w-[24px]" />
       ) : null}
     </Button>
   );
@@ -385,7 +431,7 @@ function HeaderButton({
   disabled,
   testId,
 }: {
-  icon: typeof LayoutGrid;
+  icon: typeof Home;
   label: string;
   onClick: () => void;
   active?: boolean;
@@ -445,6 +491,7 @@ function SheetGrabber({
   glow,
   opacity,
   pilled,
+  inert,
 }: {
   open: boolean;
   onOpen: () => void;
@@ -458,14 +505,18 @@ function SheetGrabber({
   // Inert while pilled so the invisible grabber can't steal taps meant for the
   // pill capsule (or pass-through to the home screen) below it.
   pilled: boolean;
+  // Inert while collapsed attachment controls are visible; their tap targets sit
+  // in the same top edge zone the broad swipe handle normally owns.
+  inert?: boolean;
 }): React.JSX.Element {
+  const disabled = pilled || inert;
   return (
     <motion.button
-      style={{ opacity, pointerEvents: pilled ? "none" : "auto" }}
+      style={{ opacity, pointerEvents: disabled ? "none" : "auto" }}
       // Invisible + inert while pilled: the pill capsule below owns the drag, so
       // keep this out of the tab order and the a11y tree until it's the handle.
-      tabIndex={pilled ? -1 : undefined}
-      aria-hidden={pilled || undefined}
+      tabIndex={disabled ? -1 : undefined}
+      aria-hidden={disabled || undefined}
       // A disclosure toggle for the chat history, not a value-bearing separator:
       // button + aria-expanded is the accurate semantic and stays keyboard-
       // operable (Enter/Space toggle, Arrow keys nudge) per WCAG 2.1.1.
@@ -503,7 +554,6 @@ function SheetGrabber({
         // caught) and STOPS at the handle's own bottom, so it never overlaps the
         // interactive composer row beneath — taps fall through to the input.
         "before:absolute before:-inset-x-2 before:-top-6 before:bottom-0 before:content-['']",
-        "   ",
       )}
     >
       <span
@@ -579,7 +629,6 @@ function PillHandle({
         // let taps fall through to the composer textarea below it — otherwise its
         // tall hit zone steals the tap and the keyboard never opens.
         pilled ? "pointer-events-auto" : "pointer-events-none",
-        "   ",
       )}
     >
       <span
@@ -627,11 +676,11 @@ function TurnStatusIndicator({
       <div
         className={cn(
           "rounded-2xl rounded-bl-md border px-3.5 py-2",
-          FLOAT_SHADOW,
+          WALLPAPER_FLOAT_SHADOW,
           // Orange (the accent) ONLY for spoken replies; every other phase is
           // neutral white glass. No blue anywhere.
           // #10698: no own scrim — the shared panel glass carries the contrast;
-          // keep only the tone border (orange when speaking) + FLOAT_SHADOW.
+          // keep only the tone border (orange when speaking) + WALLPAPER_FLOAT_SHADOW.
           speaking ? "border-accent/45" : "border-border",
         )}
       >
@@ -641,123 +690,14 @@ function TurnStatusIndicator({
   );
 }
 
-// After this long WITHOUT OBSERVED PROGRESS still booting, the banner escalates
-// to a "taking longer than usual" state with a settings escape, so a truly
-// stuck boot never reads as a silent hang — but a slow-yet-progressing boot
-// does NOT trip it (#14040 sub-defect 3): the escalation keys off
-// absence-of-progress, not raw elapsed wall-clock. Exported for the unit test
-// (see the __-seam note below).
-export const BOOT_SLOW_AFTER_MS = 90_000;
-
-// Grace before the banner appears: a warm agent leaves the "booting" phase
-// within a frame, so only a real cold boot outlasts this and shows the banner
-// — no flash on a first paint / warm reconnect.
-const BOOT_BANNER_GRACE_MS = 600;
-
-/**
- * Cold-start boot feedback (resting, pre-send): an indeterminate spinner + live
- * "Waking …" label, escalating after {@link BOOT_SLOW_AFTER_MS} to a "taking
- * longer than usual" state with an Open-settings escape. The parent gates
- * mounting on {@link BOOT_BANNER_GRACE_MS} (see the render site).
- *
- * Exported (with BOOT_SLOW_AFTER_MS) only as a unit-test seam — not part of the
- * public overlay API; cf. `__renderThreadLineForParity`.
- */
-export function BootStatusIndicator({
-  agentName,
-  onOpenSettings,
-  reduce,
-  progressSignal,
-}: {
-  agentName: string;
-  onOpenSettings?: () => void;
-  reduce?: boolean;
-  /**
-   * A token that changes whenever fresh boot progress is observed (#14040
-   * sub-defect 3). The slow-boot escalation restarts its timer on each change,
-   * so a slow-but-progressing boot never trips "taking longer than usual" while
-   * a genuinely stalled boot still escalates. When `undefined` (no progress
-   * channel available) the timer falls back to raw-elapsed escalation — the
-   * prior behaviour — by keying off a stable token.
-   */
-  progressSignal?: string;
-}): React.JSX.Element {
-  // Escalate on ABSENCE of progress, not raw elapsed time (#14040 sub-defect
-  // 3): the timer is (re)armed on mount AND whenever `progressSignal` changes,
-  // so each fresh progress observation pushes the "taking longer than usual"
-  // threshold out by another window. A boot that keeps reporting progress never
-  // trips it; a stalled boot (token stable for BOOT_SLOW_AFTER_MS) still does.
-  // The parent unmounts this the instant readiness flips, so the timer never
-  // outlives the boot.
-  const [slow, setSlow] = React.useState(false);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: progressSignal is the RESET trigger, not read in the body — re-running the effect on each change restarts the escalation window (that IS the fix for #14040 sub-defect 3). Removing it would revert to raw-elapsed escalation.
-  React.useEffect(() => {
-    // Fresh progress clears any prior escalation and restarts the window.
-    setSlow(false);
-    const id = window.setTimeout(() => setSlow(true), BOOT_SLOW_AFTER_MS);
-    return () => window.clearTimeout(id);
-  }, [progressSignal]);
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      aria-atomic="true"
-      data-testid="chat-boot-status"
-      data-aesthetic-audit-ignore-text-density="true"
-      data-slow={slow ? "true" : undefined}
-      className="pointer-events-none relative mb-2 flex w-full justify-center"
-    >
-      <span
-        className={cn(
-          "inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 text-sm font-medium text-txt",
-          FLOAT_SHADOW,
-        )}
-      >
-        {slow ? (
-          <>
-            <RotateCcw
-              className={cn(
-                "h-3.5 w-3.5 text-accent",
-                reduce ? "" : "animate-spin [animation-duration:2.4s]",
-              )}
-              aria-hidden="true"
-            />
-            <span>{agentName} is taking longer than usual to wake…</span>
-            {onOpenSettings ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onOpenSettings}
-                data-testid="chat-boot-open-settings"
-                className="pointer-events-auto ml-1 h-auto rounded-full border border-border-strong bg-surface px-2 py-0.5 text-xs text-txt transition-colors hover:border-border-hover hover:bg-bg-hover"
-              >
-                Open settings
-              </Button>
-            ) : null}
-          </>
-        ) : (
-          <>
-            <Loader2
-              className={cn(
-                "h-3.5 w-3.5 text-accent",
-                reduce ? "" : "animate-spin",
-              )}
-              aria-hidden="true"
-            />
-            <span>Waking {agentName}…</span>
-          </>
-        )}
-      </span>
-    </div>
-  );
-}
-
 /**
  * Render a user turn's text, bolding a leading slash command so a sent
  * `/command` reads as a command in the transcript (mirroring the composer's
  * inline autocomplete). Plain prose renders unchanged.
  */
 function ThreadLineText({ content }: { content: string }): React.ReactNode {
+  const formSubmit = parseFormSubmitDisplay(content);
+  if (formSubmit) return <FormSubmitReceipt label={formSubmit.label} />;
   const slash = splitLeadingSlashCommand(content);
   if (!slash) return content;
   return (
@@ -799,7 +739,7 @@ function renderOverlayMessageBody(
       <div
         className={cn(
           "max-w-[85%] rounded-2xl rounded-bl-md border border-accent/30 bg-scrim px-3.5 py-3 text-txt",
-          FLOAT_SHADOW,
+          WALLPAPER_FLOAT_SHADOW,
         )}
       >
         <div className="mb-1 text-[14px] font-medium">
@@ -957,7 +897,6 @@ export function ContinuousChatOverlay({
   const {
     messages,
     phase,
-    bootProgressSignal,
     responding,
     turnStatus,
     send,
@@ -996,14 +935,22 @@ export function ContinuousChatOverlay({
   // it reaches the in-chat conductor (and never the server); post-onboarding it
   // is unused here (the composer sends via `controller.send`). In stories/tests
   // with no AppContext the store returns an inert no-op.
-  const { sendActionMessage, handleChatDelete } = useAppSelectorShallow(
-    (s) => ({
-      sendActionMessage: s.sendActionMessage,
-      // Persistent per-message delete (#13533): server DELETE + optimistic
-      // removal with rollback. Inert no-op in stories/tests with no AppContext.
-      handleChatDelete: s.handleChatDelete,
-    }),
-  );
+  const {
+    sendActionMessage,
+    handleChatDelete,
+    handleSelectConversation,
+    loadConversationMessagesAround,
+  } = useAppSelectorShallow((s) => ({
+    sendActionMessage: s.sendActionMessage,
+    // Persistent per-message delete (#13533): server DELETE + optimistic
+    // removal with rollback. Inert no-op in stories/tests with no AppContext.
+    handleChatDelete: s.handleChatDelete,
+    // Search-jump (#14279): select the hit's conversation, then (if the hit is
+    // older than the loaded recent window) load a window centered on it before
+    // scrolling. Inert no-ops in stories/tests with no AppContext.
+    handleSelectConversation: s.handleSelectConversation,
+    loadConversationMessagesAround: s.loadConversationMessagesAround,
+  }));
   // Defensive default so a minimal mock controller (stories/tests) that predates
   // the swipe-nav surface still renders without crashing.
   const conversationNav = controller.conversationNav ?? EMPTY_CONVERSATION_NAV;
@@ -1108,7 +1055,11 @@ export function ContinuousChatOverlay({
   // per-surface cooldown keeps the same offer from immediately re-appearing);
   // accept ("Do it") sends the implied action as a real turn through the SAME
   // send() path an edit-resend uses, then clears the bubble.
-  const { removeConversationMessage } = useConversationMessages();
+  const {
+    removeConversationMessage,
+    conversationMessages,
+    prependConversationMessages,
+  } = useConversationMessages();
   const handleDismissSuggestion = React.useCallback(
     (messageId: string) => {
       removeConversationMessage(messageId);
@@ -1146,6 +1097,8 @@ export function ContinuousChatOverlay({
     setChatInput: setDraft,
     chatPendingImages: pendingImages,
     setChatPendingImages: setPendingImages,
+    chatReplyTarget,
+    setChatReplyTarget,
   } = useChatComposerOrLocal();
   const activeConversationId = conversationNav.activeId;
   // Live handle to the draft for callbacks that must read the current text
@@ -1153,9 +1106,11 @@ export function ContinuousChatOverlay({
   const draftRef = React.useRef(draft);
   draftRef.current = draft;
   // Live handle to the active conversation id for the send path's draft clear,
-  // so submitText / pickSuggestion keep their stable identities.
+  // so submitText keeps its stable identity.
   const activeConversationIdRef = React.useRef(activeConversationId);
   activeConversationIdRef.current = activeConversationId;
+  const composerHadDraftRef = React.useRef(draft.trim().length > 0);
+  const composerPauseTimerRef = React.useRef<number | null>(null);
   // The active view can take over the composer: override the placeholder and
   // receive the live draft (e.g. Help uses the chat as its search box).
   const viewChatBinding = useViewChatBinding();
@@ -1248,6 +1203,23 @@ export function ContinuousChatOverlay({
   const delayedNavigationTimerRef = React.useRef<number | null>(null);
   const prefillFocusFrameRef = React.useRef<number | null>(null);
   const prefillFocusTimerRef = React.useRef<number | null>(null);
+  // A GPU-compositing hint scoped to an ACTIVE drag/settle only. While the
+  // finger drives the panel (`scale`/`flexBasis` change every frame) and while
+  // the release spring runs, we set `will-change: transform` on the panel (and
+  // suppress the thread's edge mask) so iOS Safari/WebKit promotes the morph to
+  // its own compositor layer up front — it then composites without a per-frame
+  // repaint of the frosted glass + content (the visible micro-stutter on the
+  // installed PWA). Deliberately NOT permanent: `will-change` keeps a promoted
+  // layer (and its memory) resident, so we drop it the instant the release
+  // spring settles. A ref mirrors it for the guarded setter so per-frame drag
+  // updates never cause a redundant re-render.
+  const [isDragging, setDragging] = React.useState(false);
+  const isDraggingRef = React.useRef(false);
+  const setDraggingState = React.useCallback((dragging: boolean) => {
+    if (isDraggingRef.current === dragging) return;
+    isDraggingRef.current = dragging;
+    setDragging(dragging);
+  }, []);
   const stopThreadAnimation = React.useCallback(() => {
     threadAnimationRef.current?.stop();
     threadAnimationRef.current = null;
@@ -1259,9 +1231,24 @@ export function ContinuousChatOverlay({
   const animateThreadHeight = React.useCallback(
     (target: number) => {
       stopThreadAnimation();
-      threadAnimationRef.current = animate(threadHeight, target, SHEET_SPRING);
+      const controls = animate(threadHeight, target, SHEET_SPRING);
+      threadAnimationRef.current = controls;
+      // Drop the drag-scoped GPU promotion only once the RELEASE spring has come
+      // to rest — clearing it on release itself would strip `will-change` mid
+      // settle-spring and repaint exactly when the panel is still moving. A stop
+      // (a new gesture interrupting) rejects `.finished`, so keep the layer for
+      // the incoming drag; only a clean finish drops it.
+      controls.finished
+        .then(() => {
+          if (!isDraggingRef.current) return;
+          if (draggingRef.current) return; // a new drag started meanwhile
+          setDraggingState(false);
+        })
+        .catch(() => {
+          // Interrupted by a fresh gesture (stop) — keep the promotion resident.
+        });
     },
-    [stopThreadAnimation, threadHeight],
+    [stopThreadAnimation, threadHeight, setDraggingState],
   );
   const animateOpenProgress = React.useCallback(
     (target: number) => {
@@ -1339,6 +1326,20 @@ export function ContinuousChatOverlay({
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const overlayRef = React.useRef<HTMLDivElement>(null);
   const panelRef = React.useRef<HTMLFieldSetElement>(null);
+  const [panelElement, setPanelElement] =
+    React.useState<HTMLFieldSetElement | null>(null);
+  const bindPanelRef = React.useCallback((node: HTMLFieldSetElement | null) => {
+    panelRef.current = node;
+    setPanelElement(node);
+  }, []);
+  const getPanelElement = React.useCallback(() => {
+    if (panelElement) return panelElement;
+    if (panelRef.current) return panelRef.current;
+    if (typeof document === "undefined") return null;
+    return document.querySelector<HTMLFieldSetElement>(
+      '[data-testid="chat-sheet"]',
+    );
+  }, [panelElement]);
   // The transcript's inner content wrapper — measured to size the onboarding
   // sheet to its content (grow-from-the-bottom) instead of a tall empty panel.
   const threadContentRef = React.useRef<HTMLDivElement>(null);
@@ -1372,7 +1373,7 @@ export function ContinuousChatOverlay({
     ) {
       return;
     }
-    const panel = panelRef.current;
+    const panel = getPanelElement();
     const root = document.documentElement;
     if (sheetOpen) return; // Keep the last resting value while the sheet is open.
     if (!panel) return;
@@ -1388,7 +1389,7 @@ export function ContinuousChatOverlay({
     const ro = new ResizeObserver(publish);
     ro.observe(panel);
     return () => ro.disconnect();
-  }, [sheetOpen]);
+  }, [sheetOpen, getPanelElement]);
   // The composer content (textarea + thread). Held so we can imperatively clear
   // its `inert` (set while pilled) the instant the pill is tapped open, before
   // React re-renders — iOS only raises the keyboard for a focus() that lands on
@@ -1408,12 +1409,28 @@ export function ContinuousChatOverlay({
   // after the user has moved on.
   const pendingExpandOnRevealRef = React.useRef(false);
   const focusThreadRef = React.useRef(false);
+  // The render window slides UP as the reader scrolls into history (#14329):
+  // it starts at MAX_RENDERED_SHELL_MESSAGES (lean idle/drag DOM) and grows a
+  // page per scroll-to-top — first revealing already-loaded turns, then paging
+  // older ones in — bounded by MAX_LOADED_SHELL_WINDOW so a long thread never
+  // unbounds the DOM. Reset when the active conversation changes (below).
+  const [renderWindowSize, setRenderWindowSize] = React.useState(
+    MAX_RENDERED_SHELL_MESSAGES,
+  );
   // Recomputed only when the thread or phase changes — NOT on every drag/draft
-  // re-render. Pure windowing (empty-turn filter + most-recent cap, with the
-  // streaming-assistant exception) lives in shell-state so it's unit-tested.
-  const visibleMessages = React.useMemo(
-    () => selectVisibleShellMessages(messages, phase),
+  // re-render. Pure windowing (empty-turn filter, with the streaming-assistant
+  // exception) lives in shell-state so it's unit-tested; the count of renderable
+  // turns drives the scroll-up reveal-before-fetch policy.
+  const renderableMessages = React.useMemo(
+    () => filterRenderableShellMessages(messages, phase),
     [messages, phase],
+  );
+  const visibleMessages = React.useMemo(
+    () =>
+      renderableMessages.length > renderWindowSize
+        ? renderableMessages.slice(-renderWindowSize)
+        : renderableMessages,
+    [renderableMessages, renderWindowSize],
   );
   const lastId = visibleMessages.at(-1)?.id ?? null;
   const lastContent = visibleMessages.at(-1)?.content ?? "";
@@ -1477,6 +1494,193 @@ export function ContinuousChatOverlay({
     () => deriveChannelTopics(visibleMessages),
     [visibleMessages],
   );
+
+  // ── Infinite upward scroll (#13532), wired into the overlay per #14279 ────
+  // The overlay is the primary mobile/PWA chat surface, but until now only the
+  // desktop ChatView wired load-older. Share the SAME scroller (`threadRef`,
+  // owned by useThreadAutoScroll for bottom-follow) plus a top sentinel so a
+  // scroll toward the oldest line seamlessly prepends an older page — with the
+  // reader's viewport anchored (no jump) by useLoadOlderOnScroll.
+  const topSentinelRef = React.useRef<HTMLDivElement>(null);
+  const [hasMoreOlder, setHasMoreOlder] = React.useState(true);
+  // The active id captured for the async load-older result, so a page fetched
+  // for the previous conversation can't prepend into (or re-arm paging for) the
+  // newly active one after a mid-flight switch.
+  const loadOlderConversationIdRef = React.useRef(activeConversationId);
+  loadOlderConversationIdRef.current = activeConversationId;
+  // Live copies for the scroll-up handler so its identity stays stable across
+  // window growth / message churn (the observer captures it through a ref).
+  const renderWindowSizeRef = React.useRef(renderWindowSize);
+  renderWindowSizeRef.current = renderWindowSize;
+  const renderableCountRef = React.useRef(renderableMessages.length);
+  renderableCountRef.current = renderableMessages.length;
+  const hasMoreOlderRef = React.useRef(hasMoreOlder);
+  hasMoreOlderRef.current = hasMoreOlder;
+  const loadOlderMessages = React.useCallback(async () => {
+    const conversationId = activeConversationId;
+    if (!conversationId) return;
+    // Reveal-before-fetch: grow the render window a page to surface
+    // already-loaded older turns before hitting the network. Only when the
+    // window has consumed every loaded turn do we page the next older server
+    // window (and grow to render it). Both grows go through the SAME
+    // scrollHeight-delta anchor in useLoadOlderOnScroll, so the reader stays put.
+    const plan = planScrollTopLoadOlder(
+      renderWindowSizeRef.current,
+      renderableCountRef.current,
+      hasMoreOlderRef.current,
+    );
+    if (plan.nextWindowSize !== renderWindowSizeRef.current) {
+      setRenderWindowSize(plan.nextWindowSize);
+    }
+    if (!plan.shouldFetch) return;
+    const result = await loadOlderConversationMessages({
+      client,
+      conversationId,
+      currentMessages: conversationMessages,
+      prependMessages: (older) => {
+        if (loadOlderConversationIdRef.current === conversationId) {
+          prependConversationMessages(older);
+        }
+      },
+    });
+    if (loadOlderConversationIdRef.current === conversationId) {
+      setHasMoreOlder(result.hasMore);
+      if (result.prependedCount > 0) {
+        setRenderWindowSize((n) =>
+          Math.min(n + result.prependedCount, MAX_LOADED_SHELL_WINDOW),
+        );
+      }
+    }
+  }, [activeConversationId, conversationMessages, prependConversationMessages]);
+  // A fresh/switched conversation may have older history — re-arm the loader and
+  // collapse the render window back to the lean initial size.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: activeConversationId is the intentional re-arm trigger; the body only calls stable setters.
+  React.useEffect(() => {
+    setHasMoreOlder(true);
+    setRenderWindowSize(MAX_RENDERED_SHELL_MESSAGES);
+  }, [activeConversationId]);
+  useLoadOlderOnScroll<HTMLDivElement>({
+    scrollRef: threadRef,
+    sentinelRef: topSentinelRef,
+    onLoadOlder: loadOlderMessages,
+    // Topic grouping wraps rows in collapsible segments, which breaks the
+    // sentinel's flat-prepend anchor math; restrict load-older to the flat
+    // transcript (the common case). A topic-grouped thread still shows its
+    // recent window; scroll-up paging there is a follow-up. The observer stays
+    // armed while older turns can still be revealed (window below the loaded
+    // count) OR paged (server has more), and latches off at the DOM bound.
+    hasMore:
+      !hasTopics &&
+      renderWindowSize < MAX_LOADED_SHELL_WINDOW &&
+      (renderWindowSize < renderableMessages.length || hasMoreOlder),
+    topItemKey: visibleMessages[0]?.id ?? "",
+    enabled: threadPresented && !hasTopics,
+  });
+
+  // ── Message search across previous chats (#9955, wired into the overlay per
+  //    #14279) ─────────────────────────────────────────────────────────
+  // A quiet search entry point in the sheet header opens the shared
+  // MessageSearchPanel. Search runs against the server keyword endpoint (ranked
+  // by relevance then recency — already smarter than a naive substring scan);
+  // a hit jumps to its conversation + message, loading a centered window if the
+  // hit predates the loaded recent window, then scroll-flashes the anchor.
+  const [searchOpen, setSearchOpen] = React.useState(false);
+  const openSearch = React.useCallback(() => {
+    // Grow the sheet to FULL when search opens so the results region has the
+    // most room above a raised keyboard (the panel bottom-anchors its input
+    // right above the keyboard; the taller the sheet, the more results are
+    // visible in the space above it). The header — hence the search control —
+    // only exists at half+, so this only ever grows the sheet, never shrinks it.
+    setFreeH(null);
+    setMode("full");
+    setSearchOpen(true);
+  }, []);
+  const closeSearch = React.useCallback(() => setSearchOpen(false), []);
+  // Collapse search when the sheet closes so a re-open lands on the transcript.
+  React.useEffect(() => {
+    if (!sheetOpen) setSearchOpen(false);
+  }, [sheetOpen]);
+  const runMessageSearch = React.useCallback(
+    async (query: string, signal: AbortSignal) => {
+      const { results } = await client.searchConversationMessages(query, {
+        signal,
+      });
+      return results;
+    },
+    [],
+  );
+  // Poll a bounded number of frames for the anchor to mount (the thread
+  // re-renders asynchronously after a selection / window load), then resolve it
+  // or null once the frame budget is spent.
+  const waitForSearchAnchor = React.useCallback(
+    (anchorId: string, maxFrames: number): Promise<HTMLElement | null> =>
+      new Promise((resolve) => {
+        if (typeof requestAnimationFrame === "undefined") {
+          resolve(document.getElementById(anchorId));
+          return;
+        }
+        let frames = 0;
+        const step = () => {
+          const el = document.getElementById(anchorId);
+          if (el) {
+            resolve(el);
+            return;
+          }
+          if (frames++ < maxFrames) {
+            requestAnimationFrame(step);
+            return;
+          }
+          resolve(null);
+        };
+        requestAnimationFrame(step);
+      }),
+    [],
+  );
+  const scrollAndFlashSearchAnchor = React.useCallback((el: HTMLElement) => {
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.style.transition = "outline-color 0.5s ease-out";
+    el.style.outline = "2px solid var(--primary)";
+    el.style.outlineOffset = "2px";
+    el.style.borderRadius = "8px";
+    window.setTimeout(() => {
+      el.style.outline = "2px solid transparent";
+    }, 1200);
+    window.setTimeout(() => {
+      el.style.removeProperty("outline");
+      el.style.removeProperty("outline-offset");
+      el.style.removeProperty("transition");
+    }, 1800);
+  }, []);
+  const handleSearchJump = React.useCallback(
+    (result: ConversationMessageSearchResult) => {
+      const anchorId = getChatMessageAnchorId(result.messageId);
+      void (async () => {
+        // Select the hit's conversation and let its recent window load first, so
+        // the in-window case (the common one) scrolls without a second fetch.
+        await handleSelectConversation(result.conversationId);
+        let el = await waitForSearchAnchor(anchorId, 20);
+        if (!el) {
+          // The hit predates the loaded recent window: load a window CENTERED on
+          // it, let the thread re-render, then scroll.
+          const loaded = await loadConversationMessagesAround(
+            result.conversationId,
+            result.messageId,
+          );
+          if (loaded) {
+            el = await waitForSearchAnchor(anchorId, 20);
+          }
+        }
+        if (el) scrollAndFlashSearchAnchor(el);
+      })();
+    },
+    [
+      handleSelectConversation,
+      loadConversationMessagesAround,
+      waitForSearchAnchor,
+      scrollAndFlashSearchAnchor,
+    ],
+  );
+
   const [collapsedTopics, setCollapsedTopics] = React.useState<
     ReadonlySet<string>
   >(() => new Set<string>());
@@ -1519,6 +1723,18 @@ export function ContinuousChatOverlay({
       renderOverlayMessageBody(m, ctx, openSettings),
     [openSettings],
   );
+  // Reply arms the shared composer reply target so the next send() stamps
+  // replyToMessageId (attached at the sendChatText chokepoint → REPLY_CONTEXT)
+  // and the pill renders above the input. Opens the sheet so the reply is typed
+  // against the visible thread, not the bare collapsed bar.
+  const handleReplyMessage = React.useCallback(
+    (message: ChatMessageData) => {
+      setChatReplyTarget(buildReplyTargetFromMessage(message, agentName));
+      setMode((m) => (m === "half" || m === "full" ? m : "half"));
+      inputRef.current?.focus();
+    },
+    [setChatReplyTarget, agentName],
+  );
   // Render one transcript line as the canonical ChatMessage (glass chrome);
   // shared by the flat and topic-grouped paths so the in-flight-turn detection
   // stays identical.
@@ -1539,7 +1755,8 @@ export function ContinuousChatOverlay({
       return (
         <ChatMessage
           key={m.id}
-          appearance="glass"
+          appearance={firstRunOpen ? "panel" : "glass"}
+          agentName={agentName}
           message={shellToChatMessageData(m)}
           reduceMotion={reduce}
           onCopy={handleCopyMessage}
@@ -1547,6 +1764,7 @@ export function ContinuousChatOverlay({
           onSpeak={handleSpeakMessage}
           onEdit={handleEditResend}
           onDelete={handleDeleteMessage}
+          onReply={handleReplyMessage}
           onRetry={handleRetry}
           playing={speaking && playingMessageId === m.id}
           renderContent={renderRowBody}
@@ -1558,12 +1776,15 @@ export function ContinuousChatOverlay({
     },
     [
       visibleMessages.length,
+      firstRunOpen,
+      agentName,
       reduce,
       handleCopyMessage,
       handleLongPressCopy,
       handleSpeakMessage,
       handleEditResend,
       handleDeleteMessage,
+      handleReplyMessage,
       handleRetry,
       speaking,
       playingMessageId,
@@ -1579,47 +1800,45 @@ export function ContinuousChatOverlay({
   const listening = phase === "listening";
   const hasDraft = draft.trim().length > 0;
   const hasImages = pendingImages.length > 0;
-
-  // `booting` (= `phase === "booting"`) is true whenever the agent isn't ready
-  // YET — including first paint before the status fetch resolves, even for a
-  // warm agent. So require it to hold past BOOT_BANNER_GRACE_MS before showing
-  // the banner: a warm agent flips ready within a frame and never crosses it.
-  const [showBootBanner, setShowBootBanner] = React.useState(false);
   React.useEffect(() => {
-    if (!booting) {
-      setShowBootBanner(false);
+    const draftLength = draft.trim().length;
+    if (composerPauseTimerRef.current !== null) {
+      window.clearTimeout(composerPauseTimerRef.current);
+      composerPauseTimerRef.current = null;
+    }
+    if (draftLength === 0) {
+      composerHadDraftRef.current = false;
       return;
     }
-    const id = window.setTimeout(
-      () => setShowBootBanner(true),
-      BOOT_BANNER_GRACE_MS,
-    );
-    return () => window.clearTimeout(id);
-  }, [booting]);
-
-  // The suggestion strip is a keyboard-style row of one-tap prompts shown in the
-  // RESTING (closed) state — ready, nothing typed or attached, not recording. It
-  // unmounts once the sheet opens or a draft starts; this condition also gates
-  // the small-model fetch so it isn't called for a hidden strip.
-  const suggestionsVisible =
-    SHOW_PROMPT_SUGGESTIONS &&
-    !pilled &&
-    !sheetOpen &&
-    !recording &&
-    !booting &&
-    canSend &&
-    !hasDraft &&
-    !hasImages;
-
-  // Three tailored prompt suggestions for the resting overlay (model-backed via
-  // TEXT_SMALL, with a static offline fallback).
-  const suggestions = usePromptSuggestions(messages, {
-    enabled: suggestionsVisible,
-  });
+    if (!composerHadDraftRef.current) {
+      reportComposerActivity({
+        activity: "typing_started",
+        surface: COMPOSER_ACTIVITY_SURFACE,
+        conversationId: activeConversationId,
+        draftLength,
+      });
+      composerHadDraftRef.current = true;
+    }
+    composerPauseTimerRef.current = window.setTimeout(() => {
+      reportComposerActivity({
+        activity: "typing_paused",
+        surface: COMPOSER_ACTIVITY_SURFACE,
+        conversationId: activeConversationIdRef.current,
+        draftLength: draftRef.current.trim().length,
+        idleForMs: COMPOSER_TYPING_PAUSE_MS,
+      });
+      composerPauseTimerRef.current = null;
+    }, COMPOSER_TYPING_PAUSE_MS);
+    return () => {
+      if (composerPauseTimerRef.current !== null) {
+        window.clearTimeout(composerPauseTimerRef.current);
+        composerPauseTimerRef.current = null;
+      }
+    };
+  }, [activeConversationId, draft]);
 
   // Send `text` (and optional images) through the normal chat pipeline, clearing
-  // the composer. Shared by the send button, the slash menu (agent commands),
-  // and suggestion taps.
+  // the composer. Shared by the send button and the slash menu (agent commands).
   const submitText = React.useCallback(
     (text: string, images: ImageAttachment[] = []) => {
       const trimmed = text.trim();
@@ -1713,23 +1932,6 @@ export function ContinuousChatOverlay({
       setPendingImages,
       viewChatBinding,
     ],
-  );
-
-  // Tapping a suggestion sends it immediately (same path as submit), so the
-  // strip is a one-tap shortcut, not just a draft pre-fill.
-  const pickSuggestion = React.useCallback(
-    (text: string) => {
-      if (!canSend) return;
-      setDraft("");
-      clearChatDraft(activeConversationIdRef.current);
-      send(text);
-      // Open to HALF (conversation above the keyboard), not a full-screen jump.
-      setFreeH(null);
-      setMode((m) => (m === "half" || m === "full" ? m : "half"));
-      detentHaptic();
-      inputRef.current?.focus();
-    },
-    [canSend, send, setDraft],
   );
 
   const addImageFiles = React.useCallback(
@@ -2034,6 +2236,43 @@ export function ContinuousChatOverlay({
     !responding &&
     !firstRunOpen;
 
+  // In short landscape the resting composer moves to the bottom inline-end
+  // corner. Publish that footprint separately from bottom clearance so hosted
+  // app/plugin views can keep right-edge content out from under the corner bar.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const root = document.documentElement;
+    const reset = () => {
+      root.style.setProperty("--eliza-continuous-chat-side-clearance", "0px");
+    };
+    if (!compactLanding) {
+      reset();
+      return;
+    }
+    const panel = getPanelElement();
+    if (!panel) {
+      reset();
+      return;
+    }
+    const publish = () => {
+      const width = panel.getBoundingClientRect().width;
+      root.style.setProperty(
+        "--eliza-continuous-chat-side-clearance",
+        width > 0 ? `${Math.ceil(width + 24)}px` : "0px",
+      );
+    };
+    publish();
+    if (typeof ResizeObserver === "undefined") {
+      return () => reset();
+    }
+    const ro = new ResizeObserver(publish);
+    ro.observe(panel);
+    return () => {
+      ro.disconnect();
+      reset();
+    };
+  }, [compactLanding, getPanelElement]);
+
   // Top clearance + max height come from the pure, unit-tested layout solver.
   // It reserves the real measured notch inset (`safeAreaTop`) above the panel,
   // and — critically — subtracts any keyboard lift the visual viewport did NOT
@@ -2129,9 +2368,6 @@ export function ContinuousChatOverlay({
   // flips back the instant the thread opens.
   const scrimVisibility = useTransform(threadHeight, (h) =>
     h > 0 ? "visible" : "hidden",
-  );
-  const suggestionsOpacity = useTransform(threadHeight, (h) =>
-    Math.max(0, 1 - h / Math.max(1, openH * 0.5)),
   );
   const threadFlexBasis = useTransform(threadHeight, (h) => `${h}px`);
   // Corner radius tracks the live height with real pixel radii. `9999px` works
@@ -2395,12 +2631,13 @@ export function ContinuousChatOverlay({
   );
 
   // First-run onboarding pin + release. While onboarding is active the sheet
-  // stays pinned FULL — the seeded greeting/choices must be visible and the
-  // chat undismissable (every collapse path below is also gated on
-  // `firstRunOpen`). On the FALLING edge — onboarding just completed — auto-
-  // collapse to the input bar so the home screen underneath is revealed.
-  // Edge-detected via a ref so an ordinary session (onboarding never active)
-  // never triggers the collapse.
+  // stays pinned FULL — a true full-screen chat (the seeded greeting/choices
+  // own the screen and the chat is undismissable; every collapse path below is
+  // also gated on `firstRunOpen`). On the FALLING edge — onboarding just
+  // completed — settle to the HALF detent: the sheet springs full → half in
+  // step with the opaque backdrop fade, so the home screen is revealed behind
+  // the top half while the conversation stays in hand. Edge-detected via a ref
+  // so an ordinary session (onboarding never active) never triggers it.
   const wasFirstRunOpenRef = React.useRef(firstRunOpen);
   React.useEffect(() => {
     const was = wasFirstRunOpenRef.current;
@@ -2409,7 +2646,7 @@ export function ContinuousChatOverlay({
       setMode("full");
       return;
     }
-    if (was) goToDetent("collapsed");
+    if (was) goToDetent("half");
   }, [firstRunOpen, goToDetent]);
 
   // First-run opaque backdrop (#12178). While onboarding pins the sheet FULL,
@@ -2431,32 +2668,6 @@ export function ContinuousChatOverlay({
       prev === "opaque" ? (reduce ? "off" : "revealing") : prev,
     );
   }, [firstRunOpen, reduce]);
-
-  // Onboarding grows from the BOTTOM: size the sheet to its content (capped at
-  // full) via the freeH rest-height seam, so the greeting + choice widget sit
-  // just above the composer instead of floating under a tall empty panel. Drags
-  // are gated while onboarding, so nothing fights freeH; on completion
-  // goToDetent("collapsed") clears it and collapses smoothly. `data-detent`
-  // still reports "full" (the pinned-open contract) even when visually shorter.
-  // jsdom has no layout (offsetHeight 0), so this no-ops there — the unit tests
-  // keep the full-height pin.
-  React.useLayoutEffect(() => {
-    if (!firstRunOpen || typeof ResizeObserver === "undefined") return;
-    const content = threadContentRef.current;
-    if (!content) return;
-    const measure = () => {
-      const h = content.offsetHeight;
-      if (h <= 0) return; // not laid out (jsdom) — leave the full-height pin
-      const next = Math.min(h + 28, panelMaxH);
-      setFreeH((prev) =>
-        prev != null && Math.abs(prev - next) < 2 ? prev : next,
-      );
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(content);
-    return () => ro.disconnect();
-  }, [firstRunOpen, panelMaxH]);
 
   const openFromGrabber = React.useCallback(() => {
     if (hasRevealableThread) {
@@ -3208,6 +3419,12 @@ export function ContinuousChatOverlay({
         maxPullRawRef.current = 0;
       }
       draggingRef.current = true;
+      // Promote the panel + thread to their own GPU layer for the duration of
+      // the drag (dropped on settle) so the live morph composites instead of
+      // repainting per frame on iOS Safari. Skipped under reduced-motion: there
+      // is no settle spring to composite, and the async clear below only runs on
+      // the animated release path.
+      if (!reduce) setDraggingState(true);
       // PILL drag: map the upward travel to the pill→input morph (openProgress).
       // The thread stays at 0 until the input is fully formed; only the EXCESS
       // past PILL_OPEN_DISTANCE flows into the thread height, so a single
@@ -3263,6 +3480,8 @@ export function ContinuousChatOverlay({
       clampHeight,
       threadHeight,
       openProgress,
+      reduce,
+      setDraggingState,
       stopThreadAnimation,
       stopOpenProgressAnimation,
       setDragPreviewMounted,
@@ -3558,29 +3777,42 @@ export function ContinuousChatOverlay({
       // chat low without touching that zone.
       style={{
         zIndex: Z_SHELL_OVERLAY,
-        bottom: effectiveKeyboardInset,
+        // RECLAIM THE DEAD BAND UNDER THE HOME COMPOSER (device r36): at rest the
+        // overlay is anchored `bottom: 0`, but on the installed iOS Safari
+        // standalone PWA a `position: fixed` descendant of the `position: fixed`
+        // body takes the LAYOUT (small, ~873px) viewport as its containing block
+        // — ~59px short of the physical bottom (100lvh ~932px) — so `bottom: 0`
+        // floated the composer ~59px UP over a dead band down to the home
+        // indicator. Drop it by the lvh−dvh collapse delta so it seats at the
+        // TRUE physical bottom. `max(0px, 100lvh - 100dvh)` is 0 on every
+        // viewport where the two agree (desktop, Android, non-collapsed), so
+        // this is a no-op except on the exact iOS-standalone geometry that
+        // collapses. When the keyboard is up the visual viewport shrinks and
+        // `effectiveKeyboardInset` drives the lift instead — no delta applied —
+        // so the keyboard-lift math (contract-tested) is untouched.
+        bottom: keyboardLiftActive
+          ? effectiveKeyboardInset
+          : "calc(-1 * max(0px, 100lvh - 100dvh))",
         // Full-bleed fills the screen edge-to-edge: NO overlay bottom padding,
         // so the glass panel reaches the true bottom (no orange gap). The
         // gesture-zone clearance moves INSIDE the composer row (below) so the
         // input still sits above the home-gesture bar. Non-full-bleed anchors
-        // the composer LOW, lock-screen style. The OS reports a ~34px bottom
-        // safe-area on a home-indicator phone, but the indicator itself is a
-        // thin (~5px) bar whose TOP edge sits only ~13px off the true bottom
-        // (5px bar + ~8px own margin) — clearing the WHOLE safe-area floats
-        // the pill ~34px up over a dead band, and 60% (device round: still
-        // reads too high) leaves it hovering ~20px up. So clear exactly what
-        // the indicator occupies: 40% of the reported inset (34px * 0.4 ≈
-        // 13.6px — the pill seats right on the indicator's top edge without
-        // ever overlapping the bar or the OS gesture zone), with a 0.5rem
-        // floor so a device with NO inset still keeps a hair of breathing
-        // room. The same factor holds for Android gesture pills (their inset
-        // reports similarly padded). Everything below the composer is the
-        // full-bleed wallpaper / app floor — no cosmetic strip repaints it.
+        // the composer LOW, lock-screen style, CLEARING the home indicator: now
+        // that the overlay itself seats at the TRUE physical bottom (the `bottom`
+        // reclaim above), the resting padding must clear the WHOLE home-indicator
+        // safe area (env(safe-area-inset-bottom) ~34px) plus a small gap, so the
+        // composer rests ~42–46px off the physical edge — above the indicator,
+        // not floating in a dead band above it. (Previously this multiplied the
+        // inset by 0.4 to sit the pill ~13px up; that tuning was compensating
+        // for the collapsed-ICB float — with the overlay now correctly at the
+        // true bottom, the full inset + gap is the right, native-app clearance.)
+        // The same holds for Android gesture pills. Everything below the composer
+        // is the full-bleed wallpaper / app floor — no cosmetic strip repaints it.
         paddingBottom: fullBleed
           ? 0
           : keyboardLiftActive
             ? "0.75rem"
-            : "calc(var(--eliza-mobile-nav-offset, 0px) + max(max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)) * 0.4, 0.5rem))",
+            : "calc(var(--eliza-mobile-nav-offset, 0px) + max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)) + 0.625rem)",
       }}
       data-testid="continuous-chat-overlay"
       data-open={sheetOpen ? "true" : undefined}
@@ -3675,8 +3907,7 @@ export function ContinuousChatOverlay({
             className={cn(
               "pointer-events-auto h-auto gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
               "border-warn/40 bg-warn/15 text-warn hover:bg-warn/25",
-              "  ",
-              FLOAT_SHADOW,
+              WALLPAPER_FLOAT_SHADOW,
             )}
           >
             <Glyph d={SPEAKER_MUTED_GLYPH} />
@@ -3688,59 +3919,10 @@ export function ContinuousChatOverlay({
       {/* Local model download/load status renders as the home-grid
           model-download widget only — no floating pill above the composer (the
           double status read as clutter). Send stays ungated; the server holds
-          the turn until the model is ready. */}
-
-      {/* Cold-start boot feedback — sibling of the model-download banner above.
-          See BootStatusIndicator; `showBootBanner` is the grace-gated flag.
-          Suppressed once we know no provider is configured: the agent will NEVER
-          become ready, so "Waking …" would spin forever — the in-transcript
-          no-provider gate is the honest error surface instead. Also suppressed
-          for the whole of onboarding (#13377): the conductor owns every word on
-          that screen, and a floating "Waking …" chip above the sign-in chat
-          read as clutter. */}
-      {showBootBanner && !noProviderConfigured && !firstRunOpen ? (
-        <BootStatusIndicator
-          agentName={agentName}
-          onOpenSettings={openSettings}
-          reduce={reduce}
-          progressSignal={bootProgressSignal}
-        />
-      ) : null}
-
-      {/* Three tailored prompt suggestions — a keyboard-style strip shown in the
-          resting (closed) state when nothing is typed. Tapping one sends it
-          immediately, which also pulls the chat sheet up. `order: -1` floats the
-          strip ABOVE the chat sheet (sheet-below-bubbles layout); the strip fades
-          out as the sheet is dragged up so the unmount on open never pops. */}
-      {suggestionsVisible ? (
-        <motion.fieldset
-          aria-label="Suggested prompts"
-          className={cn(
-            "pointer-events-auto relative m-0 mb-2 flex w-full max-w-3xl flex-wrap items-center justify-center gap-2 border-0 p-0",
-          )}
-          style={{ order: -1, opacity: suggestionsOpacity }}
-          data-testid="chat-suggestions"
-        >
-          {suggestions.map((s, i) => (
-            <Button
-              key={s}
-              variant="ghost"
-              size="sm"
-              data-testid={`chat-suggestion-${i}`}
-              aria-label={s}
-              onClick={() => pickSuggestion(s)}
-              className={cn(
-                "h-auto max-w-full truncate rounded-full border border-white/15 bg-black/40 px-3 py-1.5",
-                "text-[12px] text-white/80 transition-colors",
-                "hover:border-white/30 hover:bg-white/15 hover:text-white",
-                "  ",
-              )}
-            >
-              {s}
-            </Button>
-          ))}
-        </motion.fieldset>
-      ) : null}
+          the turn until the model is ready. Boot status likewise has NO
+          floating surface: a stalled boot speaks in the transcript via the
+          boot-recovery conductor (use-boot-recovery-conductor.ts), and the
+          in-transcript no-provider gate covers the unconfigured state. */}
 
       {/* THE chat — one connected object. Its base is the always-present input;
           the conversation grows UP out of it on a pull, inside this same panel.
@@ -3771,10 +3953,11 @@ export function ContinuousChatOverlay({
             glow={listening || responding}
             opacity={grabberOpacity}
             pilled={pilled}
+            inert={!sheetOpen && (hasImages || Boolean(imageError))}
           />
         ) : null}
         <motion.fieldset
-          ref={panelRef}
+          ref={bindPanelRef}
           aria-label="Chat composer"
           data-testid="chat-sheet"
           data-variant={sheetOpen ? "open" : "closed"}
@@ -3794,6 +3977,7 @@ export function ContinuousChatOverlay({
           // openProgress, so pill → input is a continuous scale + crossfade.
           // maxHeight keeps it from spilling off the top (thread scrolls instead).
           style={{
+            ...CHAT_PANEL_THEME,
             maxHeight: panelMaxH,
             // Full-bleed must be exactly scale 1 — a sub-1 morph scale with a
             // bottom transform-origin would drop the top edge below the status
@@ -3801,6 +3985,16 @@ export function ContinuousChatOverlay({
             scale: fullBleed ? 1 : panelScale,
             // Grow UP out of the pill at the bottom.
             transformOrigin: "bottom center",
+            // GPU-promote the panel ONLY while a drag/settle is live (#swipe-
+            // smoothness). The morph animates `scale` (a transform) here and the
+            // thread animates its `flexBasis` below; hinting `will-change:
+            // transform` for the duration of the gesture lets WebKit/iOS Safari
+            // rasterize the panel onto its own compositor layer up front, so the
+            // finger-tracked morph and the release spring composite without
+            // repainting the frosted glass each frame (the installed-PWA
+            // micro-stutter). Dropped on settle — a permanent hint keeps the
+            // layer (and its memory) resident for no benefit at rest.
+            willChange: isDragging ? "transform" : undefined,
             // Pilled: span the (invisible) input area but pass taps through to the
             // home screen — only the pill-capsule child re-enables pointer events.
             pointerEvents: pilled ? "none" : "auto",
@@ -3843,15 +4037,9 @@ export function ContinuousChatOverlay({
               // #9141 battery gate) is needed anymore since the fill is opaque; a
               // faint top-sheen gradient (backgroundImage below) still reads as
               // glass. The collapsed pill stays chrome-free via glassOpacity fade.
-              // Use `--card` (defined in BOTH themes: the ember `--surface-1`
-              // in dark, the warm off-white in light) rather than `--surface-1`
-              // directly — `--surface-1` is only declared under `.dark`, so an
-              // inline `var(--surface-1)` would compute to transparent in light
-              // mode and re-open the very see-through panel this fixes. The
-              // fallback keeps it opaque even if a theme ever drops `--card`.
-              backgroundColor: fullBleed
-                ? "var(--bg)"
-                : "var(--card, var(--surface-1))",
+              // `--card` / `--bg` are scoped by CHAT_PANEL_THEME on the fieldset,
+              // not inherited from the orange app theme behind the overlay.
+              backgroundColor: fullBleed ? "var(--bg)" : "var(--card)",
               backgroundImage:
                 "linear-gradient(180deg, var(--surface) 0%, transparent 24%)",
               // Full-bleed: extend the glass UP through the safe-area-top so the
@@ -3972,10 +4160,9 @@ export function ContinuousChatOverlay({
             {/* Sheet header — shown at the HALF detent and up (not just FULL).
               One infinite thread (#13531): no maximize/minimize (that's a
               vertical pull now) and no clear/new-chat (the thread never resets).
-              Right: one Launcher/Home launcher. Settings lives inside the
-              Launcher grid, so the chat header stops acting like a second app
-              nav bar. The left slot is intentionally empty so the launcher
-              stays anchored right. */}
+              Left: search only. Right: one Home button back to the launcher.
+              Settings lives inside the Launcher grid, so the chat header stops
+              acting like a second app nav bar. */}
             {threadPresented ? (
               <motion.div
                 // Mounted while the sheet is open, or while an upward drag is
@@ -4007,9 +4194,21 @@ export function ContinuousChatOverlay({
                   "relative z-20 flex shrink-0 items-center justify-between gap-1.5 overflow-hidden px-3",
                 )}
               >
-                {/* Empty left slot: keeps the launcher pinned to the right now
-                    that maximize/clear were removed (#13531). */}
-                <div className="flex items-center gap-1.5" />
+                {/* Left cluster: search is the ONLY left control. The thread is
+                    one infinite conversation — there is deliberately no
+                    new-chat/refresh button (scroll-up pages older turns, search
+                    jumps anywhere). Locked while onboarding pins the sheet so
+                    the chat stays front and center. */}
+                <div className="flex items-center gap-1.5">
+                  <HeaderButton
+                    icon={Search}
+                    label="search messages"
+                    active={searchOpen}
+                    disabled={firstRunOpen}
+                    onClick={() => (searchOpen ? closeSearch() : openSearch())}
+                    testId="chat-full-search"
+                  />
+                </div>
                 {transcriptionMode ? (
                   <div
                     data-testid="chat-transcribing-badge"
@@ -4019,9 +4218,25 @@ export function ContinuousChatOverlay({
                   </div>
                 ) : null}
                 <div className="flex items-center gap-1.5">
+                  {/* Voice on/off: the top-bar master control for bidirectional
+                      voice. Same semantics as a composer-mic tap (hands-free
+                      conversation on/off; ends transcription when live), so
+                      there is exactly ONE voice state machine. */}
                   <HeaderButton
-                    icon={LayoutGrid}
-                    label="launcher"
+                    icon={Mic}
+                    label={
+                      handsFree || recording || transcriptionMode
+                        ? "turn voice off"
+                        : "turn voice on"
+                    }
+                    active={handsFree || recording || transcriptionMode}
+                    disabled={firstRunOpen}
+                    onClick={handleMicClick}
+                    testId="chat-full-voice"
+                  />
+                  <HeaderButton
+                    icon={Home}
+                    label="home"
                     // A close-and-navigate control — locked while onboarding
                     // pins the sheet (the chat must stay front and center).
                     disabled={firstRunOpen}
@@ -4055,8 +4270,16 @@ export function ContinuousChatOverlay({
                   "relative z-10 flex min-h-0 w-full shrink grow-0 flex-col overflow-hidden",
                   // When open, fade the top edge into the glass so the topmost
                   // message dissolves under the drag handle instead of butting
-                  // against it.
+                  // against it. SUPPRESSED during an active drag (#swipe-
+                  // smoothness): a CSS mask on the thread forces its scrolling
+                  // subtree off WebKit's fast compositing path, so while the
+                  // flex-basis is changing every frame the masked layer
+                  // re-rasterizes per frame (the visible edge stutter on the
+                  // installed iOS PWA). The grabber floats over the moving top
+                  // edge during the pull anyway; the fade only reads at rest, so
+                  // restore it the moment the gesture settles.
                   threadPresented &&
+                    !isDragging &&
                     "[mask-image:linear-gradient(to_bottom,transparent_0,#000_34px)] [-webkit-mask-image:linear-gradient(to_bottom,transparent_0,#000_34px)]",
                 )}
                 // Flex-basis IS the motion value (px string) — set 1:1 during a drag,
@@ -4071,6 +4294,35 @@ export function ContinuousChatOverlay({
                   paddingTop: threadGrabberClearance,
                 }}
               >
+                {/* Message search (#14279): an in-sheet panel that covers the
+                    transcript while open. Selecting a hit closes it and jumps
+                    (handleSearchJump). Only reachable via the header control,
+                    which itself only exists at half+; gate on sheetOpen so the
+                    panel never intrudes on the resting composer. */}
+                {searchOpen && sheetOpen ? (
+                  <div
+                    data-testid="chat-message-search"
+                    data-keyboard-open={keyboardLiftActive ? "true" : undefined}
+                    // Bottom-anchored, NON-scrolling flex column. The panel
+                    // itself owns scrolling in its results region and pins its
+                    // search input to the bottom (`keyboard-anchored` layout),
+                    // so the input the user types into always sits right above
+                    // a raised soft keyboard — the whole overlay is already
+                    // lifted by `effectiveKeyboardInset`, so the panel bottom IS
+                    // the top of the keyboard. Making THIS wrapper scroll (the
+                    // old `overflow-y-auto`) let the input scroll away under the
+                    // keyboard on iOS; keep it `overflow-hidden` and let the
+                    // inner results list be the only scroll region.
+                    className="absolute inset-0 z-30 flex flex-col overflow-hidden bg-scrim px-4 pb-3 pt-2 backdrop-blur-xl"
+                  >
+                    <MessageSearchPanel
+                      search={runMessageSearch}
+                      onJump={handleSearchJump}
+                      onClose={closeSearch}
+                      layout="keyboard-anchored"
+                    />
+                  </div>
+                ) : null}
                 <motion.div
                   id="continuous-thread"
                   data-testid="chat-thread-scroll"
@@ -4105,7 +4357,7 @@ export function ContinuousChatOverlay({
                   // horizontal scrollbar strip across the sheet on iOS — the
                   // "weird side scroll thingy." This transcript only ever scrolls
                   // vertically; pin the horizontal axis closed.
-                  className="relative flex min-h-0 w-full flex-1 touch-pan-y flex-col overflow-y-auto overflow-x-hidden overscroll-contain px-5 [scrollbar-width:none] [-webkit-overflow-scrolling:touch] [&::-webkit-scrollbar]:hidden"
+                  className="relative flex min-h-0 w-full flex-1 touch-pan-y flex-col overflow-y-auto overflow-x-hidden overscroll-contain px-5 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[rgba(255,247,240,0.22)] [scrollbar-width:none] [-webkit-overflow-scrolling:touch] [&::-webkit-scrollbar]:hidden"
                   style={{ opacity: threadContentOpacity }}
                 >
                   {/* Empty-thread loading: a fresh/cleared chat awaiting its
@@ -4131,14 +4383,46 @@ export function ContinuousChatOverlay({
                       className="sticky top-0 z-[2] -mx-5 mb-1 bg-gradient-to-b from-scrim to-transparent px-5"
                     />
                   ) : null}
-                  {/* `mt-auto` keeps the latest line at the bottom (nearest the input)
-                  until the thread overflows, then it scrolls. The ref measures
-                  this content so onboarding can size the sheet to it (grow from
-                  the bottom). */}
+                  {/* `mt-auto` keeps the latest line at the bottom (nearest the
+                  input) until the thread overflows, then it scrolls. During
+                  onboarding the transcript is TOP-aligned instead: the sheet is
+                  pinned full-screen, and bottom-anchoring would shift every
+                  existing choice button UP each time the conductor seeds a new
+                  turn — the second tap of a fast double-tap would land on a
+                  button that just slid under the finger (a mis-pick straight
+                  into the wrong flow). Top-aligned, turns append BELOW what's
+                  already on screen and nothing moves under a pointer. */}
                   <div
                     ref={threadContentRef}
-                    className="mt-auto flex flex-col pb-3 pt-1"
+                    className={cn(
+                      "flex flex-col pb-3 pt-1",
+                      !firstRunOpen && "mt-auto",
+                    )}
                   >
+                    {/* Top sentinel for infinite upward scroll (#13532, #14279):
+                        a zero-height marker just above the oldest turn. When it
+                        nears the top of the scroller, useLoadOlderOnScroll
+                        prefetches + prepends an older page a viewport early and
+                        preserves the reader's anchor so the thread never jumps.
+                        Only meaningful in the flat (non-topic) transcript. */}
+                    {!hasTopics &&
+                    hasMoreOlder &&
+                    visibleMessages.length > 0 ? (
+                      <div
+                        ref={topSentinelRef}
+                        data-testid="chat-transcript-top-sentinel"
+                        aria-hidden="true"
+                        className="pointer-events-none flex h-5 shrink-0 items-center justify-center"
+                      >
+                        <Loader2
+                          className={cn(
+                            "h-4 w-4 text-muted-strong opacity-60",
+                            reduce ? "" : "animate-spin",
+                          )}
+                          aria-hidden="true"
+                        />
+                      </div>
+                    ) : null}
                     {hasTopics
                       ? // Topic-grouped transcript: each cluster collapses via a
                         // gesture on its header (no visible buttons).
@@ -4217,6 +4501,16 @@ export function ContinuousChatOverlay({
                 ) : null}
               </motion.div>
             ) : null}
+            {/* Reply target pill, just above the input (glass chrome). */}
+            {chatReplyTarget ? (
+              <div className="relative z-10 shrink-0 px-3 pt-2">
+                <ChatReplyPill
+                  appearance="glass"
+                  target={chatReplyTarget}
+                  onCancel={() => setChatReplyTarget(null)}
+                />
+              </div>
+            ) : null}
             {/* Pending image attachments + any read error, just above the input. */}
             {hasImages || imageError ? (
               <div className="relative z-10 flex shrink-0 flex-col gap-1.5 px-3 pt-2">
@@ -4233,7 +4527,7 @@ export function ContinuousChatOverlay({
                           // Small visual disc, but a 44px-class hit zone via the
                           // invisible `before` overlay so it's thumb-tappable
                           // without crowding the tile.
-                          className="absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full border border-border-strong bg-scrim p-0 text-xs text-txt transition-colors before:absolute before:-inset-3 before:content-[''] hover:bg-bg"
+                          className="absolute -right-1.5 -top-1.5 z-30 grid h-5 w-5 place-items-center rounded-full border border-border-strong bg-scrim p-0 text-xs text-txt transition-colors before:absolute before:-inset-3 before:content-[''] hover:bg-bg"
                         >
                           ×
                         </Button>
@@ -4279,7 +4573,11 @@ export function ContinuousChatOverlay({
                 {imageError ? (
                   <p
                     role="alert"
-                    className={cn("text-xs text-red-200/90", FLOAT_SHADOW)}
+                    className={cn(
+                      "text-xs",
+                      WALLPAPER_TEXT.danger,
+                      WALLPAPER_FLOAT_SHADOW,
+                    )}
                   >
                     {imageError}
                   </p>
@@ -4352,10 +4650,23 @@ export function ContinuousChatOverlay({
                 rows={1}
                 value={draft}
                 onChange={(e) => {
-                  setDraft(e.target.value);
+                  const nextDraft = e.target.value;
+                  if (
+                    draft.trim().length > 0 &&
+                    nextDraft.trim().length === 0
+                  ) {
+                    reportComposerActivity({
+                      activity: "draft_abandoned",
+                      surface: COMPOSER_ACTIVITY_SURFACE,
+                      conversationId: activeConversationIdRef.current,
+                      draftLength: 0,
+                      reason: "cleared",
+                    });
+                  }
+                  setDraft(nextDraft);
                   // Mirror the live draft to the active view (Help search etc.).
-                  viewChatBinding?.onQuery?.(e.target.value);
-                  if (e.target.value.trim().length > 0) expand();
+                  viewChatBinding?.onQuery?.(nextDraft);
+                  if (nextDraft.trim().length > 0) expand();
                 }}
                 onFocus={() => {
                   // Widen out of the short-landscape compact affordance (#14173)
@@ -4505,6 +4816,7 @@ export function ContinuousChatOverlay({
                       // the composer while onboarding is choice-driven.
                       disabled={firstRunOpen}
                       active={recording || handsFree || transcriptionMode}
+                      pulse={recording || handsFree || transcriptionMode}
                       onClick={handleMicClick}
                       onPointerDown={micHoldHandlers.onPointerDown}
                       onPointerUp={micHoldHandlers.onPointerUp}

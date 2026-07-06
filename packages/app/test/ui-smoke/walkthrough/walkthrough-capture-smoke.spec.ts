@@ -97,7 +97,7 @@ async function installWalkthroughConversationStore(page: Page): Promise<void> {
   });
 
   await page.route(
-    "**/api/conversations/walkthrough-conversation/messages",
+    "**/api/conversations/walkthrough-conversation/messages**",
     async (route) => {
       if (route.request().method() === "GET") {
         await fulfillJson(route, 200, { messages });
@@ -178,6 +178,40 @@ async function captureState(
   await testInfo.attach(filename, { path, contentType: "image/png" });
 }
 
+/**
+ * Flick the open chat sheet's grabber up to the FULL detent — the pull gesture
+ * that replaced the removed `chat-full-maximize` button (#13531/#14332). A
+ * few-step, large-travel `page.mouse` drag clears the flick velocity threshold
+ * so the sheet snaps up a detent; retried since a single flick can land at HALF
+ * first.
+ */
+async function flickSheetToFull(page: Page): Promise<void> {
+  const sheet = page.getByTestId("chat-sheet");
+  await expect(page.getByTestId("continuous-chat-overlay")).toHaveAttribute(
+    "data-open",
+    "true",
+    { timeout: 15_000 },
+  );
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if ((await sheet.getAttribute("data-detent")) === "full") return;
+    const box = await page.getByTestId("chat-sheet-grabber").boundingBox();
+    if (!box) throw new Error("no bounding box for chat-sheet-grabber");
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    const travel = Math.min(cy - 4, 560);
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    for (let i = 1; i <= 3; i += 1) {
+      await page.mouse.move(cx, cy - (travel * i) / 3);
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+  }
+  await expect(sheet).toHaveAttribute("data-detent", "full", {
+    timeout: 5_000,
+  });
+}
+
 test.describe("walkthrough capture smoke", () => {
   test("captures the first stable walkthrough states", async ({
     page,
@@ -193,7 +227,9 @@ test.describe("walkthrough capture smoke", () => {
     const onboarding = page.getByTestId("continuous-chat-overlay");
     await expect(onboarding).toBeVisible({ timeout: 20_000 });
     await expect(
-      page.getByText("First, where should your agent run?", { exact: false }),
+      page.getByText("Sign in to Eliza Cloud and I'll get you set up.", {
+        exact: false,
+      }),
     ).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId("first-run-runtime-chooser")).toHaveCount(0);
     await expect(
@@ -201,12 +237,10 @@ test.describe("walkthrough capture smoke", () => {
     ).toBeVisible();
     await expect(
       page.getByTestId("choice-__first_run__:runtime:local"),
-    ).toBeVisible();
-    // Remote (connect to an existing agent) is the third location chip.
+    ).toHaveCount(0);
     await expect(
       page.getByTestId("choice-__first_run__:runtime:remote"),
-    ).toBeVisible();
-    // runtime:other ("Bring your own keys") stays removed as a location (#11509).
+    ).toHaveCount(0);
     await expect(
       page.getByTestId("choice-__first_run__:runtime:other"),
     ).toHaveCount(0);
@@ -219,6 +253,11 @@ test.describe("walkthrough capture smoke", () => {
     await openAppPath(page, "/chat");
     const overlay = page.getByTestId("continuous-chat-overlay");
     await expect(overlay).toBeVisible({ timeout: 60_000 });
+    const setupSkip = page.getByRole("button", { name: "Skip for now" });
+    if (await setupSkip.isVisible().catch(() => false)) {
+      await setupSkip.click();
+      await expect(setupSkip).toBeHidden({ timeout: 10_000 });
+    }
     await captureState(page, testInfo, "walkthrough-02-chat-ready.png");
 
     const composer = page.locator(CHAT_COMPOSER_SELECTOR).first();
@@ -239,15 +278,10 @@ test.describe("walkthrough capture smoke", () => {
     ).toBeVisible({ timeout: 30_000 });
     await captureState(page, testInfo, "walkthrough-03-chat-round-trip.png");
 
-    await page.getByTestId("chat-full-maximize").click();
+    await flickSheetToFull(page);
     await expect(page.getByTestId("chat-sheet")).toHaveAttribute(
       "data-detent",
       "full",
-      { timeout: 10_000 },
-    );
-    await expect(page.getByTestId("chat-sheet")).toHaveAttribute(
-      "data-maximized",
-      "true",
       { timeout: 10_000 },
     );
     await captureState(page, testInfo, "walkthrough-04-chat-full-detent.png");

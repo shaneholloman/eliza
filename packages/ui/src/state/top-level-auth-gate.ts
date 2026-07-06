@@ -27,3 +27,22 @@ export function firstRunOwnsLoginSurface(
     coordinatorPhase === "first-run-required" || firstRunComplete === false
   );
 }
+
+/**
+ * Whether the main shell should stay unmounted while the top-level auth probe is
+ * still deciding. Returning users with an expired Cloud session can have a
+ * persisted agent base in localStorage; mounting the shell before `/api/auth/me`
+ * resolves starts agent/status/chat pollers that all 401. First-run still owns
+ * its in-chat login surface, so this only applies to normal post-onboarding
+ * sessions.
+ */
+export function authProbeShouldHoldShell(
+  coordinatorPhase: string,
+  firstRunComplete: boolean | null | undefined,
+  authPhase: string,
+): boolean {
+  return (
+    authPhase === "loading" &&
+    !firstRunOwnsLoginSurface(coordinatorPhase, firstRunComplete)
+  );
+}

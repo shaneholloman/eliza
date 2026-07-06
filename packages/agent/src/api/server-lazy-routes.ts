@@ -244,23 +244,17 @@ export async function handleAvatarRoutes(
   return (await import("./avatar-routes.ts")).handleAvatarRoutes(...args);
 }
 
-type SuggestionsRoutesModule = typeof import("./suggestions-routes.ts");
-export async function handleSuggestionsRoutes(
-  ...args: Parameters<SuggestionsRoutesModule["handleSuggestionsRoutes"]>
-): ReturnType<SuggestionsRoutesModule["handleSuggestionsRoutes"]> {
-  const ctx = routeContext(args);
-  if (ctx?.pathname !== "/api/suggestions") return false;
-  return (await import("./suggestions-routes.ts")).handleSuggestionsRoutes(
-    ...args,
-  );
-}
-
 type InteractionsRoutesModule = typeof import("./interactions-routes.ts");
 export async function handleInteractionsRoutes(
   ...args: Parameters<InteractionsRoutesModule["handleInteractionsRoutes"]>
 ): ReturnType<InteractionsRoutesModule["handleInteractionsRoutes"]> {
   const ctx = routeContext(args);
-  if (ctx?.pathname !== "/api/interactions/shortcut") return false;
+  if (
+    ctx?.pathname !== "/api/interactions/shortcut" &&
+    ctx?.pathname !== "/api/interactions/composer"
+  ) {
+    return false;
+  }
   return (await import("./interactions-routes.ts")).handleInteractionsRoutes(
     ...args,
   );
@@ -440,8 +434,8 @@ export async function handleMobileOptionalRoutes(
     typeof pathname !== "string" ||
     !(
       pathname.startsWith("/api/local-inference") ||
-      pathname === "/api/tts/local-inference" ||
-      pathname === "/api/asr/local-inference" ||
+      pathname.startsWith("/api/tts/local-inference") ||
+      pathname.startsWith("/api/asr/local-inference") ||
       pathname.startsWith("/api/mobile") ||
       pathname === "/api/runtime/mode" ||
       pathname.startsWith("/api/computer-use/") ||

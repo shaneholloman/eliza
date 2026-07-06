@@ -49,6 +49,10 @@ import type {
   TriageClassification,
   TriageEntry,
 } from "../inbox/types.ts";
+import {
+  appendInboxDraftChoiceMarker,
+  appendInboxTriageChoiceMarkers,
+} from "./choice-markers.js";
 
 const ACTION_NAME = "INBOX";
 
@@ -494,10 +498,29 @@ function parseConfirmation(value: unknown): boolean {
   return false;
 }
 
-function parseSnoozeUntil(params: InboxActionParameters): string | null {
+/** Default snooze window when a tap sends no explicit timestamp: ~1 day out. */
+const DEFAULT_SNOOZE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Resolve the snooze-until timestamp for a snooze op.
+ *
+ * Three outcomes, kept distinct on purpose:
+ *   - a valid explicit timestamp  -> that ISO instant
+ *   - NO timestamp at all          -> the default window (one-tap Snooze chip:
+ *                                     its value is a bare `inbox snooze <id>`,
+ *                                     so a tap carries no time to parse #14735)
+ *   - an INVALID timestamp         -> `null`, so the caller rejects bad input
+ *                                     instead of silently snoozing to default
+ */
+function resolveSnoozeUntil(params: InboxActionParameters): string | null {
   const raw = params.snoozedUntil ?? params.until;
-  if (typeof raw !== "string" || !raw.trim()) return null;
-  const parsed = Date.parse(raw);
+  if (raw === undefined) {
+    return new Date(Date.now() + DEFAULT_SNOOZE_MS).toISOString();
+  }
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const parsed = Date.parse(trimmed);
   if (!Number.isFinite(parsed)) return null;
   return new Date(parsed).toISOString();
 }
@@ -601,7 +624,10 @@ async function replyToEntry(args: {
   if (!args.confirmed) {
     return {
       success: true,
-      text: `Drafted reply for ${args.entry.senderName ?? args.entry.channelName}. Confirm before sending.`,
+      text: appendInboxDraftChoiceMarker(
+        `Drafted reply for ${args.entry.senderName ?? args.entry.channelName}. Confirm before sending.`,
+        args.entry.id,
+      ),
       data: {
         subaction: "reply",
         requiresConfirmation: true,
@@ -728,7 +754,10 @@ export async function executeInboxQueueOperation(args: {
             : `Loaded ${entries.length} pending inbox triage items.`;
       return {
         success: true,
-        text: `${baseText}${degradedSuffix(degraded)}`,
+        text: appendInboxTriageChoiceMarkers(
+          `${baseText}${degradedSuffix(degraded)}`,
+          entries,
+        ),
         data: {
           subaction: "triage",
           classified: classifiedCount,
@@ -739,7 +768,7 @@ export async function executeInboxQueueOperation(args: {
     }
     case "snooze": {
       const id = requireEntryId(args.params);
-      const until = parseSnoozeUntil(args.params);
+      const until = resolveSnoozeUntil(args.params);
       if (!until) {
         throw new Error("valid snooze timestamp is required");
       }

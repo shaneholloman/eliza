@@ -43,6 +43,7 @@ import {
   OPTIONAL_STATIC_PLUGIN_REGISTRATIONS,
   optionalPluginImportSpecifier,
 } from "./optional-plugins.ts";
+import { deduplicatePluginActions } from "./plugin-action-dedupe.ts";
 import {
   isWorkspacePluginSourceFallbackAllowed,
   type PluginResolutionPhase,
@@ -55,6 +56,7 @@ import {
 } from "./plugin-types.ts";
 import { shouldLoadRemoteCodingRunnerForBoot } from "./remote-coding-runner-gate.ts";
 
+export { deduplicatePluginActions } from "./plugin-action-dedupe.ts";
 export {
   CHANNEL_PLUGIN_MAP,
   collectPluginNames,
@@ -1570,31 +1572,6 @@ export async function shutdownRuntime(
 
   if (firstError) {
     throw firstError;
-  }
-}
-
-/**
- * Remove duplicate actions across an ordered list of plugins.
- *
- * When multiple plugins define an action with the same `name`, only the first
- * occurrence is kept.  This prevents "Action already registered" warnings from
- * elizaOS core.  The function mutates each plugin's `actions` array in-place.
- */
-export function deduplicatePluginActions(plugins: Plugin[]): void {
-  const seen = new Set<string>();
-  for (const plugin of plugins) {
-    if (plugin.actions) {
-      plugin.actions = plugin.actions.filter((action) => {
-        if (seen.has(action.name)) {
-          logger.debug(
-            `[eliza] Skipping duplicate action "${action.name}" from plugin "${plugin.name}"`,
-          );
-          return false;
-        }
-        seen.add(action.name);
-        return true;
-      });
-    }
   }
 }
 
@@ -4309,6 +4286,9 @@ export async function startEliza(
     skipCharacterProvider: false,
     enableAutonomy:
       settings.ENABLE_AUTONOMY === true || settings.ENABLE_AUTONOMY === "true",
+    // The app ships a Vault/Secrets settings section by default, so the
+    // matching chat action must be present in the default runtime as well.
+    enableSecretsManager: true,
   });
   deduplicatePluginActions([
     basicCapabilitiesPlugin,
@@ -4322,6 +4302,7 @@ export async function startEliza(
     // advancedCapabilities: true,
     actionPlanning: true,
     // advancedMemory is enabled via character.advancedMemory
+    enableSecretsManager: true,
     plugins: [...subAgentCredentialPlugins, elizaPlugin, ...pluginsForRuntime],
     ...(runtimeLogLevel ? { logLevel: runtimeLogLevel } : {}),
     // Sandbox options — only active when mode != "off"
@@ -4341,6 +4322,11 @@ export async function startEliza(
       : {}),
     settings: {
       VALIDATION_LEVEL: "fast",
+      // SecretsService uses ENCRYPTION_SALT; the app already persists SECRET_SALT
+      // for durable ciphertext, so reuse it rather than requiring a second key.
+      ...(process.env.SECRET_SALT
+        ? { ENCRYPTION_SALT: process.env.SECRET_SALT }
+        : {}),
       // Forward non-sensitive Eliza config.env vars as runtime settings so
       // plugins can access them via runtime.getSetting(). This fixes a bug where
       // plugins (e.g. @elizaos/plugin-google-genai) call runtime.getSetting()
@@ -5147,9 +5133,18 @@ export async function startEliza(
             `[eliza] deferred: ✓ ${plugin.name} registered (${Date.now() - startedAt}ms)`,
           );
         } catch (err) {
+          // error-policy:#14415 — a deferred plugin that fails to register
+          // silently drops every capability it provides (its actions,
+          // providers, connectors). Report it so the failure is agent-visible
+          // via RECENT_ERRORS and escalates when a plugin fails repeatedly,
+          // rather than only landing in a boot-log warning the user never sees.
           logger.warn(
             `[eliza] deferred: Plugin ${plugin.name} registration failed: ${formatError(err)}`,
           );
+          runtime.reportError("eliza.deferredPluginRegistration", err, {
+            plugin: plugin.name,
+            phase: "deferred-boot",
+          });
         }
       }),
     );
@@ -5378,7 +5373,16 @@ export async function startEliza(
   // wave's awaited work cannot starve the API bind off the event loop.
   const kickoffDeferredBoot = (): void => {
     void runDeferredBoot().catch((err) => {
+      // error-policy:#14415 — deferred boot registers connectors + feature
+      // plugins after the runtime is chat-ready. A swallowed failure here left
+      // capabilities silently absent (the device-review class of bug: the user
+      // sees an empty feature, not an error). Surface it via reportError so it
+      // reaches RECENT_ERRORS (agent-visible) and escalates on repeat, in
+      // addition to the boot-log warning.
       logger.warn(`[eliza] Deferred boot failed: ${formatError(err)}`);
+      runtime.reportError("eliza.deferredBoot", err, {
+        phase: "deferred-boot",
+      });
     });
   };
 
@@ -5610,6 +5614,7 @@ export async function startEliza(
           ]);
           const newRuntime = new AgentRuntime({
             character: freshCharacter,
+            enableSecretsManager: true,
             plugins: [
               ...subAgentCredentialPlugins,
               freshElizaPlugin,
@@ -5617,6 +5622,14 @@ export async function startEliza(
             ],
             ...(runtimeLogLevel ? { logLevel: runtimeLogLevel } : {}),
             settings: {
+              ...(process.env.SECRET_SALT
+                ? { ENCRYPTION_SALT: process.env.SECRET_SALT }
+                : {}),
+              ...Object.fromEntries(
+                Object.entries(collectConfigEnvVars(freshConfig)).filter(
+                  ([key]) => isEnvKeyAllowedForForwarding(key),
+                ),
+              ),
               ...(freshPreferredProviderId
                 ? { MODEL_PROVIDER: freshPreferredProviderId }
                 : {}),

@@ -51,11 +51,11 @@ import type {
 } from "../api";
 import { client } from "../api";
 import { getCloudAuthToken } from "../api/client-cloud";
-import { startTutorial } from "../components/pages/tutorial/tutorial-controller";
 import { getBootConfig } from "../config/boot-config";
 import { ACCENT_PRESETS, useAppSelectorShallow } from "../state";
 import { useConversationMessages } from "../state/ConversationMessagesContext.hooks";
 import { hasUsableStoredStewardToken } from "../state/cloud-steward-login";
+import { startTutorial } from "../tutorial/tutorial-service";
 import { preOpenWindow } from "../utils";
 import { normalizeFirstRunName } from "./first-run";
 import {
@@ -97,7 +97,7 @@ const CLOUD_SIGN_IN_CHOICE = [
 const CLOUD_WELCOME_BACK =
   "Welcome back — you're already signed in to Eliza Cloud. Setting up your agent…";
 const CLOUD_ONLY_DONE =
-  "You're all set — ask me anything. Want a quick tour? Open the Tutorial tile on your home screen whenever you like.";
+  'You\'re all set — ask me anything. Want a quick tour? Type "restart tutorial" whenever you like.';
 
 /** User-facing recovery message when a cloud provisioning call rejects. */
 function cloudFailureMessage(err: unknown): string {
@@ -346,7 +346,6 @@ export function useFirstRunConductor(): void {
     completeFirstRun,
     elizaCloudConnected,
     handleCloudLogin,
-    showActionBanner,
     setTab,
     setState,
     setUiAccent,
@@ -357,7 +356,6 @@ export function useFirstRunConductor(): void {
     completeFirstRun: s.completeFirstRun,
     elizaCloudConnected: s.elizaCloudConnected,
     handleCloudLogin: s.handleCloudLogin,
-    showActionBanner: s.showActionBanner,
     setTab: s.setTab,
     setState: s.setState,
     setUiAccent: s.setUiAccent,
@@ -462,7 +460,7 @@ export function useFirstRunConductor(): void {
 
   // Cloud-only completion (#13377): signing in IS onboarding. The moment
   // provisioning succeeds we flip the real gate — no tutorial/accent pick gates
-  // completion in this mode (the tutorial stays reachable from its home tile).
+  // completion in this mode (the chat-native tutorial remains command-driven).
   // Latched by completedRef so a double-fired finish can't flip the gate twice.
   const completeCloudOnly = React.useCallback(() => {
     if (completedRef.current) return;
@@ -515,7 +513,6 @@ export function useFirstRunConductor(): void {
       setRuntimeState: (key, value) => {
         setState(key, value as never);
       },
-      showActionBanner,
       setTab,
       completeFirstRun: () => {
         if (isRuntimeChooserEnabled()) {
@@ -535,7 +532,6 @@ export function useFirstRunConductor(): void {
       elizaCloudConnected,
       handleCloudLogin,
       setState,
-      showActionBanner,
       setTab,
       seedTutorial,
       completeCloudOnly,
@@ -605,6 +601,12 @@ export function useFirstRunConductor(): void {
     null,
   );
   const bindInFlightRef = React.useRef(false);
+  // Live mirror of elizaCloudConnected for call-time reads inside callbacks that
+  // must NOT list it as a dep (adding it re-registers the action handler and
+  // re-seeds on every connection change). It also gates the needs-cloud-login
+  // re-arm below so a stale-but-"connected" token can't spin the resume loop.
+  const elizaCloudConnectedRef = React.useRef(elizaCloudConnected);
+  elizaCloudConnectedRef.current = elizaCloudConnected;
 
   const handleOutcome = React.useCallback(
     (outcome: FirstRunFinishOutcome) => {
@@ -634,8 +636,18 @@ export function useFirstRunConductor(): void {
           return;
         }
         case "needs-cloud-login": {
-          pendingCloudResumeRef.current =
-            draftRef.current.runtime === "cloud" ? "cloud" : "hybrid";
+          // Arm auto-resume ONLY when not already connected. If elizaCloudConnected
+          // already reads true yet the bind still reported needs-cloud-login, the
+          // stored token is stale/invalid (getCloudAuthToken shadowed empty) — arming
+          // would let the auto-resume effect (gated on elizaCloudConnected) re-fire at
+          // once and spin the provision→fail→re-arm loop that spammed the transcript
+          // (#14387). Show the retry turn and wait for a genuine re-auth (a false→true
+          // flip re-enables resume); its sign-in tap re-enters the flow meanwhile.
+          pendingCloudResumeRef.current = elizaCloudConnectedRef.current
+            ? null
+            : draftRef.current.runtime === "cloud"
+              ? "cloud"
+              : "hybrid";
           surfaceCloudLoginRetryTurn({ seedTurn, replaceTurn });
           return;
         }
@@ -756,25 +768,34 @@ export function useFirstRunConductor(): void {
   );
   bindCloudAgentByIdRef.current = bindCloudAgentById;
 
-  // Auto-resume: when the user connects Eliza Cloud from the retry turn's
-  // OAuth block (instead of re-picking a runtime), continue the interrupted
-  // flow the moment the store learns the connection landed. A fresh pick
-  // clears the pending marker, so the user's latest intent always wins.
-  React.useEffect(() => {
-    if (!active || !elizaCloudConnected) return;
-    const resume = pendingCloudResumeRef.current;
-    if (!resume) return;
-    runCloudResume(resume);
-  }, [active, elizaCloudConnected, runCloudResume]);
-
-  // Read-only mirrors so the mount effect can resume immediately when the
-  // durable token already made the connection live at launch — without adding
-  // elizaCloudConnected/runCloudResume to the mount effect's deps (which would
-  // re-register the action handler and re-seed on every connection change).
-  const elizaCloudConnectedRef = React.useRef(elizaCloudConnected);
-  elizaCloudConnectedRef.current = elizaCloudConnected;
+  // Read-only mirror so the auto-resume effect + the mount rehydrate can drive
+  // runCloudResume without listing it as a dep. Its identity churns as its own
+  // deps (replaceTurn, the flow launchers) change; the effect below depending on
+  // it re-fired on every seeded-turn render and, on a stale token, spun the
+  // provision→fail→re-arm loop (#14387).
   const runCloudResumeRef = React.useRef(runCloudResume);
   runCloudResumeRef.current = runCloudResume;
+
+  // Auto-resume: when the user connects Eliza Cloud from the retry turn's OAuth
+  // block (instead of re-picking a runtime), continue the interrupted flow the
+  // moment the store learns the connection landed. Fires AT MOST ONCE per
+  // connection epoch: a resume that lands back on needs-cloud-login (stale token)
+  // must not immediately re-fire — that is the loop that spammed the onboarding
+  // transcript (#14387). A fresh false→true connection flip clears the latch and
+  // re-enables resume; the retry turn's sign-in tap re-enters the flow meanwhile.
+  // A fresh pick clears the pending marker, so the user's latest intent wins.
+  const resumedForConnectionRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!active || !elizaCloudConnected) {
+      resumedForConnectionRef.current = false;
+      return;
+    }
+    if (resumedForConnectionRef.current) return;
+    const resume = pendingCloudResumeRef.current;
+    if (!resume) return;
+    resumedForConnectionRef.current = true;
+    runCloudResumeRef.current(resume);
+  }, [active, elizaCloudConnected]);
 
   const handleFirstRunAction = React.useCallback(
     (value: string): boolean => {

@@ -9,7 +9,6 @@
  * to replace it wholesale.
  */
 import { v4 } from "uuid";
-import z from "zod";
 import { formatActionNames, formatActions } from "../actions";
 import {
 	actionToTool,
@@ -42,7 +41,12 @@ import { logger } from "../logger";
 import { describeImageCached } from "../media";
 import { fetchRemoteMedia } from "../media/fetch";
 import { imageDescriptionTemplate, messageHandlerTemplate } from "../prompts";
-import { checkSenderRole, hasAtLeastRole, isAdminRank } from "../roles";
+import {
+	checkSenderRole,
+	getUnresolvedSenderRoleFloor,
+	hasAtLeastRole,
+	isAdminRank,
+} from "../roles";
 import {
 	type ActionCatalog,
 	buildActionCatalog,
@@ -76,7 +80,6 @@ import {
 	getMessageHistoryCompactionHook,
 	type MessageHistoryCompactionTelemetry,
 } from "../runtime/conversation-compaction-hook";
-import { runDirectMessageHooks } from "../runtime/direct-message-hook";
 import {
 	type EvaluatorEffects,
 	type EvaluatorOutput,
@@ -696,138 +699,6 @@ function resolvePlannerActionNameFromLookup(
 	return [];
 }
 
-function isStructuredPlannerIdentifier(value: string): boolean {
-	const unwrapped = unwrapPlannerIdentifier(value).trim();
-	return /^[A-Za-z][A-Za-z0-9_:-]*$/u.test(unwrapped);
-}
-
-function extractStructuredProviderList(rawProviders: string): string[] {
-	const safe =
-		rawProviders.length > 10_000 ? rawProviders.slice(0, 10_000) : rawProviders;
-	const tokens = safe
-		.split(/[\n,;]/)
-		.map((providerName) =>
-			providerName.replace(/^[\s"'[\](){}]+|[\s"'[\](){}]+$/g, ""),
-		)
-		.map((providerName) => unwrapPlannerIdentifier(providerName).trim())
-		.filter((providerName) => providerName.length > 0);
-	if (tokens.length === 0 || !tokens.every(isStructuredPlannerIdentifier)) {
-		return [];
-	}
-	return tokens;
-}
-
-// Schemas for LLM-emitted provider lists embedded as JSON strings inside the
-// planner output. The planner sometimes returns providers as a JSON array of
-// strings or as a `{ providers: string[] }` object.
-// We coerce non-string entries to string and validate downstream.
-const ProviderJsonArraySchema = z.array(z.unknown());
-const ProviderJsonEnvelopeSchema = z.object({
-	providers: z.array(z.unknown()),
-});
-
-export function extractPlannerProviderNames(
-	parsedPlanner: Record<string, unknown>,
-): string[] {
-	const rawProviders = parsedPlanner.providers;
-	if (typeof rawProviders === "string") {
-		const trimmedProviders = rawProviders.trim();
-		if (!trimmedProviders) {
-			return [];
-		}
-		if (
-			(trimmedProviders.startsWith("[") && trimmedProviders.endsWith("]")) ||
-			(trimmedProviders.startsWith("{") && trimmedProviders.endsWith("}"))
-		) {
-			try {
-				const parsedJson: unknown = JSON.parse(trimmedProviders);
-				const arrayResult = ProviderJsonArraySchema.safeParse(parsedJson);
-				if (arrayResult.success) {
-					return arrayResult.data
-						.map((providerName) => String(providerName).trim())
-						.filter(
-							(providerName): providerName is string =>
-								providerName.length > 0 &&
-								isStructuredPlannerIdentifier(providerName),
-						);
-				}
-				const envelopeResult = ProviderJsonEnvelopeSchema.safeParse(parsedJson);
-				if (envelopeResult.success) {
-					return envelopeResult.data.providers
-						.map((providerName) => String(providerName).trim())
-						.filter(
-							(providerName): providerName is string =>
-								providerName.length > 0 &&
-								isStructuredPlannerIdentifier(providerName),
-						);
-				}
-				logger.warn(
-					{
-						raw: trimmedProviders,
-						arrayErr: arrayResult.error.issues,
-						envelopeErr: envelopeResult.error.issues,
-					},
-					"[message] LLM response failed schema validation",
-				);
-			} catch (err) {
-				logger.warn(
-					{ raw: trimmedProviders, err },
-					"[message] LLM response failed schema validation",
-				);
-			}
-		}
-
-		return extractStructuredProviderList(trimmedProviders);
-	}
-
-	if (Array.isArray(rawProviders)) {
-		return rawProviders.flatMap((providerName) => {
-			if (typeof providerName !== "string") {
-				const normalized = String(providerName).trim();
-				return normalized.length > 0 &&
-					isStructuredPlannerIdentifier(normalized)
-					? [normalized]
-					: [];
-			}
-
-			const trimmedProvider = providerName.trim();
-			if (!trimmedProvider) {
-				return [];
-			}
-			if (
-				(trimmedProvider.startsWith("[") && trimmedProvider.endsWith("]")) ||
-				(trimmedProvider.startsWith("{") && trimmedProvider.endsWith("}"))
-			) {
-				try {
-					const parsedJson: unknown = JSON.parse(trimmedProvider);
-					const arrayResult = ProviderJsonArraySchema.safeParse(parsedJson);
-					if (arrayResult.success) {
-						return arrayResult.data
-							.map((entry) => String(entry).trim())
-							.filter(
-								(entry): entry is string =>
-									entry.length > 0 && isStructuredPlannerIdentifier(entry),
-							);
-					}
-					logger.warn(
-						{ raw: trimmedProvider, err: arrayResult.error.issues },
-						"[message] LLM response failed schema validation",
-					);
-				} catch (err) {
-					logger.warn(
-						{ raw: trimmedProvider, err },
-						"[message] LLM response failed schema validation",
-					);
-				}
-			}
-
-			return extractStructuredProviderList(trimmedProvider);
-		});
-	}
-
-	return [];
-}
-
 const CORE_RESPONSE_STATE_PROVIDERS = [
 	"RUNTIME_MODEL_CONTEXT",
 	"UI_CONTEXT",
@@ -928,8 +799,6 @@ const STAGE1_EXTRA_PROVIDER_EXCLUSIONS = [
 	"DOCUMENTS",
 ] as const;
 
-const STRUCTURED_RESPONSE_STATE_PROVIDERS = ["ACTIONS", "PROVIDERS"];
-
 function isCurrentTimeQuestion(message: Memory): boolean {
 	const text = message.content.text?.toLowerCase() ?? "";
 	if (!text) return false;
@@ -946,8 +815,6 @@ function stage1ProviderExclusionsForMessage(message: Memory): string[] {
 	}
 	return exclusions;
 }
-const FOCUSED_PROVIDER_REPLY_STATE_PROVIDERS = ["CHARACTER", "RECENT_MESSAGES"];
-
 function hasInboundBenchmarkContext(message: Memory): boolean {
 	const metadata = message.metadata as Record<string, unknown> | undefined;
 	const benchmarkContext = metadata?.benchmarkContext;
@@ -1159,43 +1026,6 @@ async function composeResponseState(
 	);
 }
 
-function _composeStructuredResponseState(
-	runtime: IAgentRuntime,
-	message: Memory,
-	skipCache = false,
-): Promise<State> {
-	return runtime.composeState(
-		message,
-		STRUCTURED_RESPONSE_STATE_PROVIDERS,
-		false,
-		skipCache,
-	);
-}
-
-async function composeProviderGroundedResponseState(
-	runtime: IAgentRuntime,
-	message: Memory,
-	providers: string[],
-	skipCache = false,
-): Promise<State> {
-	const state = await runtime.composeState(
-		message,
-		[
-			...CORE_RESPONSE_STATE_PROVIDERS,
-			...alwaysOnResponseStateProviderNames(runtime),
-			...providers,
-		],
-		false,
-		skipCache,
-	);
-	return applyMessageHistoryCompactionHook(
-		runtime,
-		message,
-		state,
-		"provider-grounded-state",
-	);
-}
-
 export function selectV5PlannerStateProviderNames(args: {
 	runtime: IAgentRuntime;
 	message: Memory;
@@ -1236,20 +1066,6 @@ export function selectV5PlannerStateProviderNames(args: {
 	}
 
 	return [...providerNames];
-}
-
-function _composeFocusedProviderReplyState(
-	runtime: IAgentRuntime,
-	message: Memory,
-	providers: string[],
-	skipCache = false,
-): Promise<State> {
-	return runtime.composeState(
-		message,
-		[...FOCUSED_PROVIDER_REPLY_STATE_PROVIDERS, ...providers],
-		true,
-		skipCache,
-	);
 }
 
 function _ensureActionStateValues(
@@ -1842,7 +1658,6 @@ function createV5ReplyStrategyResult(args: {
 	const responseContent: Content = {
 		thought: args.thought,
 		actions: ["REPLY"],
-		providers: [],
 		text: restorePiiInUserReplyText(args.text),
 		simple: args.mode !== "actions",
 		responseId: args.responseId,
@@ -5093,9 +4908,9 @@ function synthesizeStage1TruncationReply(): MessageHandlerResult {
 /**
  * Resolve the calling sender's role for context-catalog filtering.
  *
- * This is best-effort: when there is no world context (DM-only sessions,
- * benchmarks, tests), `checkSenderRole` returns null and we fall through to a
- * conservative default. Owner-only messages always pass the agent's own
+ * This is best-effort: when there is no world context, `checkSenderRole`
+ * returns null and we fall through to the same source-aware floor that
+ * `hasRoleAccess` uses. Owner-only messages always pass the agent's own
  * messages without a world lookup.
  */
 async function resolveStage1SenderRole(
@@ -5116,12 +4931,10 @@ async function resolveStage1SenderRole(
 	} catch (error) {
 		runtime.logger.debug(
 			{ src: "service:message", error },
-			"Stage 1 sender role lookup failed; defaulting to USER",
+			"Stage 1 sender role lookup failed; using unresolved role floor",
 		);
 	}
-	// No world metadata — fall back to USER. This matches the lenient default
-	// in plugin-role-gating so local-only usage isn't blocked.
-	return "USER";
+	return getUnresolvedSenderRoleFloor(message);
 }
 
 function listAvailableContextsForRole(
@@ -5152,6 +4965,34 @@ interface ExecuteV5PlannedToolCallParams {
 	recorder?: TrajectoryRecorder;
 	trajectoryId?: string;
 	plannerLoopConfig?: PlannerLoopParams["config"];
+}
+
+interface BuildV5ExecutorContextParams {
+	message: Memory;
+	state: State;
+	selectedContexts: AgentContext[];
+	senderRole: RoleGateRole;
+	previousResults: readonly ActionResult[];
+	callback?: HandlerCallback;
+}
+
+function buildV5ExecutorContext(
+	args: BuildV5ExecutorContextParams,
+): ExecutePlannedToolCallContext {
+	return {
+		message: args.message,
+		state: args.state,
+		activeContexts: args.selectedContexts,
+		userRoles: [args.senderRole],
+		previousResults: args.previousResults,
+		...(args.callback ? { callback: args.callback } : {}),
+	};
+}
+
+export function __buildV5ExecutorContextForTests(
+	args: BuildV5ExecutorContextParams,
+): ExecutePlannedToolCallContext {
+	return buildV5ExecutorContext(args);
 }
 
 function plannerErrorLooksTransient(error: unknown): boolean {
@@ -5239,6 +5080,7 @@ async function runDeterministicPlannerFallback(args: {
 	recorder?: TrajectoryRecorder;
 	trajectoryId?: string;
 	plannerLoopConfig?: PlannerLoopParams["config"];
+	callback?: HandlerCallback;
 	plannerError: unknown;
 }): Promise<PlannerLoopResult | null> {
 	if (!plannerErrorLooksTransient(args.plannerError)) {
@@ -5307,13 +5149,14 @@ async function runDeterministicPlannerFallback(args: {
 		runtime: args.runtime,
 		toolCall,
 		plannerContext: trajectory.context,
-		executorCtx: {
+		executorCtx: buildV5ExecutorContext({
 			message: args.message,
 			state: args.plannerState,
-			activeContexts: args.selectedContexts,
-			userRoles: [args.senderRole],
+			selectedContexts: args.selectedContexts,
+			senderRole: args.senderRole,
 			previousResults: [],
-		},
+			...(args.callback ? { callback: args.callback } : {}),
+		}),
 		plannerRuntime: args.plannerRuntime,
 		executorOptions: { actions: args.actions },
 		evaluatorEffects: args.evaluatorEffects,
@@ -5932,6 +5775,7 @@ export async function runV5MessageRuntimeStage1(args: {
 	message: Memory;
 	state: State;
 	responseId: UUID;
+	callback?: HandlerCallback;
 	plannerLoopConfig?: PlannerLoopParams["config"];
 	onResponseHandlerEarlyReply?: (
 		event: ResponseHandlerEarlyReplyEvent,
@@ -6899,13 +6743,14 @@ export async function runV5MessageRuntimeStage1(args: {
 						runtime: args.runtime,
 						toolCall,
 						plannerContext: plannerContextAfterEarlyReply,
-						executorCtx: {
+						executorCtx: buildV5ExecutorContext({
 							message: args.message,
 							state: plannerState,
-							activeContexts: selectedContexts,
-							userRoles: [senderRole],
+							selectedContexts,
+							senderRole,
 							previousResults: collectPreviousActionResults(ctx.trajectory),
-						},
+							...(args.callback ? { callback: args.callback } : {}),
+						}),
 						plannerRuntime,
 						executorOptions: { actions: exposedPlannerActions },
 						evaluatorEffects,
@@ -6937,6 +6782,7 @@ export async function runV5MessageRuntimeStage1(args: {
 				recorder,
 				trajectoryId,
 				plannerLoopConfig: args.plannerLoopConfig,
+				...(args.callback ? { callback: args.callback } : {}),
 				plannerError: error,
 			});
 			if (!fallbackResult) {
@@ -9395,7 +9241,6 @@ export class DefaultMessageService implements IMessageService {
 					const earlyContent: Content = {
 						thought: event.messageHandler.thought,
 						actions: ["REPLY"],
-						providers: [],
 						text,
 						responseId: earlyResponseId,
 						inReplyTo: createUniqueUuid(runtime, message.id),
@@ -9447,11 +9292,11 @@ export class DefaultMessageService implements IMessageService {
 			setTranslatedUserText,
 		});
 
-		// #8791: pre-LLM action shortcut gate runs FIRST — before any direct hook,
-		// planner, or model call. An explicit slash/`!` command (always-on) or a
+		// #8791: pre-LLM action shortcut gate runs FIRST — before the planner or
+		// model call. An explicit slash/`!` command (always-on) or a
 		// confident natural-language shortcut resolves to a deterministic action
 		// reply with zero inference. Placed here (ahead of the pre-LLM
-		// direct-message hooks and the conditional v5 stage) so a slash command can
+		// conditional v5 stage) so a slash command can
 		// never be pre-empted by another handler.
 		if (!strategyResult) {
 			const shortcutSenderRole = await resolveStage1SenderRole(
@@ -9475,29 +9320,6 @@ export class DefaultMessageService implements IMessageService {
 			}
 		}
 
-		const directHookResult = strategyResult
-			? null
-			: await runDirectMessageHooks(runtime, { runtime, message, state });
-		if (directHookResult) {
-			const directText =
-				typeof directHookResult.text === "string" &&
-				directHookResult.text.trim().length > 0
-					? directHookResult.text.trim()
-					: directHookResult.success
-						? "Done."
-						: "I couldn't complete that request.";
-			strategyResult = createV5ReplyStrategyResult({
-				runtime,
-				message,
-				state,
-				responseId,
-				text: directText,
-				thought: "A pre-LLM direct-message hook handled this request.",
-				mode: "simple",
-			});
-			_usedV5Runtime = true;
-		}
-
 		if (!strategyResult && hasTextGenerationHandler(runtime)) {
 			if (isAutonomous) {
 				runtime.logger.debug(
@@ -9512,6 +9334,7 @@ export class DefaultMessageService implements IMessageService {
 						message,
 						state,
 						responseId,
+						...(callback ? { callback } : {}),
 						onResponseHandlerEarlyReply: deliverResponseHandlerEarlyReply,
 					}),
 					runtime.applyPipelineHooks(
@@ -9801,23 +9624,6 @@ export class DefaultMessageService implements IMessageService {
 				responseContent.inReplyTo = createUniqueUuid(runtime, message.id);
 			}
 
-			const providerStateValues = {
-				[AVAILABLE_CONTEXTS_STATE_KEY]:
-					state.values?.[AVAILABLE_CONTEXTS_STATE_KEY],
-				[CONTEXT_ROUTING_STATE_KEY]: state.values?.[CONTEXT_ROUTING_STATE_KEY],
-			};
-
-			if (responseContent?.providers && responseContent.providers.length > 0) {
-				state = withContextRoutingValues(
-					await composeProviderGroundedResponseState(
-						runtime,
-						message,
-						responseContent.providers,
-					),
-					providerStateValues,
-				);
-			}
-
 			// Save response memory to database.
 			// - simple mode: persists after hooks in the branch below.
 			// - actions mode: do NOT persist the initial LLM text here.
@@ -9864,19 +9670,6 @@ export class DefaultMessageService implements IMessageService {
 
 			if (responseContent) {
 				if (mode === "simple") {
-					// Log provider usage for simple responses
-					if (
-						responseContent.providers &&
-						responseContent.providers.length > 0
-					) {
-						runtime.logger.debug(
-							{
-								src: "service:message",
-								providers: responseContent.providers,
-							},
-							"Simple response used providers",
-						);
-					}
 					// Keep content hooks and DB write before delivery so the wire
 					// response and stored memory match. Do not put MESSAGE_SENT
 					// handlers or post-turn evaluators before the callback; they are
@@ -10366,6 +10159,8 @@ export class DefaultMessageService implements IMessageService {
 								"Generated image description",
 							);
 						} else {
+							processedAttachment.notProcessed =
+								"Image description unavailable (vision backend returned no result)";
 							runtime.logger.warn(
 								{ src: "service:message" },
 								"Image description unavailable for attachment",
@@ -10381,11 +10176,14 @@ export class DefaultMessageService implements IMessageService {
 							url,
 							isRemote,
 						);
-						// Any text/* document (plain, csv, markdown — all on the chat
-						// upload allow-list) is readable as text; PDFs are extracted via
-						// unpdf. Previously only text/plain was handled, so csv/markdown/
-						// pdf were skipped and never seen by the agent (#10714).
-						const isText = contentType.startsWith("text/");
+						// Any text/* document (plain, csv, markdown) and application/json —
+						// all on the chat upload allow-list — is readable as UTF-8 text;
+						// PDFs are extracted via unpdf. Previously only text/plain was
+						// handled, so csv/markdown/pdf were skipped and never seen by the
+						// agent (#10714).
+						const isText =
+							contentType.startsWith("text/") ||
+							contentType.startsWith("application/json");
 						const isPdf = contentType.startsWith("application/pdf");
 
 						if (isText) {
@@ -10427,6 +10225,7 @@ export class DefaultMessageService implements IMessageService {
 								"Extracted PDF text content",
 							);
 						} else {
+							processedAttachment.notProcessed = `Unsupported document type (${contentType}); stored but text not extracted`;
 							runtime.logger.warn(
 								{ src: "service:message", contentType },
 								"Skipping unsupported document type",
@@ -10473,8 +10272,12 @@ export class DefaultMessageService implements IMessageService {
 									},
 									"Transcribed audio attachment",
 								);
+							} else {
+								processedAttachment.notProcessed =
+									"Audio transcription returned no text (empty or no speech detected)";
 							}
 						} catch (err) {
+							processedAttachment.notProcessed = `Audio transcription unavailable: ${err instanceof Error ? err.message : String(err)}`;
 							runtime.logger.warn(
 								{ src: "service:message", err },
 								"Audio transcription failed, continuing without transcript",
@@ -10521,8 +10324,12 @@ export class DefaultMessageService implements IMessageService {
 									},
 									"Transcribed video attachment",
 								);
+							} else {
+								processedAttachment.notProcessed =
+									"Video transcription returned no text (empty or no speech detected)";
 							}
 						} catch (err) {
+							processedAttachment.notProcessed = `Video transcription unavailable: ${err instanceof Error ? err.message : String(err)}`;
 							runtime.logger.warn(
 								{ src: "service:message", err },
 								"Video transcription failed, continuing without transcript",
@@ -10782,7 +10589,6 @@ export class DefaultMessageService implements IMessageService {
 			elizaSyntheticFailure: true,
 			transient: true,
 			doNotPersist: true,
-			providers: [],
 			text: replyText,
 			responseId,
 		};
@@ -10836,7 +10642,6 @@ export class DefaultMessageService implements IMessageService {
 			thought: `No LLM provider configured during ${stage}.`,
 			actions: ["REPLY"],
 			failureKind: "no_provider",
-			providers: [],
 			text: replyText,
 			responseId,
 		};

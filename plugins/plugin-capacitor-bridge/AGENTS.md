@@ -172,10 +172,10 @@ If a new `node:fs` function needs sandboxing, add it to the appropriate array (`
 - **ws is a runtime dep.** The `ws` package is loaded dynamically (`await import("ws")`) so the module can be bundled for environments where WebSocket is not needed.
 - **Interactive-over-background text lane (#11914).** Both TEXT handler paths (bionic UDS delegation and the renderer device bridge) route every generate through the process-wide `InferencePriorityGate` (`@elizaos/core`): interactive turns (the default) dispatch ahead of queued background jobs; requests marked `priority: "background"` run only when the lane is idle, wait at most the RAM-class bound, and are clamped to the RAM-class budget (`resolveMobileLaneBudget`, driven by the `ELIZA_INFERENCE_RAM_CLASS` env contract from #11760) before the decode. This is what stops a long autonomous job from self-queueing on the bionic host's resident lock and starving chat.
 
-<!-- BEGIN: evidence-and-e2e-mandate (managed; canonical standard = repo-root PR_EVIDENCE.md) -->
+<!-- BEGIN: evidence-and-e2e-mandate (managed; canonical standard = repo-root AGENTS.md) -->
 ## ⛔ NON-NEGOTIABLE — evidence, trajectories & real end-to-end tests
 
-> The binding, repo-wide standard is **[PR_EVIDENCE.md](../../PR_EVIDENCE.md)**. Read it.
+> The binding, repo-wide standard is **[AGENTS.md](../../AGENTS.md)**. Read it.
 > Nothing in this package is *done* until it is *proven* done — a reviewer must confirm it
 > works **without reading the code**, from the artifacts you attach. This applies to **every**
 > feature, fix, refactor, and chore here. "Tests pass" is not proof; "CI is green" is not proof.
@@ -203,7 +203,7 @@ If a new `node:fs` function needs sandboxing, add it to the appropriate array (`
   "follow-up." When unsure, research thoroughly, weigh the options, and ship the best,
   highest-effort, production-ready version. Keep going until every possibility is exhausted.
 
-Artifacts → `.github/issue-evidence/<issue#>-<slug>.<ext>`; attach each evidence type **or**
+Artifacts → attached inline in the PR (MP4 video, JPG screenshots, logs in `<details>`); attach each evidence type **or**
 explicitly mark it N/A with a reason — never leave it blank. If `develop` moved and changed
 behavior, **re-capture** evidence; stale proof is worse than none.
 

@@ -350,12 +350,9 @@ function isReasoningModel(modelName: string): boolean {
 }
 
 /**
- * True when the Cloud gateway routes this model to Cerebras. Cerebras's
- * OpenAI-compatible endpoint rejects
- * `response_format: { type: "json_schema", ... }` with a 400, so structured
- * output for these models must fall back to `{ type: "json_object" }`.
- * Mirrors plugin-openai's `isCerebrasMode` json_object scrub, detected by
- * model name here because one Cloud key serves many providers.
+ * Strips provider prefixes and variant suffixes so Cerebras-served models can
+ * be recognized by bare id (one Cloud key serves many providers, and callers
+ * pass `cerebras:...` / `openai/...` / `:suffix` forms interchangeably).
  */
 function normalizeCerebrasModelId(modelName: string): string {
   return modelName
@@ -364,15 +361,6 @@ function normalizeCerebrasModelId(modelName: string): string {
     .replace(/^cerebras[:/]/, "")
     .replace(/^openai\//, "")
     .replace(/:(?!free$).+$/, "");
-}
-
-function isCerebrasServedModel(modelName: string): boolean {
-  const id = normalizeCerebrasModelId(modelName);
-  return (
-    id === DEFAULT_CEREBRAS_TEXT_MODEL ||
-    id === "gpt-oss-120b" ||
-    id === "zai-glm-4.7"
-  );
 }
 
 function resolveCerebrasThinkingOffReasoningEffort(
@@ -459,6 +447,87 @@ function shouldReturnNativeResult(params: GenerateTextParamsWithNativeOptions): 
   return Boolean(params.messages || params.tools || params.toolChoice || params.responseSchema);
 }
 
+function toolCallIds(toolCalls: unknown): string[] {
+  if (!Array.isArray(toolCalls)) {
+    return [];
+  }
+  const ids: string[] = [];
+  for (const call of toolCalls) {
+    const id = firstString(asRecord(call).id);
+    if (id) {
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+// The native `/chat/completions` gateway strictly enforces OpenAI tool-call
+// linkage: a `role:"tool"` message is only valid when a directly-preceding
+// assistant message declared a matching id in its `tool_calls`, and an
+// assistant `tool_calls` entry is only valid when a later tool message answers
+// it. Runtime-rendered history routinely violates both — a prior turn's tool
+// result surfaces as a bare `role:"tool"` message with no `tool_call_id` and no
+// assistant `tool_calls` before it — and the gateway 400s the WHOLE request on
+// that (`invalid_request_error`), breaking every tool-using turn. Reconstructing
+// the original `tool_calls` isn't possible from rendered history, so make the
+// array spec-valid instead: downgrade every unpaired tool message to a plain
+// `role:"user"` message (verified 200 against the gateway) with a `[tool result]`
+// marker so its content survives, and strip `tool_calls` from any assistant
+// message whose calls go unanswered (which would otherwise 500 "Tool result is
+// missing"). Well-formed assistant→tool pairs pass through untouched.
+function sanitizeNativeMessages(
+  messages: Array<Record<string, unknown>>
+): Array<Record<string, unknown>> {
+  const result = messages.map((message) => ({ ...message }));
+  let openAssistant: Record<string, unknown> | null = null;
+  let matchedToolMessages: Array<Record<string, unknown>> = [];
+  let pending = new Set<string>();
+  const downgradeToolMessage = (message: Record<string, unknown>): void => {
+    delete message.tool_call_id;
+    message.role = "user";
+    message.content = `[tool result] ${stringifyMessageContent(message.content)}`;
+  };
+  const finalizeOpenAssistant = (): void => {
+    if (openAssistant && pending.size > 0) {
+      delete openAssistant.tool_calls;
+      if (openAssistant.content == null) {
+        openAssistant.content = "";
+      }
+      for (const toolMessage of matchedToolMessages) {
+        downgradeToolMessage(toolMessage);
+      }
+    }
+    openAssistant = null;
+    matchedToolMessages = [];
+    pending = new Set();
+  };
+  for (const message of result) {
+    if (message.role === "tool") {
+      const id = firstString(message.tool_call_id);
+      if (id && pending.has(id)) {
+        pending.delete(id);
+        matchedToolMessages.push(message);
+      } else {
+        if (openAssistant && pending.size > 0) {
+          finalizeOpenAssistant();
+        }
+        downgradeToolMessage(message);
+      }
+      continue;
+    }
+    finalizeOpenAssistant();
+    if (message.role === "assistant") {
+      const ids = toolCallIds(message.tool_calls);
+      if (ids.length > 0) {
+        openAssistant = message;
+        pending = new Set(ids);
+      }
+    }
+  }
+  finalizeOpenAssistant();
+  return result;
+}
+
 function buildNativeMessages(
   params: GenerateTextParamsWithNativeOptions,
   promptText: string,
@@ -471,10 +540,11 @@ function buildNativeMessages(
         : { role: "user", content: stringifyMessageContent(message) }
     );
     const first = asRecord(messages[0]);
-    if (systemPrompt && first.role !== "system") {
-      return [{ role: "system", content: systemPrompt }, ...messages];
-    }
-    return messages;
+    const withSystem =
+      systemPrompt && first.role !== "system"
+        ? [{ role: "system", content: systemPrompt }, ...messages]
+        : messages;
+    return sanitizeNativeMessages(withSystem);
   }
 
   const messages: Array<Record<string, unknown>> = [];
@@ -585,39 +655,26 @@ export function normalizeNativeToolChoice(toolChoice: unknown): unknown {
   return toolName ? { type: "function", function: { name: toolName } } : toolChoice;
 }
 
-function buildNativeResponseFormat(responseSchema: unknown, modelName: string): unknown {
+function buildNativeResponseFormat(responseSchema: unknown, _modelName: string): unknown {
   if (!responseSchema) {
     return undefined;
   }
 
-  // Cerebras-served models 400 on `response_format: json_schema`, so emit
-  // `json_object` and rely on the schema embedded in the prompt body.
-  if (isCerebrasServedModel(modelName)) {
-    return { type: "json_object" };
-  }
-
+  // An explicit caller-supplied response format still wins.
   const schemaRecord = asRecord(responseSchema);
   if (schemaRecord.responseFormat) {
     return schemaRecord.responseFormat;
   }
 
-  const schemaOptions =
-    "schema" in schemaRecord
-      ? {
-          schema: schemaRecord.schema,
-          name: firstString(schemaRecord.name) ?? "structured_response",
-          description: firstString(schemaRecord.description),
-        }
-      : { schema: responseSchema, name: "structured_response", description: undefined };
-
-  return {
-    type: "json_schema",
-    json_schema: {
-      name: schemaOptions.name,
-      ...(schemaOptions.description ? { description: schemaOptions.description } : {}),
-      schema: schemaOptions.schema,
-    },
-  };
+  // The Cloud's native `/chat/completions` gateway 400s on `response_format`
+  // for its served models — BOTH `json_schema` AND `json_object`, verified
+  // live against zai-glm-4.7 AND gemma-4-31b (each: with either format → 400,
+  // without → 200). The structured schema is already embedded in the prompt
+  // body and the caller repairs/validates the returned JSON, so omit
+  // `response_format` entirely; otherwise every structured-output call (the
+  // trajectory evaluator, the planner) fails with `Bad Request` and breaks
+  // every tool-using turn (web search, price lookups, sub-agent spawns).
+  return undefined;
 }
 
 function resolvePromptCacheKey(providerOptions: Record<string, unknown>): string | undefined {

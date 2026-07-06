@@ -1,9 +1,10 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 /**
  * Stage 3 — GEPA optimization sweep over the gpt-5.5 harvest.
  *
  * Reads the Stage-2 harvest tree
- * (.github/issue-evidence/gpt55-training-pipeline/harvest/{scenario,benchmark}/…),
+ * (reports/training-harvest/gpt55/harvest/{scenario,benchmark}/…),
  * selects the GEPA-optimizable failures (real agent failures, NOT connector/cred
  * env-gates — decided from `report.json`, never stderr grep), groups them by the
  * plugin-training GEPA task the scorer actually supports, builds one
@@ -38,20 +39,16 @@
 import {
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
-const EVIDENCE_ROOT = path.join(
-  REPO_ROOT,
-  ".github/issue-evidence/gpt55-training-pipeline",
-);
+const EVIDENCE_ROOT = path.join(REPO_ROOT, "reports/training-harvest/gpt55");
 const HARVEST_ROOT = path.join(EVIDENCE_ROOT, "harvest");
 const TSCONFIG = path.join(REPO_ROOT, "tsconfig.json");
 const S1_PROVIDER_PATH = "/tmp/s1-provider-full.json";
@@ -332,7 +329,7 @@ function selectAndGroup() {
     if (status === "passed") {
       stats.passed += 1;
       // Gold rows: every passing native row buckets into its GEPA task.
-      for (const row of readNativeRows(it.itemDir + "/native.jsonl")) {
+      for (const row of readNativeRows(`${it.itemDir}/native.jsonl`)) {
         if (rowScenarioStatus(row) === "failed") continue; // belt + suspenders
         const gepaTask = TASK_TYPE_TO_GEPA_TASK[rowTaskType(row)];
         if (!gepaTask) continue;
@@ -346,9 +343,10 @@ function selectAndGroup() {
     }
     stats.failed += 1;
 
-    const reportPath = it.itemDir + "/report.json";
+    const reportPath = `${it.itemDir}/report.json`;
     if (!existsSync(reportPath)) {
-      stats.failClassCounts.NO_REPORT = (stats.failClassCounts.NO_REPORT ?? 0) + 1;
+      stats.failClassCounts.NO_REPORT =
+        (stats.failClassCounts.NO_REPORT ?? 0) + 1;
       continue;
     }
     let report;
@@ -371,7 +369,7 @@ function selectAndGroup() {
     // OWN native rows' task_type (already stamped), preferring the task whose
     // failure category matches: ACTION_SELECTION → action_planner, else the
     // dominant non-evaluation task_type present.
-    const failRows = readNativeRows(it.itemDir + "/native.jsonl");
+    const failRows = readNativeRows(`${it.itemDir}/native.jsonl`);
     const taskTypesPresent = new Set(
       failRows.map(rowTaskType).filter((t) => TASK_TYPE_TO_GEPA_TASK[t]),
     );
@@ -454,14 +452,19 @@ function buildTaskDataset(task, goldRows) {
   const seen = new Set();
   const lines = [];
   for (const row of goldRows) {
-    if (row.boundary !== "vercel_ai_sdk.generateText" &&
-        row.boundary !== "vercel_ai_sdk.streamText") continue;
+    if (
+      row.boundary !== "vercel_ai_sdk.generateText" &&
+      row.boundary !== "vercel_ai_sdk.streamText"
+    )
+      continue;
     const req = row.request ?? {};
     const resp = row.response ?? {};
     // Must have a usable user turn + expected output (mirrors rowToExample).
     const hasUser =
       (Array.isArray(req.messages) &&
-        req.messages.some((m) => m.role === "user" && (m.content ?? "").trim())) ||
+        req.messages.some(
+          (m) => m.role === "user" && (m.content ?? "").trim(),
+        )) ||
       (typeof req.prompt === "string" && req.prompt.trim());
     const hasExpected =
       (typeof resp.text === "string" && resp.text.trim()) ||
@@ -475,7 +478,10 @@ function buildTaskDataset(task, goldRows) {
       response: resp,
       metadata: row.metadata ?? {},
     };
-    const key = JSON.stringify([req.messages ?? req.prompt, resp.text ?? resp.toolCalls]);
+    const key = JSON.stringify([
+      req.messages ?? req.prompt,
+      resp.text ?? resp.toolCalls,
+    ]);
     if (seen.has(key)) continue; // dedup identical gold rows
     seen.add(key);
     lines.push(JSON.stringify(rec));
@@ -489,7 +495,10 @@ function buildTaskDataset(task, goldRows) {
   if (MAX_ROW_CHARS > 0) kept = kept.filter((l) => l.length <= MAX_ROW_CHARS);
   if (SAMPLE_ROWS > 0 && kept.length > SAMPLE_ROWS) {
     const n = kept.length;
-    kept = Array.from({ length: SAMPLE_ROWS }, (_, i) => kept[Math.floor((i * n) / SAMPLE_ROWS)]);
+    kept = Array.from(
+      { length: SAMPLE_ROWS },
+      (_, i) => kept[Math.floor((i * n) / SAMPLE_ROWS)],
+    );
   }
   writeFileSync(outPath, kept.join("\n") + (kept.length ? "\n" : ""));
   return { path: outPath, size: kept.length, poolSize: lines.length };
@@ -545,7 +554,9 @@ function runGepaForTask(task, datasetPath) {
     "current",
   );
   if (!FORCE && existsSync(artifactCurrent)) {
-    console.log(`[gepa] ${task}: artifact exists, skip (use --force). ${artifactCurrent}`);
+    console.log(
+      `[gepa] ${task}: artifact exists, skip (use --force). ${artifactCurrent}`,
+    );
     return { task, skipped: true, artifactCurrent };
   }
   if (!process.env.CEREBRAS_API_KEY) {
@@ -553,7 +564,9 @@ function runGepaForTask(task, datasetPath) {
       "CEREBRAS_API_KEY is required to run GEPA scoring (the sanctioned fast eval adapter).",
     );
   }
-  console.log(`[gepa] ${task}: running GEPA (dataset=${path.basename(datasetPath)})…`);
+  console.log(
+    `[gepa] ${task}: running GEPA (dataset=${path.basename(datasetPath)})…`,
+  );
   const res = spawnSync("bun", argvArr, {
     cwd: REPO_ROOT,
     encoding: "utf8",
@@ -750,7 +763,7 @@ function main() {
           `scorer=${p.dedicatedScorer ? "dedicated" : "token-overlap"}  ` +
           `${gepaable ? "RUNNABLE" : "SKIP(no dataset or no failures)"}`,
       );
-      if (gepaable) console.log(p.command + "\n");
+      if (gepaable) console.log(`${p.command}\n`);
     }
     const summaryPath = path.join(STAGE3_ROOT, "stage3-plan.json");
     writeFileSync(summaryPath, JSON.stringify(summary, null, 2));
@@ -767,14 +780,18 @@ function main() {
   const results = [];
   for (const p of plan) {
     if (p.datasetSize === 0 || p.failingScenarios === 0) {
-      console.log(`[skip] ${p.task}: dataset=${p.datasetSize} failing=${p.failingScenarios}`);
+      console.log(
+        `[skip] ${p.task}: dataset=${p.datasetSize} failing=${p.failingScenarios}`,
+      );
       continue;
     }
     let gepaResult = { task: p.task, skipped: RERUN_ONLY };
     if (!RERUN_ONLY) {
       gepaResult = runGepaForTask(p.task, p.datasetPath);
       if (gepaResult.exitCode && gepaResult.exitCode !== 0) {
-        console.log(`[gepa] ${p.task}: exit=${gepaResult.exitCode} — see gepa-logs; skipping rerun.`);
+        console.log(
+          `[gepa] ${p.task}: exit=${gepaResult.exitCode} — see gepa-logs; skipping rerun.`,
+        );
         results.push({ task: p.task, gepaResult, reruns: [] });
         continue;
       }
@@ -785,7 +802,9 @@ function main() {
     for (const scn of failing) {
       console.log(`[rerun] ${p.task} :: ${scn.item} (was ${scn.cat})`);
       const v = rerunScenario(scn, providerEnv);
-      console.log(`[rerun]   → status=${v.status} flipped=${v.flipped} judge=${v.judgeScore ?? "n/a"}`);
+      console.log(
+        `[rerun]   → status=${v.status} flipped=${v.flipped} judge=${v.judgeScore ?? "n/a"}`,
+      );
       reruns.push(v);
     }
     const flips = reruns.filter((r) => r.flipped).length;
@@ -796,13 +815,12 @@ function main() {
       flips,
       rerunCount: reruns.length,
     });
-    console.log(`[task] ${p.task}: ${flips}/${reruns.length} flipped to passing\n`);
+    console.log(
+      `[task] ${p.task}: ${flips}/${reruns.length} flipped to passing\n`,
+    );
   }
   summary.results = results;
-  const summaryPath = path.join(
-    STAGE3_ROOT,
-    `stage3-run-${Date.now()}.json`,
-  );
+  const summaryPath = path.join(STAGE3_ROOT, `stage3-run-${Date.now()}.json`);
   writeFileSync(summaryPath, JSON.stringify(summary, null, 2));
   console.log(`\nrun summary → ${path.relative(REPO_ROOT, summaryPath)}`);
 }

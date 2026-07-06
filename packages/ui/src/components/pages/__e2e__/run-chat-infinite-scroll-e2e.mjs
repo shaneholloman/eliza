@@ -1,15 +1,22 @@
 /**
- * REAL-browser e2e for the infinite upward scroll (#13532).
+ * REAL-browser e2e for the infinite upward scroll (#13532/#14329).
  *
  * Mounts chat-infinite-scroll-fixture.tsx — the PRODUCTION `useLoadOlderOnScroll`
- * hook + `loadOlderConversationMessages` orchestration — in real Chromium and
- * drives the actual behaviour jsdom cannot:
+ * hook + `loadOlderConversationMessages` orchestration + `planScrollTopLoadOlder`
+ * render-window policy — in real Chromium and drives the actual behaviour jsdom
+ * cannot:
  *   1. Scroll to the top → a `GET .../messages?before=<cursor>` request FIRES
  *      (observed on the wire), older rows PREPEND, and the previously-top row's
  *      boundingBox stays put (scroll-anchor preservation, ±tolerance).
  *   2. Empty history → NO fetch loop (an empty thread has no cursor to page).
  *   3. Fetch failure → the error surfaces (guard re-arms), with NO retry storm
  *      (bounded resolves), and no fabricated/empty prepend.
+ *   4. #14329 render window: a thread far larger than the initial render cap
+ *      mounts showing only the newest window (NOT every loaded turn), and
+ *      scrolling up GROWS the window to reveal the already-loaded older turns —
+ *      network-free (no `?before=` fetch) until the window has drained. This
+ *      guards the actual bug: a fixed `slice(-80)` cap that sliced prepended
+ *      older turns straight back off, dead-ending scroll-up.
  *
  * A tiny in-process HTTP server serves the fixture HTML AND the mock
  * `?before=` messages endpoint, so the `fetch()` the client issues is genuine
@@ -20,19 +27,41 @@
  */
 
 import { createServer } from "node:http";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { builtinModules } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { chromium } from "playwright";
+import { chromium, webkit } from "playwright";
+
+// `ENGINE=webkit` runs the SAME harness under WebKit — scroll-anchor
+// preservation on prepend is engine-specific (WebKit's scroll-anchoring
+// heuristics differ from Blink), so AC #2 (#14329) requires both engines. The
+// harness drives scrollTop programmatically (not a wheel), so it is
+// engine-agnostic and needs no per-engine gesture path.
+const ENGINE = process.env.ENGINE === "webkit" ? webkit : chromium;
+const ENGINE_NAME = process.env.ENGINE === "webkit" ? "webkit" : "chromium";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const outDir = join(here, "output-infinite-scroll");
+const videoDir = join(outDir, "video");
+await mkdir(outDir, { recursive: true });
+await mkdir(videoDir, { recursive: true });
 
 let failures = 0;
+const assertions = [];
 function assert(cond, msg) {
   console.log(`${cond ? "✓" : "✗"} ${msg}`);
+  assertions.push({ status: cond ? "pass" : "fail", message: msg });
   if (!cond) failures += 1;
   return cond;
+}
+
+async function screenshot(page, name) {
+  await page.screenshot({
+    path: join(outDir, `${ENGINE_NAME}-${name}.png`),
+    fullPage: false,
+  });
 }
 
 // --- bundle the fixture (same stub set as the sibling chat-scroll runner) ---
@@ -160,28 +189,47 @@ const base = `http://127.0.0.1:${port}`;
 const SCROLLER = '[data-testid="infinite-scroll-scroller"]';
 const ROW = '[data-testid="infinite-scroll-row"]';
 
-const browser = await chromium.launch({ args: ["--no-sandbox"] });
+console.log(`engine: ${ENGINE_NAME}`);
+const browser = await ENGINE.launch(
+  ENGINE_NAME === "chromium" ? { args: ["--no-sandbox"] } : {},
+);
 const consoleErrors = [];
+const networkRequests = [];
 
 async function newPage(query) {
-  const page = await browser.newPage({
+  const context = await browser.newContext({
     viewport: { width: 480, height: 700 },
+    recordVideo: { dir: videoDir, size: { width: 480, height: 700 } },
   });
+  const page = await context.newPage();
   const requests = [];
-  page.on("request", (r) => requests.push(r.url()));
+  page.on("request", (r) => {
+    requests.push(r.url());
+    networkRequests.push(r.url());
+  });
   page.on("console", (m) => {
     if (m.type() === "error") consoleErrors.push(m.text());
   });
   page.on("pageerror", (e) => consoleErrors.push(String(e)));
   await page.goto(`${base}/${query}`);
   await page.waitForSelector(SCROLLER);
-  return { page, requests };
+  return { page, requests, context };
+}
+
+async function closePageWithVideo(run, name) {
+  const video = run.page.video();
+  await run.page.close();
+  await run.context.close();
+  if (!video) return;
+  const videoPath = await video.path();
+  await rename(videoPath, join(outDir, `${ENGINE_NAME}-${name}.webm`));
 }
 
 try {
   // ── 1) Load-older: scroll to top → ?before= fires → prepend → no jump ──────
   {
-    const { page, requests } = await newPage("");
+    const run = await newPage("");
+    const { page, requests } = run;
     await page.waitForSelector(ROW);
     // The thread mounts pinned to the bottom (sentinel off-screen), so NO fetch
     // has fired yet — the load-older is entirely reader-driven below.
@@ -193,11 +241,16 @@ try {
       requests.filter((u) => /\/messages\?before=/.test(u)).length === 0,
       "no ?before= fetch fired at mount (thread starts pinned to bottom)",
     );
+    await screenshot(page, "01-mounted-bottom");
 
     // Scroll to the very top and, in the SAME evaluate, capture the anchor: the
     // top-most row's identity + viewport-y at scrollTop=0, BEFORE the prepend
     // lands. The prefetch fires from this scroll; the only thing that then moves
     // this row is the older-page grow — exactly the anchor behaviour under test.
+    const beforeRequest = page.waitForRequest(
+      (r) => /\/messages\?before=/.test(r.url()),
+      { timeout: 8_000 },
+    );
     const anchorInfo = await page.evaluate(
       ({ scrollerSel, rowSel }) => {
         const scroller = document.querySelector(scrollerSel);
@@ -212,15 +265,14 @@ try {
       },
       { scrollerSel: SCROLLER, rowSel: ROW },
     );
+    await screenshot(page, "02-before-prepend-top");
     assert(
       anchorInfo && anchorInfo.id,
       "captured the top anchor row at scrollTop=0 before the load-older",
     );
 
     // The `?before=` request must fire on scroll-to-top.
-    await page.waitForRequest((r) => /\/messages\?before=/.test(r.url()), {
-      timeout: 8_000,
-    });
+    await beforeRequest;
     assert(
       requests.some((u) => /\/messages\?before=/.test(u)),
       "a GET .../messages?before= request fired on scroll-to-top",
@@ -261,15 +313,18 @@ try {
         `anchor row viewport-y preserved across the prepend (drift ${drift.toFixed(1)}px ≤ 4px, ${anchorInfo.y.toFixed(0)} → ${yAfter.toFixed(0)})`,
       );
     }
-    await page.close();
+    await screenshot(page, "03-after-prepend-anchored");
+    await closePageWithVideo(run, "01-prepend-anchor");
   }
 
   // ── 2) Empty history: NO fetch loop ────────────────────────────────────────
   {
-    const { page, requests } = await newPage("?empty");
+    const run = await newPage("?empty");
+    const { page, requests } = run;
     await page.waitForTimeout(600);
     const rows = await page.locator(ROW).count();
     assert(rows === 0, "empty thread renders zero rows");
+    await screenshot(page, "04-empty-history");
     // Scroll (no-op on an empty scroller) — still must not fetch.
     await page.evaluate((sel) => {
       const el = document.querySelector(sel);
@@ -280,12 +335,13 @@ try {
       !requests.some((u) => /\/messages\?before=/.test(u)),
       "empty thread issues NO ?before= fetch (no cursor to page below)",
     );
-    await page.close();
+    await closePageWithVideo(run, "02-empty-history");
   }
 
   // ── 3) Fetch failure: error surfaces, guard re-arms, no retry storm ─────────
   {
-    const { page } = await newPage("?fail");
+    const run = await newPage("?fail");
+    const { page } = run;
     await page.waitForSelector(ROW);
     const rowsBefore = await page.locator(ROW).count();
     // Trigger the (failing) older-page load.
@@ -309,18 +365,127 @@ try {
       resolves <= 2,
       `no retry storm on failure (older-page loads resolved ${resolves} times ≤ 2)`,
     );
+    await screenshot(page, "05-fetch-failure");
+    await closePageWithVideo(run, "03-fetch-failure");
+  }
+
+  // ── 4) #14329 render window grows past the initial cap on scroll-up ─────────
+  // A 200-turn thread mounts. It must render only the newest window (the initial
+  // cap), NOT all 200 — then scrolling up reveals the already-loaded older turns
+  // WITHOUT a network fetch. Under the old fixed `slice(-80)` cap the prepended /
+  // hidden older turns were sliced straight back off and scroll-up dead-ended.
+  {
+    const { page, requests } = await newPage("?big");
+    await page.waitForSelector(ROW);
+    await page.waitForTimeout(300);
+
+    const TOTAL_LOADED = 200;
+    const rowsAtMount = await page.locator(ROW).count();
+    const windowAtMount = await page.evaluate(() => window.__renderWindow ?? 0);
+    assert(
+      rowsAtMount > 0 && rowsAtMount < TOTAL_LOADED,
+      `big thread mounts capped to the render window, not all ${TOTAL_LOADED} turns (rendered ${rowsAtMount})`,
+    );
+    assert(
+      rowsAtMount === windowAtMount,
+      `rendered rows equal the render window at mount (${rowsAtMount} === ${windowAtMount})`,
+    );
+    // The oldest loaded turn is initially windowed OUT (this is the "before"
+    // state the bug report shows: scroll-up dead-ends before reaching it).
+    const oldestHiddenAtMount = await page.evaluate(
+      () => !document.querySelector('[data-message-id="tail-0"]'),
+    );
+    assert(
+      oldestHiddenAtMount,
+      "the oldest loaded turn (tail-0) is windowed out at mount",
+    );
+
+    // ONE scroll-to-top must GROW the window and reveal older loaded turns with
+    // NO `?before=` fetch — reveal-before-fetch, the network-free path.
+    await page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      if (el) el.scrollTop = 0;
+    }, SCROLLER);
+    await page
+      .waitForFunction(
+        ({ prev }) => (window.__renderWindow ?? 0) > prev,
+        { prev: windowAtMount },
+        { timeout: 8_000 },
+      )
+      .catch(() => {});
+    const windowAfterOne = await page.evaluate(() => window.__renderWindow ?? 0);
+    const rowsAfterOne = await page.locator(ROW).count();
+    assert(
+      windowAfterOne > windowAtMount && rowsAfterOne > rowsAtMount,
+      `scroll-up grew the render window (${windowAtMount}→${windowAfterOne}) and revealed rows (${rowsAtMount}→${rowsAfterOne})`,
+    );
+    assert(
+      requests.filter((u) => /\/messages\?before=/.test(u)).length === 0,
+      "revealing already-loaded turns issued NO ?before= fetch (reveal-before-fetch)",
+    );
+
+    // Keep scrolling to the top: the window keeps growing until every loaded
+    // turn — including the oldest (tail-0) — is rendered.
+    for (let i = 0; i < 8; i += 1) {
+      await page.evaluate((sel) => {
+        const el = document.querySelector(sel);
+        if (el) el.scrollTop = 0;
+      }, SCROLLER);
+      await page.waitForTimeout(150);
+      const done = await page.evaluate(
+        () => !!document.querySelector('[data-message-id="tail-0"]'),
+      );
+      if (done) break;
+    }
+    const oldestRevealed = await page.evaluate(
+      () => !!document.querySelector('[data-message-id="tail-0"]'),
+    );
+    assert(
+      oldestRevealed,
+      "scrolling up reveals the oldest loaded turn (tail-0) — scroll-up no longer dead-ends",
+    );
+    const rowsFinal = await page.locator(ROW).count();
+    assert(
+      rowsFinal >= TOTAL_LOADED,
+      `all ${TOTAL_LOADED} loaded turns are reachable by scrolling up (rendered ${rowsFinal})`,
+    );
     await page.close();
   }
 } finally {
   await browser.close();
   server.close();
+  const evidence = {
+    engine: ENGINE_NAME,
+    assertions,
+    serverRequests,
+    networkRequests,
+    consoleErrors,
+  };
+  await writeFile(
+    join(outDir, `${ENGINE_NAME}-evidence.json`),
+    `${JSON.stringify(evidence, null, 2)}\n`,
+  );
+  await writeFile(
+    join(outDir, `${ENGINE_NAME}-frontend-log.txt`),
+    [
+      `engine=${ENGINE_NAME}`,
+      `consoleErrors=${consoleErrors.length}`,
+      ...consoleErrors.map((entry) => `ERROR ${entry}`),
+      "",
+      "networkRequests:",
+      ...networkRequests,
+      "",
+      "serverRequests:",
+      JSON.stringify(serverRequests, null, 2),
+    ].join("\n"),
+  );
 }
 
 assert(consoleErrors.length === 0, `no console errors (${consoleErrors.length})`);
 if (consoleErrors.length) for (const e of consoleErrors) console.log("  ERR:", e);
 
 if (failures > 0) {
-  console.error(`\n${failures} assertion(s) FAILED`);
+  console.error(`\n${failures} assertion(s) FAILED [${ENGINE_NAME}]`);
   process.exit(1);
 }
-console.log("\nAll infinite-scroll assertions passed.");
+console.log(`\nAll infinite-scroll assertions passed [${ENGINE_NAME}].`);

@@ -33,10 +33,12 @@ describe("parseIosE2eArgs", () => {
     expect(f).toEqual({
       device: undefined,
       appPath: undefined,
+      output: undefined,
       skipBuild: false,
       skipAuth: false,
       skipLocalChat: false,
       cloud: false,
+      noWait: false,
     });
   });
 
@@ -46,22 +48,27 @@ describe("parseIosE2eArgs", () => {
       "--skip-auth",
       "--skip-local-chat",
       "--cloud",
+      "--no-wait",
     ]);
     expect(f.skipBuild).toBe(true);
     expect(f.skipAuth).toBe(true);
     expect(f.skipLocalChat).toBe(true);
     expect(f.cloud).toBe(true);
+    expect(f.noWait).toBe(true);
   });
 
-  it("captures --device and --app-path values", () => {
+  it("captures --device, --app-path, and --output values", () => {
     const f = parseIosE2eArgs([
       "--device",
       "iPhone 15",
       "--app-path",
       "/tmp/App.app",
+      "--output",
+      "/tmp/evidence",
     ]);
     expect(f.device).toBe("iPhone 15");
     expect(f.appPath).toBe("/tmp/App.app");
+    expect(f.output).toBe("/tmp/evidence");
   });
 
   it("does not read past the end of argv for a trailing value flag", () => {
@@ -76,6 +83,7 @@ describe("planIosE2eSteps", () => {
     skipAuth: false,
     skipLocalChat: false,
     cloud: false,
+    noWait: false,
   };
 
   it("runs build → auth → local-chat by default (no cloud)", () => {

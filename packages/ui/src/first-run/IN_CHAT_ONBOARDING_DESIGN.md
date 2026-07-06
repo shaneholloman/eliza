@@ -19,8 +19,10 @@ choices and should keep negative assertions for deleted surfaces such as
 `first-run-runtime-chooser`, `first-run-chat`, and
 `startup-first-run-background`.
 
-Current end-to-end evidence for issue #10709 lives in
-`.github/issue-evidence/10709-onboarding-chat/`.
+Current end-to-end evidence is attached inline to the issue/PR from the
+Playwright artifact tree (`test-results` / per-test output): JPG screenshots,
+recordings when enabled, and the relevant console/network excerpts. Specs should
+not write repo-local evidence folders.
 
 ## The onboarding surface (#9952 → relaxed by #12178)
 
@@ -79,6 +81,27 @@ seeds the same in-chat onboarding; once first-run completes the mount is a
 no-op (`App.chat-overlay-first-run.test.tsx`). The transcript's CHOICE widgets,
 any OAuth/secret blocks, and the unlocked composer are the interactive surfaces
 during onboarding.
+
+## Post-onboarding landing (#14362)
+
+Onboarding finishes on chat and stays there. `completeFirstRun(landingTab)` —
+the single finalizer in `useFirstRunCallbacks.ts` — flips the durable
+completion gate, sets the tab, and marks `initialTabSetRef`, so the first
+post-onboarding paint is already the landing surface. Cloud-only completion
+(`completeCloudOnly` in `use-first-run-conductor.ts`) passes `"chat"`; the
+BYOK/Settings escapes pass `"settings"`.
+
+There is **no automatic character-select landing.** An earlier design (#13396)
+routed the first post-onboarding boot to the full-screen character-select view
+once, via a session-scoped `justCommitted` ref consumed in
+`startup-phase-hydrate.ts`. That contradicted the one-obvious-path / chat-first
+doctrine — two surfaces fought for the first impression — so the detour and its
+`justCommitted` plumbing were removed. The hydrating phase now only lands a root
+open on the default tab (chat) and lets a deep-linked URL win. Character
+customization is reached explicitly from Settings/launcher, not forced on first
+run. The regression is guarded by `startup-phase-hydrate.initial-tab.test.ts`
+(root boot never routes to character-select) and
+`onboarding-cloud-only.spec.ts` (no character-select surface after onboarding).
 
 ## Confused-user guards (conductor + send funnel)
 

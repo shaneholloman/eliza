@@ -237,7 +237,7 @@ test.describe("real touch input (CDP dispatchTouchEvent) — #9943 item 6", () =
   });
 });
 
-test("removed single-thread controls: no chat-full-clear and no swipe-between-conversations on the open thread", async ({
+test("single-thread open thread: header search exists (no new-chat), but no swipe-between-conversations", async ({
   page,
 }, testInfo) => {
   await openAppPath(page, "/chat");
@@ -255,7 +255,10 @@ test("removed single-thread controls: no chat-full-clear and no swipe-between-co
   await expect(thread).toContainText("STANDUP", { timeout: 15_000 });
   const convBefore = await sheet.getAttribute("data-conversation-id");
 
-  // The removed Clear/new-chat header control (#13531) is nowhere in the shell.
+  // Chat history UX: the header exposes a quiet search entry point as its ONLY
+  // left control — there is no new-chat/clear button (the thread is one
+  // infinite conversation). Opening the sheet to half+ reveals the header.
+  await expect(page.getByTestId("chat-full-search")).toHaveCount(1);
   await expect(page.getByTestId("chat-full-clear")).toHaveCount(0);
 
   // A horizontal drag across the OPEN thread must NOT switch conversations —

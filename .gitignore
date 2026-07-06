@@ -7,27 +7,33 @@ node_modules
 
 # E2E recording output — videos, traces, contact sheets (generated locally)
 /e2e-recordings/
+# Local cross-silo evidence review dashboard (generated locally)
+/evidence/
 # Voice trajectory video capture (binary webm — regenerate via record-voice-trajectories.mjs)
 packages/ui/src/components/shell/__e2e__/output-voice-recording/
 # Tutorial spotlight e2e output (screenshots + webm — regenerate via test:tutorial-e2e)
 packages/ui/src/components/pages/tutorial/__e2e__/output-tutorial/
 # FTU welcome e2e output (screenshots + webm — regenerate via test:ftu-home-e2e)
 packages/ui/src/components/chat/widgets/__e2e__/output-ftu/
+# Wallet widget e2e output (screenshots + stubs — regenerate via test:wallet-widget-e2e)
+packages/ui/src/components/chat/widgets/__e2e__/output-wallet/
 # Permission-priming e2e output (screenshots + webm + stubs — regenerate via test:permission-priming-e2e)
 packages/ui/src/components/permissions/__e2e__/output-permission-priming/
 # View-lifecycle e2e output (screenshots + webm + telemetry — regenerate via test:view-lifecycle-e2e)
 packages/ui/src/components/views/__e2e__/output-view-lifecycle/
-# Desktop bottom-bar e2e output (screenshots + webm — regenerate via test:bottombar-e2e; committed evidence lives in .github/issue-evidence/9953-windows-bottom-bar/)
+# Desktop bottom-bar e2e output (screenshots + webm — regenerate via test:bottombar-e2e)
 packages/ui/src/components/shell/__e2e__/output-bottombar/
-# Connector card e2e output (screenshots + bundles — regenerate via test:connectors-e2e; committed evidence lives in .github/issue-evidence/10705-connector-config-co-render/)
+# Connector card e2e output (screenshots + bundles — regenerate via test:connectors-e2e)
 packages/ui/src/components/pages/__e2e__/output-connectors/
-# Resize-handles e2e output (screenshots + html bundle — regenerate via the composites __e2e__ runner; committed evidence lives in .github/issue-evidence/11144-spatial-chrome-gestures/)
+# Chat infinite-scroll e2e output (screenshots + request/assertion logs)
+packages/ui/src/components/pages/__e2e__/output-infinite-scroll/
+# Resize-handles e2e output (screenshots + html bundle — regenerate via the composites __e2e__ runner)
 packages/ui/src/components/composites/__e2e__/output-resize-handles/
-# Launcher gesture-loop e2e output (webm videos + html bundle + traces — regenerate via test:launcher-loop-e2e; committed evidence lives in .github/issue-evidence/12179-web-loop/)
+# Launcher gesture-loop e2e output (webm videos + html bundle + traces — regenerate via test:launcher-loop-e2e)
 packages/ui/src/components/shell/__e2e__/output-launcher-loop/
-# Activity-feedback e2e output (screenshots + esbuild html bundle — regenerate via test:activity-feedback-e2e; committed evidence lives in .github/issue-evidence/13535-agent-activity-feedback/)
+# Activity-feedback e2e output (screenshots + esbuild html bundle — regenerate via test:activity-feedback-e2e)
 packages/ui/src/components/chat/__e2e__/output-activity-feedback/
-# Chat-widget e2e output (task-pipeline / orchestrator-accounts esbuild html bundles + screenshots — regenerate via test:task-pipeline-e2e / test:orchestrator-accounts-e2e; committed evidence lives in .github/issue-evidence/13536-pipeline-activity-inline/)
+# Chat-widget e2e output (task-pipeline / orchestrator-accounts esbuild html bundles + screenshots — regenerate via test:task-pipeline-e2e / test:orchestrator-accounts-e2e)
 packages/ui/src/components/chat/widgets/__e2e__/output/
 
 .next/
@@ -156,9 +162,6 @@ plugins/plugin-local-inference/src/services/voice-prewarm.js
 *.onnx
 *.wav
 *.mp3
-# Human-verifiable audio evidence is force-tracked under issue-evidence.
-!.github/issue-evidence/**/*.wav
-!.github/issue-evidence/**/*.mp3
 # Real-speech ASR/decode test fixtures (relocated out of the removed
 # omnivoice.cpp submodule; see that dir's README).
 !plugins/plugin-local-inference/native/audio-fixtures/*.wav
@@ -717,9 +720,13 @@ reports/
 docs/*
 !docs/ELIZA_1_BUNDLE_EXTRAS.json
 !docs/automation-glossary.md
+!docs/design/
+!docs/design/**
 !docs/tee-architecture-implementation-plan.md
 !docs/security/
 !docs/security/**
+!docs/testing/
+!docs/testing/**
 !docs/transcripts/
 !docs/transcripts/**
 yolov8n.pt
@@ -754,6 +761,8 @@ node_modules
 # misc
 .DS_Store
 *.pem
+# The certification trust anchor is deliberately committed (.github/certification/README.md)
+!.github/certification/certification-public-key.pem
 *.key
 *.key.*
 *.p8
@@ -1527,3 +1536,8 @@ railway.json
 .railwayignore
 .dockerignore
 packages/ui/src/components/shell/__e2e__/output-fused-wake-integration/
+
+# widget scroll + tap-target certification evidence (#14380)
+packages/ui/src/testing/__e2e__/output-widget-cert/
+# Home locale e2e output (screenshots — regenerate via test:home-locale-e2e)
+packages/ui/src/components/shell/__e2e__/output-home-locale/

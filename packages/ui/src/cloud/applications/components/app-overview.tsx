@@ -7,10 +7,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
-  Check,
   ChevronRight,
   Coins,
-  Copy,
   ExternalLink,
   Eye,
   EyeOff,
@@ -46,6 +44,7 @@ import {
 } from "../../../components/ui/alert-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import { CopyButton } from "../../../components/ui/copy-button";
 import { Input } from "../../../components/ui/input";
 import { cn } from "../../../lib/utils";
 import { api } from "../../lib/api-client";
@@ -76,7 +75,6 @@ export function AppOverview({ app, showApiKey }: AppOverviewProps) {
   const t = useCloudT();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [copiedItem, setCopiedItem] = useState<string | null>(null);
   const [displayApiKey, setDisplayApiKey] = useState(showApiKey || "");
   const [showKey, setShowKey] = useState(!!showApiKey);
   const [isRegenerating, setIsRegenerating] = useState(false);
@@ -95,18 +93,6 @@ export function AppOverview({ app, showApiKey }: AppOverviewProps) {
   const hideApiKeyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deploymentPollInFlightRef = useRef(false);
   const mountedRef = useRef(true);
-
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedItem(label);
-    toast.success(
-      t("cloud.apps.overview.copiedLabel", {
-        defaultValue: "{{label}} copied to clipboard",
-        label,
-      }),
-    );
-    setTimeout(() => setCopiedItem(null), 2000);
-  };
 
   const revealApiKey = useCallback((apiKey: string) => {
     if (hideApiKeyTimerRef.current) {
@@ -325,9 +311,9 @@ export function AppOverview({ app, showApiKey }: AppOverviewProps) {
     <div className="space-y-4">
       {/* New API Key Alert */}
       {showKey && displayApiKey && (
-        <div className="p-4 rounded-sm bg-[var(--accent)]/10 border border-[var(--accent)]/20">
+        <div className="p-4 rounded-sm bg-card border border-border">
           <div className="flex items-start gap-3">
-            <Key className="h-5 w-5 text-[var(--accent)] mt-0.5 shrink-0" />
+            <Key className="h-5 w-5 text-muted mt-0.5 shrink-0" />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-txt mb-2">
                 {t("cloud.apps.overview.apiKeyOnce", {
@@ -338,18 +324,12 @@ export function AppOverview({ app, showApiKey }: AppOverviewProps) {
                 <code className="flex-1 bg-surface px-3 py-2 rounded-sm text-xs text-muted font-mono overflow-x-auto">
                   {displayApiKey}
                 </code>
-                <Button
-                  variant="ghost"
-                  type="button"
-                  onClick={() => copyToClipboard(displayApiKey, "API Key")}
-                  className="p-2 bg-surface hover:bg-bg-hover rounded-sm transition-colors shrink-0"
-                >
-                  {copiedItem === "API Key" ? (
-                    <Check className="h-4 w-4 text-green-400" />
-                  ) : (
-                    <Copy className="h-4 w-4 text-muted" />
-                  )}
-                </Button>
+                <CopyButton
+                  value={displayApiKey}
+                  copyLabel="Copy API Key"
+                  copiedLabel="Copied"
+                  className="p-2 bg-surface shrink-0"
+                />
               </div>
               <p className="text-xs text-muted">
                 {t("cloud.apps.overview.saveKeyHint", {
@@ -413,7 +393,7 @@ export function AppOverview({ app, showApiKey }: AppOverviewProps) {
       <div className="bg-card rounded-sm p-4 space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-medium text-txt flex items-center gap-2">
-            <Rocket className="h-4 w-4 text-[var(--accent)]" />
+            <Rocket className="h-4 w-4 text-muted" />
             {t("cloud.apps.overview.deployment", {
               defaultValue: "Deployment",
             })}
@@ -527,7 +507,7 @@ export function AppOverview({ app, showApiKey }: AppOverviewProps) {
         <div className="bg-card rounded-sm p-4 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium text-txt flex items-center gap-2">
-              <Key className="h-4 w-4 text-[var(--accent)]" />
+              <Key className="h-4 w-4 text-muted" />
               {t("cloud.apps.overview.apiKey", { defaultValue: "API Key" })}
             </h3>
             <AlertDialog>
@@ -570,7 +550,7 @@ export function AppOverview({ app, showApiKey }: AppOverviewProps) {
                   </AlertDialogCancel>
                   <AlertDialogAction
                     onClick={handleRegenerateApiKey}
-                    className="bg-[var(--accent)] hover:bg-[#e54f00]"
+                    className="bg-txt text-bg hover:bg-txt/90"
                   >
                     {t("cloud.apps.overview.regenerate", {
                       defaultValue: "Regenerate",
@@ -600,18 +580,11 @@ export function AppOverview({ app, showApiKey }: AppOverviewProps) {
                       <Eye className="h-3.5 w-3.5 text-muted" />
                     )}
                   </Button>
-                  <Button
-                    variant="ghost"
-                    type="button"
-                    onClick={() => copyToClipboard(displayApiKey, "API Key")}
-                    className="p-1.5 hover:bg-bg-hover rounded-sm transition-colors"
-                  >
-                    {copiedItem === "API Key" ? (
-                      <Check className="h-3.5 w-3.5 text-green-400" />
-                    ) : (
-                      <Copy className="h-3.5 w-3.5 text-muted" />
-                    )}
-                  </Button>
+                  <CopyButton
+                    value={displayApiKey}
+                    copyLabel="Copy API Key"
+                    copiedLabel="Copied"
+                  />
                 </>
               )}
             </div>
@@ -627,7 +600,7 @@ export function AppOverview({ app, showApiKey }: AppOverviewProps) {
         {/* Basic Info Card */}
         <div className="bg-card rounded-sm p-4 space-y-4">
           <h3 className="text-sm font-medium text-txt flex items-center gap-2">
-            <Globe className="h-4 w-4 text-[var(--accent)]" />
+            <Globe className="h-4 w-4 text-muted" />
             {t("cloud.apps.overview.appInformation", {
               defaultValue: "App Information",
             })}
@@ -688,8 +661,8 @@ export function AppOverview({ app, showApiKey }: AppOverviewProps) {
         <div className="bg-card rounded-sm p-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-sm bg-orange-500/10">
-                <Coins className="h-5 w-5 text-orange-400" />
+              <div className="p-2 rounded-sm bg-surface">
+                <Coins className="h-5 w-5 text-muted" />
               </div>
               <div>
                 <h3 className="text-sm font-medium text-txt">Monetization</h3>

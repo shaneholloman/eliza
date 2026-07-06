@@ -21,10 +21,7 @@ const environment = arg("--environment", "production");
 const image = arg("--image", "ghcr.io/elizaos/eliza:develop");
 const cloudSecretName = arg("--cloud-secret-name", "ELIZACLOUD_API_KEY");
 const cloudTokenEnvName = "ELIZA_CLOUD_AUTH_TOKEN";
-const outDir = arg(
-  "--out-dir",
-  ".github/issue-evidence/8756-launch-hardening-status",
-);
+const outDir = arg("--out-dir", "reports/launch-hardening/8756-status");
 const cloudReport = arg("--cloud-report");
 
 function run(command, args, options = {}) {

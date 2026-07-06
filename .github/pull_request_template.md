@@ -2,9 +2,12 @@
 
 # Relates to
 
-<!-- LINK TO ISSUE OR TICKET -->
+<!--
+Link the issue, ticket, or Project card. For agent/kanban work, follow
+CONTRIBUTING.md and keep the Project item status current.
+-->
 
-Definition of Done: full standard in [`PR_EVIDENCE.md`](../PR_EVIDENCE.md).
+Definition of Done: full standard in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 - [ ] This PR targets `develop` and is rebased onto the latest `origin/develop`
       with zero conflicts (`git fetch origin && git rebase origin/develop`).
@@ -76,9 +79,11 @@ None: Automated tests are acceptable.
 Any change testable on the frontend is not mergeable without a video walkthrough,
 before/after screenshots, and logs. If you did not attach them, say why.
 
-Attach each applicable artifact, or write `N/A - <reason>` on the row. Do not
-leave evidence rows blank. Drop files in
-`.github/issue-evidence/<issue#>-<slug>.<ext>` and reference them here.
+Attach each applicable artifact **inline in this PR** (drag-and-drop into the
+description or a comment), or write `N/A - <reason>` on the row. Do not leave
+evidence rows blank. Videos must be **MP4** (GitHub renders them inline);
+prefer **JPG over PNG** for screenshots. Do not commit evidence files to the
+repo.
 
 <!-- evidence-row:before-screenshots -->
 - [ ] Before full-page screenshots are attached for every affected UI surface
@@ -120,7 +125,7 @@ Link the JSON report, run viewer, native jsonl, or write `N/A - <reason>`.
 
 Backend: structured logger lines ([ClassName] …) showing the code path firing end to end.
 Frontend: console + network trace showing the request/response and state change.
-Paste here and file under `.github/issue-evidence/`, or write
+Paste here inline (wrap long output in a `<details>` block), or write
 `N/A - <reason>`.
 
 ## Screenshots (before / after) + video walkthrough
