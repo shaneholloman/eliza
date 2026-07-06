@@ -4,6 +4,7 @@ export * from "./apple-reminders.js";
 export * from "./bulk-review.js";
 export * from "./commitments/index.js";
 export * from "./defaults.js";
+export * from "./delegation-contracts/index.js";
 export * from "./document-review.js";
 export * from "./email-curation.js";
 export * from "./enforcement-windows.js";
