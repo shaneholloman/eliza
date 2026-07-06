@@ -163,4 +163,29 @@ describe("native /chat/completions message sanitizer (offline)", () => {
     expect(downgraded?.tool_call_id).toBeUndefined();
     expect(out.some((m) => m.role === "tool")).toBe(false);
   });
+
+  it("downgrades the whole tool block when an orphan interrupts pending assistant calls", async () => {
+    const out = await captureMessages([
+      { role: "user", content: "weather and stocks?" },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          { id: "call_weather", type: "function", function: { name: "getW", arguments: "{}" } },
+          { id: "call_stock", type: "function", function: { name: "getS", arguments: "{}" } },
+        ],
+      },
+      { role: "tool", tool_call_id: "call_other", content: "orphan" },
+      { role: "tool", tool_call_id: "call_weather", content: "sunny" },
+      { role: "tool", tool_call_id: "call_stock", content: "42" },
+    ]);
+
+    const asst = out.find((m) => m.role === "assistant");
+    expect(asst?.tool_calls).toBeUndefined();
+    expect(asst?.content).toBe("");
+    expect(out.some((m) => m.role === "tool")).toBe(false);
+    expect(out.map((m) => m.content)).toContain("[tool result] orphan");
+    expect(out.map((m) => m.content)).toContain("[tool result] sunny");
+    expect(out.map((m) => m.content)).toContain("[tool result] 42");
+  });
 });

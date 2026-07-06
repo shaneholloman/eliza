@@ -508,6 +508,9 @@ function sanitizeNativeMessages(
         pending.delete(id);
         matchedToolMessages.push(message);
       } else {
+        if (openAssistant && pending.size > 0) {
+          finalizeOpenAssistant();
+        }
         downgradeToolMessage(message);
       }
       continue;
