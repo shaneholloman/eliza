@@ -18,13 +18,15 @@
  * prefers-reduced-motion; browsers without view-timeline support keep the
  * static fades and plain scrolling.
  *
- * Ordering is deliberately NOT the unread-first inbox rank: rows sort by
- * priority bucket then recency, ignoring read state, so tapping a row (which
- * marks it read) never reshuffles the list under the user's finger. Groups
- * inherit the position of their highest-ranked row.
+ * Acknowledgement is the platform-shade model (iOS lock screen / Android
+ * shade): tapping a row acts on it AND clears it from the list — there is no
+ * read/unread bookkeeping, no dots, no restyle-on-tap. Rows sort by priority
+ * bucket then recency (a stable total order, so live arrivals never reshuffle
+ * existing rows under the user's finger); groups inherit the position of
+ * their highest-ranked row.
  */
 import type { AgentNotification, NotificationCategory } from "@elizaos/core";
-import { Check, ExternalLink, X } from "lucide-react";
+import { ExternalLink, X } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { haptics } from "../../bridge/capacitor-bridge";
 import { cn } from "../../lib/utils";
@@ -34,7 +36,6 @@ import {
   navigateDeepLink,
 } from "../../state/notifications/navigate-deep-link";
 import {
-  markNotificationRead,
   removeNotification,
   useNotifications,
 } from "../../state/notifications/notification-store";
@@ -204,23 +205,23 @@ export function groupDashboardNotifications(
 }
 
 /**
- * One notification row: a whole-row open button (mark read + scheme-checked
- * deep link). The row carries no fill or border of its own — it floats on the
- * shade's field, spacing separates turns. Dismissal is pointer-idiomatic: a
- * mouse reveals an X on hover; touch throws the row left or right past
- * {@link SWIPE_DISMISS_PX} to dismiss (springs back below it). A long-press
- * (touch) or right-click (mouse) opens a contextual menu — open / mark read /
- * dismiss — so tap stays a single clean "open the view" action.
+ * One notification row: a whole-row open button (scheme-checked deep link +
+ * clear, the platform-shade tap). The row carries no fill or border of its
+ * own — it floats on the shade's field, spacing separates turns. Dismissal is
+ * pointer-idiomatic: a mouse reveals an X on hover; touch throws the row left
+ * or right past {@link SWIPE_DISMISS_PX} to dismiss (springs back below it).
+ * A long-press (touch) or right-click (mouse) opens a contextual menu — open /
+ * dismiss — so tap stays a single clean "open" action.
  *
  * Memoized (binding pattern, spec §C.4): the relative timestamp now lives in a
  * `<RelativeTime>` leaf that owns the minute tick, so the row no longer has to
- * re-render every minute to keep "5m ago" honest. With time rendering out of
+ * re-render every minute to keep "5m" honest. With time rendering out of
  * the row's render path, a stable-props memo is correct - it re-renders only
  * when the row's actual content changes, and `arePropsEqual` compares the
- * identity fields that drive its markup: `id`, `readAt` (unread styling),
- * `priority` (rail), `title`, `body`, `data.count`, plus the two callbacks (stable via the
- * parent's `useCallback`). `createdAt` is intentionally NOT compared: it feeds
- * only the leaf, which subscribes to the tick itself.
+ * identity fields that drive its markup: `id`, `title`, `body`, `deepLink`,
+ * `data.count`, plus the two callbacks (stable via the parent's `useCallback`).
+ * `createdAt` is intentionally NOT compared: it feeds only the leaf, which
+ * subscribes to the tick itself.
  */
 export function rowPropsEqual(
   prev: NotificationRowProps,
@@ -230,15 +231,12 @@ export function rowPropsEqual(
   const b = next.notification;
   return (
     a.id === b.id &&
-    a.readAt === b.readAt &&
-    a.priority === b.priority &&
     a.title === b.title &&
     a.body === b.body &&
     a.deepLink === b.deepLink &&
     a.data?.count === b.data?.count &&
     prev.onOpen === next.onOpen &&
-    prev.onDismiss === next.onDismiss &&
-    prev.onMarkRead === next.onMarkRead
+    prev.onDismiss === next.onDismiss
   );
 }
 
@@ -246,7 +244,6 @@ export interface NotificationRowProps {
   notification: AgentNotification;
   onOpen: (n: AgentNotification) => void;
   onDismiss: (id: string) => void;
-  onMarkRead: (id: string) => void;
 }
 
 let notificationRowRenderObserverForTests: (() => void) | null = null;
@@ -268,10 +265,8 @@ const NotificationRow = memo(function NotificationRow({
   notification,
   onOpen,
   onDismiss,
-  onMarkRead,
 }: NotificationRowProps): React.JSX.Element {
   notificationRowRenderObserverForTests?.();
-  const unread = !notification.readAt;
 
   // Touch swipe-to-dismiss + long-press menu. `swipeX` drives the live drag
   // transform; `menuOpen` is the contextual menu. Refs hold the in-flight
@@ -452,10 +447,9 @@ const NotificationRow = memo(function NotificationRow({
         <button
           type="button"
           data-testid="notification-row"
-          data-unread={unread ? "true" : undefined}
           aria-label={`${notification.title}${
             notification.body ? `. ${notification.body}` : ""
-          }${unread ? ". Unread." : ""}`}
+          }`}
           onClick={(e) => {
             // A swipe / long-press synthesizes a click on release; swallow it so
             // the gesture doesn't also open the notification.
@@ -469,35 +463,13 @@ const NotificationRow = memo(function NotificationRow({
           className="flex min-h-touch min-w-0 flex-1 flex-col gap-0.5 rounded-xl px-3 py-2 pr-9 text-left active:scale-[0.99] motion-reduce:active:scale-100 pointer-coarse:pr-3"
         >
           <span className="flex items-baseline gap-1.5">
-            {unread ? (
-              <span
-                aria-hidden
-                data-testid="notification-unread-dot"
-                className={cn(
-                  "mb-px h-1.5 w-1.5 shrink-0 self-center rounded-full",
-                  "bg-white",
-                )}
-              />
-            ) : null}
-            <span
-              className={cn(
-                "truncate text-sm",
-                unread
-                  ? "font-semibold text-white"
-                  : "font-medium text-white/78",
-              )}
-            >
+            <span className="truncate text-sm font-semibold text-white">
               {notification.title}
             </span>
             {count ? (
               <span
                 data-testid="notification-count-chip"
-                className={cn(
-                  "shrink-0 rounded-full px-1.5 text-2xs font-semibold tabular-nums leading-[1.15rem]",
-                  unread
-                    ? "bg-white/18 text-white"
-                    : "bg-white/10 text-white/70",
-                )}
+                className="shrink-0 rounded-full bg-white/14 px-1.5 text-2xs font-semibold tabular-nums leading-[1.15rem] text-white"
               >
                 {count}
                 <span className="sr-only"> grouped notifications</span>
@@ -557,21 +529,6 @@ const NotificationRow = memo(function NotificationRow({
               Open
             </button>
           ) : null}
-          {unread ? (
-            <button
-              type="button"
-              role="menuitem"
-              data-testid="notification-menu-mark-read"
-              onClick={() => {
-                setMenuOpen(false);
-                onMarkRead(notification.id);
-              }}
-              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
-            >
-              <Check className="h-4 w-4 shrink-0 text-white/70" />
-              Mark as read
-            </button>
-          ) : null}
           <button
             type="button"
             role="menuitem"
@@ -599,7 +556,7 @@ NotificationRow.displayName = "NotificationRow";
  */
 export function NotificationsHomeCenter(): React.JSX.Element | null {
   notificationsHomeCenterRenderObserverForTests?.();
-  const { notifications, unreadCount } = useNotifications();
+  const { notifications } = useNotifications();
   // No list-level clock tick here (binding pattern, spec §C.4): relative
   // timestamps live in the `<RelativeTime>` leaf inside each row, which owns the
   // shared visibility-gated ticker. The minute roll re-renders those text nodes
@@ -622,18 +579,17 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
   }, [syncEdgeFades, notifications.length]);
 
   const openNotification = useCallback((n: AgentNotification) => {
-    if (!n.readAt) void markNotificationRead(n.id);
+    // Platform-shade acknowledgement (iOS/Android): tapping a notification
+    // acts on it AND removes it from the shade — no lingering "read" restyle.
     // deepLink is producer/LLM-influenceable - only scheme-checked links
-    // navigate; anything else the tap is just "mark read".
+    // navigate; anything else the tap just clears the row.
     if (n.deepLink && isSafeDeepLink(n.deepLink)) {
       navigateDeepLink(n.deepLink);
     }
+    void removeNotification(n.id);
   }, []);
   const dismissNotification = useCallback((id: string) => {
     void removeNotification(id);
-  }, []);
-  const markReadNotification = useCallback((id: string) => {
-    void markNotificationRead(id);
   }, []);
 
   if (notifications.length === 0) return null;
@@ -649,11 +605,7 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
 
   return (
     <section
-      aria-label={
-        unreadCount > 0
-          ? `Notifications, ${unreadCount} unread`
-          : "Notifications"
-      }
+      aria-label="Notifications"
       data-testid="home-notification-center"
       // No card chrome: the inbox has no fill and no border of its own. It sits
       // inline on the home field directly under the time/weather header — rows
@@ -702,7 +654,6 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
                   notification={notification}
                   onOpen={openNotification}
                   onDismiss={dismissNotification}
-                  onMarkRead={markReadNotification}
                 />
               ))}
             </ul>

@@ -171,7 +171,8 @@ describe("NotificationsHomeCenter render count (#14559)", () => {
     // The memo's equality function is the surgical part of the fix: `createdAt`
     // is excluded (it feeds only the leaf), so the once-a-minute newer-timestamp
     // never re-renders the row; but any field that changes the row's OWN markup
-    // (readAt/unread, priority/rail, title, body, deepLink) does.
+    // (title, body, deepLink, data.count) does. Read state and priority no
+    // longer style the row (platform-shade model), so they are not compared.
     const base = makeNotification({
       title: "T",
       body: "B",
@@ -181,8 +182,7 @@ describe("NotificationsHomeCenter render count (#14559)", () => {
     });
     const onOpen = () => {};
     const onDismiss = () => {};
-    const onMarkRead = () => {};
-    const props = { notification: base, onOpen, onDismiss, onMarkRead };
+    const props = { notification: base, onOpen, onDismiss };
 
     // createdAt-only delta → equal → memo SKIPS (no row re-render on the minute).
     expect(
@@ -192,19 +192,14 @@ describe("NotificationsHomeCenter render count (#14559)", () => {
       }),
     ).toBe(true);
 
-    // Each identity field flips it to a real re-render.
+    // A readAt / priority delta no longer changes the row's markup → equal.
     expect(
       rowPropsEqual(props, {
         ...props,
         notification: { ...base, readAt: Date.now() },
       }),
-    ).toBe(false);
-    expect(
-      rowPropsEqual(props, {
-        ...props,
-        notification: { ...base, priority: "urgent" },
-      }),
-    ).toBe(false);
+    ).toBe(true);
+    // Each identity field flips it to a real re-render.
     expect(
       rowPropsEqual(props, {
         ...props,
@@ -245,7 +240,7 @@ describe("NotificationsHomeCenter render count (#14559)", () => {
     );
   });
 
-  it("tap-marks-read still never reorders rows (stable-order invariant)", () => {
+  it("tap clears the row without reordering the survivors (stable-order invariant)", () => {
     const urgent = makeNotification({ priority: "urgent", title: "First" });
     __ingestNotificationForTests(makeNotification({ title: "Second" }));
     __ingestNotificationForTests(urgent);
@@ -258,7 +253,10 @@ describe("NotificationsHomeCenter render count (#14559)", () => {
         .getAllByTestId("notification-row")
         .map((el) => el.textContent ?? "");
     expect(titles()[0]).toContain("First");
+    // Platform-shade tap: the row acts and leaves the list; the remaining rows
+    // keep their order.
     fireEvent.click(screen.getAllByTestId("notification-row")[0]);
-    expect(titles()[0]).toContain("First");
+    expect(titles()).toHaveLength(1);
+    expect(titles()[0]).toContain("Second");
   });
 });

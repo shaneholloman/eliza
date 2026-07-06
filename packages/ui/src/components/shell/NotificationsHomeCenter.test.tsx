@@ -117,34 +117,37 @@ describe("NotificationsHomeCenter", () => {
     expect(screen.getByText("Reminder fired")).toBeTruthy();
   });
 
-  it("styles urgent rows with the danger tone and unread dot", () => {
+  it("carries no read-state chrome — no unread dot, no data-unread attribute", () => {
     __ingestNotificationForTests(
       makeNotification({ priority: "urgent", title: "Disk almost full" }),
     );
     render(<NotificationsHomeCenter />);
+    // Platform-shade model: presence in the list IS the state; rows never
+    // restyle on read.
     const row = screen.getByTestId("notification-row");
-    expect(row.getAttribute("data-unread")).toBe("true");
-    expect(screen.getByTestId("notification-unread-dot")).toBeTruthy();
+    expect(row.getAttribute("data-unread")).toBeNull();
+    expect(screen.queryByTestId("notification-unread-dot")).toBeNull();
   });
 
-  it("marks a row read on tap and follows a safe deep link", () => {
+  it("tap follows a safe deep link and clears the row from the shade", () => {
     __ingestNotificationForTests(
       makeNotification({ deepLink: "/settings", title: "Open settings" }),
     );
     render(<NotificationsHomeCenter />);
     fireEvent.click(screen.getByTestId("notification-row"));
     expect(navigateDeepLink).toHaveBeenCalledWith("/settings");
-    expect(__getStateForTests().unreadCount).toBe(0);
+    // iOS/Android shade acknowledgement: acting on a notification removes it.
+    expect(__getStateForTests().notifications).toHaveLength(0);
   });
 
-  it("never navigates an unsafe deep link (tap still marks read)", () => {
+  it("never navigates an unsafe deep link (tap still clears the row)", () => {
     __ingestNotificationForTests(
       makeNotification({ deepLink: "javascript:alert(1)" }),
     );
     render(<NotificationsHomeCenter />);
     fireEvent.click(screen.getByTestId("notification-row"));
     expect(navigateDeepLink).not.toHaveBeenCalled();
-    expect(__getStateForTests().unreadCount).toBe(0);
+    expect(__getStateForTests().notifications).toHaveLength(0);
   });
 
   it("dismisses a single row via its X", () => {
@@ -173,7 +176,7 @@ describe("NotificationsHomeCenter", () => {
     expect(screen.queryByTestId("notifications-mark-all-read")).toBeNull();
   });
 
-  it("opens a contextual menu on right-click with dismiss + mark-read actions", () => {
+  it("opens a contextual menu on right-click with open + dismiss actions", () => {
     __ingestNotificationForTests(
       makeNotification({ title: "Menu me", deepLink: "/x" }),
     );
@@ -181,9 +184,9 @@ describe("NotificationsHomeCenter", () => {
     const li = screen.getByText("Menu me").closest("li") as HTMLElement;
     fireEvent.contextMenu(li);
     expect(screen.getByTestId("notification-row-menu")).toBeTruthy();
-    // Unread + safe deep link → open, mark-read, and dismiss are all present.
+    // Safe deep link → open and dismiss; no mark-read (tap already clears).
     expect(screen.getByTestId("notification-menu-open")).toBeTruthy();
-    expect(screen.getByTestId("notification-menu-mark-read")).toBeTruthy();
+    expect(screen.queryByTestId("notification-menu-mark-read")).toBeNull();
     fireEvent.click(screen.getByTestId("notification-menu-dismiss"));
     expect(screen.queryByText("Menu me")).toBeNull();
   });
@@ -196,7 +199,7 @@ describe("NotificationsHomeCenter", () => {
     expect(card.className).not.toMatch(/border|bg-black|backdrop-blur/);
   });
 
-  it("keeps a tapped (now read) row in place - order ignores read state", () => {
+  it("tap removes the row; surviving rows keep their stable order", () => {
     const urgent = makeNotification({ priority: "urgent", title: "First" });
     __ingestNotificationForTests(makeNotification({ title: "Second" }));
     __ingestNotificationForTests(urgent);
@@ -207,8 +210,8 @@ describe("NotificationsHomeCenter", () => {
         .map((el) => el.textContent ?? "");
     expect(titles()[0]).toContain("First");
     fireEvent.click(screen.getAllByTestId("notification-row")[0]);
-    // Still first after being marked read.
-    expect(titles()[0]).toContain("First");
+    expect(titles()).toHaveLength(1);
+    expect(titles()[0]).toContain("Second");
   });
 
   it("caps rendering at 100 rows", () => {
