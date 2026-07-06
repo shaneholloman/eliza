@@ -5195,6 +5195,26 @@
         "react-dom": "*",
       },
     },
+    "plugins/plugin-trajectory-logger": {
+      "name": "@elizaos/plugin-trajectory-logger",
+      "version": "2.0.3-beta.7",
+      "dependencies": {
+        "@elizaos/app-core": "workspace:*",
+        "@elizaos/core": "workspace:*",
+        "@elizaos/shared": "workspace:*",
+        "@elizaos/ui": "workspace:*",
+        "lucide-react": "^1.0.0",
+      },
+      "devDependencies": {
+        "@elizaos/tui": "workspace:*",
+        "tsup": "^8.5.1",
+        "vite": "^8.0.0",
+      },
+      "peerDependencies": {
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+      },
+    },
     "plugins/plugin-tunnel": {
       "name": "@elizaos/plugin-tunnel",
       "version": "2.0.3-beta.7",
@@ -6561,6 +6581,8 @@
     "@elizaos/plugin-todos": ["@elizaos/plugin-todos@workspace:plugins/plugin-todos"],
 
     "@elizaos/plugin-training": ["@elizaos/plugin-training@workspace:plugins/plugin-training"],
+
+    "@elizaos/plugin-trajectory-logger": ["@elizaos/plugin-trajectory-logger@workspace:plugins/plugin-trajectory-logger"],
 
     "@elizaos/plugin-tunnel": ["@elizaos/plugin-tunnel@workspace:plugins/plugin-tunnel"],
 
