@@ -130,6 +130,8 @@ export function ShellOverlays({
           role="status"
           aria-live="polite"
           aria-busy={actionNotice.busy ? true : undefined}
+          data-testid="shell-action-notice"
+          data-tone={actionNotice.tone}
         >
           {actionNotice.busy ? (
             <Spinner size={16} className="shrink-0 opacity-95" aria-hidden />
