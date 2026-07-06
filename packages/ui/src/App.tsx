@@ -2534,8 +2534,8 @@ export function App() {
     );
   }
 
-  // Auth gate — once the shell is paintable (agent may still be warming up),
-  // check /api/auth/me. "loading": wait (fall through to the main shell render).
+  // Auth gate — once the shell is paintable, keep poll-heavy shell hooks
+  // unmounted until /api/auth/me resolves for returning sessions.
   // "unauthenticated": render LoginView. "authenticated": proceed.
   // "server_unavailable": show a retryable startup failure.
   if (

@@ -1,8 +1,8 @@
 /**
- * Unit coverage for `firstRunOwnsLoginSurface`, the pure predicate that decides
- * whether the top-level LoginView owns the screen versus in-chat onboarding.
- * Guards the double-login window (onboarding incomplete but coordinator past
- * first-run-required). Pure function, no harness.
+ * Unit coverage for the pure top-level auth predicates. These gates decide
+ * whether the top-level LoginView owns the screen, whether in-chat onboarding
+ * owns it instead, and whether shell pollers must stay unmounted during the
+ * initial auth probe.
  */
 import { describe, expect, it } from "vitest";
 import {
