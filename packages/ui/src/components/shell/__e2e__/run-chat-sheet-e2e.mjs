@@ -95,9 +95,8 @@ const detent = (p) =>
 // OPEN_HALF_OR_OVER | MAXIMIZED) — the single source the overlay derives.
 const chatState = (p) =>
   p.getByTestId("chat-sheet").getAttribute("data-chat-state");
-// Header buttons (maximize/clear/home/settings) are always mounted (so they can
-// fade + lerp their space), so visibility is the LIVE-height `data-header-shown`
-// flag, not their presence in the DOM.
+// The header is a safe-area/status strip, so visibility is the LIVE-height
+// `data-header-shown` flag, not the presence of controls in the DOM.
 const headerShown = async (p) =>
   (await p.getByTestId("chat-sheet").getAttribute("data-header-shown")) ===
   "true";
@@ -408,15 +407,15 @@ async function runDragSuite(p, pointer, tag) {
     grabberBarOpacity === "1",
     `[${pointer}] grabber bar paints (inner-span opacity "${grabberBarOpacity}" === "1", not opacity-0) (#9142)`,
   );
-  // The sheet header shows at HALF and up now, not only at FULL. It carries
-  // search (left) + the home launcher (right); maximize stays a gesture/state
-  // contract (over-pull), not a header button, and there is no new-chat/clear
-  // control (the thread is one infinite conversation).
+  // The sheet header shows at HALF and up now, not only at FULL. It reserves the
+  // safe-area/status strip; user actions live in the composer + menu, and
+  // maximize stays a gesture/state contract instead of a header button.
   assert(
-    (await p.getByTestId("chat-full-launcher").count()) === 1 &&
+    (await headerShown(p)) &&
+      (await p.getByTestId("chat-full-launcher").count()) === 0 &&
       (await p.getByTestId("chat-full-maximize").count()) === 0 &&
       (await p.getByTestId("chat-full-clear").count()) === 0,
-    `[${pointer}] HALF detent shows the sheet header`,
+    `[${pointer}] HALF detent shows the status header without action buttons`,
   );
 
   // FLICK up again → FULL — the sheet rises to the top of the screen
@@ -432,15 +431,14 @@ async function runDragSuite(p, pointer, tag) {
   );
   await snap(p, `${tag}-full`);
 
-  // Header (post #13531/#9450): search + the one home launcher. There is no
-  // maximize/minimize header button — maximize is an over-pull gesture — and
-  // no new-chat/clear control. The old Home/Views/Settings trio collapsed
-  // into the one launcher.
+  // The full detent keeps the same header contract: no launcher/search/maximize
+  // or new-chat controls. The composer menu owns actions for this conversation.
   assert(
-    (await p.getByTestId("chat-full-launcher").count()) === 1 &&
+    (await headerShown(p)) &&
+      (await p.getByTestId("chat-full-launcher").count()) === 0 &&
       (await p.getByTestId("chat-full-maximize").count()) === 0 &&
       (await p.getByTestId("chat-full-clear").count()) === 0,
-    `[${pointer}] header shows search + home launcher without maximize or new-chat`,
+    `[${pointer}] full detent keeps action buttons out of the header`,
   );
   // Maximize → full-bleed (edge-to-edge): a deliberate over-pull flips
   // data-maximized and the panel reaches x=0.
@@ -1063,6 +1061,127 @@ async function runAutoScrollSuite(p, pointer, tag) {
 
 const browser = await chromium.launch();
 const sink = { logs: [], errors: [] };
+
+// FINGER-SYNC DIAGNOSTIC (env FINGER_PROBE=1): grab the pill and drag SLOWLY to
+// the very top, then back down, recording at each step the cursor Y and the live
+// grabber-bar center Y. Prints the divergence so we can see whether the handle
+// stays under the finger 1:1 across the extremes.
+// Drive a SLOW held grabber drag from the sheet's current open state to `endY`,
+// sampling every step: the cursor Y and the panel's live TOP edge (what the user
+// perceives as the sheet edge under the finger). Returns the per-step rows.
+async function sampleGrabberDrag(page, endY, steps = 34) {
+  const panelTopY = async () => {
+    const box = await page
+      .getByTestId("chat-sheet")
+      .boundingBox()
+      .catch(() => null);
+    return box ? box.y : null;
+  };
+  const b = await page.getByTestId("chat-sheet-grabber").boundingBox();
+  const cx = b.x + b.width / 2;
+  const startY = b.y + b.height / 2;
+  const rows = [];
+  await page.mouse.move(cx, startY);
+  await page.mouse.down();
+  for (let i = 1; i <= steps; i += 1) {
+    const cursorY = startY + ((endY - startY) * i) / steps;
+    await page.mouse.move(cx, cursorY);
+    await page.waitForTimeout(22);
+    const top = await panelTopY();
+    rows.push({ cursorY, top, div: top == null ? null : top - cursorY });
+  }
+  await page.mouse.up();
+  await page.waitForTimeout(SETTLE);
+  return rows;
+}
+
+// Assert 1:1 finger tracking: across a slow held drag the panel top edge must
+// stay under the finger with a CONSTANT offset (the grabber's fixed gap above
+// the panel). We measure divergence = panelTop - cursor at each step and require
+// it to stay within `band` px of the drag's own MEDIAN divergence — i.e. no
+// dead zones (finger moves, edge doesn't) and no lag that accumulates. The first
+// and last few samples are trimmed: at the extremes the finger runs past the
+// panel's min/max (you can't drag the sheet above the screen top or below where
+// the pill sits), which is a real boundary, not a tracking failure.
+function assertFingerTracking(rows, band, label) {
+  const usable = rows
+    .filter((r) => r.div != null)
+    // Drop samples where the panel is pinned at the screen-top boundary (top
+    // ≤ 40): there the grabber bar can't keep floating its fixed gap ABOVE the
+    // panel (nothing above y=0), so its offset legitimately compresses — the
+    // panel top still tracks the finger, but the handle-gap assumption breaks.
+    .filter((r) => r.top > 40)
+    .slice(2, -3);
+  if (usable.length < 6) {
+    assert(false, `${label}: too few usable samples (${usable.length})`);
+    return;
+  }
+  const divs = usable.map((r) => r.div).sort((a, b) => a - b);
+  const median = divs[Math.floor(divs.length / 2)];
+  let worst = 0;
+  for (const r of usable) {
+    const drift = Math.abs(r.div - median);
+    if (drift > worst) worst = drift;
+  }
+  assert(
+    worst <= band,
+    `${label}: panel top tracks the finger 1:1 (max drift ${Math.round(worst)}px from the ${Math.round(median)}px handle offset ≤ ${band}px band)`,
+  );
+  return { median, worst };
+}
+
+// FINGER-TRACKING SUITE — the smooth-motion validation the drag exists for: the
+// sheet edge must follow the cursor EXACTLY (constant handle offset) while held,
+// up to the very top (maximize) and down to the pill. Mouse-only: the assertion
+// is engine-agnostic and real-touch CDP moves coalesce, defeating per-step
+// geometry reads.
+async function runFingerTrackingSuite(page) {
+  // (A) OPEN → drag the grabber to the very top (maximize).
+  await gesture(page, 160, { pointer: "mouse", slow: false, steps: 2 });
+  await page.waitForTimeout(SETTLE);
+  const vh = await viewportH(page);
+  const up = await sampleGrabberDrag(page, 4);
+  const upStats = assertFingerTracking(up, 28, "[finger] UP open→top");
+  // The top must actually be reachable in one slow drag (the old morph budget
+  // exceeded the screen height and stalled ~200px short).
+  const minTop = Math.min(...up.filter((r) => r.top != null).map((r) => r.top));
+  assert(
+    minTop <= 40,
+    `[finger] UP drag reaches the screen top (min panel top ${Math.round(minTop)}px ≤ 40px)`,
+  );
+
+  // Reset to a clean inset FULL sheet for the collapse test.
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(SETTLE);
+  await gesture(page, 160, { pointer: "mouse", slow: false, steps: 2 });
+  await page.waitForTimeout(SETTLE);
+  await gesture(page, 220, { pointer: "mouse", slow: false, steps: 2 });
+  await page.waitForTimeout(SETTLE);
+
+  // (B) FULL → drag the grabber all the way down; the sheet edge follows 1:1
+  // and the chat ends collapsed at the bottom (pill/input).
+  const down = await sampleGrabberDrag(page, vh - 8);
+  const downStats = assertFingerTracking(down, 28, "[finger] DOWN full→pill");
+  assert(
+    (await variant(page)) === "closed",
+    `[finger] DOWN drag collapses the chat to the bottom`,
+  );
+  console.log(
+    `  ℹ finger tracking: up drift ${Math.round(upStats?.worst ?? -1)}px, down drift ${Math.round(downStats?.worst ?? -1)}px (handle offsets ${Math.round(upStats?.median ?? 0)}/${Math.round(downStats?.median ?? 0)}px)`,
+  );
+}
+
+if (process.env.FINGER_PROBE) {
+  const page = await browser.newPage({ viewport: { width: 420, height: 880 } });
+  attachConsole(page, sink);
+  await gotoFixture(page);
+  await page.waitForSelector('[data-testid="chat-sheet"]');
+  await page.waitForTimeout(700);
+  await runFingerTrackingSuite(page);
+  await browser.close();
+  process.exit(failures === 0 ? 0 : 1);
+}
+
 try {
   if (!ONLY_AUTOSCROLL) {
     // ===== DESKTOP + MOUSE =====
@@ -1083,6 +1202,17 @@ try {
     await desktop.waitForSelector('[data-testid="chat-sheet"]');
     await desktop.waitForTimeout(700);
     await runMidDragCommitSuite(desktop, "desktop");
+
+    // Fresh load: finger-tracking (the sheet edge follows the cursor 1:1 up to
+    // the top and down to the pill) on a small phone-sized viewport where the
+    // extremes are tightest.
+    const finger = await browser.newPage({ viewport: { width: 420, height: 880 } });
+    attachConsole(finger, sink);
+    await gotoFixture(finger);
+    await finger.waitForSelector('[data-testid="chat-sheet"]');
+    await finger.waitForTimeout(700);
+    await runFingerTrackingSuite(finger);
+    await finger.close();
 
     // ===== MOBILE + TOUCH (recorded — the continuous detent drag-suite video) =====
     const mobileCtx = await browser.newContext({
@@ -1289,7 +1419,10 @@ try {
     await p.waitForSelector('[data-testid="chat-composer-textarea"]');
     await p.waitForTimeout(650);
     assert((await p.locator('[data-testid="chat-thread"]').count()) === 0, "EMPTY: no thread/history mounted (just the input panel)");
-    assert(await p.getByTestId("chat-composer-attach").isVisible(), "EMPTY: attach (+) button shown");
+    assert(await p.getByTestId("chat-composer-plus").isVisible(), "EMPTY: chat actions (+) button shown");
+    await p.getByTestId("chat-composer-plus").click();
+    assert(await p.getByText("Upload file", { exact: true }).isVisible(), "EMPTY: upload lives in the chat-actions menu");
+    await p.keyboard.press("Escape");
     assert((await p.getByTestId("chat-composer-mic").count()) === 1, "EMPTY: mic button shown (no draft)");
     await snap(p, "state-empty");
     await p.close();
@@ -1309,8 +1442,8 @@ try {
       "BOOTING: composer placeholder says 'waking up'",
     );
     assert(
-      (await p.getByTestId("chat-composer-attach").getAttribute("aria-disabled")) !== "true",
-      "BOOTING: attach (+) stays enabled (you can compose while it wakes)",
+      (await p.getByTestId("chat-composer-plus").getAttribute("aria-disabled")) !== "true",
+      "BOOTING: chat actions (+) stay enabled (you can compose while it wakes)",
     );
     assert(
       (await p.getByTestId("chat-composer-mic").getAttribute("aria-disabled")) !== "true",
@@ -1501,7 +1634,7 @@ try {
     const p = await ctrl();
     attachConsole(p, sink);
     await gotoFixture(p);
-    await p.waitForSelector('[data-testid="chat-composer-attach"]');
+    await p.waitForSelector('[data-testid="chat-composer-plus"]');
     await p.waitForTimeout(600);
     // 1x1 transparent PNG
     const pngB64 =
@@ -2005,9 +2138,9 @@ try {
     await p.close();
   }
 
-  // HEADER NAV (post-consolidation): the per-tab Home/Views/Settings trio is
-  // gone — a single always-present, always-enabled Launcher button replaces
-  // it, and the old testids must stay gone (regression guard for #9450).
+  // HEADER ACTIONS: navigation moved out of the chat header. The bar remains as
+  // a safe-area/status strip, while conversation actions live in the composer
+  // menu and the legacy header testids stay gone.
   {
     const p = await ctrl();
     attachConsole(p, sink);
@@ -2018,23 +2151,22 @@ try {
     await p.waitForTimeout(SETTLE);
     assert((await detent(p)) === "half", "NAV: opened to half");
     assert(
-      (await p.getByTestId("chat-full-launcher").count()) === 1 &&
-        !(await p.getByTestId("chat-full-launcher").isDisabled()),
-      "NAV: single launcher button present and enabled",
+      (await headerShown(p)) &&
+        (await p.getByTestId("chat-composer-plus").isVisible()),
+      "NAV: status header is shown and composer actions stay available",
     );
     assert(
-      (await p.getByTestId("chat-full-home").count()) === 0 &&
+      (await p.getByTestId("chat-full-launcher").count()) === 0 &&
+        (await p.getByTestId("chat-full-home").count()) === 0 &&
         (await p.getByTestId("chat-full-views").count()) === 0 &&
         (await p.getByTestId("chat-full-settings").count()) === 0,
-      "NAV: legacy home/views/settings buttons removed (#9450)",
+      "NAV: legacy header navigation buttons are absent",
     );
     await p.close();
   }
 
-  // NAVIGATE-AND-CLOSE: tapping Launcher animates OUT of maximize (if
-  // maximized) and collapses the sheet, THEN navigates — the page swap waits for
-  // the close animation to start, so it reads as the chat closing into the new
-  // view rather than a jump-cut from full-screen.
+  // MAXIMIZED ACTION MENU: the composer menu remains reachable in full-bleed
+  // chat and opening it must not collapse or unmaximize the sheet.
   {
     const p = await ctrl();
     attachConsole(p, sink);
@@ -2050,23 +2182,19 @@ try {
       (await p
         .locator('[data-testid="chat-sheet"][data-maximized="true"]')
         .count()) === 1,
-      "NAV-CLOSE: maximized before tapping launcher",
+      "ACTION-MENU: maximized before opening composer menu",
     );
-    await p.getByTestId("chat-full-launcher").click();
-    await p.waitForTimeout(600);
+    await p.getByTestId("chat-composer-plus").click();
+    assert(
+      (await p.getByText("Search chat…", { exact: true }).isVisible()) &&
+        (await p.getByText("Upload file", { exact: true }).isVisible()),
+      "ACTION-MENU: search and upload actions are available from composer menu",
+    );
     assert(
       (await p
         .locator('[data-testid="chat-sheet"][data-maximized="true"]')
-        .count()) === 0,
-      "NAV-CLOSE: tapping launcher animates OUT of maximize",
-    );
-    assert(
-      (await detent(p)) === "collapsed",
-      "NAV-CLOSE: tapping launcher collapses the sheet (close)",
-    );
-    assert(
-      sink.logs.some((l) => l.includes("navigateHome")),
-      "NAV-CLOSE: launcher navigation fires after the close starts",
+        .count()) === 1,
+      "ACTION-MENU: opening composer menu does not exit maximized chat",
     );
     await p.close();
   }
@@ -2112,8 +2240,8 @@ try {
   // clearance), so the panel must fill the WHOLE viewport. The bug: panelMaxH
   // still subtracted the stale bottomPad, so the maximized panel floated a
   // gesture-inset BELOW the top — a hard-cut glass seam under the status bar and
-  // the safe-area-padded header pushed down. Assert: panel reaches y≈0 AND the
-  // header buttons sit at the safe area, not a gesture-inset lower.
+  // the safe-area-padded status strip pushed down. Assert: panel reaches y≈0 AND
+  // the header strip starts at the viewport top, not a gesture-inset lower.
   {
     const p = await ctrl();
     attachConsole(p, sink);
@@ -2145,13 +2273,15 @@ try {
         box?.y ?? -1,
       )}) — no status-bar seam`,
     );
-    const btn = await p.getByTestId("chat-full-launcher").boundingBox();
-    // Header padding = safe-area-top (30) + 0.5rem (8); buttons must sit ~there,
-    // NOT a whole gesture inset (~36px) lower (the old "bad space" margin).
+    const header = await p.getByTestId("chat-sheet-header").boundingBox();
+    // Header padding = safe-area-top (30) + 0.5rem (8); the strip itself must
+    // stay anchored at the top instead of inheriting the bottom gesture gap.
     assert(
-      !!btn && btn.y <= 30 + 8 + 20,
-      `MAX-INSET: header buttons sit at the safe area, not pushed down by a gap (y=${Math.round(
-        btn?.y ?? -1,
+      !!header && header.y <= 2 && header.height >= 30,
+      `MAX-INSET: header status strip starts at the top safe area, not pushed down by a gap (y=${Math.round(
+        header?.y ?? -1,
+      )}, h=${Math.round(
+        header?.height ?? -1,
       )})`,
     );
     await snap(p, "state-maximized-with-inset");
@@ -2159,7 +2289,7 @@ try {
   }
 
   // ── ALL FIVE CHATSTATES (the canonical machine) — assert data-chat-state + the
-  // header-button gate, screenshot each (the user asked for a shot of every
+  // status-header gate, screenshot each (the user asked for a shot of every
   // state). Driven by real gestures on the grabber + the pill.
   {
     const p = await ctrl();
@@ -2173,7 +2303,7 @@ try {
     assert((await chatState(p)) === "INPUT", "STATES: rest is INPUT");
     assert(
       !(await headerShown(p)),
-      "STATES: INPUT shows no header buttons",
+      "STATES: INPUT hides the status header",
     );
     await snap(p, "state-INPUT");
 
@@ -2185,7 +2315,7 @@ try {
     );
     assert(
       await headerShown(p),
-      "STATES: OPEN_HALF_OR_OVER shows header buttons",
+      "STATES: OPEN_HALF_OR_OVER shows the status header",
     );
     await snap(p, "state-OPEN_HALF_OR_OVER");
 
@@ -2261,7 +2391,7 @@ try {
     );
     assert(
       !(await headerShown(p)),
-      "STATES: OPEN_UNDER_HALF hides header buttons",
+      "STATES: OPEN_UNDER_HALF hides the status header",
     );
     // With the header hidden below half, the thread viewport must be inset below
     // the floating grabber so the topmost line isn't tucked under the handle.

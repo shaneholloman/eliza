@@ -263,9 +263,9 @@ const CHAT_CLEARANCE_MAX_PX = 220;
 // grabbable (only the bottom composer strip is excluded), and it sits UNDER the
 // top bar whose empty space is pointer-transparent so pulls there reach it too.
 const MAXIMIZE_RESTORE_ZONE_VH = 0.9;
-// The panel's top clearance + max height (which decide where the header buttons
-// land relative to the notch) live in the pure, unit-tested
-// `resolveChatPanelLayout` — see chat-panel-layout.ts.
+// The panel's top clearance + max height (which decide how the full-bleed header
+// clears the notch) live in the pure, unit-tested `resolveChatPanelLayout` — see
+// chat-panel-layout.ts.
 // Detent magnetism: on a deliberate (non-flick) drag release, a height within
 // this many px of a detent (collapsed/half/full) snaps to that detent instead
 // of resting free — so near-detent releases are deterministic + clean, and only
@@ -876,8 +876,8 @@ export function ContinuousChatOverlay({
   /**
    * True while in-chat first-run onboarding is active (`firstRunComplete ===
    * false` upstream). The overlay opens to FULL and pins there: every collapse
-   * path (Escape, outside tap, grabber pull-down/close, header launcher) is a
-   * no-op, and the backdrop is OPAQUE (`bg-bg`) so the launcher/home behind is
+   * path (Escape, outside tap, grabber pull-down/close) is a no-op, and the
+   * backdrop is OPAQUE (`bg-bg`) so the launcher/home behind is
    * hidden. The composer TEXT + SEND are unlocked (#12178) — typed text is
    * answered locally by the in-chat conductor and never reaches the server —
    * while attach + mic stay disabled (no agent to take media yet); the seeded
@@ -1340,6 +1340,15 @@ export function ContinuousChatOverlay({
   // threshold), so committing is re-armed only once the pull drops back below
   // the inset FULL height — no commit/un-commit flapping at the threshold.
   const dragMaxArmedRef = React.useRef(true);
+  // Maximize-morph tracking. Raw height is the deterministic source while the
+  // sheet is already open; measured top-edge pinning supplements it for long
+  // pill/input hauls where the visual panel reaches its inset ceiling before the
+  // raw travel has consumed the whole morph budget. These latch that pin phase.
+  const dragMinTopRef = React.useRef(Number.POSITIVE_INFINITY);
+  const dragPinnedRef = React.useRef(false);
+  const dragOffAtPinRef = React.useRef(0);
+  const dragPinTopRef = React.useRef(0);
+  const dragStartTopRef = React.useRef(0);
   // At rest the collapsed composer should not carry hidden transcript/header
   // DOM. During an upward pull, though, the sheet needs a mounted body so the
   // MotionValue-driven height can follow the finger before the release commits
@@ -2101,10 +2110,10 @@ export function ContinuousChatOverlay({
   }, []);
   const [viewport, setViewport] = React.useState(readViewport);
   const [bottomPad, setBottomPad] = React.useState(0);
-  // The real `env(safe-area-inset-top)` in px, so the panel's top clearance
-  // reserves the actual notch/Dynamic-Island inset (not a fixed guess) and the
-  // header buttons always sit below it. Re-measured on rotation (`resize`); it
-  // never changes between resizes, so it stays off the high-rate vv `scroll`.
+  // The real `env(safe-area-inset-top)` in px, so the full-bleed header reserves
+  // the actual notch/Dynamic-Island inset instead of a fixed guess. Re-measured
+  // on rotation (`resize`); it never changes between resizes, so it stays off the
+  // high-rate vv `scroll`.
   const [safeAreaTop, setSafeAreaTop] = React.useState(0);
   React.useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -2321,8 +2330,8 @@ export function ContinuousChatOverlay({
   // report (the iOS Capacitor `resize:"body"` case where `keyboardInset` reads 0
   // but the native Keyboard plugin still lifted the overlay): without that, the
   // panel is sized against the full height while ALSO being pushed up by the
-  // keyboard, so its top edge — the header buttons — shoots above the notch and
-  // off-screen. Full-bleed drops the top margin + the overlay's bottom padding
+  // keyboard, so its top edge shoots above the notch and off-screen. Full-bleed
+  // drops the top margin + the overlay's bottom padding
   // so the maximized panel fills the screen edge-to-edge.
   // Solve BOTH shapes: the inset overlay height (detent target) and the
   // edge-to-edge full-bleed height. Their difference is the REAL pixel gap the
@@ -2368,8 +2377,8 @@ export function ContinuousChatOverlay({
   //   CLOSED            — pill only (sheet pilled away)
   //   INPUT             — composer bar, no thread (the resting closed state)
   //   OPEN_UNDER_HALF   — opened but below the half detent (a deliberate slow
-  //                       pull rested here); header buttons stay hidden
-  //   OPEN_HALF_OR_OVER — at the half detent or taller (header buttons show)
+  //                       pull rested here); the status header stays hidden
+  //   OPEN_HALF_OR_OVER — at the half detent or taller (status header shows)
   //   MAXIMIZED         — full-bleed edge-to-edge
   // Transitions: pill tap / flick-up → INPUT; focus·type·flick·send → an OPEN_*
   // state; pull-down → INPUT → CLOSED; maximize toggle ↔ MAXIMIZED.
@@ -2385,12 +2394,11 @@ export function ContinuousChatOverlay({
         : baseH >= halfH - 1
           ? "OPEN_HALF_OR_OVER"
           : "OPEN_UNDER_HALF";
-  // Header buttons (maximize/clear/home/settings) are gated on the LIVE rendered
-  // height, NOT the settled enum — otherwise dragging the panel below half keeps
-  // the header mounted on a too-short panel (the "buttons between input and half"
-  // bug). They show only when the panel actually renders at/over half (or is
-  // full-bleed), tracking the finger frame-by-frame; the prev===next guard keeps
-  // re-renders to the two threshold crossings.
+  // The status header is gated on the LIVE rendered height, NOT the settled enum
+  // — otherwise dragging the panel below half keeps the top strip mounted on a
+  // too-short panel. It shows only when the panel actually renders at/over half
+  // (or is full-bleed), tracking the finger frame-by-frame; the prev===next guard
+  // keeps re-renders to the two threshold crossings.
   const evalHeaderVisible = React.useCallback(
     (h: number) => threadPresented && !pilled && (fullBleed || h >= halfH - 1),
     [threadPresented, pilled, fullBleed, halfH],
@@ -3689,7 +3697,29 @@ export function ContinuousChatOverlay({
         // Base the track on the DERIVED resting height (detent / free-rest),
         // not the live threadHeight — the sheet visually rests at `baseH`, and
         // reading the motion value would pick up a mid-flight settle spring.
-        const startH = baseH;
+        let startH = baseH;
+        // De-slack a capped OPEN sheet: at the FULL detent the thread's
+        // flex-basis (baseH = panelMaxH) exceeds what actually fits — the thread
+        // is flex-shrunk to the panel. Dragging DOWN would first have to drain
+        // that invisible slack before the panel shrank (a ~chrome-px dead zone
+        // where the finger moves but the sheet edge doesn't). Snap the base to
+        // the thread's REAL rendered height so a downward drag shrinks the panel
+        // 1:1 from the first pixel. No visual change: the panel is already this
+        // tall (capped), we only realign the motion value to it.
+        if (sheetOpen && typeof document !== "undefined") {
+          const threadEl = document.querySelector<HTMLElement>(
+            '[data-testid="chat-thread"]',
+          );
+          const actualThreadH = threadEl?.getBoundingClientRect().height;
+          if (
+            actualThreadH != null &&
+            actualThreadH > 0 &&
+            actualThreadH < startH - 2
+          ) {
+            startH = actualThreadH;
+            threadHeight.set(actualThreadH);
+          }
+        }
         dragStartHRef.current = startH;
         dragBaseHRef.current = startH;
         dragOffsetBaseRef.current = 0;
@@ -3699,6 +3729,15 @@ export function ContinuousChatOverlay({
         // grabbing the maximized panel) must NOT re-maximize on its first frame;
         // it re-arms only after the pull drops below the inset FULL height.
         dragMaxArmedRef.current = startH < insetPanelMaxH + maxOverPull / 2;
+        // Reset the measured-top maximize tracking for the fresh gesture.
+        const el0 = getPanelElement();
+        dragStartTopRef.current = el0
+          ? el0.getBoundingClientRect().top
+          : Number.POSITIVE_INFINITY;
+        dragMinTopRef.current = dragStartTopRef.current;
+        dragPinnedRef.current = maximized;
+        dragOffAtPinRef.current = 0;
+        dragPinTopRef.current = 0;
       }
       draggingRef.current = true;
       // Promote the panel + thread to their own GPU layer for the duration of
@@ -3832,27 +3871,62 @@ export function ContinuousChatOverlay({
           raw < 0 ? Math.max(0, 1 + raw / PILL_OPEN_DISTANCE) : 1,
         );
       }
-      // The inset→edge-to-edge shape morph is a PURE FUNCTION of the live
-      // height across the real pixel gap between the inset FULL height and the
-      // full-bleed height — height and shape can never disagree, and the same
-      // mapping runs both directions (over-pull up, restore drag down), so the
-      // whole maximize reads as one finger-locked motion. 0 at and below the
-      // inset FULL detent: a normal pull to full never starts squaring corners.
-      fullBleedT.set(
-        Math.min(1, Math.max(0, (raw - insetPanelMaxH) / maxOverPull)),
+      // MAXIMIZE MORPH. Raw height keeps an already-open sheet finger-locked
+      // past FULL. The measured top-edge latch fills the gap for long hauls that
+      // start lower in the stack and visually pin at the inset ceiling before
+      // raw height alone would finish the edge-to-edge morph.
+      const rawOverpullT = Math.min(
+        1,
+        Math.max(0, (raw - insetPanelMaxH) / maxOverPull),
       );
+      let measuredOverpullT = 0;
+      if (sheetOpen && effOffset >= 0) {
+        const el = getPanelElement();
+        const top = el ? el.getBoundingClientRect().top : null;
+        if (top != null) {
+          if (!dragPinnedRef.current) {
+            // Still rising: track the lowest (highest-on-screen) top reached.
+            if (top < dragMinTopRef.current - 1) {
+              dragMinTopRef.current = top;
+            } else if (
+              dragMaxArmedRef.current &&
+              dragMinTopRef.current < dragStartTopRef.current - 24 &&
+              dragMinTopRef.current > 2
+            ) {
+              // Top stopped rising while the finger keeps pulling → pinned at
+              // the inset-full ceiling. Latch the over-pull phase from here.
+              dragPinnedRef.current = true;
+              dragOffAtPinRef.current = off;
+              dragPinTopRef.current = dragMinTopRef.current;
+            }
+          }
+          if (dragPinnedRef.current) {
+            measuredOverpullT = Math.min(
+              1,
+              Math.max(
+                0,
+                (off - dragOffAtPinRef.current) /
+                  Math.max(1, dragPinTopRef.current),
+              ),
+            );
+            // Reversed back below the pin → drop the over-pull phase.
+            if (off < dragOffAtPinRef.current - 4) {
+              dragPinnedRef.current = false;
+              dragMinTopRef.current = top;
+            }
+          }
+        }
+      }
+      const overpullT = Math.max(rawOverpullT, measuredOverpullT);
+      fullBleedT.set(overpullT);
       if (reduce) return;
-      // MID-DRAG COMMITS — the same intents the release path uses, fired the
-      // moment the finger crosses them so the sheet expands/collapses WHILE
-      // dragging: maximize on an over-pull ≥ half the morph gap past FULL or a
-      // long haul from ≤ HALF sweeping ≥ 80% of the screen; pill when carried
-      // past the bottom by the overshoot, or when a big yank that started above
-      // half+magnet runs out the bottom of the screen.
-      if (
-        dragMaxArmedRef.current &&
-        (raw >= maximizeCommitH ||
-          (dragStartHRef.current <= halfH + 1 && raw >= screenH * 0.8))
-      ) {
+      // MID-DRAG COMMITS — fired the moment the finger crosses the intent so the
+      // sheet expands/collapses WHILE dragging: maximize once the over-pull has
+      // collapsed the margin at least halfway (the top is more than halfway to
+      // the screen edge under the finger); pill when carried past the bottom by
+      // the overshoot, or a big yank that started above half+magnet runs out the
+      // bottom of the screen.
+      if (dragMaxArmedRef.current && overpullT >= 0.5) {
         commitMaximizeMidDrag(offset);
         return;
       }
@@ -3889,6 +3963,8 @@ export function ContinuousChatOverlay({
       setDragPreviewMounted,
       commitPillMidDrag,
       commitMaximizeMidDrag,
+      getPanelElement,
+      maximized,
     ],
   );
 
@@ -4728,6 +4804,7 @@ export function ContinuousChatOverlay({
               the safe-area top inset at full-bleed and host the transcribe badge. */}
             {threadPresented ? (
               <motion.div
+                data-testid="chat-sheet-header"
                 // Mounted while the sheet is open, or while an upward drag is
                 // previewing the sheet before release. It can FADE + LERP its
                 // space as the live height crosses the header threshold.
@@ -4760,8 +4837,8 @@ export function ContinuousChatOverlay({
                   // `pointer-events-none` on the bar itself so a pull-down that
                   // starts over the EMPTY top-bar space falls through to the
                   // restore strip beneath it (the "should work over the top bar"
-                  // fix); the button clusters below re-enable pointer events so
-                  // taps on search/voice/home still land.
+                  // fix); interactive content inside the strip opts back in only
+                  // when present.
                   "pointer-events-none relative z-20 flex shrink-0 items-center justify-between gap-1.5 overflow-hidden px-3",
                   // Always the centered reading column: pinned even mid-morph
                   // and full-bleed so the header never reflows while the glass

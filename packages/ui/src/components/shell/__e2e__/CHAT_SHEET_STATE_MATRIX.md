@@ -83,6 +83,33 @@ continues past it.
 | Onboarding (`firstRunOpen`) | pinned MAXIMIZED and undismissable; falling edge settles to HALF. |
 | Viewport rotation / pointer-cancel mid-drag | settles back to the current detent (never strands mid-morph). |
 
+## 1:1 finger tracking (the sheet edge follows the cursor exactly)
+
+While held, the panel's **top edge stays under the finger** with a constant
+offset (the grabber bar floats a fixed ~13px above it) — no dead zones, no
+accumulating lag — all the way UP to the screen top (maximize) and DOWN to the
+pill. Two structural fixes make this hold at the extremes:
+
+- **Reaching the top.** The pill→full→edge-to-edge morph budget in pixels
+  exceeds the physical screen height, so a `raw`-height threshold for maximize is
+  literally unreachable in one slow drag (it stalled ~200px short). Instead the
+  maximize morph is driven by the panel's **measured** top edge: once an upward
+  drag pins the panel at the inset-full ceiling (its top stops rising while the
+  finger keeps pulling), each further pixel of finger travel collapses the top
+  margin 1:1 (`fullBleedT` 0→1), raising the top pin→0 under the finger.
+- **Collapsing without a dead zone.** At the FULL detent the thread's flex-basis
+  exceeds what fits (it's flex-shrunk to the capped panel). A downward drag used
+  to first drain that invisible slack (~chrome px) before the panel shrank. On
+  gesture start the base is snapped to the thread's *real* rendered height (no
+  visual change — the panel is already that tall), so a downward drag shrinks the
+  sheet 1:1 from the first pixel.
+
+Validated by `runFingerTrackingSuite` (chat-sheet e2e): it slow-drags the grabber
+to the top and to the pill on a 420×880 viewport, sampling the panel top vs the
+cursor each step, and asserts the divergence stays within a tight band of its own
+median (the constant handle offset) — i.e. the edge tracks the finger 1:1 — plus
+that the top is actually reached and the chat collapses to the bottom.
+
 ## Mid-drag commit (expand/collapse WHILE holding, not only on release)
 
 The maximize and pill landings fire the **moment the finger crosses the
