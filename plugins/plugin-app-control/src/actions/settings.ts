@@ -39,6 +39,8 @@ import {
 	normalizeWalletRpcProviderId,
 	type PermissionId,
 	resolveInitialWalletRpcSelections,
+	VOICE_SETTINGS_APPLY_EVENT,
+	type VoiceSettingsApplyPayload,
 	WALLET_RPC_PROVIDER_OPTIONS,
 	type WalletConfigStatus,
 	type WalletRpcChain,
@@ -903,6 +905,26 @@ function buildVoiceSettingsPrefs(
 	return "provide key=continuous|silence-ms|rms";
 }
 
+// Mirror the applied prefs onto the running shell. Persisting messages.voice
+// alone leaves capture stale: ChatView / useShellController read the localStorage
+// mirrors (loadContinuousChatMode / loadVadAutoStop) that VoiceSectionMount seeds
+// from config, and never re-read config until that section remounts. Broadcasting
+// voice-settings:apply drives useVoiceSettingsApplyChannel to re-seed those
+// mirrors live — the same loopback appearance:apply uses (#14910).
+function voiceSettingsBroadcastRequest(
+	prefs: VoiceSettingsPrefs,
+): SettingsRouteRequest {
+	const payload: VoiceSettingsApplyPayload = {
+		continuous: prefs.continuous,
+		vadAutoStop: prefs.vadAutoStop,
+	};
+	return {
+		method: "POST",
+		path: "/api/views/events/broadcast",
+		body: { type: VOICE_SETTINGS_APPLY_EVENT, payload },
+	};
+}
+
 const VOICE_PREFS_KEY: SettingsWritableKey = {
 	description:
 		"Voice continuous-chat mode and VAD end-of-turn thresholds persisted under messages.voice through /api/config.",
@@ -924,7 +946,13 @@ const VOICE_PREFS_KEY: SettingsWritableKey = {
 			path: "/api/config",
 			body: { messages: { ...messages, voice: next } },
 		});
-		return outcome.ok ? { ...outcome, data: next } : outcome;
+		if (!outcome.ok) return outcome;
+
+		// The action's contract is to change voice behavior in the running app, so
+		// a broadcast failure is a real failure (the shell would stay stale) — not
+		// swallowed, even though config already persisted.
+		const applied = await routeFetch(voiceSettingsBroadcastRequest(next));
+		return applied.ok ? { ...applied, data: next } : applied;
 	},
 	successText: (_value, _request, outcome) => {
 		const next = readVoiceSettingsPrefs({ messages: { voice: outcome.data } });

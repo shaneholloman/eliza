@@ -35,6 +35,7 @@ import { useChatAvatarVoiceBridge } from "../../hooks/useChatAvatarVoiceBridge";
 import { useConnectorSendAsAccount } from "../../hooks/useConnectorSendAsAccount";
 import { useIntervalWhenDocumentVisible } from "../../hooks/useDocumentVisibility";
 import { useLoadOlderOnScroll } from "../../hooks/useLoadOlderOnScroll";
+import { useViewEvent } from "../../hooks/useViewEvent";
 import { claimAssistantLaunchPayloadFromHash } from "../../platform/assistant-launch-payload";
 import {
   CodingAgentControlChip,
@@ -58,7 +59,14 @@ import {
   intakeAttachmentFiles,
   MAX_CHAT_IMAGES,
 } from "../../utils/image-attachment";
-import type { VoiceContinuousMode } from "../../voice/voice-chat-types";
+import {
+  VOICE_SETTINGS_APPLY_EVENT,
+  type VoiceSettingsApplyPayload,
+} from "../../voice/useVoiceSettingsApplyChannel";
+import {
+  VOICE_CONTINUOUS_MODES,
+  type VoiceContinuousMode,
+} from "../../voice/voice-chat-types";
 import { AccountRequiredCard } from "../chat/AccountRequiredCard";
 import { AgentActivityBox } from "../chat/AgentActivityBox";
 import { ConnectorAccountPicker } from "../chat/ConnectorAccountPicker";
@@ -95,6 +103,13 @@ const CHAT_INPUT_MAX_HEIGHT_PX = 200;
 const TYPING_INDICATOR_STALL_MS = 30_000;
 const fallbackTranslate: TranslateFn = (key, options) =>
   typeof options?.defaultValue === "string" ? options.defaultValue : key;
+
+function readAppliedContinuousMode(value: unknown): VoiceContinuousMode | null {
+  return typeof value === "string" &&
+    VOICE_CONTINUOUS_MODES.includes(value as VoiceContinuousMode)
+    ? (value as VoiceContinuousMode)
+    : null;
+}
 
 type ChatViewVariant = "default" | "game-modal";
 type InboxChatSelection = {
@@ -287,6 +302,11 @@ export function ChatView({
   const [typingStalled, setTypingStalled] = useState(false);
   const [continuousChatMode, setContinuousChatMode] =
     useState<VoiceContinuousMode>(loadContinuousChatMode);
+  useViewEvent(VOICE_SETTINGS_APPLY_EVENT, (event) => {
+    const payload = event.payload as VoiceSettingsApplyPayload;
+    const continuous = readAppliedContinuousMode(payload.continuous);
+    if (continuous) setContinuousChatMode(continuous);
+  });
   const handleContinuousChatModeChange = useCallback(
     (next: VoiceContinuousMode) => {
       setContinuousChatMode(next);

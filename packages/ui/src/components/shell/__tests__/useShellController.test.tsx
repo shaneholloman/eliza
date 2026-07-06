@@ -7,6 +7,7 @@
 // store, and voice-output hook are mocked; localStorage is backed by an
 // in-memory Storage so hands-free persistence is real.
 
+import { VOICE_SETTINGS_APPLY_EVENT } from "@elizaos/shared/events";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import {
   afterEach,
@@ -17,7 +18,7 @@ import {
   type Mock,
   vi,
 } from "vitest";
-
+import { emitViewEvent } from "../../../views/view-event-bus";
 import {
   createVoiceCapture,
   type VoiceCaptureFactoryOptions,
@@ -771,6 +772,45 @@ describe("useShellController — voice capture routing", () => {
     expect(appMock.value.sendChatText.mock.calls[0]?.[1]).toMatchObject({
       channelType: "VOICE_DM",
     });
+  });
+
+  it("voice-settings apply always-on engages the mounted hands-free shell", async () => {
+    const { result } = renderHook(() => useShellController());
+    expect(result.current.handsFree).toBe(false);
+
+    await act(async () => {
+      emitViewEvent(
+        VOICE_SETTINGS_APPLY_EVENT,
+        { continuous: "always-on" },
+        "agent",
+      );
+      await Promise.resolve();
+    });
+
+    expect(result.current.handsFree).toBe(true);
+    expect(result.current.isOpen).toBe(true);
+    expect(createVoiceCaptureMock).toHaveBeenCalledTimes(1);
+    expect(captureHandles[0]?.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("voice-settings apply off stops the mounted hands-free shell", async () => {
+    const { result } = renderHook(() => useShellController());
+    await act(async () => {
+      result.current.toggleHandsFree();
+    });
+    expect(result.current.handsFree).toBe(true);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      emitViewEvent(VOICE_SETTINGS_APPLY_EVENT, { continuous: "off" }, "agent");
+      await Promise.resolve();
+    });
+
+    expect(result.current.handsFree).toBe(false);
+    expect(captureHandles[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(voiceOutputMock.stopSpeaking).toHaveBeenCalled();
   });
 
   it("a spoken 'start transcription' in converse flips into transcription mode and is not sent", async () => {
