@@ -5,12 +5,14 @@
 import { transcriptPlainText } from "@elizaos/shared/transcripts";
 import {
   ArrowDown,
+  Camera,
+  Captions,
   FileText,
   Film,
-  Home,
   Loader2,
   Mic,
   Music,
+  Paperclip,
   Search,
   SendHorizontal,
 } from "lucide-react";
@@ -108,6 +110,12 @@ import type {
 import { TurnStatus } from "../composites/chat/chat-typing-indicator";
 import { ToolCallEventLog } from "../tool-events/ToolCallEventLog";
 import { Button } from "../ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import {
@@ -447,52 +455,6 @@ function SoftButton({
         // the widened glyph paths fill the same fraction of it.
         <Glyph d={glyph} className="size-[22px]" />
       ) : null}
-    </Button>
-  );
-}
-
-/** A compact icon-only control for the full-state header (maximize / clear /
- *  settings). Smaller than SoftButton; same borderless neutral resting →
- *  neutral-hover language (no blue), `active` renders as the accent color. */
-function HeaderButton({
-  icon: Icon,
-  label,
-  onClick,
-  active,
-  disabled,
-  testId,
-}: {
-  icon: typeof Home;
-  label: string;
-  onClick: () => void;
-  active?: boolean;
-  disabled?: boolean;
-  testId?: string;
-}): React.JSX.Element {
-  return (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      data-testid={testId}
-      aria-label={label}
-      aria-pressed={active}
-      disabled={disabled}
-      aria-disabled={disabled || undefined}
-      onClick={onClick}
-      className={cn(
-        // Icon-only, same borderless language as SoftButton: no capsule, no
-        // background — the glyph alone carries the control. Neutral resting →
-        // neutral hover; active expresses as the accent color, never a fill.
-        "grid h-9 w-9 shrink-0 place-items-center bg-transparent p-0 transition-colors hover:bg-transparent",
-        disabled
-          ? // On the view it targets: shown but inert + dimmed (we disable, not hide).
-            "cursor-default text-muted"
-          : active
-            ? "text-accent"
-            : "text-muted-strong hover:text-txt",
-      )}
-    >
-      <Icon className="h-[18px] w-[18px]" aria-hidden />
     </Button>
   );
 }
@@ -946,7 +908,6 @@ export function ContinuousChatOverlay({
     needsAudioUnlock,
     unlockAudio,
     openSettings,
-    navigateHome,
     currentTab,
     stop,
     speak,
@@ -1245,7 +1206,6 @@ export function ContinuousChatOverlay({
   // before starting another.
   const threadAnimationRef = React.useRef<MotionControls | null>(null);
   const openProgressAnimationRef = React.useRef<MotionControls | null>(null);
-  const delayedNavigationTimerRef = React.useRef<number | null>(null);
   const prefillFocusFrameRef = React.useRef<number | null>(null);
   const prefillFocusTimerRef = React.useRef<number | null>(null);
   // A GPU-compositing hint scoped to an ACTIVE drag/settle only. While the
@@ -1327,10 +1287,6 @@ export function ContinuousChatOverlay({
     () => () => {
       stopThreadAnimation();
       stopOpenProgressAnimation();
-      if (delayedNavigationTimerRef.current !== null) {
-        window.clearTimeout(delayedNavigationTimerRef.current);
-        delayedNavigationTimerRef.current = null;
-      }
       if (layoutShiftIntentTimerRef.current !== null) {
         window.clearTimeout(layoutShiftIntentTimerRef.current);
         layoutShiftIntentTimerRef.current = null;
@@ -2773,24 +2729,6 @@ export function ContinuousChatOverlay({
   // view rather than a jump-cut from full-screen. The page swap waits a beat for
   // the collapse spring to start (a touch longer when leaving MAXIMIZED, since
   // there's more to unwind); reduced motion navigates immediately.
-  const navigateAndClose = React.useCallback(
-    (go: () => void) => {
-      const wasMaximized = maximized;
-      closeSheet();
-      if (delayedNavigationTimerRef.current !== null) {
-        window.clearTimeout(delayedNavigationTimerRef.current);
-      }
-      delayedNavigationTimerRef.current = window.setTimeout(
-        () => {
-          delayedNavigationTimerRef.current = null;
-          go();
-        },
-        reduce ? 0 : wasMaximized ? 260 : 190,
-      );
-    },
-    [closeSheet, maximized, reduce],
-  );
-
   // Maximize via a vertical PULL, not a button (#13531). A pull-up that crosses
   // the 80%-of-viewport threshold rises to the FULL detent and drops the inset,
   // so the panel goes edge-to-edge in one continuous gesture. The button-only
@@ -4836,21 +4774,11 @@ export function ContinuousChatOverlay({
                   "mx-auto w-full max-w-3xl",
                 )}
               >
-                {/* Left cluster: search is the ONLY left control. The thread is
-                    one infinite conversation — there is deliberately no
-                    new-chat/refresh button (scroll-up pages older turns, search
-                    jumps anywhere). Locked while onboarding pins the sheet so
-                    the chat stays front and center. */}
-                <div className="pointer-events-auto flex items-center gap-1.5">
-                  <HeaderButton
-                    icon={Search}
-                    label="search messages"
-                    active={searchOpen}
-                    disabled={firstRunOpen}
-                    onClick={() => (searchOpen ? closeSearch() : openSearch())}
-                    testId="chat-full-search"
-                  />
-                </div>
+                {/* The header carries no nav/search buttons — Search, Upload,
+                    Enable camera, and Transcribe all live in the composer "+"
+                    menu now, and Home lives in the launcher. This bar exists
+                    only to reserve the safe-area top inset at full-bleed and to
+                    host the transcription status badge. */}
                 {transcriptionMode ? (
                   <div
                     data-testid="chat-transcribing-badge"
@@ -4859,19 +4787,6 @@ export function ContinuousChatOverlay({
                     Transcribing — say “exit transcription mode” to stop
                   </div>
                 ) : null}
-                <div className="pointer-events-auto flex items-center gap-1.5">
-                  {/* Voice lives on the composer mic alone — the top bar carries
-                      only navigation (home). */}
-                  <HeaderButton
-                    icon={Home}
-                    label="home"
-                    // A close-and-navigate control — locked while onboarding
-                    // pins the sheet (the chat must stay front and center).
-                    disabled={firstRunOpen}
-                    onClick={() => navigateAndClose(() => navigateHome?.())}
-                    testId="chat-full-launcher"
-                  />
-                </div>
               </motion.div>
             ) : null}
 
@@ -5277,15 +5192,77 @@ export function ContinuousChatOverlay({
                   onPick={pickSlashItem}
                 />
               ) : null}
-              <SoftButton
-                glyph={PLUS_GLYPH}
-                label="attach image"
-                disabled={
-                  firstRunOpen || pendingImages.length >= MAX_CHAT_IMAGES
-                }
-                onClick={() => fileInputRef.current?.click()}
-                testId="chat-composer-attach"
-              />
+              {/* The "+" opens the chat-actions menu. Every item acts on THIS
+                  in-app conversation only — they are surface-local affordances
+                  (search this thread, attach to this turn, point the agent's
+                  camera/transcription at this chat), never connector actions on a
+                  Discord/Telegram room. Search + Transcribe + camera are things
+                  the agent can also drive; Upload is a pure client affordance. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-lg"
+                    aria-label="chat actions"
+                    disabled={firstRunOpen}
+                    data-testid="chat-composer-plus"
+                    className="grid h-11 w-11 shrink-0 place-items-center bg-transparent p-0 text-muted-strong transition-colors hover:bg-transparent hover:text-txt data-[state=open]:text-txt [&_svg]:size-[22px]"
+                  >
+                    <Glyph d={PLUS_GLYPH} className="size-[22px]" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  side="top"
+                  align="start"
+                  sideOffset={10}
+                  // Above the shell overlay (z 9000); mirrors the config-select
+                  // floating layer so the menu never hides behind the glass.
+                  style={{ zIndex: 12000 }}
+                  className="min-w-[13rem] border-border-strong"
+                >
+                  <DropdownMenuItem
+                    className="cursor-pointer gap-2.5 data-[highlighted]:bg-bg-hover"
+                    onSelect={() => openSearch()}
+                  >
+                    <Search
+                      className="h-4 w-4 shrink-0 text-muted"
+                      aria-hidden
+                    />
+                    Search chat…
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="cursor-pointer gap-2.5 data-[highlighted]:bg-bg-hover"
+                    disabled={pendingImages.length >= MAX_CHAT_IMAGES}
+                    onSelect={() => fileInputRef.current?.click()}
+                  >
+                    <Paperclip
+                      className="h-4 w-4 shrink-0 text-muted"
+                      aria-hidden
+                    />
+                    Upload file
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="cursor-pointer gap-2.5 data-[highlighted]:bg-bg-hover"
+                    onSelect={() => send("Turn on the camera so you can see.")}
+                  >
+                    <Camera
+                      className="h-4 w-4 shrink-0 text-muted"
+                      aria-hidden
+                    />
+                    Enable camera
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="cursor-pointer gap-2.5 data-[highlighted]:bg-bg-hover"
+                    onSelect={() => toggleTranscriptionMode()}
+                  >
+                    <Captions
+                      className="h-4 w-4 shrink-0 text-muted"
+                      aria-hidden
+                    />
+                    {transcriptionMode ? "Stop transcribing" : "Transcribe"}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Textarea
                 ref={inputRef}
                 rows={1}
