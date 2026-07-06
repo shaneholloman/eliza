@@ -139,7 +139,12 @@ describe("resolveManagedWebUiUrl (pairing-token direct URL fallback)", () => {
   });
 
   it("rejects RFC1918 and link-local origins but keeps loopback (local dev) and public IPs", () => {
-    for (const host of ["10.0.0.1", "172.16.5.5", "192.168.1.10", "169.254.9.9"]) {
+    for (const host of [
+      "10.0.0.1",
+      "172.16.5.5",
+      "192.168.1.10",
+      "169.254.9.9",
+    ]) {
       expect(
         resolveManagedWebUiUrl({
           bridge_url: `http://${host}:19027`,
