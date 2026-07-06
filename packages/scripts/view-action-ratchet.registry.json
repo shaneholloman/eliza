@@ -85,16 +85,12 @@
       }
     },
     "updateExperience": {
-      "gap": {
-        "issue": "#14623",
-        "reason": "character experience edit has no semantic twin (SEARCH_EXPERIENCES is read-only)"
-      }
+      "action": "EXPERIENCE",
+      "note": "EXPERIENCE action=update rewrites learning/importance/confidence/tags by experienceId (confirm:true)"
     },
     "deleteExperience": {
-      "gap": {
-        "issue": "#14623",
-        "reason": "character experience delete has no semantic twin (SEARCH_EXPERIENCES is read-only)"
-      }
+      "action": "EXPERIENCE",
+      "note": "EXPERIENCE action=delete removes by experienceId or unique query text (confirm:true)"
     },
     "sendInboxMessage": {
       "exempt": "chat composer send — chat IS the semantic path; a chat twin of chat is circular"
