@@ -211,6 +211,41 @@ describe("SurfaceRealmScope.resetHostRealm — root/body class + :root var vecto
     );
   });
 
+  it("preserves shell-owned continuous chat layout vars added after activation", () => {
+    const scope = makeScope();
+
+    document.documentElement.style.setProperty(
+      "--eliza-continuous-chat-clearance",
+      "92px",
+    );
+    document.documentElement.style.setProperty(
+      "--eliza-continuous-chat-side-clearance",
+      "232px",
+    );
+    document.documentElement.style.setProperty("--rogue-var", "red");
+
+    const removed = scope.resetHostRealm();
+
+    expect(
+      document.documentElement.style.getPropertyValue(
+        "--eliza-continuous-chat-clearance",
+      ),
+    ).toBe("92px");
+    expect(
+      document.documentElement.style.getPropertyValue(
+        "--eliza-continuous-chat-side-clearance",
+      ),
+    ).toBe("232px");
+    expect(document.documentElement.style.getPropertyValue("--rogue-var")).toBe(
+      "",
+    );
+    expect(removed.rootVars).not.toContain("--eliza-continuous-chat-clearance");
+    expect(removed.rootVars).not.toContain(
+      "--eliza-continuous-chat-side-clearance",
+    );
+    expect(removed.rootVars).toContain("--rogue-var");
+  });
+
   it("does not strip a token that was already present when the view activated (only what the view added)", () => {
     // A plugin-provided token present at activation (e.g. a content-pack var).
     document.documentElement.style.setProperty("--pack-custom-token", "blue");

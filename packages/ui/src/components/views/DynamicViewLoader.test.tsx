@@ -148,6 +148,16 @@ describe("DynamicViewLoader", () => {
     expect(importBundle).not.toHaveBeenCalledWith(
       expect.stringContaining("/api/views/remote.panel/bundle.js"),
     );
+    const surface = document.querySelector(
+      '[data-spatial-surface="gui"]',
+    ) as HTMLElement | null;
+    expect(surface?.style.overflowY).toBe("auto");
+    expect(surface?.style.paddingBottom).toBe(
+      "var(--eliza-continuous-chat-clearance, 5.25rem)",
+    );
+    expect(surface?.style.paddingInlineEnd).toBe(
+      "var(--eliza-continuous-chat-side-clearance, 0px)",
+    );
   });
 
   it("renders sandboxed iframe views from frameUrl and does not import bundleUrl", () => {

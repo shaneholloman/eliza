@@ -7,6 +7,7 @@
  * modality. Static/string render (no live headset).
  */
 
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -15,6 +16,7 @@ import {
   HStack,
   SpatialSurface,
   Text,
+  useContinuousChatSideClearanceActive,
   useSpatialState,
   VStack,
 } from "../index.ts";
@@ -28,7 +30,11 @@ declare global {
 }
 
 afterEach(() => {
+  cleanup();
   window.__elizaXRContext = undefined;
+  document.documentElement.style.removeProperty(
+    "--eliza-continuous-chat-side-clearance",
+  );
 });
 
 describe("SpatialSurface auto-detects the headset modality", () => {
@@ -47,6 +53,65 @@ describe("SpatialSurface auto-detects the headset modality", () => {
       </SpatialSurface>,
     );
     expect(xr).toContain('data-spatial-surface="xr"');
+  });
+
+  it("only reserves floating-chat clearance when the host opts in", () => {
+    const plain = renderToStaticMarkup(
+      <SpatialSurface modality="gui">
+        <Text>plain</Text>
+      </SpatialSurface>,
+    );
+    expect(plain).not.toContain("--eliza-continuous-chat-clearance");
+
+    const hosted = renderToStaticMarkup(
+      <SpatialSurface modality="gui" reserveChatClearance>
+        <Text>hosted</Text>
+      </SpatialSurface>,
+    );
+    expect(hosted).toContain(
+      "padding-bottom:var(--eliza-continuous-chat-clearance, 5.25rem)",
+    );
+    expect(hosted).toContain(
+      "padding-inline-end:var(--eliza-continuous-chat-side-clearance, 0px)",
+    );
+    expect(hosted).toContain("overflow-y:auto");
+  });
+});
+
+function ChatClearanceProbe() {
+  const active = useContinuousChatSideClearanceActive();
+  return <span data-testid="chat-clearance-probe">{String(active)}</span>;
+}
+
+describe("continuous chat side-clearance hook", () => {
+  it("tracks the shell-published inline-end clearance var", async () => {
+    render(<ChatClearanceProbe />);
+    expect(screen.getByTestId("chat-clearance-probe").textContent).toBe(
+      "false",
+    );
+
+    act(() => {
+      document.documentElement.style.setProperty(
+        "--eliza-continuous-chat-side-clearance",
+        "232px",
+      );
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-clearance-probe").textContent).toBe(
+        "true",
+      ),
+    );
+
+    act(() => {
+      document.documentElement.style.removeProperty(
+        "--eliza-continuous-chat-side-clearance",
+      );
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-clearance-probe").textContent).toBe(
+        "false",
+      ),
+    );
   });
 });
 

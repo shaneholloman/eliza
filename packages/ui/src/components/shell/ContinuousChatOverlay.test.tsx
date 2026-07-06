@@ -414,6 +414,77 @@ describe("ContinuousChatOverlay", () => {
     );
   });
 
+  it("publishes side clearance for the compact short-landscape composer", () => {
+    const originalInnerWidth = Object.getOwnPropertyDescriptor(
+      window,
+      "innerWidth",
+    );
+    const originalInnerHeight = Object.getOwnPropertyDescriptor(
+      window,
+      "innerHeight",
+    );
+    const originalResizeObserver = globalThis.ResizeObserver;
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+    class TestResizeObserver {
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+
+    try {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 800,
+      });
+      Object.defineProperty(window, "innerHeight", {
+        configurable: true,
+        value: 390,
+      });
+      vi.stubGlobal("ResizeObserver", TestResizeObserver);
+      rectSpy.mockReturnValue({
+        width: 208,
+        height: 72,
+        x: 0,
+        y: 0,
+        top: 0,
+        right: 208,
+        bottom: 72,
+        left: 0,
+        toJSON: () => ({}),
+      } as DOMRect);
+      document.documentElement.style.removeProperty(
+        "--eliza-continuous-chat-side-clearance",
+      );
+
+      render(<ContinuousChatOverlay controller={makeController()} />);
+
+      expect(
+        document.documentElement.style.getPropertyValue(
+          "--eliza-continuous-chat-side-clearance",
+        ),
+      ).toBe("232px");
+
+      fireEvent.focus(screen.getByLabelText("message"));
+
+      expect(
+        document.documentElement.style.getPropertyValue(
+          "--eliza-continuous-chat-side-clearance",
+        ),
+      ).toBe("0px");
+    } finally {
+      rectSpy.mockRestore();
+      if (originalInnerWidth) {
+        Object.defineProperty(window, "innerWidth", originalInnerWidth);
+      }
+      if (originalInnerHeight) {
+        Object.defineProperty(window, "innerHeight", originalInnerHeight);
+      }
+      vi.stubGlobal("ResizeObserver", originalResizeObserver);
+      document.documentElement.style.removeProperty(
+        "--eliza-continuous-chat-side-clearance",
+      );
+    }
+  });
+
   it("renders NO cosmetic bottom-floor strip under the composer (wallpaper owns the zone)", () => {
     // The old continuous-chat-bottom-floor painted a --launch-bg gradient over
     // the strip below the composer; with the app shell painting that zone

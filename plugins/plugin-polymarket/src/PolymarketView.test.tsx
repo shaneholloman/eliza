@@ -298,6 +298,16 @@ describe("PolymarketView — list -> detail navigation", () => {
 });
 
 describe("PolymarketView — refresh + error path", () => {
+  it("does not render a duplicate wrapper toolbar above the spatial controls", async () => {
+    render(React.createElement(PolymarketView));
+    await screen.findByText("Will BTC be above 100k?");
+
+    expect(
+      screen.queryByRole("toolbar", { name: "Polymarket controls" }),
+    ).toBeNull();
+    expect(screen.queryByText("All markets")).toBeNull();
+  });
+
   it("the Refresh control re-loads status + markets", async () => {
     render(React.createElement(PolymarketView));
     await screen.findByText("Will BTC be above 100k?");

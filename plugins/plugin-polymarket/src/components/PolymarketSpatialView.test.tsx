@@ -154,6 +154,20 @@ describe("PolymarketSpatialView one source, three modalities", () => {
     }
   });
 
+  it("GUI compact chat-clearance mode keeps the market detail concise", () => {
+    const html = renderToStaticMarkup(
+      <SpatialSurface modality="gui">
+        <PolymarketSpatialView snapshot={detailSnapshot} compactChatClearance />
+      </SpatialSurface>,
+    );
+
+    expect(html).toContain("Will it rain tomorrow?");
+    expect(html).toContain("Yes 62%");
+    expect(html).toContain("No 38%");
+    expect(html).not.toContain("orderbook tokens");
+    expect(html).not.toContain("Refresh");
+  });
+
   it("registers as a terminal view the agent terminal can mount and render", () => {
     const unregister = registerSpatialTerminalView(
       "polymarket-test",

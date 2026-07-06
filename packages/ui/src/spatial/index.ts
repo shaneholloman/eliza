@@ -27,6 +27,7 @@ export {
   detectDomModality,
   SpatialSurface,
   type SpatialSurfaceProps,
+  useContinuousChatSideClearanceActive,
 } from "./dom.tsx";
 // React → IR evaluation + cross-modal state hooks.
 export {

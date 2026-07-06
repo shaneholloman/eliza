@@ -138,6 +138,18 @@ function outcomeSummary(outcome: PolymarketMarket["outcomes"][number]): string {
   return `${outcome.name} ${percent != null ? `${percent}%` : "n/a"}`;
 }
 
+function compactOutcomeSummary(market: PolymarketMarket): string | null {
+  if (market.outcomes.length > 0) {
+    return market.outcomes.map(outcomeSummary).join(" · ");
+  }
+  const lastTrade = priceToPercent(market.lastTradePrice);
+  if (lastTrade == null) return null;
+  if (market.clobTokenIds.length === 2) {
+    return `Yes ${lastTrade}% · No ${100 - lastTrade}%`;
+  }
+  return `Last trade ${lastTrade}%`;
+}
+
 function MarketRow({
   market,
   index,
@@ -208,11 +220,38 @@ function MarketRow({
 function MarketDetail({
   market,
   onAction,
+  compact = false,
 }: {
   market: PolymarketMarket;
   onAction?: (action: string) => void;
+  compact?: boolean;
 }) {
   const lastTrade = priceToPercent(market.lastTradePrice);
+
+  if (compact) {
+    const compactMetrics = [
+      `Vol ${shortNumber(market.volume) ?? "-"}`,
+      `Liq ${shortNumber(market.liquidity) ?? "-"}`,
+      `Last ${lastTrade != null ? `${lastTrade}%` : "-"}`,
+    ].join(" · ");
+    const compactOutcomes = compactOutcomeSummary(market);
+    return (
+      <VStack gap={1}>
+        <Text style="subheading" wrap>
+          {market.question ?? market.slug ?? market.id}
+        </Text>
+        {compactOutcomes ? (
+          <Text tone="primary" wrap>
+            {compactOutcomes}
+          </Text>
+        ) : null}
+        <Text style="caption" tone="muted" wrap>
+          {compactMetrics}
+        </Text>
+      </VStack>
+    );
+  }
+
   return (
     <VStack gap={1}>
       <Button
@@ -354,11 +393,14 @@ export interface PolymarketSpatialViewProps {
   snapshot: PolymarketSnapshot;
   /** Dispatch by action id: `market:<id>` (open a market), `detail-back`, `refresh`. */
   onAction?: (action: string) => void;
+  /** True when the shell's compact chat composer reserves the inline-end edge. */
+  compactChatClearance?: boolean;
 }
 
 export function PolymarketSpatialView({
   snapshot,
   onAction,
+  compactChatClearance = false,
 }: PolymarketSpatialViewProps) {
   const { status, markets, selectedMarket, loading, error } = snapshot;
   const positions = snapshot.positions ?? [];
@@ -371,15 +413,17 @@ export function PolymarketSpatialView({
         <Text style="caption" tone="muted" grow={1}>
           {loading ? "loading" : `${markets.length} markets`}
         </Text>
-        <Button
-          variant="outline"
-          tone="default"
-          agent="refresh"
-          disabled={loading}
-          onPress={() => onAction?.("refresh")}
-        >
-          Refresh
-        </Button>
+        {compactChatClearance ? null : (
+          <Button
+            variant="outline"
+            tone="default"
+            agent="refresh"
+            disabled={loading}
+            onPress={() => onAction?.("refresh")}
+          >
+            Refresh
+          </Button>
+        )}
       </HStack>
 
       {error ? (
@@ -389,7 +433,11 @@ export function PolymarketSpatialView({
       ) : null}
 
       {selectedMarket ? (
-        <MarketDetail market={selectedMarket} onAction={onAction} />
+        <MarketDetail
+          market={selectedMarket}
+          onAction={onAction}
+          compact={compactChatClearance}
+        />
       ) : (
         <>
           {accountReady ? (

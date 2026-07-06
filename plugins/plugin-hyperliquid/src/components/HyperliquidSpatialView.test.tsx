@@ -109,6 +109,20 @@ describe("HyperliquidSpatialView one source, three modalities", () => {
 		}
 	});
 
+	it("GUI compact chat-clearance mode keeps the dashboard concise", () => {
+		const html = renderToStaticMarkup(
+			<SpatialSurface modality="gui">
+				<HyperliquidSpatialView snapshot={snapshot} compactChatClearance />
+			</SpatialSurface>,
+		);
+
+		expect(html).toContain("read-ready");
+		expect(html).toContain("BTC");
+		expect(html).toContain("positions");
+		expect(html).not.toContain("orders");
+		expect(html).not.toContain("Refresh");
+	});
+
 	it("registers as a terminal view the agent terminal can mount and render", () => {
 		const unregister = registerSpatialTerminalView(
 			"hyperliquid-test",

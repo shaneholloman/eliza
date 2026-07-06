@@ -289,6 +289,15 @@ describe("HyperliquidView — read-blocked surfaces", () => {
 });
 
 describe("HyperliquidView — controls", () => {
+	it("does not render a duplicate wrapper toolbar above the spatial controls", async () => {
+		render(React.createElement(HyperliquidView));
+		await screen.findByText("ETH");
+
+		expect(
+			screen.queryByRole("toolbar", { name: "Hyperliquid controls" }),
+		).toBeNull();
+	});
+
 	it("the Refresh control re-fetches status + reads", async () => {
 		render(React.createElement(HyperliquidView));
 		await screen.findByText("ETH");

@@ -207,11 +207,12 @@ export function BuildBadge() {
   return (
     <>
       <div
+        data-testid="build-badge-anchor"
         className="pointer-events-none fixed left-0 bottom-0 z-[9997]"
         style={{
           paddingLeft: "calc(env(safe-area-inset-left, 0px) + 0.375rem)",
           paddingBottom:
-            "calc(max(env(safe-area-inset-bottom, 0px), var(--android-gesture-inset-bottom, 0px)) + var(--eliza-mobile-nav-offset, 0px) + 0.375rem)",
+            "calc(max(env(safe-area-inset-bottom, 0px), var(--android-gesture-inset-bottom, 0px)) + var(--eliza-mobile-nav-offset, 0px) + var(--eliza-continuous-chat-clearance, 0px) + 0.375rem)",
         }}
       >
         <span className="pointer-events-auto flex items-center gap-1 rounded-full border border-border bg-surface/80 px-2 py-0.5 text-3xs leading-none text-muted opacity-70 transition-opacity hover:opacity-100">

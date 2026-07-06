@@ -66,7 +66,9 @@ describe("BrowserWorkspaceView uniform header (#13596)", () => {
     // Chromeless at rest — no border/fill; hover-only chip.
     expect(back.className).toContain("bg-transparent");
     expect(back.className).not.toContain("border");
-    expect(back.className).toContain("hover:bg-bg-hover");
+    expect(back.querySelector("span")?.className).toContain(
+      "group-hover:bg-bg-hover",
+    );
     // Icon-only: no visible text label.
     expect(back.textContent?.trim()).toBe("");
   });
@@ -103,6 +105,11 @@ describe("BrowserWorkspaceView uniform header (#13596)", () => {
       // The URL bar / tab control stays inside WorkspaceLayout's contentHeader —
       // the ViewHeader is additive, not a toolbar swap.
       expect(source).toContain("contentHeader={navNode}");
+    });
+
+    it("keeps the empty bridge actions clear of the continuous chat composer", () => {
+      expect(source).toContain("--eliza-continuous-chat-clearance");
+      expect(source).toContain("--eliza-continuous-chat-side-clearance");
     });
   });
 });
