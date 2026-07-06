@@ -1,3 +1,9 @@
+/**
+ * Choice marker helpers for inbox queue responses. The marker syntax is consumed
+ * by the chat shell and returns plain owner text to the planner, so every emitted
+ * command must map to an operation the INBOX action already supports.
+ */
+
 import type { TriageEntry } from "../inbox/types.js";
 
 function choiceLabelText(value: string): string {
@@ -14,8 +20,7 @@ export function appendInboxDraftChoiceMarker(
   return `${text}
 [CHOICE:inbox-draft-${entryId} id=${entryId}]
 inbox approve ${entryId}=Send
-inbox edit ${entryId}=Edit
-inbox discard ${entryId}=Discard
+inbox archive ${entryId}=Discard
 [/CHOICE]`;
 }
 

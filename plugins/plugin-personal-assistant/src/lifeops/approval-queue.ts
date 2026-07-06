@@ -658,6 +658,8 @@ export class PgApprovalQueue implements ApprovalQueue {
         action: input.action,
       });
     } catch (err) {
+      // error-policy:J7 chat choice emission is a non-blocking side-channel,
+      // but reportError keeps stranded approval prompts observable.
       this.runtime.reportError("ApprovalQueue.chatChoice", err, {
         requestId: id,
         action: input.action,

@@ -1,3 +1,9 @@
+/**
+ * Choice marker helpers for owner approval and check-in responses. These strings
+ * are intentionally planner-readable because the chat UI sends the selected
+ * command back as owner text instead of invoking a private callback API.
+ */
+
 import type { ApprovalAction } from "./approval-queue.types.js";
 
 export function buildApprovalChoiceText(input: {
