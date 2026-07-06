@@ -71,15 +71,10 @@ export const ManyViews: Story = {
   },
 };
 
-/** Named zones — Recents + Favorites projected over the All Apps grid. */
+/** Named zones, Favorites projected over the All Apps grid (Recents removed). */
 export const Zones: Story = {
   args: {
     zones: [
-      {
-        key: "recents",
-        label: "Recents",
-        entries: [VIEWS[0], VIEWS[4], VIEWS[9]],
-      },
       { key: "favorites", label: "Favorites", entries: [VIEWS[4], VIEWS[2]] },
       { key: "all", label: "All Apps", entries: VIEWS },
     ] satisfies LauncherZone[],

@@ -21,7 +21,7 @@
  */
 
 import { Star } from "lucide-react";
-import { memo, useCallback } from "react";
+import { memo, useCallback, useState } from "react";
 import type { ViewEntry } from "../../hooks/view-catalog";
 import { cn } from "../../lib/utils";
 import { emitViewInteraction } from "../../view-telemetry";
@@ -52,6 +52,8 @@ interface IconTileProps {
   onLaunch: (entry: ViewEntry) => void;
   onToggleFavorite?: (entry: ViewEntry) => void;
   isFavorite: boolean;
+  /** Reveal the empty-star pin on every tile (touch-first "manage" mode). */
+  showManageFavorites: boolean;
 }
 
 function viewKindBadge(entry: ViewEntry): {
@@ -81,6 +83,7 @@ const IconTile = memo(function IconTile({
   onLaunch,
   onToggleFavorite,
   isFavorite,
+  showManageFavorites,
 }: IconTileProps) {
   const badge = viewKindBadge(entry);
   return (
@@ -125,11 +128,16 @@ const IconTile = memo(function IconTile({
             {badge.label}
           </span>
         ) : null}
-        {onToggleFavorite ? (
+        {onToggleFavorite && (isFavorite || showManageFavorites) ? (
           // The pin lives on the tile itself (the only place a launcher-scoped
-          // favorite has meaning). Fine pointers keep the quiet hover/focus
-          // reveal, while coarse pointers get a visible 44px target at rest so
-          // Favorites can be managed on the phone-primary surface.
+          // favorite has meaning). The RESTING grid stays calm, icon + label,
+          // nothing else, so the empty-star prompt is NOT painted on every tile
+          // (touch has no hover, so `pointer-coarse:opacity-100` made a second
+          // badge sit permanently on every icon: the "stars are slop" report).
+          // An already-pinned tile shows its filled gold star at rest; the
+          // empty-star affordance appears only on hover/focus (fine pointers) or
+          // while the launcher-level Manage-favorites mode is on (coarse
+          // pointers), keeping a 44px target for touch pinning when asked for.
           <Button
             unstyled
             data-testid={`launcher-favorite-${entry.id}`}
@@ -147,7 +155,9 @@ const IconTile = memo(function IconTile({
               "absolute -right-3.5 -top-3.5 inline-flex h-11 w-11 items-center justify-center rounded-full border border-border/50 bg-card/85 p-0 text-card-foreground shadow-sm transition-[background-color,opacity,transform] active:scale-[0.98] hover:bg-card",
               isFavorite
                 ? "text-warn opacity-100"
-                : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100",
+                : showManageFavorites
+                  ? "opacity-100"
+                  : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100",
             )}
           >
             <Star
@@ -182,12 +192,14 @@ function LauncherGrid({
   onLaunch,
   onToggleFavorite,
   favoriteIds,
+  showManageFavorites,
 }: {
   entries: ViewEntry[];
   testIdPrefix: string;
   onLaunch: (entry: ViewEntry) => void;
   onToggleFavorite?: (entry: ViewEntry) => void;
   favoriteIds?: ReadonlySet<string>;
+  showManageFavorites: boolean;
 }) {
   return (
     <div className="grid w-full grid-cols-4 gap-x-4 gap-y-5 max-sm:portrait:gap-y-8 sm:grid-cols-5">
@@ -199,6 +211,7 @@ function LauncherGrid({
             onLaunch={onLaunch}
             onToggleFavorite={onToggleFavorite}
             isFavorite={favoriteIds?.has(entry.id) ?? false}
+            showManageFavorites={showManageFavorites}
           />
         </div>
       ))}
@@ -233,6 +246,12 @@ export function Launcher({
   favoriteIds,
   className,
 }: LauncherProps) {
+  // Touch-first Favorites management: OFF, the resting grid is calm (icon +
+  // label, and a filled gold star only on already-pinned tiles). ON, the
+  // empty-star pin target is revealed on every tile so a coarse-pointer user
+  // (no hover) can pin/unpin. A single overflow control toggles it, the star
+  // affordance is never permanently painted on every icon at rest.
+  const [manageFavorites, setManageFavorites] = useState(false);
   const handleLaunch = useCallback(
     (entry: ViewEntry) => {
       emitViewInteraction({
@@ -268,6 +287,35 @@ export function Launcher({
           className="relative flex min-h-0 flex-1 flex-col items-center overflow-y-auto touch-pan-y px-6 pt-2 pb-8"
         >
           <div className="flex w-full max-w-2xl flex-col gap-6">
+            {onToggleFavorite && !showSkeleton ? (
+              // The single overflow control for touch-first Favorites management,
+              // aligned to the row end so it reads as a quiet utility, not a
+              // per-tile badge. Fine pointers never need it (hover reveals the
+              // pin); it exists so coarse pointers can enter/exit a manage mode
+              // instead of the empty star squatting on every icon.
+              <div className="flex justify-end">
+                <Button
+                  unstyled
+                  data-testid="launcher-manage-favorites"
+                  aria-pressed={manageFavorites}
+                  onClick={() => setManageFavorites((prev) => !prev)}
+                  className={cn(
+                    "inline-flex h-11 items-center gap-1.5 rounded-full px-3 text-[11px] font-semibold transition-colors active:scale-[0.98]",
+                    WALLPAPER_GLASS.iconPlate,
+                    WALLPAPER_TEXT.base,
+                    WALLPAPER_FLOAT_SHADOW,
+                    manageFavorites ? "text-warn" : null,
+                  )}
+                >
+                  <Star
+                    className="h-4 w-4"
+                    fill={manageFavorites ? "currentColor" : "none"}
+                    aria-hidden
+                  />
+                  {manageFavorites ? "Done" : "Edit favorites"}
+                </Button>
+              </div>
+            ) : null}
             {showSkeleton ? (
               <div className="grid w-full grid-cols-4 gap-x-4 gap-y-5 sm:grid-cols-5">
                 {["a", "b", "c", "d", "e", "f", "g", "h"].map((id) => (
@@ -305,6 +353,7 @@ export function Launcher({
                       // projection zones render read-only.
                       onToggleFavorite={isAll ? onToggleFavorite : undefined}
                       favoriteIds={favoriteIds}
+                      showManageFavorites={isAll && manageFavorites}
                     />
                   </section>
                 );

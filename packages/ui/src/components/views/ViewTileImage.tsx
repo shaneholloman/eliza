@@ -1,6 +1,15 @@
 /**
  * Paints launcher and catalog tile imagery with deterministic fallback glyph
  * styling and runtime-safe API URL resolution.
+ *
+ * Launcher tiles are GLYPH-ONLY: a deterministic branded gradient plate with the
+ * crisp Lucide glyph centered on top, never a generated hero image. Painting the
+ * per-view generated hero PNG (`entry.imageUrl`) over the glyph is what produced
+ * the "icons are slop" report: a cartoon virus for Settings, a ladybug for
+ * Memories, etc. The hero art belongs to the larger catalog CARD surface, where a
+ * preview reads as a preview; on the small home-grid tile it just muddies the
+ * legible glyph. So the launcher branch renders `<ViewIcon>` alone and the
+ * catalog branch keeps the image/fallback order.
  */
 import { type CSSProperties, useState } from "react";
 import { client } from "../../api";
@@ -106,59 +115,13 @@ export function ViewTileImage({
 }) {
   const [failure, setFailure] = useState<"none" | "primary" | "all">("none");
 
-  const primaryUrl =
-    failure === "none" ? resolveTileImageUrl(entry.imageUrl) : undefined;
-  const fallbackUrl =
-    failure !== "all" ? resolveTileImageUrl(entry.fallbackImageUrl) : undefined;
-  const url = primaryUrl ?? fallbackUrl;
-  const hasFallback = Boolean(fallbackUrl && fallbackUrl !== primaryUrl);
-
+  // Launcher tiles never composite a hero image, they read the glyph directly,
+  // so the image-URL resolution below is scoped to the catalog card surface.
   if (source === "launcher") {
-    if (url) {
-      return (
-        <div
-          className={cn(containerClassName, "relative overflow-hidden")}
-          data-view-visual={entry.id}
-          style={launcherIconStyle(entry)}
-        >
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute -right-4 -top-5 h-14 w-14 rounded-full bg-white/25"
-          />
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 bg-[linear-gradient(160deg,rgba(255,255,255,0.36)_0%,rgba(255,255,255,0.08)_42%,rgba(0,0,0,0.2)_100%)]"
-          />
-          <ViewIcon
-            icon={entry.icon}
-            label={entry.label}
-            id={entry.id}
-            className={cn(
-              glyphClassName,
-              "relative z-0 drop-shadow-[0_1px_3px_rgba(0,0,0,0.35)]",
-            )}
-          />
-          <img
-            src={url}
-            alt=""
-            draggable={false}
-            loading="eager"
-            decoding="async"
-            onError={() => {
-              emitViewInteraction({
-                source,
-                action: "hero-image-error",
-                viewId: entry.id,
-              });
-              setFailure(primaryUrl && hasFallback ? "primary" : "all");
-            }}
-            className="absolute inset-0 z-10 h-full w-full object-cover"
-            data-testid={imageTestId}
-          />
-        </div>
-      );
-    }
-
+    // Glyph-only app icon: the deterministic branded gradient plate + soft
+    // top-corner highlight, with the crisp Lucide glyph centered on top. No
+    // `<img>` hero (that painted a generated cartoon over the real glyph, the
+    // "icons are slop" report); no `entry.imageUrl` probe, no load/error state.
     return (
       <div
         className={cn(containerClassName, "relative overflow-hidden")}
@@ -185,6 +148,13 @@ export function ViewTileImage({
       </div>
     );
   }
+
+  const primaryUrl =
+    failure === "none" ? resolveTileImageUrl(entry.imageUrl) : undefined;
+  const fallbackUrl =
+    failure !== "all" ? resolveTileImageUrl(entry.fallbackImageUrl) : undefined;
+  const url = primaryUrl ?? fallbackUrl;
+  const hasFallback = Boolean(fallbackUrl && fallbackUrl !== primaryUrl);
 
   if (url) {
     return (
