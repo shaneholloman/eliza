@@ -84,9 +84,8 @@ export function AppBackground({
   // wallpaper (or its base color) instead of the near-black `--launch-bg`. This
   // kills the recurring bottom "strip" (device r8) BY CONSTRUCTION: even where
   // every box stops ~59px short of the true bottom, the canvas shows the
-  // wallpaper, not #160d07. Belt-and-suspenders with the JS-measured
-  // `--standalone-bottom-reclaim` (#15036), which independently re-seats the
-  // composer but relies on the measurement being correct; this mirror does not.
+  // wallpaper, not #160d07. It deliberately avoids any JS-measured bottom-gap
+  // offset: the canvas is the stable layer when viewport APIs disagree.
   // App-lifetime: updated on every background change, never torn down (this
   // layer is mounted once at the shell root for the whole session).
   useEffect(() => {
