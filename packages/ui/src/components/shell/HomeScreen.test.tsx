@@ -7,6 +7,12 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const navigateDeepLink = vi.hoisted(() => vi.fn());
+vi.mock("../../state/notifications/navigate-deep-link", async (orig) => ({
+  ...(await orig()),
+  navigateDeepLink,
+}));
+
 // Stub the live activity stream so the home renders deterministically.
 vi.mock("../../hooks/useActivityEvents", () => ({
   useActivityEvents: () => ({
@@ -45,6 +51,7 @@ afterEach(() => {
   cleanup();
   __resetNotificationStoreForTests();
   __resetHomeDismissalsForTests();
+  navigateDeepLink.mockClear();
 });
 
 const NATIVE_OS_TILES = ["messages", "phone", "contacts", "camera"];
@@ -181,5 +188,19 @@ describe("HomeScreen", () => {
     // Past the threshold: the shade opens mid-gesture.
     fireEvent.pointerMove(hint, { clientY: 270, pointerId: 1 });
     expect(screen.getByTestId("notifications-shade")).toBeTruthy();
+  });
+
+  it("closes the notification shade when a row follows a safe deep link", () => {
+    __ingestNotificationForTests(
+      makeNotification({ deepLink: "/settings", title: "Open settings" }),
+    );
+    render(<HomeScreen onOpenTile={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("home-notifications-hint"));
+    expect(screen.getByTestId("notifications-shade")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("notification-row"));
+
+    expect(navigateDeepLink).toHaveBeenCalledWith("/settings");
+    expect(screen.queryByTestId("notifications-shade")).toBeNull();
   });
 });
