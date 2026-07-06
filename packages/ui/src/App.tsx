@@ -110,8 +110,10 @@ import {
   isRouteRootPath,
   pathForTab,
   shouldUseHashNavigation,
+  type Tab,
   TAB_PATHS,
   tabFromPath,
+  titleForTab,
 } from "./navigation";
 import { applyLaunchConnection } from "./platform";
 import { isIOS, isNative } from "./platform/init";
@@ -212,6 +214,7 @@ import {
   isWalletSectionPath,
   WalletSectionNav,
 } from "./components/pages/WalletSectionNav";
+import { ViewHeader } from "./components/shared/ViewHeader";
 import { FineTuningView } from "./components/training/injected";
 import { DynamicViewLoader } from "./components/views/DynamicViewLoader";
 import { registerSandboxProbeView } from "./components/views/sandbox-probe-view";
@@ -1105,16 +1108,26 @@ function findRemoteViewForRoute(
 
 function renderRemoteView(view: ViewRegistryEntry, nav?: ReactNode): ReactNode {
   if (!view.bundleUrl && !view.frameUrl) return null;
+  // Remote plugin bundles render only their own content (a SpatialSurface), not
+  // the app-shell chrome — so the shell owns the standard top bar for them. Every
+  // `normal`-policy view gets the shared ViewHeader (title + back-to-launcher),
+  // matching #13586 ("the shell enforces the shared ViewHeader on every normal
+  // view"); `fullscreen`/`modal`/`immersive` opt out. A section nav (Wallet /
+  // Character strip) already supplies the header, so it suppresses this one.
+  const showHeader = !nav && resolveSurfaceManifest(view).header === "normal";
   return (
     <TabContentView nav={nav}>
-      <DynamicViewLoader
-        bundleUrl={view.bundleUrl}
-        frameUrl={view.frameUrl}
-        componentExport={view.componentExport}
-        viewId={view.id}
-        viewType={view.viewType}
-        surface={view.surface}
-      />
+      {showHeader ? <ViewHeader title={view.label} /> : null}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <DynamicViewLoader
+          bundleUrl={view.bundleUrl}
+          frameUrl={view.frameUrl}
+          componentExport={view.componentExport}
+          viewId={view.id}
+          viewType={view.viewType}
+          surface={view.surface}
+        />
+      </div>
     </TabContentView>
   );
 }
@@ -1317,15 +1330,26 @@ function buildStaticTabRenderers(): Record<
   const wrap = (node: ReactNode) => () => (
     <TabContentView>{node}</TabContentView>
   );
+  // Tool views that own no header of their own get the shared ViewHeader (back
+  // button + centered title) via the same flush structure MemoryViewerView uses,
+  // so every launcher tool reads the same at the top instead of opening headerless.
+  const withHeader = (tab: Tab, node: ReactNode) => () => (
+    <TabContentView>
+      <div className="flex h-full min-h-0 w-full flex-col">
+        <ViewHeader title={titleForTab(tab)} />
+        <div className="min-h-0 flex-1 overflow-hidden">{node}</div>
+      </div>
+    </TabContentView>
+  );
   return {
     chat: () => <ViewUnavailableFallback />,
     browser: () => <BrowserWorkspaceView />,
     stream: () => <StreamView />,
     tasks: wrap(<TasksPageView />),
     automations: () => <AutomationsFeed />,
-    plugins: wrap(<PluginsPageView />),
-    skills: wrap(<SkillsView />),
-    trajectories: wrap(<TrajectoriesView />),
+    plugins: withHeader("plugins", <PluginsPageView />),
+    skills: withHeader("skills", <SkillsView />),
+    trajectories: withHeader("trajectories", <TrajectoriesView />),
     transcripts: wrap(<LiveMeetingPageView />),
     // Relationships is a Character-family section: the shared CharacterSectionNav
     // (passed as `nav`) owns the "Character" header + strip, so the view renders
@@ -1349,14 +1373,19 @@ function buildStaticTabRenderers(): Record<
     memories: wrap(<MemoryViewerView />),
     "my-apps": wrap(<MyAppsView />),
     files: () => (
-      <TabScrollView>
-        <FilesView />
-      </TabScrollView>
+      <TabContentView>
+        <div className="flex h-full min-h-0 w-full flex-col">
+          <ViewHeader title={titleForTab("files")} />
+          <div className="eliza-continuous-chat-scroll min-h-0 flex-1 overflow-y-auto pb-[var(--eliza-continuous-chat-clearance,5.25rem)]">
+            <FilesView />
+          </div>
+        </div>
+      </TabContentView>
     ),
-    runtime: wrap(<RuntimeView />),
-    database: wrap(<DatabasePageView />),
-    logs: wrap(<LogsView />),
-    desktop: wrap(<DesktopWorkspaceSection />),
+    runtime: withHeader("runtime", <RuntimeView />),
+    database: withHeader("database", <DatabasePageView />),
+    logs: withHeader("logs", <LogsView />),
+    desktop: withHeader("desktop", <DesktopWorkspaceSection />),
     settings: ({
       settingsInitialSection,
       settingsNavigatePayload,

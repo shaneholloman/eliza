@@ -357,7 +357,10 @@ export const TAB_PATHS: Record<BuiltinTab, string> = {
   experience: "/character/experience",
   "character-skills": "/character/skills",
   memories: "/apps/memories",
-  "my-apps": "/apps/my-apps",
+  // My Apps is the canonical `/apps` destination (the launcher grid lives at
+  // `/views`). Defined after `apps` so it wins the `PATH_TO_TAB` reverse lookup
+  // for the bare `/apps` path; `/apps/<slug>` still resolves to the app runtime.
+  "my-apps": "/apps",
   rolodex: "/rolodex",
   runtime: "/apps/runtime",
   database: "/apps/database",

@@ -6,18 +6,21 @@
  * first-class destination rather than buried in preferences. The body is the
  * reused {@link AppsManagementSection}, wrapped in a titled scroll page.
  */
+import { ViewHeader } from "../shared/ViewHeader";
 import { AppsManagementSection } from "../settings/AppsManagementSection";
 
 export function MyAppsView() {
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-lg font-semibold text-txt-strong">My Apps</h1>
-        <p className="text-sm text-muted">
-          Install, create, and run your elizaOS apps.
-        </p>
-      </header>
-      <AppsManagementSection />
+    <div className="flex h-full min-h-0 w-full flex-col">
+      <ViewHeader title="My Apps" />
+      <div className="min-h-0 flex-1 overflow-y-auto eliza-continuous-chat-scroll pb-[var(--eliza-continuous-chat-clearance,5.25rem)]">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
+          <p className="text-sm text-muted">
+            Install, create, and run your elizaOS apps.
+          </p>
+          <AppsManagementSection />
+        </div>
+      </div>
     </div>
   );
 }
