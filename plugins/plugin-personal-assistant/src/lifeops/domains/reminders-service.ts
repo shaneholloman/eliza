@@ -105,6 +105,7 @@ import {
   shouldSuppressSleepCycleMorningCheckin,
 } from "../checkin/morning-checkin-ownership.js";
 import { resolveCheckinSchedule } from "../checkin/schedule-resolver.js";
+import { appendCheckinAckChoiceMarker } from "../choice-markers.js";
 import {
   type ContactRoutePurpose,
   resolveContactRouteCandidates,
@@ -5626,17 +5627,24 @@ export class RemindersDomain {
         urgency: report.escalationLevel >= 2 ? "high" : "medium",
         now: args.now,
       });
-      this.ctx.emitAssistantEvent(report.summaryText, "lifeops-checkin", {
-        checkinKind: kind,
-        reportId: report.reportId,
-        deliveryBasis: "sleep_cycle",
-        circadianState: currentSchedule.circadianState,
-        wakeAt: currentSchedule.wakeAt,
-        bedtimeTargetAt: currentSchedule.relativeTime.bedtimeTargetAt,
-        minutesUntilBedtimeTarget:
-          currentSchedule.relativeTime.minutesUntilBedtimeTarget,
-        ...routeMetadata,
-      });
+      this.ctx.emitAssistantEvent(
+        appendCheckinAckChoiceMarker(report.summaryText, {
+          reportId: report.reportId,
+          kind,
+        }),
+        "lifeops-checkin",
+        {
+          checkinKind: kind,
+          reportId: report.reportId,
+          deliveryBasis: "sleep_cycle",
+          circadianState: currentSchedule.circadianState,
+          wakeAt: currentSchedule.wakeAt,
+          bedtimeTargetAt: currentSchedule.relativeTime.bedtimeTargetAt,
+          minutesUntilBedtimeTarget:
+            currentSchedule.relativeTime.minutesUntilBedtimeTarget,
+          ...routeMetadata,
+        },
+      );
     };
 
     if (
