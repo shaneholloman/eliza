@@ -2287,7 +2287,7 @@ export function BrowserWorkspaceView(): React.JSX.Element {
             </div>
           </div>
         ) : (
-          <div className="flex h-full min-h-0 flex-col items-center justify-center overflow-y-auto pt-3 pb-[calc(var(--eliza-continuous-chat-clearance,5.25rem)+1rem)]">
+          <div className="flex h-full min-h-0 flex-col items-center justify-center overflow-y-auto pt-3 pb-[calc(var(--eliza-continuous-chat-clearance,5.25rem)+1rem)] pe-[var(--eliza-continuous-chat-side-clearance,0px)]">
             <PagePanel.Empty
               variant="inset"
               className="flex-none py-1 sm:py-2"

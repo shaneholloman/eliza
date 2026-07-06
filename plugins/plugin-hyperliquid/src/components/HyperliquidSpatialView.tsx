@@ -175,11 +175,14 @@ export interface HyperliquidSpatialViewProps {
 	snapshot: HyperliquidSnapshot;
 	/** Dispatch by agent id: `refresh`, `back`. */
 	onAction?: (action: string) => void;
+	/** True when the shell's compact chat composer reserves the inline-end edge. */
+	compactChatClearance?: boolean;
 }
 
 export function HyperliquidSpatialView({
 	snapshot,
 	onAction,
+	compactChatClearance = false,
 }: HyperliquidSpatialViewProps) {
 	const dispatch = (action: string) => () => onAction?.(action);
 	const { status } = snapshot;
@@ -206,6 +209,94 @@ export function HyperliquidSpatialView({
 						Back
 					</Button>
 				</HStack>
+			</Card>
+		);
+	}
+
+	if (compactChatClearance) {
+		const marketSummary =
+			snapshot.markets.length === 0
+				? "Markets none"
+				: `Markets ${snapshot.markets
+						.slice(0, 4)
+						.map(
+							(market) =>
+								`${market.name} ${market.maxLeverage ? `${market.maxLeverage}x` : "n/a"} sz${market.szDecimals}${market.onlyIsolated ? " iso" : ""}`,
+						)
+						.join(" · ")}`;
+		const accountSummary = `Account ${shortAddress(status.accountAddress)} · ${
+			status.executionReady ? "exec-ready" : "exec-off"
+		}`;
+		const accountValue = snapshot.summary
+			? toNumber(snapshot.summary.accountValue)
+			: null;
+		const totalUnrealizedPnl = snapshot.summary
+			? toNumber(snapshot.summary.totalUnrealizedPnl)
+			: null;
+		const pnlSummary = snapshot.summary
+			? `Value ${formatUsdCompact(accountValue)} · PnL ${formatUsdCompact(totalUnrealizedPnl, { withSign: true })}`
+			: null;
+		const positionSummary =
+			openPositions.length === 0
+				? null
+				: `Positions ${openPositions
+						.slice(0, 2)
+						.map((position) => {
+							const long = isLongPosition(position.size);
+							const uPnl = toNumber(position.unrealizedPnl);
+							return `${position.coin} ${long ? "long" : "short"}${
+								uPnl === null ? "" : ` ${formatUsd(uPnl, { withSign: true })}`
+							}`;
+						})
+						.join(" · ")}`;
+		return (
+			<Card gap={1} padding={1}>
+				<Text
+					style="caption"
+					tone={status.publicReadReady ? "success" : "danger"}
+					wrap
+				>
+					{`${snapshot.loading ? "loading" : status.publicReadReady ? "read-ready" : "read-blocked"} · ${snapshot.markets.length} markets · ${snapshot.positions.length} positions`}
+				</Text>
+
+				{snapshot.error ? (
+					<Text tone="danger" style="caption">
+						{snapshot.error}
+					</Text>
+				) : null}
+
+				{status.executionBlockedReason ? (
+					<Text style="caption" tone="warning">
+						{status.executionBlockedReason}
+					</Text>
+				) : null}
+
+				<Text style="caption" tone="default" wrap>
+					{marketSummary}
+				</Text>
+				<Text
+					style="caption"
+					tone={status.executionReady ? "success" : "muted"}
+					wrap
+				>
+					{accountSummary}
+				</Text>
+
+				{pnlSummary ? (
+					<Text style="caption" tone={pnlTone(totalUnrealizedPnl)} wrap>
+						{pnlSummary}
+					</Text>
+				) : null}
+
+				{positionSummary ? (
+					<Text
+						style="caption"
+						tone={pnlTone(toNumber(openPositions[0]?.unrealizedPnl))}
+						wrap
+					>
+						{positionSummary}
+					</Text>
+				) : null}
 			</Card>
 		);
 	}

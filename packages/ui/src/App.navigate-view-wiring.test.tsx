@@ -536,6 +536,11 @@ describe("App navigate-view event wiring", () => {
         .querySelector('[data-shell-content-region="true"]')
         ?.className.includes("pb-[var(--eliza-continuous-chat-clearance"),
     ).toBe(true);
+    expect(
+      container
+        .querySelector('[data-shell-content-region="true"]')
+        ?.className.includes("pe-[var(--eliza-continuous-chat-side-clearance"),
+    ).toBe(true);
     expect(getByTestId("app-opaque-background")).toBeTruthy();
     expect(queryByTestId("app-background-shader")).toBeNull();
   });

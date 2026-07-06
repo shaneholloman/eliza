@@ -1291,6 +1291,20 @@ export function ContinuousChatOverlay({
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const overlayRef = React.useRef<HTMLDivElement>(null);
   const panelRef = React.useRef<HTMLFieldSetElement>(null);
+  const [panelElement, setPanelElement] =
+    React.useState<HTMLFieldSetElement | null>(null);
+  const bindPanelRef = React.useCallback((node: HTMLFieldSetElement | null) => {
+    panelRef.current = node;
+    setPanelElement(node);
+  }, []);
+  const getPanelElement = React.useCallback(() => {
+    if (panelElement) return panelElement;
+    if (panelRef.current) return panelRef.current;
+    if (typeof document === "undefined") return null;
+    return document.querySelector<HTMLFieldSetElement>(
+      '[data-testid="chat-sheet"]',
+    );
+  }, [panelElement]);
   // The transcript's inner content wrapper — measured to size the onboarding
   // sheet to its content (grow-from-the-bottom) instead of a tall empty panel.
   const threadContentRef = React.useRef<HTMLDivElement>(null);
@@ -1324,7 +1338,7 @@ export function ContinuousChatOverlay({
     ) {
       return;
     }
-    const panel = panelRef.current;
+    const panel = getPanelElement();
     const root = document.documentElement;
     if (sheetOpen) return; // Keep the last resting value while the sheet is open.
     if (!panel) return;
@@ -1340,7 +1354,7 @@ export function ContinuousChatOverlay({
     const ro = new ResizeObserver(publish);
     ro.observe(panel);
     return () => ro.disconnect();
-  }, [sheetOpen]);
+  }, [sheetOpen, getPanelElement]);
   // The composer content (textarea + thread). Held so we can imperatively clear
   // its `inert` (set while pilled) the instant the pill is tapped open, before
   // React re-renders — iOS only raises the keyboard for a focus() that lands on
@@ -2134,6 +2148,43 @@ export function ContinuousChatOverlay({
     !recording &&
     !responding &&
     !firstRunOpen;
+
+  // In short landscape the resting composer moves to the bottom inline-end
+  // corner. Publish that footprint separately from bottom clearance so hosted
+  // app/plugin views can keep right-edge content out from under the corner bar.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const root = document.documentElement;
+    const reset = () => {
+      root.style.setProperty("--eliza-continuous-chat-side-clearance", "0px");
+    };
+    if (!compactLanding) {
+      reset();
+      return;
+    }
+    const panel = getPanelElement();
+    if (!panel) {
+      reset();
+      return;
+    }
+    const publish = () => {
+      const width = panel.getBoundingClientRect().width;
+      root.style.setProperty(
+        "--eliza-continuous-chat-side-clearance",
+        width > 0 ? `${Math.ceil(width + 24)}px` : "0px",
+      );
+    };
+    publish();
+    if (typeof ResizeObserver === "undefined") {
+      return () => reset();
+    }
+    const ro = new ResizeObserver(publish);
+    ro.observe(panel);
+    return () => {
+      ro.disconnect();
+      reset();
+    };
+  }, [compactLanding, getPanelElement]);
 
   // Top clearance + max height come from the pure, unit-tested layout solver.
   // It reserves the real measured notch inset (`safeAreaTop`) above the panel,
@@ -3819,7 +3870,7 @@ export function ContinuousChatOverlay({
           />
         ) : null}
         <motion.fieldset
-          ref={panelRef}
+          ref={bindPanelRef}
           aria-label="Chat composer"
           data-testid="chat-sheet"
           data-variant={sheetOpen ? "open" : "closed"}

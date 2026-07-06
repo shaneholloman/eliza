@@ -1529,8 +1529,10 @@ export const DynamicViewLoader = memo(function DynamicViewLoader({
           {/* One shell-level SpatialSurface owns modality for every mounted
               view — GUI by auto-detect, XR inside a headset host — so plugin
               view components no longer each wrap themselves. Omitting `modality`
-              keeps the exact auto-detect behaviour the per-view wrappers had. */}
-          <SpatialSurface>
+              keeps the exact auto-detect behaviour the per-view wrappers had.
+              The host also reserves the floating composer clearance once so
+              spatial plugin content scrolls above the chat affordance. */}
+          <SpatialSurface reserveChatClearance>
             <View {...viewProps} />
           </SpatialSurface>
         </ErrorBoundary>

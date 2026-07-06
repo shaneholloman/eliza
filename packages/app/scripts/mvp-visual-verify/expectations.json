@@ -9,7 +9,8 @@
     "ocr": {
       "perViewport": {
         "desktop": { "present": ["Models", "Voice"] },
-        "desktop-landscape": { "present": ["Models", "Voice"] }
+        "desktop-landscape": { "present": ["Settings", "Models", "Voice"] },
+        "mobile-portrait": { "present": ["Settings", "Basics", "Models"] }
       }
     }
   },
@@ -26,9 +27,10 @@
   "builtin-automations": {
     "accentOrange": true,
     "ocr": {
+      "present": ["Workflows"],
       "perViewport": {
-        "desktop": { "present": ["Workflows"] },
-        "desktop-landscape": { "present": ["Workflows"] },
+        "desktop": { "present": ["Nothing scheduled"] },
+        "desktop-landscape": { "present": ["Nothing scheduled"] },
         "mobile-portrait": { "present": ["Workflows"] }
       }
     }

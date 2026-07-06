@@ -8,7 +8,7 @@
  * exact structural parity with each other and with the TUI IR.
  */
 
-import { type ReactNode, useMemo } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { type SpatialAction, SpatialContextProvider } from "./context.ts";
 import type { SpatialModality } from "./ir.ts";
 
@@ -64,11 +64,61 @@ export function detectDomModality(): SpatialModality {
   return "gui";
 }
 
+const CONTINUOUS_CHAT_SIDE_CLEARANCE_VAR =
+  "--eliza-continuous-chat-side-clearance";
+
+function readContinuousChatSideClearanceActive(): boolean {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return false;
+  }
+  const root = document.documentElement;
+  const raw =
+    getComputedStyle(root).getPropertyValue(
+      CONTINUOUS_CHAT_SIDE_CLEARANCE_VAR,
+    ) || root.style.getPropertyValue(CONTINUOUS_CHAT_SIDE_CLEARANCE_VAR);
+  const px = Number.parseFloat(raw);
+  return Number.isFinite(px) && px > 0.5;
+}
+
+/**
+ * True while the app shell's continuous chat composer publishes an inline-end
+ * clearance. GUI wrappers can use this to switch dense spatial views into a
+ * short-landscape layout; terminal/SSR callers get `false`.
+ */
+export function useContinuousChatSideClearanceActive(): boolean {
+  const [active, setActive] = useState(readContinuousChatSideClearanceActive);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      return;
+    }
+    const publish = () => setActive(readContinuousChatSideClearanceActive());
+    publish();
+    const observer = new MutationObserver(publish);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["style", "class"],
+    });
+    window.addEventListener("resize", publish);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", publish);
+    };
+  }, []);
+
+  return active;
+}
+
 export interface SpatialSurfaceProps {
   /** Presentation modality. Omit to auto-detect (`xr` inside a headset host, else `gui`). */
   modality?: SpatialModality;
   /** Receives primitive actions (button presses, field changes). */
   onAction?: (action: SpatialAction) => void;
+  /**
+   * Reserve the app shell's floating chat-composer clearance. Shell-hosted
+   * plugin views opt in; standalone spatial renders keep their exact footprint.
+   */
+  reserveChatClearance?: boolean;
   children: ReactNode;
 }
 
@@ -87,6 +137,7 @@ export interface SpatialSurfaceProps {
 export function SpatialSurface({
   modality,
   onAction,
+  reserveChatClearance = false,
   children,
 }: SpatialSurfaceProps) {
   const resolved = modality ?? detectDomModality();
@@ -106,6 +157,21 @@ export function SpatialSurface({
           minHeight: 0,
           minWidth: 0,
           boxSizing: "border-box",
+          overflowX: reserveChatClearance ? "hidden" : undefined,
+          overflowY: reserveChatClearance ? "auto" : undefined,
+          overscrollBehavior: reserveChatClearance ? "contain" : undefined,
+          paddingBottom: reserveChatClearance
+            ? "var(--eliza-continuous-chat-clearance, 5.25rem)"
+            : undefined,
+          paddingInlineEnd: reserveChatClearance
+            ? "var(--eliza-continuous-chat-side-clearance, 0px)"
+            : undefined,
+          scrollPaddingBottom: reserveChatClearance
+            ? "var(--eliza-continuous-chat-clearance, 5.25rem)"
+            : undefined,
+          scrollPaddingInlineEnd: reserveChatClearance
+            ? "var(--eliza-continuous-chat-side-clearance, 0px)"
+            : undefined,
         }}
       >
         {children}
