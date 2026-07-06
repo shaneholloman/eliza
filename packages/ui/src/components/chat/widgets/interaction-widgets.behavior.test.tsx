@@ -94,6 +94,36 @@ describe("FormRequest — every input + submit", () => {
     expect(screen.getByText(/Repo URL is required/i)).toBeTruthy();
   });
 
+  it("does not crash when a direct form spec uses inherited Object field names", () => {
+    const onSubmit = vi.fn();
+    const inheritedNames: FormRequestSpec = {
+      id: "unsafe-names",
+      submitLabel: "Save",
+      fields: [
+        { name: "constructor", type: "text", label: "Constructor" },
+        { name: "hasOwnProperty", type: "text", label: "Has own property" },
+      ],
+    };
+    render(<FormRequest form={inheritedNames} onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByLabelText("Constructor"), {
+      target: { value: "ctor" },
+    });
+    fireEvent.change(screen.getByLabelText("Has own property"), {
+      target: { value: "own" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const payload = onSubmit.mock.calls[0]?.[1];
+    expect(Object.hasOwn(payload, "constructor")).toBe(true);
+    expect(Object.hasOwn(payload, "hasOwnProperty")).toBe(true);
+    expect(payload).toMatchObject({
+      constructor: "ctor",
+      hasOwnProperty: "own",
+    });
+  });
+
   it("locks after a successful submit (no double-send)", () => {
     const onSubmit = vi.fn();
     render(<FormRequest form={form} onSubmit={onSubmit} />);

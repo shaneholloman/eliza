@@ -40,7 +40,9 @@ export type FormResultValue = string | boolean;
  * so no custom picker or dependency is added. Any other type is a plain text
  * box. Exported for the field-type unit test.
  */
-export function htmlInputTypeForField(fieldType: FormFieldSpec["type"]): string {
+export function htmlInputTypeForField(
+  fieldType: FormFieldSpec["type"],
+): string {
   switch (fieldType) {
     case "number":
       return "number";
@@ -61,44 +63,42 @@ export type FormRequestProps = {
   onSubmit: (formId: string, values: Record<string, FormResultValue>) => void;
 };
 
+type FormValueRecord = Record<string, FormResultValue>;
+type FormErrorRecord = Record<string, string[]>;
+
 function initialValueFor(field: FormFieldSpec): FormResultValue {
   return field.type === "checkbox" ? false : "";
 }
 
-/**
- * Copy a null-prototype record and set one key, keeping the result null-proto
- * (object spread `{ ...prev }` would re-inherit `Object.prototype`, reopening
- * the field-named-`constructor` hazard). See the state comment in `FormRequest`.
- */
-function mergeRecord<V>(
-  prev: Record<string, V>,
-  key: string,
-  value: V,
-): Record<string, V> {
-  const next: Record<string, V> = Object.assign(Object.create(null), prev);
-  next[key] = value;
-  return next;
+function createFormRecord<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+function copyFormRecord<T>(record: Record<string, T>): Record<string, T> {
+  return Object.assign(createFormRecord<T>(), record);
+}
+
+function getOwnRecordValue<T>(
+  record: Record<string, T>,
+  name: string,
+): T | undefined {
+  return Object.hasOwn(record, name) ? record[name] : undefined;
+}
+
+function toSubmitPayload(values: FormValueRecord): FormValueRecord {
+  return copyFormRecord(values);
 }
 
 export function FormRequest({ form, onSubmit }: FormRequestProps) {
-  // `values`/`errors` are keyed by attacker-controlled field names (the agent
-  // emits the form JSON). A plain `{}` inherits `Object.prototype`, so a field
-  // named `constructor` / `hasOwnProperty` / `__proto__` would make
-  // `errors[field.name]` return an inherited function (truthy, `.length===1`)
-  // and crash the transcript when `ConfigFieldErrors` calls `.map` on it — and
-  // `obj["__proto__"] = v` would pollute the prototype. Null-prototype records,
-  // preserved through every update, make every lookup an own-property read and
-  // turn such names into ordinary working fields (#14489). `mergeRecord` keeps
-  // the map null-proto across spreads (object spread would re-inherit).
-  const [values, setValues] = useState<Record<string, FormResultValue>>(() => {
-    const initial: Record<string, FormResultValue> = Object.create(null);
+  const [values, setValues] = useState<FormValueRecord>(() => {
+    const initial = createFormRecord<FormResultValue>();
     for (const field of form.fields) {
       initial[field.name] = initialValueFor(field);
     }
     return initial;
   });
-  const [errors, setErrors] = useState<Record<string, string[]>>(() =>
-    Object.create(null),
+  const [errors, setErrors] = useState<FormErrorRecord>(() =>
+    createFormRecord<string[]>(),
   );
   const [submitted, setSubmitted] = useState(false);
 
@@ -108,11 +108,15 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
   );
 
   const setValue = useCallback((name: string, value: FormResultValue) => {
-    setValues((prev) => mergeRecord(prev, name, value));
+    setValues((prev) => {
+      const next = copyFormRecord(prev);
+      next[name] = value;
+      return next;
+    });
   }, []);
 
   const validateField = useCallback(
-    (field: FormFieldSpec, value: FormResultValue) => {
+    (field: FormFieldSpec, value: FormResultValue | undefined) => {
       if (!field.required || field.type === "checkbox") return;
       const fieldErrors = runValidation(
         [
@@ -123,7 +127,11 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
         ],
         value,
       );
-      setErrors((prev) => mergeRecord(prev, field.name, fieldErrors));
+      setErrors((prev) => {
+        const next = copyFormRecord(prev);
+        next[field.name] = fieldErrors;
+        return next;
+      });
     },
     [],
   );
@@ -133,7 +141,7 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
       event.preventDefault();
       if (submitted) return;
 
-      const nextErrors: Record<string, string[]> = Object.create(null);
+      const nextErrors = createFormRecord<string[]>();
       for (const field of requiredFields) {
         const fieldErrors = runValidation(
           [
@@ -142,7 +150,7 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
               message: `${field.label ?? field.name} is required`,
             },
           ],
-          values[field.name],
+          getOwnRecordValue(values, field.name),
         );
         if (fieldErrors.length > 0) nextErrors[field.name] = fieldErrors;
       }
@@ -150,7 +158,7 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
       if (Object.keys(nextErrors).length > 0) return;
 
       setSubmitted(true);
-      onSubmit(form.id, values);
+      onSubmit(form.id, toSubmitPayload(values));
     },
     [form.id, onSubmit, requiredFields, submitted, values],
   );
@@ -169,7 +177,8 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
 
       {form.fields.map((field) => {
         const label = field.label ?? field.name;
-        const fieldErrors = errors[field.name];
+        const value = getOwnRecordValue(values, field.name);
+        const fieldErrors = getOwnRecordValue(errors, field.name);
         if (field.type === "checkbox") {
           const checkboxId = `${form.id}-${field.name}`;
           return (
@@ -180,7 +189,7 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
             >
               <Checkbox
                 id={checkboxId}
-                checked={Boolean(values[field.name])}
+                checked={Boolean(value)}
                 disabled={submitted}
                 onCheckedChange={(checked) => setValue(field.name, !!checked)}
               />
@@ -190,7 +199,7 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
         }
         if (field.type === "select") {
           const options = field.options ?? [];
-          const current = String(values[field.name] ?? "");
+          const current = String(value ?? "");
           return (
             <div key={field.name} className="flex flex-col gap-1 text-xs">
               <span className="font-semibold">{label}</span>
@@ -244,11 +253,13 @@ export function FormRequest({ form, onSubmit }: FormRequestProps) {
               type={htmlInputTypeForField(field.type)}
               name={field.name}
               placeholder={field.placeholder ?? ""}
-              value={String(values[field.name] ?? "")}
+              value={String(value ?? "")}
               disabled={submitted}
               required={field.required}
               onChange={(e) => setValue(field.name, e.currentTarget.value)}
-              onBlur={() => validateField(field, values[field.name])}
+              onBlur={() =>
+                validateField(field, getOwnRecordValue(values, field.name))
+              }
             />
             <ConfigFieldErrors errors={fieldErrors} />
           </div>

@@ -51,6 +51,20 @@ const FIELD_TYPES: ReadonlySet<InteractionFieldType> = new Set([
 	"time",
 	"datetime",
 ]);
+const UNSAFE_OBJECT_FIELD_NAMES: ReadonlySet<string> = new Set([
+	"__defineGetter__",
+	"__defineSetter__",
+	"__lookupGetter__",
+	"__lookupSetter__",
+	"__proto__",
+	"constructor",
+	"hasOwnProperty",
+	"isPrototypeOf",
+	"propertyIsEnumerable",
+	"toLocaleString",
+	"toString",
+	"valueOf",
+]);
 const FOLLOWUP_KINDS: ReadonlySet<FollowupKind> = new Set([
 	"reply",
 	"navigate",
@@ -122,7 +136,9 @@ function parseFormField(raw: unknown): InteractionField | null {
 	const name = typeof r.name === "string" ? r.name.trim() : "";
 	const type =
 		typeof r.type === "string" ? (r.type as InteractionFieldType) : "text";
-	if (!name || !/^[\w.-]+$/.test(name)) return null;
+	if (!name || !/^[\w.-]+$/.test(name) || UNSAFE_OBJECT_FIELD_NAMES.has(name)) {
+		return null;
+	}
 	if (!FIELD_TYPES.has(type)) return null;
 	const field: InteractionField = { name, type };
 	if (typeof r.label === "string") field.label = r.label;

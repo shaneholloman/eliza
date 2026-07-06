@@ -38,7 +38,9 @@ describe("FormRequest temporal fields", () => {
 
   it("renders native date/time/datetime-local inputs", () => {
     render(<FormRequest form={form} onSubmit={() => {}} />);
-    expect((screen.getByLabelText("Day") as HTMLInputElement).type).toBe("date");
+    expect((screen.getByLabelText("Day") as HTMLInputElement).type).toBe(
+      "date",
+    );
     expect((screen.getByLabelText("At") as HTMLInputElement).type).toBe("time");
     expect((screen.getByLabelText("When") as HTMLInputElement).type).toBe(
       "datetime-local",
@@ -115,8 +117,9 @@ describe("FormRequest prototype-polluting field names (#14489)", () => {
     expect(Object.hasOwn({}, "polluted")).toBe(false);
     expect(onSubmit).toHaveBeenCalledTimes(1);
     const submitted = onSubmit.mock.calls[0][1] as Record<string, unknown>;
-    expect(submitted.__proto__).toBe("a");
-    expect(submitted.hasOwnProperty).toBe("b");
+    expect(Object.hasOwn(submitted, "__proto__")).toBe(true);
+    expect(Reflect.get(submitted, "__proto__")).toBe("a");
+    expect(Reflect.get(submitted, "hasOwnProperty")).toBe("b");
   });
 
   it("validates a required `constructor` field instead of crashing", () => {
@@ -127,7 +130,12 @@ describe("FormRequest prototype-polluting field names (#14489)", () => {
           id: "f3",
           submitLabel: "Save",
           fields: [
-            { name: "constructor", type: "text", label: "Ctor", required: true },
+            {
+              name: "constructor",
+              type: "text",
+              label: "Ctor",
+              required: true,
+            },
           ],
         }}
         onSubmit={onSubmit}

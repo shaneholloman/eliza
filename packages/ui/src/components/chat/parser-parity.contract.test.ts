@@ -12,8 +12,8 @@
  *      (region count, scope, options, kinds) — so a future edit to either side
  *      that breaks parity fails here; and
  *   2. PINS the known FORM field-name divergence (UI `^[A-Za-z][\w-]*$` vs core
- *      `^[\w.-]+$`) as an explicit, tracked expectation, so reconciling it is a
- *      conscious change (update this test) rather than silent drift.
+ *      `^[\w.-]+$`) while requiring both parsers to reject Object-prototype
+ *      keys that would be hazardous for plain-object form state.
  *
  * If/when the UI parsers are made to delegate to core, the divergence assertion
  * flips to agreement and this file documents that the contract is now exact.
@@ -133,5 +133,16 @@ describe("parser parity — UI per-marker parsers vs @elizaos/core findInteracti
     // UI drops the field (none valid) → no region; core accepts the dotted name.
     expect(ui).toHaveLength(0);
     expect(core).toHaveLength(1);
+  });
+
+  it("FORM inherited Object field names are rejected by both parsers", () => {
+    const unsafe =
+      '[FORM]\n{"id":"f","fields":[{"name":"constructor","type":"text"},{"name":"hasOwnProperty","type":"text"}]}\n[/FORM]';
+    const ui = findFormRegions(unsafe);
+    const core = findInteractionRegions(unsafe)
+      .map((r) => r.block)
+      .filter((b) => b.kind === "form");
+    expect(ui).toHaveLength(0);
+    expect(core).toHaveLength(0);
   });
 });

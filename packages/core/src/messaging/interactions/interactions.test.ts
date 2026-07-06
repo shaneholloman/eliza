@@ -115,14 +115,16 @@ describe("parse", () => {
 		})}\n[/FORM]`;
 		const { blocks } = parseInteractionBlocks(text);
 		const form = blocks[0] as FormInteraction;
-		expect(form.fields.map((f) => f.type)).toEqual(["date", "time", "datetime"]);
-		// parse ↔ serialize parity: the temporal types survive a round trip.
-		const rt = parseInteractionBlocks(serializeInteractionBlock(form));
-		expect((rt.blocks[0] as FormInteraction).fields.map((f) => f.type)).toEqual([
+		expect(form.fields.map((f) => f.type)).toEqual([
 			"date",
 			"time",
 			"datetime",
 		]);
+		// parse ↔ serialize parity: the temporal types survive a round trip.
+		const rt = parseInteractionBlocks(serializeInteractionBlock(form));
+		expect((rt.blocks[0] as FormInteraction).fields.map((f) => f.type)).toEqual(
+			["date", "time", "datetime"],
+		);
 	});
 
 	it("drops a field with an unknown type (core parser is strict)", () => {
@@ -136,6 +138,32 @@ describe("parse", () => {
 		const form = blocks[0] as FormInteraction;
 		// unknown "color" is rejected; the valid "date" field survives.
 		expect(form.fields.map((f) => f.name)).toEqual(["ok"]);
+	});
+
+	it("drops inherited Object field names from form blocks (#14489)", () => {
+		const text = `[FORM]\n${JSON.stringify({
+			fields: [
+				{ name: "constructor", type: "text" },
+				{ name: "hasOwnProperty", type: "text" },
+				{ name: "propertyIsEnumerable", type: "text" },
+				{ name: "__proto__", type: "text" },
+				{ name: "ok", type: "text" },
+			],
+		})}\n[/FORM]`;
+		const { blocks } = parseInteractionBlocks(text);
+		const form = blocks[0] as FormInteraction;
+		expect(form.fields.map((f) => f.name)).toEqual(["ok"]);
+
+		const onlyUnsafe = `[FORM]\n${JSON.stringify({
+			fields: [
+				{ name: "constructor", type: "text" },
+				{ name: "hasOwnProperty", type: "text" },
+			],
+		})}\n[/FORM]`;
+		const { blocks: unsafeBlocks, cleanedText } =
+			parseInteractionBlocks(onlyUnsafe);
+		expect(unsafeBlocks).toHaveLength(0);
+		expect(cleanedText).toContain("[FORM]");
 	});
 
 	it("rejects malformed form JSON (left as text)", () => {

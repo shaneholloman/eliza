@@ -76,6 +76,20 @@ const FORM_FIELD_TYPES = new Set<FormFieldType>([
 
 /** Field names become state-path segments + result keys; keep them safe. */
 const SAFE_FIELD_NAME_RE = /^[A-Za-z][\w-]*$/;
+const UNSAFE_OBJECT_FIELD_NAMES = new Set([
+  "__defineGetter__",
+  "__defineSetter__",
+  "__lookupGetter__",
+  "__lookupSetter__",
+  "__proto__",
+  "constructor",
+  "hasOwnProperty",
+  "isPrototypeOf",
+  "propertyIsEnumerable",
+  "toLocaleString",
+  "toString",
+  "valueOf",
+]);
 
 export const FORM_RE = /\[FORM\]\n([\s\S]*?)\n\[\/FORM\]/g;
 
@@ -93,7 +107,13 @@ function parseField(raw: unknown): FormFieldSpec | null {
   if (!raw || typeof raw !== "object") return null;
   const record = raw as Record<string, unknown>;
   const name = record.name;
-  if (typeof name !== "string" || !SAFE_FIELD_NAME_RE.test(name)) return null;
+  if (
+    typeof name !== "string" ||
+    !SAFE_FIELD_NAME_RE.test(name) ||
+    UNSAFE_OBJECT_FIELD_NAMES.has(name)
+  ) {
+    return null;
+  }
   const type =
     typeof record.type === "string" &&
     FORM_FIELD_TYPES.has(record.type as FormFieldType)

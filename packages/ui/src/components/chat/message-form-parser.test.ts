@@ -104,25 +104,28 @@ describe("parseFormBody", () => {
     });
   });
 
-  it("admits Object.prototype-key names (constructor/hasOwnProperty); render stays safe (#14489)", () => {
-    // `__proto__` is dropped upstream (SAFE_FIELD_NAME_RE requires a leading
-    // letter), but `constructor`/`hasOwnProperty` are structurally valid names
-    // and are ACCEPTED here — the crash hazard they pose lives in the value/error
-    // lookup, which FormRequest neutralizes with null-prototype state, so the
-    // chosen behavior is "accept + render safely" rather than parser-reject.
+  it("rejects inherited Object field names so malformed blocks degrade to text", () => {
     const form = parseFormBody(
       JSON.stringify({
         fields: [
           { name: "constructor", type: "text" },
-          { name: "hasOwnProperty", type: "number" },
-          { name: "__proto__", type: "text" },
+          { name: "hasOwnProperty", type: "text" },
+          { name: "propertyIsEnumerable", type: "text" },
+          { name: "toString", type: "text" },
+          { name: "safeName", type: "text" },
         ],
       }),
     );
-    expect(form?.fields.map((f) => f.name)).toEqual([
-      "constructor",
-      "hasOwnProperty",
-    ]);
+    expect(form?.fields.map((field) => field.name)).toEqual(["safeName"]);
+
+    const onlyUnsafe = JSON.stringify({
+      fields: [
+        { name: "constructor", type: "text" },
+        { name: "hasOwnProperty", type: "text" },
+      ],
+    });
+    expect(parseFormBody(onlyUnsafe)).toBeNull();
+    expect(findFormRegions(`[FORM]\n${onlyUnsafe}\n[/FORM]`)).toEqual([]);
   });
 
   it("returns null for malformed or empty input rather than throwing", () => {
