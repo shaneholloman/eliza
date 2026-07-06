@@ -115,11 +115,13 @@ function TodoRow({
       <div className="flex items-start gap-2">
         <span
           className={`mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full ${
-            todo.isUrgent
-              ? "bg-danger"
-              : todo.priority != null
-                ? "bg-accent"
-                : "bg-muted"
+            isHome
+              ? "bg-white/70"
+              : todo.isUrgent
+                ? "bg-danger"
+                : todo.priority != null
+                  ? "bg-accent"
+                  : "bg-muted"
           }`}
         />
         <div className="min-w-0 flex-1">
@@ -195,7 +197,9 @@ function GoalAttentionRow({
       }`}
     >
       <Target
-        className={`mt-0.5 h-4 w-4 shrink-0 ${atRisk ? "text-danger" : "text-accent"}`}
+        className={`mt-0.5 h-4 w-4 shrink-0 ${
+          isHome ? "text-white/75" : atRisk ? "text-danger" : "text-accent"
+        }`}
       />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
