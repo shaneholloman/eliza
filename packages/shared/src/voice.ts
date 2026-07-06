@@ -281,13 +281,23 @@ export const PREMADE_VOICES: VoicePreset[] = [
 ];
 
 export const VOICE_PROVIDERS: Array<{
-  id: "elevenlabs" | "edge" | "local-inference";
+  id: "eliza-cloud" | "elevenlabs" | "edge" | "local-inference";
   label: string;
   labelKey: string;
   hint: string;
   hintKey: string;
   needsKey: boolean;
+  requiresCloud?: boolean;
 }> = [
+  {
+    id: "eliza-cloud",
+    label: "Eliza Cloud",
+    labelKey: "voice.provider.elizaCloud",
+    hint: "Free Kokoro voice through Eliza Cloud",
+    hintKey: "voice.provider.elizaCloud.hint",
+    needsKey: false,
+    requiresCloud: true,
+  },
   {
     id: "elevenlabs",
     label: "ElevenLabs",
@@ -300,7 +310,7 @@ export const VOICE_PROVIDERS: Array<{
     id: "local-inference",
     label: "Local inference",
     labelKey: "voice.provider.localInference",
-    hint: "On-device OmniVoice",
+    hint: "On-device Kokoro",
     hintKey: "voice.provider.localInference.hint",
     needsKey: false,
   },

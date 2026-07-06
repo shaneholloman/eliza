@@ -177,11 +177,46 @@ describe("useVoiceChat TTS fails closed (#12253)", () => {
     expect(speechSynthesisMock.speak).not.toHaveBeenCalled();
   });
 
+  it("surfaces a ttsError and never speaks via the browser when Eliza Cloud TTS 502s", async () => {
+    fetchWithCsrf.mockResolvedValue(
+      new Response("cloud kokoro unavailable", {
+        status: 502,
+        statusText: "Bad Gateway",
+      }),
+    );
+
+    const { result } = renderHook(() =>
+      useVoiceChat({
+        onTranscript: vi.fn(),
+        voiceConfig: { provider: "eliza-cloud" },
+        cloudConnected: true,
+      }),
+    );
+
+    act(() => {
+      result.current.speak("hello from cloud");
+    });
+
+    await waitFor(() => {
+      expect(result.current.ttsError).not.toBeNull();
+    });
+
+    expect(result.current.ttsError?.engine).toBe("eliza-cloud");
+    expect(result.current.ttsError?.message).toContain("502");
+    expect(speechSynthesisMock.speak).not.toHaveBeenCalled();
+    expect(fetchWithCsrf).toHaveBeenCalledWith(
+      expect.stringContaining("/api/tts/cloud"),
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result.current.isSpeaking).toBe(false);
+  });
+
   it("still speaks via the browser when the browser is the CONFIGURED engine (edge/unset)", async () => {
     const { result } = renderHook(() =>
       useVoiceChat({
         onTranscript: vi.fn(),
         voiceConfig: { provider: "edge" },
+        cloudConnected: true,
       }),
     );
 
