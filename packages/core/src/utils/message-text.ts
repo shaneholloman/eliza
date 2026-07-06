@@ -74,9 +74,9 @@ export function hasDocumentAugmentationEnvelope(text: unknown): boolean {
  * so callers on the hot path pay nothing for the common (unaugmented) case and
  * the live in-flight message keeps its wrap for the current LLM call.
  */
-export function stripAugmentationForPersistence<T extends Pick<Memory, "content">>(
-	message: T,
-): T {
+export function stripAugmentationForPersistence<
+	T extends Pick<Memory, "content">,
+>(message: T): T {
 	const content = message?.content;
 	if (!content || typeof content !== "object") return message;
 	const rendered = (content as { text?: unknown }).text;
