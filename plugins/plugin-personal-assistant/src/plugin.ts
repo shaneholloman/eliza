@@ -98,6 +98,7 @@ import {
   FOLLOWUP_TRACKER_TASK_NAME,
   registerFollowupTrackerWorker,
 } from "./followup/index.js";
+import { anticipationFeedbackEvaluator } from "./lifeops/anticipation/evaluator.js";
 import { registerLifeOpsCalendarGate } from "./lifeops/calendar-gate.js";
 import {
   createChannelRegistry,
@@ -114,6 +115,7 @@ import { handleVoiceTurnObserved } from "./lifeops/entities/voice-observer-bridg
 import { installFirstRunChannelInspector } from "./lifeops/first-run/channel-inspector.js";
 import { setRuntimeChannelInspector } from "./lifeops/first-run/questions.js";
 import { FirstRunService } from "./lifeops/first-run/service.js";
+import { ftuGoalDiscoveryEvaluator } from "./lifeops/ftu-goal/evaluator.js";
 import { createOwnerLocaleExamplesProvider } from "./lifeops/i18n/localized-examples-provider.js";
 import {
   createMultilingualPromptRegistry,
@@ -178,6 +180,7 @@ import { activityProfileProvider } from "./providers/activity-profile.js";
 import { crossChannelContextProvider } from "./providers/cross-channel-context.js";
 // LifeOps core providers
 import { firstRunProvider } from "./providers/first-run.js";
+import { ftuGoalProvider } from "./providers/ftu-goal.js";
 import { healthProvider } from "./providers/health.js";
 import { lifeOpsProvider } from "./providers/lifeops.js";
 import { pendingApprovalsProvider } from "./providers/pending-approvals.js";
@@ -670,6 +673,7 @@ const rawPersonalAssistantPlugin: Plugin = {
   providers: [
     browserBridgeProvider,
     firstRunProvider,
+    ftuGoalProvider,
     roomPolicyProvider,
     lifeOpsProvider,
     pendingApprovalsProvider,
@@ -695,6 +699,9 @@ const rawPersonalAssistantPlugin: Plugin = {
   ],
   responseHandlerEvaluators: [ownerProfileExtractionEvaluator],
   responseHandlerFieldEvaluators: [threadOpsFieldEvaluator],
+  // Post-turn evaluators join the runtime's single merged SMALL-model
+  // evaluation call (EvaluatorService) — no extra model round-trip per turn.
+  evaluators: [ftuGoalDiscoveryEvaluator, anticipationFeedbackEvaluator],
   // No views — the LifeOps overview surface was removed (owner: "no need for an
   // overview"). Domain views live in the per-domain plugins; the personal
   // assistant is the chat itself (PERSONAL_ASSISTANT action).
@@ -1123,6 +1130,20 @@ export {
   setFollowupThresholdAction,
   writeOverdueDigestMemory,
 } from "./followup/index.js";
+export {
+  type AnticipationFeedbackOutput,
+  anticipationFeedbackEvaluator,
+  parseAnticipationFeedbackOutput,
+} from "./lifeops/anticipation/evaluator.js";
+export {
+  type AnticipationOutcome,
+  type AnticipationStats,
+  listUnprocessedDispatches,
+  type ProactiveDispatchMarker,
+  readAnticipationStats,
+  recordAnticipationFeedback,
+  recordProactiveDispatch,
+} from "./lifeops/anticipation/store.js";
 export { CheckinService } from "./lifeops/checkin/checkin-service.js";
 export type { CheckinSchedule } from "./lifeops/checkin/schedule-resolver.js";
 export { resolveCheckinSchedule } from "./lifeops/checkin/schedule-resolver.js";
@@ -1153,6 +1174,19 @@ export {
   type SeededDefaultsMarker,
   type SeededDefaultsStore,
 } from "./lifeops/first-run/state.js";
+export {
+  FTU_GOAL_CONFIDENCE_THRESHOLD,
+  type FtuGoalDiscoveryOutput,
+  ftuGoalDiscoveryEvaluator,
+  parseFtuGoalOutput,
+} from "./lifeops/ftu-goal/evaluator.js";
+export {
+  createFtuGoalStateStore,
+  type DiscoveredFtuGoal,
+  type FtuGoalRecord,
+  type FtuGoalStateStore,
+  type FtuGoalStatus,
+} from "./lifeops/ftu-goal/state.js";
 export {
   createGlobalPauseStore,
   type GlobalPauseStatus,
@@ -1304,6 +1338,8 @@ export {
 } from "./lifeops/work-threads/index.js";
 export type { FirstRunAffordance } from "./providers/first-run.js";
 export { firstRunProvider } from "./providers/first-run.js";
+export type { FtuGoalAffordance } from "./providers/ftu-goal.js";
+export { ftuGoalProvider } from "./providers/ftu-goal.js";
 export { healthProvider } from "./providers/health.js";
 export { inboxTriageProvider } from "./providers/inbox-triage.js";
 export { lifeOpsProvider } from "./providers/lifeops.js";
