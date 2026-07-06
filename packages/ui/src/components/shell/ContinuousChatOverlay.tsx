@@ -66,7 +66,6 @@ import { useThreadAutoScroll } from "../../hooks/useThreadAutoScroll";
 import { Z_SHELL_OVERLAY } from "../../lib/floating-layers";
 import { cn } from "../../lib/utils";
 import { claimAssistantLaunchPayloadFromHash } from "../../platform/assistant-launch-payload";
-import { STANDALONE_BOTTOM_RECLAIM_OFFSET } from "../../platform/standalone-bottom-reclaim";
 import { useAppSelectorShallow } from "../../state";
 import {
   clearChatDraft,
@@ -243,6 +242,13 @@ export type ChatMode = "pill" | "input" | "half" | "full";
 type MotionControls = { stop: () => void };
 
 const SHEET_HALF_VH = 0.46; // fraction of viewport height at the HALF detent
+// Ceiling (px) for the composer-footprint clearance the chat reserves in the
+// home/launcher layout. The panel can momentarily measure its OPEN/animating
+// height on the drag-down→collapse edge; publishing that as the reserved space
+// would push the launcher's top row off-screen (it lays out against this
+// padding). A tall composer — 3-line draft + a couple of attachment chips — is
+// well under this, so the cap only ever clips the bogus open-height reading.
+const CHAT_CLEARANCE_MAX_PX = 220;
 // Restore-from-maximized grab zone (#13531): while full-bleed, a downward pull
 // that STARTS within this fraction of the panel height from the top drops
 // full-bleed and tracks the finger. 0.9 = "top 90%" — nearly the whole panel is
@@ -257,6 +263,12 @@ const MAXIMIZE_RESTORE_ZONE_VH = 0.9;
 // of resting free — so near-detent releases are deterministic + clean, and only
 // the clear gaps between detents keep the free-drag rest height.
 const SHEET_DETENT_MAGNET = 64;
+// Over-pull (px past the FULL detent) across which the inset sheet morphs to
+// edge-to-edge full-bleed. The maximize tracks the finger over this range
+// instead of springing on release, so pulling past full reads as one continuous
+// expand-to-maximize — and dragging back down within the same gesture reverses
+// it. Release commits the maximize once the morph is at least half-complete.
+const MAXIMIZE_PULL_RANGE = 150;
 const COMPOSER_TYPING_PAUSE_MS = 2_000;
 const COMPOSER_ACTIVITY_SURFACE = "continuous_chat_overlay";
 
@@ -400,12 +412,11 @@ function SoftButton({
         // neutral hover, accent for active — never a background/border, never
         // blue.
         //
-        // `[&_svg]:size-8` OVERRIDES the kit Button's base `[&_svg]:size-4`
-        // (which otherwise pins every icon to 16px): the mark sits comfortably
-        // large in the 44px box without the dead inset padding a small glyph
-        // leaves. The box — and therefore the composer row height — is
-        // unchanged; only the glyph grows.
-        "grid h-11 w-11 shrink-0 place-items-center bg-transparent p-0 transition-colors hover:bg-transparent [&_svg]:size-8",
+        // `[&_svg]:size-6` OVERRIDES the kit Button's base `[&_svg]:size-4`
+        // (16px): the mark reads clearly in the 44px hit box without dominating
+        // the composer row. The box — and the composer row height — is unchanged;
+        // only the glyph size is tuned.
+        "grid h-11 w-11 shrink-0 place-items-center bg-transparent p-0 transition-colors hover:bg-transparent [&_svg]:size-6",
         active ? "text-accent" : "text-muted-strong hover:text-txt",
         // Pulse the accent glyph while capture is hot; reduced-motion falls back
         // to the static accent without adding background or border chrome.
@@ -418,7 +429,7 @@ function SoftButton({
       ) : glyph ? (
         // Match the lucide marks: the parent [&_svg] rule governs the box, and
         // the widened glyph paths fill the same fraction of it.
-        <Glyph d={glyph} className="size-8" />
+        <Glyph d={glyph} className="size-6" />
       ) : null}
     </Button>
   );
@@ -1397,10 +1408,12 @@ export function ContinuousChatOverlay({
     if (!panel) return;
     const publish = () => {
       const h = panel.getBoundingClientRect().height;
+      // Cap it: a mid-collapse frame can report the open panel height, and
+      // reserving that in the home/launcher layout clips the top apps off-screen.
       if (h > 0)
         root.style.setProperty(
           "--eliza-continuous-chat-clearance",
-          `${Math.ceil(h)}px`,
+          `${Math.min(Math.ceil(h), CHAT_CLEARANCE_MAX_PX)}px`,
         );
     };
     publish();
@@ -2413,14 +2426,48 @@ export function ContinuousChatOverlay({
   // radius, composer bottom-inset); the height is still the finger/detent spring,
   // so the two read as one motion. Reduced-motion sets it instantly.
   const fullBleedT = useMotionValue(firstRunOpen ? 1 : 0);
+  // Mirror the settled full-bleed flag so release handlers can settle the morph
+  // toward the committed shape without waiting for a re-render.
+  const fullBleedRef = React.useRef(fullBleed);
+  fullBleedRef.current = fullBleed;
+  const fullBleedAnimRef = React.useRef<MotionControls | null>(null);
+  const stopFullBleedAnimation = React.useCallback(() => {
+    fullBleedAnimRef.current?.stop();
+    fullBleedAnimRef.current = null;
+  }, []);
+  // Settle the shape morph to an explicit target. Used on release because a
+  // finger-driven over-pull that is released WITHOUT changing `fullBleed` (an
+  // over-pull-then-return, or a restore that lands back at full) never re-fires
+  // the state effect below — the morph would otherwise strand mid-way.
+  const animateFullBleedTo = React.useCallback(
+    (target: number) => {
+      stopFullBleedAnimation();
+      if (reduce) {
+        fullBleedT.set(target);
+        return;
+      }
+      fullBleedAnimRef.current = animate(fullBleedT, target, SHEET_SPRING);
+    },
+    [fullBleedT, reduce, stopFullBleedAnimation],
+  );
+  const settleFullBleed = React.useCallback(
+    () => animateFullBleedTo(fullBleedRef.current ? 1 : 0),
+    [animateFullBleedTo],
+  );
+  // State-driven flips (programmatic maximize/restore, keyboard, onboarding)
+  // spring the shape. Skipped while a finger owns the morph — the live drag
+  // sets `fullBleedT` directly and the release path settles it explicitly.
   React.useEffect(() => {
     if (reduce) {
       fullBleedT.set(fullBleed ? 1 : 0);
       return;
     }
+    if (draggingRef.current) return;
+    stopFullBleedAnimation();
     const controls = animate(fullBleedT, fullBleed ? 1 : 0, SHEET_SPRING);
+    fullBleedAnimRef.current = controls;
     return () => controls.stop();
-  }, [fullBleed, reduce, fullBleedT]);
+  }, [fullBleed, reduce, fullBleedT, stopFullBleedAnimation]);
   // Side inset (12→0px), corner radius (inset radius→0), and the composer bottom
   // inset (full→0), each scaled by the spring so they collapse/return together.
   const overlayPadX = useTransform(fullBleedT, [0, 1], [12, 0]);
@@ -2518,6 +2565,9 @@ export function ContinuousChatOverlay({
       animateThreadHeight(baseH);
       animateOpenProgress(open);
     }
+    // Return the shape morph to its committed end (inset unless still maximized):
+    // a released over-pull that did not commit maximize must un-morph the edges.
+    settleFullBleed();
   }, [
     threadHeight,
     openProgress,
@@ -2528,6 +2578,7 @@ export function ContinuousChatOverlay({
     stopOpenProgressAnimation,
     animateThreadHeight,
     animateOpenProgress,
+    settleFullBleed,
     setDragPreviewMounted,
   ]);
   // Keep the ref the (earlier-declared) viewport-resize effect calls pointing at
@@ -2615,8 +2666,17 @@ export function ContinuousChatOverlay({
     setFreeH(null);
     setMode("full");
     setMaximized(true);
+    // Finish the finger-driven morph to edge-to-edge explicitly: the drag left
+    // fullBleedT partway (≥0.5) and the state effect is gated during the release
+    // frame, so drive it home rather than waiting for the `fullBleed` flip.
+    animateFullBleedTo(1);
     detentHaptic();
-  }, [openProgress, stopThreadAnimation, stopOpenProgressAnimation]);
+  }, [
+    openProgress,
+    stopThreadAnimation,
+    stopOpenProgressAnimation,
+    animateFullBleedTo,
+  ]);
 
   // Restore OUT of full-bleed back to the inset FULL-detent overlay (#13531).
   // Driven by a downward pull that starts in the top 20% of the maximized panel
@@ -2668,6 +2728,9 @@ export function ContinuousChatOverlay({
       } else {
         animateThreadHeight(target);
       }
+      // Settle the shape morph: any detent but a still-maximized FULL is the
+      // inset shape, so un-morph a partial over-pull that landed on a detent.
+      animateFullBleedTo(to === "full" && fullBleedRef.current ? 1 : 0);
       // Stepping all the way down closes the keyboard (the chat is dismissed).
       if (to === "collapsed") inputRef.current?.blur();
       detentHaptic();
@@ -2679,6 +2742,7 @@ export function ContinuousChatOverlay({
       threadHeight,
       stopThreadAnimation,
       animateThreadHeight,
+      animateFullBleedTo,
     ],
   );
 
@@ -3470,6 +3534,9 @@ export function ContinuousChatOverlay({
       if (!draggingRef.current) {
         stopThreadAnimation();
         stopOpenProgressAnimation();
+        // Hand the shape morph to the finger — stop any in-flight settle spring
+        // so a fresh over-pull tracks 1:1 instead of fighting a decay.
+        stopFullBleedAnimation();
         // Fresh gesture: reset the peak raw-pull tracker (#13531).
         maxPullRawRef.current = 0;
       }
@@ -3528,33 +3595,50 @@ export function ContinuousChatOverlay({
       const rawUpH = baseH + Math.max(0, offset);
       if (rawUpH > maxPullRawRef.current) maxPullRawRef.current = rawUpH;
       threadHeight.set(clampHeight(baseH + off));
+      // Finger-tracked maximize: the over-pull PAST the FULL detent drives the
+      // inset→edge-to-edge morph (fullBleedT 0→1) over MAXIMIZE_PULL_RANGE px, so
+      // pulling past full expands to maximize as one motion and dragging back
+      // down in the SAME gesture reverses it (rawUpH falls). Only past full — the
+      // morph is 0 at and below the detent, so a normal drag up to full never
+      // starts squaring the corners. The release commits the maximize once the
+      // peak pull clears the viewportH*0.8 threshold (maybeMaximizeOnRelease); the
+      // morph is already at/near 1 by then. A committed maximize is instead pulled
+      // DOWN via the restore strip, which owns the morph there — skip it here.
+      if (!maximized) {
+        fullBleedT.set(
+          Math.min(1, Math.max(0, (rawUpH - openH) / MAXIMIZE_PULL_RANGE)),
+        );
+      }
     },
     [
       firstRunOpen,
       pilled,
       sheetOpen,
       expanded,
+      maximized,
       baseH,
+      openH,
       clampHeight,
       threadHeight,
       openProgress,
+      fullBleedT,
       reduce,
       setDraggingState,
       stopThreadAnimation,
       stopOpenProgressAnimation,
+      stopFullBleedAnimation,
       setDragPreviewMounted,
     ],
   );
 
   // Pull-to-maximize decision (#13531): a released upward pull whose PEAK raw
   // upward travel (maxPullRawRef, pre-clamp/pre-pin) cleared 80% of the viewport
-  // height commits to edge-to-edge full-bleed — pulling the chat above 80%
-  // animates it into full screen. This sits below the inset FULL detent
-  // (openH ≈ 0.9×viewportH), so a sustained drag past 80% maximizes while a
-  // flick-up from half (small finger travel) still rests at the inset full
+  // height commits to edge-to-edge full-bleed. The live shape morph in
+  // onDragOffset is calibrated to the SAME threshold — it reaches full exactly
+  // here — so the panel is already reading as maximized when this commits it,
+  // and a release short of the threshold settles the morph back to the inset FULL
   // detent. Returns true when it took over the release so the caller skips its
-  // normal detent settle. Onboarding never re-triggers this (the sheet is pinned
-  // full-bleed and undismissable).
+  // normal detent settle. Onboarding never re-triggers this (pinned full-bleed).
   const maybeMaximizeOnRelease = React.useCallback((): boolean => {
     if (firstRunOpen) return false;
     if (maxPullRawRef.current >= viewportH * 0.8) {
@@ -3770,8 +3854,24 @@ export function ContinuousChatOverlay({
         restoreDidUnmaximizeRef.current = true;
       }
       onDragOffset(offset);
+      // Finger-track the edge-to-edge → inset morph as the panel is pulled down,
+      // in lock-step with the shrinking height, so the committed maximize returns
+      // as one continuous motion instead of a post-release spring. The shape is
+      // fully inset once the panel has shrunk MAXIMIZE_PULL_RANGE below full.
+      if (restoreDidUnmaximizeRef.current) {
+        const h = threadHeight.get();
+        fullBleedT.set(
+          Math.min(
+            1,
+            Math.max(
+              0,
+              (h - (openH - MAXIMIZE_PULL_RANGE)) / MAXIMIZE_PULL_RANGE,
+            ),
+          ),
+        );
+      }
     },
-    [firstRunOpen, maximized, onDragOffset],
+    [firstRunOpen, maximized, onDragOffset, threadHeight, openH, fullBleedT],
   );
   // Release from a restore drag: if it never un-maximized (an upward/stationary
   // gesture) keep it pinned full-bleed; otherwise settle at the released height —
@@ -3782,6 +3882,9 @@ export function ContinuousChatOverlay({
     setDragPreviewMounted(false);
     setRestoreDragging(false);
     if (firstRunOpen || !restoreDidUnmaximizeRef.current) return settleDrag();
+    // A restore that un-maximized always lands on the inset shape; drive the
+    // morph home (0) so a release mid-return finishes un-morphing the edges.
+    animateFullBleedTo(0);
     const h = Math.max(0, Math.min(threadHeight.get(), panelMaxH));
     if (h <= SHEET_DETENT_MAGNET) {
       closeSheet();
@@ -3805,6 +3908,7 @@ export function ContinuousChatOverlay({
     halfH,
     closeSheet,
     goToDetent,
+    animateFullBleedTo,
     setDragPreviewMounted,
   ]);
   // Cancel/tap on the strip: drop the drag flag and spring back to the current
@@ -3898,24 +4002,14 @@ export function ContinuousChatOverlay({
       // chat low without touching that zone.
       style={{
         zIndex: Z_SHELL_OVERLAY,
-        // RECLAIM THE DEAD BAND UNDER THE HOME COMPOSER (device r36 → r6
-        // JS-MEASURED cure): at rest the overlay is anchored `bottom: 0`, but on
-        // the installed iOS Safari standalone PWA a `position: fixed` descendant
-        // of the `position: fixed` body takes the LAYOUT (small, ~873px)
-        // viewport as its containing block — ~59px short of the physical bottom
-        // — so `bottom: 0` floated the composer ~59px UP over a dead band down to
-        // the home indicator. Drop it by the MEASURED collapse gap
-        // (`--standalone-bottom-reclaim`, set in JS from window/visualViewport
-        // vs documentElement.clientHeight) so it seats at the TRUE physical
-        // bottom. The prior `max(0px, 100lvh - 100dvh)` CSS-unit calc was a
-        // NO-OP on device (collapsed ICB resolves lvh === dvh, delta 0). Var is
-        // a hard 0 off-standalone. When the keyboard is up the visual viewport
-        // shrinks and `effectiveKeyboardInset` drives the lift instead — no
-        // reclaim applied — so the keyboard-lift math (contract-tested) is
-        // untouched.
-        bottom: keyboardLiftActive
-          ? effectiveKeyboardInset
-          : STANDALONE_BOTTOM_RECLAIM_OFFSET,
+        // At rest the overlay anchors `bottom: 0`. With the body scroll-locked
+        // WITHOUT `position: fixed` (see styles/base.css), this `fixed` overlay's
+        // containing block is the true viewport, so `bottom: 0` seats it at the
+        // physical screen bottom — no ICB collapse, no reclaim offset. When the
+        // keyboard is up the visual viewport shrinks and `effectiveKeyboardInset`
+        // drives the lift instead. The home-indicator clearance is the composer
+        // row's own `paddingBottom` (below), so buttons stay above the indicator.
+        bottom: keyboardLiftActive ? effectiveKeyboardInset : 0,
         // Full-bleed fills the screen edge-to-edge: NO overlay bottom padding,
         // so the glass panel reaches the true bottom (no orange gap). The
         // gesture-zone clearance moves INSIDE the composer row (below) so the
@@ -4180,9 +4274,25 @@ export function ContinuousChatOverlay({
               // glass. The collapsed pill stays chrome-free via glassOpacity fade.
               // `--card` / `--bg` are scoped by CHAT_PANEL_THEME on the fieldset,
               // not inherited from the orange app theme behind the overlay.
-              backgroundColor: fullBleed ? "var(--bg)" : "var(--card)",
+              // Frosted glass (not the opaque warm slab): a translucent panel
+              // with a real backdrop blur so the ember field behind reads as a
+              // soft blur instead of a brown fill. Full-bleed stays opaque (it
+              // covers the whole screen — nothing to see through). The blur is the
+              // battery-costly bit the prior opaque pass removed (#10698/#9141);
+              // it's back by product direction for the frosted look.
+              backgroundColor: fullBleed
+                ? "var(--bg)"
+                : "color-mix(in srgb, var(--card) 68%, transparent)",
+              backdropFilter: fullBleed
+                ? undefined
+                : "blur(24px) saturate(1.3)",
+              WebkitBackdropFilter: fullBleed
+                ? undefined
+                : "blur(24px) saturate(1.3)",
+              // Faint neutral top-edge highlight (a glass sheen), NOT the warm
+              // `--surface` gradient that read as brown.
               backgroundImage:
-                "linear-gradient(180deg, var(--surface) 0%, transparent 24%)",
+                "linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 22%)",
               // Full-bleed: extend the glass UP through the safe-area-top so the
               // dark background reaches the true top of the screen. The panel
               // height comes from visualViewport (which excludes the Android
