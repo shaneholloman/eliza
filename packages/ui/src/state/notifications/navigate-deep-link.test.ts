@@ -74,7 +74,7 @@ describe("navigateDeepLink", () => {
     const types = dispatchSpy.mock.calls
       .map((c: unknown[]) => c[0])
       .filter((e: unknown): e is CustomEvent => e instanceof CustomEvent)
-      .map((e) => e.type);
+      .map((e: CustomEvent) => e.type);
     expect(types).toContain("eliza:chat:open");
     expect(types).not.toContain("eliza:navigate:view");
   });
@@ -93,7 +93,7 @@ describe("navigateDeepLink", () => {
     const types = dispatchSpy.mock.calls
       .map((c: unknown[]) => c[0])
       .filter((e: unknown): e is CustomEvent => e instanceof CustomEvent)
-      .map((e) => e.type);
+      .map((e: CustomEvent) => e.type);
     expect(types).not.toContain("eliza:navigate:view");
   });
 
