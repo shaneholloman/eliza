@@ -393,7 +393,7 @@ describe("Composer bottom geometry — full-bleed, keyboard-lift preserved", () 
 
   it("keeps the home-indicator clearance as composer paddingBottom (send button stays tappable)", () => {
     expect(overlaySrc).toContain(
-      "max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)) + 0.625rem",
+      "max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)) + 0.5rem",
     );
   });
 
