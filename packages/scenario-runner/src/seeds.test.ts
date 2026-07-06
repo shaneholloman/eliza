@@ -6,6 +6,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { AgentRuntime, UUID } from "@elizaos/core";
+import { createRealTestRuntime } from "@elizaos/core/testing";
 import type {
   ScenarioContext,
   ScenarioSeedStep,
@@ -213,6 +214,117 @@ function baseConnector(
 }
 
 describe("scenario memory seeds", () => {
+  it("writes calendar-event memory seeds into the LifeOps calendar event store", async () => {
+    const harness = await createRealTestRuntime({
+      withLLM: false,
+      characterName: "scenario-calendar-seed-test",
+    });
+    try {
+      const ctx = {
+        runtime: harness.runtime,
+        scenarioId: "push.meeting-reminder-T-0",
+        now: "2026-07-06T14:00:00.000Z",
+      } as ScenarioContext;
+
+      const result = await applyScenarioSeedStep(ctx, {
+        type: "memory",
+        content: {
+          kind: "calendar-event",
+          id: "evt-eng-standup",
+          title: "Eng standup",
+          startAt: "2026-07-06T15:00:00.000Z",
+          joinLink: "https://meet.example.com/eng-standup",
+          attendees: [
+            { email: "owner@example.com", responseStatus: "accepted" },
+          ],
+        },
+      } satisfies ScenarioSeedStep);
+
+      expect(result).toBeUndefined();
+      const { LifeOpsRepository } = await import(
+        "../../../plugins/plugin-personal-assistant/src/lifeops/repository.ts"
+      );
+      const repository = new LifeOpsRepository(harness.runtime);
+      const events = await repository.listCalendarEvents(
+        String(harness.runtime.agentId),
+        "google",
+        "2026-07-06T14:30:00.000Z",
+        "2026-07-06T16:00:00.000Z",
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        id: "evt-eng-standup",
+        externalId: "evt-eng-standup",
+        calendarId: "primary",
+        title: "Eng standup",
+        status: "confirmed",
+        startAt: "2026-07-06T15:00:00.000Z",
+        endAt: "2026-07-06T15:30:00.000Z",
+        conferenceLink: "https://meet.example.com/eng-standup",
+        metadata: expect.objectContaining({
+          source: "scenario-seed",
+          kind: "calendar-event",
+          scenarioId: "push.meeting-reminder-T-0",
+          joinLink: "https://meet.example.com/eng-standup",
+        }),
+      });
+      expect(events[0]?.attendees).toEqual([
+        { email: "owner@example.com", responseStatus: "accepted" },
+      ]);
+    } finally {
+      await harness.cleanup();
+    }
+  }, 120_000);
+
+  it("maps cancelled calendar-event shorthand into cancelled calendar rows", async () => {
+    const harness = await createRealTestRuntime({
+      withLLM: false,
+      characterName: "scenario-cancelled-calendar-seed-test",
+    });
+    try {
+      const ctx = {
+        runtime: harness.runtime,
+        scenarioId: "push.scheduled-notification-cancel-when-event-cancelled",
+        now: "2026-07-06T14:00:00.000Z",
+      } as ScenarioContext;
+
+      const result = await applyScenarioSeedStep(ctx, {
+        type: "memory",
+        content: {
+          kind: "calendar-event",
+          id: "evt-investor-sync",
+          title: "Investor sync",
+          startAt: "2026-07-06T16:00:00.000Z",
+          cancelled: true,
+          cancelledAt: "2026-07-06T13:50:00.000Z",
+        },
+      } satisfies ScenarioSeedStep);
+
+      expect(result).toBeUndefined();
+      const { LifeOpsRepository } = await import(
+        "../../../plugins/plugin-personal-assistant/src/lifeops/repository.ts"
+      );
+      const repository = new LifeOpsRepository(harness.runtime);
+      const events = await repository.listCalendarEvents(
+        String(harness.runtime.agentId),
+        "google",
+        "2026-07-06T15:30:00.000Z",
+        "2026-07-06T17:00:00.000Z",
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        id: "evt-investor-sync",
+        title: "Investor sync",
+        status: "cancelled",
+        metadata: expect.objectContaining({
+          cancelledAt: "2026-07-06T13:50:00.000Z",
+        }),
+      });
+    } finally {
+      await harness.cleanup();
+    }
+  }, 120_000);
+
   it("maps rolodex-entity memory seeds into relationship contacts", async () => {
     const { ctx, relationships, runtime } = createSeedHarness();
 
@@ -507,6 +619,7 @@ describe("scenario memory seeds", () => {
     } satisfies ScenarioSeedStep);
 
     expect(result).toMatch(/unsupported memory seed kind "inbound-message"/);
+    expect(result).toContain("calendar-event");
     expect(createMemory).not.toHaveBeenCalled();
     expect(relationships.addContact).not.toHaveBeenCalled();
   });
