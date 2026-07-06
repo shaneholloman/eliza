@@ -313,6 +313,16 @@ const OPEN_SPRING = {
 // maps offset → openProgress ∈ [0,1] over this distance; past it, the excess
 // flows into the thread height so pill → input → chat is one continuous motion.
 const PILL_OPEN_DISTANCE = 120;
+// Downward finger travel PAST the bottom (thread height 0) at which releasing an
+// OPEN-sheet drag commits the pill. Deliberately smaller than the halfway mark
+// of the input→pill morph (PILL_OPEN_DISTANCE / 2): a drag that consumed the
+// whole thread height ends with the finger near the screen edge, so only
+// ~50–80px of physical travel can exist past the bottom — requiring the full
+// half-morph would make "drag from full screen down to the pill" physically
+// unreachable on shorter panels. The short input→pill gesture (which has the
+// whole screen of room) keeps the stricter halfway rule.
+const PILL_COMMIT_OVERSHOOT = 40;
+const PILL_COMMIT_PROGRESS = 1 - PILL_COMMIT_OVERSHOOT / PILL_OPEN_DISTANCE;
 
 // Glyphs (viewBox 0 0 36 36), rendered in currentColor inside a soft chip. Send
 // + mic now use lucide icons (SendHorizontal / Mic); the rest stay hand-drawn.
@@ -1336,6 +1346,13 @@ export function ContinuousChatOverlay({
   // path can tell an over-pull past the 80%-viewport maximize threshold from a
   // plain release at FULL. Reset to 0 at the start of every gesture.
   const maxPullRawRef = React.useRef(0);
+  // Thread height at the START of the current gesture. Release paths that land
+  // at the bottom use it to tell a big yank (started at/above the half detent →
+  // the user is putting the chat away → PILL) from a short close (started low →
+  // INPUT). Distance-past-the-bottom alone can't make that call: a maximized
+  // sheet fills the screen, so the finger physically runs out of room to
+  // overshoot below it.
+  const dragStartHRef = React.useRef(0);
   // At rest the collapsed composer should not carry hidden transcript/header
   // DOM. During an upward pull, though, the sheet needs a mounted body so the
   // MotionValue-driven height can follow the finger before the release commits
@@ -2608,23 +2625,67 @@ export function ContinuousChatOverlay({
 
   const closeSheet = React.useCallback(() => {
     draggingRef.current = false;
-    stopOpenProgressAnimation();
     setFreeH(null);
     setMaximized(false);
     setMode("input");
     if (reduce) {
       stopThreadAnimation();
+      stopOpenProgressAnimation();
       threadHeight.set(0);
+      openProgress.set(1);
     } else {
       animateThreadHeight(0);
+      // Settle the pill morph to the input's resting end explicitly: a drag
+      // that dipped past the bottom left openProgress below 1, and the
+      // `pilled`-driven effect won't re-fire when `pilled` stays false — the
+      // glass would otherwise strand semi-transparent.
+      animateOpenProgress(1);
     }
   }, [
     reduce,
     threadHeight,
+    openProgress,
     stopThreadAnimation,
     stopOpenProgressAnimation,
     animateThreadHeight,
+    animateOpenProgress,
   ]);
+
+  // Collapse the whole chat to the bottom pill capsule — the shared landing for
+  // every "put the chat away" release (flick down from the input, an input drag
+  // whose pill morph crossed halfway, an open-sheet drag carried past the
+  // bottom). Mode "pill" drives everything else: the pilled effect springs
+  // openProgress → 0 and the detent effect springs the thread height → 0.
+  const collapseToPill = React.useCallback(() => {
+    draggingRef.current = false;
+    setDragPreviewMounted(false);
+    setFreeH(null);
+    setMaximized(false);
+    setMode("pill");
+    inputRef.current?.blur();
+    detentHaptic();
+  }, [setDragPreviewMounted]);
+
+  // Landing for a drag released AT THE BOTTOM (thread height within the detent
+  // magnet of 0): PILL when the gesture carried past the bottom into the
+  // input→pill morph, OR when it started at/above the half detent (one big yank
+  // from full/maximized = "put the chat away" — the screen edge leaves no room
+  // to overshoot below a full-height sheet, so start height carries the
+  // intent). Otherwise the INPUT bar (short closes, small free rests).
+  const collapseFromRelease = React.useCallback(() => {
+    // The overshoot test only applies to gestures that came DOWN through the
+    // bottom (openProgress driven 1 → below the commit line). A drag that
+    // started PILLED moves openProgress the other way (0 → up) — a half-open
+    // pill morph must land on the INPUT, not read as "carried past bottom".
+    if (
+      (!pilled && openProgress.get() <= PILL_COMMIT_PROGRESS) ||
+      dragStartHRef.current > halfH + SHEET_DETENT_MAGNET
+    ) {
+      collapseToPill();
+    } else {
+      closeSheet();
+    }
+  }, [pilled, openProgress, halfH, collapseToPill, closeSheet]);
 
   // Leaving the chat for Settings/Home: animate OUT of maximize and collapse the
   // sheet (closeSheet un-maximizes + springs the thread height down) BEFORE
@@ -2724,9 +2785,17 @@ export function ContinuousChatOverlay({
       const target = to === "collapsed" ? 0 : to === "half" ? halfH : openH;
       if (reduce) {
         stopThreadAnimation();
+        stopOpenProgressAnimation();
         threadHeight.set(target);
+        openProgress.set(1);
       } else {
         animateThreadHeight(target);
+        // Every detent is on the input side of the pill morph. A drag that
+        // dipped past the bottom (openProgress < 1) then released upward onto a
+        // detent must settle the morph home — the pilled effect won't re-fire
+        // while `pilled` stays false, so an un-settled morph strands the glass
+        // semi-transparent.
+        animateOpenProgress(1);
       }
       // Settle the shape morph: any detent but a still-maximized FULL is the
       // inset shape, so un-morph a partial over-pull that landed on a detent.
@@ -2740,8 +2809,11 @@ export function ContinuousChatOverlay({
       openH,
       reduce,
       threadHeight,
+      openProgress,
       stopThreadAnimation,
+      stopOpenProgressAnimation,
       animateThreadHeight,
+      animateOpenProgress,
       animateFullBleedTo,
     ],
   );
@@ -3537,8 +3609,10 @@ export function ContinuousChatOverlay({
         // Hand the shape morph to the finger — stop any in-flight settle spring
         // so a fresh over-pull tracks 1:1 instead of fighting a decay.
         stopFullBleedAnimation();
-        // Fresh gesture: reset the peak raw-pull tracker (#13531).
+        // Fresh gesture: reset the peak raw-pull tracker (#13531) and record
+        // where the sheet stood when the finger landed.
         maxPullRawRef.current = 0;
+        dragStartHRef.current = threadHeight.get();
       }
       draggingRef.current = true;
       // Promote the panel + thread to their own GPU layer for the duration of
@@ -3562,6 +3636,16 @@ export function ContinuousChatOverlay({
         // to-open stays gated in `expand` so boot never auto-pops an empty sheet.
         setDragPreviewMounted(excess > 0);
         threadHeight.set(excess > 0 ? clampHeight(excess) : 0);
+        // The pill sits at height 0, so the raw finger travel IS the equivalent
+        // pull height. Tracking it here (like the open-sheet path below) lets a
+        // single held drag from the pill clear the maximize threshold — pill →
+        // input → chat → full-screen is one continuous gesture.
+        if (up > maxPullRawRef.current) maxPullRawRef.current = up;
+        // Same finger-tracked inset→edge-to-edge morph as the open-sheet path,
+        // so the over-pull squares the corners live from the pill too.
+        fullBleedT.set(
+          Math.min(1, Math.max(0, (up - openH) / MAXIMIZE_PULL_RANGE)),
+        );
         return;
       }
       // INPUT → PILL drag (collapsed, dragging DOWN): the mirror of the pill
@@ -3593,8 +3677,25 @@ export function ContinuousChatOverlay({
       // to <=0 above) and the rendered height rubber-bands at openH (#13531). A
       // pull DOWN (offset<0) never advances the maximize tracker.
       const rawUpH = baseH + Math.max(0, offset);
-      if (rawUpH > maxPullRawRef.current) maxPullRawRef.current = rawUpH;
+      // Track only REAL upward travel: without the `offset > 0` gate the
+      // tracker seeds itself with baseH on the first frame, so a downward-only
+      // release from a tall detent (baseH ≥ the maximize threshold) would
+      // "commit" a maximize the finger never pulled toward — re-maximizing the
+      // sheet the user was dragging shut.
+      if (offset > 0 && rawUpH > maxPullRawRef.current)
+        maxPullRawRef.current = rawUpH;
       threadHeight.set(clampHeight(baseH + off));
+      // Continuum PAST the bottom: once an open-sheet drag has consumed the
+      // whole thread height (raw below 0), the remaining downward travel flows
+      // into the input→pill morph — so one held drag reads chat → input → pill
+      // instead of parking at the input bar while the finger keeps moving. The
+      // release paths commit the pill once the morph crossed halfway.
+      if (sheetOpen) {
+        const raw = baseH + off;
+        openProgress.set(
+          raw < 0 ? Math.max(0, 1 + raw / PILL_OPEN_DISTANCE) : 1,
+        );
+      }
       // Finger-tracked maximize: the over-pull PAST the FULL detent drives the
       // inset→edge-to-edge morph (fullBleedT 0→1) over MAXIMIZE_PULL_RANGE px, so
       // pulling past full expands to maximize as one motion and dragging back
@@ -3641,13 +3742,39 @@ export function ContinuousChatOverlay({
   // normal detent settle. Onboarding never re-triggers this (pinned full-bleed).
   const maybeMaximizeOnRelease = React.useCallback((): boolean => {
     if (firstRunOpen) return false;
-    if (maxPullRawRef.current >= viewportH * 0.8) {
+    // Two distinct maximize intents, both read from the gesture itself:
+    //  - OVER-PULL: the peak raw pull carried at least half the maximize morph
+    //    PAST the FULL detent (the finger visibly squared the corners) — the
+    //    canonical exit upward from an already-tall sheet.
+    //  - LONG HAUL: the drag STARTED at/below the half detent and swept ≥80%
+    //    of the screen — "grabbed it at the bottom and threw it to the top"
+    //    (pill/input/half starts). Gating on the start height keeps a mere
+    //    one-detent flick from a tall free rest stepping to FULL instead of
+    //    surprise-maximizing.
+    // The 80% is measured against the LAYOUT viewport (screen space), not the
+    // keyboard-shrunk visual viewport: with a soft keyboard up, 80% of the
+    // visual height can fall below the FULL detent, so an ordinary flick to
+    // full would accidentally commit an edge-to-edge maximize whose top spills
+    // above the screen.
+    const screenH = Math.max(viewportH, viewport.innerHeight);
+    const peak = maxPullRawRef.current;
+    const overPulled = peak >= openH + MAXIMIZE_PULL_RANGE / 2;
+    const longHaul =
+      dragStartHRef.current <= halfH + 1 && peak >= screenH * 0.8;
+    if (overPulled || longHaul) {
       focusThreadRef.current = true;
       maximizeFromPull();
       return true;
     }
     return false;
-  }, [firstRunOpen, viewportH, maximizeFromPull]);
+  }, [
+    firstRunOpen,
+    viewportH,
+    viewport.innerHeight,
+    openH,
+    halfH,
+    maximizeFromPull,
+  ]);
 
   const pullBinding: PullGestureBinding = usePullGesture({
     onDrag: onDragOffset,
@@ -3668,23 +3795,28 @@ export function ContinuousChatOverlay({
     onPullUp: () => {
       setDragPreviewMounted(false);
       if (pilled) {
-        // PILL → INPUT, or straight into the chat when there's history: a flick
-        // up opens. Mirror the slow-drag path so a flick and a slow drag BOTH
-        // reach the chat (no hard stop at the bare input). Releasing draggingRef
-        // first lets the pilled→openProgress effect spring the morph 0→1.
+        // PILL → open: a flick up opens; a HELD drag released with flick
+        // velocity honors how far the finger actually carried the sheet — a
+        // long pull from the pill lands FULL (or commits maximize past the 80%
+        // threshold), a short flick lands HALF, so pill → input → chat →
+        // full-screen is one continuum from the very bottom. Releasing
+        // draggingRef first lets the pilled→openProgress effect spring the
+        // morph 0→1.
         draggingRef.current = false;
-        if (hasRevealableThread) {
-          focusThreadRef.current = true;
-          goToDetent("half");
-        } else {
-          // Pill → bare input bar (no thread to open into).
+        if (maybeMaximizeOnRelease()) return;
+        const releasedH = Math.max(0, Math.min(threadHeight.get(), panelMaxH));
+        if (releasedH < SHEET_DETENT_MAGNET && !hasRevealableThread) {
+          // A short flick with no thread to open into → the bare input bar.
           setMode("input");
           if (reduce) {
             stopThreadAnimation();
             threadHeight.set(0);
           } else animateThreadHeight(0);
           detentHaptic();
+          return;
         }
+        focusThreadRef.current = true;
+        goToDetent(releasedH >= halfH + SHEET_DETENT_MAGNET ? "full" : "half");
         return;
       }
       // Over-pull past the 80%-viewport threshold maximizes from ANY open state
@@ -3713,24 +3845,26 @@ export function ContinuousChatOverlay({
       // Onboarding: a pull-down must not step the pinned-FULL sheet down.
       if (firstRunOpen) return settleDrag();
       if (pilled) return settleDrag(); // already the lowest detent
-      // Step down ONE detent based on the EFFECTIVE height (so a free-rest above
-      // half steps to half first, never skipping it). A downward flick also
-      // closes the keyboard — goToDetent("collapsed") blurs; half-step blurs too.
-      const effectiveH = freeH != null ? Math.min(freeH, panelMaxH) : detentH;
-      if (sheetOpen && effectiveH > halfH + 1) {
-        inputRef.current?.blur();
-        goToDetent("half");
-      } else if (sheetOpen) {
-        goToDetent("collapsed");
-      } else {
-        // INPUT → PILL: collapse the input away into a pill at the bottom.
-        setMode("pill");
-        setMaximized(false);
-        draggingRef.current = false;
-        setDragPreviewMounted(false);
-        inputRef.current?.blur();
-        detentHaptic();
+      if (sheetOpen) {
+        // Step down from the LIVE height, so a flick and a held-drag-then-flick
+        // both land where the finger left the sheet: a plain flick (height
+        // barely moved) steps ONE detent — full → half → input, never skipping;
+        // a held drag carried to the bottom released with downward velocity
+        // lands at the bottom (pill/input by collapseFromRelease), not bounced
+        // back up to a detent it deliberately left. A downward flick also
+        // closes the keyboard — goToDetent("collapsed") blurs; half-step too.
+        const h = Math.max(0, Math.min(threadHeight.get(), panelMaxH));
+        if (h <= SHEET_DETENT_MAGNET) return collapseFromRelease();
+        if (h > halfH + 1) {
+          inputRef.current?.blur();
+          goToDetent("half");
+        } else {
+          goToDetent("collapsed");
+        }
+        return;
       }
+      // INPUT → PILL: collapse the input away into a pill at the bottom.
+      collapseToPill();
     },
     // A tap (no drag) on the handle. A tap on the PILL brings the input back.
     // When OPEN, the grabber acts as a disclosure toggle: tap once to close.
@@ -3782,15 +3916,12 @@ export function ContinuousChatOverlay({
       }
       // From the collapsed input, a downward drag has nothing to "size" below
       // it. Require the input→pill morph to cross halfway before committing;
-      // small thumb drift should spring back to the input, not collapse the chat.
+      // small thumb drift should spring back to the input, not collapse the
+      // chat. (Open-sheet drags that reach the bottom land via the magnetism
+      // below — collapseFromRelease picks pill vs input.)
       if (!sheetOpen && direction === "down") {
-        if (openProgress.get() <= 0.5) {
-          setMode("pill");
-          inputRef.current?.blur();
-          detentHaptic();
-        } else {
-          settleDrag();
-        }
+        if (openProgress.get() <= 0.5) collapseToPill();
+        else settleDrag();
         return;
       }
       // A slow over-pull past the 80%-viewport threshold maximizes (#13531),
@@ -3804,8 +3935,8 @@ export function ContinuousChatOverlay({
       // between them keep the free-drag rest height. goToDetent commits the
       // honest flags so data-detent + the maximize header match the height.
       if (h <= SHEET_DETENT_MAGNET) {
-        // Near the bottom → collapse to the input bar.
-        closeSheet();
+        // Near the bottom → pill or input by gesture intent.
+        collapseFromRelease();
         return;
       }
       focusThreadRef.current = true;
@@ -3887,7 +4018,9 @@ export function ContinuousChatOverlay({
     animateFullBleedTo(0);
     const h = Math.max(0, Math.min(threadHeight.get(), panelMaxH));
     if (h <= SHEET_DETENT_MAGNET) {
-      closeSheet();
+      // The restore drag started full-height, so a run to the bottom lands on
+      // the PILL (collapseFromRelease reads the gesture-start height).
+      collapseFromRelease();
       return;
     }
     focusThreadRef.current = true;
@@ -3906,7 +4039,7 @@ export function ContinuousChatOverlay({
     panelMaxH,
     openH,
     halfH,
-    closeSheet,
+    collapseFromRelease,
     goToDetent,
     animateFullBleedTo,
     setDragPreviewMounted,
