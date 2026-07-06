@@ -229,6 +229,18 @@ type QueuedPushMemorySeed = {
   dueAt?: unknown;
 };
 
+type DeviceIntentMemorySeed = {
+  kind?: unknown;
+  type?: unknown;
+  id?: unknown;
+  title?: unknown;
+  body?: unknown;
+  priority?: unknown;
+  dispatchedTo?: unknown;
+  actionUrl?: unknown;
+  expiresAt?: unknown;
+};
+
 type MemoryContactSeed = {
   kind?: unknown;
   type?: unknown;
@@ -706,6 +718,21 @@ function normalizeScheduledTaskPriority(
   return "medium";
 }
 
+function normalizeIntentPriority(
+  value: unknown,
+): "low" | "medium" | "high" | "urgent" {
+  const text = readNonEmptyString(value);
+  if (
+    text === "low" ||
+    text === "medium" ||
+    text === "high" ||
+    text === "urgent"
+  ) {
+    return text;
+  }
+  return "medium";
+}
+
 function existingActivityProfile(
   value: unknown,
 ): Record<string, unknown> | null {
@@ -1004,6 +1031,101 @@ async function seedQueuedPushMemory(
   return undefined;
 }
 
+function normalizeDeviceIntentTargets(value: unknown): string[] {
+  const targets = readStringArray(value);
+  return targets.length > 0 ? targets : ["all"];
+}
+
+function deviceIntentTarget(device: string): {
+  target: "all" | "desktop" | "mobile" | "specific";
+  targetDeviceId: string | null;
+} {
+  if (device === "all") return { target: "all", targetDeviceId: null };
+  if (device === "desktop") return { target: "desktop", targetDeviceId: null };
+  if (device === "mobile" || device === "phone") {
+    return { target: "mobile", targetDeviceId: null };
+  }
+  return { target: "specific", targetDeviceId: device };
+}
+
+async function seedDeviceIntentMemory(
+  ctx: ScenarioContext,
+  seed: DeviceIntentMemorySeed,
+): Promise<string | undefined> {
+  const runtime = requireRuntime(ctx);
+  const title = readNonEmptyString(seed.title);
+  if (!title) {
+    return "device-intent seed requires a title";
+  }
+  const intentGroupId =
+    readNonEmptyString(seed.id) ??
+    `scenario-device-intent:${ctx.scenarioId ?? "unknown"}:${title}`;
+  const createdAt = readScenarioNow(ctx).toISOString();
+  const expiresAt = readIsoDate(seed.expiresAt)?.toISOString() ?? null;
+  const body = readNonEmptyString(seed.body) ?? title;
+  const actionUrl = readNonEmptyString(seed.actionUrl);
+  const priority = normalizeIntentPriority(seed.priority);
+  const dispatchedTo = normalizeDeviceIntentTargets(seed.dispatchedTo);
+  const { LifeOpsRepository } = await loadLifeOps();
+  await LifeOpsRepository.bootstrapSchema(runtime);
+  const { executeRawSql, sqlText } = (await import(
+    new URL(
+      "../../../plugins/plugin-personal-assistant/src/lifeops/sql.ts",
+      import.meta.url,
+    ).href
+  )) as {
+    executeRawSql: (
+      runtime: AgentRuntime,
+      sql: string,
+    ) => Promise<Record<string, unknown>[]>;
+    sqlText: (value: unknown) => string;
+  };
+  for (const device of dispatchedTo) {
+    const { target, targetDeviceId } = deviceIntentTarget(device);
+    const metadata = {
+      source: "scenario-seed",
+      scenarioId: ctx.scenarioId ?? null,
+      deviceIntentId: intentGroupId,
+      syncGroupId: intentGroupId,
+      dispatchedTo,
+      device,
+    };
+    await executeRawSql(
+      runtime,
+      `INSERT INTO app_lifeops.life_intents (
+        id, agent_id, kind, target, target_device_id,
+        title, body, action_url, priority,
+        created_at, expires_at, acknowledged_at, acknowledged_by, metadata_json
+      ) VALUES (
+        ${sqlText(`${intentGroupId}:${device}`)},
+        ${sqlText(runtime.agentId)},
+        ${sqlText("attention_request")},
+        ${sqlText(target)},
+        ${sqlText(targetDeviceId)},
+        ${sqlText(title)},
+        ${sqlText(body)},
+        ${sqlText(actionUrl)},
+        ${sqlText(priority)},
+        ${sqlText(createdAt)},
+        ${sqlText(expiresAt)},
+        NULL,
+        NULL,
+        ${sqlText(JSON.stringify(metadata))}
+      )
+      ON CONFLICT (id) DO UPDATE SET
+        title = excluded.title,
+        body = excluded.body,
+        action_url = excluded.action_url,
+        priority = excluded.priority,
+        expires_at = excluded.expires_at,
+        metadata_json = excluded.metadata_json,
+        acknowledged_at = NULL,
+        acknowledged_by = NULL`,
+    );
+  }
+  return undefined;
+}
+
 async function seedContact(
   ctx: ScenarioContext,
   seed: ContactSeed,
@@ -1108,11 +1230,14 @@ async function seedMemory(
   if (memoryType === "queued-push") {
     return seedQueuedPushMemory(ctx, content as QueuedPushMemorySeed);
   }
+  if (memoryType === "device-intent") {
+    return seedDeviceIntentMemory(ctx, content as DeviceIntentMemorySeed);
+  }
   if (memoryType !== null) {
     // A seed the runner cannot land must fail the scenario, never no-op:
     // a silently dropped seed fabricates the premise the checks grade
     // against (#14631 — the "seeded VIP fact" the model never received).
-    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity/user-state/focus-window-active/queued-push, or plain { text } for a durable owner fact`;
+    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity/user-state/focus-window-active/queued-push/device-intent, or plain { text } for a durable owner fact`;
   }
   const text = readNonEmptyString((content as { text?: unknown }).text);
   if (!text) {

@@ -29,6 +29,15 @@ type LifeOpsScheduledTaskForTest = {
   metadata?: Record<string, unknown>;
 };
 
+type LifeOpsIntentForTest = {
+  id: string;
+  title: string;
+  priority: string;
+  target: string;
+  targetDeviceId?: string;
+  metadata: Record<string, unknown>;
+};
+
 let activeServer: http.Server | null = null;
 const originalGoogleBase = process.env.ELIZA_MOCK_GOOGLE_BASE;
 
@@ -370,6 +379,87 @@ describe("scenario memory seeds", () => {
               channel: "push",
             },
           }),
+        }),
+      );
+    } finally {
+      await harness.cleanup();
+    }
+  }, 120_000);
+
+  it("maps device-intent memory seeds into pending LifeOps device intents", async () => {
+    const harness = await createRealTestRuntime({
+      withLLM: false,
+      characterName: "scenario-device-intent-seed-test",
+    });
+    try {
+      const ctx = {
+        runtime: harness.runtime,
+        scenarioId: "push.ack-from-one-device-clears-others",
+        now: "2026-07-06T14:00:00.000Z",
+      } as ScenarioContext;
+
+      const result = await applyScenarioSeedStep(ctx, {
+        type: "memory",
+        content: {
+          kind: "device-intent",
+          id: "di-board-call-meeting",
+          title: "Board call at 3pm",
+          priority: "high",
+          dispatchedTo: ["desktop", "mobile", "watch"],
+        },
+      } satisfies ScenarioSeedStep);
+
+      expect(result).toBeUndefined();
+      const { receivePendingIntents } = (await import(
+        "../../../plugins/plugin-personal-assistant/src/lifeops/intent-sync.ts"
+      )) as {
+        receivePendingIntents: (
+          runtime: AgentRuntime,
+          opts?: {
+            device?: "all" | "desktop" | "mobile" | "specific";
+            deviceId?: string;
+            limit?: number;
+          },
+        ) => Promise<LifeOpsIntentForTest[]>;
+      };
+      const desktop = await receivePendingIntents(harness.runtime, {
+        device: "desktop",
+      });
+      const mobile = await receivePendingIntents(harness.runtime, {
+        device: "mobile",
+      });
+      const watch = await receivePendingIntents(harness.runtime, {
+        device: "specific",
+        deviceId: "watch",
+      });
+
+      expect(desktop).toContainEqual(
+        expect.objectContaining({
+          id: "di-board-call-meeting:desktop",
+          title: "Board call at 3pm",
+          priority: "high",
+          target: "desktop",
+          metadata: expect.objectContaining({
+            source: "scenario-seed",
+            scenarioId: "push.ack-from-one-device-clears-others",
+            deviceIntentId: "di-board-call-meeting",
+            syncGroupId: "di-board-call-meeting",
+            dispatchedTo: ["desktop", "mobile", "watch"],
+            device: "desktop",
+          }),
+        }),
+      );
+      expect(mobile).toContainEqual(
+        expect.objectContaining({
+          id: "di-board-call-meeting:mobile",
+          target: "mobile",
+        }),
+      );
+      expect(watch).toContainEqual(
+        expect.objectContaining({
+          id: "di-board-call-meeting:watch",
+          target: "specific",
+          targetDeviceId: "watch",
         }),
       );
     } finally {
