@@ -15,7 +15,6 @@ import type { ViewEntry } from "../../../hooks/view-catalog";
 import { resetShellSurfaceForTests } from "../../../state/shell-surface-store";
 import { HomeLauncherSurface } from "../../shell/HomeLauncherSurface";
 import { Launcher } from "../Launcher";
-import { allAppsZone } from "../launcher-curation";
 
 type Win = typeof window & {
   __launcherCalls?: {
@@ -109,7 +108,7 @@ function Harness(): React.JSX.Element {
         }
         launcher={
           <Launcher
-            zones={allAppsZone(ENTRIES)}
+            entries={ENTRIES}
             onLaunch={(entry) => {
               (window as Win).__launcherCalls?.launch.push(entry.id);
             }}
