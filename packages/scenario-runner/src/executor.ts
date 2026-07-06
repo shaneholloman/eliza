@@ -117,6 +117,14 @@ function isSynthesizedReplyAction(
   return action.actionName === "REPLY" && data?.source === "synthesized-reply";
 }
 
+// The runtime message callback receives full `Content`; the executor only
+// needs the reply text plus the structural failure marker set by
+// `buildStructuredFailureReply` (packages/core/src/services/message.ts).
+type SyntheticFailureAwareContent = {
+  text?: string;
+  elizaSyntheticFailure?: boolean;
+};
+
 function stringifyForAssertion(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -202,6 +210,7 @@ type ExecutedTurn = ScenarioTurnExecution & {
   apiBody?: unknown;
   durationMs?: number;
   reportResponseText?: string;
+  syntheticFailure?: boolean;
 };
 
 type ScenarioVariableState = {
@@ -1413,7 +1422,11 @@ async function executeMessageTurn(
   turnTimeoutMs: number,
   scenarioId: string,
   runId?: string,
-): Promise<{ responseText: string; durationMs: number }> {
+): Promise<{
+  responseText: string;
+  durationMs: number;
+  syntheticFailure: boolean;
+}> {
   const text =
     typeof turn.text === "string"
       ? String(resolveScenarioTemplates(turn.text, currentNow))
@@ -1454,10 +1467,10 @@ async function executeMessageTurn(
         handleMessage: (
           rt: AgentRuntime,
           memory: Memory,
-          cb: (content: { text?: string }) => Promise<unknown>,
+          cb: (content: SyntheticFailureAwareContent) => Promise<unknown>,
           options?: Record<string, unknown>,
         ) => Promise<{
-          responseContent?: { text?: string };
+          responseContent?: SyntheticFailureAwareContent;
           responseMessages?: Memory[];
         }>;
       };
@@ -1471,8 +1484,17 @@ async function executeMessageTurn(
 
   const startedAt = Date.now();
   let responseText = "";
-  const callback = async (content: { text?: string }): Promise<unknown[]> => {
+  // The runtime synthesizes a failure reply (rate-limit / auth / credits /
+  // generic apology) when a model call fails; it carries the structural
+  // `elizaSyntheticFailure` flag the chat DTO and recent-messages filter
+  // already key on. Capture it so the turn fails on the flag, not on matching
+  // one of several apology strings that drift and can be template-overridden.
+  let syntheticFailure = false;
+  const callback = async (
+    content: SyntheticFailureAwareContent,
+  ): Promise<unknown[]> => {
     if (content.text) responseText += content.text;
+    if (content.elizaSyntheticFailure === true) syntheticFailure = true;
     return [];
   };
   const timeoutMs =
@@ -1487,11 +1509,14 @@ async function executeMessageTurn(
   if (!responseText && result?.responseContent?.text) {
     responseText = result.responseContent.text;
   }
+  if (result?.responseContent?.elizaSyntheticFailure === true) {
+    syntheticFailure = true;
+  }
 
   // Let completed events settle.
   await new Promise((r) => setTimeout(r, 500));
 
-  return { responseText, durationMs: Date.now() - startedAt };
+  return { responseText, durationMs: Date.now() - startedAt, syntheticFailure };
 }
 
 async function executeActionTurn(
@@ -1815,6 +1840,12 @@ async function runTurnAssertions(
   const failures: string[] = [];
   let judgeScore: number | undefined;
   const kind = typeof turn.kind === "string" ? turn.kind : "message";
+
+  if (execution.syntheticFailure === true) {
+    failures.push(
+      "runtimeFailureReply: the runtime returned a synthetic model/runtime failure reply (rate-limit, auth, credits, or generic apology); this cannot satisfy scenario evidence",
+    );
+  }
 
   if (typeof turn.assertResponse === "function") {
     const result = turnUsesStatusResponse(kind)

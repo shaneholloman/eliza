@@ -59,6 +59,23 @@ const DEFAULT_FACT_CONFIDENCE = 0.6;
  */
 const CANDIDATE_POOL_PER_SEARCH = 120;
 const TOP_PER_KIND = 6;
+const PRIVATE_FACT_PRIVACY_CLASSES = new Set([
+	"private",
+	"sensitive",
+	"restricted",
+	"owner_only",
+	"owner-only",
+]);
+const PRIVATE_FACT_TEXT_PATTERN =
+	/\b(?:confidential|sensitive|private|do not share|don't share|wants? (?:this|these|it|them) kept private|keep (?:this|these|it|them) private|kept private)\b/i;
+const AVAILABILITY_REQUEST_PATTERN =
+	/\b(?:availability|available|free|busy|calendar|schedule|meeting|call|book)\b/i;
+const THIRD_PARTY_SCHEDULE_REFERENCE_PATTERN =
+	/\b(?:your boss|boss'?s?|their schedule|his schedule|her schedule|around (?:their|his|her) schedule|someone else's calendar)\b/i;
+const THIRD_PARTY_SELF_IDENTIFICATION_PATTERN =
+	/\b(?:this is|it is|it's)\s+[^.!?\n]{1,80}\bfrom\b/i;
+const THIRD_PARTY_NAMED_AVAILABILITY_PATTERN =
+	/\b(?:(?:when\s+(?:is|can|could|would|will|does)|is|can|could|would|will|does)\s+(?!i\b|me\b|my\b|we\b|us\b|you\b|your\b|the\b|a\b|an\b)[a-z][a-z0-9'_-]{1,30}(?:\s+[a-z][a-z0-9'_-]{1,30}){0,2}\s+(?:free|available|busy|meet|join|take|do|have|book)|(?:availability|schedule|calendar)\s+for\s+(?!me\b|my\b|you\b|your\b)[a-z][a-z0-9'_-]{1,30}(?:\s+[a-z][a-z0-9'_-]{1,30}){0,2})\b/i;
 
 function readFactMetadata(memory: Memory): FactMetadata {
 	const meta = memory.metadata;
@@ -187,6 +204,38 @@ function readCategory(memory: Memory): string {
 	const category = readFactMetadata(memory).category;
 	if (typeof category === "string" && category.length > 0) return category;
 	return "uncategorized";
+}
+
+function readStringMetadata(memory: Memory, key: string): string | null {
+	const metadata = readFactMetadata(memory) as Record<string, unknown>;
+	const value = metadata[key];
+	return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function isMarkedPrivateFact(memory: Memory): boolean {
+	const privacyClass =
+		readStringMetadata(memory, "privacyClass") ??
+		readStringMetadata(memory, "privacy_class") ??
+		readStringMetadata(memory, "visibility") ??
+		readStringMetadata(memory, "scope");
+	if (
+		privacyClass &&
+		PRIVATE_FACT_PRIVACY_CLASSES.has(privacyClass.trim().toLowerCase())
+	) {
+		return true;
+	}
+	const text = memory.content.text ?? "";
+	return PRIVATE_FACT_TEXT_PATTERN.test(text);
+}
+
+function shouldMinimizePrivateFactsForTurn(message: Memory): boolean {
+	const text = message.content.text ?? "";
+	return (
+		AVAILABILITY_REQUEST_PATTERN.test(text) &&
+		(THIRD_PARTY_SCHEDULE_REFERENCE_PATTERN.test(text) ||
+			THIRD_PARTY_SELF_IDENTIFICATION_PATTERN.test(text) ||
+			THIRD_PARTY_NAMED_AVAILABILITY_PATTERN.test(text))
+	);
 }
 
 // Bounded always-on lane for the sender's stored `preference` facts. The gate
@@ -342,7 +391,10 @@ const factsProvider: Provider = {
 			]);
 			const entityFacts = entityFactPools.flat();
 
-			const dedupedPool = dedupeById([...roomFacts, ...entityFacts]);
+			const minimizePrivateFacts = shouldMinimizePrivateFactsForTurn(message);
+			const dedupedPool = dedupeById([...roomFacts, ...entityFacts]).filter(
+				(memory) => !minimizePrivateFacts || !isMarkedPrivateFact(memory),
+			);
 			const { durable: durableCandidates, current: currentCandidates } =
 				partitionByKind(dedupedPool);
 

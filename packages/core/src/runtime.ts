@@ -91,6 +91,7 @@ import {
 	resolveEffectiveSystemPrompt,
 	textFromChatMessageContent,
 } from "./runtime/system-prompt";
+import { buildProviderAttributionsFromState } from "./runtime/trajectory-provider-attribution";
 import { TurnControllerRegistry } from "./runtime/turn-controller";
 import { BM25 } from "./search";
 import {
@@ -118,6 +119,7 @@ import {
 	describeModelCallError,
 	isModelProviderFallbackError,
 } from "./services/message/fallback-reply";
+import { ensureAgentVoice } from "./services/message/voice-gate";
 import type { TaskService } from "./services/task";
 import type { ToolPolicyService } from "./services/tool-policy";
 import { decryptSecret, getSalt } from "./settings";
@@ -4262,30 +4264,6 @@ export class AgentRuntime implements IAgentRuntime {
 			reused: providersToGet.length - providersToRun.length,
 		});
 
-		if (trajectoryStepId && trajLogger) {
-			const userText =
-				typeof message.content.text === "string" ? message.content.text : "";
-			const trajCtx = getTrajectoryContext();
-			const providerTraceId = this.getActiveTrace(this.getCurrentRunId())?.id;
-			for (const r of providerData) {
-				try {
-					const textLen = typeof r.text === "string" ? r.text.length : 0;
-					trajLogger.logProviderAccess({
-						stepId: trajectoryStepId,
-						providerName: r.providerName,
-						data: { textLength: textLen },
-						purpose: "compose_state",
-						query: { message: userText.slice(0, 2000) },
-						runId: trajCtx?.runId,
-						roomId: trajCtx?.roomId,
-						messageId: trajCtx?.messageId,
-						executionTraceId: providerTraceId,
-					});
-				} catch {
-					// Trajectory logging must never break core message flow.
-				}
-			}
-		}
 		const currentProviderResults: Record<
 			string,
 			{
@@ -4337,6 +4315,62 @@ export class AgentRuntime implements IAgentRuntime {
 		// Redact any secrets from provider context before use
 		const rawProvidersText = orderedTexts.join("\n");
 		const providersText = this.redactSecrets(rawProvidersText);
+		const providerOrderNames = providersToGet.map((provider) => provider.name);
+		const attributionState = {
+			values: {},
+			data: {
+				providerOrder: providerOrderNames,
+				providers: currentProviderResults,
+			},
+			text: providersText,
+		} as State;
+		const providerAttribution = buildProviderAttributionsFromState({
+			state: attributionState,
+			prompt: providersText,
+		});
+		const providerAttributionByName = new Map(
+			providerAttribution.providerAttributions.map((entry) => [
+				entry.providerName,
+				entry,
+			]),
+		);
+		const activeTrajectoryContext = getTrajectoryContext();
+		if (activeTrajectoryContext) {
+			activeTrajectoryContext.providerOrder = providerAttribution.providerOrder;
+			activeTrajectoryContext.providerAttributions =
+				providerAttribution.providerAttributions;
+		}
+		if (trajectoryStepId && trajLogger) {
+			const userText =
+				typeof message.content.text === "string" ? message.content.text : "";
+			const trajCtx = activeTrajectoryContext;
+			const providerTraceId = this.getActiveTrace(this.getCurrentRunId())?.id;
+			for (const r of providerData) {
+				try {
+					const redactedText =
+						currentProviderResults[r.providerName]?.text ?? "";
+					const attribution = providerAttributionByName.get(r.providerName);
+					trajLogger.logProviderAccess({
+						stepId: trajectoryStepId,
+						providerName: r.providerName,
+						data: { textLength: redactedText.length },
+						sha256: attribution?.sha256,
+						tokenCount: attribution?.tokenCount,
+						position: attribution?.position,
+						spanStart: attribution?.spanStart,
+						spanEnd: attribution?.spanEnd,
+						purpose: "compose_state",
+						query: { message: userText.slice(0, 2000) },
+						runId: trajCtx?.runId,
+						roomId: trajCtx?.roomId,
+						messageId: trajCtx?.messageId,
+						executionTraceId: providerTraceId,
+					});
+				} catch {
+					// Trajectory logging must never break core message flow.
+				}
+			}
+		}
 		const conversationSeed = buildDeterministicSeed(
 			this.agentId,
 			message.roomId,
@@ -4377,7 +4411,7 @@ export class AgentRuntime implements IAgentRuntime {
 			data: {
 				...cachedState.data,
 				__conversationSeed: conversationSeed,
-				providerOrder: providersToGet.map((provider) => provider.name),
+				providerOrder: providerOrderNames,
 				providers: currentProviderResults,
 			},
 			text: providersText,
@@ -6215,6 +6249,8 @@ export class AgentRuntime implements IAgentRuntime {
 				roomId: trajCtx.roomId,
 				messageId: trajCtx.messageId,
 				executionTraceId: activeTrace?.id,
+				providerOrder: trajCtx.providerOrder,
+				providerAttributions: trajCtx.providerAttributions,
 			});
 		} catch {
 			// Trajectory logging must never break core model flow.
@@ -10280,7 +10316,14 @@ ${section_end}`;
 			);
 			throw new Error(errorMsg);
 		}
-		const result = await handler(this, target, content);
+		// Humanness voice gate (#14873): this is the connector-transport chokepoint
+		// for every agent-initiated outbound message (scheduled dispatches,
+		// escalations, task-agent routing, raw error strings). Rephrase the literal
+		// into the agent's own voice unless it is already model-voiced
+		// (`content.agentVoiced`); the gate fails open, so a rephrase outage
+		// delivers the original text rather than blocking the send.
+		const voicedContent = await ensureAgentVoice(this, content, { source });
+		const result = await handler(this, target, voicedContent);
 		return result as Memory | undefined;
 	}
 
