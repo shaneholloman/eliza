@@ -99,7 +99,7 @@ describe("NotificationsHomeCenter", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders the inbox rows with unread badge once notifications arrive", () => {
+  it("renders the inbox rows once notifications arrive — no unread count badge", () => {
     __ingestNotificationForTests(
       makeNotification({ title: "Reminder fired", category: "reminder" }),
     );
@@ -112,10 +112,8 @@ describe("NotificationsHomeCenter", () => {
     render(<NotificationsHomeCenter />);
     expect(screen.getByTestId("home-notification-center")).toBeTruthy();
     expect(screen.getAllByTestId("notification-row")).toHaveLength(2);
-    // One unread → badge shows 1.
-    expect(screen.getByTestId("notifications-unread-badge").textContent).toBe(
-      "1",
-    );
+    // The header is a bare eyebrow: no numeric unread badge next to the label.
+    expect(screen.queryByTestId("notifications-unread-badge")).toBeNull();
     expect(screen.getByText("Reminder fired")).toBeTruthy();
   });
 
@@ -165,16 +163,13 @@ describe("NotificationsHomeCenter", () => {
     expect(screen.queryByText("Dismiss me")).toBeNull();
   });
 
-  it("marks all read from the header, and has no clear-all trash button", () => {
+  it("has no header bulk actions — no mark-all checkmark, no clear-all trash", () => {
     __ingestNotificationForTests(makeNotification());
     __ingestNotificationForTests(makeNotification());
     render(<NotificationsHomeCenter />);
-    // The bulk delete/trash affordance is gone: rows are dismissed one at a
-    // time (hover X / swipe / row menu), never nuked wholesale from the header.
+    // Rows manage their own state one at a time (tap to read, hover X / swipe
+    // / row menu to dismiss); the header carries no bulk affordances at all.
     expect(screen.queryByTestId("notifications-clear-all")).toBeNull();
-    fireEvent.click(screen.getByTestId("notifications-mark-all-read"));
-    expect(__getStateForTests().unreadCount).toBe(0);
-    // With nothing unread, mark-all disappears.
     expect(screen.queryByTestId("notifications-mark-all-read")).toBeNull();
   });
 
@@ -224,30 +219,18 @@ describe("NotificationsHomeCenter", () => {
     expect(screen.getAllByTestId("notification-row")).toHaveLength(100);
   });
 
-  it("renders a normal row with no priority rail (lock-screen restraint)", () => {
-    __ingestNotificationForTests(
-      makeNotification({ priority: "normal", title: "Quiet one" }),
-    );
-    render(<NotificationsHomeCenter />);
-    // A normal notification is just its line + time - no leading accent rail,
-    // no per-row icon chip (the box-in-a-box slop is gone).
-    expect(screen.queryByTestId("notification-row-accent")).toBeNull();
-    expect(screen.queryByTestId("notification-row-icon")).toBeNull();
-  });
-
-  it("shows a priority rail only for urgent/high rows", () => {
+  it("renders rows with no accent rail at any priority (lock-screen restraint)", () => {
     __ingestNotificationForTests(
       makeNotification({ priority: "urgent", title: "Urgent" }),
     );
     __ingestNotificationForTests(
-      makeNotification({ priority: "high", title: "High" }),
-    );
-    __ingestNotificationForTests(
-      makeNotification({ priority: "low", title: "Low" }),
+      makeNotification({ priority: "normal", title: "Quiet one" }),
     );
     render(<NotificationsHomeCenter />);
-    // Two elevated rows carry the rail; the low row does not.
-    expect(screen.getAllByTestId("notification-row-accent")).toHaveLength(2);
+    // A notification is just its line + time - no leading edge highlight even
+    // for urgent rows, no per-row icon chip (the box-in-a-box slop is gone).
+    expect(screen.queryByTestId("notification-row-accent")).toBeNull();
+    expect(screen.queryByTestId("notification-row-icon")).toBeNull();
   });
 
   it("carries no glass/blur/border chrome — the shade owns the surface", () => {

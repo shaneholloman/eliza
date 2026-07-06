@@ -233,15 +233,15 @@ describe("NotificationsHomeCenter render count (#14559)", () => {
       vi.advanceTimersByTime(0);
     });
     expect(screen.getByTestId("notification-row-time").textContent).toBe(
-      "just now",
+      "now",
     );
 
-    // 3 minutes later the SAME row (memoized) shows "3m ago" - not pinned.
+    // 3 minutes later the SAME row (memoized) shows "3m" - not pinned.
     act(() => {
       vi.advanceTimersByTime(3 * MINUTE_MS);
     });
     expect(screen.getByTestId("notification-row-time").textContent).toBe(
-      "3m ago",
+      "3m",
     );
   });
 

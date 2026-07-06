@@ -5,8 +5,9 @@
  * (rows, open/deep-link, per-row dismiss, mark-all-read) and self-hides when
  * empty, fading in Apple-style when the first notification arrives. It has no
  * card chrome of its own — no fill, no border — it sits directly on the home
- * field; rows carry no bulk clear-all, only per-row dismissal (hover X on
- * mouse, sideways swipe on touch, or the row's long-press / right-click menu).
+ * field; the header is a bare eyebrow (no unread count, no mark-all action),
+ * and rows carry only per-row dismissal (hover X on mouse, sideways swipe on
+ * touch, or the row's long-press / right-click menu).
  *
  * Rows are grouped by the VIEW they deep-link into (falling back to the
  * producer category), like a platform notification shade groups by app. The
@@ -23,7 +24,7 @@
  * inherit the position of their highest-ranked row.
  */
 import type { AgentNotification, NotificationCategory } from "@elizaos/core";
-import { Check, CheckCheck, ExternalLink, X } from "lucide-react";
+import { Check, ExternalLink, X } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { haptics } from "../../bridge/capacitor-bridge";
 import { cn } from "../../lib/utils";
@@ -33,7 +34,6 @@ import {
   navigateDeepLink,
 } from "../../state/notifications/navigate-deep-link";
 import {
-  markAllNotificationsRead,
   markNotificationRead,
   removeNotification,
   useNotifications,
@@ -272,8 +272,6 @@ const NotificationRow = memo(function NotificationRow({
 }: NotificationRowProps): React.JSX.Element {
   notificationRowRenderObserverForTests?.();
   const unread = !notification.readAt;
-  const urgent = notification.priority === "urgent";
-  const high = notification.priority === "high";
 
   // Touch swipe-to-dismiss + long-press menu. `swipeX` drives the live drag
   // transform; `menuOpen` is the contextual menu. Refs hold the in-flight
@@ -407,11 +405,9 @@ const NotificationRow = memo(function NotificationRow({
   // inbox silently keeping only the last of the batch. Only surfaced for N > 1.
   const rawCount = notification.data?.count;
   const count = typeof rawCount === "number" && rawCount > 1 ? rawCount : null;
-  // Lock-screen restraint: NO per-row icon chip (a box inside a box inside the
-  // card). Priority is carried by a hairline accent rail on the leading edge -
-  // present only for urgent/high - and an unread state by a single dot, so a
-  // quiet normal notification is just its line + time, like an iOS lock note.
-  const accent = urgent || high ? "bg-white/75" : null;
+  // Lock-screen restraint: NO per-row icon chip, no accent rail, no fill.
+  // Unread state is carried by the dot + bold title alone, so a notification
+  // is just its line + time, like an iOS lock note.
   const dragging = swipeX !== 0 && !dismissing;
   return (
     <li
@@ -448,24 +444,11 @@ const NotificationRow = memo(function NotificationRow({
         onPointerUp={onPointerEnd}
         onPointerCancel={onPointerEnd}
         className={cn(
-          // No fill, no border of its own — the row floats on the shade field;
-          // a hover wash is the only rest→hover chrome. Unread keeps a faint tint.
+          // No fill, no border of its own — read or unread, the row floats on
+          // the shade field; a hover wash is the only rest→hover chrome.
           "eliza-notif-row-inner group relative flex items-stretch overflow-hidden rounded-xl transition-colors duration-150 hover:bg-white/10",
-          unread && "bg-white/8",
         )}
       >
-        {/* Priority rail: a 2px edge tint, urgent/high only. The row without
-            it reads as ordinary - restraint over decoration. */}
-        {accent ? (
-          <span
-            aria-hidden
-            data-testid="notification-row-accent"
-            className={cn(
-              "absolute inset-y-1.5 left-0 w-0.5 rounded-full",
-              accent,
-            )}
-          />
-        ) : null}
         <button
           type="button"
           data-testid="notification-row"
@@ -522,6 +505,7 @@ const NotificationRow = memo(function NotificationRow({
             ) : null}
             <RelativeTime
               ts={notification.createdAt}
+              short
               className="ml-auto shrink-0 pl-2 text-2xs tabular-nums text-white/60"
               data-testid="notification-row-time"
             />
@@ -680,9 +664,10 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
       className="eliza-notif-center-in flex min-h-0 flex-1 flex-col overflow-hidden"
     >
       <style>{NOTIF_SCROLL_CSS}</style>
-      {/* Pinned header: a quiet eyebrow + unread count, actions to the right.
-          No boxed bell chip - the label alone names the surface. */}
-      <div className="flex shrink-0 items-center gap-1.5 px-3.5 pb-1 pt-2.5">
+      {/* Pinned header: a quiet eyebrow, nothing else — no unread count, no
+          mark-all action, no boxed bell chip. The label alone names the
+          surface; rows manage their own read/dismiss state. */}
+      <div className="flex shrink-0 items-center px-3.5 pb-1 pt-2.5">
         <span
           className={cn(
             "text-2xs font-medium uppercase tracking-[0.1em]",
@@ -690,32 +675,6 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
           )}
         >
           Notifications
-        </span>
-        {unreadCount > 0 ? (
-          <span
-            data-testid="notifications-unread-badge"
-            className="text-2xs font-semibold tabular-nums leading-none text-white"
-          >
-            {unreadCount > 99 ? "99+" : unreadCount}
-          </span>
-        ) : null}
-        <span className="ml-auto flex items-center gap-0.5">
-          {unreadCount > 0 ? (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Mark all read"
-              title="Mark all read"
-              data-testid="notifications-mark-all-read"
-              className={cn(
-                WALLPAPER_TEXT.secondary,
-                "hover:bg-white/10 hover:text-white",
-              )}
-              onClick={() => void markAllNotificationsRead()}
-            >
-              <CheckCheck className="h-4 w-4" />
-            </Button>
-          ) : null}
         </span>
       </div>
       <ul
