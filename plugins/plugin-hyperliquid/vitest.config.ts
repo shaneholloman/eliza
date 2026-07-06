@@ -45,6 +45,21 @@ export default defineConfig({
 				replacement: require.resolve("react-dom/client"),
 			},
 			{
+				find: /^@elizaos\/ui$/,
+				replacement: path.join(repoRoot, "packages/ui/src/browser.ts"),
+			},
+			{
+				find: /^@elizaos\/ui\/agent-surface$/,
+				replacement: path.join(
+					repoRoot,
+					"packages/ui/src/agent-surface/index.ts",
+				),
+			},
+			{
+				find: /^@elizaos\/ui\/events$/,
+				replacement: path.join(repoRoot, "packages/ui/src/events/index.ts"),
+			},
+			{
 				find: /^@elizaos\/shared\/local-inference$/,
 				replacement: path.join(
 					repoRoot,
@@ -77,6 +92,21 @@ export default defineConfig({
 			{
 				find: /^@elizaos\/shared$/,
 				replacement: path.join(repoRoot, "packages/shared/src/index.ts"),
+			},
+			{
+				find: /^@elizaos\/tui$/,
+				replacement: path.join(repoRoot, "packages/tui/src/index.ts"),
+			},
+			{
+				find: /^@elizaos\/ui\/spatial\/tui$/,
+				replacement: path.join(
+					repoRoot,
+					"packages/ui/src/spatial/tui/index.ts",
+				),
+			},
+			{
+				find: /^@elizaos\/ui\/spatial$/,
+				replacement: path.join(repoRoot, "packages/ui/src/spatial/index.ts"),
 			},
 			// All plugins in plugins/ that have no pre-built dist — point vitest at
 			// source so it can resolve without built artifacts.

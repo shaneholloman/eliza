@@ -43,10 +43,25 @@ export default defineConfig({
         replacement: require.resolve("react-dom/client"),
       },
       {
+        find: /^@elizaos\/app-core$/,
+        replacement: path.resolve(here, "__tests__/app-core-shim.ts"),
+      },
+      {
+        find: /^@elizaos\/app-core\/(.+)$/,
+        replacement: path.resolve(here, "../../packages/app-core/src/$1.ts"),
+      },
+      {
         find: /^@elizaos\/ui\/agent-surface$/,
         replacement: path.resolve(
           here,
           "../../packages/ui/src/agent-surface/index.ts",
+        ),
+      },
+      {
+        find: /^@elizaos\/ui\/spatial\/tui$/,
+        replacement: path.resolve(
+          here,
+          "../../packages/ui/src/spatial/tui/index.ts",
         ),
       },
       {
@@ -55,6 +70,10 @@ export default defineConfig({
           here,
           "../../packages/ui/src/spatial/index.ts",
         ),
+      },
+      {
+        find: /^@elizaos\/tui$/,
+        replacement: path.resolve(here, "../../packages/tui/src/index.ts"),
       },
     ],
   },

@@ -105,7 +105,7 @@ vi.mock("../../api", () => ({
   client: { sendWsMessage },
 }));
 
-const AGENT_SURFACE_MANIFEST = { capabilities: ["agent-surface" as const] };
+const AGENT_SURFACE_MANIFEST = { capabilities: ["agent-surface"] } as const;
 
 describe("DynamicViewLoader", () => {
   beforeEach(() => {
