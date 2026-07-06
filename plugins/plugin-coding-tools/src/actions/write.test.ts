@@ -96,6 +96,11 @@ describe("WRITE", () => {
     expect(onDisk).toBe("hello world");
     const data = result.data as Record<string, unknown> | undefined;
     expect(data?.bytes).toBe(11);
+    // The write confirmation is user-facing so the planner-loop relays it
+    // verbatim when the post-tool evaluator model call fails (no regression on
+    // the elizaOS Cloud 400 incident).
+    expect(result.userFacingText).toBe(result.text);
+    expect(result.userFacingText).toContain("Wrote 11 bytes to ");
   });
 
   it("prefers capability router for file writes when available", async () => {

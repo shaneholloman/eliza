@@ -36,6 +36,7 @@ import {
 	type ToolChoice,
 	type ToolDefinition,
 } from "../types/model";
+import { isModelProviderError } from "../utils/model-errors";
 import { resolveStateDir } from "../utils/state-dir";
 import { computePrefixHashes } from "./context-hash";
 import { appendContextEvent } from "./context-object";
@@ -797,18 +798,25 @@ export async function runPlannerLoop(
 		try {
 			evaluator = await evaluateTrajectory(params, trajectory, iteration);
 		} catch (err) {
-			// error-policy:J4 explicit user-facing degrade - when the tool already
-			// succeeded, return that truthful result instead of a generic failure.
+			// error-policy:J4 explicit user-facing degrade - only an EXPECTED
+			// provider/model failure degrades to the completed tool's truthful
+			// output; every other error shape propagates.
 			// The in-loop evaluator is a MODEL call: it decides FINISH/CONTINUE and
 			// synthesizes the user-facing reply from the tool results. When it fails
-			// transiently (a provider 400/429/5xx) AFTER a non-terminal tool already
-			// executed successfully this turn, propagating the error discards the
-			// completed work and surfaces the generic "something went wrong" apology —
-			// a lie, because the tool did the work (e.g. FILE wrote the file). Relay
-			// the successful tool's own truthful output deterministically (no further
-			// model call, so the same provider failure cannot recur). With no
-			// successful non-terminal tool to relay, rethrow so a genuine failure
-			// still surfaces honestly — never mask a real failure.
+			// transiently (a provider 400/429/5xx or a network error) AFTER a
+			// non-terminal tool already executed successfully this turn, propagating
+			// the error discards the completed work and surfaces the generic
+			// "something went wrong" apology — a lie, because the tool did the work
+			// (e.g. FILE wrote the file). Relay the successful tool's own truthful
+			// output deterministically (no further model call, so the same provider
+			// failure cannot recur).
+			// The gate is what keeps this a J4 "only expected error shapes degrade"
+			// handler and not a bug-swallower: a TypeError, a SchemaValidationFailedError,
+			// or any programmer error carries no HTTP status / network code, so it
+			// rethrows and surfaces instead of being masked as a finished turn. With
+			// no successful non-terminal tool to relay, rethrow too — never mask a
+			// real failure.
+			if (!isModelProviderError(err)) throw err;
 			const relay = deterministicSuccessfulToolRelay(trajectory);
 			if (!relay) throw err;
 			params.runtime.logger?.warn?.(
@@ -2764,10 +2772,17 @@ function latestToolResultText(
  * Deterministic (no model call) relay of the most recent SUCCESSFUL non-terminal
  * tool result. Used when a model call LATER in the turn (the post-tool evaluator
  * synthesis/decision call) fails transiently AFTER a tool already did real work:
- * relay the tool's own truthful output — the path it wrote, the count it returned
- * — instead of discarding the work and telling the user "something went wrong".
- * Prefers the tool's opt-in `userFacingText`, then its `text`, then its `summary`.
- * Returns undefined when nothing succeeded, so genuine failures still surface.
+ * relay the tool's own truthful output instead of discarding the work and telling
+ * the user "something went wrong".
+ *
+ * Reads ONLY the tool's opt-in `userFacingText`, upholding the same contract as
+ * {@link latestToolResultText}: the diagnostic `text`/`summary` fields are
+ * log-shaped (shell prompts, exit codes, cwd, raw fetch bodies) and must not be
+ * guessed into the user channel. A tool declares its output safe to show by
+ * setting `userFacingText` — FILE write/edit do so ("Wrote N bytes to <path>");
+ * SHELL, fetchers, and file readers leave it unset, so their raw logs never leak
+ * here. Returns undefined when no successful non-terminal tool exposed a
+ * user-facing result, so genuine failures still surface.
  */
 function deterministicSuccessfulToolRelay(
 	trajectory: PlannerTrajectory,
@@ -2775,10 +2790,7 @@ function deterministicSuccessfulToolRelay(
 	for (const step of [...trajectory.steps].reverse()) {
 		if (!step.toolCall || step.result?.success !== true) continue;
 		if (isTerminalToolCall(step.toolCall)) continue;
-		const candidate =
-			getNonEmptyString(step.result.userFacingText) ??
-			getNonEmptyString(step.result.text) ??
-			getNonEmptyString(step.result.summary);
+		const candidate = getNonEmptyString(step.result.userFacingText);
 		if (candidate) return candidate;
 	}
 	return undefined;

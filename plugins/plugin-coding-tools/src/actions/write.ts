@@ -21,7 +21,7 @@ import {
 import {
   failureToActionResult,
   readStringParam,
-  successActionResult,
+  userFacingSuccessResult,
 } from "../lib/format.js";
 import { detectSecrets } from "../lib/secrets.js";
 import type { FileStateService } from "../services/file-state-service.js";
@@ -180,7 +180,7 @@ export async function writeFileHandler(
     );
   if (callback) await callback({ text, source: "coding-tools" });
 
-  return successActionResult(text, {
+  return userFacingSuccessResult(text, {
     path: resolved,
     bytes,
   });
