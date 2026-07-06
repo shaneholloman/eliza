@@ -6,6 +6,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { AgentRuntime, UUID } from "@elizaos/core";
+import { createRealTestRuntime } from "@elizaos/core/testing";
 import type {
   ScenarioContext,
   ScenarioSeedStep,
@@ -213,6 +214,57 @@ function baseConnector(
 }
 
 describe("scenario memory seeds", () => {
+  it("writes user-state memory seeds into proactive activity profile metadata", async () => {
+    const harness = await createRealTestRuntime({
+      withLLM: false,
+      characterName: "scenario-user-state-seed-test",
+    });
+    try {
+      const ctx = {
+        runtime: harness.runtime,
+        scenarioId: "push.urgent-bypasses-do-not-disturb",
+        now: "2026-07-06T14:00:00.000Z",
+        primaryUserId: "00000000-0000-0000-0000-0000000000bb",
+      } as ScenarioContext;
+
+      const result = await applyScenarioSeedStep(ctx, {
+        type: "memory",
+        content: {
+          kind: "user-state",
+          doNotDisturb: true,
+          lastSeenPlatform: "mobile",
+          isCurrentlyActive: true,
+        },
+      } satisfies ScenarioSeedStep);
+
+      expect(result).toBeUndefined();
+      const tasks = await harness.runtime.getTasks({
+        tags: ["queue", "repeat", "proactive"],
+      });
+      const proactiveTask = tasks.find(
+        (task) => task.name === "PROACTIVE_AGENT",
+      );
+      expect(proactiveTask?.metadata).toMatchObject({
+        proactiveAgent: { kind: "runtime_runner" },
+        activityProfile: {
+          ownerEntityId: "00000000-0000-0000-0000-0000000000bb",
+          analyzedAt: Date.parse("2026-07-06T14:00:00.000Z"),
+          totalMessages: 0,
+          primaryPlatform: "mobile",
+          lastSeenPlatform: "mobile",
+          isCurrentlyActive: true,
+          dndActive: true,
+          metadata: {
+            source: "scenario-seed",
+            scenarioId: "push.urgent-bypasses-do-not-disturb",
+          },
+        },
+      });
+    } finally {
+      await harness.cleanup();
+    }
+  }, 120_000);
+
   it("maps rolodex-entity memory seeds into relationship contacts", async () => {
     const { ctx, relationships, runtime } = createSeedHarness();
 
@@ -427,12 +479,13 @@ describe("scenario memory seeds", () => {
     const result = await applyScenarioSeedStep(ctx, {
       type: "memory",
       content: {
-        kind: "inbound-message",
+        kind: "voice-call-attempt",
         text: "hello",
       },
     } satisfies ScenarioSeedStep);
 
-    expect(result).toMatch(/unsupported memory seed kind "inbound-message"/);
+    expect(result).toMatch(/unsupported memory seed kind "voice-call-attempt"/);
+    expect(result).toContain("user-state");
     expect(createMemory).not.toHaveBeenCalled();
     expect(relationships.addContact).not.toHaveBeenCalled();
   });

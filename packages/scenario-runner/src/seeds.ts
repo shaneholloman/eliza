@@ -167,6 +167,21 @@ type ConnectorSeed = {
   limit?: unknown;
 };
 
+type UserStateMemorySeed = {
+  kind?: unknown;
+  type?: unknown;
+  doNotDisturb?: unknown;
+  dndActive?: unknown;
+  isCurrentlyActive?: unknown;
+  lastSeenPlatform?: unknown;
+  primaryPlatform?: unknown;
+  secondaryPlatform?: unknown;
+  calendarBusy?: unknown;
+  screenContextBusy?: unknown;
+  screenContextAvailable?: unknown;
+  screenContextFocus?: unknown;
+};
+
 type MemoryContactSeed = {
   kind?: unknown;
   type?: unknown;
@@ -192,6 +207,9 @@ type MemoryContactSeed = {
   lastContactedAt?: unknown;
   relationshipStatus?: unknown;
 };
+
+const PROACTIVE_TASK_NAME = "PROACTIVE_AGENT";
+const PROACTIVE_TASK_TAGS = ["queue", "repeat", "proactive"];
 
 type ConnectorStatusLike = {
   state: "ok" | "degraded" | "disconnected";
@@ -607,6 +625,236 @@ function buildContactEntityId(runtime: AgentRuntime, name: string): UUID {
   return stringToUuid(`scenario-contact-${name}-${runtime.agentId}`) as UUID;
 }
 
+function normalizeScreenContextFocus(
+  value: unknown,
+): "work" | "leisure" | "transition" | "idle" | "unknown" | null {
+  const focus = readNonEmptyString(value);
+  if (
+    focus === "work" ||
+    focus === "leisure" ||
+    focus === "transition" ||
+    focus === "idle" ||
+    focus === "unknown"
+  ) {
+    return focus;
+  }
+  return null;
+}
+
+function existingActivityProfile(
+  value: unknown,
+): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  return typeof record.ownerEntityId === "string" &&
+    typeof record.analyzedAt === "number" &&
+    typeof record.totalMessages === "number"
+    ? record
+    : null;
+}
+
+function seededActivityProfile(
+  ctx: ScenarioContext,
+  runtime: AgentRuntime,
+  seed: UserStateMemorySeed,
+  previous: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const now = readScenarioNow(ctx);
+  const nowMs = now.getTime();
+  const primaryPlatform =
+    readNonEmptyString(seed.primaryPlatform) ??
+    readNonEmptyString(seed.lastSeenPlatform) ??
+    (typeof previous?.primaryPlatform === "string"
+      ? previous.primaryPlatform
+      : "mobile");
+  const lastSeenPlatform =
+    readNonEmptyString(seed.lastSeenPlatform) ??
+    (typeof previous?.lastSeenPlatform === "string"
+      ? previous.lastSeenPlatform
+      : primaryPlatform);
+  const active =
+    readOptionalBoolean(seed.isCurrentlyActive) ??
+    (typeof previous?.isCurrentlyActive === "boolean"
+      ? previous.isCurrentlyActive
+      : true);
+  const screenContextAvailable =
+    readOptionalBoolean(seed.screenContextAvailable) ??
+    (typeof previous?.screenContextAvailable === "boolean"
+      ? previous.screenContextAvailable
+      : false);
+  const screenContextFocus =
+    normalizeScreenContextFocus(seed.screenContextFocus) ??
+    (typeof previous?.screenContextFocus === "string"
+      ? normalizeScreenContextFocus(previous.screenContextFocus)
+      : null);
+  return {
+    ownerEntityId:
+      readNonEmptyString(ctx.primaryUserId) ?? String(runtime.agentId),
+    analyzedAt: nowMs,
+    analysisWindowDays:
+      typeof previous?.analysisWindowDays === "number"
+        ? previous.analysisWindowDays
+        : 14,
+    timezone:
+      typeof previous?.timezone === "string" ? previous.timezone : "UTC",
+    totalMessages:
+      typeof previous?.totalMessages === "number" ? previous.totalMessages : 0,
+    sustainedInactivityThresholdMinutes:
+      typeof previous?.sustainedInactivityThresholdMinutes === "number"
+        ? previous.sustainedInactivityThresholdMinutes
+        : 60,
+    platforms: Array.isArray(previous?.platforms) ? previous.platforms : [],
+    primaryPlatform,
+    secondaryPlatform:
+      readNonEmptyString(seed.secondaryPlatform) ??
+      (typeof previous?.secondaryPlatform === "string"
+        ? previous.secondaryPlatform
+        : null),
+    bucketCounts:
+      previous?.bucketCounts && typeof previous.bucketCounts === "object"
+        ? previous.bucketCounts
+        : {
+            EARLY_MORNING: 0,
+            MORNING: 0,
+            MIDDAY: 0,
+            AFTERNOON: 0,
+            EVENING: 0,
+            NIGHT: 0,
+            LATE_NIGHT: 0,
+          },
+    hasCalendarData:
+      readOptionalBoolean(seed.calendarBusy) !== undefined ||
+      (typeof previous?.hasCalendarData === "boolean"
+        ? previous.hasCalendarData
+        : false),
+    calendarBusy:
+      readOptionalBoolean(seed.calendarBusy) ?? previous?.calendarBusy,
+    typicalFirstEventHour: previous?.typicalFirstEventHour ?? null,
+    typicalLastEventHour: previous?.typicalLastEventHour ?? null,
+    avgWeekdayMeetings:
+      typeof previous?.avgWeekdayMeetings === "number"
+        ? previous.avgWeekdayMeetings
+        : null,
+    typicalFirstActiveHour: previous?.typicalFirstActiveHour ?? null,
+    typicalLastActiveHour: previous?.typicalLastActiveHour ?? null,
+    typicalWakeHour: previous?.typicalWakeHour ?? null,
+    typicalSleepHour: previous?.typicalSleepHour ?? null,
+    hasSleepData:
+      typeof previous?.hasSleepData === "boolean"
+        ? previous.hasSleepData
+        : false,
+    isCurrentlySleeping:
+      typeof previous?.isCurrentlySleeping === "boolean"
+        ? previous.isCurrentlySleeping
+        : false,
+    lastSleepSignalAt: previous?.lastSleepSignalAt ?? null,
+    lastWakeSignalAt: previous?.lastWakeSignalAt ?? null,
+    sleepSourcePlatform: previous?.sleepSourcePlatform ?? null,
+    sleepSource: previous?.sleepSource ?? null,
+    typicalSleepDurationMinutes: previous?.typicalSleepDurationMinutes ?? null,
+    lastSeenAt:
+      typeof previous?.lastSeenAt === "number" ? previous.lastSeenAt : nowMs,
+    lastSeenPlatform,
+    isCurrentlyActive: active,
+    hasOpenActivityCycle:
+      typeof previous?.hasOpenActivityCycle === "boolean"
+        ? previous.hasOpenActivityCycle
+        : active,
+    currentActivityCycleStartedAt:
+      typeof previous?.currentActivityCycleStartedAt === "number"
+        ? previous.currentActivityCycleStartedAt
+        : active
+          ? nowMs
+          : null,
+    currentActivityCycleLocalDate:
+      typeof previous?.currentActivityCycleLocalDate === "string"
+        ? previous.currentActivityCycleLocalDate
+        : now.toISOString().slice(0, 10),
+    effectiveDayKey:
+      typeof previous?.effectiveDayKey === "string"
+        ? previous.effectiveDayKey
+        : now.toISOString().slice(0, 10),
+    screenContextFocus,
+    screenContextSource: previous?.screenContextSource ?? null,
+    screenContextSampledAt:
+      typeof previous?.screenContextSampledAt === "number"
+        ? previous.screenContextSampledAt
+        : screenContextAvailable
+          ? nowMs
+          : null,
+    screenContextConfidence:
+      typeof previous?.screenContextConfidence === "number"
+        ? previous.screenContextConfidence
+        : screenContextAvailable
+          ? 0.8
+          : null,
+    screenContextBusy:
+      readOptionalBoolean(seed.screenContextBusy) ??
+      (typeof previous?.screenContextBusy === "boolean"
+        ? previous.screenContextBusy
+        : false),
+    screenContextAvailable,
+    screenContextStale:
+      typeof previous?.screenContextStale === "boolean"
+        ? previous.screenContextStale
+        : false,
+    dndActive:
+      readOptionalBoolean(seed.dndActive) ??
+      readOptionalBoolean(seed.doNotDisturb) ??
+      previous?.dndActive === true,
+    metadata: {
+      ...(previous?.metadata &&
+      typeof previous.metadata === "object" &&
+      !Array.isArray(previous.metadata)
+        ? (previous.metadata as Record<string, unknown>)
+        : {}),
+      source: "scenario-seed",
+      ...(ctx.scenarioId ? { scenarioId: ctx.scenarioId } : {}),
+    },
+  };
+}
+
+async function seedUserStateMemory(
+  ctx: ScenarioContext,
+  seed: UserStateMemorySeed,
+): Promise<string | undefined> {
+  const runtime = requireRuntime(ctx);
+  const tasks = await runtime.getTasks({ tags: PROACTIVE_TASK_TAGS });
+  const existingTask = tasks.find((task) => task.name === PROACTIVE_TASK_NAME);
+  const metadata =
+    existingTask?.metadata &&
+    typeof existingTask.metadata === "object" &&
+    !Array.isArray(existingTask.metadata)
+      ? existingTask.metadata
+      : {};
+  const previous = existingActivityProfile(metadata.activityProfile);
+  const activityProfile = seededActivityProfile(ctx, runtime, seed, previous);
+  const nextMetadata = {
+    ...metadata,
+    proactiveAgent:
+      metadata.proactiveAgent &&
+      typeof metadata.proactiveAgent === "object" &&
+      !Array.isArray(metadata.proactiveAgent)
+        ? metadata.proactiveAgent
+        : { kind: "runtime_runner" },
+    activityProfile,
+  };
+  if (existingTask?.id) {
+    await runtime.updateTask(existingTask.id, { metadata: nextMetadata });
+    return undefined;
+  }
+  await runtime.createTask({
+    id: stringToUuid(`scenario-user-state:${ctx.scenarioId ?? "unknown"}`),
+    name: PROACTIVE_TASK_NAME,
+    agentId: runtime.agentId,
+    tags: PROACTIVE_TASK_TAGS,
+    metadata: nextMetadata,
+  });
+  return undefined;
+}
+
 async function seedContact(
   ctx: ScenarioContext,
   seed: ContactSeed,
@@ -697,11 +945,14 @@ async function seedMemory(
   ) {
     return seedContact(ctx, memoryEntityToContactSeed(content, memoryType));
   }
+  if (memoryType === "user-state") {
+    return seedUserStateMemory(ctx, content as UserStateMemorySeed);
+  }
   if (memoryType !== null) {
     // A seed the runner cannot land must fail the scenario, never no-op:
     // a silently dropped seed fabricates the premise the checks grade
     // against (#14631 — the "seeded VIP fact" the model never received).
-    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity, or plain { text } for a durable owner fact`;
+    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity/user-state, or plain { text } for a durable owner fact`;
   }
   const text = readNonEmptyString((content as { text?: unknown }).text);
   if (!text) {
