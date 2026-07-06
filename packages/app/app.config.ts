@@ -39,16 +39,15 @@ const config = {
     shortName: "Eliza",
     // Launch/loading surface used by manifest theme_color + background_color,
     // <meta name="theme-color">, and PWA launch surfaces. Matches the default
-    // home background (#ef5a1f = DEFAULT_BACKGROUND_COLOR, the brand-orange
-    // shader field) so chrome and splash never flash a different color before
-    // the home background appears (issue #9565). On iOS standalone PWAs
-    // theme-color paints the home-indicator safe-area inset; because the
-    // background layers now reach the true physical bottom (the fixed-body ICB
-    // collapse fix), matching the orange field keeps any inset bleed-through
+    // home background base (#000000 = DEFAULT_BACKGROUND_COLOR, the black
+    // field under the orange ember glow) so chrome and splash never flash a
+    // different color before the home background appears (issue #9565). On
+    // iOS standalone PWAs theme-color paints the home-indicator safe-area
+    // inset, so matching the black field keeps any inset bleed-through
     // invisible. The brand accent (logos, buttons) stays #FF5800 / the CSS
     // --brand-orange and is intentionally separate from these launch surfaces.
-    themeColor: "#ef5a1f",
-    backgroundColor: "#ef5a1f",
+    themeColor: "#000000",
+    backgroundColor: "#000000",
     shareImagePath: "/brand/ogembeds/eliza_ogembed.svg",
   },
 

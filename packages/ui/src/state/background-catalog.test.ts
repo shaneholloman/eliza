@@ -84,11 +84,12 @@ describe("background catalog (#13538)", () => {
     }
   });
 
-  it("the boot default is the brand-orange shader field", () => {
-    // Orange IS the app background/brand color: the app boots to the living
-    // orange ember field, not a photo wallpaper (those stay gallery options).
+  it("the boot default is the black ember shader field", () => {
+    // The app boots to the black field with the living orange ember glow —
+    // not a photo wallpaper (those stay gallery options). Black keeps the
+    // orange glow legible as the app background instead of flat paint.
     expect(DEFAULT_BACKGROUND_CONFIG.mode).toBe("shader");
-    expect(DEFAULT_BACKGROUND_CONFIG.color).toBe("#ef5a1f");
+    expect(DEFAULT_BACKGROUND_CONFIG.color).toBe("#000000");
     expect(DEFAULT_BACKGROUND_CONFIG.imageUrl).toBeUndefined();
     // The Ember Night gallery tile still resolves to the served sunset asset.
     const def = BACKGROUND_CATALOG.find(

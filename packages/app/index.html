@@ -275,9 +275,9 @@
   </script>
   <style>
     /* FOUC guard — runs before external CSS so we use concrete values.
-       The launch surface is the brand-orange home background (#ef5a1f —
-       DEFAULT_BACKGROUND_COLOR, the orange field the home ShaderBackground
-       and the StartupShell loader paint). Keep it separate from --bg: --bg
+       The launch surface is black (#000000 — DEFAULT_BACKGROUND_COLOR, the
+       base field of the home ShaderBackground; the orange ember glow renders
+       on top of it). Keep it separate from --bg: --bg
        resolves to the light/dark theme background and can flash white/black
        before the loader appears. This surface PERSISTS as the page background
        under the app: any strip the fixed background layers don't reach (the
@@ -286,13 +286,13 @@
        equality (enforced by test/brand-surface.test.ts) is what makes any
        bleed-through invisible. */
     :root {
-      --launch-bg: #ef5a1f;
+      --launch-bg: #000000;
     }
 
     html,
     body,
     #root {
-      background-color: var(--launch-bg, #ef5a1f);
+      background-color: var(--launch-bg, #000000);
     }
 
     html, body {
@@ -318,7 +318,7 @@
 
     #root {
       min-height: 100dvh;
-      background-color: var(--launch-bg, #ef5a1f);
+      background-color: var(--launch-bg, #000000);
     }
 
     .eliza-preboot-shell {
@@ -326,7 +326,7 @@
       display: grid;
       place-items: center;
       overflow: hidden;
-      background: var(--launch-bg, #ef5a1f);
+      background: var(--launch-bg, #000000);
       color: #ffffff;
     }
 

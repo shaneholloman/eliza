@@ -63,13 +63,15 @@ export interface BackgroundConfig {
 }
 
 /**
- * The default shader base: the brand orange field. Orange IS the app's
- * background and brand color (orange / blue / black / white); the home boots
- * to the living orange ember field, and every persistent host-chrome surface
- * (launch FOUC guard, PWA theme-color, manifest colors) tracks this value so
- * any bleed-through is invisible against the app.
+ * The default shader base: pure black. The brand palette is orange / blue /
+ * black / white — the field is black so the orange ember glow
+ * ({@link DEFAULT_BACKGROUND_GLOW}) reads as the visible app background
+ * breathing on top of it, instead of orange-on-orange flat paint. Every
+ * persistent host-chrome surface (launch FOUC guard, PWA theme-color,
+ * manifest colors) and the native boot splashes track this value so boot
+ * never flashes a foreign color and any bleed-through is invisible.
  */
-export const DEFAULT_BACKGROUND_COLOR = "#ef5a1f";
+export const DEFAULT_BACKGROUND_COLOR = "#000000";
 
 /**
  * The ember glow hue the shader layers over {@link DEFAULT_BACKGROUND_COLOR}:
@@ -81,7 +83,7 @@ export const DEFAULT_BACKGROUND_COLOR = "#ef5a1f";
 export const DEFAULT_BACKGROUND_GLOW = "#ff6a1f";
 
 /**
- * The shader-mode config for the brand-orange field: the boot default (see
+ * The shader-mode config for the black ember field: the boot default (see
  * {@link DEFAULT_BACKGROUND_CONFIG}) and the base the color swatches and the
  * glsl fallback resolve to.
  */
@@ -131,10 +133,9 @@ const PHOTO_WALLPAPER_IDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The boot default background: the brand-orange shader field
- * ({@link DEFAULT_SHADER_BACKGROUND_CONFIG}). Orange is the app's background
- * color — the app boots to the living orange ember field, not a photo
- * wallpaper. The curated images (Ember Night sunset, photo wallpapers) remain
+ * The boot default background: the black shader field with the orange ember
+ * glow ({@link DEFAULT_SHADER_BACKGROUND_CONFIG}) — not a photo wallpaper.
+ * The curated images (Ember Night sunset, photo wallpapers) remain
  * user-selectable gallery options.
  */
 export const DEFAULT_BACKGROUND_CONFIG: BackgroundConfig = {
