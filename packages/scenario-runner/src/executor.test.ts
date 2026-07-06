@@ -1102,6 +1102,99 @@ describe("scenario executor action turns", () => {
     ]);
   });
 
+  const RUNTIME_FAILURE_ASSERTION =
+    "runtimeFailureReply: the runtime returned a synthetic model/runtime failure reply (rate-limit, auth, credits, or generic apology); this cannot satisfy scenario evidence";
+
+  it("fails turns that only receive the generic runtime failure reply", async () => {
+    const runtime = {
+      ...createRuntime([]),
+      messageService: {
+        handleMessage: vi.fn(async (_runtime, _message, callback) => {
+          await callback({
+            text: "Something went wrong on my end. Please try again.",
+            elizaSyntheticFailure: true,
+          });
+          return {};
+        }),
+      },
+    } as unknown as AgentRuntime;
+
+    const report = await runScenario(
+      {
+        id: "generic-failure-reply",
+        title: "Generic failure reply",
+        domain: "executor",
+        turns: [
+          {
+            kind: "message",
+            name: "model fails",
+            text: "answer the user",
+          },
+        ],
+      },
+      runtime,
+      {
+        minJudgeScore: 0.8,
+        providerName: "unit-test",
+        turnTimeoutMs: 1_000,
+      },
+    );
+
+    expect(report.status).toBe("failed");
+    expect(report.turns[0]?.actionsCalled[0]).toMatchObject({
+      actionName: "REPLY",
+      result: { data: { source: "synthesized-reply" } },
+    });
+    expect(report.turns[0]?.failedAssertions).toEqual([
+      RUNTIME_FAILURE_ASSERTION,
+    ]);
+  });
+
+  // The synthetic failure reply varies by failure kind (rate-limit, auth,
+  // credits) and can be character-template-overridden, so keying on the
+  // structural `elizaSyntheticFailure` flag — not one apology string — is what
+  // stops a rate-limited live run (the most common failure) from false-passing.
+  it("fails turns on a non-generic synthetic failure reply via the structural flag", async () => {
+    const runtime = {
+      ...createRuntime([]),
+      messageService: {
+        handleMessage: vi.fn(async (_runtime, _message, callback) => {
+          await callback({
+            text: "My model provider is rate-limiting me right now — give it a few seconds and try again.",
+            elizaSyntheticFailure: true,
+          });
+          return {};
+        }),
+      },
+    } as unknown as AgentRuntime;
+
+    const report = await runScenario(
+      {
+        id: "rate-limit-failure-reply",
+        title: "Rate-limit failure reply",
+        domain: "executor",
+        turns: [
+          {
+            kind: "message",
+            name: "model is rate-limited",
+            text: "answer the user",
+          },
+        ],
+      },
+      runtime,
+      {
+        minJudgeScore: 0.8,
+        providerName: "unit-test",
+        turnTimeoutMs: 1_000,
+      },
+    );
+
+    expect(report.status).toBe("failed");
+    expect(report.turns[0]?.failedAssertions).toEqual([
+      RUNTIME_FAILURE_ASSERTION,
+    ]);
+  });
+
   it("matches expectedActions against the action selected during the turn", async () => {
     const runtime = createRuntime(
       [
