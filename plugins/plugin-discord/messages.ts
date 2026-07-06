@@ -289,12 +289,10 @@ export interface DmSendOptions {
 }
 
 /**
- * Build the option bag for a DM reply so it carries the SAME widget components
- * a guild channel reply would (#14527). The DM branch used to send
- * `{content, files}` only, silently dropping every button/select on a
- * components-only reply. Discord's API supports message components on DM
- * channels, so there is no API constraint to degrade around for the button +
- * string-select types this connector emits; we simply attach them.
+ * Build the option bag for a DM reply using the same widget rows as guild
+ * sends. Discord supports action rows of buttons and string selects in DMs, so
+ * the connector does not need a DM-specific fallback for the component types it
+ * emits.
  *
  * `components`/`files` keys are omitted entirely when empty so we never send an
  * empty `components: []` (which Discord rejects) or an empty `files: []`.
@@ -1187,11 +1185,6 @@ export class MessageManager {
 							return [];
 						}
 
-						// Widget components (choice pickers, task cards, secret/OAuth
-						// link-outs) must render in DMs too. Discord's API supports
-						// message components (buttons + string selects) on DM channels,
-						// so we build the same rows the guild path does instead of
-						// silently dropping them (#14527).
 						const dmComponents = hasComponents
 							? buildDiscordComponents(rendered.components)
 							: undefined;

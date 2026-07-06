@@ -575,20 +575,9 @@ interface MessageSendOptions {
  * untouched. Returns `undefined` when there is nothing renderable so callers can
  * omit the `components` key entirely.
  *
- * This is the SINGLE place button/select builders are assembled, shared by both
- * the guild send path (`sendMessageInChunks`) and the DM send path in
- * `messages.ts`. Keeping DMs on the same builder is the fix for #14527 — the DM
- * branch previously called `user.send({content, files})` with no components, so
- * a components-only reply rendered the "Choose an option:" fallback with zero
- * buttons.
- *
- * NOTE on Discord DM constraints: message components (action rows of buttons and
- * string selects — the only types this helper emits) ARE supported in DMs by
- * Discord's API, so no DM-specific degradation is required here. The types
- * Discord forbids in DMs are guild-scoped interaction surfaces (e.g. role/user
- * selects, type 5/6/7/8), which this connector does not emit. If such a type is
- * ever added, degrade it to a link-out or text fallback rather than dropping it
- * silently.
+ * This is the single button/select builder for guild sends and DMs. Discord
+ * supports action rows of buttons and string selects in DMs; guild-scoped
+ * component types must get an explicit fallback before being added here.
  */
 export function buildDiscordComponents(
 	components: DiscordActionRow[] | undefined,
@@ -670,6 +659,7 @@ export function buildDiscordComponents(
 								return selectMenu;
 							}
 						} catch (err) {
+							// error-policy:J4 malformed component specs degrade to text-only Discord delivery.
 							logger.error(`Error creating component: ${err}`);
 							return null;
 						}
@@ -693,6 +683,7 @@ export function buildDiscordComponents(
 
 		return discordComponents.length > 0 ? discordComponents : undefined;
 	} catch (error) {
+		// error-policy:J4 malformed component rows degrade to text-only Discord delivery.
 		logger.error(`Error processing components: ${error}`);
 		return undefined;
 	}
