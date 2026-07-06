@@ -740,10 +740,13 @@ describe("ContinuousChatOverlay", () => {
         <ContinuousChatOverlay controller={makeController()} />,
       );
       const sheet = screen.getByTestId("chat-sheet");
-      const barOf = () =>
-        screen.getByTestId("chat-pill").querySelector("span")?.className ?? "";
+      const spanOf = () => screen.getByTestId("chat-pill").querySelector("span");
+      const barOf = () => spanOf()?.className ?? "";
       expect(barOf()).not.toContain("animate-pulse");
-      expect(barOf()).toContain("bg-muted-strong");
+      // Resting bar color is an explicit light warm-white inline style (not the
+      // `bg-muted-strong` token, which resolved dark/black on the grabber that
+      // renders outside the panel theme) — kept identical to the grabber bar.
+      expect(spanOf()?.style.backgroundColor).toBe("rgba(255, 247, 240, 0.86)");
       rerender(
         <ContinuousChatOverlay
           controller={makeController({ phase: "listening", recording: true })}
