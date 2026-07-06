@@ -36,9 +36,32 @@ type LifeOpsOccurrence = Record<string, unknown> & {
   state: LifeOpsOccurrenceState;
 };
 
+type LifeOpsScheduledTask = Record<string, unknown> & {
+  taskId: string;
+  kind: string;
+  promptInstructions: string;
+  trigger: Record<string, unknown>;
+  priority: "low" | "medium" | "high";
+  respectsGlobalPause: boolean;
+  state: { status: string; followupCount: number };
+  source: string;
+  createdBy: string;
+  ownerVisible: boolean;
+  metadata?: Record<string, unknown>;
+};
+
 type LifeOpsRepositoryInstance = {
   createDefinition: (definition: LifeOpsTaskDefinition) => Promise<unknown>;
   upsertOccurrence: (occurrence: LifeOpsOccurrence) => Promise<unknown>;
+  upsertScheduledTask: (
+    agentId: string,
+    task: LifeOpsScheduledTask,
+    options?: { nextFireAtIso?: string | null },
+  ) => Promise<unknown>;
+  listScheduledTasks: (
+    agentId: string,
+    filter?: Record<string, unknown>,
+  ) => Promise<LifeOpsScheduledTask[]>;
 };
 
 type LifeOpsRepositoryConstructor = {
@@ -70,12 +93,18 @@ type LifeOpsRepositoryModule = {
 // Loaded lazily so this module can be built without pulling app-lifeops into the
 // scenario-runner rootDir (app-lifeops is only available at runtime).
 async function loadLifeOps() {
-  const defaultsSpecifier: string =
-    "../../../plugins/plugin-personal-assistant/src/lifeops/defaults.ts";
-  const engineSpecifier: string =
-    "../../../plugins/plugin-personal-assistant/src/lifeops/engine.ts";
-  const repositorySpecifier: string =
-    "../../../plugins/plugin-personal-assistant/src/lifeops/repository.ts";
+  const defaultsSpecifier: string = new URL(
+    "../../../plugins/plugin-personal-assistant/src/lifeops/defaults.ts",
+    import.meta.url,
+  ).href;
+  const engineSpecifier: string = new URL(
+    "../../../plugins/plugin-personal-assistant/src/lifeops/engine.ts",
+    import.meta.url,
+  ).href;
+  const repositorySpecifier: string = new URL(
+    "../../../plugins/plugin-personal-assistant/src/lifeops/repository.ts",
+    import.meta.url,
+  ).href;
   const [
     { resolveDefaultWindowPolicy },
     { materializeDefinitionOccurrences },
@@ -180,6 +209,24 @@ type UserStateMemorySeed = {
   screenContextBusy?: unknown;
   screenContextAvailable?: unknown;
   screenContextFocus?: unknown;
+  metadata?: unknown;
+};
+
+type FocusWindowMemorySeed = {
+  kind?: unknown;
+  type?: unknown;
+  title?: unknown;
+  startAt?: unknown;
+  endAt?: unknown;
+};
+
+type QueuedPushMemorySeed = {
+  kind?: unknown;
+  type?: unknown;
+  title?: unknown;
+  urgency?: unknown;
+  channel?: unknown;
+  dueAt?: unknown;
 };
 
 type MemoryContactSeed = {
@@ -342,6 +389,13 @@ function readOptionalNumber(value: unknown): number | undefined {
 
 function readOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function readIsoDate(value: unknown): Date | null {
+  const text = readNonEmptyString(value);
+  if (!text) return null;
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? new Date(timestamp) : null;
 }
 
 function readPositiveInteger(value: unknown): number | undefined {
@@ -641,6 +695,17 @@ function normalizeScreenContextFocus(
   return null;
 }
 
+function normalizeScheduledTaskPriority(
+  value: unknown,
+): "low" | "medium" | "high" {
+  const text = readNonEmptyString(value);
+  if (text === "low" || text === "medium" || text === "high") {
+    return text;
+  }
+  if (text === "urgent") return "high";
+  return "medium";
+}
+
 function existingActivityProfile(
   value: unknown,
 ): Record<string, unknown> | null {
@@ -810,6 +875,11 @@ function seededActivityProfile(
       !Array.isArray(previous.metadata)
         ? (previous.metadata as Record<string, unknown>)
         : {}),
+      ...(seed.metadata &&
+      typeof seed.metadata === "object" &&
+      !Array.isArray(seed.metadata)
+        ? (seed.metadata as Record<string, unknown>)
+        : {}),
       source: "scenario-seed",
       ...(ctx.scenarioId ? { scenarioId: ctx.scenarioId } : {}),
     },
@@ -852,6 +922,85 @@ async function seedUserStateMemory(
     tags: PROACTIVE_TASK_TAGS,
     metadata: nextMetadata,
   });
+  return undefined;
+}
+
+function focusWindowToUserStateSeed(
+  ctx: ScenarioContext,
+  seed: FocusWindowMemorySeed,
+): UserStateMemorySeed | string {
+  const startAt = readIsoDate(seed.startAt);
+  const endAt = readIsoDate(seed.endAt);
+  if (!startAt || !endAt) {
+    return "focus-window-active seed requires valid ISO startAt/endAt";
+  }
+  if (endAt.getTime() <= startAt.getTime()) {
+    return "focus-window-active seed endAt must be after startAt";
+  }
+  const now = readScenarioNow(ctx);
+  if (now.getTime() < startAt.getTime() || now.getTime() >= endAt.getTime()) {
+    return "focus-window-active seed window must contain ctx.now";
+  }
+  return {
+    kind: "user-state",
+    isCurrentlyActive: true,
+    lastSeenPlatform: "desktop",
+    primaryPlatform: "desktop",
+    screenContextBusy: true,
+    screenContextAvailable: true,
+    screenContextFocus: "work",
+    dndActive: false,
+    metadata: {
+      focusWindow: {
+        title: readNonEmptyString(seed.title) ?? "Focus window",
+        startAt: startAt.toISOString(),
+        endAt: endAt.toISOString(),
+      },
+    },
+  };
+}
+
+async function seedQueuedPushMemory(
+  ctx: ScenarioContext,
+  seed: QueuedPushMemorySeed,
+): Promise<string | undefined> {
+  const runtime = requireRuntime(ctx);
+  const title = readNonEmptyString(seed.title);
+  if (!title) {
+    return "queued-push seed requires a title";
+  }
+  const dueAt = readIsoDate(seed.dueAt) ?? readScenarioNow(ctx);
+  const { LifeOpsRepository } = await loadLifeOps();
+  await LifeOpsRepository.bootstrapSchema(runtime);
+  const repository = new LifeOpsRepository(runtime);
+  const channel = readNonEmptyString(seed.channel) ?? "push";
+  const urgency = readNonEmptyString(seed.urgency) ?? "medium";
+  const taskId = `scenario-queued-push:${ctx.scenarioId ?? "unknown"}:${title}`;
+  await repository.upsertScheduledTask(
+    String(runtime.agentId),
+    {
+      taskId,
+      kind: "reminder",
+      promptInstructions: `Queued push: ${title}`,
+      trigger: { kind: "once", atIso: dueAt.toISOString() },
+      priority: normalizeScheduledTaskPriority(urgency),
+      respectsGlobalPause: true,
+      state: { status: "scheduled", followupCount: 0 },
+      source: "user_chat",
+      createdBy: String(runtime.agentId),
+      ownerVisible: true,
+      metadata: {
+        source: "scenario-seed",
+        scenarioId: ctx.scenarioId ?? null,
+        push: {
+          title,
+          urgency,
+          channel,
+        },
+      },
+    },
+    { nextFireAtIso: dueAt.toISOString() },
+  );
   return undefined;
 }
 
@@ -948,11 +1097,22 @@ async function seedMemory(
   if (memoryType === "user-state") {
     return seedUserStateMemory(ctx, content as UserStateMemorySeed);
   }
+  if (memoryType === "focus-window-active") {
+    const userStateSeed = focusWindowToUserStateSeed(
+      ctx,
+      content as FocusWindowMemorySeed,
+    );
+    if (typeof userStateSeed === "string") return userStateSeed;
+    return seedUserStateMemory(ctx, userStateSeed);
+  }
+  if (memoryType === "queued-push") {
+    return seedQueuedPushMemory(ctx, content as QueuedPushMemorySeed);
+  }
   if (memoryType !== null) {
     // A seed the runner cannot land must fail the scenario, never no-op:
     // a silently dropped seed fabricates the premise the checks grade
     // against (#14631 — the "seeded VIP fact" the model never received).
-    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity/user-state, or plain { text } for a durable owner fact`;
+    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity/user-state/focus-window-active/queued-push, or plain { text } for a durable owner fact`;
   }
   const text = readNonEmptyString((content as { text?: unknown }).text);
   if (!text) {

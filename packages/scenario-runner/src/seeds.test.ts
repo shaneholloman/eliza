@@ -20,6 +20,15 @@ type MockRequest = {
   body: Record<string, unknown>;
 };
 
+type LifeOpsScheduledTaskForTest = {
+  taskId: string;
+  kind: string;
+  priority: string;
+  trigger: Record<string, unknown>;
+  state: { status: string; followupCount: number };
+  metadata?: Record<string, unknown>;
+};
+
 let activeServer: http.Server | null = null;
 const originalGoogleBase = process.env.ELIZA_MOCK_GOOGLE_BASE;
 
@@ -260,6 +269,109 @@ describe("scenario memory seeds", () => {
           },
         },
       });
+    } finally {
+      await harness.cleanup();
+    }
+  }, 120_000);
+
+  it("maps active focus-window and queued-push memory seeds into LifeOps attention state", async () => {
+    const harness = await createRealTestRuntime({
+      withLLM: false,
+      characterName: "scenario-focus-window-seed-test",
+    });
+    try {
+      const ctx = {
+        runtime: harness.runtime,
+        scenarioId: "push.silent-during-deep-work",
+        now: "2026-07-06T14:00:00.000Z",
+        primaryUserId: "00000000-0000-0000-0000-0000000000cc",
+      } as ScenarioContext;
+
+      const result = await applyScenarioSeedStep(ctx, {
+        type: "memory",
+        content: {
+          kind: "focus-window-active",
+          title: "Deep work block",
+          startAt: "2026-07-06T13:30:00.000Z",
+          endAt: "2026-07-06T15:30:00.000Z",
+        },
+      } satisfies ScenarioSeedStep);
+      const queuedResult = await applyScenarioSeedStep(ctx, {
+        type: "memory",
+        content: {
+          kind: "queued-push",
+          title: "Send newsletter draft",
+          urgency: "low",
+        },
+      } satisfies ScenarioSeedStep);
+
+      expect(result).toBeUndefined();
+      expect(queuedResult).toBeUndefined();
+      const tasks = await harness.runtime.getTasks({
+        tags: ["queue", "repeat", "proactive"],
+      });
+      const proactiveTask = tasks.find(
+        (task) => task.name === "PROACTIVE_AGENT",
+      );
+      expect(proactiveTask?.metadata).toMatchObject({
+        proactiveAgent: { kind: "runtime_runner" },
+        activityProfile: {
+          ownerEntityId: "00000000-0000-0000-0000-0000000000cc",
+          primaryPlatform: "desktop",
+          lastSeenPlatform: "desktop",
+          isCurrentlyActive: true,
+          screenContextBusy: true,
+          screenContextAvailable: true,
+          screenContextFocus: "work",
+          dndActive: false,
+          metadata: {
+            source: "scenario-seed",
+            scenarioId: "push.silent-during-deep-work",
+            focusWindow: {
+              title: "Deep work block",
+              startAt: "2026-07-06T13:30:00.000Z",
+              endAt: "2026-07-06T15:30:00.000Z",
+            },
+          },
+        },
+      });
+
+      const { LifeOpsRepository } = (await import(
+        "../../../plugins/plugin-personal-assistant/src/lifeops/repository.ts"
+      )) as {
+        LifeOpsRepository: new (
+          runtime: AgentRuntime,
+        ) => {
+          listScheduledTasks: (
+            agentId: string,
+            filter?: Record<string, unknown>,
+          ) => Promise<LifeOpsScheduledTaskForTest[]>;
+        };
+      };
+      const repository = new LifeOpsRepository(harness.runtime);
+      const scheduledTasks = await repository.listScheduledTasks(
+        String(harness.runtime.agentId),
+        { kind: "reminder", status: "scheduled" },
+      );
+      expect(scheduledTasks).toContainEqual(
+        expect.objectContaining({
+          taskId:
+            "scenario-queued-push:push.silent-during-deep-work:Send newsletter draft",
+          kind: "reminder",
+          priority: "low",
+          trigger: { kind: "once", atIso: "2026-07-06T14:00:00.000Z" },
+          state: { status: "scheduled", followupCount: 0 },
+          metadata: expect.objectContaining({
+            source: "scenario-seed",
+            scenarioId: "push.silent-during-deep-work",
+            push: {
+              title: "Send newsletter draft",
+              urgency: "low",
+              channel: "push",
+            },
+          }),
+        }),
+      );
     } finally {
       await harness.cleanup();
     }
