@@ -4322,6 +4322,10 @@ export function ContinuousChatOverlay({
                   // fix); the button clusters below re-enable pointer events so
                   // taps on search/voice/home still land.
                   "pointer-events-none relative z-20 flex shrink-0 items-center justify-between gap-1.5 overflow-hidden px-3",
+                  // Keep the header controls aligned with the centered transcript
+                  // column when full-bleed stretches the panel across a wide
+                  // desktop window.
+                  fullBleed && "mx-auto w-full max-w-3xl",
                 )}
               >
                 {/* Left cluster: search is the ONLY left control. The thread is
@@ -4398,6 +4402,11 @@ export function ContinuousChatOverlay({
                   // resolved height regardless, so this makes the scroll viewport
                   // reliably bounded on every engine.
                   "relative z-10 flex min-h-0 w-full shrink grow-0 flex-col overflow-hidden",
+                  // Full-bleed spans the whole panel (edge-to-edge on desktop),
+                  // but the transcript reads best as a centered column — cap it
+                  // at the same width as the inset sheet so wide desktop windows
+                  // don't stretch each line clear across the screen.
+                  fullBleed && "mx-auto max-w-3xl",
                   // When open, fade the top edge into the glass so the topmost
                   // message dissolves under the drag handle instead of butting
                   // against it. SUPPRESSED during an active drag (#swipe-
@@ -4742,6 +4751,10 @@ export function ContinuousChatOverlay({
                 // No divider above the composer — spacing separates it from the
                 // thread; the sheet is one continuous glass surface (#10710).
                 "relative z-10 flex min-w-0 shrink-0 items-center gap-1.5 px-2 py-2 sm:gap-2",
+                // Match the transcript's centered column when full-bleed so the
+                // composer sits under the messages, not stretched edge-to-edge on
+                // a wide desktop window.
+                fullBleed && "mx-auto w-full max-w-3xl",
               )}
               // Full-bleed has no overlay bottom padding (the panel is
               // edge-to-edge), so the composer carries the home-gesture
