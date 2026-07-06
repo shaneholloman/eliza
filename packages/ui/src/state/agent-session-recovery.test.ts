@@ -39,9 +39,7 @@ describe("resolveAgentSessionRecovery", () => {
 
     expect(decision.action).toBe("re-pair");
     if (decision.action === "re-pair") {
-      expect(decision.agentId).toBe(
-        "23766030-0000-0000-0000-000000000000",
-      );
+      expect(decision.agentId).toBe("23766030-0000-0000-0000-000000000000");
       expect(decision.cloudApiBase).toBe("https://elizacloud.ai");
     }
   });

@@ -111,8 +111,8 @@ import {
   isRouteRootPath,
   pathForTab,
   shouldUseHashNavigation,
-  type Tab,
   TAB_PATHS,
+  type Tab,
   tabFromPath,
   titleForTab,
 } from "./navigation";

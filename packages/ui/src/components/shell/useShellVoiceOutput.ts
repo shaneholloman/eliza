@@ -3,9 +3,8 @@
  * controls share one playback signal.
  */
 import * as React from "react";
-
-import type { AsrProvider } from "../../api/client-types-config";
 import type { ConversationMessage } from "../../api/client-types-chat";
+import type { AsrProvider } from "../../api/client-types-config";
 import { useVoiceChat } from "../../hooks/useVoiceChat";
 import { useVoiceConfig } from "../../voice/useVoiceConfig";
 

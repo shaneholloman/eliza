@@ -828,7 +828,9 @@ export class SubAgentRouter extends Service {
       );
       if (stale.length === 0) return;
       await Promise.all(
-        stale.map((entity) => this.runtime.removeParticipant(entity.id, roomId)),
+        stale.map((entity) =>
+          this.runtime.removeParticipant(entity.id, roomId),
+        ),
       );
       this.log(
         "info",

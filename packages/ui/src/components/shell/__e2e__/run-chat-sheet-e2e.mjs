@@ -1213,8 +1213,26 @@ if (process.env.ANIM_PROBE) {
     await page.getByTestId(sel).click();
   };
   await sampleCurve("EXPAND (tap grabber, input→half)", tap("chat-sheet-grabber"));
-  await page.waitForTimeout(SETTLE);
+  const barColor = async (testid) =>
+    page.evaluate((id) => {
+      const span = document
+        .querySelector(`[data-testid="${id}"]`)
+        ?.querySelector("span[aria-hidden='true']");
+      return span ? getComputedStyle(span).backgroundColor : "n/a";
+    }, testid);
+  console.log(`GRABBER bar color (open): ${await barColor("chat-sheet-grabber")}`);
+  const composerBorder = async () =>
+    page.evaluate(() => {
+      const el = document.querySelector('[data-testid="chat-composer-textarea"]')
+        ?.closest("div[style]");
+      return el ? getComputedStyle(el).borderColor : "n/a";
+    });
+  await maximizeByPull(page);
+  console.log(`COMPOSER border (full-bleed): ${await composerBorder()}`);
+  await restoreFromMaximized(page, "mouse");
+  console.log(`COMPOSER border (inset): ${await composerBorder()}`);
   await sampleCurve("COLLAPSE (tap grabber, half→input)", tap("chat-sheet-grabber"));
+  console.log(`PILL bar color (collapsed): ${await barColor("chat-pill")}`);
   await browser.close();
   process.exit(0);
 }

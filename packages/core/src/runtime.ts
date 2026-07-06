@@ -1361,9 +1361,9 @@ export class AgentRuntime implements IAgentRuntime {
 	 */
 	private createPiiSwapSession(): PseudonymSession {
 		const recognizers: PiiEntityRecognizer[] = [new RegexEntityRecognizer()];
-		const nerService = this.getService(
-			PII_ENTITY_RECOGNIZER_SERVICE,
-		) as (Service & Partial<PiiEntityRecognizerService>) | null;
+		const nerService = this.getService(PII_ENTITY_RECOGNIZER_SERVICE) as
+			| (Service & Partial<PiiEntityRecognizerService>)
+			| null;
 		const nerRecognizer = nerService?.getRecognizer?.() ?? null;
 		if (nerRecognizer) recognizers.push(nerRecognizer);
 

@@ -30,9 +30,9 @@ describe("runAgentSessionRecovery", () => {
   it("navigates the current window to the /pair redirect and reports success", async () => {
     const redirectUrl =
       "https://agent-23766030.elizacloud.ai/pair?token=one-time";
-    const fetchFn = vi.fn().mockResolvedValue(
-      jsonResponse(200, { data: { redirectUrl } }),
-    );
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(200, { data: { redirectUrl } }));
     const navigate = vi.fn();
 
     const result = await runAgentSessionRecovery({

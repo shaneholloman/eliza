@@ -244,7 +244,10 @@ function preferenceScore(entry: ViewEntry): number {
  * without this gate it shows as an "Apps" tile even when cloud is
  * disconnected. (#10725)
  */
-export const LAUNCHER_CLOUD_IDS: ReadonlySet<string> = new Set(["cloud-apps", "cloud"]);
+export const LAUNCHER_CLOUD_IDS: ReadonlySet<string> = new Set([
+  "cloud-apps",
+  "cloud",
+]);
 
 export interface CurateLauncherOptions {
   /** Include the native-OS tiles (phone/messages/contacts/camera/files). */

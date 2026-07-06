@@ -10,6 +10,7 @@ import { logger } from "@elizaos/logger";
 import { getStylePresets } from "@elizaos/shared";
 import type { FirstRunOptions } from "../api";
 import { client } from "../api";
+import { getAndroidLocalAgentBootStateForUrl } from "../api/android-native-agent-transport";
 import { supportsFullAppShellRoutes } from "../api/app-shell-capabilities";
 import {
   getCloudAuthToken,
@@ -21,7 +22,6 @@ import {
   isIosNativeAgentBootInProgress,
   isTerminalIosNativeAgentBootErrorMessage,
 } from "../api/ios-local-agent-transport";
-import { getAndroidLocalAgentBootStateForUrl } from "../api/android-native-agent-transport";
 import { getBackendStartupTimeoutMs } from "../bridge";
 import { resumePendingCloudHandoff } from "../cloud/handoff/resume-pending-handoff";
 import {
