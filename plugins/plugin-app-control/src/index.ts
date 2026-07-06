@@ -17,6 +17,7 @@ import { agentSwitchAction } from "./actions/agent-switch.js";
 import { appAction, createAppAction } from "./actions/app.js";
 import { backgroundAction } from "./actions/background.js";
 import { modelSwitchAction } from "./actions/model-switch.js";
+import { settingsAction } from "./actions/settings.js";
 import {
 	closeAllViewsAction,
 	closeViewAction,
@@ -66,6 +67,22 @@ export {
 	modelSwitchAction,
 	sanctionedModelError,
 } from "./actions/model-switch.js";
+export {
+	createSettingsAction,
+	parseBooleanValue,
+	parseSettingsRequest,
+	resolveSectionId,
+	SETTINGS_WRITE_REGISTRY,
+	type SettingsActionDeps,
+	type SettingsRequest,
+	type SettingsRouteFetch,
+	type SettingsRouteOutcome,
+	type SettingsSectionCapability,
+	type SettingsSectionListing,
+	type SettingsVerb,
+	type SettingsWritableKey,
+	settingsAction,
+} from "./actions/settings.js";
 export {
 	__matcherData,
 	MATCHER_VIEW_IDS,
@@ -152,6 +169,7 @@ export const appControlPlugin: Plugin = {
 		backgroundAction,
 		modelSwitchAction,
 		agentSwitchAction,
+		settingsAction,
 	],
 	shortcuts: viewNavigationShortcuts,
 	// Three-stage view-switch cascade:
