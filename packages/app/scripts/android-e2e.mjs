@@ -15,11 +15,16 @@
 // Flags: --serial <s>  --skip-local-chat  --skip-route-coverage  --cloud
 //        --launcher-loop (≥200-action seeded launcher gesture loop; opt-in)
 //        --force-build/--build (build the APK first)  --skip-build
-//        --no-emulator-boot
+//        --no-emulator-boot  --no-wait
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  captureAndroidLogcat,
+  captureAndroidScreenshot,
+  startAndroidScreenRecord,
+} from "./lib/android-capture.mjs";
 import {
   androidApkNeedsBuild,
   androidDistNeedsBuild,
@@ -27,6 +32,7 @@ import {
   ensureEmulatorBooted,
   ensureEmulatorPermissive,
   installApk,
+  listDevices,
   readFreshAndroidRendererStamp,
   readInstalledRendererStamp,
   readRendererStampFromApk,
@@ -34,6 +40,18 @@ import {
   resolveApk,
   resolveSerial,
 } from "./lib/android-device.mjs";
+import {
+  createDeviceE2eBundle,
+  finalizeDeviceE2eBundle,
+  finishBundleStep,
+  parseOutputDirArg,
+  recordBundleArtifact,
+  runBundledCommand,
+  setBundleBuild,
+  setBundleDevice,
+  startBundleStep,
+} from "./lib/device-e2e-bundle.mjs";
+import { acquireDeviceLease, isDeviceLeased } from "./lib/device-lease.mjs";
 
 const appDir = path.resolve(fileURLToPath(import.meta.url), "..", "..");
 const elizaRoot = path.resolve(appDir, "..", "..");
@@ -166,15 +184,8 @@ function stageVoiceModels(adb, serial) {
   log(`voice models staged for on-device ASR/TTS (${toStage.length} pushed).`);
 }
 
-function run(cmd, args, env = {}) {
-  const res = spawnSync(cmd, args, {
-    cwd: appDir,
-    stdio: "inherit",
-    env: { ...process.env, ...env },
-  });
-  if (res.status !== 0) {
-    throw new Error(`${cmd} ${args.join(" ")} exited with code ${res.status}`);
-  }
+function run(bundle, name, cmd, args, env = {}) {
+  return runBundledCommand(bundle, name, cmd, args, { cwd: appDir, env });
 }
 
 function currentHeadCommit() {
@@ -189,9 +200,9 @@ function currentHeadCommit() {
   }
 }
 
-function buildAndroidApk() {
+function buildAndroidApk(bundle) {
   log("building WebView-debuggable APK…");
-  run("bun", ["run", "build:android"], {
+  run(bundle, "build Android APK", "bun", ["run", "build:android"], {
     ELIZA_MOBILE_REPO_ROOT: elizaRoot,
     ELIZA_WEBVIEW_DEBUG: "1",
     ELIZA_BUN_RISCV64_OPTIONAL: "1",
@@ -218,7 +229,7 @@ function readApkRendererStamp(apk) {
   }
 }
 
-function ensureFreshApkInstalled(adb, serial) {
+function ensureFreshApkInstalled(bundle, adb, serial) {
   const forceBuild = has("--force-build") || has("--build");
   const skipBuild = has("--skip-build");
   const headCommit = currentHeadCommit();
@@ -226,7 +237,7 @@ function ensureFreshApkInstalled(adb, serial) {
   const buildDecision = androidDistNeedsBuild({ freshStamp, headCommit });
 
   if (forceBuild) {
-    buildAndroidApk();
+    buildAndroidApk(bundle);
   } else if (buildDecision.build) {
     if (skipBuild) {
       throw new Error(
@@ -234,7 +245,7 @@ function ensureFreshApkInstalled(adb, serial) {
       );
     }
     log(`${buildDecision.reason} — rebuilding before install check.`);
-    buildAndroidApk();
+    buildAndroidApk(bundle);
   } else {
     log(`fresh dist renderer stamp: ${stampLabel(freshStamp)}`);
   }
@@ -257,7 +268,7 @@ function ensureFreshApkInstalled(adb, serial) {
     }
     if (!forceBuild) {
       log(`${apkDecision.reason} — rebuilding APK before install.`);
-      buildAndroidApk();
+      buildAndroidApk(bundle);
       freshStamp = readFreshAndroidRendererStamp();
       if (!freshStamp) {
         throw new Error(
@@ -282,7 +293,14 @@ function ensureFreshApkInstalled(adb, serial) {
     : androidInstallDecision({ freshStamp, installedStamp });
   if (installDecision.install) {
     log(`${installDecision.reason} — installing ${apk}`);
-    installApk(adb, serial, apk);
+    const step = startBundleStep(bundle, "install Android APK");
+    try {
+      installApk(adb, serial, apk);
+      finishBundleStep(bundle, step, "passed");
+    } catch (error) {
+      finishBundleStep(bundle, step, "failed", error);
+      throw error;
+    }
     const readback = readInstalledRendererStamp(adb, serial, { log });
     const readbackDecision = androidInstallDecision({
       freshStamp,
@@ -293,10 +311,18 @@ function ensureFreshApkInstalled(adb, serial) {
         `Android install did not produce the fresh renderer stamp: ${readbackDecision.reason}`,
       );
     }
+    setBundleBuild(bundle, {
+      buildId: readback?.buildId ?? freshStamp.buildId,
+      commit: readback?.commit ?? freshStamp.commit ?? null,
+    });
     log(`installed renderer stamp verified: ${stampLabel(readback)}`);
     return;
   }
 
+  setBundleBuild(bundle, {
+    buildId: installedStamp?.buildId ?? freshStamp.buildId,
+    commit: installedStamp?.commit ?? freshStamp.commit ?? null,
+  });
   log(`${installDecision.reason} — skipping APK install.`);
 }
 
@@ -323,85 +349,249 @@ function ensureSmokeModelCached() {
 }
 
 async function main() {
-  const adb = resolveAdb();
+  const bundle = createDeviceE2eBundle({
+    appDir,
+    lane: "android",
+    outputDir: parseOutputDirArg(process.argv),
+  });
+  let adb = null;
+  let serial;
+  let lease = null;
+  let finalResult = "failed";
+  let routeRecording = null;
 
-  let serial = val("--serial", process.env.ANDROID_SERIAL);
-  if (!has("--no-emulator-boot")) {
-    serial = await ensureEmulatorBooted({ adb, avd: val("--avd"), log });
-  }
-  serial = resolveSerial(adb, serial);
-  process.env.ANDROID_SERIAL = serial;
-  log(`device serial=${serial}`);
+  try {
+    adb = resolveAdb();
+    {
+      const step = startBundleStep(bundle, "resolve Android device");
+      try {
+        serial = val("--serial", process.env.ANDROID_SERIAL);
+        if (!serial && has("--no-emulator-boot")) {
+          const unleased = listDevices(adb).find(
+            (candidate) => !isDeviceLeased(`android:${candidate}`),
+          );
+          if (unleased) serial = unleased;
+        }
+        if (!has("--no-emulator-boot")) {
+          const bootStep = startBundleStep(bundle, "boot Android device");
+          try {
+            serial = await ensureEmulatorBooted({
+              adb,
+              avd: val("--avd"),
+              log,
+            });
+            finishBundleStep(bundle, bootStep, "passed");
+          } catch (error) {
+            finishBundleStep(bundle, bootStep, "failed", error);
+            throw error;
+          }
+        }
+        serial = resolveSerial(adb, serial);
+        finishBundleStep(bundle, step, "passed");
+      } catch (error) {
+        finishBundleStep(bundle, step, "failed", error);
+        throw error;
+      }
+    }
+    process.env.ANDROID_SERIAL = serial;
+    setBundleDevice(bundle, { serial, kind: "android" });
+    log(`device serial=${serial}`);
+    lease = await acquireDeviceLease(`android:${serial}`, {
+      waitMs: has("--no-wait") ? 0 : undefined,
+      log,
+    });
 
-  await ensureEmulatorPermissive(adb, serial, { log });
+    {
+      const step = startBundleStep(bundle, "prepare Android device");
+      try {
+        await ensureEmulatorPermissive(adb, serial, { log });
+        finishBundleStep(bundle, step, "passed");
+      } catch (error) {
+        finishBundleStep(bundle, step, "failed", error);
+        throw error;
+      }
+    }
 
-  ensureFreshApkInstalled(adb, serial);
+    ensureFreshApkInstalled(bundle, adb, serial);
 
-  if (!has("--skip-local-chat")) {
-    const modelPath = ensureSmokeModelCached();
-    log("local route: on-device agent + smallest model + real chat…");
-    run(
-      "node",
-      [
-        "scripts/mobile-local-chat-smoke.mjs",
-        "--platform",
-        "android",
-        "--require-installed",
-        "--live",
-        "--android-select-local",
-        "--android-stage-smoke-model",
-        "--serial",
-        serial,
-      ],
-      { ANDROID_SMOKE_MODEL_PATH: modelPath, ANDROID_SERIAL: serial },
-    );
-  }
+    if (!has("--skip-local-chat")) {
+      const modelPath = ensureSmokeModelCached();
+      log("local route: on-device agent + smallest model + real chat…");
+      run(
+        bundle,
+        "local chat smoke",
+        "node",
+        [
+          "scripts/mobile-local-chat-smoke.mjs",
+          "--platform",
+          "android",
+          "--require-installed",
+          "--live",
+          "--android-select-local",
+          "--android-stage-smoke-model",
+          "--serial",
+          serial,
+        ],
+        { ANDROID_SMOKE_MODEL_PATH: modelPath, ANDROID_SERIAL: serial },
+      );
+    }
 
-  if (!has("--skip-route-coverage")) {
-    // The Playwright config runs route-coverage AND the on-device voice
-    // round-trip; the latter needs the ASR/TTS GGUFs staged (the chat smoke only
-    // stages the text model, and an `adb install -r` cycle can drop the
-    // separately-pushed voice models).
-    stageVoiceModels(adb, serial);
-    log("route coverage: driving every route on the real WebView…");
-    run("node", [
-      "scripts/run-ui-playwright.mjs",
-      "--config",
-      "playwright.android.config.ts",
-    ]);
-  }
-
-  if (has("--launcher-loop")) {
-    // Long seeded launcher gesture loop (≥200 real device actions). Opt-in: it
-    // adds several minutes, so it does not run in the default sweep. The seed is
-    // printed by the spec and honored via ELIZA_LOOP_SEED for reproduction.
-    log("launcher loop: ≥200 real device gestures with per-action invariants…");
-    run(
-      "bunx",
-      [
-        "playwright",
-        "test",
-        "--config",
-        "playwright.android.config.ts",
-        "test/android/launcher-gesture-loop.android.spec.ts",
-      ],
+    if (!has("--skip-route-coverage")) {
+      // The Playwright config runs route-coverage AND the on-device voice
+      // round-trip; the latter needs the ASR/TTS GGUFs staged (the chat smoke only
+      // stages the text model, and an `adb install -r` cycle can drop the
+      // separately-pushed voice models).
       {
-        ELIZA_ANDROID_BACKEND: process.env.ELIZA_ANDROID_BACKEND ?? "host",
-        ELIZA_ANDROID_REQUIRE_AGENT:
-          process.env.ELIZA_ANDROID_REQUIRE_AGENT ?? "1",
-        ANDROID_SERIAL: serial,
-      },
-    );
-  }
+        const step = startBundleStep(bundle, "stage Android voice models");
+        try {
+          stageVoiceModels(adb, serial);
+          finishBundleStep(bundle, step, "passed");
+        } catch (error) {
+          finishBundleStep(bundle, step, "failed", error);
+          throw error;
+        }
+      }
+      log("route coverage: driving every route on the real WebView…");
+      routeRecording = await startAndroidScreenRecord({
+        adb,
+        serial,
+        artifactDir: bundle.rawDir,
+        filename: "android-route-coverage.mp4",
+        remotePath: "/sdcard/eliza-android-route-coverage.mp4",
+        log,
+      });
+      try {
+        run(
+          bundle,
+          "Android route coverage",
+          "node",
+          [
+            "scripts/run-ui-playwright.mjs",
+            "--config",
+            "playwright.android.config.ts",
+          ],
+          {
+            ANDROID_SERIAL: serial,
+            ELIZA_DEVICE_E2E_ARTIFACT_DIR: path.join(
+              bundle.root,
+              "test-results",
+            ),
+            ELIZA_ANDROID_ARTIFACT_DIR: path.join(
+              bundle.root,
+              "test-results",
+              "android",
+            ),
+            ELIZA_ANDROID_PLAYWRIGHT_JUNIT: path.join(
+              bundle.reportsDir,
+              "android-playwright.junit.xml",
+            ),
+            ELIZA_ANDROID_PLAYWRIGHT_JSON: path.join(
+              bundle.reportsDir,
+              "android-playwright.json",
+            ),
+            PLAYWRIGHT_HTML_REPORT: path.join(
+              bundle.reportsDir,
+              "android-playwright-html",
+            ),
+          },
+        );
+      } finally {
+        const videoPath = await routeRecording.stop();
+        routeRecording = null;
+        if (videoPath) recordBundleArtifact(bundle, videoPath, "video");
+      }
+    }
 
-  if (has("--cloud")) {
-    log(
-      "cloud route: real Hetzner provisioning probe (loud-fails if it can't)…",
-    );
-    run("node", ["scripts/cloud-provisioning-e2e.mjs"]);
-  }
+    if (has("--launcher-loop")) {
+      // Long seeded launcher gesture loop (≥200 real device actions). Opt-in: it
+      // adds several minutes, so it does not run in the default sweep. The seed is
+      // printed by the spec and honored via ELIZA_LOOP_SEED for reproduction.
+      log(
+        "launcher loop: ≥200 real device gestures with per-action invariants…",
+      );
+      run(
+        bundle,
+        "Android launcher loop",
+        "bunx",
+        [
+          "playwright",
+          "test",
+          "--config",
+          "playwright.android.config.ts",
+          "test/android/launcher-gesture-loop.android.spec.ts",
+        ],
+        {
+          ELIZA_ANDROID_BACKEND: process.env.ELIZA_ANDROID_BACKEND ?? "host",
+          ELIZA_ANDROID_REQUIRE_AGENT:
+            process.env.ELIZA_ANDROID_REQUIRE_AGENT ?? "1",
+          ANDROID_SERIAL: serial,
+          ELIZA_DEVICE_E2E_ARTIFACT_DIR: path.join(bundle.root, "test-results"),
+          ELIZA_ANDROID_ARTIFACT_DIR: path.join(
+            bundle.root,
+            "test-results",
+            "android",
+          ),
+        },
+      );
+    }
 
-  log("ALL ANDROID E2E PASSED ✅");
+    if (has("--cloud")) {
+      log(
+        "cloud route: real Hetzner provisioning probe (loud-fails if it can't)…",
+      );
+      run(bundle, "cloud provisioning", "node", [
+        "scripts/cloud-provisioning-e2e.mjs",
+      ]);
+    }
+    finalResult = "passed";
+    log("ALL ANDROID E2E PASSED ✅");
+  } finally {
+    if (routeRecording) {
+      const videoPath = await routeRecording.stop();
+      if (videoPath) recordBundleArtifact(bundle, videoPath, "video");
+    }
+    if (adb && serial) {
+      try {
+        recordBundleArtifact(
+          bundle,
+          captureAndroidScreenshot({
+            adb,
+            serial,
+            artifactDir: bundle.rawDir,
+            filename: "android-final.png",
+            log,
+          }),
+          "screenshot",
+        );
+      } catch (error) {
+        // error-policy:J7 Bundle capture is diagnostic; preserve the runner result.
+        bundle.warnings.push(
+          `final Android screenshot failed: ${error?.message ?? error}`,
+        );
+      }
+      try {
+        recordBundleArtifact(
+          bundle,
+          captureAndroidLogcat({
+            adb,
+            serial,
+            artifactDir: bundle.logsDir,
+            filename: "android-logcat.txt",
+            log,
+          }),
+          "log",
+        );
+      } catch (error) {
+        // error-policy:J7 Bundle capture is diagnostic; preserve the runner result.
+        bundle.warnings.push(
+          `Android logcat capture failed: ${error?.message ?? error}`,
+        );
+      }
+    }
+    lease?.release();
+    const bundleRoot = finalizeDeviceE2eBundle(bundle, finalResult);
+    log(`bundle: ${bundleRoot}`);
+  }
 }
 
 main().catch((error) => {
