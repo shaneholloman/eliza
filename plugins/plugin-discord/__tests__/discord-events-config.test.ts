@@ -74,7 +74,6 @@ function makeService(shouldRespondOnlyToMentions: boolean) {
 		},
 		slashCommands: [],
 		timeouts: [],
-		userSelections: new Map(),
 		voiceManager: undefined,
 	};
 }

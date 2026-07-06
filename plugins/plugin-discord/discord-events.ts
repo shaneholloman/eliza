@@ -69,7 +69,6 @@ export interface DiscordServiceInternals {
 	allowAllSlashCommands: Set<string>;
 	slashCommands: DiscordSlashCommand[];
 	timeouts: ReturnType<typeof setTimeout>[];
-	userSelections: Map<string, Record<string, unknown>>;
 
 	// Methods
 	isChannelAllowed(channelId: string): boolean;

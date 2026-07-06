@@ -96,7 +96,6 @@ function makeService() {
 		runtime,
 		slashCommands: [],
 		timeouts: [],
-		userSelections: new Map(),
 		voiceManager: undefined,
 	};
 	return { service, runtime, states, rooms, worlds };
