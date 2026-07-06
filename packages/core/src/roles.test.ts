@@ -170,12 +170,21 @@ describe("hasRoleAccess — fail-closed on unresolved role", () => {
 
 	it("uses USER only for local unresolved sources", () => {
 		expect(getUnresolvedSenderRoleFloor(guestMessage)).toBe("USER");
-		expect(
-			getUnresolvedSenderRoleFloor({
-				...guestMessage,
-				content: { text: "from local API", source: "api" },
-			} as unknown as Memory),
-		).toBe("USER");
+		for (const source of [
+			"api",
+			"dashboard",
+			"owner_app",
+			"local-voice",
+			"sub_agent",
+			"coding-agent",
+		]) {
+			expect(
+				getUnresolvedSenderRoleFloor({
+					...guestMessage,
+					content: { text: `from ${source}`, source },
+				} as unknown as Memory),
+			).toBe("USER");
+		}
 	});
 
 	it("uses GUEST for unresolved connector sources", () => {

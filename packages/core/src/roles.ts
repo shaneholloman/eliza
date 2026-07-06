@@ -29,7 +29,12 @@ import {
 import { createUniqueUuid } from "./entities";
 import { logger } from "./logger";
 import type { IAgentRuntime, Memory, UUID, World } from "./types";
-import { MESSAGE_SOURCE_CLIENT_CHAT } from "./types/message-source";
+import {
+	MESSAGE_SOURCE_AGENT_GREETING,
+	MESSAGE_SOURCE_CLIENT_CHAT,
+	MESSAGE_SOURCE_CODING_AGENT,
+	MESSAGE_SOURCE_SUB_AGENT,
+} from "./types/message-source";
 import { formatError } from "./utils/format-error";
 import { asRecordOrUndefined as asRecord } from "./utils/type-guards";
 
@@ -218,16 +223,25 @@ function getMessageSource(message: Memory): string | undefined {
 
 const LOCAL_UNRESOLVED_ROLE_SOURCES = new Set([
 	MESSAGE_SOURCE_CLIENT_CHAT,
+	MESSAGE_SOURCE_SUB_AGENT,
+	MESSAGE_SOURCE_CODING_AGENT,
+	MESSAGE_SOURCE_AGENT_GREETING,
 	"api",
 	"benchmark",
+	"dashboard",
+	"deep-link",
+	"event",
+	"ios-local",
+	"local-voice",
+	"owner_app",
 	"test",
 ]);
 
 /**
  * Role floor used when a real sender exists but no world role can be resolved.
- * Connector messages must not outrank a fully resolved stranger, so they fall to
- * GUEST; local/API harness traffic keeps USER so headless usage without a world
- * is not broken by connector hardening.
+ * Connector messages must not outrank a fully resolved stranger, so unknown
+ * non-local sources fall to GUEST. Local, owner-app, and harness traffic keeps
+ * USER so no-world control surfaces keep their historical behavior.
  */
 export function getUnresolvedSenderRoleFloor(message: Memory): RoleName {
 	const source = getMessageSource(message)?.trim().toLowerCase();
@@ -997,7 +1011,8 @@ async function isCanonicalOwner(
  * When there is no access context at all (no runtime / no sender entity — for
  * example local API calls), allow through so local-only usage follows the same
  * lenient path as plugin role gating. But when there IS a real sender whose
- * role simply cannot be resolved, fail CLOSED to USER rank — see below.
+ * role simply cannot be resolved, use the same source-aware floor as Stage 1
+ * context filtering.
  */
 export async function hasRoleAccess(
 	runtime: IAgentRuntime | undefined,
