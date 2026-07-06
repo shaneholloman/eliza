@@ -68,6 +68,7 @@ import { HomeLauncherSurface } from "./components/shell/HomeLauncherSurface";
 import { HomePill } from "./components/shell/HomePill";
 import { HomeScreen, type HomeTileTarget } from "./components/shell/HomeScreen";
 import { KioskViewCanvas } from "./components/shell/KioskViewCanvas";
+import { NotificationBanners } from "./components/shell/NotificationBanners";
 import { NotificationsShellBoot } from "./components/shell/notifications-boot";
 import { ShellControllerProvider } from "./components/shell/ShellControllerContext";
 import { useShellControllerContext } from "./components/shell/ShellControllerContext.hooks";
@@ -114,7 +115,6 @@ import {
 } from "./navigation";
 import { applyLaunchConnection } from "./platform";
 import { isIOS, isNative } from "./platform/init";
-import { STANDALONE_BOTTOM_RECLAIM_OFFSET } from "./platform/standalone-bottom-reclaim";
 import { RetainedLazyComponent } from "./retained-lazy";
 import {
   type ActionNotice,
@@ -2678,15 +2678,14 @@ export function App() {
           // `paddingTop` below keeps CONTENT notch-aware. Locked by
           // App.safe-area-fill.test.ts.
           //
-          // RECLAIM THE BOTTOM STRIP (#14411): the base height is `h-[100dvh]`
-          // (correct for a desktop browser tab / popout where dvh == the full
-          // window). In the INSTALLED PWA the styles.css standalone blocks pin
-          // #root to 100lvh and reclaim THIS column to 100lvh too (via the
-          // `[data-app-shell-root]` selector), so the app fills full-bleed to
-          // the physical bottom edge instead of leaving the ~59px lvh–dvh strip
-          // as #root's near-black --launch-bg band. The home-indicator safe
-          // area is padded INSIDE the app (the floating composer clears it), so
-          // background content bleeds under the indicator, native-app style.
+          // The base height is `h-[100dvh]` (correct for a desktop browser tab /
+          // popout). In the installed PWA the styles.css standalone blocks fill
+          // #root AND this column (`[data-app-shell-root]`) to 100dvh — the full
+          // screen, since the non-fixed body no longer collapses the viewport —
+          // so the app paints full-bleed to the physical bottom edge. The
+          // home-indicator safe area is padded INSIDE the app (the floating
+          // composer clears it), so background content bleeds under the
+          // indicator, native-app style.
           data-app-shell-root=""
           className="relative flex h-[100dvh] w-full max-w-full flex-col overflow-hidden"
           // Reserve a TIGHT status-bar inset: enough to clear the notch/Dynamic
@@ -2725,24 +2724,14 @@ export function App() {
             aria-hidden="true"
             data-testid="app-safe-area-floor"
             className={cn(
+              // `fixed inset-0` with a non-fixed body → its containing block is
+              // the true viewport, so `bottom: 0` reaches the physical screen
+              // edge (no ICB collapse, no reclaim).
               "pointer-events-none fixed inset-0 z-[-1]",
               // Transparent under the full-bleed wallpaper so it shows to the
               // very bottom edge; opaque dark elsewhere as the FOUC guard.
               renderSharedAppBackground ? "bg-transparent" : "bg-bg",
             )}
-            // BOTTOM-BAR ROOT CAUSE (device r6, JS-MEASURED cure): this
-            // `fixed inset-0` floor is a fixed descendant of the fixed body, so
-            // its `bottom: 0` anchors to the ICB that COLLAPSES to the
-            // small/layout viewport on the installed iOS standalone PWA (~59px
-            // short of the true bottom). On OPAQUE routes it then stops short
-            // and the launch-bg strip shows below it; on wallpaper routes it is
-            // transparent so the (now-reclaimed) wallpaper owns the edge. Drop
-            // it by the MEASURED collapse gap (`--standalone-bottom-reclaim`,
-            // set in JS) the composer + wallpaper use so the FOUC guard reaches
-            // the physical bottom too. The prior `max(0px, 100lvh - 100dvh)`
-            // CSS-unit calc was a NO-OP on device (collapsed ICB resolves
-            // lvh === dvh). Var is a hard 0 off-standalone.
-            style={{ bottom: STANDALONE_BOTTOM_RECLAIM_OFFSET }}
           />
           {/* The unified app background, mounted once here so it persists
               seamlessly across shared-background routes. It keeps the
@@ -2846,6 +2835,9 @@ export function App() {
             to the dashboard, where NotificationsHomeCenter is the one
             notification surface. Renders null. */}
         <NotificationsShellBoot />
+        {/* Top-of-screen glass banners for live notification arrivals (iOS/
+            Android heads-up idiom). Renders only while the queue is non-empty. */}
+        <NotificationBanners />
         {/* Tiny dismissible build stamp (bottom-left) so testers can verify
             PWA cache freshness at a glance. Best-effort: hidden when
             /build-info.json is absent (production builds without the
