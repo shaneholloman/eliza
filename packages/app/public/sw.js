@@ -18,12 +18,10 @@ const VIEWS_CACHE_NAME = "elizaos-views-v1";
 // iOS standalone PWA (Add-to-Home-Screen runs this SW). The network-first shell
 // still updates on reload, but the version bump forces old caches to be dropped
 // in `activate` so a re-open can't serve a pre-safe-area-fix shell from cache.
-// v3: evict any stale precached shell in an installed (iOS standalone) PWA
-// after the dark host-chrome fix (theme-color + launch-bg #ef5a1f -> #160d07,
-// the orange band under the composer). The network-first shell still updates
-// on reload; the version bump forces old caches to be dropped in `activate`
-// so a re-open can't serve a pre-fix orange shell.
-const SHELL_CACHE_NAME = "elizaos-shell-v3";
+// v4: brand-orange restore (theme-color + launch-bg #160d07 -> #ef5a1f; the
+// orange field is the app background again now that the fixed background
+// layers reach the true physical bottom). Bump drops any cached dark shell.
+const SHELL_CACHE_NAME = "elizaos-shell-v4";
 const HERO_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 h
 const KNOWN_CACHES = [VIEWS_CACHE_NAME, SHELL_CACHE_NAME];
 

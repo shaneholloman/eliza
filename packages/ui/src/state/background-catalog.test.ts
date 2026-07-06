@@ -84,17 +84,18 @@ describe("background catalog (#13538)", () => {
     }
   });
 
-  it("the boot default is a curated natural image, not a flat color", () => {
-    expect(DEFAULT_BACKGROUND_CONFIG.mode).toBe("image");
-    // The default wallpaper is the served sunset asset (a same-origin path),
-    // not a flat color and not an inline data URL.
-    expect(DEFAULT_BACKGROUND_CONFIG.imageUrl).toBe("/bg-sunset.jpg");
+  it("the boot default is the brand-orange shader field", () => {
+    // Orange IS the app background/brand color: the app boots to the living
+    // orange ember field, not a photo wallpaper (those stay gallery options).
+    expect(DEFAULT_BACKGROUND_CONFIG.mode).toBe("shader");
+    expect(DEFAULT_BACKGROUND_CONFIG.color).toBe("#ef5a1f");
+    expect(DEFAULT_BACKGROUND_CONFIG.imageUrl).toBeUndefined();
+    // The Ember Night gallery tile still resolves to the served sunset asset.
     const def = BACKGROUND_CATALOG.find(
       (e) => e.id === DEFAULT_BACKGROUND_CATALOG_ID,
     );
     expect(def?.kind).toBe("image");
-    // The boot default and its gallery tile resolve to the same source.
-    expect(def?.source).toBe(DEFAULT_BACKGROUND_CONFIG.imageUrl);
+    expect(def?.source).toBe("/bg-sunset.jpg");
   });
 
   it("resolveCatalogEntry matches by id, label, and fuzzy name", () => {

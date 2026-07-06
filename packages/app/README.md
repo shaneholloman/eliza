@@ -68,10 +68,10 @@ Native boot splash surfaces (`capacitor.config.ts`, Android launch resources,
 iOS `LaunchScreen.storyboard`) use the splash orange `#ef5a1f`, not the brand
 accent `#FF5800`. Persistent host-chrome surfaces (`index.html` FOUC
 background, `<meta name="theme-color">` / manifest colors via `app.config.ts`,
-the renderer root CSS) use the dark home background `#160d07`
+the renderer root CSS) use the brand-orange home background `#ef5a1f`
 (`DEFAULT_BACKGROUND_COLOR`): they stay visible under the app (iOS
-home-indicator safe-area, overscroll), so an orange there reads as a glowing
-band instead of a boot flash.
+home-indicator safe-area, overscroll), so they must equal the default home
+background for any bleed-through to be invisible.
 
 ## License
 
