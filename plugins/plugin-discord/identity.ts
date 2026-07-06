@@ -8,7 +8,9 @@ import {
 	createUniqueUuid,
 	type IAgentRuntime,
 	type Metadata,
-	Role,
+	type RolesWorldMetadata,
+	recordOwnerGrant,
+	recordRoleGrant,
 	stringToUuid,
 } from "@elizaos/core";
 
@@ -162,25 +164,21 @@ export function buildDiscordWorldMetadata(
 	guildOwnerId: string | undefined,
 ): Metadata | undefined {
 	const ownerId = resolveElizaOwnerEntityId(runtime);
-	const roles: Record<string, Role> = {
-		[ownerId]: Role.OWNER,
-	};
+	const metadata: RolesWorldMetadata = { ownership: { ownerId } };
+	recordOwnerGrant(metadata, ownerId);
 
-	// The Discord guild owner should also be recognized as an owner in their
-	// guild.  Map the guild owner's Discord snowflake to a runtime entity ID
-	// and grant OWNER so that role resolution picks them up even when the bot-
-	// application owner extraction didn't include them.
+	// Discord guild ownership is connector provenance, not app ownership. Record
+	// it through core's canonical grant helper so the role and its source stay
+	// paired, and let the connector-admin whitelist decide at read time whether
+	// the grant can rise above GUEST.
 	if (guildOwnerId && DISCORD_SNOWFLAKE_PATTERN.test(guildOwnerId)) {
 		const guildOwnerEntityId = createUniqueUuid(runtime, guildOwnerId);
 		if (guildOwnerEntityId !== ownerId) {
-			roles[guildOwnerEntityId] = Role.OWNER;
+			recordRoleGrant(metadata, guildOwnerEntityId, "ADMIN", "connector_admin");
 		}
 	}
 
-	return {
-		ownership: { ownerId },
-		roles,
-	};
+	return metadata;
 }
 
 export function buildDiscordEntityMetadata(
