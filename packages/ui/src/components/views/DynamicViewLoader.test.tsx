@@ -105,6 +105,8 @@ vi.mock("../../api", () => ({
   client: { sendWsMessage },
 }));
 
+const AGENT_SURFACE_MANIFEST = { capabilities: ["agent-surface" as const] };
+
 describe("DynamicViewLoader", () => {
   beforeEach(() => {
     Object.defineProperty(HTMLElement.prototype, "innerText", {
@@ -227,6 +229,7 @@ describe("DynamicViewLoader", () => {
         bundleUrl={bundleUrl}
         viewId="remote.interactive"
         viewType="gui"
+        surface={AGENT_SURFACE_MANIFEST}
       />,
     );
 
@@ -342,7 +345,13 @@ describe("DynamicViewLoader", () => {
       },
     }));
 
-    render(<DynamicViewLoader bundleUrl={bundleUrl} viewId="focus.view" />);
+    render(
+      <DynamicViewLoader
+        bundleUrl={bundleUrl}
+        viewId="focus.view"
+        surface={AGENT_SURFACE_MANIFEST}
+      />,
+    );
     await screen.findByRole("button", { name: "Create view" });
 
     const { dispatchViewInteract } = await import("./view-interact-registry");
@@ -416,7 +425,13 @@ describe("DynamicViewLoader", () => {
       },
     }));
 
-    render(<DynamicViewLoader bundleUrl={bundleUrl} viewId="form.view" />);
+    render(
+      <DynamicViewLoader
+        bundleUrl={bundleUrl}
+        viewId="form.view"
+        surface={AGENT_SURFACE_MANIFEST}
+      />,
+    );
     await screen.findByRole("button", { name: "Save view" });
 
     const { dispatchViewInteract } = await import("./view-interact-registry");
@@ -491,7 +506,11 @@ describe("DynamicViewLoader", () => {
     }));
 
     render(
-      <DynamicViewLoader bundleUrl={bundleUrl} viewId="form.errors.view" />,
+      <DynamicViewLoader
+        bundleUrl={bundleUrl}
+        viewId="form.errors.view"
+        surface={AGENT_SURFACE_MANIFEST}
+      />,
     );
     await screen.findByDisplayValue("Original");
 
@@ -557,7 +576,13 @@ describe("DynamicViewLoader", () => {
       },
     }));
 
-    render(<DynamicViewLoader bundleUrl={bundleUrl} viewId="sensitive.view" />);
+    render(
+      <DynamicViewLoader
+        bundleUrl={bundleUrl}
+        viewId="sensitive.view"
+        surface={AGENT_SURFACE_MANIFEST}
+      />,
+    );
     await screen.findByDisplayValue("existing-secret");
 
     const { dispatchViewInteract } = await import("./view-interact-registry");
@@ -632,7 +657,13 @@ describe("DynamicViewLoader", () => {
       },
     }));
 
-    render(<DynamicViewLoader bundleUrl={bundleUrl} viewId="missing.focus" />);
+    render(
+      <DynamicViewLoader
+        bundleUrl={bundleUrl}
+        viewId="missing.focus"
+        surface={AGENT_SURFACE_MANIFEST}
+      />,
+    );
     await screen.findByText("No inputs here");
 
     const { dispatchViewInteract } = await import("./view-interact-registry");
@@ -666,7 +697,13 @@ describe("DynamicViewLoader", () => {
       };
     });
 
-    render(<DynamicViewLoader bundleUrl={bundleUrl} viewId="refresh.view" />);
+    render(
+      <DynamicViewLoader
+        bundleUrl={bundleUrl}
+        viewId="refresh.view"
+        surface={AGENT_SURFACE_MANIFEST}
+      />,
+    );
     await screen.findByText("Refresh version 1");
 
     const { dispatchViewInteract } = await import("./view-interact-registry");
@@ -725,7 +762,11 @@ describe("DynamicViewLoader", () => {
     vi.stubGlobal("fetch", fetchHead);
 
     const rendered = render(
-      <DynamicViewLoader bundleUrl={bundleUrl} viewId="hmr.view" />,
+      <DynamicViewLoader
+        bundleUrl={bundleUrl}
+        viewId="hmr.view"
+        surface={AGENT_SURFACE_MANIFEST}
+      />,
     );
     await flushViewLoader();
     expect(screen.getByText("HMR version 1")).toBeTruthy();
@@ -811,6 +852,7 @@ describe("DynamicViewLoader", () => {
         bundleUrl={firstUrl}
         viewId="replace.first"
         viewType="gui"
+        surface={AGENT_SURFACE_MANIFEST}
       />,
     );
     await screen.findByText("First dynamic panel");
@@ -820,6 +862,7 @@ describe("DynamicViewLoader", () => {
         bundleUrl={secondUrl}
         viewId="replace.second"
         viewType="gui"
+        surface={AGENT_SURFACE_MANIFEST}
       />,
     );
     await screen.findByText("Second dynamic panel");

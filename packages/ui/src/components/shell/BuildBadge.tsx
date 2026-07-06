@@ -119,9 +119,10 @@ function readCapacitorPlatform(): string {
 /** Snapshot the live device/layout state that decides the PWA lockdown. */
 function collectDiagnostics(): DiagRow[] {
   const bodyClasses = document.body.className.trim() || "(none)";
-  const modes = ["standalone", "fullscreen", "minimal-ui", "browser"]
-    .filter(matchesDisplayMode)
-    .join(", ") || "(none)";
+  const modes =
+    ["standalone", "fullscreen", "minimal-ui", "browser"]
+      .filter(matchesDisplayMode)
+      .join(", ") || "(none)";
   const coarse = (() => {
     try {
       return window.matchMedia("(pointer: coarse)").matches ? "coarse" : "fine";
@@ -153,7 +154,10 @@ function collectDiagnostics(): DiagRow[] {
       k: "visualViewport.h",
       v: vv ? `${Math.round(vv.height)}px` : "n/a",
     },
-    { k: "safe-inset-bottom", v: readRootLength("env(safe-area-inset-bottom, 0px)") },
+    {
+      k: "safe-inset-bottom",
+      v: readRootLength("env(safe-area-inset-bottom, 0px)"),
+    },
     {
       k: "body.position",
       v: getComputedStyle(document.body).position || "?",
@@ -239,18 +243,23 @@ export function BuildBadge() {
       </div>
 
       {diag ? (
-        <div
-          data-testid="build-badge-diag"
-          className="pointer-events-auto fixed inset-0 z-[9998] flex items-end justify-start p-2"
-          style={{
-            paddingLeft: "calc(env(safe-area-inset-left, 0px) + 0.5rem)",
-            paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)",
-          }}
-          onClick={closeDiag}
-        >
+        <>
+          <button
+            type="button"
+            aria-label="Close build diagnostics"
+            className="fixed inset-0 z-[9998] cursor-default bg-transparent"
+            onClick={closeDiag}
+          />
           <div
-            className="max-h-[70vh] w-full max-w-sm overflow-auto rounded-lg border border-border bg-surface/95 p-3 text-2xs shadow-lg backdrop-blur"
-            onClick={(e) => e.stopPropagation()}
+            data-testid="build-badge-diag"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Build diagnostics for ${label}`}
+            className="pointer-events-auto fixed z-[9999] max-h-[70vh] w-[calc(100%-1rem)] max-w-sm overflow-auto rounded-lg border border-border bg-surface/95 p-3 text-2xs shadow-lg backdrop-blur"
+            style={{
+              left: "calc(env(safe-area-inset-left, 0px) + 0.5rem)",
+              bottom: "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)",
+            }}
           >
             <div className="mb-2 flex items-center justify-between">
               <span className="font-mono text-3xs text-muted">{label}</span>
@@ -273,7 +282,7 @@ export function BuildBadge() {
               ))}
             </dl>
           </div>
-        </div>
+        </>
       ) : null}
     </>
   );

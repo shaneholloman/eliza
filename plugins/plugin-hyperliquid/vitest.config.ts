@@ -56,6 +56,10 @@ export default defineConfig({
 				replacement: path.join(here, "__tests__/app-core-shim.ts"),
 			},
 			{
+				find: /^@elizaos\/ui\/spatial$/,
+				replacement: path.join(repoRoot, "packages/ui/src/spatial/index.ts"),
+			},
+			{
 				find: /^@elizaos\/app-core\/registry$/,
 				replacement: path.join(
 					repoRoot,

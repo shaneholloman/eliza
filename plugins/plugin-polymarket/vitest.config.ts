@@ -49,6 +49,13 @@ export default defineConfig({
           "../../packages/ui/src/agent-surface/index.ts",
         ),
       },
+      {
+        find: /^@elizaos\/ui\/spatial$/,
+        replacement: path.resolve(
+          here,
+          "../../packages/ui/src/spatial/index.ts",
+        ),
+      },
     ],
   },
   test: {
