@@ -43,6 +43,7 @@ export const LAUNCHER_APPS_ORDER: readonly string[] = [
   "wallet",
   "tasks",
   "automations",
+  "my-apps",
   "browser",
   // Character family — the old single Character hub, split into top-level tiles.
   "character",
