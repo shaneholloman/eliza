@@ -68,6 +68,7 @@ import { HomeLauncherSurface } from "./components/shell/HomeLauncherSurface";
 import { HomePill } from "./components/shell/HomePill";
 import { HomeScreen, type HomeTileTarget } from "./components/shell/HomeScreen";
 import { KioskViewCanvas } from "./components/shell/KioskViewCanvas";
+import { NotificationBanners } from "./components/shell/NotificationBanners";
 import { NotificationsShellBoot } from "./components/shell/notifications-boot";
 import { ShellControllerProvider } from "./components/shell/ShellControllerContext";
 import { useShellControllerContext } from "./components/shell/ShellControllerContext.hooks";
@@ -2686,13 +2687,16 @@ export function App() {
           className="relative flex h-[100dvh] w-full max-w-full flex-col overflow-hidden"
           // Reserve a TIGHT status-bar inset: enough to clear the notch/Dynamic
           // Island but no oversized empty band above the content (the repeated
-          // "too much space at the top" report). Shave the inset down from the
-          // full safe area, with a 1.25rem floor so notch-less phones still
+          // "too much space at the top" report; device r8 screenshot still showed
+          // dead space above the in-app clock). The iOS status bar clock already
+          // draws INSIDE the safe-area-top zone, so any app paddingTop below the
+          // full inset is ADDITIVE dead space. Shave harder, subtract 2rem from
+          // the safe area (was 1.25rem) so the big in-app clock seats snug under
+          // the status bar, with a 0.75rem floor so notch-less phones still
           // clear their status bar. Top banners bleed their bg back up via
           // `.mobile-top-banner:first-child` (styles.css). No-op on web.
           style={{
-            paddingTop:
-              "max(calc(var(--safe-area-top, 0px) - 1.25rem), 1.25rem)",
+            paddingTop: "max(calc(var(--safe-area-top, 0px) - 2rem), 0.75rem)",
           }}
         >
           {/* BOTTOM-BAR / SAFE-AREA FLOOR (do not remove): a viewport-filling
@@ -2841,6 +2845,9 @@ export function App() {
             to the dashboard, where NotificationsHomeCenter is the one
             notification surface. Renders null. */}
         <NotificationsShellBoot />
+        {/* Top-of-screen glass banners for live notification arrivals (iOS/
+            Android heads-up idiom). Renders only while the queue is non-empty. */}
+        <NotificationBanners />
         {/* Tiny dismissible build stamp (bottom-left) so testers can verify
             PWA cache freshness at a glance. Best-effort: hidden when
             /build-info.json is absent (production builds without the

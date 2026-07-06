@@ -3250,9 +3250,22 @@ export function ContinuousChatOverlay({
     // Z_NOTIFICATION_OVERLAY, any open Radix dialog) must win the tap — the
     // swallower otherwise eats their first tap AND collapses the chat under
     // them. "Tap outside collapses" is only for the background view.
+    //
+    // The inline home notification center (#15080) is a live INTERACTIVE
+    // surface even though it sits BELOW the chat glass (inline on the home
+    // column, not the old Z_NOTIFICATION_OVERLAY shade). Its rows own tap (open
+    // / deep-link), swipe-dismiss, and a long-press menu; without this
+    // exemption the capture-phase pointerup below preventDefault +
+    // stopImmediatePropagation'd the row's tap and set suppressNextOutsideClick,
+    // so the click-swallower ate the row's onClick, tapping a notification did
+    // NOTHING ("interacting is cooked", device r8). Exempt the notification
+    // center (rows, its menu, the header actions) so its own handlers win; a
+    // real tap on the bare field AROUND the rows still collapses the chat.
     const isAboveShellOverlay = (target: EventTarget | null): boolean =>
       target instanceof Element &&
-      !!target.closest('[data-above-shell-overlay], [role="dialog"]');
+      !!target.closest(
+        '[data-above-shell-overlay], [role="dialog"], [data-testid="home-notification-center"], [data-notif-row]',
+      );
 
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0 && event.pointerType === "mouse") return;
@@ -3900,18 +3913,26 @@ export function ContinuousChatOverlay({
         // that the overlay itself seats at the TRUE physical bottom (the `bottom`
         // reclaim above), the resting padding must clear the WHOLE home-indicator
         // safe area (env(safe-area-inset-bottom) ~34px) plus a small gap, so the
-        // composer rests ~42–46px off the physical edge — above the indicator,
-        // not floating in a dead band above it. (Previously this multiplied the
-        // inset by 0.4 to sit the pill ~13px up; that tuning was compensating
-        // for the collapsed-ICB float — with the overlay now correctly at the
-        // true bottom, the full inset + gap is the right, native-app clearance.)
+        // composer rests ~42px off the physical edge, one finger above the
+        // indicator, not floating in a dead band above it. (Previously this
+        // multiplied the inset by 0.4 to sit the pill ~13px up; that tuning was
+        // compensating for the collapsed-ICB float. With the overlay now
+        // correctly at the true bottom via the screen.height reclaim (device r8),
+        // the full inset plus a small gap is the right, native-app clearance.)
+        // NOTE the resting `bottom` above already re-seats the overlay at the
+        // TRUE physical bottom; this padding uses the safe-area inset only (NOT
+        // the reclaim var), so there is no double-count. The r8 screenshot's
+        // "big dead band below the composer" was the reclaim reading 0 (overlay
+        // stuck 59px UP) PLUS this clearance, not this clearance itself; with the
+        // reclaim now 59 the band collapses to just this one-finger inset. The
+        // extra gap is trimmed 0.625rem to 0.5rem so it sits snug, not floating.
         // The same holds for Android gesture pills. Everything below the composer
-        // is the full-bleed wallpaper / app floor — no cosmetic strip repaints it.
+        // is the full-bleed wallpaper / app floor, no cosmetic strip repaints it.
         paddingBottom: fullBleedFrame
           ? 0
           : keyboardLiftActive
             ? "0.75rem"
-            : "calc(var(--eliza-mobile-nav-offset, 0px) + max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)) + 0.625rem)",
+            : "calc(var(--eliza-mobile-nav-offset, 0px) + max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)) + 0.5rem)",
       }}
       data-testid="continuous-chat-overlay"
       data-open={sheetOpen ? "true" : undefined}
@@ -4348,22 +4369,10 @@ export function ContinuousChatOverlay({
                   </div>
                 ) : null}
                 <div className="pointer-events-auto flex items-center gap-1.5">
-                  {/* Voice on/off: the top-bar master control for bidirectional
-                      voice. Same semantics as a composer-mic tap (hands-free
-                      conversation on/off; ends transcription when live), so
-                      there is exactly ONE voice state machine. */}
-                  <HeaderButton
-                    icon={Mic}
-                    label={
-                      handsFree || recording || transcriptionMode
-                        ? "turn voice off"
-                        : "turn voice on"
-                    }
-                    active={handsFree || recording || transcriptionMode}
-                    disabled={firstRunOpen}
-                    onClick={handleMicClick}
-                    testId="chat-full-voice"
-                  />
+                  {/* Voice lives ONLY on the composer mic. A second top-bar
+                      mic beside Home read as a duplicated control (two
+                      buttons, one voice state machine), so the header keeps
+                      navigation chrome only. */}
                   <HeaderButton
                     icon={Home}
                     label="home"
