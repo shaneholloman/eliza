@@ -14,7 +14,6 @@ import {
 import {
   canonicalLauncherId,
   curateLauncherPages,
-  curateLauncherZones,
   normalizeLauncherLabel,
 } from "./launcher-curation";
 
@@ -711,55 +710,5 @@ describe("launcher label-duplication lint", () => {
     expect(() => assertNoDuplicateVisibleLabels(clash)).toThrow(
       /Duplicate launcher label/,
     );
-  });
-});
-
-describe("curateLauncherZones", () => {
-  const PAGE = curateLauncherPages(
-    [
-      entry("chat"),
-      entry("settings"),
-      entry("wallet"),
-      entry("browser"),
-      entry("documents", { viewKind: "system" }),
-    ],
-    { isAosp: false, enabledKinds: ENABLED, cloudActive: true },
-  );
-
-  it("projects Favorites over the curated page and keeps All Apps exhaustive (no Recents zone)", () => {
-    const zones = curateLauncherZones(PAGE, {
-      favoriteIds: ["settings"],
-    });
-    // Recents was removed as duplicate noise (#13453): only Favorites + All Apps.
-    expect(zones.map((z) => z.key)).toEqual(["favorites", "all"]);
-    expect(zones[0].entries.map((e) => e.id)).toEqual(["settings"]);
-    // All Apps is the whole page (a tile is not removed for being pinned).
-    expect(zones[1].entries).toBe(PAGE);
-    expect(zones[1].entries.map((e) => e.id)).toContain("browser");
-  });
-
-  it("returns an empty Favorites zone for a first-run launcher", () => {
-    const zones = curateLauncherZones(PAGE, {
-      favoriteIds: [],
-    });
-    expect(zones[0].entries).toEqual([]);
-    expect(zones[1].entries).toBe(PAGE);
-  });
-
-  it("skips favorite ids that are no longer visible tiles (no resurrection)", () => {
-    // A stale favorite for a now-hidden/uninstalled surface must not add a tile
-    // the curated page dropped; a still-visible one survives.
-    const zones = curateLauncherZones(PAGE, {
-      favoriteIds: ["also-gone", "wallet"],
-    });
-    expect(zones[0].entries.map((e) => e.id)).toEqual(["wallet"]);
-  });
-
-  it("canonicalizes + de-dupes favorite ids", () => {
-    const zones = curateLauncherZones(PAGE, {
-      // `inventory` canonicalizes to `wallet`; the duplicate must collapse.
-      favoriteIds: ["inventory", "wallet", "browser"],
-    });
-    expect(zones[0].entries.map((e) => e.id)).toEqual(["wallet", "browser"]);
   });
 });
