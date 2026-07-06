@@ -46,6 +46,7 @@ const localPackages = [
   "eliza/plugins/plugin-personal-assistant",
   "eliza/plugins/plugin-task-coordinator",
   "eliza/plugins/plugin-training",
+  "eliza/plugins/plugin-edge-tts",
   "eliza/plugins/plugin-agent-orchestrator",
   "eliza/plugins/plugin-app-control",
   "eliza/plugins/plugin-commands",
