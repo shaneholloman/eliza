@@ -574,9 +574,9 @@ interface MessageSendOptions {
  * untouched. Returns `undefined` when there is nothing renderable so callers can
  * omit the `components` key entirely.
  *
- * This is the single button/select builder for guild sends and DMs. Discord
- * supports action rows of buttons and string selects in DMs; guild-scoped
- * component types must get an explicit fallback before being added here.
+ * This is the single button builder for guild sends and DMs. Other Discord
+ * component types need a live producer and submit path before being added here;
+ * otherwise callers would render controls the connector cannot handle.
  */
 export function buildDiscordComponents(
 	components: DiscordActionRow[] | undefined,
