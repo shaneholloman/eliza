@@ -89,7 +89,7 @@ function makeAcp(sessions: SessionInfo[]): {
 function makeRuntime(opts: {
   acp: unknown;
   roomEntities?: Entity[];
-  deleteParticipantsImpl?: () => Promise<boolean>;
+  removeParticipantImpl?: () => Promise<boolean>;
 }) {
   const handleMessage = vi.fn<
     (
@@ -103,8 +103,8 @@ function makeRuntime(opts: {
   const getEntitiesForRoom = vi.fn(async (_roomId: string) => [
     ...(opts.roomEntities ?? []),
   ]);
-  const deleteParticipants = vi.fn(
-    opts.deleteParticipantsImpl ?? (async () => true),
+  const removeParticipant = vi.fn(
+    opts.removeParticipantImpl ?? (async () => true),
   );
   const reportError = vi.fn();
   const runtime = {
@@ -116,7 +116,7 @@ function makeRuntime(opts: {
     createEntity,
     addParticipant,
     getEntitiesForRoom,
-    deleteParticipants,
+    removeParticipant,
     reportError,
     emitEvent: vi.fn(async () => undefined),
     messageService: { handleMessage },
@@ -127,7 +127,7 @@ function makeRuntime(opts: {
     createEntity,
     addParticipant,
     getEntitiesForRoom,
-    deleteParticipants,
+    removeParticipant,
     reportError,
   };
 }
@@ -255,7 +255,7 @@ describe("legacy per-session entity sweep (migration path)", () => {
 
     const session = makeSession(SESSION_A, "fresh-task");
     const acp = makeAcp([session]);
-    const { runtime, getEntitiesForRoom, deleteParticipants } = makeRuntime({
+    const { runtime, getEntitiesForRoom, removeParticipant } = makeRuntime({
       acp: acp.service,
       roomEntities: [legacyA, human, shared, legacyB, nameOnly],
     });
@@ -264,11 +264,11 @@ describe("legacy per-session entity sweep (migration path)", () => {
     acp.emit(SESSION_A, "task_complete", { response: "done" });
     await flush();
 
-    expect(deleteParticipants).toHaveBeenCalledTimes(1);
-    const pairs = deleteParticipants.mock.calls[0]?.[0] as Array<{
-      entityId: UUID;
-      roomId: UUID;
-    }>;
+    expect(removeParticipant).toHaveBeenCalledTimes(2);
+    const pairs = removeParticipant.mock.calls.map(([entityId, roomId]) => ({
+      entityId: entityId as UUID,
+      roomId: roomId as UUID,
+    }));
     expect(new Set(pairs.map((p) => p.entityId))).toEqual(
       new Set([legacyA.id, legacyB.id]),
     );
@@ -279,7 +279,7 @@ describe("legacy per-session entity sweep (migration path)", () => {
     acp.emit(SESSION_A, "task_complete", { response: "done again" });
     await flush();
     expect(getEntitiesForRoom.mock.calls.length).toBe(scans);
-    expect(deleteParticipants).toHaveBeenCalledTimes(1);
+    expect(removeParticipant).toHaveBeenCalledTimes(2);
 
     await router.stop();
   });
@@ -292,7 +292,7 @@ describe("legacy per-session entity sweep (migration path)", () => {
     );
     const session = makeSession(SESSION_A, "streaming-task");
     const acp = makeAcp([session]);
-    const { runtime, deleteParticipants, handleMessage } = makeRuntime({
+    const { runtime, removeParticipant, handleMessage } = makeRuntime({
       acp: acp.service,
       roomEntities: [legacy],
     });
@@ -304,10 +304,11 @@ describe("legacy per-session entity sweep (migration path)", () => {
     await flush();
 
     expect(handleMessage).not.toHaveBeenCalled();
-    expect(deleteParticipants).toHaveBeenCalledTimes(1);
-    const pairs = deleteParticipants.mock.calls[0]?.[0] as Array<{
-      entityId: UUID;
-    }>;
+    expect(removeParticipant).toHaveBeenCalledTimes(1);
+    const pairs = removeParticipant.mock.calls.map(([entityId, roomId]) => ({
+      entityId: entityId as UUID,
+      roomId: roomId as UUID,
+    }));
     expect(pairs.map((p) => p.entityId)).toEqual([legacy.id]);
 
     await router.stop();
@@ -322,10 +323,10 @@ describe("legacy per-session entity sweep (migration path)", () => {
     let calls = 0;
     const session = makeSession(SESSION_A, "retry-task");
     const acp = makeAcp([session]);
-    const { runtime, deleteParticipants, reportError } = makeRuntime({
+    const { runtime, removeParticipant, reportError } = makeRuntime({
       acp: acp.service,
       roomEntities: [legacy],
-      deleteParticipantsImpl: async () => {
+      removeParticipantImpl: async () => {
         calls += 1;
         if (calls === 1) throw new Error("db offline");
         return true;
@@ -344,7 +345,7 @@ describe("legacy per-session entity sweep (migration path)", () => {
     // Memo was dropped, so the next event retries — and this time succeeds.
     acp.emit(SESSION_A, "task_complete", { response: "second" });
     await flush();
-    expect(deleteParticipants).toHaveBeenCalledTimes(2);
+    expect(removeParticipant).toHaveBeenCalledTimes(2);
     expect(reportError).toHaveBeenCalledTimes(1);
 
     await router.stop();
