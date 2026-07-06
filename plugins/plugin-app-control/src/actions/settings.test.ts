@@ -7,7 +7,10 @@
  */
 
 import type { HandlerCallback, IAgentRuntime, Memory } from "@elizaos/core";
-import { APPEARANCE_APPLY_EVENT } from "@elizaos/shared";
+import {
+	APPEARANCE_APPLY_EVENT,
+	VOICE_SETTINGS_APPLY_EVENT,
+} from "@elizaos/shared";
 import {
 	SETTINGS_NON_CATALOG_SECTION_META,
 	SETTINGS_SECTION_META,
@@ -662,6 +665,100 @@ describe("SETTINGS action: set on an owned route section", () => {
 		});
 		expect(result?.success).toBe(true);
 		expect(texts.join(" ")).toContain("speech threshold is 0.01");
+	});
+
+	it("broadcasts voice-settings:apply so the running shell mirrors update", async () => {
+		// #14910: persisting messages.voice alone leaves the live capture path stale;
+		// the action must also broadcast the applied prefs to re-seed the shell's
+		// localStorage mirrors (useVoiceSettingsApplyChannel). Explicit stored VAD
+		// values keep this independent of the default-value fix (#14994).
+		const routeFetch = vi.fn<SettingsRouteFetch>(async (request) => {
+			if (request.method === "GET") {
+				return {
+					ok: true,
+					data: {
+						messages: {
+							voice: {
+								continuous: "off",
+								vadAutoStop: { silenceMs: 1100, speechRmsThreshold: 0.005 },
+							},
+						},
+					},
+				};
+			}
+			return { ok: true };
+		});
+		const { result } = await invoke(
+			{
+				action: "set",
+				section: "voice",
+				key: "continuous",
+				value: "always-on",
+			},
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenCalledTimes(3);
+		expect(routeFetch).toHaveBeenNthCalledWith(3, {
+			method: "POST",
+			path: "/api/views/events/broadcast",
+			body: {
+				type: VOICE_SETTINGS_APPLY_EVENT,
+				payload: {
+					continuous: "always-on",
+					vadAutoStop: { silenceMs: 1100, speechRmsThreshold: 0.005 },
+				},
+			},
+		});
+		expect(result?.success).toBe(true);
+		expect(VOICE_SETTINGS_APPLY_EVENT).toBe("voice-settings:apply");
+	});
+
+	it("surfaces a voice broadcast failure instead of fabricating live-apply", async () => {
+		// The config write can succeed while the broadcast fails; the shell would
+		// then stay on old values, so the action reports failure rather than a
+		// fabricated success (#14910).
+		const routeFetch = vi.fn<SettingsRouteFetch>(async (request) => {
+			if (request.method === "GET") {
+				return {
+					ok: true,
+					data: { messages: { voice: { continuous: "off" } } },
+				};
+			}
+			if (request.method === "PUT") return { ok: true };
+			return { ok: false, detail: "view broadcast failed" };
+		});
+		const { result, texts } = await invoke(
+			{ action: "set", section: "voice", key: "continuous", value: "vad" },
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenCalledTimes(3);
+		expect(result?.success).toBe(false);
+		expect(texts.join(" ")).toContain("view broadcast failed");
+	});
+
+	it("does not broadcast when the voice config write fails", async () => {
+		// Fail-fast: a failed PUT returns before the broadcast, so the shell is
+		// never told about a change that did not persist.
+		const routeFetch = vi.fn<SettingsRouteFetch>(async (request) => {
+			if (request.method === "GET") {
+				return { ok: true, data: { messages: {} } };
+			}
+			return { ok: false, detail: "config save failed" };
+		});
+		const { result } = await invoke(
+			{
+				action: "set",
+				section: "voice",
+				key: "continuous",
+				value: "always-on",
+			},
+			routeFetch,
+		);
+		expect(routeFetch).toHaveBeenCalledTimes(2);
+		expect(routeFetch).not.toHaveBeenCalledWith(
+			expect.objectContaining({ path: "/api/views/events/broadcast" }),
+		);
+		expect(result?.success).toBe(false);
 	});
 
 	it("dispatches permissions shell off through the backend route", async () => {
