@@ -14,6 +14,8 @@
  * lapses).
  */
 
+import { logger } from "@elizaos/logger";
+
 const CHUNK_RELOAD_AT_KEY = "eliza:chunk-reload-attempted-at";
 const RELOAD_COOLDOWN_MS = 5 * 60 * 1000;
 
@@ -43,15 +45,19 @@ export function tryChunkReloadRecovery(): boolean {
       window.sessionStorage.getItem(CHUNK_RELOAD_AT_KEY) ?? "0",
     );
   } catch {
-    // error-policy:J3 storage denied (private mode) → treat as never attempted;
-    // worst case is one extra reload.
+    // error-policy:J3 storage denied (private mode) → an unreadable marker is
+    // explicitly "never attempted"; worst case is one extra reload.
+    lastAttempt = 0;
   }
   if (Date.now() - lastAttempt < RELOAD_COOLDOWN_MS) return false;
   try {
     window.sessionStorage.setItem(CHUNK_RELOAD_AT_KEY, String(Date.now()));
-  } catch {
+  } catch (err) {
     // error-policy:J6 marker write is best-effort; without it we may reload
     // once more than intended, never loop (the navigation itself rate-limits).
+    logger.debug(
+      `[ChunkLoadRecovery] could not persist reload marker: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
   window.location.reload();
   return true;
