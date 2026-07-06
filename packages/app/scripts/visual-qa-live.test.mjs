@@ -10,6 +10,7 @@ import {
   aggregateVerdict,
   buildCaptureUrl,
   buildOnboardedSeed,
+  buildOverallVerdict,
   buildStateMatrix,
   COMPOSER_PROBE_TEXT,
   evaluateCaptureReadiness,
@@ -57,6 +58,8 @@ describe("buildStateMatrix", () => {
     const focused = matrix.filter((s) => s.focusComposer);
     expect(focused).toHaveLength(1);
     expect(focused[0].viewport).toBe("mobile");
+    expect(focused[0].seed).toBe("onboarded");
+    expect(focused[0].route).toBe("/chat");
   });
   it("gives every state a unique id", () => {
     const ids = matrix.map((s) => s.id);
@@ -121,6 +124,46 @@ describe("seedDriftOffenders", () => {
     expect(seedDriftOffenders([{ viewport: "desktop" }])).toEqual([
       { viewport: "desktop", changedFraction: undefined },
     ]);
+  });
+});
+
+describe("buildOverallVerdict", () => {
+  it("passes only when color, capture readiness, and seed drift all pass", () => {
+    expect(
+      buildOverallVerdict({
+        colorVerdict: { pass: true },
+        captureFailures: [],
+        driftOffenders: [],
+      }).pass,
+    ).toBe(true);
+  });
+
+  it("fails when a capture is invalid even if color analysis passes", () => {
+    const verdict = buildOverallVerdict({
+      colorVerdict: { pass: true },
+      captureFailures: [
+        {
+          id: "mobile-composer-focused",
+          failedChecks: [{ name: "composer:focus_and_type", ok: false }],
+        },
+      ],
+      driftOffenders: [],
+    });
+    expect(verdict.pass).toBe(false);
+    expect(verdict.colorPass).toBe(true);
+    expect(verdict.captureFailures.map((f) => f.id)).toEqual([
+      "mobile-composer-focused",
+    ]);
+  });
+
+  it("fails when the onboarded seed drifts back to the gate", () => {
+    const verdict = buildOverallVerdict({
+      colorVerdict: { pass: true },
+      captureFailures: [],
+      driftOffenders: [{ viewport: "mobile", changedFraction: 0.001 }],
+    });
+    expect(verdict.pass).toBe(false);
+    expect(verdict.driftOffenders.map((o) => o.viewport)).toEqual(["mobile"]);
   });
 });
 
