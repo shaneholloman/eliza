@@ -7,7 +7,7 @@
  * executor between setup and the first turn.
  */
 import type { AgentRuntime, UUID } from "@elizaos/core";
-import { MemoryType, stringToUuid } from "@elizaos/core";
+import { createMessageMemory, MemoryType, stringToUuid } from "@elizaos/core";
 import type {
   ScenarioContext,
   ScenarioSeedStep,
@@ -267,6 +267,18 @@ type CalendarEventMemorySeed = MemoryContactSeed & {
   canceled?: unknown;
   cancelledAt?: unknown;
   canceledAt?: unknown;
+};
+
+type InboundMessageMemorySeed = MemoryContactSeed & {
+  from?: unknown;
+  relationship?: unknown;
+  priority?: unknown;
+  text?: unknown;
+  source?: unknown;
+  messageId?: unknown;
+  occurredAt?: unknown;
+  threadId?: unknown;
+  url?: unknown;
 };
 
 type ConnectorStatusLike = {
@@ -839,6 +851,126 @@ async function seedCalendarEventMemory(
   return undefined;
 }
 
+function inboundMessageSenderName(seed: InboundMessageMemorySeed): string {
+  return (
+    readNonEmptyString(seed.displayName) ??
+    readNonEmptyString(seed.from) ??
+    readNonEmptyString(seed.handle) ??
+    "Scenario sender"
+  );
+}
+
+function inboundMessageSenderEntityId(
+  ctx: ScenarioContext,
+  seed: InboundMessageMemorySeed,
+): UUID {
+  const platform = readNonEmptyString(seed.platform) ?? "scenario";
+  const identity =
+    readNonEmptyString(seed.platformUserId) ??
+    readNonEmptyString(seed.handle) ??
+    inboundMessageSenderName(seed);
+  return stringToUuid(
+    `scenario-inbound-message-sender:${ctx.scenarioId ?? "unknown"}:${platform}:${identity}`,
+  ) as UUID;
+}
+
+function inboundMessageTimestamp(
+  ctx: ScenarioContext,
+  seed: InboundMessageMemorySeed,
+): number {
+  const occurredAt = readNonEmptyString(seed.occurredAt);
+  if (occurredAt) {
+    const parsed = Date.parse(occurredAt);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return readScenarioNow(ctx).getTime();
+}
+
+async function seedInboundMessageMemory(
+  ctx: ScenarioContext,
+  seed: InboundMessageMemorySeed,
+): Promise<string | undefined> {
+  const text = readNonEmptyString(seed.text);
+  if (!text) {
+    return "inbound-message memory seed requires non-empty text";
+  }
+  const runtime = requireRuntime(ctx);
+  const roomId = readNonEmptyString(ctx.primaryRoomId);
+  if (!roomId) {
+    return "inbound-message memory seed requires ctx.primaryRoomId (set by the executor before seeds run)";
+  }
+
+  const senderName = inboundMessageSenderName(seed);
+  const senderEntityId = inboundMessageSenderEntityId(ctx, seed);
+  const existingEntity = await runtime.getEntityById(senderEntityId);
+  if (!existingEntity) {
+    await runtime.createEntity({
+      id: senderEntityId,
+      names: [senderName],
+      agentId: runtime.agentId,
+    });
+  }
+
+  const timestamp = inboundMessageTimestamp(ctx, seed);
+  const platform = readNonEmptyString(seed.platform) ?? "scenario";
+  const handle = readNonEmptyString(seed.handle);
+  const platformUserId = readNonEmptyString(seed.platformUserId);
+  const url = readNonEmptyString(seed.url);
+  const relationship = readNonEmptyString(seed.relationship);
+  const priority = readNonEmptyString(seed.priority);
+  const threadId = readNonEmptyString(seed.threadId);
+  const messageId =
+    readNonEmptyString(seed.messageId) ??
+    `${ctx.scenarioId ?? "scenario"}:${roomId}:${senderEntityId}:${timestamp}`;
+  const source = readNonEmptyString(seed.source) ?? platform;
+  const memory = createMessageMemory({
+    id: stringToUuid(`scenario-inbound-message:${messageId}`),
+    entityId: senderEntityId,
+    roomId: roomId as UUID,
+    content: {
+      text,
+      source,
+      ...(url ? { url } : {}),
+      ...(handle ? { username: handle } : {}),
+      displayName: senderName,
+      senderName,
+      from: readNonEmptyString(seed.from) ?? senderName,
+      ...(platform ? { platform } : {}),
+      ...(platformUserId ? { platformUserId } : {}),
+      ...(relationship ? { relationship } : {}),
+      ...(priority ? { priority } : {}),
+    },
+  });
+  memory.createdAt = timestamp;
+  memory.metadata = {
+    ...memory.metadata,
+    source: "scenario-seed",
+    sourceId: messageId,
+    timestamp,
+    scenarioId: ctx.scenarioId,
+    kind: "inbound-message",
+    entityName: senderName,
+    sender: {
+      name: senderName,
+      ...(handle ? { username: handle } : {}),
+      ...(platformUserId ? { id: platformUserId } : {}),
+    },
+    provider: platform,
+    ...(handle ? { username: handle } : {}),
+    ...(platformUserId ? { fromId: platformUserId, platformUserId } : {}),
+    ...(relationship ? { relationship } : {}),
+    ...(priority ? { priority } : {}),
+    ...(threadId ? { thread: { id: threadId } } : {}),
+    ...(platform === "telegram" && platformUserId
+      ? { telegram: { userId: platformUserId, id: platformUserId, messageId } }
+      : {}),
+  };
+  await runtime.createMemory(memory, "messages");
+  return undefined;
+}
+
 async function seedContact(
   ctx: ScenarioContext,
   seed: ContactSeed,
@@ -936,11 +1068,14 @@ async function seedMemory(
   if (memoryType === "calendar-event") {
     return seedCalendarEventMemory(ctx, content as CalendarEventMemorySeed);
   }
+  if (memoryType === "inbound-message") {
+    return seedInboundMessageMemory(ctx, content as InboundMessageMemorySeed);
+  }
   if (memoryType !== null) {
     // A seed the runner cannot land must fail the scenario, never no-op:
     // a silently dropped seed fabricates the premise the checks grade
     // against (#14631 — the "seeded VIP fact" the model never received).
-    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity/calendar-event, travel profile/trip/booking/upgrade-offer/calendar-focus-window, or plain { text } for a durable owner fact`;
+    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity/calendar-event/inbound-message, travel profile/trip/booking/upgrade-offer/calendar-focus-window, or plain { text } for a durable owner fact`;
   }
   const text = readNonEmptyString((content as { text?: unknown }).text);
   if (!text) {
