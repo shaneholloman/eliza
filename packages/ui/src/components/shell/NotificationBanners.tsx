@@ -118,6 +118,7 @@ function BannerCard({
             </span>
             <RelativeTime
               ts={notification.createdAt}
+              short
               className="ml-auto shrink-0 pl-2 text-2xs tabular-nums text-white/60"
             />
           </span>

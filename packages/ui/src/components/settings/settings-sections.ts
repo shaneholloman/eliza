@@ -308,6 +308,10 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     tone: "accent",
     hue: "accent",
     labelKey: "settings.sections.voice.label",
+    // Hidden for MVP — voice runs on the bundled Kokoro TTS with no user
+    // selection; a summary row lives in Models & Providers. Kept registered so
+    // the `/settings voice` deep-link still resolves.
+    developerOnly: true,
     Component: VoiceSectionMount,
   },
   {
@@ -320,6 +324,8 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     hue: "accent",
     labelKey: "settings.sections.capabilities.label",
     titleKey: "common.capabilities",
+    // Hidden for MVP (kept registered so its route/deep-link still resolves).
+    developerOnly: true,
     Component: CapabilitiesSection,
   },
   {
@@ -331,6 +337,8 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     tone: "accent",
     hue: "accent",
     labelKey: "settings.sections.apps.label",
+    // Hidden for MVP (kept registered so its route/deep-link still resolves).
+    developerOnly: true,
     Component: AppsManagementSection,
   },
   {
@@ -366,6 +374,9 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     tone: "neutral",
     hue: "rose",
     labelKey: "settings.sections.background.label",
+    // Consolidated into the Appearance section for MVP; the standalone tab is
+    // hidden but kept registered so the `/background` deep-link still resolves.
+    developerOnly: true,
     // Chrome-light so the live wallpaper shows through while choices apply.
     Component: BackgroundSettingsSection,
   },
@@ -377,6 +388,8 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     tone: "neutral",
     hue: "slate",
     labelKey: "settings.sections.runtime.label",
+    // Hidden for MVP (kept registered so its route/deep-link still resolves).
+    developerOnly: true,
     Component: RuntimeSettingsSection,
   },
   {
@@ -389,6 +402,9 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     hue: "slate",
     labelKey: "settings.sections.walletrpc.label",
     bodyClassName: "p-4 sm:p-5",
+    // Hidden for MVP — default to Eliza Cloud RPC. Kept registered so the route
+    // still resolves and it can be re-surfaced later.
+    developerOnly: true,
     Component: WalletRpcSection,
   },
   {
@@ -412,6 +428,8 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     tone: "neutral",
     hue: "slate",
     labelKey: "settings.sections.updates.label",
+    // Hidden for MVP (kept registered so its route/deep-link still resolves).
+    developerOnly: true,
     Component: ReleaseCenterView,
   },
   {
@@ -436,6 +454,8 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     tone: "warn",
     hue: "amber",
     labelKey: "settings.sections.secrets.label",
+    // Hidden for MVP (kept registered so its route/deep-link still resolves).
+    developerOnly: true,
     Component: SecretsManagerSection,
   },
   {
@@ -472,6 +492,8 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     // into your host"). Meaningless for a cloud mobile user — the cloud
     // "Sessions & Privacy" section covers real account security on cloud.
     hideOnCloud: true,
+    // Hidden for MVP (kept registered so its route/deep-link still resolves).
+    developerOnly: true,
     Component: SecuritySettingsSection,
   },
 
@@ -508,6 +530,9 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     titleKey: "settings.sections.cloudAgents.title",
     defaultTitle: "Eliza Cloud Agents",
     order: 1.55,
+    // Hidden for MVP — agent management renders inside the single "Eliza
+    // Cloud" tab (CloudOverviewSection). Deep-link still resolves.
+    developerOnly: true,
     Component: CloudAgentsSection,
   },
   // "My Runtimes" — manage + switch between local / cloud-dedicated /
@@ -521,6 +546,8 @@ const BUILTIN_SECTION_DEFINITIONS: readonly BuiltinSectionDefinition[] = [
     labelKey: "settings.sections.myRuntimes.label",
     titleKey: "settings.sections.myRuntimes.title",
     order: 3.5,
+    // Hidden for MVP (kept registered so its route/deep-link still resolves).
+    developerOnly: true,
     Component: MyRuntimesContainer,
   },
 ] as const;

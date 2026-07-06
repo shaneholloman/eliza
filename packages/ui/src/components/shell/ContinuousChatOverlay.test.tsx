@@ -1652,8 +1652,9 @@ describe("ContinuousChatOverlay", () => {
 
     expect(screen.queryByTestId("chat-composer-clear-debug")).toBeNull();
     // Width is constrained on the panel's wrapper (which also holds the absolute
-    // drag handle); the input row is a single, non-wrapping flex row.
-    expect(panel.parentElement?.className).toContain("max-w-3xl");
+    // drag handle) via the morph-driven inline max-width — 48rem (768px) at rest,
+    // widening to the viewport only as the maximize morph completes.
+    expect(panel.parentElement?.style.maxWidth).toBe("768px");
     expect(bar?.className).toContain("flex");
     expect(bar?.className).not.toContain("flex-wrap");
     expect(input.className).toContain("flex-1");
@@ -2729,15 +2730,16 @@ describe("ContinuousChatOverlay single-thread (no chat swipe, #13531)", () => {
     expect(screen.queryByTestId("chat-full-clear")).toBeNull();
   });
 
-  it("renders NO header voice button — voice lives only on the composer mic", () => {
+  it("carries no voice control in the top bar — voice lives on the composer mic", () => {
     const { controller } = makeSwipeController();
     render(<ContinuousChatOverlay controller={controller} />);
     openSheet();
 
-    // One voice state machine, ONE control: the composer mic. A second
-    // top-bar mic beside Home read as a duplicated control and was removed.
+    // The redundant top-bar mic was removed: voice has exactly one entry point,
+    // the composer mic. A tap there enters/exits the hands-free conversation.
     expect(screen.queryByTestId("chat-full-voice")).toBeNull();
-    expect(screen.getByTestId("chat-full-launcher")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("chat-composer-mic"));
+    expect(controller.toggleHandsFree).toHaveBeenCalledTimes(1);
   });
 
   it("opens the message-search panel from the header search control (#14279)", () => {
