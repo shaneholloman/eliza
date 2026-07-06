@@ -124,7 +124,10 @@ import {
   useChatInputRef,
 } from "./state/ChatComposerContext.hooks";
 import { isShellPaintable } from "./state/startup-coordinator";
-import { firstRunOwnsLoginSurface } from "./state/top-level-auth-gate";
+import {
+  authProbeShouldHoldShell,
+  firstRunOwnsLoginSurface,
+} from "./state/top-level-auth-gate";
 import { isLoopbackGatewayHost } from "./state/use-startup-shell-controller";
 import {
   SurfaceRealmScope,
@@ -2531,8 +2534,8 @@ export function App() {
     );
   }
 
-  // Auth gate — once the shell is paintable (agent may still be warming up),
-  // check /api/auth/me. "loading": wait (fall through to the main shell render).
+  // Auth gate — once the shell is paintable, keep poll-heavy shell hooks
+  // unmounted until /api/auth/me resolves for returning sessions.
   // "unauthenticated": render LoginView. "authenticated": proceed.
   // "server_unavailable": show a retryable startup failure.
   if (
@@ -2540,6 +2543,20 @@ export function App() {
     !isPopout &&
     !firstRunOwnsLoginSurface(startupCoordinator.phase, firstRunComplete)
   ) {
+    if (
+      authProbeShouldHoldShell(
+        startupCoordinator.phase,
+        firstRunComplete,
+        authState.phase,
+      )
+    ) {
+      return (
+        <BugReportProvider value={bugReport}>
+          <StartupScreen />
+          <BugReportModal />
+        </BugReportProvider>
+      );
+    }
     if (authState.phase === "server_unavailable") {
       return (
         <BugReportProvider value={bugReport}>
@@ -2575,8 +2592,8 @@ export function App() {
         </BugReportProvider>
       );
     }
-    // While loading the auth state we allow the main shell to continue
-    // rendering (avoids a flash of login screen on refresh when cookies are valid).
+    // The loading phase is handled above so the shell's poll-heavy hooks never
+    // mount until the session is known.
   }
 
   // OS kiosk window — the locked appliance shell: a fullscreen in-window
