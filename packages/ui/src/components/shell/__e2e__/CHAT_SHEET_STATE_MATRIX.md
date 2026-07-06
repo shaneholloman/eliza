@@ -83,9 +83,30 @@ continues past it.
 | Onboarding (`firstRunOpen`) | pinned MAXIMIZED and undismissable; falling edge settles to HALF. |
 | Viewport rotation / pointer-cancel mid-drag | settles back to the current detent (never strands mid-morph). |
 
+## Mid-drag commit (expand/collapse WHILE holding, not only on release)
+
+The maximize and pill landings fire the **moment the finger crosses the
+threshold**, not on release — dragging up to the top maximizes without letting
+go, dragging down to the bottom collapses into the pill without letting go. The
+state flips and the springs carry the sheet into it under the held finger; the
+gesture stays alive and is **rebased** at the committed state so it can be
+**reversed within the same drag** (with a small `MID_DRAG_RESUME_SLOP`
+hysteresis so end-of-gesture jitter can't flap it).
+
+| While holding | Fires when | Reverse (same held drag) |
+| --- | --- | --- |
+| **→ MAXIMIZED** | over-pull ≥ half the morph gap past FULL, or (started ≤ HALF) the pull sweeps ≥ 80% of the screen | pull back down past the slop → un-maximizes, then tracks the panel shrinking 1:1 (re-arms only below the inset FULL height) |
+| **→ PILL** | an open-sheet drag carried ≥ 40px past the bottom, or a big yank that started above HALF running out the bottom; or the input→pill morph crosses halfway | pull back up past the slop → resumes the pill-open drag from zero |
+
+The release then just settles where the mid-drag commit already landed the sheet.
+The initiating handle (grabber or pill) is kept mounted and pointer-active for
+the whole gesture (`draggingRef`) so the state flip never drops the pointer
+capture that is driving it.
+
 ## Invariants
 
 - The panel is ONE persistent element pill ↔ input ↔ chat ↔ full-bleed — no remounts; all morphs are transform/opacity/height (compositor-friendly).
+- Commits happen mid-drag (see above); the finger never has to let go to trigger the expand/collapse, and any commit is reversible within the same held gesture.
 - Only FULL may carry `maximized`; every other landing clears it.
 - `openProgress` always settles to 0 (pill) or 1 (anything else) on release — never strands mid-morph.
 - Detent changes fire exactly one haptic; sub-threshold releases fire none.

@@ -3781,9 +3781,13 @@ export function ContinuousChatOverlay({
         if (commit.kind === "maximized") {
           if (delta > -MID_DRAG_RESUME_SLOP) return;
           // Pulling back down out of the committed maximize: drop the state and
-          // track from the full ceiling (the restore-strip drag's shape).
+          // track from the full ceiling (the restore-strip drag's shape). Reset
+          // the peak tracker so the eventual RELEASE doesn't re-maximize off the
+          // now-void peak the committed maximize left behind (the user reversed
+          // — they no longer want it) — it re-grows only if they pull up again.
           dragCommitRef.current = null;
           dragMaxArmedRef.current = false;
+          maxPullRawRef.current = 0;
           setMaximized(false);
           dragBaseHRef.current = fullPanelMaxH;
           dragOffsetBaseRef.current = offset;

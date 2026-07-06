@@ -854,6 +854,97 @@ async function runContinuumSuite(p, pointer, tag) {
   await snap(p, `${tag}-continuum-final-input`);
 }
 
+/**
+ * MID-DRAG COMMIT — the sheet must expand/collapse WHILE the finger is still
+ * down, not only on release. Holds each signature drag past its threshold and
+ * asserts the committed state BEFORE releasing:
+ *   1. pill → hold-drag to the top → data-maximized flips true mid-hold;
+ *   2. FULL → hold-drag past the bottom → data-detent flips to "pill" mid-hold;
+ *   3. reversal: after a mid-drag maximize, pulling back DOWN past the resume
+ *      slop un-maximizes mid-hold (the commit is reversible in the same drag).
+ * Real-touch hold-drags coalesce mid-gesture, so this runs mouse-only (the
+ * commit thresholds themselves are engine-agnostic; runContinuumSuite already
+ * proves the touch release path).
+ */
+async function runMidDragCommitSuite(p, tag) {
+  const vh = await viewportH(p);
+  // Start from the INPUT resting state; collapse to the pill first.
+  await gesture(p, -120, { pointer: "mouse", slow: false, steps: 2 });
+  await p.waitForTimeout(SETTLE);
+  assert(
+    (await detent(p)) === "pill",
+    `[${tag}-middrag] collapsed to PILL to start`,
+  );
+
+  // (1) HOLD a long drag from the pill to near the top — do NOT release.
+  await gesture(p, vh - 40, {
+    pointer: "mouse",
+    hold: true,
+    slow: true,
+    steps: 26,
+    target: "chat-pill",
+  });
+  await p.waitForTimeout(SETTLE);
+  assert(
+    (await p
+      .locator('[data-testid="chat-sheet"][data-maximized="true"]')
+      .count()) === 1,
+    `[${tag}-middrag] MAXIMIZES mid-drag from the pill (still holding, not released)`,
+  );
+  await snap(p, `${tag}-middrag-maximized-held`);
+
+  // (3) REVERSAL: still holding, drag back DOWN a short way — un-maximizes
+  // mid-drag (the finger reversed past the resume slop).
+  const pillBox0 = await p.getByTestId("chat-pill").boundingBox().catch(() => null);
+  void pillBox0;
+  // Move the held mouse back down ~200px from the top.
+  await p.mouse.move(
+    (await p.evaluate(() => window.innerWidth)) / 2,
+    240,
+    { steps: 12 },
+  );
+  await p.waitForTimeout(SETTLE);
+  assert(
+    (await p
+      .locator('[data-testid="chat-sheet"][data-maximized="true"]')
+      .count()) === 0,
+    `[${tag}-middrag] pulling back down UN-maximizes mid-drag (reversible in the same gesture)`,
+  );
+  await p.mouse.up();
+  await p.waitForTimeout(SETTLE);
+
+  // (2) Open to FULL, then HOLD a drag past the bottom — collapses to the pill
+  // mid-drag. Flick up twice to FULL for a known start.
+  await gesture(p, 160, { pointer: "mouse", slow: false, steps: 2 });
+  await p.waitForTimeout(SETTLE);
+  await gesture(p, 200, { pointer: "mouse", slow: false, steps: 2 });
+  await p.waitForTimeout(SETTLE);
+  assert(
+    (await detent(p)) === "full",
+    `[${tag}-middrag] opened to FULL for the collapse-mid-drag check`,
+  );
+  // Hold-drag the grabber all the way down past the bottom of the screen.
+  await gesture(p, -(vh + 80), {
+    pointer: "mouse",
+    hold: true,
+    slow: true,
+    steps: 28,
+    target: "chat-sheet-grabber",
+  });
+  await p.waitForTimeout(SETTLE);
+  assert(
+    (await detent(p)) === "pill",
+    `[${tag}-middrag] COLLAPSES to the pill mid-drag from FULL (still holding)`,
+  );
+  await snap(p, `${tag}-middrag-pill-held`);
+  await p.mouse.up();
+  await p.waitForTimeout(SETTLE);
+  assert(
+    (await detent(p)) === "pill",
+    `[${tag}-middrag] stays PILL after releasing the committed collapse`,
+  );
+}
+
 const BIG_STREAM_GROWTH = `\n\n${Array.from(
   { length: 18 },
   (_, i) =>
@@ -986,6 +1077,12 @@ try {
     await desktop.waitForSelector('[data-testid="chat-sheet"]');
     await desktop.waitForTimeout(700);
     await runContinuumSuite(desktop, "mouse", "desktop");
+
+    // Fresh load: mid-drag commit (expand/collapse WHILE holding, not on release).
+    await gotoFixture(desktop);
+    await desktop.waitForSelector('[data-testid="chat-sheet"]');
+    await desktop.waitForTimeout(700);
+    await runMidDragCommitSuite(desktop, "desktop");
 
     // ===== MOBILE + TOUCH (recorded — the continuous detent drag-suite video) =====
     const mobileCtx = await browser.newContext({
