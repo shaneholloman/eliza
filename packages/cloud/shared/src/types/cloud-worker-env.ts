@@ -57,6 +57,13 @@ export interface Bindings {
    * STT endpoint serves Whisper for free; ElevenLabs STT is the fallback.
    */
   WHISPER_STT_URL?: string;
+  /**
+   * Model id passed to the self-hosted Whisper STT service. Optional; defaults
+   * to the multilingual `Systran/faster-whisper-small`, so the forwarded
+   * `languageCode` works for the non-English persona corpus. Set this to pin a
+   * different hosted model for a deployment.
+   */
+  WHISPER_STT_MODEL?: string;
 
   // ---- AI providers ----
   CEREBRAS_API_KEY?: string;
