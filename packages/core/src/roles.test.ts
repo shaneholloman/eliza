@@ -23,6 +23,7 @@ import {
 	canModifyRole,
 	getEntityRole,
 	getLiveEntityMetadataFromMessage,
+	getUnresolvedSenderRoleFloor,
 	hasAtLeastRole,
 	hasRoleAccess,
 	isAdminRank,
@@ -141,11 +142,9 @@ describe("isAgentSelf", () => {
 describe("hasRoleAccess — fail-closed on unresolved role", () => {
 	// A message with a real entity/room but no resolvable world (deleted or
 	// inaccessible world, or a source that yields no world id) makes
-	// checkSenderRole return null. That path used to `return true` (fail-OPEN) —
-	// a guest whose world resolution failed cleared the OWNER gate and reached
-	// owner-gated capabilities (e.g. SHELL). It must fail closed to USER rank
-	// (matching the pre-handler default), denying ADMIN/OWNER while still
-	// allowing basic USER actions.
+	// checkSenderRole return null. Connector-originated senders must fall to
+	// GUEST so they do not outrank a fully resolved stranger; local/API harness
+	// traffic keeps USER so no-world local usage still works.
 	const makeRuntime = (settings: Record<string, string> = {}) =>
 		({
 			agentId: "agent-1",
@@ -163,6 +162,40 @@ describe("hasRoleAccess — fail-closed on unresolved role", () => {
 		roomId: "room-1",
 		content: { text: "run df -h on the server", source: "test" },
 	} as unknown as Memory;
+	const connectorMessage = {
+		entityId: "guest-entity-1",
+		roomId: "room-1",
+		content: { text: "run df -h on the server", source: "discord" },
+	} as unknown as Memory;
+
+	it("uses USER only for local unresolved sources", () => {
+		expect(getUnresolvedSenderRoleFloor(guestMessage)).toBe("USER");
+		for (const source of [
+			"api",
+			"dashboard",
+			"owner_app",
+			"local-voice",
+			"sub_agent",
+			"coding-agent",
+		]) {
+			expect(
+				getUnresolvedSenderRoleFloor({
+					...guestMessage,
+					content: { text: `from ${source}`, source },
+				} as unknown as Memory),
+			).toBe("USER");
+		}
+	});
+
+	it("uses GUEST for unresolved connector sources", () => {
+		expect(getUnresolvedSenderRoleFloor(connectorMessage)).toBe("GUEST");
+		expect(
+			getUnresolvedSenderRoleFloor({
+				...connectorMessage,
+				content: { text: "from Telegram", source: "telegram" },
+			} as unknown as Memory),
+		).toBe("GUEST");
+	});
 
 	it("denies OWNER and ADMIN when the sender role cannot be resolved", async () => {
 		const runtime = makeRuntime();
@@ -170,10 +203,16 @@ describe("hasRoleAccess — fail-closed on unresolved role", () => {
 		expect(await hasRoleAccess(runtime, guestMessage, "ADMIN")).toBe(false);
 	});
 
-	it("still allows USER (matches the pre-handler ['USER'] default) and GUEST", async () => {
+	it("still allows USER for unresolved local/API traffic and always allows GUEST", async () => {
 		const runtime = makeRuntime();
 		expect(await hasRoleAccess(runtime, guestMessage, "USER")).toBe(true);
 		expect(await hasRoleAccess(runtime, guestMessage, "GUEST")).toBe(true);
+	});
+
+	it("denies USER for an unresolved connector sender", async () => {
+		const runtime = makeRuntime();
+		expect(await hasRoleAccess(runtime, connectorMessage, "USER")).toBe(false);
+		expect(await hasRoleAccess(runtime, connectorMessage, "GUEST")).toBe(true);
 	});
 
 	it("still allows the canonical owner through the OWNER gate", async () => {

@@ -41,7 +41,12 @@ import { logger } from "../logger";
 import { describeImageCached } from "../media";
 import { fetchRemoteMedia } from "../media/fetch";
 import { imageDescriptionTemplate, messageHandlerTemplate } from "../prompts";
-import { checkSenderRole, hasAtLeastRole, isAdminRank } from "../roles";
+import {
+	checkSenderRole,
+	getUnresolvedSenderRoleFloor,
+	hasAtLeastRole,
+	isAdminRank,
+} from "../roles";
 import {
 	type ActionCatalog,
 	buildActionCatalog,
@@ -4903,9 +4908,9 @@ function synthesizeStage1TruncationReply(): MessageHandlerResult {
 /**
  * Resolve the calling sender's role for context-catalog filtering.
  *
- * This is best-effort: when there is no world context (DM-only sessions,
- * benchmarks, tests), `checkSenderRole` returns null and we fall through to a
- * conservative default. Owner-only messages always pass the agent's own
+ * This is best-effort: when there is no world context, `checkSenderRole`
+ * returns null and we fall through to the same source-aware floor that
+ * `hasRoleAccess` uses. Owner-only messages always pass the agent's own
  * messages without a world lookup.
  */
 async function resolveStage1SenderRole(
@@ -4926,12 +4931,10 @@ async function resolveStage1SenderRole(
 	} catch (error) {
 		runtime.logger.debug(
 			{ src: "service:message", error },
-			"Stage 1 sender role lookup failed; defaulting to USER",
+			"Stage 1 sender role lookup failed; using unresolved role floor",
 		);
 	}
-	// No world metadata — fall back to USER. This matches the lenient default
-	// in plugin-role-gating so local-only usage isn't blocked.
-	return "USER";
+	return getUnresolvedSenderRoleFloor(message);
 }
 
 function listAvailableContextsForRole(
