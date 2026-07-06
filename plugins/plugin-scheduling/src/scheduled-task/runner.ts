@@ -25,7 +25,7 @@ import type {
   AnchorRegistry,
   ConsolidationRegistry,
 } from "./consolidation-policy.js";
-import { isScheduledTaskDue } from "./due.js";
+import { isScheduledTaskDue, type ScheduledTaskDueDecision } from "./due.js";
 import {
   type EscalationLadderRegistry,
   resetLadderForSnooze,
@@ -545,6 +545,32 @@ export interface ScheduledTaskRunnerExtras {
    * `null` when the task is not found or has no cursor recorded yet.
    */
   getEscalationCursor(taskId: string): Promise<EscalationCursorView | null>;
+  /**
+   * Project the next wall-clock fire instant for a task, honoring the same
+   * scheduled-override and recurrence rules the runner uses to index
+   * `next_fire_at`. Returns `null` for triggers with no wall-clock time
+   * (`event`/`manual`/`after_task`) or settled non-recurring rows.
+   *
+   * Exposed so consumers that need a due-window view (e.g. the
+   * `SCHEDULED_TASKS` action's "overdue"/"today" list filter) share the one
+   * next-fire computation instead of re-deriving it and drifting from the
+   * indexed value the tick relies on.
+   */
+  resolveNextFireAt(task: ScheduledTask): Promise<string | null>;
+  /**
+   * Evaluate whether a task is due at the runner's current clock, using the
+   * same owner-facts and anchor dependencies as the scheduler tick. Consumers
+   * that present due-window views need this before a future next-fire
+   * projection, otherwise a missed recurring occurrence can be hidden by the
+   * next natural occurrence.
+   */
+  resolveDueDecision(task: ScheduledTask): Promise<ScheduledTaskDueDecision>;
+  /**
+   * Return the owner facts the runner uses for trigger/gate evaluation. This is
+   * exposed for read-only views that must apply the same owner-local timezone
+   * boundary as the scheduler without reaching behind the runner deps port.
+   */
+  resolveOwnerFacts(): Promise<OwnerFactsView>;
 }
 
 export interface ScheduledTaskRunnerHandle
@@ -677,6 +703,21 @@ export function createScheduledTaskRunner(
       ownerFacts,
       anchors: deps.anchors,
     });
+  }
+
+  async function resolveDueDecision(
+    task: ScheduledTask,
+  ): Promise<ScheduledTaskDueDecision> {
+    const ownerFacts = await deps.ownerFacts();
+    return isScheduledTaskDue(task, {
+      now: now(),
+      ownerFacts,
+      anchors: deps.anchors,
+    });
+  }
+
+  async function resolveOwnerFacts(): Promise<OwnerFactsView> {
+    return deps.ownerFacts();
   }
 
   async function schedule(
@@ -1685,5 +1726,8 @@ export function createScheduledTaskRunner(
     rolloverStateLog,
     inspectRegistries,
     getEscalationCursor,
+    resolveNextFireAt,
+    resolveDueDecision,
+    resolveOwnerFacts,
   };
 }

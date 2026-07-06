@@ -6,7 +6,8 @@
  * `ScheduledTask` records (frozen contract per `IMPLEMENTATION_PLAN.md` §1).
  *
  * Subactions:
- *   - `list`      — read tasks (optional kind / status / subject filters)
+ *   - `list`      — read tasks (optional kind / status / subject filters, plus
+ *                   a `dueWindow` = overdue|today next-fire filter)
  *   - `get`       — fetch one task by id
  *   - `create`    — schedule a new task (any `ScheduledTaskKind`)
  *   - `update`    — edit a scheduled task (`ScheduledTaskRunner.apply edit`)
@@ -90,6 +91,8 @@ interface ScheduledTaskParams {
   subjectKind?: ScheduledTaskSubjectKindParam;
   subjectId?: string;
   ownerVisibleOnly?: boolean;
+  /** list-only: restrict to next-fire window `overdue` (past due) or `today`. */
+  dueWindow?: "overdue" | "today";
   /** create-only: free-form prompt instructions for the runner. */
   promptInstructions?: string;
   /** create-only: trigger spec (`once`, `cron`, `manual`, etc). */
@@ -498,15 +501,94 @@ function stableTriggerKey(trigger: ScheduledTaskTrigger): string {
     .join("|");
 }
 
+const DUE_WINDOWS = ["overdue", "today"] as const;
+type DueWindow = (typeof DUE_WINDOWS)[number];
+
+function normalizeDueWindow(value: unknown): DueWindow | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().toLowerCase();
+  return (DUE_WINDOWS as readonly string[]).includes(trimmed)
+    ? (trimmed as DueWindow)
+    : undefined;
+}
+
+function localDateKey(date: Date, timeZone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(date);
+    const read = (type: string) =>
+      parts.find((part) => part.type === type)?.value;
+    const year = read("year");
+    const month = read("month");
+    const day = read("day");
+    if (year && month && day) return `${year}-${month}-${day}`;
+  } catch {
+    // error-policy:J3 invalid owner timezone fact falls back to UTC date-key comparison.
+    // Invalid owner timezone facts fall back to UTC, matching scheduler helpers.
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Keep tasks whose due instant falls inside `window`, using the runner's
+ * due-decision and next-fire projection so the chat/voice filter and scheduler
+ * tick share the same owner-facts and anchor dependencies. Already-due tasks
+ * are considered before the future next-fire projection; otherwise a missed
+ * recurring occurrence can project to tomorrow and disappear from an
+ * "overdue" view. Tasks with no wall-clock due time (event/manual/after_task,
+ * or settled non-recurring rows) are excluded from both windows. `today` is a
+ * superset of `overdue`.
+ */
+async function filterByDueWindow(
+  scope: RunnerScope,
+  tasks: ScheduledTask[],
+  window: DueWindow,
+): Promise<ScheduledTask[]> {
+  const now = Date.now();
+  const ownerFacts = await scope.runner.resolveOwnerFacts();
+  const ownerTimeZone = ownerFacts.timezone ?? "UTC";
+  const todayKey = localDateKey(new Date(now), ownerTimeZone);
+  const kept: ScheduledTask[] = [];
+  for (const task of tasks) {
+    const dueDecision = await scope.runner.resolveDueDecision(task);
+    if (dueDecision.due) {
+      kept.push(task);
+      continue;
+    }
+    if (window === "overdue") continue;
+    const nextFireAtIso = await scope.runner.resolveNextFireAt(task);
+    if (nextFireAtIso === null) continue;
+    const fireMs = Date.parse(nextFireAtIso);
+    if (!Number.isFinite(fireMs)) continue;
+    if (localDateKey(new Date(fireMs), ownerTimeZone) === todayKey) {
+      kept.push(task);
+    }
+  }
+  return kept;
+}
+
 async function handleList(
   scope: RunnerScope,
   params: ScheduledTaskParams,
 ): Promise<ActionResult> {
   const tasks = await scope.runner.list(buildFilter(params));
+  const dueWindow = normalizeDueWindow(params.dueWindow);
+  const filtered = dueWindow
+    ? await filterByDueWindow(scope, tasks, dueWindow)
+    : tasks;
+  const windowNote = dueWindow ? ` (${dueWindow})` : "";
   return {
     success: true,
-    text: `${tasks.length} scheduled task${tasks.length === 1 ? "" : "s"} match.`,
-    data: { subaction: "list", tasks },
+    text: `${filtered.length} scheduled task${filtered.length === 1 ? "" : "s"} match${windowNote}.`,
+    data: {
+      subaction: "list",
+      tasks: filtered,
+      ...(dueWindow ? { dueWindow } : {}),
+    },
   };
 }
 
@@ -858,6 +940,32 @@ const examples: ActionExample[][] = [
   [
     {
       name: "{{name1}}",
+      content: { text: "Show me only my overdue tasks." },
+    },
+    {
+      name: "{{agentName}}",
+      content: {
+        text: "Listing scheduled tasks that are past due.",
+        action: "SCHEDULED_TASKS",
+      },
+    },
+  ],
+  [
+    {
+      name: "{{name1}}",
+      content: { text: "What's due today?" },
+    },
+    {
+      name: "{{agentName}}",
+      content: {
+        text: "Listing scheduled tasks due today.",
+        action: "SCHEDULED_TASKS",
+      },
+    },
+  ],
+  [
+    {
+      name: "{{name1}}",
       content: { text: "Snooze that reminder 30 minutes." },
     },
     {
@@ -930,7 +1038,7 @@ export const scheduledTaskAction: Action & {
   descriptionCompressed:
     "low-level scheduled-item admin list|get|create|update|snooze|skip|complete|ack|dismiss|cancel|history; NOT new-habit/routine creation (-> OWNER_ROUTINES/OWNER_REMINDERS create)",
   routingHint:
-    'manage EXISTING scheduled items ("snooze that reminder", "follow-ups today", "complete check-in", "scheduled-item history") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder ("brush my teeth at 8 am and 9 pm every day", "remind me daily at 9pm") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES',
+    'manage EXISTING scheduled items ("snooze that reminder", "show me only overdue tasks" -> action=list dueWindow=overdue, "what\'s due today" -> action=list dueWindow=today, "complete check-in", "scheduled-item history") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder ("brush my teeth at 8 am and 9 pm every day", "remind me daily at 9pm") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES',
   contexts: [
     "tasks",
     "automation",
@@ -982,6 +1090,12 @@ export const scheduledTaskAction: Action & {
       name: "ownerVisibleOnly",
       description: "true: list ownerVisible tasks only.",
       schema: { type: "boolean" as const },
+    },
+    {
+      name: "dueWindow",
+      description:
+        'list-only next-fire filter: "overdue" (fire time already past) or "today" (fires before end of the local day). Use for "show me only overdue tasks" / "what\'s due today".',
+      schema: { type: "string" as const, enum: [...DUE_WINDOWS] },
     },
     {
       name: "promptInstructions",
