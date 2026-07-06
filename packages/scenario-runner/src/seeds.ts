@@ -36,6 +36,38 @@ type LifeOpsOccurrence = Record<string, unknown> & {
   state: LifeOpsOccurrenceState;
 };
 
+type LifeOpsScheduledTask = Record<string, unknown> & {
+  taskId: string;
+  kind: string;
+  promptInstructions: string;
+  trigger: Record<string, unknown>;
+  priority: "low" | "medium" | "high";
+  respectsGlobalPause: boolean;
+  state: { status: string; followupCount: number };
+  source: string;
+  createdBy: string;
+  ownerVisible: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+type LifeOpsReminderAttempt = Record<string, unknown> & {
+  id: string;
+  agentId: string;
+  planId: string;
+  ownerType: "occurrence" | "calendar_event";
+  ownerId: string;
+  occurrenceId: string | null;
+  channel: string;
+  stepIndex: number;
+  scheduledFor: string;
+  attemptedAt: string | null;
+  outcome: string;
+  connectorRef: string | null;
+  deliveryMetadata: Record<string, unknown>;
+  reviewAt?: string | null;
+  reviewStatus?: string | null;
+};
+
 type LifeOpsCalendarEventSeedInput = {
   id: string;
   externalId: string;
@@ -66,6 +98,20 @@ type LifeOpsCalendarEventSeedInput = {
 type LifeOpsRepositoryInstance = {
   createDefinition: (definition: LifeOpsTaskDefinition) => Promise<unknown>;
   upsertOccurrence: (occurrence: LifeOpsOccurrence) => Promise<unknown>;
+  upsertScheduledTask: (
+    agentId: string,
+    task: LifeOpsScheduledTask,
+    options?: { nextFireAtIso?: string | null },
+  ) => Promise<unknown>;
+  listScheduledTasks: (
+    agentId: string,
+    filter?: Record<string, unknown>,
+  ) => Promise<LifeOpsScheduledTask[]>;
+  createReminderAttempt: (attempt: LifeOpsReminderAttempt) => Promise<unknown>;
+  listReminderAttempts: (
+    agentId: string,
+    options?: Record<string, unknown>,
+  ) => Promise<LifeOpsReminderAttempt[]>;
   upsertCalendarEvent: (
     event: LifeOpsCalendarEventSeedInput,
     side?: LifeOpsCalendarEventSeedInput["side"],
@@ -204,6 +250,81 @@ type ConnectorSeed = {
   limit?: unknown;
 };
 
+type UserStateMemorySeed = {
+  kind?: unknown;
+  type?: unknown;
+  doNotDisturb?: unknown;
+  dndActive?: unknown;
+  isCurrentlyActive?: unknown;
+  lastSeenPlatform?: unknown;
+  primaryPlatform?: unknown;
+  secondaryPlatform?: unknown;
+  calendarBusy?: unknown;
+  screenContextBusy?: unknown;
+  screenContextAvailable?: unknown;
+  screenContextFocus?: unknown;
+  metadata?: unknown;
+};
+
+type FocusWindowMemorySeed = {
+  kind?: unknown;
+  type?: unknown;
+  title?: unknown;
+  startAt?: unknown;
+  endAt?: unknown;
+};
+
+type QueuedPushMemorySeed = {
+  kind?: unknown;
+  type?: unknown;
+  title?: unknown;
+  urgency?: unknown;
+  channel?: unknown;
+  dueAt?: unknown;
+};
+
+type DeviceIntentMemorySeed = {
+  kind?: unknown;
+  type?: unknown;
+  id?: unknown;
+  title?: unknown;
+  body?: unknown;
+  priority?: unknown;
+  dispatchedTo?: unknown;
+  actionUrl?: unknown;
+  expiresAt?: unknown;
+};
+
+type ReminderAttemptMemorySeed = {
+  kind?: unknown;
+  type?: unknown;
+  id?: unknown;
+  title?: unknown;
+  channel?: unknown;
+  sentAt?: unknown;
+  readAt?: unknown;
+  attemptedAt?: unknown;
+  scheduledFor?: unknown;
+  priority?: unknown;
+  urgency?: unknown;
+  result?: unknown;
+  statusCode?: unknown;
+  topic?: unknown;
+};
+
+type LadderStateMemorySeed = {
+  kind?: unknown;
+  type?: unknown;
+  history?: unknown;
+  urgency?: unknown;
+};
+
+type LadderHistoryEntry = {
+  channel?: unknown;
+  at?: unknown;
+  ackedAt?: unknown;
+};
+
 type MemoryContactSeed = {
   kind?: unknown;
   type?: unknown;
@@ -229,6 +350,9 @@ type MemoryContactSeed = {
   lastContactedAt?: unknown;
   relationshipStatus?: unknown;
 };
+
+const PROACTIVE_TASK_NAME = "PROACTIVE_AGENT";
+const PROACTIVE_TASK_TAGS = ["queue", "repeat", "proactive"];
 
 const TRAVEL_FACT_MEMORY_KINDS = new Set([
   "profile",
@@ -412,6 +536,13 @@ function readOptionalNumber(value: unknown): number | undefined {
 
 function readOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function readIsoDate(value: unknown): Date | null {
+  const text = readNonEmptyString(value);
+  if (!text) return null;
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? new Date(timestamp) : null;
 }
 
 function readOptionalRecord(value: unknown): Record<string, unknown> | null {
@@ -699,6 +830,574 @@ async function requireRelationshipsService(
 
 function buildContactEntityId(runtime: AgentRuntime, name: string): UUID {
   return stringToUuid(`scenario-contact-${name}-${runtime.agentId}`) as UUID;
+}
+
+function normalizeScreenContextFocus(
+  value: unknown,
+): "work" | "leisure" | "transition" | "idle" | "unknown" | null {
+  const focus = readNonEmptyString(value);
+  if (
+    focus === "work" ||
+    focus === "leisure" ||
+    focus === "transition" ||
+    focus === "idle" ||
+    focus === "unknown"
+  ) {
+    return focus;
+  }
+  return null;
+}
+
+function normalizeScheduledTaskPriority(
+  value: unknown,
+): "low" | "medium" | "high" {
+  const text = readNonEmptyString(value);
+  if (text === "low" || text === "medium" || text === "high") {
+    return text;
+  }
+  if (text === "urgent") return "high";
+  return "medium";
+}
+
+function normalizeIntentPriority(
+  value: unknown,
+): "low" | "medium" | "high" | "urgent" {
+  const text = readNonEmptyString(value);
+  if (
+    text === "low" ||
+    text === "medium" ||
+    text === "high" ||
+    text === "urgent"
+  ) {
+    return text;
+  }
+  return "medium";
+}
+
+function existingActivityProfile(
+  value: unknown,
+): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  return typeof record.ownerEntityId === "string" &&
+    typeof record.analyzedAt === "number" &&
+    typeof record.totalMessages === "number"
+    ? record
+    : null;
+}
+
+function seededActivityProfile(
+  ctx: ScenarioContext,
+  runtime: AgentRuntime,
+  seed: UserStateMemorySeed,
+  previous: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const now = readScenarioNow(ctx);
+  const nowMs = now.getTime();
+  const primaryPlatform =
+    readNonEmptyString(seed.primaryPlatform) ??
+    readNonEmptyString(seed.lastSeenPlatform) ??
+    (typeof previous?.primaryPlatform === "string"
+      ? previous.primaryPlatform
+      : "mobile");
+  const lastSeenPlatform =
+    readNonEmptyString(seed.lastSeenPlatform) ??
+    (typeof previous?.lastSeenPlatform === "string"
+      ? previous.lastSeenPlatform
+      : primaryPlatform);
+  const active =
+    readOptionalBoolean(seed.isCurrentlyActive) ??
+    (typeof previous?.isCurrentlyActive === "boolean"
+      ? previous.isCurrentlyActive
+      : true);
+  const screenContextAvailable =
+    readOptionalBoolean(seed.screenContextAvailable) ??
+    (typeof previous?.screenContextAvailable === "boolean"
+      ? previous.screenContextAvailable
+      : false);
+  const screenContextFocus =
+    normalizeScreenContextFocus(seed.screenContextFocus) ??
+    (typeof previous?.screenContextFocus === "string"
+      ? normalizeScreenContextFocus(previous.screenContextFocus)
+      : null);
+  return {
+    ownerEntityId:
+      readNonEmptyString(ctx.primaryUserId) ?? String(runtime.agentId),
+    analyzedAt: nowMs,
+    analysisWindowDays:
+      typeof previous?.analysisWindowDays === "number"
+        ? previous.analysisWindowDays
+        : 14,
+    timezone:
+      typeof previous?.timezone === "string" ? previous.timezone : "UTC",
+    totalMessages:
+      typeof previous?.totalMessages === "number" ? previous.totalMessages : 0,
+    sustainedInactivityThresholdMinutes:
+      typeof previous?.sustainedInactivityThresholdMinutes === "number"
+        ? previous.sustainedInactivityThresholdMinutes
+        : 60,
+    platforms: Array.isArray(previous?.platforms) ? previous.platforms : [],
+    primaryPlatform,
+    secondaryPlatform:
+      readNonEmptyString(seed.secondaryPlatform) ??
+      (typeof previous?.secondaryPlatform === "string"
+        ? previous.secondaryPlatform
+        : null),
+    bucketCounts:
+      previous?.bucketCounts && typeof previous.bucketCounts === "object"
+        ? previous.bucketCounts
+        : {
+            EARLY_MORNING: 0,
+            MORNING: 0,
+            MIDDAY: 0,
+            AFTERNOON: 0,
+            EVENING: 0,
+            NIGHT: 0,
+            LATE_NIGHT: 0,
+          },
+    hasCalendarData:
+      readOptionalBoolean(seed.calendarBusy) !== undefined ||
+      (typeof previous?.hasCalendarData === "boolean"
+        ? previous.hasCalendarData
+        : false),
+    calendarBusy:
+      readOptionalBoolean(seed.calendarBusy) ?? previous?.calendarBusy,
+    typicalFirstEventHour: previous?.typicalFirstEventHour ?? null,
+    typicalLastEventHour: previous?.typicalLastEventHour ?? null,
+    avgWeekdayMeetings:
+      typeof previous?.avgWeekdayMeetings === "number"
+        ? previous.avgWeekdayMeetings
+        : null,
+    typicalFirstActiveHour: previous?.typicalFirstActiveHour ?? null,
+    typicalLastActiveHour: previous?.typicalLastActiveHour ?? null,
+    typicalWakeHour: previous?.typicalWakeHour ?? null,
+    typicalSleepHour: previous?.typicalSleepHour ?? null,
+    hasSleepData:
+      typeof previous?.hasSleepData === "boolean"
+        ? previous.hasSleepData
+        : false,
+    isCurrentlySleeping:
+      typeof previous?.isCurrentlySleeping === "boolean"
+        ? previous.isCurrentlySleeping
+        : false,
+    lastSleepSignalAt: previous?.lastSleepSignalAt ?? null,
+    lastWakeSignalAt: previous?.lastWakeSignalAt ?? null,
+    sleepSourcePlatform: previous?.sleepSourcePlatform ?? null,
+    sleepSource: previous?.sleepSource ?? null,
+    typicalSleepDurationMinutes: previous?.typicalSleepDurationMinutes ?? null,
+    lastSeenAt:
+      typeof previous?.lastSeenAt === "number" ? previous.lastSeenAt : nowMs,
+    lastSeenPlatform,
+    isCurrentlyActive: active,
+    hasOpenActivityCycle:
+      typeof previous?.hasOpenActivityCycle === "boolean"
+        ? previous.hasOpenActivityCycle
+        : active,
+    currentActivityCycleStartedAt:
+      typeof previous?.currentActivityCycleStartedAt === "number"
+        ? previous.currentActivityCycleStartedAt
+        : active
+          ? nowMs
+          : null,
+    currentActivityCycleLocalDate:
+      typeof previous?.currentActivityCycleLocalDate === "string"
+        ? previous.currentActivityCycleLocalDate
+        : now.toISOString().slice(0, 10),
+    effectiveDayKey:
+      typeof previous?.effectiveDayKey === "string"
+        ? previous.effectiveDayKey
+        : now.toISOString().slice(0, 10),
+    screenContextFocus,
+    screenContextSource: previous?.screenContextSource ?? null,
+    screenContextSampledAt:
+      typeof previous?.screenContextSampledAt === "number"
+        ? previous.screenContextSampledAt
+        : screenContextAvailable
+          ? nowMs
+          : null,
+    screenContextConfidence:
+      typeof previous?.screenContextConfidence === "number"
+        ? previous.screenContextConfidence
+        : screenContextAvailable
+          ? 0.8
+          : null,
+    screenContextBusy:
+      readOptionalBoolean(seed.screenContextBusy) ??
+      (typeof previous?.screenContextBusy === "boolean"
+        ? previous.screenContextBusy
+        : false),
+    screenContextAvailable,
+    screenContextStale:
+      typeof previous?.screenContextStale === "boolean"
+        ? previous.screenContextStale
+        : false,
+    dndActive:
+      readOptionalBoolean(seed.dndActive) ??
+      readOptionalBoolean(seed.doNotDisturb) ??
+      previous?.dndActive === true,
+    metadata: {
+      ...(previous?.metadata &&
+      typeof previous.metadata === "object" &&
+      !Array.isArray(previous.metadata)
+        ? (previous.metadata as Record<string, unknown>)
+        : {}),
+      ...(seed.metadata &&
+      typeof seed.metadata === "object" &&
+      !Array.isArray(seed.metadata)
+        ? (seed.metadata as Record<string, unknown>)
+        : {}),
+      source: "scenario-seed",
+      ...(ctx.scenarioId ? { scenarioId: ctx.scenarioId } : {}),
+    },
+  };
+}
+
+async function seedUserStateMemory(
+  ctx: ScenarioContext,
+  seed: UserStateMemorySeed,
+): Promise<string | undefined> {
+  const runtime = requireRuntime(ctx);
+  const tasks = await runtime.getTasks({ tags: PROACTIVE_TASK_TAGS });
+  const existingTask = tasks.find((task) => task.name === PROACTIVE_TASK_NAME);
+  const metadata =
+    existingTask?.metadata &&
+    typeof existingTask.metadata === "object" &&
+    !Array.isArray(existingTask.metadata)
+      ? existingTask.metadata
+      : {};
+  const previous = existingActivityProfile(metadata.activityProfile);
+  const activityProfile = seededActivityProfile(ctx, runtime, seed, previous);
+  const nextMetadata = {
+    ...metadata,
+    proactiveAgent:
+      metadata.proactiveAgent &&
+      typeof metadata.proactiveAgent === "object" &&
+      !Array.isArray(metadata.proactiveAgent)
+        ? metadata.proactiveAgent
+        : { kind: "runtime_runner" },
+    activityProfile,
+  };
+  if (existingTask?.id) {
+    await runtime.updateTask(existingTask.id, { metadata: nextMetadata });
+    return undefined;
+  }
+  await runtime.createTask({
+    id: stringToUuid(`scenario-user-state:${ctx.scenarioId ?? "unknown"}`),
+    name: PROACTIVE_TASK_NAME,
+    agentId: runtime.agentId,
+    tags: PROACTIVE_TASK_TAGS,
+    metadata: nextMetadata,
+  });
+  return undefined;
+}
+
+function focusWindowToUserStateSeed(
+  ctx: ScenarioContext,
+  seed: FocusWindowMemorySeed,
+): UserStateMemorySeed | string {
+  const startAt = readIsoDate(seed.startAt);
+  const endAt = readIsoDate(seed.endAt);
+  if (!startAt || !endAt) {
+    return "focus-window-active seed requires valid ISO startAt/endAt";
+  }
+  if (endAt.getTime() <= startAt.getTime()) {
+    return "focus-window-active seed endAt must be after startAt";
+  }
+  const now = readScenarioNow(ctx);
+  if (now.getTime() < startAt.getTime() || now.getTime() >= endAt.getTime()) {
+    return "focus-window-active seed window must contain ctx.now";
+  }
+  return {
+    kind: "user-state",
+    isCurrentlyActive: true,
+    lastSeenPlatform: "desktop",
+    primaryPlatform: "desktop",
+    screenContextBusy: true,
+    screenContextAvailable: true,
+    screenContextFocus: "work",
+    dndActive: false,
+    metadata: {
+      focusWindow: {
+        title: readNonEmptyString(seed.title) ?? "Focus window",
+        startAt: startAt.toISOString(),
+        endAt: endAt.toISOString(),
+      },
+    },
+  };
+}
+
+async function seedQueuedPushMemory(
+  ctx: ScenarioContext,
+  seed: QueuedPushMemorySeed,
+): Promise<string | undefined> {
+  const runtime = requireRuntime(ctx);
+  const title = readNonEmptyString(seed.title);
+  if (!title) {
+    return "queued-push seed requires a title";
+  }
+  const dueAt = readIsoDate(seed.dueAt) ?? readScenarioNow(ctx);
+  const { LifeOpsRepository } = await loadLifeOps();
+  await LifeOpsRepository.bootstrapSchema(runtime);
+  const repository = new LifeOpsRepository(runtime);
+  const channel = readNonEmptyString(seed.channel) ?? "push";
+  const urgency = readNonEmptyString(seed.urgency) ?? "medium";
+  const taskId = `scenario-queued-push:${ctx.scenarioId ?? "unknown"}:${title}`;
+  await repository.upsertScheduledTask(
+    String(runtime.agentId),
+    {
+      taskId,
+      kind: "reminder",
+      promptInstructions: `Queued push: ${title}`,
+      trigger: { kind: "once", atIso: dueAt.toISOString() },
+      priority: normalizeScheduledTaskPriority(urgency),
+      respectsGlobalPause: true,
+      state: { status: "scheduled", followupCount: 0 },
+      source: "user_chat",
+      createdBy: String(runtime.agentId),
+      ownerVisible: true,
+      metadata: {
+        source: "scenario-seed",
+        scenarioId: ctx.scenarioId ?? null,
+        push: {
+          title,
+          urgency,
+          channel,
+        },
+      },
+    },
+    { nextFireAtIso: dueAt.toISOString() },
+  );
+  return undefined;
+}
+
+function normalizeDeviceIntentTargets(value: unknown): string[] {
+  const targets = readStringArray(value);
+  return targets.length > 0 ? targets : ["all"];
+}
+
+function deviceIntentTarget(device: string): {
+  target: "all" | "desktop" | "mobile" | "specific";
+  targetDeviceId: string | null;
+} {
+  if (device === "all") return { target: "all", targetDeviceId: null };
+  if (device === "desktop") return { target: "desktop", targetDeviceId: null };
+  if (device === "mobile" || device === "phone") {
+    return { target: "mobile", targetDeviceId: null };
+  }
+  return { target: "specific", targetDeviceId: device };
+}
+
+async function seedDeviceIntentMemory(
+  ctx: ScenarioContext,
+  seed: DeviceIntentMemorySeed,
+): Promise<string | undefined> {
+  const runtime = requireRuntime(ctx);
+  const title = readNonEmptyString(seed.title);
+  if (!title) {
+    return "device-intent seed requires a title";
+  }
+  const intentGroupId =
+    readNonEmptyString(seed.id) ??
+    `scenario-device-intent:${ctx.scenarioId ?? "unknown"}:${title}`;
+  const createdAt = readScenarioNow(ctx).toISOString();
+  const expiresAt = readIsoDate(seed.expiresAt)?.toISOString() ?? null;
+  const body = readNonEmptyString(seed.body) ?? title;
+  const actionUrl = readNonEmptyString(seed.actionUrl);
+  const priority = normalizeIntentPriority(seed.priority);
+  const dispatchedTo = normalizeDeviceIntentTargets(seed.dispatchedTo);
+  const { LifeOpsRepository } = await loadLifeOps();
+  await LifeOpsRepository.bootstrapSchema(runtime);
+  const { executeRawSql, sqlText } = (await import(
+    new URL(
+      "../../../plugins/plugin-personal-assistant/src/lifeops/sql.ts",
+      import.meta.url,
+    ).href
+  )) as {
+    executeRawSql: (
+      runtime: AgentRuntime,
+      sql: string,
+    ) => Promise<Record<string, unknown>[]>;
+    sqlText: (value: unknown) => string;
+  };
+  for (const device of dispatchedTo) {
+    const { target, targetDeviceId } = deviceIntentTarget(device);
+    const metadata = {
+      source: "scenario-seed",
+      scenarioId: ctx.scenarioId ?? null,
+      deviceIntentId: intentGroupId,
+      syncGroupId: intentGroupId,
+      dispatchedTo,
+      device,
+    };
+    await executeRawSql(
+      runtime,
+      `INSERT INTO app_lifeops.life_intents (
+        id, agent_id, kind, target, target_device_id,
+        title, body, action_url, priority,
+        created_at, expires_at, acknowledged_at, acknowledged_by, metadata_json
+      ) VALUES (
+        ${sqlText(`${intentGroupId}:${device}`)},
+        ${sqlText(runtime.agentId)},
+        ${sqlText("attention_request")},
+        ${sqlText(target)},
+        ${sqlText(targetDeviceId)},
+        ${sqlText(title)},
+        ${sqlText(body)},
+        ${sqlText(actionUrl)},
+        ${sqlText(priority)},
+        ${sqlText(createdAt)},
+        ${sqlText(expiresAt)},
+        NULL,
+        NULL,
+        ${sqlText(JSON.stringify(metadata))}
+      )
+      ON CONFLICT (id) DO UPDATE SET
+        title = excluded.title,
+        body = excluded.body,
+        action_url = excluded.action_url,
+        priority = excluded.priority,
+        expires_at = excluded.expires_at,
+        metadata_json = excluded.metadata_json,
+        acknowledged_at = NULL,
+        acknowledged_by = NULL`,
+    );
+  }
+  return undefined;
+}
+
+function normalizeReminderAttemptChannel(value: unknown): string {
+  const channel = readNonEmptyString(value)?.toLowerCase();
+  if (
+    channel === "desktop" ||
+    channel === "mobile" ||
+    channel === "sms" ||
+    channel === "voice" ||
+    channel === "phone_call" ||
+    channel === "ntfy" ||
+    channel === "in_app"
+  ) {
+    return channel === "phone_call" ? "voice" : channel;
+  }
+  return "in_app";
+}
+
+function normalizeReminderAttemptOutcome(
+  seed: ReminderAttemptMemorySeed,
+): string {
+  const result = readNonEmptyString(seed.result)?.toLowerCase();
+  if (result === "failed" || result === "blocked") {
+    return "blocked_connector";
+  }
+  if (readNonEmptyString(seed.readAt)) {
+    return "delivered_read";
+  }
+  if ("readAt" in seed && seed.readAt === null) {
+    return "delivered_unread";
+  }
+  return "delivered";
+}
+
+async function seedReminderAttemptMemory(
+  ctx: ScenarioContext,
+  seed: ReminderAttemptMemorySeed,
+  index = 0,
+  planIdOverride?: string,
+): Promise<string | undefined> {
+  const runtime = requireRuntime(ctx);
+  const channel = normalizeReminderAttemptChannel(seed.channel);
+  const attemptedAt =
+    readIsoDate(seed.attemptedAt) ??
+    readIsoDate(seed.sentAt) ??
+    readScenarioNow(ctx);
+  const scheduledFor = (
+    readIsoDate(seed.scheduledFor) ?? attemptedAt
+  ).toISOString();
+  const title =
+    readNonEmptyString(seed.title) ??
+    (channel === "ntfy" ? "ntfy push" : "Scenario push attempt");
+  const planId =
+    planIdOverride ??
+    `scenario-reminder-plan:${ctx.scenarioId ?? "unknown"}:${title}`;
+  const outcome = normalizeReminderAttemptOutcome(seed);
+  const urgency =
+    readNonEmptyString(seed.urgency) ??
+    readNonEmptyString(seed.priority) ??
+    "medium";
+  const reviewAt =
+    outcome === "delivered_unread" || outcome === "delivered"
+      ? readScenarioNow(ctx).toISOString()
+      : null;
+  const { LifeOpsRepository } = await loadLifeOps();
+  await LifeOpsRepository.bootstrapSchema(runtime);
+  const repository = new LifeOpsRepository(runtime);
+  await repository.createReminderAttempt({
+    id:
+      readNonEmptyString(seed.id) ??
+      `${planId}:attempt:${index}:${channel}:${attemptedAt.toISOString()}`,
+    agentId: String(runtime.agentId),
+    planId,
+    ownerType: "occurrence",
+    ownerId: planId,
+    occurrenceId: null,
+    channel,
+    stepIndex: index,
+    scheduledFor,
+    attemptedAt: attemptedAt.toISOString(),
+    outcome,
+    connectorRef: readNonEmptyString(seed.topic)
+      ? `${channel}:${readNonEmptyString(seed.topic)}`
+      : null,
+    deliveryMetadata: {
+      source: "scenario-seed",
+      scenarioId: ctx.scenarioId ?? null,
+      title,
+      urgency,
+      priority: readNonEmptyString(seed.priority) ?? urgency,
+      readAt: readNonEmptyString(seed.readAt),
+      statusCode: readOptionalNumber(seed.statusCode),
+      result: readNonEmptyString(seed.result),
+      topic: readNonEmptyString(seed.topic),
+    },
+    reviewAt,
+    reviewStatus: reviewAt ? "no_response" : null,
+  });
+  return undefined;
+}
+
+async function seedLadderStateMemory(
+  ctx: ScenarioContext,
+  seed: LadderStateMemorySeed,
+): Promise<string | undefined> {
+  if (!Array.isArray(seed.history) || seed.history.length === 0) {
+    return "ladder-state seed requires a non-empty history array";
+  }
+  const planId = `scenario-ladder:${ctx.scenarioId ?? "unknown"}`;
+  for (const [index, entry] of seed.history.entries()) {
+    const record =
+      entry && typeof entry === "object" && !Array.isArray(entry)
+        ? (entry as LadderHistoryEntry)
+        : null;
+    if (!record) {
+      return "ladder-state history entries must be objects";
+    }
+    const result = await seedReminderAttemptMemory(
+      ctx,
+      {
+        kind: "push-delivery-attempt",
+        title: `Ladder rung ${index + 1}`,
+        channel: record.channel,
+        attemptedAt: record.at,
+        readAt: record.ackedAt ?? null,
+        urgency: seed.urgency,
+      },
+      index,
+      planId,
+    );
+    if (typeof result === "string") return result;
+  }
+  return undefined;
 }
 
 function normalizeCalendarProvider(
@@ -1061,6 +1760,32 @@ async function seedMemory(
   ) {
     return seedContact(ctx, memoryEntityToContactSeed(content, memoryType));
   }
+  if (memoryType === "user-state") {
+    return seedUserStateMemory(ctx, content as UserStateMemorySeed);
+  }
+  if (memoryType === "focus-window-active") {
+    const userStateSeed = focusWindowToUserStateSeed(
+      ctx,
+      content as FocusWindowMemorySeed,
+    );
+    if (typeof userStateSeed === "string") return userStateSeed;
+    return seedUserStateMemory(ctx, userStateSeed);
+  }
+  if (memoryType === "queued-push") {
+    return seedQueuedPushMemory(ctx, content as QueuedPushMemorySeed);
+  }
+  if (memoryType === "device-intent") {
+    return seedDeviceIntentMemory(ctx, content as DeviceIntentMemorySeed);
+  }
+  if (
+    memoryType === "push-delivery-attempt" ||
+    memoryType === "outbound-push-attempt"
+  ) {
+    return seedReminderAttemptMemory(ctx, content as ReminderAttemptMemorySeed);
+  }
+  if (memoryType === "ladder-state") {
+    return seedLadderStateMemory(ctx, content as LadderStateMemorySeed);
+  }
   if (memoryType && TRAVEL_FACT_MEMORY_KINDS.has(memoryType)) {
     const text = formatStructuredMemoryFact(memoryType, content);
     return writeDurableFact(ctx, text, { seedKind: memoryType });
@@ -1075,7 +1800,7 @@ async function seedMemory(
     // A seed the runner cannot land must fail the scenario, never no-op:
     // a silently dropped seed fabricates the premise the checks grade
     // against (#14631 — the "seeded VIP fact" the model never received).
-    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity/calendar-event/inbound-message, travel profile/trip/booking/upgrade-offer/calendar-focus-window, or plain { text } for a durable owner fact`;
+    return `unsupported memory seed kind "${memoryType}" — supported: contact/rolodex-entity/merged-entity/calendar-event/inbound-message/user-state/focus-window-active/queued-push/device-intent/push-delivery-attempt/outbound-push-attempt/ladder-state, travel profile/trip/booking/upgrade-offer/calendar-focus-window, or plain { text } for a durable owner fact`;
   }
   const text = readNonEmptyString((content as { text?: unknown }).text);
   if (!text) {
