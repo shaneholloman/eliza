@@ -447,6 +447,87 @@ function shouldReturnNativeResult(params: GenerateTextParamsWithNativeOptions): 
   return Boolean(params.messages || params.tools || params.toolChoice || params.responseSchema);
 }
 
+function toolCallIds(toolCalls: unknown): string[] {
+  if (!Array.isArray(toolCalls)) {
+    return [];
+  }
+  const ids: string[] = [];
+  for (const call of toolCalls) {
+    const id = firstString(asRecord(call).id);
+    if (id) {
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+// The native `/chat/completions` gateway strictly enforces OpenAI tool-call
+// linkage: a `role:"tool"` message is only valid when a directly-preceding
+// assistant message declared a matching id in its `tool_calls`, and an
+// assistant `tool_calls` entry is only valid when a later tool message answers
+// it. Runtime-rendered history routinely violates both — a prior turn's tool
+// result surfaces as a bare `role:"tool"` message with no `tool_call_id` and no
+// assistant `tool_calls` before it — and the gateway 400s the WHOLE request on
+// that (`invalid_request_error`), breaking every tool-using turn. Reconstructing
+// the original `tool_calls` isn't possible from rendered history, so make the
+// array spec-valid instead: downgrade every unpaired tool message to a plain
+// `role:"user"` message (verified 200 against the gateway) with a `[tool result]`
+// marker so its content survives, and strip `tool_calls` from any assistant
+// message whose calls go unanswered (which would otherwise 500 "Tool result is
+// missing"). Well-formed assistant→tool pairs pass through untouched.
+function sanitizeNativeMessages(
+  messages: Array<Record<string, unknown>>
+): Array<Record<string, unknown>> {
+  const result = messages.map((message) => ({ ...message }));
+  let openAssistant: Record<string, unknown> | null = null;
+  let matchedToolMessages: Array<Record<string, unknown>> = [];
+  let pending = new Set<string>();
+  const downgradeToolMessage = (message: Record<string, unknown>): void => {
+    delete message.tool_call_id;
+    message.role = "user";
+    message.content = `[tool result] ${stringifyMessageContent(message.content)}`;
+  };
+  const finalizeOpenAssistant = (): void => {
+    if (openAssistant && pending.size > 0) {
+      delete openAssistant.tool_calls;
+      if (openAssistant.content == null) {
+        openAssistant.content = "";
+      }
+      for (const toolMessage of matchedToolMessages) {
+        downgradeToolMessage(toolMessage);
+      }
+    }
+    openAssistant = null;
+    matchedToolMessages = [];
+    pending = new Set();
+  };
+  for (const message of result) {
+    if (message.role === "tool") {
+      const id = firstString(message.tool_call_id);
+      if (id && pending.has(id)) {
+        pending.delete(id);
+        matchedToolMessages.push(message);
+      } else {
+        if (openAssistant && pending.size > 0) {
+          finalizeOpenAssistant();
+        }
+        downgradeToolMessage(message);
+      }
+      continue;
+    }
+    finalizeOpenAssistant();
+    if (message.role === "assistant") {
+      const ids = toolCallIds(message.tool_calls);
+      if (ids.length > 0) {
+        openAssistant = message;
+        pending = new Set(ids);
+      }
+    }
+  }
+  finalizeOpenAssistant();
+  return result;
+}
+
 function buildNativeMessages(
   params: GenerateTextParamsWithNativeOptions,
   promptText: string,
@@ -459,10 +540,11 @@ function buildNativeMessages(
         : { role: "user", content: stringifyMessageContent(message) }
     );
     const first = asRecord(messages[0]);
-    if (systemPrompt && first.role !== "system") {
-      return [{ role: "system", content: systemPrompt }, ...messages];
-    }
-    return messages;
+    const withSystem =
+      systemPrompt && first.role !== "system"
+        ? [{ role: "system", content: systemPrompt }, ...messages]
+        : messages;
+    return sanitizeNativeMessages(withSystem);
   }
 
   const messages: Array<Record<string, unknown>> = [];
