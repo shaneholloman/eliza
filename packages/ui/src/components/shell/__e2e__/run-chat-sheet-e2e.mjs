@@ -1171,6 +1171,129 @@ async function runFingerTrackingSuite(page) {
   );
 }
 
+// Parse an rgb/rgba/color() string to {r,g,b,a} 0–255 (reuses the srgb-aware
+// parser above via the same regexes). Used to assert the handle is a LIGHT bar
+// (never the dark ambient token — the "handle is black" bug) and the composer
+// border is identical (transparent) across modes.
+function parseColor(value) {
+  const m = value.match(/rgba?\(([^)]+)\)/);
+  if (m) {
+    const [r, g, b, a = "1"] = m[1].split(",").map((s) => Number.parseFloat(s));
+    return { r, g, b, a };
+  }
+  const s = value.match(
+    /color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\)/,
+  );
+  if (!s) return null;
+  return {
+    r: Number.parseFloat(s[1]) * 255,
+    g: Number.parseFloat(s[2]) * 255,
+    b: Number.parseFloat(s[3]) * 255,
+    a: s[4] === undefined ? 1 : Number.parseFloat(s[4]),
+  };
+}
+
+// ANIMATION + APPEARANCE SUITE — regression coverage for three reported
+// polish bugs: (1) the composer must look identical in full-bleed and inset
+// (no full-screen-only border); (2) the drag handle bar must be a LIGHT bar in
+// every state (it was rendering black outside the panel theme); (3) tapping to
+// collapse must ANIMATE smoothly, not snap (it was collapsing in one frame
+// because the thread unmounted before the height spring ran).
+async function runAnimationAppearanceSuite(page) {
+  const sampleCurve = async (action, ms = 800) => {
+    await page.evaluate(() => {
+      globalThis.__curve = [];
+      const el = document.querySelector('[data-testid="chat-sheet"]');
+      const t0 = performance.now();
+      const tick = () => {
+        globalThis.__curve.push({
+          t: performance.now() - t0,
+          h: el.getBoundingClientRect().height,
+        });
+        if (performance.now() - t0 < 900) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    await action();
+    await page.waitForTimeout(ms);
+    const curve = await page.evaluate(() => globalThis.__curve);
+    let maxStep = 0;
+    let settleT = 0;
+    let steppedFrames = 0;
+    for (let i = 1; i < curve.length; i += 1) {
+      const d = Math.abs(curve[i].h - curve[i - 1].h);
+      if (d > maxStep) maxStep = d;
+      if (d > 1) {
+        settleT = curve[i].t;
+        steppedFrames += 1;
+      }
+    }
+    return { maxStep, settleT, steppedFrames };
+  };
+  const barColor = async (testid) =>
+    page.evaluate((id) => {
+      const span = document
+        .querySelector(`[data-testid="${id}"]`)
+        ?.querySelector("span[aria-hidden='true']");
+      return span ? getComputedStyle(span).backgroundColor : "n/a";
+    }, testid);
+  const composerBorder = async () =>
+    page.evaluate(() => {
+      const el = document
+        .querySelector('[data-testid="chat-composer-textarea"]')
+        ?.closest("div[style]");
+      return el ? getComputedStyle(el).borderColor : "n/a";
+    });
+
+  // (2) Handle bar is a LIGHT bar when the sheet is OPEN (grabber lives outside
+  // the panel theme — the black-handle locus).
+  await gesture(page, 160, { pointer: "mouse", slow: false, steps: 2 });
+  await page.waitForTimeout(SETTLE);
+  const grabberRgb = parseColor(await barColor("chat-sheet-grabber"));
+  assert(
+    !!grabberRgb && grabberRgb.r > 180 && grabberRgb.g > 180 && grabberRgb.b > 180,
+    `[appearance] open-sheet grabber bar is a LIGHT bar, not black (${JSON.stringify(grabberRgb)})`,
+  );
+
+  // (1) Composer border is IDENTICAL in full-bleed and inset (no fullscreen-only
+  // border) — both transparent.
+  await maximizeByPull(page);
+  const borderFull = await composerBorder();
+  await restoreFromMaximized(page, "mouse");
+  const borderInset = await composerBorder();
+  const cf = parseColor(borderFull);
+  const ci = parseColor(borderInset);
+  assert(
+    !!cf && !!ci && (cf.a ?? 1) < 0.02 && (ci.a ?? 1) < 0.02,
+    `[appearance] composer border identical (transparent) in full-bleed and inset (full=${borderFull}, inset=${borderInset})`,
+  );
+
+  // (3) Tapping to collapse ANIMATES (many stepped frames, no single-frame
+  // snap), symmetric with expand — not the 415px/frame instant snap.
+  const collapse = await sampleCurve(async () => {
+    await page.getByTestId("chat-sheet-grabber").click(); // full → half
+    await page.waitForTimeout(SETTLE);
+    await page.getByTestId("chat-sheet-grabber").click(); // half → input (collapse)
+  });
+  assert(
+    collapse.steppedFrames >= 8 && collapse.maxStep < 160,
+    `[appearance] collapse ANIMATES smoothly (${collapse.steppedFrames} stepped frames, max ${Math.round(collapse.maxStep)}px/frame < 160 — not a one-frame snap)`,
+  );
+
+  // (2) Pill bar is the SAME light bar as the grabber (identical through the
+  // crossfade).
+  await gesture(page, -120, { pointer: "mouse", slow: false, steps: 2 });
+  await page.waitForTimeout(SETTLE);
+  const pillRgb = parseColor(await barColor("chat-pill"));
+  assert(
+    !!pillRgb && !!grabberRgb && Math.abs(pillRgb.r - grabberRgb.r) < 8,
+    `[appearance] pill bar matches the grabber bar color (pill ${JSON.stringify(pillRgb)})`,
+  );
+  console.log(
+    `  ℹ collapse: ${collapse.steppedFrames} frames, ${Math.round(collapse.maxStep)}px/frame max, settle ${Math.round(collapse.settleT)}ms`,
+  );
+}
+
 if (process.env.ANIM_PROBE) {
   const page = await browser.newPage({ viewport: { width: 420, height: 880 } });
   attachConsole(page, sink);
@@ -1279,6 +1402,15 @@ try {
     await finger.waitForTimeout(700);
     await runFingerTrackingSuite(finger);
     await finger.close();
+
+    // Fresh load: animation smoothness + handle color + composer-border parity.
+    const anim = await browser.newPage({ viewport: { width: 420, height: 880 } });
+    attachConsole(anim, sink);
+    await gotoFixture(anim);
+    await anim.waitForSelector('[data-testid="chat-sheet"]');
+    await anim.waitForTimeout(700);
+    await runAnimationAppearanceSuite(anim);
+    await anim.close();
 
     // ===== MOBILE + TOUCH (recorded — the continuous detent drag-suite video) =====
     const mobileCtx = await browser.newContext({
