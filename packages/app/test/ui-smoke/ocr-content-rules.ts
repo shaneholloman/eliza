@@ -12,7 +12,7 @@
  * missing the label it exists to show. Only the rendered pixels reveal those, and
  * the rules here operate on the OCR of those pixels.
  *
- * Kept dependency-free (no Vision, no `page`, no fs) so it unit-tests as pure
+ * Kept dependency-free (no OCR engine, no `page`, no fs) so it unit-tests as pure
  * functions, mirroring how `aesthetic-audit-rules.ts` was extracted from its
  * Playwright spec. The CLI (`ocr-triage.mjs`) and, in CI, the audit spec, supply
  * the OCR and consume the verdict.
@@ -24,8 +24,10 @@ export interface OcrResult {
   text: string;
   lines: string[];
   words: number;
-  /** Mean Vision top-candidate confidence, 0..1. Low + non-empty ⇒ noisy/garbled pixels. */
+  /** Mean OCR confidence, 0..1 when the engine reports it. */
   meanConfidence: number;
+  /** Present when OCR could not read the screenshot because the image or engine failed. */
+  reason?: string;
 }
 
 /**
@@ -143,7 +145,11 @@ export function evaluateOcrContent({
       placeholderLeaks: [],
       missingRequired: [],
       forbiddenPresent: [],
-      reasons: ["screenshot failed to decode"],
+      reasons: [
+        ocr.reason
+          ? `OCR failed: ${ocr.reason}`
+          : "screenshot failed to decode",
+      ],
     };
   }
 
@@ -159,7 +165,10 @@ export function evaluateOcrContent({
       if (!hay.includes(normalize(label))) missingRequired.push(label);
     }
     const anyLabels = expectation.requireAny ?? [];
-    if (anyLabels.length > 0 && !anyLabels.some((l) => hay.includes(normalize(l)))) {
+    if (
+      anyLabels.length > 0 &&
+      !anyLabels.some((l) => hay.includes(normalize(l)))
+    ) {
       // Report the whole disjunction as one miss so the reason is legible.
       missingRequired.push(anyLabels.join(" | "));
     }
@@ -168,11 +177,18 @@ export function evaluateOcrContent({
     }
   }
 
-  if (blankPixels) reasons.push("pixels are blank — view painted no readable text");
-  if (errorLeaks.length) reasons.push(`developer string on screen: ${errorLeaks.join(", ")}`);
-  if (missingRequired.length) reasons.push(`missing expected content: ${missingRequired.join(", ")}`);
-  if (placeholderLeaks.length) reasons.push(`placeholder/scaffolding on screen: ${placeholderLeaks.join(", ")}`);
-  if (forbiddenPresent.length) reasons.push(`forbidden content on screen: ${forbiddenPresent.join(", ")}`);
+  if (blankPixels)
+    reasons.push("pixels are blank — view painted no readable text");
+  if (errorLeaks.length)
+    reasons.push(`developer string on screen: ${errorLeaks.join(", ")}`);
+  if (missingRequired.length)
+    reasons.push(`missing expected content: ${missingRequired.join(", ")}`);
+  if (placeholderLeaks.length)
+    reasons.push(
+      `placeholder/scaffolding on screen: ${placeholderLeaks.join(", ")}`,
+    );
+  if (forbiddenPresent.length)
+    reasons.push(`forbidden content on screen: ${forbiddenPresent.join(", ")}`);
 
   // Precedence: a user-visible defect (blank, dev-string, or a required label the
   // view exists to show but didn't) is broken. Softer signals — scaffolding text,
@@ -184,7 +200,10 @@ export function evaluateOcrContent({
     verdict = "broken";
   } else if (placeholderLeaks.length > 0 || forbiddenPresent.length > 0) {
     verdict = "needs-eyeball";
-  } else if (expectation && (expectation.requireAll?.length || expectation.requireAny?.length)) {
+  } else if (
+    expectation &&
+    (expectation.requireAll?.length || expectation.requireAny?.length)
+  ) {
     verdict = "verified";
     reasons.push("pixels match declared expectation");
   } else {

@@ -1,7 +1,8 @@
 /**
  * Pixel-truth triage over an all-views audit capture: OCR every captured view
- * with Apple Vision, run the content rules, and cross-check the result against the
- * DOM-derived verdict the aesthetic audit already recorded in `report.json`.
+ * with the packaged Tesseract engine, run the content rules, and cross-check the
+ * result against the DOM-derived verdict the aesthetic audit already recorded in
+ * `report.json`.
  *
  * The payoff is two-directional. It catches renders the DOM audit passed but a
  * user would see broken — a caught-and-rendered crash string, a blank paint, an
@@ -11,25 +12,26 @@
  * instead of leaving every soft-signal view for a human to squint at.
  *
  * Run: `bun scripts/ocr-triage.ts [--audit-dir <dir>] [--ocr <ndjson>] [--out <json>] [--baseline <json>]`.
- * With no `--ocr`, it shells the bundled `ocr-vision.swift` over the capture's
- * PNGs. A `--baseline` file lists `slug::viewport` regressions already tracked by
+ * With no `--ocr`, it uses `scripts/mvp-visual-verify/ocr.mjs`, which prefers the
+ * installed `tesseract.js` package so CI and local verification do not depend on
+ * Homebrew/apt state. A `--baseline` file lists `slug::viewport` regressions already tracked by
  * an issue; the gate exits non-zero only on a regression NOT in that baseline —
  * the same ratchet posture as the aesthetic audit's verdict-debt map, so a known
  * bug stays visible without wedging CI while a NEW pixel-broken render fails it.
  */
-import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
-import { join, basename, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import {
   evaluateOcrContent,
   type OcrResult,
   type OcrVerdict,
 } from "../test/ui-smoke/ocr-content-rules";
 import { VIEW_EXPECTATIONS } from "../test/ui-smoke/ocr-view-expectations";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const SWIFT_HELPER = join(HERE, "ocr-vision.swift");
+import {
+  closeOcrEngines,
+  ocrImage,
+  resolveOcrEngine,
+} from "./mvp-visual-verify/ocr.mjs";
 
 /**
  * Slugs whose healthy render legitimately OCRs to little or no text: the wallpaper
@@ -88,23 +90,38 @@ function listPngs(dir: string): string[] {
   return out;
 }
 
-function runVisionOcr(paths: string[]): Promise<OcrRecord[]> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn("swift", [SWIFT_HELPER], { stdio: ["pipe", "pipe", "inherit"] });
-    let buf = "";
-    proc.stdout.on("data", (d) => (buf += d.toString()));
-    proc.on("error", reject);
-    proc.on("close", (code) => {
-      if (code !== 0) return reject(new Error(`ocr-vision.swift exited ${code}`));
-      const recs = buf
-        .split("\n")
-        .filter((l) => l.trim())
-        .map((l) => JSON.parse(l) as OcrRecord);
-      resolve(recs);
+async function runPackagedOcr(paths: string[]): Promise<OcrRecord[]> {
+  const engine = await resolveOcrEngine();
+  if (!engine.available) {
+    throw new Error(
+      `OCR engine unavailable: ${engine.reason}. Run \`bun install\` so the packaged tesseract.js dependency is available, or set ELIZA_TESSERACT_BIN to a system tesseract binary.`,
+    );
+  }
+  const out: OcrRecord[] = [];
+  for (const path of paths) {
+    const result = await ocrImage(path);
+    if (!result.available) {
+      out.push({
+        path,
+        ok: false,
+        text: "",
+        lines: [],
+        words: 0,
+        meanConfidence: 0,
+        reason: result.reason,
+      });
+      continue;
+    }
+    out.push({
+      path,
+      ok: true,
+      text: result.text,
+      lines: result.text.split("\n").filter(Boolean),
+      words: result.words,
+      meanConfidence: 1,
     });
-    proc.stdin.write(paths.join("\n") + "\n");
-    proc.stdin.end();
-  });
+  }
+  return out;
 }
 
 function slugOf(path: string): string {
@@ -141,7 +158,7 @@ async function main() {
         .split("\n")
         .filter((l) => l.trim())
         .map((l) => JSON.parse(l) as OcrRecord)
-    : await runVisionOcr(pngs);
+    : await runPackagedOcr(pngs);
 
   const entries: TriageEntry[] = [];
   for (const rec of ocr) {
@@ -170,19 +187,25 @@ async function main() {
   }
 
   entries.sort((a, b) => {
-    const rank = (e: TriageEntry) => (e.regression ? 0 : e.ocrVerdict === "broken" ? 1 : 2);
+    const rank = (e: TriageEntry) =>
+      e.regression ? 0 : e.ocrVerdict === "broken" ? 1 : 2;
     return rank(a) - rank(b) || a.slug.localeCompare(b.slug);
   });
 
   const regressions = entries.filter((e) => e.regression);
-  const newRegressions = regressions.filter((e) => !baseline.has(`${e.slug}::${e.viewport}`));
-  const knownRegressions = regressions.filter((e) => baseline.has(`${e.slug}::${e.viewport}`));
+  const newRegressions = regressions.filter(
+    (e) => !baseline.has(`${e.slug}::${e.viewport}`),
+  );
+  const knownRegressions = regressions.filter((e) =>
+    baseline.has(`${e.slug}::${e.viewport}`),
+  );
 
   const summary = {
     total: entries.length,
     verified: entries.filter((e) => e.ocrVerdict === "verified").length,
     broken: entries.filter((e) => e.ocrVerdict === "broken").length,
-    needsEyeball: entries.filter((e) => e.ocrVerdict === "needs-eyeball").length,
+    needsEyeball: entries.filter((e) => e.ocrVerdict === "needs-eyeball")
+      .length,
     regressions: regressions.length,
     knownRegressions: knownRegressions.length,
     newRegressions: newRegressions.length,
@@ -190,24 +213,39 @@ async function main() {
 
   writeFileSync(outPath, JSON.stringify({ summary, entries }, null, 2));
 
-  console.log(`[ocr-triage] ${summary.total} views | verified ${summary.verified} | broken ${summary.broken} | needs-eyeball ${summary.needsEyeball}`);
+  console.log(
+    `[ocr-triage] ${summary.total} views | verified ${summary.verified} | broken ${summary.broken} | needs-eyeball ${summary.needsEyeball}`,
+  );
   if (knownRegressions.length) {
-    console.log(`\n[ocr-triage] ${knownRegressions.length} known regression(s) (baselined — tracked by issue):`);
+    console.log(
+      `\n[ocr-triage] ${knownRegressions.length} known regression(s) (baselined — tracked by issue):`,
+    );
     for (const e of knownRegressions) {
-      console.log(`  · ${e.slug} [${e.viewport}] dom=${e.domVerdict} → broken: ${e.reasons.join("; ")}`);
+      console.log(
+        `  · ${e.slug} [${e.viewport}] dom=${e.domVerdict} → broken: ${e.reasons.join("; ")}`,
+      );
     }
   }
   if (newRegressions.length) {
-    console.log(`\n[ocr-triage] ${newRegressions.length} NEW REGRESSION(S) — DOM audit passed, pixels are broken:`);
+    console.log(
+      `\n[ocr-triage] ${newRegressions.length} NEW REGRESSION(S) — DOM audit passed, pixels are broken:`,
+    );
     for (const e of newRegressions) {
-      console.log(`  ✗ ${e.slug} [${e.viewport}] dom=${e.domVerdict} → broken: ${e.reasons.join("; ")}`);
+      console.log(
+        `  ✗ ${e.slug} [${e.viewport}] dom=${e.domVerdict} → broken: ${e.reasons.join("; ")}`,
+      );
     }
   }
   console.log(`\n[ocr-triage] wrote ${outPath}`);
-  process.exit(newRegressions.length > 0 ? 1 : 0);
+  process.exitCode = newRegressions.length > 0 ? 1 : 0;
 }
 
-main().catch((e) => {
-  console.error("[ocr-triage]", e);
-  process.exit(2);
-});
+main()
+  .catch((e) => {
+    console.error("[ocr-triage]", e);
+    process.exitCode = 2;
+  })
+  .finally(async () => {
+    await closeOcrEngines();
+    if (process.exitCode) process.exit(process.exitCode);
+  });
