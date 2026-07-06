@@ -966,6 +966,17 @@ export function useShellController(): ShellController {
           captureRef.current = null;
           setAnalyser(null);
           setRecording(false);
+          // A hands-free tap optimistically lit the mic ("end conversation")
+          // before the device opened; a denial must roll that back so the button
+          // returns to its resting "talk" state instead of showing a lit,
+          // phantom-capturing conversation the mic never actually started. Mirror
+          // the deliberate tap-off (restore the prior non-always-on mode) so a
+          // reload doesn't re-engage a mic the user can't grant.
+          if (handsFreeRef.current) {
+            saveContinuousChatMode(priorContinuousModeRef.current);
+            setHandsFree(false);
+            handsFreeRef.current = false;
+          }
           // Mic permission denial / capture failure was previously swallowed —
           // the user tapped the mic and nothing happened with no feedback.
           // Surface a clear, actionable notice through the shell's toast channel

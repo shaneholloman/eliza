@@ -48,7 +48,7 @@ const CELLS = [
   {
     id: "web.fake-mic.roundtrip",
     title:
-      "Web fake-device mic capture -> ASR -> agent -> local TTS + barge-in",
+      "Web fake-device mic capture -> ASR -> agent -> local TTS + barge-in + failure paths (mic-denied / silent / TTS-drop)",
     platform: "web",
     dimensions: {
       transcriptionState: "off",
@@ -69,6 +69,35 @@ const CELLS = [
     env: UI_SMOKE_MATRIX_ENV,
     evidence: ["packages/app/test-results", "e2e-recordings/app/test-results"],
     probe: "web",
+  },
+  {
+    // Opt-in LIVE web round-trip against the real Railway STT/TTS + a live agent
+    // (#14371). Same spec file, but the live `test.describe` only runs (never
+    // skips-as-pass) when ELIZA_VOICE_LIVE_RAILWAY=1; the `webLiveRailway` probe
+    // gates the cell to `skip` until the lane is provisioned.
+    id: "web.live.railway-roundtrip",
+    title:
+      "Web LIVE cloud voice round-trip: injected WAV -> Railway Whisper STT -> live agent -> Railway Kokoro TTS -> non-silent audio",
+    platform: "web",
+    dimensions: {
+      transcriptionState: "off",
+      chimeIn: "should-respond",
+      wakewordContext: "idle-wake",
+      noiseRejection: "quiet",
+      voices: "owner",
+    },
+    class: "live-cloud-voice-roundtrip",
+    command: [
+      "bun",
+      "run",
+      "--cwd",
+      "packages/app",
+      "test:e2e",
+      "test/ui-smoke/voice-realaudio.spec.ts",
+    ],
+    env: UI_SMOKE_MATRIX_ENV,
+    evidence: ["packages/app/test-results", "e2e-recordings/app/test-results"],
+    probe: "webLiveRailway",
   },
   {
     id: "web.fake-mic.transcript-roundtrip",
@@ -659,6 +688,19 @@ function probeCell(cell) {
       return {
         available: true,
         reason: "Chromium fake-device mic lane is host-runnable",
+      };
+    case "webLiveRailway":
+      if (process.env.ELIZA_VOICE_LIVE_RAILWAY !== "1") {
+        return {
+          available: false,
+          reason:
+            "set ELIZA_VOICE_LIVE_RAILWAY=1 with reachable Railway STT/TTS + a live LLM key",
+        };
+      }
+      return {
+        available: true,
+        reason:
+          "ELIZA_VOICE_LIVE_RAILWAY=1: live cloud voice round-trip enabled",
       };
     case "linuxFused":
       if (process.platform !== "linux")
