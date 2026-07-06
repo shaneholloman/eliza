@@ -212,10 +212,62 @@ describe("reflection evaluator schemas are strict-structured-output safe", () =>
 			assertStrictObjectNodes(schema, evaluator.name ?? "evaluator");
 		}
 	});
+
+	it("fact extraction advertises structured fields consumed by LifeOps projections", () => {
+		const schema = factMemoryEvaluator.schema as {
+			properties?: {
+				ops?: {
+					items?: {
+						properties?: {
+							structured_fields?: {
+								properties?: Record<string, unknown>;
+								additionalProperties?: boolean;
+							};
+						};
+					};
+				};
+			};
+		};
+		const structured =
+			schema.properties?.ops?.items?.properties?.structured_fields;
+		expect(structured?.additionalProperties).toBe(false);
+		expect(structured?.properties).toMatchObject({
+			preferredName: { type: "string" },
+			person: { type: "string" },
+			relationshipType: { type: "string" },
+			platform: { type: "string" },
+			handle: { type: "string" },
+			travelBookingPreferences: { type: "string" },
+			timezone: { type: "string" },
+		});
+	});
+
+	it("fact extraction prompt names structured fields on the production evaluator path", () => {
+		const prompt = factMemoryEvaluator.prompt?.({
+			runtime: makeRuntime(),
+			message: message(
+				"Je m'appelle Camille et mon fuseau horaire est Europe/Paris",
+			),
+			state: { values: {}, data: {}, text: "" },
+			options: {},
+			evaluatorName: "factMemory",
+			prepared: {
+				recentMessages: [message("Je m'appelle Camille")],
+				existingRelationships: [],
+				entities: [],
+				knownFacts: [],
+			},
+		});
+		expect(prompt).toContain("structured_fields");
+		expect(prompt).toContain("Use English key names");
+		expect(prompt).toContain("preferredName");
+		expect(prompt).toContain("relationshipType");
+		expect(prompt).toContain("travelBookingPreferences");
+	});
 });
 
 describe("factExtractor tolerant parsing (#11235)", () => {
-	it("accepts an add op that omits structured_fields (wire-optional, prompt-unnamed)", () => {
+	it("accepts an add op that omits structured_fields (wire-optional)", () => {
 		const parsed = parseExtractorOutputTolerant({
 			ops: [
 				{ op: "add_durable", claim: "lives in Berlin", category: "identity" },
@@ -228,6 +280,36 @@ describe("factExtractor tolerant parsing (#11235)", () => {
 			op: "add_durable",
 			structured_fields: {},
 		});
+	});
+
+	it("accepts fenced JSON text that uses type as the op discriminator", () => {
+		const parsed = parseExtractorOutputTolerant(`\`\`\`json
+{
+  "ops": [
+    {
+      "type": "add_durable",
+      "claim": "User's preferred name is Camille and timezone is Europe/Paris.",
+      "category": "identity",
+      "keywords": ["name", "camille", "timezone", "europe/paris"],
+      "structured_fields": {
+        "preferredName": "Camille",
+        "timezone": "Europe/Paris"
+      }
+    }
+  ]
+}
+\`\`\``);
+
+		expect(parsed?.ops).toEqual([
+			expect.objectContaining({
+				op: "add_durable",
+				category: "identity",
+				structured_fields: {
+					preferredName: "Camille",
+					timezone: "Europe/Paris",
+				},
+			}),
+		]);
 	});
 
 	it("keeps valid ops when one op is malformed, and warns about the drop", () => {
