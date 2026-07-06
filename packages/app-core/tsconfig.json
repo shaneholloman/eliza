@@ -114,6 +114,7 @@
       "@elizaos/plugin-sql/__tests__/test-helpers": [
         "../../plugins/plugin-sql/src/__tests__/test-helpers.ts"
       ],
+      "@elizaos/plugin-sql/*": ["../../plugins/plugin-sql/src/*"],
       "@elizaos/auth": ["../auth/src/index.ts"],
       "@elizaos/auth/*": ["../auth/src/*"],
       "@elizaos/shared": ["../shared/src/index.ts"],
