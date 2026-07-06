@@ -200,6 +200,7 @@ import {
   removeUrlParameter,
 } from "./runtime-chooser-override";
 import { registerViewServiceWorker } from "./sw-registration";
+import { isElizaCloudSharedHost } from "./url-trust-policy";
 
 declare const __ELIZA_BUILD_VARIANT__: string | undefined;
 // Set by vite.config.ts `define`. `true` for the web/desktop bundle, `false`
@@ -2914,6 +2915,7 @@ function isTrustedApiBaseUrl(parsed: URL): boolean {
     return (
       isCurrentOriginHost(host) ||
       isConfiguredCloudApiHost(host) ||
+      isElizaCloudSharedHost(host) ||
       isElizaCloudAgentSubdomain(host)
     );
   }
@@ -2939,6 +2941,7 @@ function isTrustedDeepLinkApiBaseUrl(parsed: URL): boolean {
     return (
       isCurrentOriginHost(host) ||
       (parsed.protocol === "https:" && isConfiguredCloudApiHost(host)) ||
+      (parsed.protocol === "https:" && isElizaCloudSharedHost(host)) ||
       (parsed.protocol === "https:" && isElizaCloudAgentSubdomain(host))
     );
   }
