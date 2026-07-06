@@ -26,9 +26,11 @@
  * their highest-ranked row.
  */
 import type { AgentNotification, NotificationCategory } from "@elizaos/core";
-import { ExternalLink, X } from "lucide-react";
+import { tierForPriority } from "@elizaos/core";
+import { ChevronDown, ChevronUp, Clock, Flag } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { haptics } from "../../bridge/capacitor-bridge";
+import { dispatchChatPrefill } from "../../events";
 import { cn } from "../../lib/utils";
 import { tabFromPath, titleForTab } from "../../navigation";
 import {
@@ -40,9 +42,7 @@ import {
   useNotifications,
 } from "../../state/notifications/notification-store";
 import { NOTIFICATION_PRIORITY_RANK } from "../../widgets/home-priority";
-import { Button } from "../ui/button";
 import { RelativeTime } from "./RelativeTime";
-import { WALLPAPER_TEXT } from "./wallpaper-idiom";
 
 /**
  * Horizontal travel (px) a touch swipe must clear before the row commits to a
@@ -138,22 +138,59 @@ const NOTIF_SCROLL_CSS = `
 }
 `;
 
+/** The two triage orders the shade's sort toggle flips between. */
+export type NotificationSortMode = "priority" | "time";
+
+/** localStorage key persisting the sort toggle across sessions. */
+const SORT_MODE_STORAGE_KEY = "eliza:notifications:sort-mode";
+
+function loadSortMode(): NotificationSortMode {
+  try {
+    if (typeof window === "undefined") return "priority";
+    return window.localStorage.getItem(SORT_MODE_STORAGE_KEY) === "time"
+      ? "time"
+      : "priority";
+  } catch {
+    return "priority";
+  }
+}
+
+function storeSortMode(mode: NotificationSortMode): void {
+  try {
+    window.localStorage.setItem(SORT_MODE_STORAGE_KEY, mode);
+  } catch {
+    // Persistence is best-effort; the in-memory toggle still works.
+  }
+}
+
 /**
- * Stable dashboard order: priority bucket, then recency, then id as the total
- * tiebreak. Read state styles rows but never orders them - marking a row read
- * on tap must not move it (the inbox-style unread-first rank reshuffles).
+ * Stable dashboard order. `priority` (the default): priority bucket, then
+ * recency, then id as the total tiebreak. `time`: pure recency (id tiebreak).
+ * Both are total orders, so live arrivals never reshuffle existing rows.
  */
 export function orderDashboardNotifications(
   notifications: readonly AgentNotification[],
+  mode: NotificationSortMode = "priority",
 ): AgentNotification[] {
   return [...notifications].sort((a, b) => {
-    const byPriority =
-      (NOTIFICATION_PRIORITY_RANK[b.priority] ?? 1) -
-      (NOTIFICATION_PRIORITY_RANK[a.priority] ?? 1);
-    if (byPriority !== 0) return byPriority;
+    if (mode === "priority") {
+      const byPriority =
+        (NOTIFICATION_PRIORITY_RANK[b.priority] ?? 1) -
+        (NOTIFICATION_PRIORITY_RANK[a.priority] ?? 1);
+      if (byPriority !== 0) return byPriority;
+    }
     if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt;
     return a.id.localeCompare(b.id);
   });
+}
+
+/**
+ * Whether a notification renders in the shade's rested (compressed) state.
+ * Only interrupt-tier rows (`high`/`urgent`) show by default — the shade is a
+ * triage surface, not a log; everything else sits behind the "more" affordance.
+ */
+export function isInterruptPriority(n: AgentNotification): boolean {
+  return tierForPriority(n.priority) === "interrupt";
 }
 
 /** Human group labels for producer categories with no in-app deep link. */
@@ -193,9 +230,10 @@ export function notificationGroupLabel(n: AgentNotification): string {
  */
 export function groupDashboardNotifications(
   notifications: readonly AgentNotification[],
+  mode: NotificationSortMode = "priority",
 ): Array<{ label: string; rows: AgentNotification[] }> {
   const groups = new Map<string, AgentNotification[]>();
-  for (const n of orderDashboardNotifications(notifications)) {
+  for (const n of orderDashboardNotifications(notifications, mode)) {
     const label = notificationGroupLabel(n);
     const rows = groups.get(label);
     if (rows) rows.push(n);
@@ -204,24 +242,57 @@ export function groupDashboardNotifications(
   return [...groups.entries()].map(([label, rows]) => ({ label, rows }));
 }
 
+/** One inline contextual option a tapped (expanded) row offers. */
+export interface NotificationRowOption {
+  id: string;
+  label: string;
+  kind: "open" | "prefill" | "dismiss";
+  /** Composer seed for `kind: "prefill"` (opens the chat, never auto-sends). */
+  prefill?: string;
+}
+
 /**
- * One notification row: a whole-row open button (scheme-checked deep link +
- * clear, the platform-shade tap). The row carries no fill or border of its
- * own — it floats on the shade's field, spacing separates turns. Dismissal is
- * pointer-idiomatic: a mouse reveals an X on hover; touch throws the row left
- * or right past {@link SWIPE_DISMISS_PX} to dismiss (springs back below it).
- * A long-press (touch) or right-click (mouse) opens a contextual menu — open /
- * dismiss — so tap stays a single clean "open" action.
- *
- * Memoized (binding pattern, spec §C.4): the relative timestamp now lives in a
- * `<RelativeTime>` leaf that owns the minute tick, so the row no longer has to
- * re-render every minute to keep "5m" honest. With time rendering out of
- * the row's render path, a stable-props memo is correct - it re-renders only
- * when the row's actual content changes, and `arePropsEqual` compares the
- * identity fields that drive its markup: `id`, `title`, `body`, `deepLink`,
- * `data.count`, plus the two callbacks (stable via the parent's `useCallback`).
- * `createdAt` is intentionally NOT compared: it feeds only the leaf, which
- * subscribes to the tick itself.
+ * The contextual options a row expands to on tap, derived from category +
+ * deepLink. Every notification exposes at least one action plus Dismiss:
+ * a message offers "Suggest a reply" (chat prefill), an approval "Review",
+ * task-like categories a labeled open, anything with a safe deepLink a plain
+ * Open. Acting on any option acknowledges (clears) the row.
+ */
+export function notificationRowOptions(
+  n: AgentNotification,
+): NotificationRowOption[] {
+  const options: NotificationRowOption[] = [];
+  const hasLink = Boolean(n.deepLink && isSafeDeepLink(n.deepLink));
+  if (n.category === "message") {
+    options.push({
+      id: "suggest-reply",
+      label: "Suggest a reply",
+      kind: "prefill",
+      prefill: `Suggest a reply to "${n.title}"${n.body ? ` — ${n.body}` : ""}`,
+    });
+  }
+  if (hasLink) {
+    const label =
+      n.category === "approval"
+        ? "Review"
+        : n.category === "task" || n.category === "agent"
+          ? "Open task"
+          : n.category === "workflow"
+            ? "View run"
+            : "Open";
+    options.push({ id: "open", label, kind: "open" });
+  }
+  options.push({ id: "dismiss", label: "Dismiss", kind: "dismiss" });
+  return options;
+}
+
+/**
+ * Memoized (binding pattern, spec §C.4): the relative timestamp lives in a
+ * `<RelativeTime>` leaf that owns the minute tick, so the row never re-renders
+ * to keep "5m" honest. `arePropsEqual` compares the identity fields that drive
+ * its markup: `id`, `title`, `body`, `deepLink`, `category` (options),
+ * `data.count`, plus the callbacks (stable via the parent's `useCallback`).
+ * `createdAt` is intentionally NOT compared: it feeds only the leaf.
  */
 export function rowPropsEqual(
   prev: NotificationRowProps,
@@ -234,9 +305,11 @@ export function rowPropsEqual(
     a.title === b.title &&
     a.body === b.body &&
     a.deepLink === b.deepLink &&
+    a.category === b.category &&
     a.data?.count === b.data?.count &&
     prev.onOpen === next.onOpen &&
-    prev.onDismiss === next.onDismiss
+    prev.onDismiss === next.onDismiss &&
+    prev.onPrefill === next.onPrefill
   );
 }
 
@@ -244,6 +317,7 @@ export interface NotificationRowProps {
   notification: AgentNotification;
   onOpen: (n: AgentNotification) => void;
   onDismiss: (id: string) => void;
+  onPrefill: (n: AgentNotification, text: string) => void;
 }
 
 let notificationRowRenderObserverForTests: (() => void) | null = null;
@@ -261,20 +335,29 @@ export function __setNotificationsHomeCenterRenderObserverForTests(
   notificationsHomeCenterRenderObserverForTests = observer;
 }
 
+/**
+ * One notification row. Tap EXPANDS it into its contextual options
+ * ({@link notificationRowOptions}) — tap again collapses; long-press (touch)
+ * and right-click (mouse) also expand. Acting on any option acknowledges the
+ * row (it clears from the shade). Dragging the row horizontally off the
+ * screen — mouse or touch — past {@link SWIPE_DISMISS_PX} dismisses it; there
+ * is no corner X. The row carries no fill or border of its own; a hover wash
+ * is the only rest→hover chrome.
+ */
 const NotificationRow = memo(function NotificationRow({
   notification,
   onOpen,
   onDismiss,
+  onPrefill,
 }: NotificationRowProps): React.JSX.Element {
   notificationRowRenderObserverForTests?.();
 
-  // Touch swipe-to-dismiss + long-press menu. `swipeX` drives the live drag
-  // transform; `menuOpen` is the contextual menu. Refs hold the in-flight
-  // gesture so the memoized row never needs the parent to re-render mid-drag.
+  // Swipe-to-dismiss + expand state. `swipeX` drives the live drag transform;
+  // `expanded` is the inline option strip. Refs hold the in-flight gesture so
+  // the memoized row never needs the parent to re-render mid-drag.
   const [swipeX, setSwipeX] = useState(0);
   const [dismissing, setDismissing] = useState<"left" | "right" | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const gesture = useRef<{
     id: number;
     startX: number;
@@ -305,13 +388,12 @@ const NotificationRow = memo(function NotificationRow({
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      if (menuOpen) return;
       suppressClick.current = false;
       const longPress =
         e.pointerType !== "mouse"
           ? window.setTimeout(() => {
               suppressClick.current = true;
-              setMenuOpen(true);
+              setExpanded(true);
               void haptics.light();
             }, LONG_PRESS_MS)
           : null;
@@ -324,7 +406,7 @@ const NotificationRow = memo(function NotificationRow({
         moved: false,
       };
     },
-    [menuOpen],
+    [],
   );
 
   const onPointerMove = useCallback((e: React.PointerEvent) => {
@@ -334,8 +416,9 @@ const NotificationRow = memo(function NotificationRow({
     const dy = e.clientY - g.startY;
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) g.moved = true;
     // Lock the axis on first real movement: a vertical drag belongs to the
-    // list scroller, only a horizontal one is a dismiss swipe. Touch only —
-    // a mouse drag must never hijack text selection or the scrollbar.
+    // list scroller, only a horizontal one is a dismiss swipe. Mouse and touch
+    // both swipe — the rows are buttons (no text selection to hijack), and the
+    // 8px lock threshold keeps ordinary clicks from starting a drag.
     if (g.axis === "none" && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
       g.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
       // Any committed drag cancels the pending long-press.
@@ -344,7 +427,7 @@ const NotificationRow = memo(function NotificationRow({
         g.longPress = null;
       }
     }
-    if (g.axis !== "x" || e.pointerType === "mouse") return;
+    if (g.axis !== "x") return;
     e.currentTarget.setPointerCapture?.(e.pointerId);
     setSwipeX(dx);
   }, []);

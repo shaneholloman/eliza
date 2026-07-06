@@ -423,11 +423,11 @@ function SoftButton({
         // neutral hover, accent for active — never a background/border, never
         // blue.
         //
-        // `[&_svg]:size-6` OVERRIDES the kit Button's base `[&_svg]:size-4`
+        // `[&_svg]:size-[22px]` OVERRIDES the kit Button's base `[&_svg]:size-4`
         // (16px): the mark reads clearly in the 44px hit box without dominating
         // the composer row. The box — and the composer row height — is unchanged;
         // only the glyph size is tuned.
-        "grid h-11 w-11 shrink-0 place-items-center bg-transparent p-0 transition-colors hover:bg-transparent [&_svg]:size-6",
+        "grid h-11 w-11 shrink-0 place-items-center bg-transparent p-0 transition-colors hover:bg-transparent [&_svg]:size-[22px]",
         active ? "text-accent" : "text-muted-strong hover:text-txt",
         // Pulse the accent glyph while capture is hot; reduced-motion falls back
         // to the static accent without adding background or border chrome.
@@ -440,7 +440,7 @@ function SoftButton({
       ) : glyph ? (
         // Match the lucide marks: the parent [&_svg] rule governs the box, and
         // the widened glyph paths fill the same fraction of it.
-        <Glyph d={glyph} className="size-6" />
+        <Glyph d={glyph} className="size-[22px]" />
       ) : null}
     </Button>
   );
@@ -1354,6 +1354,31 @@ export function ContinuousChatOverlay({
   // sheet fills the screen, so the finger physically runs out of room to
   // overshoot below it.
   const dragStartHRef = React.useRef(0);
+  // MID-DRAG COMMIT machinery. Crossing a commit threshold while the finger is
+  // still down flips the state and ANIMATES the sheet into it right then —
+  // dragging to the top maximizes without letting go; dragging to the bottom
+  // collapses into the pill without letting go. The gesture stays alive across
+  // the flip and is REBASED so continued movement tracks from the committed
+  // state (and can reverse it with hysteresis).
+  // The height the raw-tracking is measured from — the thread height at
+  // gesture start, re-based at each mid-drag commit/resume so the state flip
+  // never jumps the track.
+  const dragBaseHRef = React.useRef(0);
+  // The gesture offset at the last rebase (0 at gesture start); per-frame math
+  // uses (offset - this) so movement is relative to the current base.
+  const dragOffsetBaseRef = React.useRef(0);
+  // The in-flight mid-drag commit, with the offset where it fired. While set,
+  // per-frame tracking is suppressed (the commit springs own the motion) until
+  // the finger reverses past a small slop — then the drag resumes, rebased.
+  const dragCommitRef = React.useRef<{
+    kind: "pill" | "maximized";
+    offset: number;
+  } | null>(null);
+  // Hysteresis arm for the maximize commit: after resuming OUT of a committed
+  // maximize the raw track starts at the full-bleed ceiling (≥ the commit
+  // threshold), so committing is re-armed only once the pull drops back below
+  // the inset FULL height — no commit/un-commit flapping at the threshold.
+  const dragMaxArmedRef = React.useRef(true);
   // At rest the collapsed composer should not carry hidden transcript/header
   // DOM. During an upward pull, though, the sheet needs a mounted body so the
   // MotionValue-driven height can follow the finger before the release commits

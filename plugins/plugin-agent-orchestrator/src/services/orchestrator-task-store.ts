@@ -106,14 +106,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isDuplicateColumnError(error: unknown): boolean {
-  if (!isRecord(error)) return false;
-  if (error.code === "42701") return true;
-  const message =
-    typeof error.message === "string" ? error.message.toLowerCase() : "";
-  return (
-    message.includes("duplicate column") ||
-    /column .+ already exists/.test(message)
-  );
+  // Walk the cause chain: Drizzle (postgres/pglite) rethrows the driver error
+  // wrapped as `{ message: "Failed query: <sql>", cause: <pgError> }`, so the
+  // duplicate-column signal — SQLSTATE 42701, or "column … already exists" —
+  // lives on the CAUSE, not the top-level message. Checking only the top level
+  // recognized the sqlite harness ("duplicate column" inline) but let the
+  // wrapped pglite/postgres error fall through, which re-threw the idempotent
+  // ADD COLUMN backfill and 500'd every orchestrator read (#13776).
+  for (
+    let node: unknown = error, depth = 0;
+    isRecord(node) && depth < 8;
+    depth++
+  ) {
+    if (node.code === "42701") return true;
+    const message =
+      typeof node.message === "string" ? node.message.toLowerCase() : "";
+    if (
+      message.includes("duplicate column") ||
+      message.includes("already exists")
+    ) {
+      return true;
+    }
+    node = node.cause;
+  }
+  return false;
 }
 
 /** Boundary guard for documents loaded from disk/JSON. A document must carry a

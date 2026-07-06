@@ -121,6 +121,51 @@ describe("task store project binding (real PGlite)", () => {
     await expect(store2.getTask("legacy-1")).resolves.not.toBeNull();
   });
 
+  it("swallows a Drizzle-WRAPPED duplicate-column error on the ADD COLUMN backfill (#13776)", {
+    timeout: PGLITE_TIMEOUT,
+  }, async () => {
+    // The runtime's eliza Drizzle adapter rethrows the driver error wrapped as
+    // `Error("Failed query: <sql>", { cause: <pgError> })`, so the duplicate
+    // signal (SQLSTATE 42701 / "already exists") is on the CAUSE, not the top
+    // level. The raw pglite adapter above never exercised that wrapping, which
+    // is exactly why the idempotent backfill re-threw and 500'd every
+    // /api/orchestrator/* read on the real server. Reproduce the wrapper here.
+    await db.query(`CREATE TABLE orchestrator_tasks (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      archived INTEGER NOT NULL DEFAULT 0,
+      priority TEXT,
+      title TEXT,
+      project_id TEXT,
+      search_text TEXT,
+      updated_at TEXT NOT NULL,
+      last_activity_at BIGINT NOT NULL,
+      document TEXT NOT NULL
+    )`);
+    const raw = pgliteAdapter(db);
+    const drizzleLike = {
+      async run(sql: string, params: unknown[] = []) {
+        try {
+          await raw.run(sql, params);
+        } catch (cause) {
+          throw new Error(`Failed query: ${sql}\nparams: `, { cause });
+        }
+      },
+      async all(sql: string, params: unknown[] = []) {
+        try {
+          return await raw.all(sql, params);
+        } catch (cause) {
+          throw new Error(`Failed query: ${sql}\nparams: `, { cause });
+        }
+      },
+    };
+    // The table already has project_id, so ensureInitialized's ADD COLUMN throws
+    // a wrapped duplicate-column error on the FIRST init — it must be recognized
+    // and swallowed, leaving a working, queryable store (not a rejected read).
+    const store = new RuntimeDbTaskStore(drizzleLike);
+    await expect(store.listTasks()).resolves.toEqual([]);
+  });
+
   it("persists project_id and filters listTasks by projectId", {
     timeout: PGLITE_TIMEOUT,
   }, async () => {
