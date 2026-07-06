@@ -18,6 +18,7 @@ import {
   failureToActionResult,
   readStringParam,
   successActionResult,
+  userFacingSuccessResult,
 } from "../lib/format.js";
 import { CODING_TOOLS_CONTEXTS } from "../types.js";
 import { editFileHandler } from "./edit.js";
@@ -233,7 +234,7 @@ async function deviceFileHandler(
     const bytes = Buffer.byteLength(content, encoding);
     const text = `Wrote ${bytes} byte${bytes === 1 ? "" : "s"} to ${path}`;
     if (callback) await callback({ text, source: "coding-tools" });
-    return successActionResult(text, {
+    return userFacingSuccessResult(text, {
       action: "FILE",
       target: "device",
       operation,

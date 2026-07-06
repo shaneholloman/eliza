@@ -46,6 +46,10 @@ describe("EDIT", () => {
     expect(data?.firstLine).toBe(2);
     expect(data?.addedLines).toBe(1);
     expect(data?.removedLines).toBe(1);
+    // The edit confirmation is user-facing so it survives a post-tool evaluator
+    // failure via the deterministic relay.
+    expect(result.userFacingText).toBe(result.text);
+    expect(result.userFacingText).toContain("Replaced 1 occurrence in ");
   });
 
   it("keeps edit plugin-owned until fs.patch parity exists", async () => {
