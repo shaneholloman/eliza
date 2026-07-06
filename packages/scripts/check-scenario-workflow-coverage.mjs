@@ -627,6 +627,7 @@ function scenarioCatalogHtml() {
       ["defaultScenarios", "Default package scenarios"],
       ["includePendingScenarios", "Including pending"],
       ["pluginLifeopsScenarios", "plugin-personal-assistant"],
+      ["pluginHealthScenarios", "plugin-health"],
       ["pluginAppControlScenarios", "plugin-app-control"],
       ["pluginAgentOrchestratorScenarios", "plugin-agent-orchestrator"],
       ["scenarioRunnerScenarios", "scenario-runner tests"],
@@ -638,6 +639,7 @@ function scenarioCatalogHtml() {
         ["Default", s.defaultScenarioCount || 0],
         ["Include pending", s.includePendingScenarioCount || 0],
         ["plugin-personal-assistant", s.pluginLifeopsCount || 0],
+        ["plugin-health", s.pluginHealthCount || 0],
         ["plugin-app-control", s.pluginAppControlCount || 0],
         ["plugin-agent-orchestrator", s.pluginAgentOrchestratorCount || 0],
         ["runner tests", s.scenarioRunnerCount || 0],
@@ -735,6 +737,7 @@ function renderMarkdown(summary, runArtifacts = []) {
     `Default packages/test scenarios: ${summary.defaultScenarioCount}`,
     `With pending included: ${summary.includePendingScenarioCount}`,
     `plugin-personal-assistant scenarios: ${summary.pluginLifeopsCount}`,
+    `plugin-health scenarios: ${summary.pluginHealthCount}`,
     `plugin-app-control scenarios: ${summary.pluginAppControlCount}`,
     `plugin-agent-orchestrator scenarios: ${summary.pluginAgentOrchestratorCount}`,
     `scenario-runner test scenarios: ${summary.scenarioRunnerCount}`,
@@ -834,6 +837,9 @@ function main() {
   const pluginLifeopsIds = listScenarioMetadata(
     "plugins/plugin-personal-assistant/test/scenarios",
   ).map((metadata) => metadata.id);
+  const pluginHealthIds = listScenarioMetadata(
+    "plugins/plugin-health/test/scenarios",
+  ).map((metadata) => metadata.id);
   const pluginAppControlIds = listScenarioMetadata(
     "plugins/plugin-app-control/test/scenarios",
   ).map((metadata) => metadata.id);
@@ -848,6 +854,10 @@ function main() {
     ...scopedScenarioRows(
       "plugins/plugin-personal-assistant/test/scenarios",
       pluginLifeopsIds,
+    ),
+    ...scopedScenarioRows(
+      "plugins/plugin-health/test/scenarios",
+      pluginHealthIds,
     ),
     ...scopedScenarioRows(
       "plugins/plugin-app-control/test/scenarios",
@@ -869,6 +879,7 @@ function main() {
   const laneScanRoots = [
     "packages/test/scenarios",
     "plugins/plugin-personal-assistant/test/scenarios",
+    "plugins/plugin-health/test/scenarios",
     "plugins/plugin-app-control/test/scenarios",
     "plugins/plugin-agent-orchestrator/test/scenarios",
     "packages/scenario-runner/test/scenarios",
@@ -964,6 +975,7 @@ function main() {
     defaultScenarioCount: defaultIds.length,
     includePendingScenarioCount: includePendingIds.length,
     pluginLifeopsCount: pluginLifeopsIds.length,
+    pluginHealthCount: pluginHealthIds.length,
     pluginAppControlCount: pluginAppControlIds.length,
     pluginAgentOrchestratorCount: pluginAgentOrchestratorIds.length,
     scenarioRunnerCount: scenarioRunnerIds.length,
@@ -992,6 +1004,7 @@ function main() {
     "plugin-personal-assistant.txt",
     pluginLifeopsIds,
   );
+  writeList(options.reportDir, "plugin-health.txt", pluginHealthIds);
   writeList(options.reportDir, "plugin-app-control.txt", pluginAppControlIds);
   writeList(
     options.reportDir,
@@ -1014,6 +1027,7 @@ function main() {
     defaultScenarios: defaultIds,
     includePendingScenarios: includePendingIds,
     pluginLifeopsScenarios: pluginLifeopsIds,
+    pluginHealthScenarios: pluginHealthIds,
     pluginAppControlScenarios: pluginAppControlIds,
     pluginAgentOrchestratorScenarios: pluginAgentOrchestratorIds,
     scenarioRunnerScenarios: scenarioRunnerIds,
