@@ -411,6 +411,10 @@
       "outputs": []
     },
     "@elizaos/plugin-calendar#typecheck": {
+      "dependsOn": [
+        "@elizaos/import-conversations#build",
+        "@elizaos/plugin-inbox#build"
+      ],
       "outputs": []
     },
     "@elizaos/plugin-personal-assistant#typecheck": {
