@@ -191,6 +191,8 @@ export interface ShellNavigateViewPayload {
   layout?: string;
   placement?: string;
   alwaysOnTop?: boolean;
+  /** Opaque target-view deep-link state, validated by the receiving view. */
+  payload?: unknown;
 }
 
 export type ShellNavigateViewWsFrame = ShellNavigateViewPayload & {
@@ -228,6 +230,7 @@ export function normalizeShellNavigateViewPayload(
     layout: readNonEmptyString(data.layout),
     placement: readNonEmptyString(data.placement),
     alwaysOnTop: data.alwaysOnTop === true,
+    ...(Object.hasOwn(data, "payload") ? { payload: data.payload } : {}),
   };
 }
 
