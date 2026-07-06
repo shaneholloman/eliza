@@ -2372,8 +2372,7 @@ export function ContinuousChatOverlay({
   //   OPEN_HALF_OR_OVER — at the half detent or taller (header buttons show)
   //   MAXIMIZED         — full-bleed edge-to-edge
   // Transitions: pill tap / flick-up → INPUT; focus·type·flick·send → an OPEN_*
-  // state; pull-down → INPUT → CLOSED; maximize toggle ↔ MAXIMIZED; Home/Settings
-  // animate out of MAXIMIZED then collapse (see navigateAndClose).
+  // state; pull-down → INPUT → CLOSED; maximize toggle ↔ MAXIMIZED.
   // MAXIMIZED is keyed off the SAME `fullBleed` predicate the styles use, so the
   // enum and the full-bleed layout can never disagree (no "maximized at half"
   // ghost state).
@@ -3674,7 +3673,6 @@ export function ContinuousChatOverlay({
       animateFullBleedTo,
     ],
   );
-
   const onDragOffset = React.useCallback(
     (offset: number) => {
       // Onboarding pins the sheet at FULL: the live drag must not move it.
@@ -3958,8 +3956,9 @@ export function ContinuousChatOverlay({
     // The inline closures are rebuilt every render, so they always read the
     // current detent.
     onPullUp: () => {
-      // A mid-drag commit already put the sheet in its landed state (the springs
-      // may still be finishing): the release just settles there.
+      // A mid-drag commit already put the sheet in its landed state; settleDrag
+      // re-asserts the resting springs (openProgress → 0/1) to the SAME targets
+      // the commit set, so it finishes the crossfade cleanly, not a jump.
       if (dragCommitRef.current) {
         dragCommitRef.current = null;
         return settleDrag();
@@ -4012,7 +4011,7 @@ export function ContinuousChatOverlay({
       }
     },
     onPullDown: () => {
-      // Mid-drag commit already landed the sheet — settle where it is.
+      // Mid-drag commit already landed the sheet — settle to its resting springs.
       if (dragCommitRef.current) {
         dragCommitRef.current = null;
         return settleDrag();
@@ -4065,7 +4064,7 @@ export function ContinuousChatOverlay({
     // A deliberate (slow) drag: REST exactly where released instead of snapping
     // to a detent — drag the sheet to any size and it stays.
     onSettleFree: (direction) => {
-      // Mid-drag commit already landed the sheet — settle where it is.
+      // Mid-drag commit already landed the sheet — settle to its resting springs.
       if (dragCommitRef.current) {
         dragCommitRef.current = null;
         return settleDrag();
@@ -4180,7 +4179,7 @@ export function ContinuousChatOverlay({
     setDragPreviewMounted(false);
     setRestoreDragging(false);
     // A mid-drag commit (a restore drag can run all the way to a committed pill)
-    // already landed the sheet — settle where it is.
+    // already landed the sheet — settle to its resting springs.
     if (dragCommitRef.current) {
       dragCommitRef.current = null;
       return settleDrag();
@@ -4488,12 +4487,7 @@ export function ContinuousChatOverlay({
             binding={pullBinding}
             glow={listening || responding}
             opacity={grabberOpacity}
-            // Keep the handle ACTIVE through a mid-drag pill commit (its
-            // pilled-disable would strip the pointer handlers off the element
-            // that holds the capture, killing the very gesture that committed).
-            // `draggingRef` (not `isDragging`) so it goes inert the instant the
-            // pointer releases, not after the settle spring finishes.
-            pilled={pilled && !draggingRef.current}
+            pilled={pilled}
             inert={!sheetOpen && (hasImages || Boolean(imageError))}
           />
         ) : null}
@@ -4728,9 +4722,10 @@ export function ContinuousChatOverlay({
             {/* Sheet header — shown at the HALF detent and up (not just FULL).
               One infinite thread (#13531): no maximize/minimize (that's a
               vertical pull now) and no clear/new-chat (the thread never resets).
-              Left: search only. Right: one Home button back to the launcher.
-              Settings lives inside the Launcher grid, so the chat header stops
-              acting like a second app nav bar. */}
+              It carries NO buttons — search/upload/camera/transcribe moved to the
+              composer "+" menu and Home lives in the launcher — so the chat stops
+              acting like a second app nav bar. The bar remains only to reserve
+              the safe-area top inset at full-bleed and host the transcribe badge. */}
             {threadPresented ? (
               <motion.div
                 // Mounted while the sheet is open, or while an upward drag is
@@ -5453,20 +5448,14 @@ export function ContinuousChatOverlay({
             className="absolute inset-x-0 bottom-0 z-30 flex justify-center"
             style={{
               opacity: pillOpacity,
-              // Interactive while pilled, AND kept interactive through a live
-              // drag: a pill-initiated MID-DRAG maximize commit flips `pilled`
-              // false, but the PillHandle still holds the pointer capture — if
-              // this wrapper (or the button) went pointer-events:none the
-              // gesture would die the instant it committed. `draggingRef` (not
-              // `isDragging`) so it reverts the instant the pointer releases.
-              pointerEvents: pilled || draggingRef.current ? "auto" : "none",
+              pointerEvents: pilled ? "auto" : "none",
             }}
           >
             <PillHandle
               binding={pullBinding}
               onOpen={openFromPill}
               glow={listening || responding}
-              pilled={pilled || draggingRef.current}
+              pilled={pilled}
             />
           </motion.div>
         </motion.fieldset>
