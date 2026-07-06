@@ -97,6 +97,7 @@ import { BootRecoveryConductorMount } from "./first-run/use-boot-recovery-conduc
 import { FirstRunConductorMount } from "./first-run/use-first-run-conductor";
 import { ModelStatusConductorMount } from "./first-run/use-model-status-conductor";
 import { BugReportProvider, useBugReportState, useContextMenu } from "./hooks";
+import { useAgentSessionRecovery } from "./hooks/useAgentSessionRecovery";
 import { useAuthStatus } from "./hooks/useAuthStatus";
 import { useRole } from "./hooks/useRole";
 import { useSecretsManagerModalState } from "./hooks/useSecretsManagerModal";
@@ -2129,6 +2130,18 @@ export function App() {
       startupCoordinator.phase === "first-run-required" ||
       isPopout,
   });
+  // #15132: after a dedicated cloud agent's container upgrade the persisted
+  // agent credential is stale (every agent-subdomain call 401s) while the cloud
+  // session is still valid. Rather than dead-end at the agent's internal
+  // password wall (a credential no cloud user has), transparently re-run the
+  // pairing exchange to refresh the credential. Only fires for a cloud-managed
+  // dedicated agent WITH a valid cloud session; otherwise stays "idle" and the
+  // wall renders exactly as before.
+  const agentSessionRecoveryStatus = useAgentSessionRecovery({
+    active: authState.phase === "unauthenticated",
+    reason:
+      authState.phase === "unauthenticated" ? authState.reason : undefined,
+  });
   // Don't initialize the 3D scene while the system is still booting — this
   // prevents VrmEngine's Three.js setup from blocking the JS thread and
   // delaying WebSocket agent-status updates (which would freeze the loader).
@@ -2660,6 +2673,19 @@ export function App() {
       );
     }
     if (authState.phase === "unauthenticated") {
+      // #15132: a stale post-upgrade agent credential with a valid cloud session
+      // is recoverable, so hold the startup surface while the re-pair runs (it
+      // ends in a full-page navigation to `/pair`) instead of flashing the
+      // password wall. Recovery drops back to "idle" if it can't proceed, and
+      // the wall renders then.
+      if (agentSessionRecoveryStatus === "recovering") {
+        return (
+          <BugReportProvider value={bugReport}>
+            <StartupScreen />
+            <BugReportModal />
+          </BugReportProvider>
+        );
+      }
       return (
         <BugReportProvider value={bugReport}>
           <LoginView onLoginSuccess={refetchAuth} reason={authState.reason} />
@@ -2719,13 +2745,16 @@ export function App() {
           className="relative flex h-[100dvh] w-full max-w-full flex-col overflow-hidden"
           // Reserve a TIGHT status-bar inset: enough to clear the notch/Dynamic
           // Island but no oversized empty band above the content (the repeated
-          // "too much space at the top" report). Shave the inset down from the
-          // full safe area, with a 1.25rem floor so notch-less phones still
+          // "too much space at the top" report; device r8 screenshot still showed
+          // dead space above the in-app clock). The iOS status bar clock already
+          // draws INSIDE the safe-area-top zone, so any app paddingTop below the
+          // full inset is ADDITIVE dead space. Shave harder, subtract 2rem from
+          // the safe area (was 1.25rem) so the big in-app clock seats snug under
+          // the status bar, with a 0.75rem floor so notch-less phones still
           // clear their status bar. Top banners bleed their bg back up via
           // `.mobile-top-banner:first-child` (styles.css). No-op on web.
           style={{
-            paddingTop:
-              "max(calc(var(--safe-area-top, 0px) - 1.25rem), 1.25rem)",
+            paddingTop: "max(calc(var(--safe-area-top, 0px) - 2rem), 0.75rem)",
           }}
         >
           {/* BOTTOM-BAR / SAFE-AREA FLOOR (do not remove): a viewport-filling

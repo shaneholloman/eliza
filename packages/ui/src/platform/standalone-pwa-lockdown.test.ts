@@ -402,4 +402,13 @@ describe("Composer bottom geometry — full-bleed, keyboard-lift preserved", () 
     expect(layoutSrc).not.toContain("100lvh");
     expect(layoutSrc).not.toContain("100dvh");
   });
+
+  it("lifts the composer purely from the visual-viewport keyboard inset (no screen.height reclaim signal)", () => {
+    // With the non-fixed body there is no ICB collapse to work around, so the
+    // keyboard lift comes solely from the visual-viewport delta — no
+    // `screen.height` probe and no reclaim-gated signal.
+    expect(overlaySrc).toContain("visualViewport");
+    expect(overlaySrc).not.toContain("KEYBOARD_INTRUSION_THRESHOLD_PX");
+    expect(overlaySrc).not.toContain("shouldInstallStandaloneBottomReclaim");
+  });
 });

@@ -106,28 +106,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isDuplicateColumnError(error: unknown): boolean {
-  // Walk the cause chain: Drizzle (postgres/pglite) rethrows the driver error
-  // wrapped as `{ message: "Failed query: <sql>", cause: <pgError> }`, so the
-  // duplicate-column signal — SQLSTATE 42701, or "column … already exists" —
-  // lives on the CAUSE, not the top-level message. Checking only the top level
-  // recognized the sqlite harness ("duplicate column" inline) but let the
-  // wrapped pglite/postgres error fall through, which re-threw the idempotent
-  // ADD COLUMN backfill and 500'd every orchestrator read (#13776).
-  for (
-    let node: unknown = error, depth = 0;
-    isRecord(node) && depth < 8;
-    depth++
-  ) {
-    if (node.code === "42701") return true;
+  // Drizzle-backed adapters surface driver failures wrapped in
+  // DrizzleQueryError ("Failed query: …") with the real duplicate-column
+  // error on `cause`; without unwrapping, the idempotent ADD COLUMN in
+  // ensureInitialized rethrows on every boot and the cached-rejected init
+  // permanently 500s the orchestrator API on pglite/postgres runtimes.
+  for (let depth = 0; isRecord(error) && depth < 8; depth++) {
+    if (error.code === "42701") return true;
     const message =
-      typeof node.message === "string" ? node.message.toLowerCase() : "";
+      typeof error.message === "string" ? error.message.toLowerCase() : "";
     if (
       message.includes("duplicate column") ||
-      message.includes("already exists")
+      /column .+ already exists/.test(message)
     ) {
       return true;
     }
-    node = node.cause;
+    error = error.cause;
   }
   return false;
 }

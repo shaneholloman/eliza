@@ -38,6 +38,22 @@ electrobun-wgpu {
 
 /* ── Global resets ──────────────────────────────────────────────────── */
 
+:root {
+  --eliza-large-viewport-height: 100vh;
+}
+
+@supports (height: 100dvh) {
+  :root {
+    --eliza-large-viewport-height: 100dvh;
+  }
+}
+
+@supports (height: 100lvh) {
+  :root {
+    --eliza-large-viewport-height: 100lvh;
+  }
+}
+
 html,
 body {
   width: 100%;
@@ -175,6 +191,15 @@ body.pwa-standalone textarea {
     max-height: 100dvh;
     padding: 0;
     box-sizing: border-box;
+    /* BOTTOM-BAR FIX (r10): transparent #root so its #160d07 launch-bg never
+       paints the collapsed-ICB strip. On device #root renders 873px tall (the
+       collapsed fixed-body ICB), painting #160d07 across it, and the 59px below
+       (873→932) is html/body #160d07 — together the recurring strip. Going
+       transparent lets the fixed AppBackground wallpaper (reclaimed to the true
+       bottom via --standalone-bottom-reclaim + mirrored onto the html canvas)
+       be the ONLY paint at the bottom edge. Folded into this geometry rule to
+       avoid a descending-specificity split. */
+    background: transparent;
   }
 
   /* biome-ignore lint/style/noDescendingSpecificity: intentional app-shell-column fill mirroring the class-path [data-app-shell-root] rule. */
