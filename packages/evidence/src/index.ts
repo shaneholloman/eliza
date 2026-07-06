@@ -100,6 +100,49 @@ export {
 } from "./bundle.ts";
 export { canonicalJson, canonicalJsonBytes } from "./canonical.ts";
 export {
+  fingerprintPublicKey,
+  type GeneratedKeypair,
+  generateCertificationKeypair,
+  type ResolveSigningKeyOptions,
+  resolveSigningKey,
+  SIGNING_KEY_ENV_VAR,
+} from "./certify/keys.ts";
+export {
+  type AnalysisFinding,
+  type ArtifactRequirement,
+  type CertificationRequirements,
+  type LaneRequirement,
+  type LaneRollup,
+  parseRequirements,
+  parseVerdictsDocument,
+  type RollupResult,
+  type RollupSummary,
+  rollupBundle,
+} from "./certify/rollup.ts";
+export {
+  type Certification,
+  type CertificationPayload,
+  type CertificationReviewer,
+  type CertificationSignature,
+  type CertificationVerdict,
+  parseCertification,
+  parseCertificationPayload,
+  REVIEWER_KINDS,
+  type ReviewerKind,
+  tierSatisfies,
+  VERDICT_VALUES,
+  type VerdictValue,
+} from "./certify/schema.ts";
+export {
+  CERTIFICATION_FAILURE_CODES,
+  type CertificationFailure,
+  type CertificationFailureCode,
+  type CertificationVerifyOptions,
+  type CertificationVerifyReport,
+  signCertification,
+  verifyCertification,
+} from "./certify/sign.ts";
+export {
   EvidenceError,
   type EvidenceErrorOptions,
   EvidenceValidationError,
