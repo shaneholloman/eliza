@@ -27,8 +27,7 @@ const NAV_WAIT_MS = Number(process.env.NAV_WAIT_MS || 700);
 const VIDEO = process.env.VIDEO !== "0";
 const SETUP_FIRST_RUN = process.env.SETUP_FIRST_RUN !== "0";
 const OUT =
-  process.env.OUT ||
-  join(process.cwd(), ".github", "issue-evidence", "10196-views-state");
+  process.env.OUT || join(process.cwd(), "capture-output", "10196-views-state");
 mkdirSync(OUT, { recursive: true });
 
 let fails = 0;

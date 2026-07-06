@@ -75,9 +75,6 @@ export function inferSource(root, filePath) {
   }
   if (rel.startsWith("reports/live-test-runs/")) return "live-test-runs";
   if (rel.startsWith("reports/walkthrough/")) return "walkthrough";
-  if (rel.startsWith(".github/issue-evidence/")) {
-    return "retired-issue-evidence";
-  }
   if (rel.startsWith("reports/")) return "reports";
   return "other";
 }

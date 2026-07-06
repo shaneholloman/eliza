@@ -2,8 +2,8 @@
 /**
  * Collects the live-validation readiness status for the LifeOps HITL work
  * (issue #11632) by probing each connector group's required env vars (model
- * provider, Google, and others) and writing a status.json under the issue's
- * evidence dir. Reports which connector groups are configured so the live
+ * provider, Google, and others) and writing a status.json under reports/.
+ * Reports which connector groups are configured so the live
  * validation run knows what it can actually exercise.
  */
 import { spawnSync } from "node:child_process";
@@ -13,8 +13,9 @@ import { dirname, join, resolve } from "node:path";
 const ROOT = resolve(new URL("../..", import.meta.url).pathname);
 const DEFAULT_OUT = join(
   ROOT,
-  ".github/issue-evidence/8833-lifeops-live-validation/11632-status/status.json",
+  "reports/lifeops-live-validation/11632-status/status.json",
 );
+const LIFEOPS_REPORT_ROOT = "reports/lifeops-live-validation";
 
 const CONNECTOR_GROUPS = [
   {
@@ -233,58 +234,55 @@ function parseEvidenceLog(path, patterns) {
 function buildStatus() {
   const envGroups = CONNECTOR_GROUPS.map(groupStatus);
   const existingEvidence = [
-    fileStatus(".github/issue-evidence/8833-lifeops-live-validation/README.md"),
-    fileStatus(
-      ".github/issue-evidence/8833-lifeops-live-validation/2026-07-02-keyless-run/README.md",
-    ),
+    fileStatus(`${LIFEOPS_REPORT_ROOT}/README.md`),
+    fileStatus(`${LIFEOPS_REPORT_ROOT}/2026-07-02-keyless-run/README.md`),
     parseEvidenceLog(
-      ".github/issue-evidence/8833-lifeops-live-validation/2026-07-02-keyless-run/owner-agent-permission-matrix.txt",
+      `${LIFEOPS_REPORT_ROOT}/2026-07-02-keyless-run/owner-agent-permission-matrix.txt`,
       [/20\/20 pass/i, /20 passed/i],
     ),
     parseEvidenceLog(
-      ".github/issue-evidence/8833-lifeops-live-validation/2026-07-02-keyless-run/connector-keyless-suites.txt",
+      `${LIFEOPS_REPORT_ROOT}/2026-07-02-keyless-run/connector-keyless-suites.txt`,
       [/all green/i, /pass/i],
     ),
     parseEvidenceLog(
-      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/owner-agent-permission-matrix.txt",
+      `${LIFEOPS_REPORT_ROOT}/11632-status/owner-agent-permission-matrix.txt`,
       [/20\/20 pass/i, /20 passed/i],
     ),
     parseEvidenceLog(
-      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/android-build-after-resolved-appdir.txt",
+      `${LIFEOPS_REPORT_ROOT}/11632-status/android-build-after-resolved-appdir.txt`,
       [/BUILD SUCCESSFUL/i, /android sideload artifact audit passed/i],
     ),
     parseEvidenceLog(
-      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/android-app-actions-test.txt",
+      `${LIFEOPS_REPORT_ROOT}/11632-status/android-app-actions-test.txt`,
       [/12 pass/i, /0 fail/i],
     ),
     parseEvidenceLog(
-      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/biome-edited-files.txt",
+      `${LIFEOPS_REPORT_ROOT}/11632-status/biome-edited-files.txt`,
       [/Checked \d+ files/i],
     ),
     parseEvidenceLog(
-      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/core-build-node.txt",
+      `${LIFEOPS_REPORT_ROOT}/11632-status/core-build-node.txt`,
       [/Node-only build complete/i],
     ),
+    parseEvidenceLog(`${LIFEOPS_REPORT_ROOT}/11632-status/core-typecheck.txt`, [
+      /tsgo --noEmit -p \.\/tsconfig\.json/i,
+    ]),
     parseEvidenceLog(
-      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/core-typecheck.txt",
-      [/tsgo --noEmit -p \.\/tsconfig\.json/i],
-    ),
-    parseEvidenceLog(
-      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/agent-typecheck.txt",
+      `${LIFEOPS_REPORT_ROOT}/11632-status/agent-typecheck.txt`,
       [/tsgo --noEmit -p tsconfig\.json/i],
     ),
     parseEvidenceLog(
-      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/plugin-discord-typecheck.txt",
+      `${LIFEOPS_REPORT_ROOT}/11632-status/plugin-discord-typecheck.txt`,
       [/tsgo --noEmit/i],
     ),
     parseEvidenceLog(
-      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/plugin-google-live.txt",
+      `${LIFEOPS_REPORT_ROOT}/11632-status/plugin-google-live.txt`,
       [/pass/i, /skip/i],
     ),
-    parseEvidenceLog(
-      ".github/issue-evidence/8833-lifeops-live-validation/11632-status/plugin-x-live.txt",
-      [/pass/i, /skip/i],
-    ),
+    parseEvidenceLog(`${LIFEOPS_REPORT_ROOT}/11632-status/plugin-x-live.txt`, [
+      /pass/i,
+      /skip/i,
+    ]),
   ];
   const devices = {
     adb: commandAvailable("adb", ["devices", "-l"]),
@@ -326,7 +324,7 @@ function buildStatus() {
       "LIFEOPS_PERMISSION_MATRIX=1 bunx vitest run --config packages/test/vitest/integration.config.ts plugins/plugin-personal-assistant/test/owner-agent-permission-matrix.integration.test.ts",
       "TEST_LANE=post-merge ELIZA_LIVE_TEST=1 bun run --cwd plugins/plugin-google test",
       "TEST_LANE=post-merge ELIZA_LIVE_TEST=1 bun run --cwd plugins/plugin-x test",
-      "bun run dev && node .github/issue-evidence/8833-lifeops-live-validation/capture-views.mjs",
+      "bun run dev && bun run --cwd packages/app audit:views",
       "bun run --cwd packages/app capture:android-emu",
       "bun run --cwd packages/app capture:ios-sim",
     ],

@@ -113,7 +113,7 @@ jobs:
 
           # Hard-fail: no `|| true`. A render-storm / unbounded cache / heap growth
           # reds this lane.
-          UI=http://127.0.0.1:2138 API=http://127.0.0.1:31337 \
+          UI=http://127.0.0.1:2138 API=http://127.0.0.1:31337 OUT="${{ runner.temp }}/evidence/10196-views-state" \
             bun run --cwd packages/app audit:views
 
       - name: Upload views-soak artifacts
@@ -122,7 +122,7 @@ jobs:
         with:
           name: views-soak
           path: |
-            .github/issue-evidence/10196-views-state/
+            ${{ runner.temp }}/evidence/10196-views-state/
             /tmp/views-soak-dev.log
           if-no-files-found: ignore
           retention-days: 7

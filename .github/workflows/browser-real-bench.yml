@@ -82,21 +82,29 @@ jobs:
         run: bun run --cwd plugins/plugin-browser test:real-chromium
 
       - name: Generate MiniWoB++ run-report artifacts (oracle + noop)
+        env:
+          BROWSER_EVIDENCE_DIR: ${{ runner.temp }}/evidence/10333-browser-real-chromium
         run: |
-          bun run --cwd plugins/plugin-browser bench:miniwob:chromium --policy oracle --seeds 3
-          bun run --cwd plugins/plugin-browser bench:miniwob:chromium --policy noop --seeds 2
+          mkdir -p "$BROWSER_EVIDENCE_DIR"
+          bun run --cwd plugins/plugin-browser bench:miniwob:chromium --policy oracle --seeds 3 --out "$BROWSER_EVIDENCE_DIR/miniwob-chromium-oracle-run.json"
+          bun run --cwd plugins/plugin-browser bench:miniwob:chromium --policy noop --seeds 2 --out "$BROWSER_EVIDENCE_DIR/miniwob-chromium-noop-run.json"
 
       - name: Generate web-grounding artifacts
+        env:
+          OUT: ${{ runner.temp }}/evidence/10333-web-grounding
         run: bun run --cwd plugins/plugin-browser bench:grounding:chromium
 
       - name: Generate external-dataset artifacts
+        env:
+          BROWSER_EVIDENCE_DIR: ${{ runner.temp }}/evidence/10333-browser-external-dataset
         run: |
-          bun run --cwd plugins/plugin-browser bench:external --policy oracle
-          bun run --cwd plugins/plugin-browser bench:external --policy noop
-          bun run --cwd plugins/plugin-browser bench:external --policy wrong
-          bun run --cwd plugins/plugin-browser bench:external:chromium --policy oracle
-          bun run --cwd plugins/plugin-browser bench:external:chromium --policy noop
-          bun run --cwd plugins/plugin-browser bench:external:chromium --policy wrong
+          mkdir -p "$BROWSER_EVIDENCE_DIR"
+          bun run --cwd plugins/plugin-browser bench:external --policy oracle --out "$BROWSER_EVIDENCE_DIR/external-dataset-oracle-run.json"
+          bun run --cwd plugins/plugin-browser bench:external --policy noop --out "$BROWSER_EVIDENCE_DIR/external-dataset-noop-run.json"
+          bun run --cwd plugins/plugin-browser bench:external --policy wrong --out "$BROWSER_EVIDENCE_DIR/external-dataset-wrong-run.json"
+          bun run --cwd plugins/plugin-browser bench:external:chromium --policy oracle --out "$BROWSER_EVIDENCE_DIR/external-dataset-chromium-oracle-run.json"
+          bun run --cwd plugins/plugin-browser bench:external:chromium --policy noop --out "$BROWSER_EVIDENCE_DIR/external-dataset-chromium-noop-run.json"
+          bun run --cwd plugins/plugin-browser bench:external:chromium --policy wrong --out "$BROWSER_EVIDENCE_DIR/external-dataset-chromium-wrong-run.json"
 
       - name: Upload benchmark artifacts
         if: always()
@@ -104,7 +112,7 @@ jobs:
         with:
           name: browser-real-benchmark-runs
           path: |
-            .github/issue-evidence/10333-browser-real-chromium/*
-            .github/issue-evidence/10333-web-grounding/*
-            .github/issue-evidence/10333-browser-external-dataset/*.json
+            ${{ runner.temp }}/evidence/10333-browser-real-chromium/*
+            ${{ runner.temp }}/evidence/10333-web-grounding/*
+            ${{ runner.temp }}/evidence/10333-browser-external-dataset/*.json
           if-no-files-found: warn

@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { resolveRequireEvidence } from "./issue-evidence.mjs";
+import { resolveRequireEvidence } from "./capture-output.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -123,10 +123,10 @@ afterAll(() => {
 });
 
 function runSkip({ argv = [], env = {} } = {}) {
-  const modulePath = JSON.stringify(path.join(here, "issue-evidence.mjs"));
+  const modulePath = JSON.stringify(path.join(here, "capture-output.mjs"));
   const harness = `import { skip } from ${modulePath}; skip('ios-sim', 'no booted simulator');`;
   const harnessPath = path.join(
-    fs.mkdtempSync(path.join(os.tmpdir(), "issue-evidence-skip-")),
+    fs.mkdtempSync(path.join(os.tmpdir(), "capture-output-skip-")),
     "harness.mjs",
   );
   fs.writeFileSync(harnessPath, harness, "utf8");

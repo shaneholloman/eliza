@@ -3,8 +3,7 @@
  * One-command iOS DEVICE deploy: unsigned local build → provisioning-profile
  * graft → explicit nested signing → verify → devicectl install → launch.
  *
- * Codifies the exact working recipe from
- * .github/issue-evidence/11030-ios-boot-fix/device-boot-README.md:
+ * Codifies the exact working recipe from the #11030 iOS boot-fix evidence:
  *   1. Build UNSIGNED via run-mobile-build ios-local (CODE_SIGNING_ALLOWED
  *      stays NO — this sidesteps the "requires a development team" failures).
  *   2. Auto-discover provisioning profiles: scan

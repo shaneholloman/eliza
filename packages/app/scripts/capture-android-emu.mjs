@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Android emulator/device evidence capture (issue #9944): screenshot + screen
-// recording + logcat tail from an attached device, written to
-// `.github/issue-evidence/`. Skips with a reason (exit 0) when adb is missing or
-// no device is in `device` state, so it is safe inside the e2e-recordings sweep
-// on any host. Reuses the shared adb/serial resolution in lib/android-device.mjs.
+// Android emulator/device capture (issue #9944): screenshot + screen recording
+// + logcat tail from an attached device, written to the generated capture-output
+// directory. Skips with a reason (exit 0) when adb is missing or no device is in
+// `device` state, so it is safe inside the e2e-recordings sweep on any host.
+// Reuses the shared adb/serial resolution in lib/android-device.mjs.
 //
 // Flags:
 //   --issue <n> --slug <s>   name artifacts `<n>-<s>-android-emu.{png,mp4,log}`
@@ -23,7 +23,7 @@ import {
   mirrorToRecordings,
   parseFlags,
   skip,
-} from "./lib/issue-evidence.mjs";
+} from "./lib/capture-output.mjs";
 
 const PLATFORM = "android-emu";
 const log = logFor(PLATFORM);

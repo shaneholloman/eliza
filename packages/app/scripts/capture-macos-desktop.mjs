@@ -12,7 +12,7 @@ import {
   mirrorToRecordings,
   parseFlags,
   skip,
-} from "./lib/issue-evidence.mjs";
+} from "./lib/capture-output.mjs";
 
 const PLATFORM = "macos-desktop";
 const log = logFor(PLATFORM);

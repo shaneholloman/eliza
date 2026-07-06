@@ -1,11 +1,10 @@
-// Shared helpers for the per-platform evidence-capture scripts (issue #9944).
+// Shared helpers for the per-platform capture scripts (issue #9944).
 //
-// One place owns: resolving the repo root, the `.github/issue-evidence/`
-// artifact directory, the `<issue#>-<slug>-<platform>.<ext>` naming convention
-// (per PR_EVIDENCE.md and .github/issue-evidence/README.md), CLI flag parsing,
-// the skip-with-reason exit, and a best-effort backend-log pull. The iOS and
-// Android capture helpers both build on this so the path math and conventions
-// live here, not duplicated per platform.
+// One place owns: resolving the repo root, choosing the generated capture
+// output directory, the `<issue#>-<slug>-<platform>.<ext>` naming convention,
+// CLI flag parsing, the skip-with-reason exit, and a best-effort backend-log
+// pull. The iOS and Android capture helpers both build on this so the path math
+// and conventions live here, not duplicated per platform.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -14,10 +13,11 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 // lib -> scripts -> app -> packages -> repo root
 export const REPO_ROOT = path.resolve(here, "..", "..", "..", "..");
-export const ISSUE_EVIDENCE_DIR = path.join(
-  REPO_ROOT,
-  ".github",
-  "issue-evidence",
+export const CAPTURE_OUTPUT_DIR = path.resolve(
+  process.env.ELIZA_CAPTURE_OUTPUT_DIR?.trim() ||
+    (process.env.RUNNER_TEMP
+      ? path.join(process.env.RUNNER_TEMP, "evidence", "app-captures")
+      : path.join(REPO_ROOT, "packages", "app", "capture-output")),
 );
 
 /**
@@ -135,10 +135,10 @@ export function evidenceBaseName({ issue, slug, platform }) {
   return `${platform}-capture-${timestamp()}`;
 }
 
-/** Ensure the issue-evidence dir exists and return an absolute path inside it. */
+/** Ensure the capture output dir exists and return an absolute path inside it. */
 export function evidencePath(baseName, ext) {
-  fs.mkdirSync(ISSUE_EVIDENCE_DIR, { recursive: true });
-  return path.join(ISSUE_EVIDENCE_DIR, `${baseName}.${ext}`);
+  fs.mkdirSync(CAPTURE_OUTPUT_DIR, { recursive: true });
+  return path.join(CAPTURE_OUTPUT_DIR, `${baseName}.${ext}`);
 }
 
 /**

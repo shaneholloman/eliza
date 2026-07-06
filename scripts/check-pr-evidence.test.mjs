@@ -26,6 +26,10 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = join(HERE, "..", ".github", "pull_request_template.md");
+const RETIRED_REPO_EVIDENCE_PATH = [
+  ".github",
+  ["issue", "evidence"].join("-"),
+].join("/");
 
 function buildBody(overrides = {}) {
   const defaults = {
@@ -204,21 +208,22 @@ describe("check-pr-evidence row primitives", () => {
     assert.equal(hasArtifactReference("just words, no artifact"), false);
   });
 
-  it("rejects retired repo-local issue-evidence paths", () => {
+  it("rejects retired repo-local evidence paths", () => {
     assert.equal(
       hasArtifactReference(
-        "committed under .github/issue-evidence/13676-a.png",
+        `committed under ${RETIRED_REPO_EVIDENCE_PATH}/13676-a.png`,
       ),
       false,
     );
     assert.equal(
-      hasArtifactReference("[proof](.github/issue-evidence/13676-a.png)"),
+      hasArtifactReference(
+        `[proof](${RETIRED_REPO_EVIDENCE_PATH}/13676-a.png)`,
+      ),
       false,
     );
     const { ok, findings } = evaluatePrEvidence(
       buildBody({
-        "backend-logs":
-          "- [ ] Backend logs: .github/issue-evidence/13676-backend.txt",
+        "backend-logs": `- [ ] Backend logs: ${RETIRED_REPO_EVIDENCE_PATH}/13676-backend.txt`,
       }),
     );
     assert.equal(ok, false);

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Windows desktop evidence capture (issue #9944): screenshot + screen recording
-// + an info log of the headed desktop (incl. the Electrobun window) via ffmpeg
-// `gdigrab`, written to `.github/issue-evidence/`.
+// Windows desktop capture (issue #9944): screenshot + screen recording + an
+// info log of the headed desktop (incl. the Electrobun window) via ffmpeg
+// `gdigrab`, written to the generated capture-output directory.
 // Skips with a reason (exit 0) when not on Windows or ffmpeg is missing — so a
 // non-Windows CI run is a clean no-op.
 //
@@ -19,7 +19,7 @@ import {
   mirrorToRecordings,
   parseFlags,
   skip,
-} from "./lib/issue-evidence.mjs";
+} from "./lib/capture-output.mjs";
 
 const PLATFORM = "windows-desktop";
 const log = logFor(PLATFORM);

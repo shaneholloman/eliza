@@ -23,7 +23,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveRequireEvidence } from "../../packages/app/scripts/lib/issue-evidence.mjs";
+import { resolveRequireEvidence } from "../../packages/app/scripts/lib/capture-output.mjs";
 import { RECORDINGS_DIR, REPO_ROOT, UI_E2E_SUITES } from "./suites.mjs";
 
 const __filename = fileURLToPath(import.meta.url);

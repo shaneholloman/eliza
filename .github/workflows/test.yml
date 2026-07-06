@@ -222,7 +222,7 @@ jobs:
       PGLITE_WASM_MODE: node
       # The TUI e2e capture test writes its .cast / viewport / scrollback
       # artifacts here during `test:server`; the upload step below attaches them.
-      TUI_EVIDENCE_DIR: ${{ github.workspace }}/.github/issue-evidence/9969-tui-e2e
+      TUI_EVIDENCE_DIR: ${{ runner.temp }}/evidence/9969-tui-e2e
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -339,7 +339,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: tui-e2e-artifacts
-          path: .github/issue-evidence/9969-tui-e2e/
+          path: ${{ runner.temp }}/evidence/9969-tui-e2e/
           if-no-files-found: ignore
 
   client-tests:

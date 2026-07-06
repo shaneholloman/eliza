@@ -42,7 +42,6 @@ const DEFAULT_SCAN_DIRS = [
   "packages/scenario-runner/reports",
   "reports/live-test-runs",
   "reports/walkthrough",
-  ".github/issue-evidence",
 ];
 const SKIP_DIR_NAMES = new Set([
   ".git",

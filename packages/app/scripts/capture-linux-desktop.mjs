@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Linux desktop evidence capture (issue #9944): screenshot + screen recording +
-// an info log of the headed X11 desktop (incl. the Electrobun window), written
-// to `.github/issue-evidence/`.
+// Linux desktop capture (issue #9944): screenshot + screen recording + an info
+// log of the headed X11 desktop (incl. the Electrobun window), written to the
+// generated capture-output directory.
 // Skips with a reason (exit 0) when ffmpeg or an X display is missing — so a
 // headless CI run is a clean no-op.
 //
@@ -19,7 +19,7 @@ import {
   mirrorToRecordings,
   parseFlags,
   skip,
-} from "./lib/issue-evidence.mjs";
+} from "./lib/capture-output.mjs";
 
 const PLATFORM = "linux-desktop";
 const log = logFor(PLATFORM);

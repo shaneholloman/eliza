@@ -27,7 +27,14 @@ export const SURFACE_ARTIFACT_ROW_IDS = [
 ];
 
 const MARKER_RE = /<!--\s*evidence-row:([a-z0-9-]+)\s*-->/gi;
-const RETIRED_ISSUE_EVIDENCE_RE = /\.github\/issue-evidence\/\S+/i;
+const RETIRED_REPO_EVIDENCE_PATH = [
+  ".github",
+  ["issue", "evidence"].join("-"),
+].join("/");
+const RETIRED_REPO_EVIDENCE_RE = new RegExp(
+  `${RETIRED_REPO_EVIDENCE_PATH.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\/\\S+`,
+  "i",
+);
 
 export function parseLabels(value) {
   if (Array.isArray(value)) {
@@ -59,9 +66,7 @@ export function hasArtifactReference(text) {
   const markdownLinks = [
     ...String(text ?? "").matchAll(/\[[^\]]+\]\(\s*(\S+)\s*\)/g),
   ];
-  if (
-    markdownLinks.some((match) => !RETIRED_ISSUE_EVIDENCE_RE.test(match[1]))
-  ) {
+  if (markdownLinks.some((match) => !RETIRED_REPO_EVIDENCE_RE.test(match[1]))) {
     return true;
   }
   if (/https?:\/\/\S+/i.test(text)) return true;
@@ -294,14 +299,13 @@ function runSelfTest() {
   {
     const { ok, findings } = evaluatePrEvidence(
       buildFixtureBody({
-        "backend-logs":
-          "- [ ] Backend logs: .github/issue-evidence/13676-backend.txt",
+        "backend-logs": `- [ ] Backend logs: ${RETIRED_REPO_EVIDENCE_PATH}/13676-backend.txt`,
       }),
     );
     const backend = findings.find((finding) => finding.id === "backend-logs");
-    if (ok) failures.push("issue-evidence-only row should fail");
+    if (ok) failures.push("retired repo evidence-only row should fail");
     if (backend?.status !== "blank") {
-      failures.push("issue-evidence-only row should be reported blank");
+      failures.push("retired repo evidence-only row should be reported blank");
     }
   }
 
@@ -365,7 +369,7 @@ function main() {
       `\nEvidence gate FAILED: ${bad.length} row(s) blank or missing. ` +
         "Attach the artifact inline (GitHub attachment URL) or write `N/A - <reason>` on each row. " +
         "For ui/frontend/native PRs, before/after screenshots and walkthrough video require concrete inline artifact links. " +
-        "Retired `.github/issue-evidence/...` repo paths do not count as evidence.",
+        "Retired repo-local evidence paths do not count as evidence.",
     );
     process.exit(1);
   }

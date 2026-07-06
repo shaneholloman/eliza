@@ -14,17 +14,17 @@
 // Flags:
 //   --device <udid>     target simulator (default: first booted, else boots one)
 //   --bundle-id <id>    app under test (default ai.elizaos.app)
-//   --out-dir <dir>     artifact dir (default .github/issue-evidence/12185-device-lifecycle/ios)
+//   --out-dir <dir>     artifact dir (default packages/app/capture-output/ios-lifecycle)
 //   --settle <seconds>  per-phase settle before screenshots (default 5)
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { CAPTURE_OUTPUT_DIR, parseFlags } from "./lib/capture-output.mjs";
 import {
   captureIosSimulatorScreenshot,
   ensureBootedIosSimulator,
   startIosSimulatorVideo,
 } from "./lib/ios-simulator-capture.mjs";
-import { ISSUE_EVIDENCE_DIR, parseFlags } from "./lib/issue-evidence.mjs";
 
 const log = (message) => console.log(`[ios-sim-lifecycle] ${message}`);
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -90,8 +90,7 @@ async function main() {
   const bundleId = flags["bundle-id"] ?? "ai.elizaos.app";
   const settleMs = Math.max(1, Number(flags.settle ?? 5)) * 1000;
   const outDir = path.resolve(
-    flags["out-dir"] ??
-      path.join(ISSUE_EVIDENCE_DIR, "12185-device-lifecycle", "ios"),
+    flags["out-dir"] ?? path.join(CAPTURE_OUTPUT_DIR, "ios-lifecycle"),
   );
   fs.mkdirSync(outDir, { recursive: true });
 

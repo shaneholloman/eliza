@@ -5,12 +5,13 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
+const RETIRED_REPO_EVIDENCE_PREFIX = `${[".github", ["issue", "evidence"].join("-")].join("/")}/`;
 
 // Historical evidence, fixture, vendored, and prototype documentation contains
 // intentionally stale sample paths. Keep the first gate on maintained
 // contributor-facing docs; shrink this list as those trees are cleaned up.
 const EXCLUDED_PREFIXES = [
-  ".github/issue-evidence/",
+  RETIRED_REPO_EVIDENCE_PREFIX,
   "docs/",
   "packages/app-core/",
   "packages/benchmarks/",

@@ -69,33 +69,36 @@ jobs:
         if: ${{ inputs.run_keyless_matrix }}
         env:
           LIFEOPS_PERMISSION_MATRIX: "1"
+          LIFEOPS_EVIDENCE_DIR: ${{ runner.temp }}/evidence/8833-lifeops-live-validation/11632-status
         run: |
           set -o pipefail
-          mkdir -p .github/issue-evidence/8833-lifeops-live-validation/11632-status
+          mkdir -p "$LIFEOPS_EVIDENCE_DIR"
           bunx vitest run \
             --config packages/test/vitest/integration.config.ts \
             plugins/plugin-personal-assistant/test/owner-agent-permission-matrix.integration.test.ts \
-            2>&1 | tee .github/issue-evidence/8833-lifeops-live-validation/11632-status/owner-agent-permission-matrix.txt
+            2>&1 | tee "$LIFEOPS_EVIDENCE_DIR/owner-agent-permission-matrix.txt"
 
       - name: Run Google live connector suite
         if: ${{ inputs.run_live_connectors }}
         env:
           TEST_LANE: post-merge
+          LIFEOPS_EVIDENCE_DIR: ${{ runner.temp }}/evidence/8833-lifeops-live-validation/11632-status
         run: |
           set -o pipefail
-          mkdir -p .github/issue-evidence/8833-lifeops-live-validation/11632-status
+          mkdir -p "$LIFEOPS_EVIDENCE_DIR"
           bun run --cwd plugins/plugin-google test \
-            2>&1 | tee .github/issue-evidence/8833-lifeops-live-validation/11632-status/plugin-google-live.txt
+            2>&1 | tee "$LIFEOPS_EVIDENCE_DIR/plugin-google-live.txt"
 
       - name: Run X live connector suite
         if: ${{ inputs.run_live_connectors }}
         env:
           TEST_LANE: post-merge
+          LIFEOPS_EVIDENCE_DIR: ${{ runner.temp }}/evidence/8833-lifeops-live-validation/11632-status
         run: |
           set -o pipefail
-          mkdir -p .github/issue-evidence/8833-lifeops-live-validation/11632-status
+          mkdir -p "$LIFEOPS_EVIDENCE_DIR"
           bun run --cwd plugins/plugin-x test \
-            2>&1 | tee .github/issue-evidence/8833-lifeops-live-validation/11632-status/plugin-x-live.txt
+            2>&1 | tee "$LIFEOPS_EVIDENCE_DIR/plugin-x-live.txt"
 
       - name: Collect post-run status
         if: always()
@@ -106,4 +109,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lifeops-11632-live-validation-status
-          path: .github/issue-evidence/8833-lifeops-live-validation/11632-status/
+          path: ${{ runner.temp }}/evidence/8833-lifeops-live-validation/11632-status/

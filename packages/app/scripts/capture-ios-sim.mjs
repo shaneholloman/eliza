@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// iOS-simulator evidence capture (issue #9944): screenshot + screen recording
-// + best-effort backend logs from a booted simulator, written to
-// `.github/issue-evidence/`. Skips with a reason (exit 0) when not on macOS or
-// no simulator is booted, so it is safe inside the e2e-recordings sweep on any
-// host. Uses only `xcrun simctl io` — no app build, no Playwright.
+// iOS-simulator capture (issue #9944): screenshot + screen recording +
+// best-effort backend logs from a booted simulator, written to the generated
+// capture-output directory. Skips with a reason (exit 0) when not on macOS or no
+// simulator is booted, so it is safe inside the e2e-recordings sweep on any host.
+// Uses only `xcrun simctl io` — no app build, no Playwright.
 //
 // Flags:
 //   --issue <n> --slug <s>   name artifacts `<n>-<s>-ios-sim.{png,mov,log}`
@@ -20,7 +20,7 @@ import {
   mirrorToRecordings,
   parseFlags,
   skip,
-} from "./lib/issue-evidence.mjs";
+} from "./lib/capture-output.mjs";
 import { analyzeScreenshot } from "./lib/visual-qa.mjs";
 
 const PLATFORM = "ios-sim";

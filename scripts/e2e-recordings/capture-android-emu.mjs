@@ -2,9 +2,9 @@
 /**
  * Captures Android emulator e2e evidence: boots (or reuses) an AVD, installs the
  * app APK, drives it against a host agent, and collects a screenshot plus logcat
- * into the issue-evidence dir. Exits with SKIP_EXIT_CODE (77) when no emulator
- * is available. Shares arg parsing and manifest writing with the other native
- * capture scripts via native-capture-common.mjs.
+ * into the generated native-capture output. Exits with SKIP_EXIT_CODE (77) when
+ * no emulator is available. Shares arg parsing and manifest writing with the
+ * other native capture scripts via native-capture-common.mjs.
  */
 import fs from "node:fs";
 import path from "node:path";

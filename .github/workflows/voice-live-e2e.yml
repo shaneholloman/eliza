@@ -18,7 +18,7 @@ name: Voice Live E2E
 # libelizainference build. Its scripts run in require-real mode so a missing
 # model/ABI/credential is a hard failure rather than green skip evidence.
 #
-# Runner provisioning (full handoff: .github/issue-evidence/9454-gpu-runner-provisioning.md):
+# Runner provisioning handoff is tracked in elizaOS/eliza#9454:
 #   The two real jobs default to the online [self-hosted, Linux, X64, eliza]
 #   runners. To repoint at a dedicated GPU box without editing this file, set the
 #   repo variable VOICE_LIVE_RUNNER_LABELS to a JSON array of labels, e.g.
@@ -134,7 +134,7 @@ jobs:
             fi
           done
           if [ -n "$missing" ]; then
-            echo "::warning title=Voice runner not fully provisioned::Absent GPU/media tools:${missing}. Real round-trip coverage needs the GPU runner from #9454 — see .github/issue-evidence/9454-gpu-runner-provisioning.md"
+            echo "::warning title=Voice runner not fully provisioned::Absent GPU/media tools:${missing}. Real round-trip coverage needs the GPU runner tracked in elizaOS/eliza#9454."
           fi
 
       - name: Setup Node.js
@@ -300,12 +300,12 @@ jobs:
               echo "- asrBundle: $BUNDLE/asr ($( [ -d "$BUNDLE/asr" ] && echo present || echo MISSING ))"
               echo "- missingTools:${missing_tools:-none}"
               echo
-              echo "Provision per .github/issue-evidence/9454-gpu-runner-provisioning.md"
+              echo "Provision the runner per elizaOS/eliza#9454"
               echo "(stage the fused libelizainference.so + the eliza-1-2b ASR"
               echo "bundle), then re-dispatch:"
               echo "  gh workflow run voice-live-e2e.yml --ref develop"
             } | tee "$VOICE_REAL_MATRIX_OUT/SKIPPED.md"
-            echo "::error title=Voice acoustic matrix runner not provisioned::Missing fused libelizainference.so and/or the eliza-1-2b ASR bundle on this self-hosted runner. This lane needs the GPU runner staged per #9454 (.github/issue-evidence/9454-gpu-runner-provisioning.md)."
+            echo "::error title=Voice acoustic matrix runner not provisioned::Missing fused libelizainference.so and/or the eliza-1-2b ASR bundle on this self-hosted runner. This lane needs the GPU runner staged per elizaOS/eliza#9454."
             exit 1
           fi
 
@@ -403,7 +403,7 @@ jobs:
             || true)"
           if [ -z "$FUSED_LIB" ]; then
             echo "FATAL: fused libelizainference.so is not staged on this runner."
-            echo "Provision the lane per .github/issue-evidence/9454-gpu-runner-provisioning.md"
+            echo "Provision the lane per elizaOS/eliza#9454"
             echo "(stage the fused libelizainference.so + the eliza-1-2b ASR bundle)."
             exit 1
           fi

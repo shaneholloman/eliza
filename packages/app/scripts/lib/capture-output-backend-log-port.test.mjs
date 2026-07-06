@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BACKEND_LOG_PORT,
   resolveBackendLogPort,
-} from "./issue-evidence.mjs";
+} from "./capture-output.mjs";
 
 describe("resolveBackendLogPort (#13624)", () => {
   it("falls back to the built-in default when no orchestrator env is set", () => {
