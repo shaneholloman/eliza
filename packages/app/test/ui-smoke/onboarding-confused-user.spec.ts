@@ -12,7 +12,7 @@ import {
 } from "./helpers";
 import {
   expectChatFirstOnboarding,
-  expectOnboardingAutoCollapse,
+  expectOnboardingSettleToHalf,
   injectFullCapabilityHost,
   installHomeRoutes,
   makeScreenshotter,
@@ -139,7 +139,7 @@ test.describe("confused-user onboarding", () => {
     await expect(skip).toBeVisible({ timeout: 30_000 });
     await skip.click();
 
-    await expectOnboardingAutoCollapse(page);
+    await expectOnboardingSettleToHalf(page);
     await settleHomeEntrance(page);
     await screenshot(page, "typed-then-tapped-home");
 
@@ -170,7 +170,7 @@ test.describe("confused-user onboarding", () => {
     await expect(skip).toBeVisible({ timeout: 30_000 });
     await skip.dblclick();
 
-    await expectOnboardingAutoCollapse(page);
+    await expectOnboardingSettleToHalf(page);
     await settleHomeEntrance(page);
     await screenshot(page, "double-click-home");
 
@@ -212,13 +212,20 @@ test.describe("confused-user onboarding", () => {
     await expect(onDevice).toBeVisible({ timeout: 15_000 });
     await onDevice.click();
 
-    // The finish fails at the POST → the conductor seeds an error turn that
-    // re-offers the runtime CHOICE. The re-offer must be UNLOCKED (a second,
-    // fresh widget row — the greeting row locked itself on the first pick).
+    // The finish fails at the POST → the conductor seeds a DISTINCT error
+    // turn with its own recovery choice (retry / different-way / Settings) —
+    // deliberately NOT an automatic runtime re-offer, which would loop forever
+    // on a persistent finish error. Picking "Choose a different way to run"
+    // re-offers the runtime CHOICE, and that re-offer must be UNLOCKED (a
+    // second, fresh widget row — the greeting row locked itself on the first
+    // pick).
+    const differentWay = page.getByTestId("choice-__first_run__:error:restart");
+    await expect(differentWay).toBeVisible({ timeout: 30_000 });
+    await screenshot(page, "first-run-post-failed");
+    await differentWay.click();
     await expect(page.getByTestId(RUNTIME_CHOICE("local"))).toHaveCount(2, {
       timeout: 30_000,
     });
-    await screenshot(page, "first-run-post-failed");
 
     // Retry: re-pick local → the conductor seeds a FRESH provider turn (the
     // original provider row is locked) → on-device → tutorial → home.
@@ -232,7 +239,7 @@ test.describe("confused-user onboarding", () => {
     await expect(skip).toBeVisible({ timeout: 30_000 });
     await skip.click();
 
-    await expectOnboardingAutoCollapse(page);
+    await expectOnboardingSettleToHalf(page);
     await settleHomeEntrance(page);
     await screenshot(page, "retry-after-failure-home");
 
@@ -274,7 +281,7 @@ test.describe("confused-user onboarding", () => {
     await expect(skip).toBeVisible({ timeout: 30_000 });
     await skip.click();
 
-    await expectOnboardingAutoCollapse(page);
+    await expectOnboardingSettleToHalf(page);
     await settleHomeEntrance(page);
     await screenshot(page, "after-reload-home");
 

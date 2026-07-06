@@ -15,7 +15,7 @@
  *   - EVERY control/state via deterministic fixture loads + interactions:
  *       empty · peek/half/full · typing→send · attach image→thumbnail→remove ·
  *       mic press→recording · voice speaking→mute toggle · responding typing
- *       dots · booting (disabled) · suggestions · reduced-motion.
+ *       dots · booting (disabled) · reduced-motion.
  *   - Screenshots every state; captures the browser console and fails on any
  *     page error or error-level log.
  *
@@ -33,7 +33,6 @@ import {
   renameRecordedVideo,
   stubElizaCore,
   stubNodeBuiltins,
-  stubPromptSuggestions,
   writeFixturePage,
 } from "../../../testing/e2e-runner/index.ts";
 import {
@@ -61,20 +60,16 @@ function near(a, b, tol) {
   return Math.abs(a - b) <= tol;
 }
 
-// Bundle the fixture with the shared stubs: the API-touching prompt-suggestions
-// hook is replaced with a local stub, and @elizaos/core + node builtins (dead at
-// render in the browser; the only render-path core symbol, findInteractionRegions,
-// is test-only) with no-op proxies, mirroring the sibling shell runners.
+// Bundle the fixture with the shared stubs: @elizaos/core + node builtins (dead
+// at render in the browser; the only render-path core symbol,
+// findInteractionRegions, is test-only) are replaced with no-op proxies,
+// mirroring the sibling shell runners.
 const url = await writeFixturePage({
   entry: join(here, "chat-sheet-fixture.tsx"),
   outDir,
   htmlName: "chat-sheet.html",
   title: "chat sheet e2e",
-  plugins: [
-    stubPromptSuggestions(join(here, "usePromptSuggestions.stub.ts")),
-    stubElizaCore(),
-    stubNodeBuiltins(),
-  ],
+  plugins: [stubElizaCore(), stubNodeBuiltins()],
   processShim: true,
   background: "#0a0d16",
   headHtml: "<style>.bg-bg{background-color:#0a0d16}</style>",
@@ -802,7 +797,7 @@ try {
       hasTouch: true,
     });
 
-  // empty thread: no sheet, just the composer (suggestion strip is flagged off)
+  // empty thread: no sheet, just the composer
   {
     const p = await ctrl();
     attachConsole(p, sink);
@@ -810,7 +805,6 @@ try {
     await p.waitForSelector('[data-testid="chat-composer-textarea"]');
     await p.waitForTimeout(650);
     assert((await p.locator('[data-testid="chat-thread"]').count()) === 0, "EMPTY: no thread/history mounted (just the input panel)");
-    assert((await p.getByTestId("chat-suggestions").count()) === 0, "EMPTY: suggestion strip NOT shown (flagged off)");
     assert(await p.getByTestId("chat-composer-attach").isVisible(), "EMPTY: attach (+) button shown");
     assert((await p.getByTestId("chat-composer-mic").count()) === 1, "EMPTY: mic button shown (no draft)");
     await snap(p, "state-empty");
@@ -963,7 +957,7 @@ try {
     await p.close();
   }
 
-  // responding: typing dots inside the (opened) sheet
+  // responding: an in-progress status row inside the opened sheet
   {
     const p = await ctrl();
     attachConsole(p, sink);
@@ -973,7 +967,7 @@ try {
     await p.getByTestId("chat-sheet-grabber").focus();
     await p.keyboard.press("ArrowUp"); // open to half so the dots are visible
     await p.waitForTimeout(450);
-    assert(await p.getByTestId("typing-dots").isVisible(), "RESPONDING: typing-dots shown in the open sheet");
+    assert(await p.getByTestId("turn-status-indicator").isVisible(), "RESPONDING: turn status shown in the open sheet");
     await snap(p, "state-responding");
     await p.close();
   }
@@ -1232,21 +1226,6 @@ try {
       sink.logs.slice(m).some((l) => l.includes("setComposerHasDraft -> false")),
       "TYPING-PAUSE: clearing the draft resumes the loop (setComposerHasDraft false)",
     );
-    await p.close();
-  }
-
-  // suggestions are feature-flagged off — no strip, no chips at rest
-  {
-    const p = await ctrl();
-    attachConsole(p, sink);
-    await gotoFixture(p, `${url}?empty`);
-    await p.waitForSelector('[data-testid="chat-composer-textarea"]');
-    await p.waitForTimeout(500);
-    assert(
-      (await p.locator('[data-testid^="chat-suggestion-"]').count()) === 0,
-      "SUGGESTIONS: no chips rendered (flagged off)",
-    );
-    await snap(p, "state-suggestions-off");
     await p.close();
   }
 
@@ -2171,12 +2150,10 @@ try {
     await p.close();
   }
 
-  // ONBOARDING (firstRunOpen): the sheet is pinned open + undismissable, but now
-  // sized to its CONTENT so the greeting + choice widget sit just above the
-  // composer (it grows from the bottom) instead of floating under a tall empty
-  // full-screen panel. Assert the sheet's TOP sits in the LOWER portion of the
-  // viewport (content-sized, not full-height), the detent still reports the
-  // pinned "full" contract, and the composer shows the onboarding copy.
+  // ONBOARDING (firstRunOpen): the sheet is pinned full-screen + undismissable.
+  // The greeting/choice widget owns the whole first-run screen; on completion the
+  // sheet settles to HALF so the home appears behind the top half while the
+  // conversation stays in hand.
   {
     const p = await ctrl();
     attachConsole(p, sink);
@@ -2190,8 +2167,8 @@ try {
       "ONBOARDING: sheet reports the pinned-open 'full' detent contract",
     );
     assert(
-      top > vh * 0.4,
-      `ONBOARDING: sheet is content-sized at the BOTTOM, not a full-screen panel (top ${Math.round(top)} > ${Math.round(vh * 0.4)})`,
+      top < vh * 0.15,
+      `ONBOARDING: sheet is full-screen, not content-sized at the bottom (top ${Math.round(top)} < ${Math.round(vh * 0.15)})`,
     );
     assert(
       (await p
@@ -2205,7 +2182,7 @@ try {
         .isEnabled()),
       "ONBOARDING: composer textarea is unlocked (#12178)",
     );
-    await snap(p, "state-onboarding-bottom-anchored");
+    await snap(p, "state-onboarding-full-screen");
 
     // OPAQUE BACKDROP (#12178 impl / #12364 proof): a solid bg-bg plane covers
     // the launcher/home so no launcher pixel shows through — the fixture's
@@ -2256,8 +2233,8 @@ try {
     await snap(p, "state-onboarding-opaque-backdrop");
 
     // COMPLETION REVEAL (#12364): drive the falling edge — the backdrop fades
-    // off its opaque state and the sheet auto-collapses, revealing the home
-    // surface cleanly.
+    // off its opaque state and the sheet settles to HALF, revealing the home
+    // surface behind the conversation.
     await p.evaluate(() => window.__setFirstRun?.(false));
     await p.waitForTimeout(900);
     const revealOpaque = await p.evaluate(() => {
@@ -2276,8 +2253,8 @@ try {
       `REVEAL: the home surface is painted again once the backdrop reveals (pixel rgb(${revealPx.r}, ${revealPx.g}, ${revealPx.b}) is no longer the opaque bg)`,
     );
     assert(
-      (await variant(p)) === "closed",
-      "REVEAL: the sheet auto-collapses on completion, revealing home",
+      (await detent(p)) === "half",
+      "REVEAL: the sheet settles to half on completion, revealing home behind the conversation",
     );
     await snap(p, "state-onboarding-reveal-home");
     await p.close();
