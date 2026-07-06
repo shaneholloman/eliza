@@ -4,10 +4,11 @@
  * the band between the header and the floating chat. It owns the inbox content
  * (rows, open/deep-link, per-row dismiss, mark-all-read) and self-hides when
  * empty, fading in Apple-style when the first notification arrives. It has no
- * card chrome of its own — no fill, no border — it sits directly on the home
- * field; the header is a bare eyebrow (no unread count, no mark-all action),
- * and rows carry only per-row dismissal (hover X on mouse, sideways swipe on
- * touch, or the row's long-press / right-click menu).
+ * card chrome and no "Notifications" header of its own — the view-group
+ * eyebrows carry the structure; the only pinned control is the icon-only
+ * priority ⇄ time sort toggle (default priority, persisted). At rest the shade
+ * shows ONLY interrupt-tier (high/urgent) rows — triage, not a log — with a
+ * quiet "N more" / "Show less" affordance to expand/compress the rest.
  *
  * Rows are grouped by the VIEW they deep-link into (falling back to the
  * producer category), like a platform notification shade groups by app. The
@@ -19,10 +20,12 @@
  * static fades and plain scrolling.
  *
  * Acknowledgement is the platform-shade model (iOS lock screen / Android
- * shade): tapping a row acts on it AND clears it from the list — there is no
- * read/unread bookkeeping, no dots, no restyle-on-tap. Rows sort by priority
- * bucket then recency (a stable total order, so live arrivals never reshuffle
- * existing rows under the user's finger); groups inherit the position of
+ * shade) with an expand step: tap opens the row's contextual option strip
+ * (Suggest a reply / Review / Open / Dismiss — see notificationRowOptions);
+ * acting on an option clears the row. Horizontal drag (mouse or touch)
+ * dismisses. There is no read/unread bookkeeping, no dots, no corner X. Both
+ * sort orders are stable total orders, so live arrivals never reshuffle
+ * existing rows under the user's finger; groups inherit the position of
  * their highest-ranked row.
  */
 import type { AgentNotification, NotificationCategory } from "@elizaos/core";
@@ -51,7 +54,7 @@ import { RelativeTime } from "./RelativeTime";
  */
 const SWIPE_DISMISS_PX = 88;
 
-/** Long-press duration (ms) that opens the row's contextual menu on touch. */
+/** Long-press duration (ms) that expands the row's options on touch. */
 const LONG_PRESS_MS = 420;
 
 /**
@@ -386,28 +389,25 @@ const NotificationRow = memo(function NotificationRow({
     [notification.id, onDismiss],
   );
 
-  const onPointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      suppressClick.current = false;
-      const longPress =
-        e.pointerType !== "mouse"
-          ? window.setTimeout(() => {
-              suppressClick.current = true;
-              setExpanded(true);
-              void haptics.light();
-            }, LONG_PRESS_MS)
-          : null;
-      gesture.current = {
-        id: e.pointerId,
-        startX: e.clientX,
-        startY: e.clientY,
-        axis: "none",
-        longPress,
-        moved: false,
-      };
-    },
-    [],
-  );
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    suppressClick.current = false;
+    const longPress =
+      e.pointerType !== "mouse"
+        ? window.setTimeout(() => {
+            suppressClick.current = true;
+            setExpanded(true);
+            void haptics.light();
+          }, LONG_PRESS_MS)
+        : null;
+    gesture.current = {
+      id: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      axis: "none",
+      longPress,
+      moved: false,
+    };
+  }, []);
 
   const onPointerMove = useCallback((e: React.PointerEvent) => {
     const g = gesture.current;
@@ -441,6 +441,8 @@ const NotificationRow = memo(function NotificationRow({
       }
       clearGesture();
       if (g.axis === "x") {
+        // A horizontal drag never doubles as a tap, even when it springs back.
+        suppressClick.current = true;
         const dx = e.clientX - g.startX;
         if (Math.abs(dx) >= SWIPE_DISMISS_PX) {
           commitDismiss(dx < 0 ? "left" : "right");
@@ -452,60 +454,29 @@ const NotificationRow = memo(function NotificationRow({
     [clearGesture, commitDismiss],
   );
 
-  // Close the contextual menu on an OUTSIDE pointer / Escape while it is open.
-  // The containment check is what lets a click LAND on a menu item: a blanket
-  // "close on any pointerdown" would unmount the menu on the item's own
-  // pointerdown, swallowing the click before it fires.
-  useEffect(() => {
-    if (!menuOpen) return undefined;
-    const onPointer = (ev: PointerEvent) => {
-      const target = ev.target as Node | null;
-      if (menuRef.current && target && menuRef.current.contains(target)) return;
-      setMenuOpen(false);
-    };
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape") setMenuOpen(false);
-    };
-    // Defer one tick so the opening long-press/right-click isn't the "outside".
-    const id = window.setTimeout(() => {
-      window.addEventListener("pointerdown", onPointer);
-      window.addEventListener("keydown", onKey);
-    }, 0);
-    return () => {
-      window.clearTimeout(id);
-      window.removeEventListener("pointerdown", onPointer);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [menuOpen]);
-
   // §C.3 count-aware coalescing: a superseding same-groupKey notification carries
   // data.count so the row reads "3 new files" via a small chip instead of the
   // inbox silently keeping only the last of the batch. Only surfaced for N > 1.
   const rawCount = notification.data?.count;
   const count = typeof rawCount === "number" && rawCount > 1 ? rawCount : null;
-  // Lock-screen restraint: NO per-row icon chip, no accent rail, no fill.
-  // Unread state is carried by the dot + bold title alone, so a notification
-  // is just its line + time, like an iOS lock note.
+  // Lock-screen restraint: no per-row icon chip, no accent rail, no fill —
+  // a notification is just its line + time, like an iOS lock note.
   const dragging = swipeX !== 0 && !dismissing;
+  const options = notificationRowOptions(notification);
   return (
     <li
-      // Lifted above sibling rows while the menu is open so the menu — which
-      // overflows past this row's box — is never painted over (each row's swipe
-      // transform makes its own stacking context, so a later row would other-
-      // wise cover the menu and swallow its clicks).
-      className={cn("eliza-notif-row relative", menuOpen && "z-30")}
+      className="eliza-notif-row relative"
       data-notif-row
       onContextMenu={(e) => {
         e.preventDefault();
-        setMenuOpen(true);
+        setExpanded((v) => !v);
       }}
     >
       <div
         data-testid="notification-row-swipe"
         style={{
           // Only apply a transform while actually swiping/dismissing: a resting
-          // `translateX(0)` still creates a stacking context on every row, which
-          // is what buries an open menu behind the next row.
+          // `translateX(0)` would create a stacking context on every row.
           transform: dismissing
             ? `translateX(${dismissing === "left" ? "-120%" : "120%"})`
             : swipeX
@@ -522,28 +493,31 @@ const NotificationRow = memo(function NotificationRow({
         onPointerUp={onPointerEnd}
         onPointerCancel={onPointerEnd}
         className={cn(
-          // No fill, no border of its own — read or unread, the row floats on
-          // the shade field; a hover wash is the only rest→hover chrome.
-          "eliza-notif-row-inner group relative flex items-stretch overflow-hidden rounded-xl transition-colors duration-150 hover:bg-white/10",
+          // No fill, no border of its own — the row floats on the shade field;
+          // a hover wash is the only rest→hover chrome. Expanded keeps a faint
+          // wash so the option strip reads as part of the row.
+          "eliza-notif-row-inner group relative flex flex-col overflow-hidden rounded-xl transition-colors duration-150 hover:bg-white/10",
+          expanded && "bg-white/8",
         )}
       >
         <button
           type="button"
           data-testid="notification-row"
+          aria-expanded={expanded}
           aria-label={`${notification.title}${
             notification.body ? `. ${notification.body}` : ""
           }`}
           onClick={(e) => {
-            // A swipe / long-press synthesizes a click on release; swallow it so
-            // the gesture doesn't also open the notification.
+            // A swipe / long-press synthesizes a click on release; swallow it
+            // so the gesture doesn't also toggle the options.
             if (suppressClick.current) {
               suppressClick.current = false;
               e.preventDefault();
               return;
             }
-            onOpen(notification);
+            setExpanded((v) => !v);
           }}
-          className="flex min-h-touch min-w-0 flex-1 flex-col gap-0.5 rounded-xl px-3 py-2 pr-9 text-left active:scale-[0.99] motion-reduce:active:scale-100 pointer-coarse:pr-3"
+          className="flex min-h-touch min-w-0 flex-col gap-0.5 rounded-xl px-3 py-2 text-left active:scale-[0.99] motion-reduce:active:scale-100"
         >
           <span className="flex items-baseline gap-1.5">
             <span className="truncate text-sm font-semibold text-white">
@@ -571,62 +545,37 @@ const NotificationRow = memo(function NotificationRow({
             </span>
           ) : null}
         </button>
-        {/* Mouse-only dismiss: hidden at rest, revealed on row hover or keyboard
-            focus. Touch has no hover — it throws the row sideways to dismiss (or
-            long-presses for the menu), so the X is `pointer-coarse:hidden` to
-            keep touch rows clean and reclaim the trailing space. */}
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Dismiss notification"
-          data-testid="notification-row-dismiss"
-          onClick={() => onDismiss(notification.id)}
-          className="absolute right-1 top-1.5 h-auto w-auto shrink-0 rounded-full p-1.5 text-white/55 opacity-0 transition-opacity hover:bg-white/10 hover:text-white focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:hidden"
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-      {menuOpen ? (
-        <div
-          ref={menuRef}
-          role="menu"
-          aria-label="Notification actions"
-          data-testid="notification-row-menu"
-          // Anchored to the trailing edge over the row. The outside-close
-          // listener skips pointerdowns inside this subtree (containment check)
-          // so a menu-item click is never swallowed.
-          className="absolute right-2 top-full z-10 mt-0.5 flex min-w-40 flex-col overflow-hidden rounded-xl border border-white/12 bg-black/80 py-1 text-sm text-white shadow-lg backdrop-blur-md"
-        >
-          {notification.deepLink && isSafeDeepLink(notification.deepLink) ? (
-            <button
-              type="button"
-              role="menuitem"
-              data-testid="notification-menu-open"
-              onClick={() => {
-                setMenuOpen(false);
-                onOpen(notification);
-              }}
-              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
-            >
-              <ExternalLink className="h-4 w-4 shrink-0 text-white/70" />
-              Open
-            </button>
-          ) : null}
-          <button
-            type="button"
-            role="menuitem"
-            data-testid="notification-menu-dismiss"
-            onClick={() => {
-              setMenuOpen(false);
-              onDismiss(notification.id);
-            }}
-            className="flex items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
+        {expanded ? (
+          <div
+            role="group"
+            aria-label="Notification actions"
+            data-testid="notification-row-options"
+            className="flex flex-wrap items-center gap-1.5 px-3 pb-2.5 pt-0.5"
           >
-            <X className="h-4 w-4 shrink-0 text-white/70" />
-            Dismiss
-          </button>
-        </div>
-      ) : null}
+            {options.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                data-testid={`notification-option-${option.id}`}
+                onClick={() => {
+                  if (option.kind === "open") onOpen(notification);
+                  else if (option.kind === "prefill" && option.prefill)
+                    onPrefill(notification, option.prefill);
+                  else onDismiss(notification.id);
+                }}
+                className={cn(
+                  "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                  option.kind === "dismiss"
+                    ? "bg-white/8 text-white/65 hover:bg-white/14 hover:text-white"
+                    : "bg-white/14 text-white hover:bg-white/22",
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
     </li>
   );
 }, rowPropsEqual);
@@ -640,6 +589,14 @@ NotificationRow.displayName = "NotificationRow";
 export function NotificationsHomeCenter(): React.JSX.Element | null {
   notificationsHomeCenterRenderObserverForTests?.();
   const { notifications } = useNotifications();
+  // Sort toggle (priority ⇄ time), persisted; priority is the default. The
+  // rested shade shows only interrupt-tier rows (`showAll` expands to all).
+  const [sortMode, setSortMode] = useState<NotificationSortMode>(loadSortMode);
+  const [showAll, setShowAll] = useState(false);
+  const changeSortMode = useCallback((mode: NotificationSortMode) => {
+    setSortMode(mode);
+    storeSortMode(mode);
+  }, []);
   // No list-level clock tick here (binding pattern, spec §C.4): relative
   // timestamps live in the `<RelativeTime>` leaf inside each row, which owns the
   // shared visibility-gated ticker. The minute roll re-renders those text nodes
@@ -674,17 +631,28 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
   const dismissNotification = useCallback((id: string) => {
     void removeNotification(id);
   }, []);
+  const prefillNotification = useCallback(
+    (n: AgentNotification, text: string) => {
+      // "Suggest a reply"-class options: open the chat with the ask staged for
+      // review (never auto-sent), then acknowledge the row.
+      dispatchChatPrefill({ text });
+      void removeNotification(n.id);
+    },
+    [],
+  );
 
   if (notifications.length === 0) return null;
 
-  // Cap rendered rows, then group by view: the cap keeps the always-cheap
-  // paint budget; grouping happens on the capped slice so headers never count
-  // against visible rows.
-  const capped = orderDashboardNotifications(notifications).slice(
+  // Cap rendered rows, filter to the rested (interrupt-tier) slice unless
+  // expanded, then group by view: the cap keeps the always-cheap paint budget;
+  // grouping happens on the shown slice so headers never count against rows.
+  const capped = orderDashboardNotifications(notifications, sortMode).slice(
     0,
     MAX_RENDERED_ROWS,
   );
-  const groups = groupDashboardNotifications(capped);
+  const shown = showAll ? capped : capped.filter(isInterruptPriority);
+  const hiddenCount = capped.length - shown.length;
+  const groups = groupDashboardNotifications(shown, sortMode);
 
   return (
     <section
@@ -699,18 +667,34 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
       className="eliza-notif-center-in flex min-h-0 flex-1 flex-col overflow-hidden"
     >
       <style>{NOTIF_SCROLL_CSS}</style>
-      {/* Pinned header: a quiet eyebrow, nothing else — no unread count, no
-          mark-all action, no boxed bell chip. The label alone names the
-          surface; rows manage their own read/dismiss state. */}
-      <div className="flex shrink-0 items-center px-3.5 pb-1 pt-2.5">
-        <span
-          className={cn(
-            "text-2xs font-medium uppercase tracking-[0.1em]",
-            WALLPAPER_TEXT.secondary,
-          )}
-        >
-          Notifications
-        </span>
+      {/* No "Notifications" header — the view-group eyebrows carry the
+          structure. The only pinned control is the icon-only sort toggle
+          (priority ⇄ time), right-aligned in the band the header occupied. */}
+      <div className="flex shrink-0 items-center justify-end gap-0.5 px-2.5 pb-0.5 pt-2">
+        {(
+          [
+            { mode: "priority", Icon: Flag, label: "Sort by priority" },
+            { mode: "time", Icon: Clock, label: "Sort by time" },
+          ] as const
+        ).map(({ mode, Icon, label }) => (
+          <button
+            key={mode}
+            type="button"
+            aria-label={label}
+            title={label}
+            aria-pressed={sortMode === mode}
+            data-testid={`notifications-sort-${mode}`}
+            onClick={() => changeSortMode(mode)}
+            className={cn(
+              "rounded-full p-1.5 transition-colors",
+              sortMode === mode
+                ? "bg-white/12 text-white"
+                : "text-white/45 hover:bg-white/8 hover:text-white/80",
+            )}
+          >
+            <Icon className="h-3.5 w-3.5" />
+          </button>
+        ))}
       </div>
       <ul
         ref={scrollRef}
@@ -737,11 +721,41 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
                   notification={notification}
                   onOpen={openNotification}
                   onDismiss={dismissNotification}
+                  onPrefill={prefillNotification}
                 />
               ))}
             </ul>
           </li>
         ))}
+        {/* Compression affordance: the rested shade is interrupt-tier only
+            (information triage, not a log). "N more" pulls the full list up;
+            "Show less" compresses back to high-priority. */}
+        {!showAll && hiddenCount > 0 ? (
+          <li>
+            <button
+              type="button"
+              data-testid="notifications-show-all"
+              onClick={() => setShowAll(true)}
+              className="flex w-full items-center justify-center gap-1 rounded-xl px-3 py-1.5 text-2xs font-medium text-white/55 transition-colors hover:bg-white/8 hover:text-white/85"
+            >
+              <ChevronDown className="h-3.5 w-3.5" />
+              {hiddenCount} more
+            </button>
+          </li>
+        ) : null}
+        {showAll && capped.some((n) => !isInterruptPriority(n)) ? (
+          <li>
+            <button
+              type="button"
+              data-testid="notifications-show-less"
+              onClick={() => setShowAll(false)}
+              className="flex w-full items-center justify-center gap-1 rounded-xl px-3 py-1.5 text-2xs font-medium text-white/55 transition-colors hover:bg-white/8 hover:text-white/85"
+            >
+              <ChevronUp className="h-3.5 w-3.5" />
+              Show less
+            </button>
+          </li>
+        ) : null}
       </ul>
     </section>
   );

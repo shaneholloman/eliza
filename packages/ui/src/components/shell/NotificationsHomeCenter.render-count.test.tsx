@@ -70,7 +70,8 @@ function makeNotification(
     id: `00000000-0000-4000-8000-${hex}` as AgentNotification["id"],
     title: `Notification ${seq}`,
     category: "general",
-    priority: "normal",
+    // High so fixtures render in the rested (interrupt-only) shade.
+    priority: "high",
     source: "test",
     // Spread across the last hour so the rows render distinct "Nm ago" strings
     // that actually change as the clock advances (a real relative-time surface).
@@ -182,7 +183,8 @@ describe("NotificationsHomeCenter render count (#14559)", () => {
     });
     const onOpen = () => {};
     const onDismiss = () => {};
-    const props = { notification: base, onOpen, onDismiss };
+    const onPrefill = () => {};
+    const props = { notification: base, onOpen, onDismiss, onPrefill };
 
     // createdAt-only delta → equal → memo SKIPS (no row re-render on the minute).
     expect(
@@ -227,17 +229,13 @@ describe("NotificationsHomeCenter render count (#14559)", () => {
     act(() => {
       vi.advanceTimersByTime(0);
     });
-    expect(screen.getByTestId("notification-row-time").textContent).toBe(
-      "now",
-    );
+    expect(screen.getByTestId("notification-row-time").textContent).toBe("now");
 
     // 3 minutes later the SAME row (memoized) shows "3m" - not pinned.
     act(() => {
       vi.advanceTimersByTime(3 * MINUTE_MS);
     });
-    expect(screen.getByTestId("notification-row-time").textContent).toBe(
-      "3m",
-    );
+    expect(screen.getByTestId("notification-row-time").textContent).toBe("3m");
   });
 
   it("tap clears the row without reordering the survivors (stable-order invariant)", () => {
@@ -253,9 +251,10 @@ describe("NotificationsHomeCenter render count (#14559)", () => {
         .getAllByTestId("notification-row")
         .map((el) => el.textContent ?? "");
     expect(titles()[0]).toContain("First");
-    // Platform-shade tap: the row acts and leaves the list; the remaining rows
-    // keep their order.
+    // Platform-shade acknowledgement: tap expands, acting clears; the
+    // remaining rows keep their order.
     fireEvent.click(screen.getAllByTestId("notification-row")[0]);
+    fireEvent.click(screen.getByTestId("notification-option-dismiss"));
     expect(titles()).toHaveLength(1);
     expect(titles()[0]).toContain("Second");
   });
