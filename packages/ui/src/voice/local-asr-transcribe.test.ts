@@ -36,7 +36,9 @@ describe("transcribeCloudWav", () => {
   });
 
   it("POSTs the raw WAV bytes to /api/asr/cloud and returns the transcript", async () => {
-    fetchWithCsrfMock.mockResolvedValue(jsonResponse({ text: "  hello world " }));
+    fetchWithCsrfMock.mockResolvedValue(
+      jsonResponse({ text: "  hello world " }),
+    );
     const wav = new Uint8Array([82, 73, 70, 70]); // "RIFF"
 
     const text = await transcribeCloudWav(wav);
@@ -47,9 +49,9 @@ describe("transcribeCloudWav", () => {
     expect(init?.method).toBe("POST");
     // The WAV is sent as raw audio bytes (Content-Type audio/wav), NOT base64
     // JSON — the proxy reads the raw body and re-wraps it as multipart.
-    expect(
-      (init?.headers as Record<string, string>)["Content-Type"],
-    ).toBe("audio/wav");
+    expect((init?.headers as Record<string, string>)["Content-Type"]).toBe(
+      "audio/wav",
+    );
     expect(init?.body).toBe(wav);
     // Transcript is trimmed.
     expect(text).toBe("hello world");

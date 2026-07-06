@@ -398,7 +398,12 @@ export async function handleCloudSttRoute(
         break;
       }
       lastStatus = attempt.status;
-      lastDetails = await attempt.text().catch(() => "unknown error");
+      try {
+        lastDetails = await attempt.text();
+      } catch {
+        // error-policy:J6 upstream error bodies are diagnostic-only.
+        lastDetails = "unknown error";
+      }
       const hasMoreCandidates = i < cloudUrls.length - 1;
       if (!hasMoreCandidates || !shouldRetryCloudTtsUpstream(attempt.status)) {
         break;
@@ -425,10 +430,16 @@ export async function handleCloudSttRoute(
       return true;
     }
 
-    const data = (await cloudResponse.json().catch(() => null)) as {
-      text?: unknown;
-      transcript?: unknown;
-    } | null;
+    let data: { text?: unknown; transcript?: unknown } | null;
+    try {
+      data = (await cloudResponse.json()) as {
+        text?: unknown;
+        transcript?: unknown;
+      } | null;
+    } catch {
+      // error-policy:J3 malformed upstream JSON becomes an empty transcript.
+      data = null;
+    }
     const text =
       typeof data?.text === "string"
         ? data.text.trim()
@@ -439,6 +450,7 @@ export async function handleCloudSttRoute(
     sendJsonResponse(res, 200, { text });
     return true;
   } catch (err) {
+    // error-policy:J1 route boundary translates upstream/proxy failures.
     sendJsonErrorResponse(
       res,
       502,
