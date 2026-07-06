@@ -88,7 +88,7 @@ describe("useDefaultProviderPresets", () => {
     expect(last?.platform).toBe("mobile");
   });
 
-  it("cloud agent on any device picks Eliza Cloud", async () => {
+  it("cloud agent on any device picks Eliza Cloud voice", async () => {
     fetchMock.mockResolvedValueOnce({
       mode: "cloud",
       deploymentRuntime: "cloud",
@@ -108,7 +108,7 @@ describe("useDefaultProviderPresets", () => {
     });
     const last = seen[seen.length - 1];
     expect(last?.defaults).toEqual({
-      tts: "edge",
+      tts: "eliza-cloud",
       asr: "eliza-cloud",
     });
     expect(last?.runtimeMode).toBe("cloud");
@@ -135,7 +135,7 @@ describe("useDefaultProviderPresets", () => {
     const last = seen[seen.length - 1];
     expect(last?.runtimeMode).toBe("remote");
     expect(last?.defaults).toEqual({
-      tts: "edge",
+      tts: "eliza-cloud",
       asr: "eliza-cloud",
     });
   });
@@ -152,9 +152,9 @@ describe("useDefaultProviderPresets", () => {
     );
     const first = seen[0];
     expect(first?.loading).toBe(true);
-    // Loading state still resolves a safe default — fast Edge TTS + Eliza Cloud ASR.
+    // Loading state still resolves a safe default — cloud Kokoro TTS + Eliza Cloud ASR.
     expect(first?.defaults).toEqual({
-      tts: "edge",
+      tts: "eliza-cloud",
       asr: "eliza-cloud",
     });
   });

@@ -1707,6 +1707,7 @@ export type { LifeOpsOccurrenceActionResult } from "@elizaos/shared";
 
 // Voice / TTS config
 export type VoiceProvider =
+  | "eliza-cloud"
   | "elevenlabs"
   | "robot-voice"
   | "edge"

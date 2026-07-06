@@ -959,13 +959,25 @@ export function CharacterEditor({
   const persistVoiceConfig = useCallback(async () => {
     setVoiceSaveError(null);
     const provider =
-      voiceConfig.provider ?? (useElevenLabs ? "elevenlabs" : "edge");
+      voiceConfig.provider ?? (useElevenLabs ? "eliza-cloud" : "edge");
     let normalizedVoiceConfig: Record<string, unknown>;
     if (provider === "edge") {
       normalizedVoiceConfig = {
         ...voiceConfig,
         provider: "edge",
         edge: voiceConfig.edge ?? {},
+      };
+    } else if (provider === "eliza-cloud") {
+      normalizedVoiceConfig = {
+        ...voiceConfig,
+        provider: "eliza-cloud",
+        mode: undefined,
+      };
+    } else if (provider === "local-inference" || provider === "robot-voice") {
+      normalizedVoiceConfig = {
+        ...voiceConfig,
+        provider,
+        mode: undefined,
       };
     } else {
       const hasElevenLabsApiKey = hasConfiguredApiKey(

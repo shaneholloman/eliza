@@ -12,12 +12,12 @@
  *     is Eliza Cloud (`eliza-cloud`) because on-device speech recognition is
  *     heavier than TTS — but see the layering note below: on native mobile the
  *     live capture engine is the OS recognizer, not this provider.
- *   - Cloud agents (any device) → fast free Microsoft Edge neural TTS
- *     (`edge`) for speech, Eliza Cloud (`eliza-cloud`) for ASR. ElevenLabs is
- *     not a default (slow and key-gated); users can still opt into it from the
- *     advanced voice picker.
+ *   - Cloud agents (any device) → free cloud Kokoro TTS
+ *     (`eliza-cloud`) for speech, Eliza Cloud (`eliza-cloud`) for ASR.
+ *     ElevenLabs is not a default (slow and key-gated); users can still opt
+ *     into it from the advanced voice picker.
  *   - Remote-controller surfaces (UI hitting a remote API base) → same as
- *     cloud agents (`edge` TTS, Eliza Cloud ASR).
+ *     cloud agents (`eliza-cloud` TTS, Eliza Cloud ASR).
  *
  * The picker is intentionally a pure function so it can be unit-tested
  * exhaustively. The React hook wrapper lives in
@@ -75,12 +75,11 @@ export function pickDefaultVoiceProvider(
   const { platform, runtimeMode } = input;
 
   // Cloud / remote: the agent isn't on this machine, so speech can't run
-  // on-device. Default to the fast, free Microsoft Edge neural voices
-  // (`edge`) rather than the slow, key-gated ElevenLabs path, and route ASR
-  // to Eliza Cloud. The user can still opt back into ElevenLabs in advanced
-  // settings.
+  // on-device. Default to the measured free cloud Kokoro path for TTS and route
+  // ASR to Eliza Cloud. The user can still opt into ElevenLabs or Edge in
+  // advanced settings.
   if (runtimeMode === "cloud" || runtimeMode === "remote") {
-    return { tts: "edge", asr: "eliza-cloud" };
+    return { tts: "eliza-cloud", asr: "eliza-cloud" };
   }
 
   // Local / local-only: split by platform. Desktop has the CPU/GPU budget
@@ -96,6 +95,6 @@ export function pickDefaultVoiceProvider(
   }
 
   // Web shell hosting a local agent: no on-device audio runtime, so use the
-  // fast free Edge neural voices for TTS and Eliza Cloud for ASR.
-  return { tts: "edge", asr: "eliza-cloud" };
+  // measured free cloud Kokoro path for TTS and Eliza Cloud for ASR.
+  return { tts: "eliza-cloud", asr: "eliza-cloud" };
 }

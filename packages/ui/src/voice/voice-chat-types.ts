@@ -70,7 +70,11 @@ export function getSpeechRecognitionCtor(): SpeechRecognitionCtor | undefined {
 // ── Public types ──────────────────────────────────────────────────────
 
 export type SpeechSegmentKind = "full" | "first-sentence" | "remainder";
-export type SpeechProviderKind = "elevenlabs" | "browser" | "local-inference";
+export type SpeechProviderKind =
+  | "eliza-cloud"
+  | "elevenlabs"
+  | "browser"
+  | "local-inference";
 export type VoiceSessionMode =
   | "idle"
   | "compose"
@@ -220,12 +224,12 @@ export interface QueueAssistantSpeechOptions {
 /**
  * A TTS engine failure that must be shown to the user rather than silently
  * papered over with a different voice (#12253). The configured voice engine
- * (Kokoro local-inference, ElevenLabs, or native talkmode) failed and the
- * queue was stopped — no fallback voice was substituted.
+ * (cloud Kokoro, local-inference Kokoro, ElevenLabs, or native talkmode)
+ * failed and the queue was stopped — no fallback voice was substituted.
  */
 export interface VoiceTtsError {
-  /** Which engine failed: `local-inference`, `elevenlabs`, or `native-talkmode`. */
-  engine: "local-inference" | "elevenlabs" | "native-talkmode";
+  /** Which configured engine failed. */
+  engine: "eliza-cloud" | "local-inference" | "elevenlabs" | "native-talkmode";
   /** Human-readable failure message for a toast/banner. */
   message: string;
   /** UI monotonic timestamp (performance.now) when the failure surfaced. */
@@ -475,18 +479,16 @@ export function resolveEffectiveVoiceConfig(
   let provider: VoiceConfig["provider"] | undefined =
     (hasLegacyOpenAiProvider ? undefined : rawProvider) ??
     (base.elevenlabs ? "elevenlabs" : base.edge ? "edge" : undefined) ??
-    (cloudConnected ? "elevenlabs" : undefined);
+    (cloudConnected ? "eliza-cloud" : undefined);
 
   if (
     cloudConnected &&
-    (provider === "edge" ||
-      hasLegacyOpenAiProvider ||
-      provider === "robot-voice")
+    (hasLegacyOpenAiProvider || provider === "robot-voice")
   ) {
     ttsDebug("voiceConfig:upgrade_provider_for_cloud", {
       fromProvider: hasLegacyOpenAiProvider ? "openai" : provider,
     });
-    provider = "elevenlabs";
+    provider = "eliza-cloud";
   }
 
   if (!provider) return null;

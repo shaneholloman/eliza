@@ -37,27 +37,27 @@ describe("pickDefaultVoiceProvider", () => {
     ).toEqual({ tts: "local-inference", asr: "eliza-cloud" });
   });
 
-  it("web + local agent uses fast Edge TTS with Cloud ASR (no on-device audio)", () => {
+  it("web + local agent uses cloud Kokoro TTS with Cloud ASR (no on-device audio)", () => {
     expect(
       pickDefaultVoiceProvider({ platform: "web", runtimeMode: "local" }),
-    ).toEqual({ tts: "edge", asr: "eliza-cloud" });
+    ).toEqual({ tts: "eliza-cloud", asr: "eliza-cloud" });
   });
 
-  it("cloud agent defaults to fast Edge TTS + Cloud ASR, never slow ElevenLabs", () => {
+  it("cloud agent defaults to cloud Kokoro TTS + Cloud ASR, never slow ElevenLabs", () => {
     const platforms: PresetPlatform[] = ["desktop", "mobile", "web"];
     for (const platform of platforms) {
       expect(
         pickDefaultVoiceProvider({ platform, runtimeMode: "cloud" }),
-      ).toEqual({ tts: "edge", asr: "eliza-cloud" });
+      ).toEqual({ tts: "eliza-cloud", asr: "eliza-cloud" });
     }
   });
 
-  it("remote-controller surfaces default to fast Edge TTS + Cloud ASR", () => {
+  it("remote-controller surfaces default to cloud Kokoro TTS + Cloud ASR", () => {
     const platforms: PresetPlatform[] = ["desktop", "mobile", "web"];
     for (const platform of platforms) {
       expect(
         pickDefaultVoiceProvider({ platform, runtimeMode: "remote" }),
-      ).toEqual({ tts: "edge", asr: "eliza-cloud" });
+      ).toEqual({ tts: "eliza-cloud", asr: "eliza-cloud" });
     }
   });
 

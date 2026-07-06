@@ -189,13 +189,29 @@ function normalizeVoiceConfigForSave(args: {
   useElevenLabs: boolean;
 }): VoiceConfig {
   const provider =
-    args.voiceConfig.provider ?? (args.useElevenLabs ? "elevenlabs" : "edge");
+    args.voiceConfig.provider ?? (args.useElevenLabs ? "eliza-cloud" : "edge");
 
   if (provider === "edge") {
     return {
       ...args.voiceConfig,
       provider: "edge",
       edge: args.voiceConfig.edge ?? {},
+    };
+  }
+
+  if (provider === "eliza-cloud") {
+    return {
+      ...args.voiceConfig,
+      provider: "eliza-cloud",
+      mode: undefined,
+    };
+  }
+
+  if (provider === "local-inference" || provider === "robot-voice") {
+    return {
+      ...args.voiceConfig,
+      provider,
+      mode: undefined,
     };
   }
 

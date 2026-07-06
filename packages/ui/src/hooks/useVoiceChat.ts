@@ -1,10 +1,11 @@
 /**
  * Bidirectional voice hook for chat + avatar lip sync.
  *
- * TTS providers (in priority order):
- *  1. ElevenLabs  — streaming endpoint; assistant replies enqueue text deltas as
- *     the stream grows (no sentence-boundary wait — lower time-to-first-audio).
- *  2. Browser SpeechSynthesis — fallback when ElevenLabs isn't configured.
+ * TTS providers:
+ *  - Eliza Cloud Kokoro through `/api/tts/cloud` for web/cloud defaults.
+ *  - Local-inference Kokoro for provisioned local/native runtimes.
+ *  - ElevenLabs for opt-in/custom voices.
+ *  - Browser SpeechSynthesis only when it is the configured provider.
  *
  * STT: local-inference ASR on local desktop, then native TalkMode or browser
  * SpeechRecognition fallback.
@@ -136,6 +137,7 @@ declare global {
 
 let sharedAudioCtx: AudioContext | null = null;
 const AUDIO_CONTEXT_RESUME_TIMEOUT_MS = 1200;
+const CLOUD_TTS_TIMEOUT_MS = 60_000;
 const LOCAL_INFERENCE_TTS_TIMEOUT_MS = 60_000;
 /** How long the transient `micReconnected` pulse stays set after an auto-restart. */
 const MIC_RECONNECT_PULSE_MS = 1500;
@@ -469,6 +471,11 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
 
   const makeLocalInferenceCacheKey = useCallback(
     (text: string) => ["local-inference", normalizeCacheText(text)].join("|"),
+    [],
+  );
+
+  const makeElizaCloudCacheKey = useCallback(
+    (text: string) => ["eliza-cloud", normalizeCacheText(text)].join("|"),
     [],
   );
 
@@ -1405,13 +1412,19 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
           source.onended = null;
           try {
             source.disconnect();
-          } catch {
-            /* ok */
+          } catch (error) {
+            // error-policy:J6 best-effort WebAudio teardown; disconnect can throw after playback has already ended.
+            ttsDebug("play:eliza-cloud:source-disconnect-failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
           }
           try {
             analyser.disconnect();
-          } catch {
-            /* ok */
+          } catch (error) {
+            // error-policy:J6 best-effort WebAudio teardown; disconnect can throw after playback has already ended.
+            ttsDebug("play:eliza-cloud:analyser-disconnect-failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
           }
           clearSpeechTimers();
           resolve();
@@ -1460,6 +1473,198 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
       clearSpeechTimers,
       getPlaybackFramePump,
       makeElevenCacheKey,
+      markAudioBlocked,
+      markAudioPlaying,
+      rememberCachedSegment,
+    ],
+  );
+
+  // ── Eliza Cloud Kokoro TTS ─────────────────────────────────────────────
+
+  const speakElizaCloud = useCallback(
+    async (text: string, task: SpeakTask, generation: number) => {
+      let ctx = sharedAudioCtx;
+      if (!ctx) {
+        ctx = new AudioContext({ latencyHint: "interactive" });
+        sharedAudioCtx = ctx;
+      }
+      if (ctx.state === "suspended") {
+        const resumed = await resumeAudioContextForPlayback(ctx);
+        if (!resumed) {
+          ttsDebug("play:audio-context-blocked", {
+            provider: "eliza-cloud",
+            state: ctx.state,
+          });
+          markAudioBlocked();
+          throw new DOMException(
+            "Audio playback is blocked until a user gesture unlocks the audio context",
+            "NotAllowedError",
+          );
+        }
+      }
+      markAudioPlaying();
+
+      const cacheKey =
+        task.cacheKey ??
+        (shouldCacheGeneratedSpeech(text, task.segment)
+          ? makeElizaCloudCacheKey(text)
+          : undefined);
+      const cachedBytes = cacheKey ? globalAudioCache.get(cacheKey) : undefined;
+      let audioBytes: Uint8Array | null = null;
+      let cached = false;
+
+      if (cacheKey && cachedBytes) {
+        rememberCachedSegment(cacheKey, cachedBytes);
+        audioBytes = cachedBytes.slice();
+        cached = true;
+      }
+
+      if (!audioBytes) {
+        const controller = new AbortController();
+        activeFetchAbortRef.current = controller;
+        const timeoutId = setTimeout(() => {
+          controller.abort(
+            new DOMException("Eliza Cloud TTS timed out", "TimeoutError"),
+          );
+        }, CLOUD_TTS_TIMEOUT_MS);
+        let res: Response;
+        try {
+          const apiToken = getElizaApiToken()?.trim() ?? "";
+          const dbg = task.debugUtteranceContext;
+          res = await fetchWithCsrf(resolveApiUrl("/api/tts/cloud"), {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "audio/wav, audio/mpeg, audio/*;q=0.9",
+              ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
+              ...(isTtsDebugEnabled() && dbg
+                ? {
+                    "x-elizaos-tts-message-id": encodeURIComponent(
+                      dbg.messageId,
+                    ),
+                    "x-elizaos-tts-clip-segment": encodeURIComponent(
+                      task.segment,
+                    ),
+                    "x-elizaos-tts-full-preview": encodeURIComponent(
+                      dbg.fullAssistTextPreview,
+                    ),
+                  }
+                : {}),
+            },
+            body: JSON.stringify({ text }),
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeoutId);
+          if (activeFetchAbortRef.current === controller) {
+            activeFetchAbortRef.current = null;
+          }
+        }
+
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          ttsDebug("useVoiceChat:eliza-cloud-http-error", {
+            status: res.status,
+            ttsTarget: describeTtsCloudFetchTargetForDebug(),
+            hadBearer: Boolean(getElizaApiToken()?.trim()),
+            bodyPreview: body.slice(0, 120),
+          });
+          throw new Error(
+            `Eliza Cloud TTS ${res.status}: ${body.slice(0, 200)}`,
+          );
+        }
+
+        audioBytes = new Uint8Array(await res.arrayBuffer());
+        if (cacheKey) {
+          rememberCachedSegment(cacheKey, audioBytes.slice());
+        }
+      }
+
+      if (generation !== generationRef.current) return;
+      const audioBuffer = await ctx.decodeAudioData(toArrayBuffer(audioBytes));
+      if (generation !== generationRef.current) return;
+
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.8;
+      analyserRef.current = analyser;
+      timeDomainDataRef.current = new Float32Array(
+        new ArrayBuffer(analyser.fftSize * Float32Array.BYTES_PER_ELEMENT),
+      );
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(analyser);
+      analyser.connect(ctx.destination);
+      audioSourceRef.current = source;
+      // error-policy:J6 best-effort visualizer tap; if attaching the frame pump
+      // fails, audio still plays — the tap only drives the waveform decoration.
+      const playbackTap = await getPlaybackFramePump()
+        .tapSource(ctx, source, audioBuffer)
+        .catch(() => null);
+
+      await new Promise<void>((resolve) => {
+        let finished = false;
+        const playStartMs = performance.now();
+        let wrappedFinish: (() => void) | null = null;
+
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          if (wrappedFinish && activeTaskFinishRef.current === wrappedFinish) {
+            activeTaskFinishRef.current = null;
+          }
+          if (audioSourceRef.current === source) {
+            audioSourceRef.current = null;
+          }
+          if (playbackFrameTapRef.current === playbackTap) {
+            playbackFrameTapRef.current = null;
+          }
+          void playbackTap?.stop({ reset: true }).catch(() => {
+            /* best effort only */
+          });
+          source.onended = null;
+          try {
+            source.disconnect();
+          } catch {
+            /* ok */
+          }
+          try {
+            analyser.disconnect();
+          } catch {
+            /* ok */
+          }
+          clearSpeechTimers();
+          resolve();
+        };
+
+        wrappedFinish = finish;
+        activeTaskFinishRef.current = wrappedFinish;
+        source.onended = wrappedFinish;
+        if (playbackTap) {
+          playbackFrameTapRef.current = playbackTap;
+          playbackTap.start(playStartMs);
+        }
+        speechTimeoutRef.current = setTimeout(
+          wrappedFinish,
+          Math.max(2500, Math.ceil(audioBuffer.duration * 1000) + 1200),
+        );
+
+        source.start(0);
+        emitPlaybackStart({
+          text,
+          segment: task.segment,
+          provider: "eliza-cloud",
+          cached,
+          startedAtMs: playStartMs,
+          ...task.telemetry,
+        });
+      });
+    },
+    [
+      clearSpeechTimers,
+      getPlaybackFramePump,
+      makeElizaCloudCacheKey,
       markAudioBlocked,
       markAudioPlaying,
       rememberCachedSegment,
@@ -1889,10 +2094,12 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
 
           const config = voiceConfigRef.current;
           const elConfig = config?.elevenlabs;
+          const useElizaCloud = config?.provider === "eliza-cloud";
           const useElevenLabs = config?.provider === "elevenlabs";
           const useLocalInference = config?.provider === "local-inference";
 
           ttsDebug("processQueue:task", {
+            useElizaCloud,
             useElevenLabs,
             useLocalInference,
             hasElConfig: Boolean(elConfig),
@@ -1953,6 +2160,38 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
                     : String(error).slice(0, 200),
               });
               failClosed("native-talkmode", error);
+              break;
+            }
+          }
+
+          if (useElizaCloud) {
+            usingAudioAnalysisRef.current = true;
+            setUsingAudioAnalysis(true);
+            try {
+              await speakElizaCloud(task.text, task, workerGeneration);
+              continue;
+            } catch (error) {
+              if (
+                workerGeneration !== generationRef.current ||
+                isAbortError(error)
+              ) {
+                break;
+              }
+              usingAudioAnalysisRef.current = false;
+              setUsingAudioAnalysis(false);
+              ttsDebug("useVoiceChat:eliza-cloud-failed", {
+                err:
+                  error instanceof Error
+                    ? `${error.name}: ${error.message.slice(0, 200)}`
+                    : String(error).slice(0, 200),
+                ttsTarget: describeTtsCloudFetchTargetForDebug(),
+                hadBearer: Boolean(getElizaApiToken()?.trim()),
+              });
+              // FAIL CLOSED (#12253): Eliza Cloud Kokoro is the configured
+              // voice. Do not silently swap to browser SpeechSynthesis — stop
+              // the queue and surface the error so users see why they heard
+              // silence.
+              failClosed("eliza-cloud", error);
               break;
             }
           }
@@ -2076,7 +2315,7 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
       setUsingAudioAnalysis(false);
       setIsSpeaking(false);
     })();
-  }, [speakBrowser, speakElevenLabs, speakLocalInference]);
+  }, [speakBrowser, speakElevenLabs, speakElizaCloud, speakLocalInference]);
 
   const enqueueSpeech = useCallback(
     (task: SpeakTask) => {

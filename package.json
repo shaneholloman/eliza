@@ -72,6 +72,7 @@
     "dev:harness": "bun packages/scripts/dev-harness.mjs",
     "dev:all": "node packages/scripts/dev-all.mjs",
     "voice:matrix": "node packages/scripts/voice-matrix.mjs",
+    "voice:cloud-bench": "node packages/scripts/voice-cloud-bench.mjs",
     "voice-models:publish-all": "node packages/scripts/voice-models-publish-all.mjs",
     "bench:voice-emotion-roundtrip": "node packages/scripts/run-python.mjs -m pytest packages/benchmarks/voice-emotion/tests/test_emotion_roundtrip.py -v --tb=short",
     "eliza1:cost-reconciliation": "bun run packages/scripts/cloud/eliza1/cost-reconciliation.ts",

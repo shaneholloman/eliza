@@ -126,6 +126,8 @@ list manually reviewed artifact paths.
 
 ## TTS Policy
 
-Kokoro TTS stays unchanged. This matrix verifies live voice breadth and Stage-B
-STT choices; it does not replace the provider defaults in
-`voice-provider-defaults.ts`.
+This matrix verifies live voice breadth and Stage-B STT choices. The
+web/cloud/remote TTS default decision is owned by the #14370 Railway benchmark
+table in `packages/docs/ongoing-development/research/07-voice-pipeline.md` and
+implemented in `voice-provider-defaults.ts`; this matrix only proves that the
+selected providers work on each platform lane.

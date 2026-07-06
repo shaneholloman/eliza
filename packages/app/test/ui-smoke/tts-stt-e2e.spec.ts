@@ -20,7 +20,7 @@
  *
  *   3. **TTS cloud endpoint receives assistant text + voiceId payload** —
  *      `/api/tts/cloud` is intercepted with a Playwright route that returns a
- *      small mp3 blob. We POST the same body shape `useVoiceChat` sends and
+ *      small WAV blob. We POST the same body shape `useVoiceChat` sends and
  *      verify the body carries the assistant text + voiceId + modelId and
  *      that an audio body comes back. This proves the renderer↔cloud TTS
  *      handshake works end-to-end (not just "compiles"). The handler itself
@@ -28,11 +28,9 @@
  *
  *   4. **STT capture path drives the voice hook** — we shim
  *      `window.webkitSpeechRecognition` before the page boots so the hook
- *      sees a supported capability, then click the chat composer's mic
- *      button to call `useVoiceChat.startListening("compose")`. We simulate
- *      a speech-recognition result and verify the interim transcript appears
- *      in the chat composer. This is the contract the chat composer relies
- *      on to populate the input from voice.
+ *      sees a supported capability, then click the chat overlay's mic button
+ *      to start browser capture. We simulate a final speech-recognition
+ *      result and verify it submits through the VOICE_DM stream path.
  *
  * The TTS/STT backends themselves (ElevenLabs cloud, local ASR, omnivoice)
  * are NOT exercised here — those are integration territory and require
@@ -63,18 +61,43 @@ import {
   seedAppStorage,
 } from "./helpers";
 
-// A 1-frame silent mp3 (4 bytes after a minimal header). The browser's
-// `AudioContext.decodeAudioData` typically rejects truly-empty bodies, so we
-// return a tiny but well-formed mp3 frame for the cloud TTS mock.
-const TINY_MP3 = Buffer.from(
-  // ID3v2 header (0 bytes) + a single silent MP3 frame. Generated with ffmpeg:
-  //   ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t 0.01 -b:a 128k out.mp3
-  // The exact bytes don't matter for the wiring tests — Playwright just sees
-  // a binary body and we don't actually call decodeAudioData (the test runs
-  // in a headless browser where AudioContext is a no-op).
-  "SUQzAwAAAAAAFlRTU0UAAAAMAAADTGF2ZjU4LjI5LjEwMAAA//tQAAAAAAAA",
-  "base64",
-);
+function makeSilentWav(): Buffer {
+  const sampleRate = 8_000;
+  const sampleCount = 800;
+  const channelCount = 1;
+  const bytesPerSample = 2;
+  const dataSize = sampleCount * channelCount * bytesPerSample;
+  const wav = Buffer.alloc(44 + dataSize);
+  let offset = 0;
+  const writeAscii = (value: string) => {
+    wav.write(value, offset, "ascii");
+    offset += value.length;
+  };
+  const writeU16 = (value: number) => {
+    wav.writeUInt16LE(value, offset);
+    offset += 2;
+  };
+  const writeU32 = (value: number) => {
+    wav.writeUInt32LE(value, offset);
+    offset += 4;
+  };
+  writeAscii("RIFF");
+  writeU32(36 + dataSize);
+  writeAscii("WAVE");
+  writeAscii("fmt ");
+  writeU32(16);
+  writeU16(1);
+  writeU16(channelCount);
+  writeU32(sampleRate);
+  writeU32(sampleRate * channelCount * bytesPerSample);
+  writeU16(channelCount * bytesPerSample);
+  writeU16(8 * bytesPerSample);
+  writeAscii("data");
+  writeU32(dataSize);
+  return wav;
+}
+
+const TINY_WAV = makeSilentWav();
 const CHAT_COMPOSER_SELECTOR =
   '[data-testid="chat-composer-textarea"], textarea[aria-label="message"]';
 
@@ -261,8 +284,8 @@ async function installTtsCloudMock(page: Page): Promise<{
     });
     await route.fulfill({
       status: 200,
-      headers: { "content-type": "audio/mpeg" },
-      body: TINY_MP3,
+      headers: { "content-type": "audio/wav" },
+      body: TINY_WAV,
     });
   });
   await page.route("**/api/tts/elevenlabs", async (route) => {
@@ -272,8 +295,8 @@ async function installTtsCloudMock(page: Page): Promise<{
     }
     await route.fulfill({
       status: 200,
-      headers: { "content-type": "audio/mpeg" },
-      body: TINY_MP3,
+      headers: { "content-type": "audio/wav" },
+      body: TINY_WAV,
     });
   });
   await page.route("**/api/tts/local-inference", async (route) => {
@@ -284,7 +307,7 @@ async function installTtsCloudMock(page: Page): Promise<{
     await route.fulfill({
       status: 200,
       headers: { "content-type": "audio/wav" },
-      body: TINY_MP3,
+      body: TINY_WAV,
     });
   });
   return { calls: () => [...recorded] };
@@ -424,13 +447,13 @@ test("voice provider matrix returns documented combos for each device + runtime 
   ).toEqual({ tts: "local-inference", asr: "eliza-cloud" });
   expect(
     pickDefaultVoiceProvider({ platform: "web", runtimeMode: "local" }),
-  ).toEqual({ tts: "edge", asr: "eliza-cloud" });
+  ).toEqual({ tts: "eliza-cloud", asr: "eliza-cloud" });
   expect(
     pickDefaultVoiceProvider({ platform: "desktop", runtimeMode: "cloud" }),
-  ).toEqual({ tts: "edge", asr: "eliza-cloud" });
+  ).toEqual({ tts: "eliza-cloud", asr: "eliza-cloud" });
   expect(
     pickDefaultVoiceProvider({ platform: "mobile", runtimeMode: "remote" }),
-  ).toEqual({ tts: "edge", asr: "eliza-cloud" });
+  ).toEqual({ tts: "eliza-cloud", asr: "eliza-cloud" });
 });
 
 test("chat SSE stream emits token + done events for assistant message", async ({
@@ -602,7 +625,7 @@ test("TTS cloud endpoint receives the assistant text + voiceId payload", async (
   });
 
   expect(status.ok, "TTS cloud endpoint must return 2xx").toBe(true);
-  expect(status.contentType ?? "").toMatch(/audio\/mpeg/);
+  expect(status.contentType ?? "").toMatch(/audio\/wav/);
   expect(
     status.bytes,
     "TTS cloud endpoint must return audio bytes",
@@ -638,6 +661,7 @@ test("TTS cloud endpoint receives the assistant text + voiceId payload", async (
 test("STT capture path fires onTranscript with the recognized string", async ({
   page,
 }) => {
+  const conversations = await installConversationStreamMock(page);
   // Shim the browser SpeechRecognition API BEFORE the page boots so the
   // voice hook sees a "supported" capability. The shim exposes
   // `window.__sttSimulate(transcript, isFinal)` which we drive from the
@@ -666,50 +690,35 @@ test("STT capture path fires onTranscript with the recognized string", async ({
   await expect(micButton).toBeEnabled({ timeout: 15_000 });
   await micButton.click();
 
-  // The hook calls recognition.start() synchronously. Now simulate a final
-  // result and verify the interim transcript appears, which is the only
-  // observable surface for STT wiring on the composer (the text feeds into
-  // chat input on `stopListening({ submit: true })`).
+  // The overlay route submits completed browser-recognition turns through the
+  // same VOICE_DM stream path as always-on chat. This is the visible contract
+  // for the collapsed home surface; it does not render the hook-composer
+  // interim transcript while collapsed.
   const simulated = await page.evaluate(() => {
     const fn = (window as unknown as Record<string, unknown>).__sttSimulate as
       | ((text: string, isFinal: boolean) => boolean)
       | undefined;
     if (typeof fn !== "function") return false;
-    return fn("hello world from the STT shim", false);
+    return fn("what time is it?", true);
   });
 
-  // If the shim didn't get a chance to start (mic not supported / permission
-  // path failed inside the hook), the test surfaces it as a wiring gap.
-  // We don't fail hard here — instead we record it and let the assertion below
-  // describe the state. The hook gates on `supported` which our shim sets
-  // true via webkitSpeechRecognition presence.
-  if (!simulated) {
-    test.info().annotations.push({
-      type: "stt-wiring-gap",
-      description:
-        "SpeechRecognition shim was not started by the hook — the mic button " +
-        "did not call recognition.start(). Check `useVoiceChat.startListening` " +
-        "branching (TalkMode native plugin vs browser fallback).",
-    });
-  }
-
-  // When the hook is wired, the interim transcript shows up under the
-  // textarea (chat-composer.tsx: `voice.isListening && voice.interimTranscript`).
-  // We give it a generous timeout because the simulated result is dispatched
-  // synchronously but React state updates are async.
-  if (simulated) {
-    await expect
-      .poll(
-        async () => {
-          return await page.evaluate(() => {
-            // The interim transcript is rendered in a sibling div of the
-            // textarea. We grep the dom for the literal phrase.
-            return document.body.textContent ?? "";
-          });
-        },
-        { timeout: 5_000 },
-      )
-      .toContain("hello world from the STT shim");
+  expect(simulated, "STT shim must receive a final browser turn").toBe(true);
+  await expect
+    .poll(async () => conversations.streamCalls().length, { timeout: 5_000 })
+    .toBe(1);
+  const [streamCall] = conversations.streamCalls();
+  expect(streamCall).toEqual(
+    expect.objectContaining({
+      channelType: "VOICE_DM",
+      text: "what time is it?",
+    }),
+  );
+  if (streamCall?.channelType === "VOICE_DM") {
+    expect(streamCall.metadata).toEqual(
+      expect.objectContaining({
+        voiceSource: "browser",
+      }),
+    );
   }
 });
 

@@ -1111,6 +1111,7 @@ export function VoiceConfigView() {
   // Cloud vs own-key only applies to providers that need credentials. Edge TTS
   // has no API key — do not gate "Configured" on Eliza Cloud when Edge is selected.
   const isConfigured = (() => {
+    if (currentProvider === "eliza-cloud") return cloudVoiceAvailable;
     if (!providerInfo?.needsKey) return true;
     if (currentMode === "cloud") return cloudVoiceAvailable;
     return hasConfiguredApiKey(voiceConfig.elevenlabs?.apiKey);
@@ -1177,7 +1178,7 @@ export function VoiceConfigView() {
   const performSave = useCallback(async () => {
     const cfg = await client.getConfig();
     const messages = (cfg.messages ?? {}) as Record<string, unknown>;
-    const provider = voiceConfig.provider ?? "elevenlabs";
+    const provider = voiceConfig.provider ?? currentProvider;
     const normalizedElevenLabs =
       provider === "elevenlabs"
         ? {
@@ -1228,7 +1229,7 @@ export function VoiceConfigView() {
     });
     dispatchWindowEvent(VOICE_CONFIG_UPDATED_EVENT, normalizedVoiceConfig);
     setDirty(false);
-  }, [currentMode, swabbleServerConfig, voiceConfig]);
+  }, [currentMode, currentProvider, swabbleServerConfig, voiceConfig]);
 
   const { saving, saveError, saveSuccess, handleSave } = useSettingsSave({
     onSave: performSave,
@@ -1258,9 +1259,11 @@ export function VoiceConfigView() {
         footer={
           <span className="flex items-center gap-2">
             <span className="text-txt">
-              {currentProvider === "elevenlabs"
-                ? `ElevenLabs — ${currentMode === "cloud" ? t("voiceconfigview.ServedViaElizaCloud") : t("voiceconfigview.RequiresApiKey")}`
-                : `${providerInfo ? t(providerInfo.labelKey, { defaultValue: providerInfo.label }) : ""} — ${t("voiceconfigview.NoApiKeyNeeded")}`}
+              {currentProvider === "eliza-cloud"
+                ? `Eliza Cloud — ${t("voiceconfigview.ServedViaElizaCloud")}`
+                : currentProvider === "elevenlabs"
+                  ? `ElevenLabs — ${currentMode === "cloud" ? t("voiceconfigview.ServedViaElizaCloud") : t("voiceconfigview.RequiresApiKey")}`
+                  : `${providerInfo ? t(providerInfo.labelKey, { defaultValue: providerInfo.label }) : ""} — ${t("voiceconfigview.NoApiKeyNeeded")}`}
             </span>
             <span
               className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${

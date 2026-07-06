@@ -11,11 +11,12 @@ in, TTS out — must work and be *proven* to work on every MVP surface.
 
 This workstream evaluated cloud voice (the Railway deploys of Kokoro TTS and Whisper STT
 that the Eliza Cloud API fronts) against on-device models. Decision in one line: **the
-architecture is already right — on-device Kokoro TTS + fused ASR / OS recognizers where a
-native runtime exists, Railway-backed cloud voice for web and unprovisioned devices —
-but the cloud path is unbenchmarked, untested in CI, partially unwired on the client, and
-pinned to an English-only tiny STT model.** The MVP work is measurement, wiring, and e2e
-proof — not new voice infrastructure.
+architecture is right — on-device Kokoro TTS + fused ASR / OS recognizers where a native
+runtime exists, Railway-backed cloud voice for web and unprovisioned devices — and the
+live benchmark now supports making Eliza Cloud Kokoro the web/cloud/remote TTS default.**
+The model hardcode, web-ASR wiring, Railway service-definition gaps, and default-provider
+drift are addressed in code; remaining MVP proof lives in the browser-level real-audio
+round trip and Railway owner deploy evidence, not in a new voice architecture.
 
 ## Current state
 
@@ -28,48 +29,52 @@ What exists today, verified in code.
   allowlisted to 11 Kokoro presets defaulting to `af_heart` (`route.ts:96-111`).
   ElevenLabs remains the opt-in/custom-voice path below it.
 - `packages/cloud/api/v1/voice/stt/route.ts:188-219` — when `WHISPER_STT_URL` is set, STT
-  posts multipart audio to `<url>/v1/audio/transcriptions`, free. The model is
-  **hardcoded to `Systran/faster-whisper-tiny.en`** (`route.ts:196`) — an English-only
-  tiny model — even though the route accepts and forwards `languageCode`.
+  posts multipart audio to `<url>/v1/audio/transcriptions`, free. The model now resolves
+  through `resolveWhisperSttModel(env.WHISPER_STT_MODEL)` with
+  `Systran/faster-whisper-small` as the default
+  (`packages/cloud/api/v1/voice/stt/whisper-model.ts`), so deployments can pin a
+  different Speaches-hosted model without changing code.
 - Env vars are typed in `packages/cloud/shared/src/types/cloud-worker-env.ts:44,50` but
-  are **not** in `wrangler.toml` — they are deploy-time Worker config. The provisioned
-  service URLs exist in-repo only as defaults in one test:
-  `kokoro-tts-production-aa4b.up.railway.app` / `whisper-stt-production-6fc7.up.railway.app`
-  (`packages/cloud/api/__tests__/voice-kokoro-whisper-live.test.ts:16-21`). There is **no
-  Railway service definition** (Dockerfile, railway.json, deploy doc) for either service
-  anywhere in the repo — the deploys are unreproducible pets.
+  are **not** in `wrangler.toml` — they are deploy-time Worker config. The committed
+  Railway service definitions live under
+  `packages/cloud/services/voice-kokoro-tts/` and
+  `packages/cloud/services/voice-whisper-stt/` (Dockerfile + `railway.toml` + README), and
+  the topology is recorded in `packages/cloud/infra/cloud/RAILWAY.md`. The current
+  blocking evidence is not code shape; it is the owner deploy proof from those committed
+  definitions.
 - The live round-trip contract test (`voice-kokoro-whisper-live.test.ts`) drives the exact
   request shapes the routes use (Kokoro WAV out → Whisper transcript back, asserts salient
-  words) but is gated on `ELIZA_VOICE_LIVE_RAILWAY=1` and **referenced by zero workflows**
-  — it has no CI lane and asserts nothing about latency.
+  words). It is now referenced by the scheduled/dispatchable `voice-railway-contract` job
+  in `.github/workflows/voice-live-e2e.yml`, still gated on
+  `ELIZA_VOICE_LIVE_RAILWAY=1` so a real Railway outage is observable rather than silently
+  skipped.
 
 **Who consumes the cloud voice routes.**
 - Server-side agent handlers: `plugins/plugin-elizacloud/src/models/speech.ts` posts to
-  `/api/v1/voice/tts`; `transcription.ts:145-149` posts to `/api/v1/voice/stt`. Note:
-  `transcription.ts:70-71` resolves and logs `ELIZAOS_CLOUD_TRANSCRIPTION_MODEL`
-  (default `gpt-5-mini-transcribe`) but the route ignores any model — the log is
-  misleading and the knob is dead on this path.
+  `/api/v1/voice/tts`; `transcription.ts:145-149` posts to `/api/v1/voice/stt`. The
+  Whisper model is owned by the Cloud route's `WHISPER_STT_MODEL`, not by an OpenAI-style
+  transcription model name in the client log path.
 - The app's TTS proxy: `POST /api/tts/cloud` (`packages/app-core/src/api/route-auth-policy.ts:166`,
   handler in `plugins/plugin-elizacloud/src/lib/server-cloud-tts.ts`) forwards to
   `<cloud-base>/voice/tts` (`packages/shared/src/elizacloud/server-cloud-tts.ts:201-209`).
   The chat voice hook tries this first, then falls back to the ElevenLabs proxy
   (`packages/ui/src/hooks/useVoiceChat.ts:1221-1301`).
-- The Kokoro branch returns **before** the ElevenLabs first-line cache
-  (`tts/route.ts:236-288`), so cloud Kokoro gets no short-utterance caching:
-  time-to-audio-start is full Railway synthesis per request, every request.
+- The Kokoro branch owns a provider-keyed first-line cache helper
+  (`packages/cloud/api/v1/voice/tts/kokoro-first-line-cache.ts`), gated by
+  `KOKORO_FIRST_LINE_CACHE`; uncached text still streams directly from Railway so long
+  responses preserve time-to-first-byte.
 
-**Client provider defaults vs what actually runs — there is a gap.**
-- The documented matrix (`packages/ui/src/voice/voice-provider-defaults.ts:54-83`):
+**Client provider defaults vs what actually runs.**
+- The documented matrix (`packages/ui/src/voice/voice-provider-defaults.ts`):
   desktop-local → TTS+ASR `local-inference`; mobile-local → TTS `local-inference`
-  (on-device Kokoro), ASR `eliza-cloud`; cloud/remote/web → TTS `edge`, ASR `eliza-cloud`.
-- But the capture factory (`packages/ui/src/voice/voice-capture-factory.ts:163-192`)
-  resolves `eliza-cloud`/`openai` ASR to **browser `SpeechRecognition`** ("Eliza-cloud /
-  OpenAI providers go through the local-inference route server-side today; … browser API
-  is the only sane client-side fallback"), and native mobile always prefers the TalkMode
-  OS recognizer. Consequence: **interactive voice capture never sends audio to the Railway
-  Whisper service.** It is exercised only by server-side `TRANSCRIPTION` calls (voice-memo
-  attachments, connector audio). Web users in cloud mode get an engine-dependent,
-  unmeasured browser recognizer; browsers without the Web Speech API get no STT at all.
+  (on-device Kokoro), ASR `eliza-cloud`; web/cloud/remote → TTS `eliza-cloud`, ASR
+  `eliza-cloud`. Edge remains an explicit browser-voice override, not the default.
+- Web/desktop `eliza-cloud` ASR now records WAV and posts to the cloud STT proxy
+  (`/api/asr/cloud` → Cloud `/voice/stt`) instead of resolving straight to browser
+  `SpeechRecognition`; browser recognition remains a fallback when WAV capture is not
+  available. Native mobile interactive capture still prefers the TalkMode OS recognizer,
+  which is the measured zero-download path for iOS and the practical Android path until
+  Stage-B hardware measurements land.
 - `edge` TTS resolves to browser `speechSynthesis` voices in chat
   (`useVoiceChat.ts:1736-1745`) and to `@elizaos/plugin-edge-tts` (free Microsoft neural
   voices) server-side, wrapped by the first-line cache
@@ -103,6 +108,12 @@ What exists today, verified in code.
   (`.github/workflows/voice-workbench.yml`).
 - `voice:matrix` (`packages/scripts/voice-matrix.mjs`) — the per-platform live-cell
   evidence matrix (`packages/ui/src/voice/VOICE_LIVE_MATRIX.md`).
+- `voice:cloud-bench` (`packages/scripts/voice-cloud-bench.mjs`) — the #14370 Railway
+  benchmark runner added for this decision record. It reuses the live contract request
+  shapes, measures Kokoro TTFB/total/RTF/bytes, measures Whisper RTT for short/medium/long
+  clips, scores `tiny.en` vs `small` WER over a fixed 12-utterance workbench slice, and
+  writes JSON + Markdown tables. It intentionally fails unless
+  `ELIZA_VOICE_LIVE_RAILWAY=1` is set; no benchmark skip can look green.
 - Nightly real-model lane `.github/workflows/voice-live-e2e.yml` (fused ASR + real Kokoro
   on self-hosted); `kokoro-real-smoke.yml` real-weight loader gate; `voice:duet` /
   `voice:interactive` local-loop harnesses (`packages/app-core/scripts/`).
@@ -113,10 +124,11 @@ What exists today, verified in code.
   (`packages/ui/src/hooks/useVoiceChat.fail-closed.test.tsx`, #12253/#12428), but there is
   no browser-level failure-path spec for mic-denied / silence / network-drop-mid-stream.
 
-**Weak/broken, summarized:** cloud voice has zero latency numbers, zero CI, an
-English-only tiny STT model, an unwired client capture default, unreproducible deploys,
-and no inline-postable round-trip evidence. On-device voice is measured and gated on
-desktop/Linux, partially measured on Apple, unmeasured steady-state on Android.
+**Weak/broken, summarized:** cloud voice now has a committed benchmark table and default
+decision, but still needs posted audible MP4 round-trip evidence and owner proof that the
+scheduled Railway lane passes against freshly deployed services. On-device voice is
+measured and gated on desktop/Linux, partially measured on Apple, and unmeasured
+steady-state on Android.
 
 ## Design considerations
 
@@ -129,8 +141,9 @@ desktop/Linux, partially measured on Apple, unmeasured steady-state on Android.
 - **A browser tab has no on-device runtime.** Web needs the servers — that is settled.
   The open question is web *quality/latency*, which only the benchmark can answer.
 - **Time-to-audio-start dominates perceived voice quality.** Cloud Kokoro returns a whole
-  WAV with no first-line cache; the local path has phrase streaming + first-line caching.
-  The benchmark must measure TTFB (first WAV byte) separately from total synthesis.
+  WAV; the provider-keyed first-line cache handles only short whole-input openers when
+  enabled. The benchmark must measure TTFB (first WAV byte) separately from total
+  synthesis.
 - **Free-path economics.** The Kokoro/Whisper branches bypass billing entirely — the MVP
   default voice costs nothing per request. ElevenLabs stays opt-in. Any change must keep
   the free branch first.
@@ -144,66 +157,130 @@ A: Per-platform decision matrix (MVP defaults):
 
 | Platform | STT | TTS | Basis |
 |---|---|---|---|
-| Web (any runtime mode) | Cloud Whisper via `/api/v1/voice/stt` (wire it — today browser SpeechRecognition) | Cloud Kokoro via `/api/tts/cloud` if TTFB benchmark ≤ ~1.5 s for a short sentence; else keep `edge` | no on-device runtime in a tab; browser STT is engine-dependent and absent on some browsers |
+| Web (any runtime mode) | Cloud Whisper via `/api/v1/voice/stt` | Cloud Kokoro via `/api/tts/cloud` | no on-device runtime in a tab; #14370 measured warmed short-ack TTFB well below the ~1.5 s threshold and exposed a cold-start outlier to monitor |
 | Desktop, local agent, bundle provisioned | fused eliza-1-asr | local Kokoro | measured: WER 0.008, RTF 0.262 (STT_SELECTION.md) — already the default |
-| Desktop, cloud mode / unprovisioned | cloud Whisper (same wiring as web) | cloud Kokoro / edge | same as web |
+| Desktop, cloud mode / unprovisioned | cloud Whisper (same wiring as web) | Cloud Kokoro via `/api/tts/cloud` | same as web; Edge remains an explicit override |
 | iOS | `SFSpeechRecognizer` via TalkMode | on-device Kokoro (CoreML) | measured WER 0 / RTF 0.168; zero download |
 | Android | `SpeechRecognizer` via TalkMode | on-device fused Kokoro | already the actual behavior; Stage-B measurement is a follow-up, not an MVP blocker |
 
 **Q2: Should we benchmark Railway vs local, and with what harness?**
-A: Yes — it is the only deliverable that can settle web TTS default and validate the
-cloud path at all. Reuse, don't build: extend `voice-kokoro-whisper-live.test.ts`'s
-request shapes into a small bench run (TTFB, total time, RTF, bytes for 3 phrase lengths;
-STT RTT for 3 s/10 s/30 s clips + WER over the existing 12-utterance workbench corpus),
-and take local numbers from `voice:latency-report` + the committed STT_SELECTION.md rows.
-Dimensions per the owner: model download size, memory, time-to-audio-start,
-tokens-to-first-audio (local phrase-streaming path), round-trip latency.
+A: Yes — and the first #14370 live run settled the web/cloud default. `bun run
+voice:cloud-bench` is the committed runner for this: it uses the same live
+Kokoro/Whisper request shapes as `voice-kokoro-whisper-live.test.ts`, writes JSON +
+Markdown, and fails closed without `ELIZA_VOICE_LIVE_RAILWAY=1`.
+
+Command:
+
+```bash
+ELIZA_VOICE_LIVE_RAILWAY=1 \
+KOKORO_TTS_URL=https://<kokoro-service> \
+WHISPER_STT_URL=https://<whisper-service> \
+bun run voice:cloud-bench -- --out /tmp/voice-cloud-bench
+```
+
+Live run: `2026-07-06T01:58:02.878Z` against
+`kokoro-tts-production-aa4b.up.railway.app` and
+`whisper-stt-production-6fc7.up.railway.app`.
+
+Cloud TTS:
+
+| Case | Runs | p50 TTFB ms | p90 TTFB ms | p50 total ms | p90 total ms | p50 RTF | p50 bytes |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| short ack | 5 | 339 | 1990 | 368 | 2021 | 0.202 | 87644 |
+| one sentence | 5 | 398 | 440 | 502 | 535 | 0.108 | 222044 |
+| three sentences | 5 | 749 | 848 | 994 | 1092 | 0.099 | 482444 |
+
+The short-ack p90 includes the first cold request in this run (TTFB 1990 ms). The
+subsequent four short-ack TTFB samples were 355, 339, 279, and 277 ms, so the steady-state
+voice path is well under the target. Keep this outlier visible: the scheduled live lane
+and first-line cache/warmup policy must prevent a cold service from becoming an invisible
+MVP regression.
+
+Cloud STT RTT:
+
+| Clip | Actual sec | Model | Runs | p50 RTT ms | p90 RTT ms |
+|---|---:|---|---:|---:|---:|
+| clip_3s | 3.33 | `Systran/faster-whisper-tiny.en` | 5 | 589 | 886 |
+| clip_3s | 3.33 | `Systran/faster-whisper-small` | 5 | 1755 | 2310 |
+| clip_10s | 8.10 | `Systran/faster-whisper-tiny.en` | 5 | 711 | 757 |
+| clip_10s | 8.10 | `Systran/faster-whisper-small` | 5 | 2059 | 2185 |
+| clip_30s | 15.88 | `Systran/faster-whisper-tiny.en` | 5 | 893 | 1033 |
+| clip_30s | 15.88 | `Systran/faster-whisper-small` | 5 | 2688 | 2906 |
+
+Cloud STT WER:
+
+| Model | Utterances | Mean WER | Median WER | p90 WER | Mean RTT ms |
+|---|---:|---:|---:|---:|---:|
+| `Systran/faster-whisper-tiny.en` | 12 | 0.076 | 0.000 | 0.200 | 638 |
+| `Systran/faster-whisper-small` | 12 | 0.038 | 0.000 | 0.143 | 1690 |
+
+Committed local comparison rows:
+
+| Backend | Device | Corpus | WER | RTF | Source |
+|---|---|---|---:|---:|---|
+| fused eliza-1-asr | Linux x86-64 CPU | 12 Kokoro utterances, 55.5 s | 0.008 | 0.262 | `packages/ui/src/voice/STT_SELECTION.md` |
+| `SFSpeechRecognizer` | Apple silicon | 5 labelled utterances, quiet | 0.000 | 0.168 | `packages/ui/src/voice/STT_SELECTION.md` |
+
+Download sizes:
+
+| Artifact | Size | Source |
+|---|---:|---|
+| Kokoro q4_k_m GGUF | 60.0 MB | `packages/shared/src/local-inference/voice-models.ts` |
+| Kokoro voice bin | 522.2 KB | `packages/shared/src/local-inference/voice-models.ts` |
+| fused eliza-1-asr bundle | 1.00 GB | `packages/ui/src/voice/STT_SELECTION.md` |
+
+The runner also writes representative WAV artifacts under `<out>/audio/`; use
+`audio/tts-short_ack-run-1.wav` (or any saved source clip) for the inline MP4 proof.
+
+Default decision: `pickDefaultVoiceProvider` now selects `eliza-cloud` TTS for web,
+cloud, and remote runtime modes. The fresh run's cold first short-ack request exceeded
+the threshold (1990 ms), but the steady-state short acknowledgements were 277-355 ms and
+cloud Kokoro is the only default that translates cleanly from web chat to
+Discord/Telegram/iMessage-style server-side replies. `edge` stays available as an
+explicit browser-voice override.
 
 **Q3: Is `faster-whisper-tiny.en` acceptable for the MVP audience?**
 A: No as a hardcode. English-only breaks any non-English user silently, and tiny-tier
-accuracy on children's/elderly speech is exactly where WER degrades. Make the model a
-deploy-time env (`WHISPER_STT_MODEL`), benchmark tiny vs small on the corpus (the Railway
-box's CPU budget decides), and drop the `.en` variant if any non-English locale is in
-scope. Default recommendation pending benchmark: `Systran/faster-whisper-small`.
+accuracy on children's/elderly speech is exactly where WER degrades. The hardcode is
+removed: `WHISPER_STT_MODEL` controls the deployed model and the default is
+`Systran/faster-whisper-small`. The remaining proof is to benchmark tiny vs small on the
+same corpus so the default has numbers instead of a rationale-only recommendation.
 
 **Q4: Should web interactive capture post audio to cloud STT, or keep browser
 SpeechRecognition?**
-A: Wire `eliza-cloud` ASR for real. The WAV recorder already exists
-(`startLocalAsrRecorder`, used by the local-inference path); posting the same WAV to the
-cloud STT route (via the agent proxy) is a small change that makes web STT deterministic,
-testable, and consistent with the documented default. Keep browser SpeechRecognition as
-the interim-transcript enhancer where available, cloud WAV transcription as the final —
-that mirrors what mobile TalkMode already does (OS interim + final).
+A: Yes, and that wiring is now in place for the web/desktop capture layer: `eliza-cloud`
+ASR records WAV and posts it to the cloud STT route through the app proxy. Browser
+SpeechRecognition is fallback-only when WAV capture is unavailable. The remaining #14371
+work is a browser-level live Railway + live-agent round trip, including failure paths.
 
 **Q5: Does cloud Kokoro need streaming/caching work?**
-A: Only if the benchmark says so. If short-sentence TTFB is already ≤ ~1.5 s, ship as-is.
-If not, the cheapest lever is extending the existing first-line cache (it is already
-provider-keyed; `packages/cloud/shared/src/lib/services/tts-first-line-cache*`) to the
-Kokoro branch — not building WAV streaming. Genuinely undecidable before the numbers
-exist; default: measure first, cache second, stream never (for MVP).
+A: No streaming work for MVP. The measured warmed short-ack TTFB is already under the
+~1.5 s threshold, and the fresh run makes the cold-start case observable instead of
+hidden. The Kokoro first-line cache is available behind `KOKORO_FIRST_LINE_CACHE` for
+short whole-input openers; use it or a scheduled warmup if the live lane keeps seeing
+cold-start p90 above target.
 
 **Q6: Who owns keeping the Railway services alive?**
-A: Nobody, today — that is the problem. The service definitions must live in-repo
-(Dockerfile + railway config or a pinned deploy doc next to
-`packages/cloud/infra/cloud/RAILWAY.md`, which currently doesn't mention voice at all)
-and the live contract test needs a scheduled lane so a dead service pages as a red run,
-not as a user report.
+A: The definitions and lane now live in-repo, but the operational proof is still missing.
+Before #14374 is done, attach fresh `railway up` logs for both committed service dirs, the
+repo variable values used by the lane, one green `voice-railway-contract` run, and one
+intentionally-red bogus-URL dispatch proving a dead service fails loudly.
 
 ## Recommendation (minimal-scope MVP plan, ordered)
 
-1. **Benchmark and publish** (P0): run the cloud-vs-local matrix (Q2) once, on real
-   services and one real desktop; post the table + artifacts inline in the issue; record
-   the web-TTS default decision (cloud Kokoro vs edge) in this doc.
+1. **Benchmark and publish** (P0): done for the #14370 decision table above. Keep the raw
+   JSON/Markdown and audible proof inline in the PR/issue, and rerun if Railway service
+   images or model tiers change.
 2. **Bidirectional voice e2e with real audio** (P0): one lane that proves mic-audio →
    STT → live agent → TTS → audible reply on (a) web against the Railway path and (b) the
    desktop local path — MP4 with audio posted inline; plus the failure paths: mic denied,
    silence, network drop mid-TTS-stream.
-3. **Wire web `eliza-cloud` ASR** (P1): capture WAV → cloud STT route; browser
-   SpeechRecognition demoted to interim-only enhancement.
-4. **Un-hardcode the Whisper model** (P1): `WHISPER_STT_MODEL` env, benchmark-informed
-   default, delete the misleading `gpt-5-mini-transcribe` log on this path.
-5. **Make the Railway services first-class** (P1): in-repo service definitions + the live
-   contract test on a scheduled workflow.
+3. **Wire web `eliza-cloud` ASR** (P1): done in code; closeout evidence belongs with the
+   browser-level #14371 round trip.
+4. **Un-hardcode the Whisper model** (P1): done in code; #14373 still needs live
+   non-English Railway proof/logs before human closeout.
+5. **Make the Railway services first-class** (P1): code/docs/workflow landed; #14374 still
+   needs owner deploy proof and green/red scheduled-lane evidence.
 6. **Kokoro TTFB mitigation** (P2, conditional on #1): first-line cache for the Kokoro
    branch only if measured TTFB exceeds threshold.
 7. **Hygiene** (P2): remove the stale whisper.cpp `.gitmodules` entry; align the
@@ -225,8 +302,8 @@ not as a user report.
 
 1. [voice] Benchmark Railway cloud voice vs on-device: TTFB, RTT, WER, sizes — publish decision table (P0)
 2. [voice] Bidirectional voice e2e with real audio round-trip on web (Railway path) + desktop (local path), incl. failure paths (P0)
-3. [voice] Wire web `eliza-cloud` ASR to actually POST audio to cloud STT (today it silently falls back to browser SpeechRecognition) (P1)
-4. [voice] Cloud STT model is hardcoded English-only `faster-whisper-tiny.en` — make it deploy-configurable, fix the misleading model log (P1)
-5. [voice] Railway Kokoro/Whisper services: in-repo service definitions + scheduled live contract lane (P1)
+3. [voice] Wire web `eliza-cloud` ASR to actually POST audio to cloud STT (code landed; live round-trip evidence pending) (P1)
+4. [voice] Cloud STT model is deploy-configurable; prove multilingual Railway behavior and logs (P1)
+5. [voice] Railway Kokoro/Whisper services: in-repo service definitions + scheduled live contract lane (code landed; owner deploy proof pending) (P1)
 6. [voice] Cloud Kokoro time-to-audio-start: extend first-line cache to the Kokoro branch (conditional on benchmark) (P2)
 7. [voice] Voice hygiene: remove stale whisper.cpp submodule entry; fix provider-defaults vs capture-factory doc drift (P2)
