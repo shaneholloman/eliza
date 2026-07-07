@@ -20,6 +20,7 @@
 
 import { X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { Z_BUILD_BADGE } from "../../lib/floating-layers";
 
 const BUILD_INFO_URL = "/build-info.json";
 const DISMISS_KEY = "eliza.buildBadge.dismissed";
@@ -309,10 +310,11 @@ export function BuildBadge() {
       <div
         data-testid="build-badge-anchor"
         data-aesthetic-overlay-ignore="true"
-        className="pointer-events-none fixed left-0 top-0 z-[9997]"
+        className="pointer-events-none fixed left-0 top-0"
         style={{
           paddingLeft: "calc(env(safe-area-inset-left, 0px) + 0.375rem)",
           paddingTop: "calc(env(safe-area-inset-top, 0px) + 0.375rem)",
+          zIndex: Z_BUILD_BADGE,
         }}
       >
         <span className="pointer-events-auto flex items-center gap-1 rounded-full border border-border bg-surface/80 px-2 py-0.5 text-3xs leading-none text-muted opacity-70 transition-opacity hover:opacity-100">
@@ -352,18 +354,20 @@ export function BuildBadge() {
           <button
             type="button"
             aria-label="Close build diagnostics"
-            className="fixed inset-0 z-[9998] cursor-default bg-transparent"
+            className="fixed inset-0 cursor-default bg-transparent"
             onClick={closeDiag}
+            style={{ zIndex: Z_BUILD_BADGE + 1 }}
           />
           <div
             data-testid="build-badge-diag"
             role="dialog"
             aria-modal="true"
             aria-label={`Build diagnostics for ${label}`}
-            className="pointer-events-auto fixed z-[9999] max-h-[70vh] w-[calc(100%-1rem)] max-w-sm overflow-auto rounded-lg border border-border bg-surface/95 p-3 text-2xs shadow-lg backdrop-blur"
+            className="pointer-events-auto fixed max-h-[70vh] w-[calc(100%-1rem)] max-w-sm overflow-auto rounded-lg border border-border bg-surface/95 p-3 text-2xs shadow-lg backdrop-blur"
             style={{
               left: "calc(env(safe-area-inset-left, 0px) + 0.5rem)",
               bottom: "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)",
+              zIndex: Z_BUILD_BADGE + 2,
             }}
           >
             <div className="mb-2 flex items-center justify-between">
