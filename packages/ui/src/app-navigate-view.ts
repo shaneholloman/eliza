@@ -6,8 +6,8 @@ import { logger } from "@elizaos/logger";
 import type { NavigateViewDetail } from "@elizaos/shared/events";
 import type { ViewRegistryEntry } from "./hooks/useAvailableViews";
 import { type Tab, tabFromPath } from "./navigation";
-import { shellHistory } from "./surface-realm-channel";
 import { ensureChatDockSplitForView } from "./state/chat-dock-store";
+import { shellHistory } from "./surface-realm-channel";
 
 export type { NavigateViewDetail };
 
