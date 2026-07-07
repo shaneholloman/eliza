@@ -85,7 +85,6 @@ export interface GlassSurfaceProps
 function useNativeAnchor(
   ref: React.RefObject<HTMLDivElement | null>,
   tier: GlassTier,
-  variant: GlassVariant,
   interactive: boolean,
 ): void {
   const regionId = useId();
@@ -114,7 +113,7 @@ function useNativeAnchor(
       window.removeEventListener("resize", sync);
       void bridge.detachGlass({ id: regionId });
     };
-  }, [tier, variant, interactive, ref, regionId]);
+  }, [tier, interactive, ref, regionId]);
 }
 
 export function GlassSurface({
@@ -126,7 +125,7 @@ export function GlassSurface({
 }: GlassSurfaceProps): React.JSX.Element {
   const tier = useNativeGlass();
   const ref = useRef<HTMLDivElement>(null);
-  useNativeAnchor(ref, tier, variant, interactive);
+  useNativeAnchor(ref, tier, interactive);
   return (
     <div
       {...rest}
