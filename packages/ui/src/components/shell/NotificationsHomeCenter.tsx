@@ -51,7 +51,14 @@ import {
   useNotifications,
 } from "../../state/notifications/notification-store";
 import { NOTIFICATION_PRIORITY_RANK } from "../../widgets/home-priority";
-import { LIQUID_GLASS_EDGE_SHADOW, LIQUID_GLASS_SHEEN } from "./liquid-glass";
+import {
+  LIQUID_GLASS_BLUR,
+  LIQUID_GLASS_EDGE_SHADOW,
+  LIQUID_GLASS_REFRACTION,
+  LIQUID_GLASS_SHEEN,
+  LiquidGlassRefractionDefs,
+  liquidGlassRimCss,
+} from "./liquid-glass";
 import { RelativeTime } from "./RelativeTime";
 
 /**
@@ -131,10 +138,21 @@ const NOTIF_SCROLL_CSS = `
   background-color: rgb(12 12 14 / 34%);
   background-image: ${LIQUID_GLASS_SHEEN};
   box-shadow: ${LIQUID_GLASS_EDGE_SHADOW};
-  -webkit-backdrop-filter: blur(16px) saturate(1.4);
-  backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-backdrop-filter: ${LIQUID_GLASS_BLUR};
+  backdrop-filter: ${LIQUID_GLASS_BLUR};
   transition: background-color 150ms linear;
 }
+/* Chromium honors url(#…) on backdrop-filter → refract the background at the
+   rim (the "liquid" cue). WebKit can't, so it keeps the frosted blur above. */
+@supports (backdrop-filter: url(#x)) or (-webkit-backdrop-filter: url(#x)) {
+  .eliza-notif-glass {
+    -webkit-backdrop-filter: ${LIQUID_GLASS_REFRACTION};
+    backdrop-filter: ${LIQUID_GLASS_REFRACTION};
+  }
+}
+/* Directional specular rim tracing every rounded corner (mask-composite ring)
+   — replaces the old one-sided inset hairline that read as a vertical line. */
+${liquidGlassRimCss(".eliza-notif-glass")}
 .eliza-notif-glass:hover {
   background-color: rgb(38 38 42 / 42%);
 }
@@ -909,6 +927,7 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
       className="eliza-notif-center-in flex min-h-0 flex-1 flex-col overflow-hidden"
     >
       <style>{NOTIF_SCROLL_CSS}</style>
+      <LiquidGlassRefractionDefs />
       {/* No "Notifications" header, no sort toggle, no more/less buttons; the
           inbox is always priority-triaged, the view-group eyebrows carry the
           only structure, and the pull gesture owns expand/collapse. */}
