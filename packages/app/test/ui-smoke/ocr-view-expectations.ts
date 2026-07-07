@@ -26,6 +26,7 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
       "Ask ",
       "Eliza",
       "Weather",
+      "Mostly clear",
       "Today",
       "Good evening",
       "Good morning",

@@ -226,7 +226,7 @@ function OrderCard(props: { title: string; entries: RuntimeOrderItem[] }) {
     <PagePanel variant="section" className="p-5">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="text-sm font-semibold text-txt">{title}</div>
-        <MetaPill>{entries.length}</MetaPill>
+        <MetaPill className="border-0 bg-surface/80">{entries.length}</MetaPill>
       </div>
       <div className="max-h-[18rem] overflow-auto text-xs font-mono leading-6 tabular-nums">
         {entries.length === 0 ? (
@@ -256,7 +256,7 @@ function ServicesOrderCard(props: { entries: RuntimeServiceOrderItem[] }) {
         <div className="text-sm font-semibold text-txt">
           {t("runtimeview.Services")}
         </div>
-        <MetaPill>
+        <MetaPill className="border-0 bg-surface/80">
           {entries.length} {t("runtimeview.types")}
         </MetaPill>
       </div>
@@ -273,7 +273,9 @@ function ServicesOrderCard(props: { entries: RuntimeServiceOrderItem[] }) {
                 <div className="min-w-0 break-words text-txt">
                   [{serviceGroup.index}] {serviceGroup.serviceType}
                 </div>
-                <MetaPill>{serviceGroup.count}</MetaPill>
+                <MetaPill className="border-0 bg-surface/80">
+                  {serviceGroup.count}
+                </MetaPill>
               </div>
               <div className="mt-1 space-y-1 pl-3 text-muted">
                 {serviceGroup.instances.map((instance) => (
@@ -402,7 +404,11 @@ function RuntimeSectionItem(props: {
         <SidebarContent.ItemTitle>{label}</SidebarContent.ItemTitle>
         <SidebarContent.ItemDescription>{meta}</SidebarContent.ItemDescription>
       </span>
-      {count ? <MetaPill compact>{count}</MetaPill> : null}
+      {count ? (
+        <MetaPill compact className="border-0 bg-surface/80">
+          {count}
+        </MetaPill>
+      ) : null}
     </SidebarContent.Item>
   );
 }
@@ -730,7 +736,7 @@ export function RuntimeView({
               title={t("runtimeview.AgentRuntimeIsNot")}
             />
           ) : activeSection === "summary" ? (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-2">
               <OrderCard
                 title={t("common.plugins")}
                 entries={snapshot.order.plugins}

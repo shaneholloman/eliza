@@ -355,7 +355,7 @@ export function DesktopWorkspaceSection({
     return (
       <ContentLayout contentHeader={contentHeader}>
         <SettingsGroup bare>
-          <div className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted">
+          <div className="rounded-lg border border-border bg-card px-4 py-3 text-base font-semibold text-txt-strong">
             {t("desktopworkspacesection.DesktopToolsOnlyAvailable")}
           </div>
         </SettingsGroup>
