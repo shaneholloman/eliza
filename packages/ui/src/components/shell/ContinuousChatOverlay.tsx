@@ -3601,7 +3601,10 @@ export function ContinuousChatOverlay({
   // detector preserves the old "tap outside to collapse" behavior without
   // stealing horizontal swipes or vertical scroll from the background.
   React.useEffect(() => {
-    if (typeof document === "undefined" || !sheetOpen) {
+    // While pinned (onboarding / docked idiom) the chat is undismissable, so
+    // the outside-tap swallower must not install: it capture-eats pointerup on
+    // everything outside the sheet — including the dock's divider pill.
+    if (typeof document === "undefined" || !sheetOpen || pinnedOpen) {
       outsideSheetPointerRef.current = null;
       suppressNextOutsideClickRef.current = false;
       return undefined;
@@ -3700,7 +3703,7 @@ export function ContinuousChatOverlay({
       document.removeEventListener("pointerup", onPointerEnd, true);
       document.removeEventListener("pointercancel", onPointerCancel, true);
     };
-  }, [sheetOpen, collapse, isOverlayControlTarget]);
+  }, [sheetOpen, pinnedOpen, collapse, isOverlayControlTarget]);
 
   // Escape collapses the chat from ANY open state, even a free-drag open with no
   // focused element (the element-level handlers on the textarea/thread only fire
