@@ -340,8 +340,6 @@
       "dependsOn": [
         "@elizaos/core#build",
         "@elizaos/shared#build",
-        "@elizaos/plugin-discord#build",
-        "@elizaos/plugin-streaming#build",
         "^build"
       ],
       "outputs": []
