@@ -123,6 +123,11 @@ import {
   measureSafeAreaInsetTop,
   resolveChatPanelLayout,
 } from "./chat-panel-layout";
+import {
+  LIQUID_GLASS_EDGE_SHADOW,
+  LiquidGlassDefs,
+  LiquidGlassRefraction,
+} from "./liquid-glass";
 import { SlashCommandMenu, useSlashMenu } from "./SlashCommandMenu";
 import {
   filterRenderableShellMessages,
@@ -3915,14 +3920,24 @@ export function ContinuousChatOverlay({
               dragMinTopRef.current = top;
             } else if (
               dragMaxArmedRef.current &&
-              dragMinTopRef.current < dragStartTopRef.current - 24 &&
-              dragMinTopRef.current > 2
+              off > 0 &&
+              // The panel top has stopped rising while the finger keeps pulling
+              // up AND the panel is TALL (top high on screen) → pinned at the
+              // inset-full ceiling. Testing the ABSOLUTE top position (not "rose
+              // ≥24px from the gesture start") is what makes this fire when the
+              // drag BEGINS already at the ceiling — a pull up from the FULL
+              // detent, where the panel cannot rise further on its own. Without
+              // it the over-pull never engaged: the panel froze at the ceiling
+              // until the finger went far past the screen top (the reported
+              // "freezes at ~90%, have to drag beyond the screen to maximize").
+              top < viewportH * 0.35 &&
+              top > 2
             ) {
-              // Top stopped rising while the finger keeps pulling → pinned at
-              // the inset-full ceiling. Latch the over-pull phase from here.
+              // Latch the over-pull phase from here: further finger travel now
+              // collapses the top margin (fullBleedT) 1:1, top pin→0.
               dragPinnedRef.current = true;
               dragOffAtPinRef.current = off;
-              dragPinTopRef.current = dragMinTopRef.current;
+              dragPinTopRef.current = Math.max(1, dragMinTopRef.current);
             }
           }
           if (dragPinnedRef.current) {
@@ -4698,6 +4713,12 @@ export function ContinuousChatOverlay({
               WebkitBackdropFilter: fullBleed
                 ? undefined
                 : "blur(24px) saturate(1.3)",
+              // Liquid-glass bevel: a bright top-left rim over a soft
+              // bottom-right shade so the frosted edge catches light like a real
+              // glass slab. Only on the inset sheet — full-bleed has no edge to
+              // catch light. Depth here is the glass rim, not a drop shadow (the
+              // flat system keeps all shadow tokens none).
+              boxShadow: fullBleed ? undefined : LIQUID_GLASS_EDGE_SHADOW,
               // Faint neutral top-edge highlight (a glass sheen), NOT the warm
               // `--surface` gradient that read as brown.
               backgroundImage:
@@ -4715,6 +4736,21 @@ export function ContinuousChatOverlay({
                 : null),
             }}
           />
+          {/* Liquid-glass refraction: bends the ember field / home widgets
+              behind the inset sheet at the panel edge (Chromium
+              `backdrop-filter: url()`; a no-op that degrades to the frosted
+              surface elsewhere). Full-bleed is opaque, so there is nothing to
+              refract. The defs mount once; the layer tracks the live radius so
+              the refracted edge stays flush through the morph. */}
+          {fullBleed ? null : (
+            <>
+              <LiquidGlassDefs />
+              <LiquidGlassRefraction
+                radius={morphRadius}
+                opacity={glassOpacity}
+              />
+            </>
+          )}
           {/* AX-tree mirror of data-detent: the native gesture e2e suites
               (XCUITest) can only observe web state through the accessibility
               tree, and data attributes never surface there. sr-only text does.
