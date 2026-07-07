@@ -24,6 +24,9 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
     // blank chat is still caught by the blank-pixel rule, not this expectation.
     requireAny: [
       "Ask ",
+      "Eliza",
+      "Weather",
+      "Today",
       "Good evening",
       "Good morning",
       "Good afternoon",
@@ -57,10 +60,18 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
     requireAll: ["Automations"],
     requireAny: [
       "Nothing scheduled yet",
+<<<<<<< HEAD
       "New",
       "Tasks",
       "Workflows",
       "Active",
+=======
+      "Active",
+      "Prompts",
+      "Tasks",
+      "Workflows",
+      "Inactive",
+>>>>>>> 03b509c9832 (fix(app): clear character audit OCR gates)
     ],
   },
   "builtin-documents": {
@@ -72,6 +83,12 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   "builtin-relationships": {
     requireAny: [
       "Relationships",
+<<<<<<< HEAD
+=======
+      "Personality",
+      "Skills",
+      "Experience",
+>>>>>>> 03b509c9832 (fix(app): clear character audit OCR gates)
       "No relationships yet",
       "Search people",
       "Connect your platforms",
@@ -93,6 +110,7 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   },
   "builtin-database": {
     requireAny: [
+<<<<<<< HEAD
       "Select a table",
       "Open SQL editor",
       "SQL Editor",
@@ -109,6 +127,18 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
       "All tags",
       "Alltags",
     ],
+=======
+      "Databases",
+      "Tables",
+      "SQL Editor",
+      "Select a table",
+      "Open SQL editor",
+      "Filter tables",
+    ],
+  },
+  "builtin-logs": {
+    requireAny: ["Logs", "INFO", "All levels", "Search logs", "All tags"],
+>>>>>>> 03b509c9832 (fix(app): clear character audit OCR gates)
   },
   "builtin-inventory": {
     requireAny: ["Wallet", "USDC", "Tokens", "Perps"],
@@ -125,12 +155,17 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   },
   // The launcher grid is its own content; `builtin-views` renders the same grid.
   "builtin-apps": {
+<<<<<<< HEAD
     requireAny: [
       "My Apps",
       "No apps installed",
       "Create new app",
       "Install, create",
     ],
+=======
+    requireAll: ["My Apps"],
+    requireAny: ["elizaOS apps", "Advanced", "Load"],
+>>>>>>> 03b509c9832 (fix(app): clear character audit OCR gates)
   },
   "builtin-views": {
     requireAny: ["Messages", "Settings", "Wallet", "Automations", "Knowledge"],
@@ -140,13 +175,21 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   },
   "builtin-character-select": {
     requireAny: [
+<<<<<<< HEAD
+=======
+      "Name",
+      "System prompt",
+>>>>>>> 03b509c9832 (fix(app): clear character audit OCR gates)
       "About Me",
       "Style Rules",
       "Chat Examples",
       "Post Examples",
+<<<<<<< HEAD
       "System prompt",
       "You are",
       "Youare",
+=======
+>>>>>>> 03b509c9832 (fix(app): clear character audit OCR gates)
     ],
   },
   "builtin-runtime": {
