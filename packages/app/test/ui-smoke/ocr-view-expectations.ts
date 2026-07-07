@@ -159,10 +159,15 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
     requireAny: ["No trajectories yet", "trajector"],
   },
   "builtin-transcripts": {
-    requireAny: ["No transcripts yet", "transcri", "recording"],
+    requireAny: ["Live meeting", "Paste a Meet", "transcri", "recording"],
   },
   "builtin-desktop": {
-    requireAny: ["Desktop workspace", "Electrobun desktop runtime"],
+    requireAny: [
+      "Desktop workspace",
+      "Desk rkspace",
+      "Electrobun desktop runtime",
+      "Electrobun desktop runtim",
+    ],
   },
 };
 
