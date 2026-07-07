@@ -9,7 +9,17 @@ import { createRoot } from "react-dom/client";
 import { MockAppProvider } from "../../../storybook/mock-providers";
 import { ContinuousChatOverlay } from "../ContinuousChatOverlay";
 import type { ShellMessage } from "../shell-state";
-import type { ShellController } from "../useShellController";
+import type { CaptureIntent, ShellController } from "../useShellController";
+
+declare global {
+  interface Window {
+    __appendAssistant?: (content: string) => void;
+    __emitDictation?: (text: string) => void;
+    __emitVoiceFinal?: (text: string) => void;
+    __growLastAssistant?: (extra: string) => void;
+    __setFirstRun?: (value: boolean) => void;
+  }
+}
 
 let nextId = 100;
 const uid = () => `m${nextId++}`;
@@ -200,9 +210,7 @@ function Harness(): React.JSX.Element {
   // fade + auto-collapse reveal that a static prop can't reach (#12364).
   const [firstRunOpen, setFirstRunOpen] = React.useState(firstRun);
   React.useEffect(() => {
-    (
-      window as unknown as { __setFirstRun?: (v: boolean) => void }
-    ).__setFirstRun = setFirstRunOpen;
+    window.__setFirstRun = setFirstRunOpen;
   }, []);
 
   // Deterministic transcript mutation hooks for the browser e2e. These drive the
@@ -210,11 +218,7 @@ function Harness(): React.JSX.Element {
   // response, while letting the runner create a single large streamed growth
   // commit and a new assistant line on demand.
   React.useEffect(() => {
-    const w = window as unknown as {
-      __appendAssistant?: (content: string) => void;
-      __growLastAssistant?: (extra: string) => void;
-    };
-    w.__appendAssistant = (content) => {
+    window.__appendAssistant = (content) => {
       console.log(`[fixture] appendAssistant length=${content.length}`);
       setMessages((current) => [
         ...current,
@@ -227,7 +231,7 @@ function Harness(): React.JSX.Element {
       ]);
       setPhase("summoned");
     };
-    w.__growLastAssistant = (extra) => {
+    window.__growLastAssistant = (extra) => {
       console.log(`[fixture] growLastAssistant length=${extra.length}`);
       setMessages((current) => {
         const lastAssistantIndex = current.findLastIndex(
@@ -252,8 +256,8 @@ function Harness(): React.JSX.Element {
       });
     };
     return () => {
-      w.__appendAssistant = undefined;
-      w.__growLastAssistant = undefined;
+      window.__appendAssistant = undefined;
+      window.__growLastAssistant = undefined;
     };
   }, []);
 
@@ -265,8 +269,8 @@ function Harness(): React.JSX.Element {
     );
   }, [phase, messages.length, recording]);
 
-  const send = React.useCallback(
-    (text: string, options?: { channelType?: string }) => {
+  const send = React.useCallback<ShellController["send"]>(
+    (text, options) => {
       const trimmed = text.trim();
       if (!trimmed) return;
       console.log(
@@ -296,11 +300,11 @@ function Harness(): React.JSX.Element {
   // Capture intent of the active mic session — mirrors the real controller:
   // PTT press → "dictate" (transcript fills the composer draft, no send);
   // hands-free tap → "converse" (final transcript sends a VOICE_DM).
-  const captureIntentRef = React.useRef<"converse" | "dictate">("converse");
+  const captureIntentRef = React.useRef<CaptureIntent>("converse");
   const dictationSinkRef = React.useRef<((text: string) => void) | null>(null);
 
   const startRecording = React.useCallback(
-    (intent: "converse" | "dictate" = "converse") => {
+    (intent: CaptureIntent = "converse") => {
       captureIntentRef.current = intent;
       console.log(`[fixture] startRecording(${intent})`);
       setRecording(true);
@@ -353,20 +357,21 @@ function Harness(): React.JSX.Element {
   // either fills the composer draft (dictate) or sends a VOICE_DM (converse),
   // routed by the active capture intent — exactly the two real directions.
   React.useEffect(() => {
-    const w = window as {
-      __emitDictation?: (t: string) => void;
-      __emitVoiceFinal?: (t: string) => void;
-    };
-    w.__emitDictation = (t) => dictationSinkRef.current?.(t);
-    w.__emitVoiceFinal = (t) => {
-      if (captureIntentRef.current === "dictate") dictationSinkRef.current?.(t);
-      else send(t, { channelType: "VOICE_DM" });
+    window.__emitDictation = (t) => dictationSinkRef.current?.(t);
+    window.__emitVoiceFinal = (t) => {
+      if (captureIntentRef.current === "dictate") {
+        dictationSinkRef.current?.(t);
+      } else if (captureIntentRef.current === "transcription") {
+        setTranscript(t);
+      } else {
+        send(t, { channelType: "VOICE_DM" });
+      }
       setRecording(false);
       setPhase("summoned");
     };
     return () => {
-      w.__emitDictation = undefined;
-      w.__emitVoiceFinal = undefined;
+      window.__emitDictation = undefined;
+      window.__emitVoiceFinal = undefined;
     };
   }, [send]);
   const toggleAgentVoiceMute = React.useCallback(() => {
@@ -376,7 +381,7 @@ function Harness(): React.JSX.Element {
     });
   }, []);
 
-  const controller = {
+  const controller: ShellController = {
     phase,
     // Raw in-flight predicate — mirrors the real controller's `chatSending ||
     // speaking`. In the fixture, "responding" phase stands in for chatSending and
@@ -400,6 +405,15 @@ function Harness(): React.JSX.Element {
       !forceNoProviderOff &&
       messages[messages.length - 1]?.failureKind === "no_provider",
     canSend: initialCanSend && phase !== "booting",
+    waveformMode: recording
+      ? "listening"
+      : phase === "responding"
+        ? "responding"
+        : "idle",
+    analyser: null,
+    open: () => console.log("[fixture] open"),
+    close: () => console.log("[fixture] close"),
+    isOpen: true,
     recording,
     handsFree,
     transcript,
@@ -423,8 +437,17 @@ function Harness(): React.JSX.Element {
     },
     // The overlay reads `modelStatus.kind` unconditionally; "ready" keeps the
     // local-model status strip dormant in the fixture.
-    modelStatus: { kind: "ready" },
+    modelStatus: {
+      kind: "ready",
+      blocksSend: false,
+      percent: null,
+      etaMs: null,
+      modelName: null,
+      errors: [],
+    },
     send,
+    captureVision: () => console.log("[fixture] captureVision"),
+    visionCapturing: false,
     toggleRecording,
     toggleHandsFree,
     setDictationSink,
@@ -433,6 +456,9 @@ function Harness(): React.JSX.Element {
       console.log(`[fixture] setComposerHasDraft -> ${hasDraft}`),
     startRecording,
     stopRecording,
+    speak: (text: string) =>
+      console.log(`[fixture] speak length=${text.length}`),
+    stopSpeaking: () => console.log("[fixture] stopSpeaking"),
     toggleAgentVoiceMute,
     unlockAudio: () => {
       console.log("[fixture] unlockAudio");
@@ -448,7 +474,15 @@ function Harness(): React.JSX.Element {
       console.log("[fixture] stop");
       setPhase("summoned");
     },
-  } as unknown as ShellController;
+    conversationNav: {
+      hasPrev: false,
+      hasNext: false,
+      goPrev: () => console.log("[fixture] conversationNav.goPrev"),
+      goNext: () => console.log("[fixture] conversationNav.goNext"),
+      activeId: "fixture-thread",
+      index: 0,
+    },
+  };
 
   return (
     <div
