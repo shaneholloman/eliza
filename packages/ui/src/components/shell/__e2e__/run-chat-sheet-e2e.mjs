@@ -1918,9 +1918,11 @@ try {
   }
 
   // TRANSCRIBING while an inline reply is in flight (regression, #9880 path):
-  // the mic reads "stop transcription" and must END the session on tap even
-  // while `responding` is true — the OFF path was gated on the reply finishing,
-  // leaving a lit, dead mic button.
+  // the voice control is the MASTER off — labeled "stop transcription and mic"
+  // (distinct from the transcribe button's "stop transcription", which leaves
+  // the mic on) — and must END the session on tap even while `responding` is
+  // true; the OFF path was gated on the reply finishing, leaving a lit, dead
+  // mic button.
   {
     const p = await ctrl();
     attachConsole(p, sink);
@@ -1931,8 +1933,8 @@ try {
     await p.waitForTimeout(500);
     assert(
       (await p.getByTestId("chat-composer-mic").getAttribute("aria-label")) ===
-        "stop transcription",
-      "TRANSCRIBING+REPLY: mic reads 'stop transcription'",
+        "stop transcription and mic",
+      "TRANSCRIBING+REPLY: voice control reads 'stop transcription and mic'",
     );
     await snap(p, "state-transcribing-inline-reply");
     await p.getByTestId("chat-composer-mic").click();
@@ -3164,10 +3166,14 @@ try {
       `ONBOARDING: sheet is full-screen, not content-sized at the bottom (top ${Math.round(top)} < ${Math.round(vh * 0.15)})`,
     );
     assert(
-      (await p
-        .getByTestId("chat-composer-textarea")
-        .getAttribute("placeholder")) === "Connect to cloud to enable chat",
-      "ONBOARDING: composer placeholder shows the cloud-connect directive (#15039)",
+      (
+        (await p
+          .getByTestId("chat-composer-textarea")
+          .getAttribute("placeholder")) ?? ""
+      )
+        .toLowerCase()
+        .includes("sign in"),
+      "ONBOARDING: composer placeholder points to sign-in (#15039; honest copy per #15206)",
     );
     assert(
       (await p
