@@ -591,6 +591,9 @@ function TabScrollView({
   return (
     <AppWorkspaceChrome
       testId="tab-scroll-view"
+      // Transparent over the shared wallpaper (the shell floor covers the
+      // explicitly-opaque routes) — same default as TabContentView.
+      surface="transparent"
       nav={nav}
       main={
         <div
@@ -606,7 +609,10 @@ function TabScrollView({
 
 function TabContentView({
   children,
-  surface = "opaque",
+  // Views sit on the shared launcher wallpaper by default (the shell paints an
+  // opaque floor for the few explicitly-opaque routes), so the workspace panel
+  // is transparent unless a view opts back into its own opaque surface.
+  surface = "transparent",
   nav,
 }: {
   children: ReactNode;
