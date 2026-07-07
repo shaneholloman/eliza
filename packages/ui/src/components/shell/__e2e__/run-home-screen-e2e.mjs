@@ -185,7 +185,7 @@ const stubElizaCore = {
 // fixture loads no app CSS, so the handful of brand vars the home widgets read
 // must be declared inline.
 const headHtml = `<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-<style>:root{--eliza-continuous-chat-clearance:5.25rem;--safe-area-bottom:0px;--eliza-mobile-nav-offset:0px;--brand-white:#fdfaf7;--brand-black:#140c07;--brand-orange:#ff6a1f}</style>`;
+<style>:root{--eliza-continuous-chat-clearance:5.25rem;--safe-area-bottom:0px;--eliza-mobile-nav-offset:0px;--brand-white:#fdfaf7;--brand-black:#000000;--brand-orange:#ff6a1f}</style>`;
 const url = await writeFixturePage({
   entry: join(here, "home-screen-fixture.tsx"),
   outDir,
@@ -570,18 +570,18 @@ try {
       "the seeded notification renders as a single row",
     );
     assert(
-      (await center.getByTestId("notification-group-label").count()) === 1,
-      "the row renders under its destination group header",
+      (await center.getByTestId("notification-group-label").count()) === 0,
+      "no group header eyebrows render — grouping is physical only",
     );
     assert(
       (await center.getByText("Payment failed", { exact: false }).count()) > 0,
       "the notification row shows the seeded title",
     );
     // A single interrupt notification hides nothing, so the rested inbox shows
-    // no "N more" pull hint / expand toggle (there is no shade to expand into).
+    // no "N more" button (there is no shade to expand into).
     assert(
-      (await center.getByTestId("notifications-pull-hint").count()) === 0,
-      "no pull-to-expand hint with a single interrupt notification",
+      (await center.getByTestId("notifications-expand-toggle").count()) === 0,
+      "no expand button with a single interrupt notification",
     );
     // Tap expands the row's option strip; a `system` row with no safe deep link
     // offers only Dismiss. Acting on it acknowledges the row → inbox self-hides.

@@ -50,10 +50,6 @@ const desktopBridgeMock = vi.hoisted(() => ({
   openDesktopLauncherWindow: vi.fn(async () => ({ id: "launcher-1" })),
 }));
 
-const mediaQueryState = vi.hoisted(() => ({
-  matches: false,
-}));
-
 const dynamicViewLoaderMock = vi.hoisted(() => ({
   render: vi.fn(
     ({
@@ -109,12 +105,6 @@ const viewsManagerView = {
   path: "/views",
   bundleUrl: "/api/views/views-manager/bundle.js",
   viewType: "gui" as const,
-};
-
-const viewsManagerTuiView = {
-  ...viewsManagerView,
-  path: "/views/tui",
-  viewType: "tui" as const,
 };
 
 const shopifyView = {
@@ -184,7 +174,6 @@ const sandboxedFrameView = {
 const mockAvailableViews: ViewRegistryEntry[] = [
   remoteLedgerView,
   viewsManagerView,
-  viewsManagerTuiView,
   shopifyView,
   calendarView,
   sharedCanvasView,
@@ -197,7 +186,6 @@ function resetMockAvailableViews() {
     mockAvailableViews.length,
     remoteLedgerView,
     viewsManagerView,
-    viewsManagerTuiView,
     shopifyView,
     calendarView,
     sharedCanvasView,
@@ -251,7 +239,7 @@ vi.mock("./hooks/useAuthStatus", () => ({
 }));
 
 vi.mock("./hooks/useMediaQuery", () => ({
-  useMediaQuery: () => mediaQueryState.matches,
+  useMediaQuery: () => false,
 }));
 
 vi.mock("./hooks/useActivityEvents", () => ({
@@ -456,7 +444,6 @@ describe("App navigate-view event wiring", () => {
     Reflect.deleteProperty(window, "__ELIZA_API_TOKEN__");
     Reflect.deleteProperty(window, "__ELIZAOS_API_TOKEN__");
     appState.tab = "chat";
-    mediaQueryState.matches = false;
     desktopTabsState.tabs = [];
     resetMockAvailableViews();
     appState.setTab.mockClear();

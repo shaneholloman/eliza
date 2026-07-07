@@ -74,6 +74,19 @@ Package: src:starpu-contrib
 Pin: release *
 Pin-Priority: -1
 
+Explanation: The two Nagios NSCA clients — nsca-client (original) and
+Explanation: nsca-ng-client (the rewrite) — Conflict with each other and neither
+Explanation: belongs on an amnesic end-user OS. Even after the snapshot serial
+Explanation: bump the resolver pulls BOTH as alternatives and deadlocks the chroot
+Explanation: install ("two conflicting decisions"). Nothing in our package lists
+Explanation: requires either (nsca-ng-client has no reverse-deps; nsca-client is
+Explanation: only pulled by the nsca server, which we do not install), so pin both
+Explanation: out. This is the last package-set conflict after #15336/#15340/#15344
+Explanation: /#15345.
+Package: nsca-client nsca-ng-client
+Pin: release *
+Pin-Priority: -1
+
 Explanation: weirdness in chroot_apt install-binary
 Package: *
 Pin: release o=chroot_local-packages

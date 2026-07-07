@@ -152,8 +152,9 @@ describe("HomeScreen", () => {
     expect(wrapper?.className).toContain("mt-4");
     // The inbox itself fills its wrapper and scrolls internally.
     expect(card.className).toContain("flex-1");
-    // Rows are grouped by view.
-    expect(screen.getByTestId("notification-group-label")).toBeTruthy();
+    // Rows are grouped by view PHYSICALLY only — no header eyebrows render.
+    expect(screen.getByTestId("notification-row")).toBeTruthy();
+    expect(screen.queryByTestId("notification-group-label")).toBeNull();
   });
 
   it("does NOT grow the notification region when the inbox is empty (calm centred home)", () => {

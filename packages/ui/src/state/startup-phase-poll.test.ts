@@ -1050,7 +1050,9 @@ describe("runPollingBackend", () => {
       { current: null },
     );
 
-    expect(agentSessionRecoveryMock.runAgentSessionRecovery).toHaveBeenCalledWith(
+    expect(
+      agentSessionRecoveryMock.runAgentSessionRecovery,
+    ).toHaveBeenCalledWith(
       expect.objectContaining({
         cloudApiBase: "https://elizacloud.ai",
         agentId: "agent-123",
@@ -1119,7 +1121,9 @@ describe("runPollingBackend", () => {
       { current: null },
     );
 
-    expect(agentSessionRecoveryMock.runAgentSessionRecovery).not.toHaveBeenCalled();
+    expect(
+      agentSessionRecoveryMock.runAgentSessionRecovery,
+    ).not.toHaveBeenCalled();
     expect(clearPersistedActiveServer).toHaveBeenCalled();
     expect(deps.setFirstRunComplete).toHaveBeenCalledWith(false);
     expect(dispatch).toHaveBeenCalledWith({

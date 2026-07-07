@@ -33,10 +33,8 @@ afterEach(() => {
 });
 
 describe("useDisplayPreferences — background history + undo", () => {
-  it("starts on the boot default (curated image) with nothing to undo", () => {
+  it("starts on the boot default (Canopy wallpaper) with nothing to undo", () => {
     const { result } = renderHook(() => useDisplayPreferences());
-    // #13538: the boot default is now the curated "Ember Night" image, not a
-    // flat shader color.
     expect(result.current.state.backgroundConfig).toEqual(
       DEFAULT_BACKGROUND_CONFIG,
     );

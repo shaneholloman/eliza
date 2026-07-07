@@ -207,6 +207,41 @@ function readTaskIdempotencyKey(task: Task): string | undefined {
   return typeof key === "string" && key.length > 0 ? key : undefined;
 }
 
+/**
+ * How long a workflow trigger waits for the WORKFLOW_DISPATCH service before
+ * declaring the workflow subsystem unavailable. plugin-workflow loads in the
+ * DEFERRED boot phase and registers the dispatcher inside its init, so a
+ * trigger firing in the boot window can race the registration — a bounded
+ * wait turns that race into a short dispatch delay instead of a spurious
+ * "Automation failed" notification.
+ */
+const WORKFLOW_DISPATCH_WAIT_MS = 15_000;
+const WORKFLOW_DISPATCH_POLL_MS = 250;
+
+/**
+ * Resolve the workflow dispatcher, waiting out the deferred-boot window.
+ * WORKFLOW_DISPATCH is a closure-based singleton set directly into the
+ * runtime services map by plugin-workflow's init (no service class), so
+ * `getServiceLoadPromise` can't await it — polling `getService` is the one
+ * signal that exists. Returns null only when the plugin never registers it
+ * (not enabled on this runtime), which is a configuration state, not a race.
+ */
+async function resolveWorkflowDispatch(
+  runtime: IAgentRuntime,
+): Promise<(Service & WorkflowDispatchServiceLike) | null> {
+  const deadline = Date.now() + WORKFLOW_DISPATCH_WAIT_MS;
+  for (;;) {
+    const svc = runtime.getService<Service & WorkflowDispatchServiceLike>(
+      "WORKFLOW_DISPATCH",
+    ) as (Service & WorkflowDispatchServiceLike) | null;
+    if (svc) return svc;
+    if (Date.now() >= deadline) return null;
+    await new Promise((resolve) =>
+      setTimeout(resolve, WORKFLOW_DISPATCH_POLL_MS),
+    );
+  }
+}
+
 async function dispatchWorkflow(
   runtime: IAgentRuntime,
   task: Task,
@@ -216,9 +251,7 @@ async function dispatchWorkflow(
   if (!trigger.workflowId) {
     return { ok: false, error: "workflow trigger missing workflowId" };
   }
-  const svc = runtime.getService<Service & WorkflowDispatchServiceLike>(
-    "WORKFLOW_DISPATCH",
-  ) as (Service & WorkflowDispatchServiceLike) | null;
+  const svc = await resolveWorkflowDispatch(runtime);
   if (!svc) {
     runtime.logger.warn(
       {
@@ -226,9 +259,13 @@ async function dispatchWorkflow(
         triggerId: trigger.triggerId,
         workflowId: trigger.workflowId,
       },
-      "[triggers] workflow dispatch requested but WORKFLOW_DISPATCH service not registered",
+      "[triggers] workflow dispatch requested but the workflow plugin never registered WORKFLOW_DISPATCH — is @elizaos/plugin-workflow enabled on this agent?",
     );
-    return { ok: false, error: "WORKFLOW_DISPATCH service not registered" };
+    return {
+      ok: false,
+      error:
+        "workflow subsystem unavailable: the workflow plugin is not enabled on this agent",
+    };
   }
   const idempotencyKey = readTaskIdempotencyKey(task);
   const payload = event

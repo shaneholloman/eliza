@@ -4,25 +4,35 @@
  * the band between the header and the floating chat. It owns the inbox content
  * (rows, open/deep-link, per-row dismiss), self-hides when empty, and fades in
  * Apple-style when the first notification arrives. The inbox container has no
- * card chrome of its own; each notification is a liquid-glass card and the
- * view-group eyebrows carry the structure.
+ * card chrome of its own; each notification is a liquid-glass card. Groups
+ * carry NO headers or dividers — the physical gap between card clusters is the
+ * only group structure (view-group labels survive as grouping keys and
+ * accessible names, never as rendered eyebrows).
  *
- * Two shade modes, toggled by a pull gesture (no buttons):
+ * Two shade modes:
  *
  *  - RESTED is triage, not a log: only interrupt-tier (`high`/`urgent`) rows
  *    show, and a view-group with several of them renders as a Z-stack — the
  *    highest-priority card on top, the rest peeking out beneath it (the iOS
- *    lock-screen stack idiom, stacked by priority). A quiet "N more" hint (not
- *    a button) names what's hidden.
+ *    lock-screen stack idiom, stacked by priority).
  *  - EXPANDED includes all priorities but preserves each view-group stack until
  *    the user fans that group out in place; the list is height-capped and
  *    scrolls internally.
  *
- *  Pulling DOWN on the shade (touch drag / mouse drag / wheel-up) while the
- *  list sits at its top toggles between the modes: at rest the pull expands;
- *  expanded, scrolling back up past the top compresses the shade again. A
- *  visually-hidden toggle button keeps the same transition reachable for
- *  keyboard and assistive tech.
+ * The transition is DIRECTIONAL, never a toggle: pulling DOWN (touch drag /
+ * mouse drag / trackpad fingers-down wheel) while the list sits at its top only
+ * EXPANDS the rested shade; pushing UP only COLLAPSES the expanded one. A
+ * same-direction gesture in the state it already produced is a no-op — this is
+ * what makes trackpad momentum safe (the old toggle re-fired on trailing
+ * momentum deltas and snapped the shade shut moments after opening it). The
+ * "N more" hint at the foot of the rested shade is a real button: clicking it
+ * expands, and its expanded twin ("Show less") collapses — the same transition
+ * for keyboard, AT, and anyone who prefers clicking to pulling.
+ *
+ * Stacks are independent of the shade: the pull/wheel gesture NEVER fans a
+ * stack, and a drag that starts on a stack still belongs to the shade. A stack
+ * fans out via a tap on its peeked cards and folds back via its own quiet
+ * "Show less" control; folding the whole shade folds every fanned stack too.
  *
  * Acknowledgement is the platform-shade model (iOS lock screen / Android
  * shade) with an expand step: tap opens the row's contextual option strip
@@ -81,7 +91,7 @@ const MAX_RENDERED_ROWS = 100;
 
 /**
  * Dampened overscroll travel (px) past the list top that commits the shade
- * mode toggle on release. The raw finger/mouse travel is roughly double
+ * mode change on release. The raw finger/mouse travel is roughly double
  * (see dampenPull); wheel deltas accumulate against the same threshold.
  */
 export const PULL_COMMIT_PX = 40;
@@ -89,11 +99,19 @@ export const PULL_COMMIT_PX = 40;
 /** Dead zone (px) before a vertical drag starts reading as a pull. */
 const PULL_SLOP_PX = 8;
 
+/**
+ * Per-event cap (px) on a wheel delta's contribution toward the COLLAPSE
+ * commit. Collapse shares its direction with ordinary downward scrolling, so
+ * one aggressive flick at the top of an overflowing list must never commit on
+ * its first event — with the cap, the commit needs at least two events with
+ * the list still at its top, and the first real scroll resets the run.
+ * Expansion has no such conflict (the list is already at its top) and stays
+ * uncapped.
+ */
+const WHEEL_COLLAPSE_STEP_PX = PULL_COMMIT_PX / 2;
+
 /** How many cards may peek out beneath a rested stack's top card. */
 const MAX_STACK_PEEKS = 2;
-
-/** Mouse travel (px) that fans a Z-stack out when swiping down over it. */
-const STACK_FAN_SWIPE_PX = 32;
 
 /** Vertical offset (px) each successive peek card protrudes beneath the top. */
 const STACK_PEEK_OFFSET_PX = 8;
@@ -171,7 +189,7 @@ ${liquidGlassRimCss(".eliza-notif-glass")}
   mask-image: linear-gradient(to bottom, black 0, black calc(100% - 1.25rem), transparent 100%);
 }
 .eliza-notif-scroll[data-fade-top][data-fade-bottom] {
-  mask-image: linear-gradient(to bottom, transparent 0, black 1.25rem, black calc(100% - 1.25rem), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, black 1.25rem, black calc(100% - 1.25rem), transparent 0);
 }
 @keyframes eliza-notif-row-in {
   from { opacity: 0; transform: translateY(-8px) scale(0.98); }
@@ -254,6 +272,8 @@ const CATEGORY_GROUP_LABELS: Record<NotificationCategory, string> = {
  * The shade groups rows by the VIEW a notification opens (its in-app deepLink
  * resolved through the tab model), the way a platform shade groups by app.
  * External links and link-less rows fall back to the producer-category label.
+ * The label is a grouping key and an accessible name only — it is never
+ * rendered as a header (the physical card clusters carry the structure).
  */
 export function notificationGroupLabel(n: AgentNotification): string {
   const link = n.deepLink;
@@ -334,10 +354,10 @@ export function notificationRowOptions(
  * Memoized (binding pattern, spec §C.4): the relative timestamp lives in a
  * `<RelativeTime>` leaf that owns the minute tick, so the row never re-renders
  * to keep "5m" honest. `arePropsEqual` compares the identity fields that drive
- * its markup: `id`, `title`, `body`, `deepLink`, `category` (options),
- * `data.count`, the single-open `expanded` flag, plus the callbacks (stable
- * via the parent's `useCallback`). `createdAt` is intentionally NOT compared:
- * it feeds only the leaf.
+ * its markup: `id`, `title`, `body`, `deepLink`, `category` (options), the
+ * single-open `expanded` flag, plus the callbacks (stable via the parent's
+ * `useCallback`). `createdAt` is intentionally NOT compared: it feeds only
+ * the leaf.
  */
 export function rowPropsEqual(
   prev: NotificationRowProps,
@@ -351,7 +371,6 @@ export function rowPropsEqual(
     a.body === b.body &&
     a.deepLink === b.deepLink &&
     a.category === b.category &&
-    a.data?.count === b.data?.count &&
     prev.expanded === next.expanded &&
     prev.onToggleExpand === next.onToggleExpand &&
     prev.onOpen === next.onOpen &&
@@ -394,7 +413,8 @@ export function __setNotificationsHomeCenterRenderObserverForTests(
  * acknowledges the row (it clears from the shade). Dragging the row
  * horizontally off the screen — mouse or touch — past {@link SWIPE_DISMISS_PX}
  * dismisses it; there is no corner X. The card carries the shared glass
- * recipe; its options are bare action text with no fill or border.
+ * recipe; its options are bare action text with no fill or border. The title
+ * line is title + relative time only — no count chip, no icon, no accent rail.
  */
 const NotificationRow = memo(function NotificationRow({
   notification,
@@ -510,13 +530,9 @@ const NotificationRow = memo(function NotificationRow({
     [clearGesture, commitDismiss],
   );
 
-  // §C.3 count-aware coalescing: a superseding same-groupKey notification carries
-  // data.count so the row reads "3 new files" via a small chip instead of the
-  // inbox silently keeping only the last of the batch. Only surfaced for N > 1.
-  const rawCount = notification.data?.count;
-  const count = typeof rawCount === "number" && rawCount > 1 ? rawCount : null;
-  // Lock-screen restraint: no per-row icon chip, no accent rail — a
-  // notification is its glass card, line + time, like an iOS lock note.
+  // Lock-screen restraint: no per-row icon chip, no accent rail, no count
+  // chip — a notification is its glass card, line + time, like an iOS lock
+  // note. Coalesced arrivals speak through their title/body, not a bare number.
   const dragging = swipeX !== 0 && !dismissing;
   const options = notificationRowOptions(notification);
   return (
@@ -577,15 +593,6 @@ const NotificationRow = memo(function NotificationRow({
             <span className="truncate text-sm font-semibold text-white">
               {notification.title}
             </span>
-            {count ? (
-              <span
-                data-testid="notification-count-chip"
-                className="shrink-0 rounded-full bg-white/14 px-1.5 text-2xs font-semibold tabular-nums leading-[1.15rem] text-white"
-              >
-                {count}
-                <span className="sr-only"> grouped notifications</span>
-              </span>
-            ) : null}
             <RelativeTime
               ts={notification.createdAt}
               short
@@ -650,9 +657,9 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
   // Single-open option strip: expanding one row collapses the others.
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   // Per-group stack expansion (iOS-shade idiom): a group fans out in place
-  // when its stack is tapped below the top card or swiped down, and folds back
-  // on an eyebrow tap / upward swipe. Independent of the shade toggle, so the
-  // expanded shade keeps its stacks too — the pull just reveals more groups.
+  // when its stack is tapped below the top card, and folds back via its own
+  // "Show less" control. Independent of the shade mode — the pull/wheel
+  // gesture reveals more GROUPS and never fans a stack.
   const [expandedStacks, setExpandedStacks] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -664,8 +671,9 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
       return next;
     });
   }, []);
-  // Dampened live pull (px). State drives the rubber-band transform; the ref
-  // mirrors it for the native touch listeners' commit path.
+  // Dampened live pull (px), SIGNED: positive is a downward pull (expand),
+  // negative an upward push (collapse). State drives the rubber-band
+  // transform; the ref mirrors it for the native touch listeners' commit path.
   const [pullPx, setPullPxState] = useState(0);
   const pullPxRef = useRef(0);
   // No list-level clock tick here (binding pattern, spec §C.4): relative
@@ -683,42 +691,46 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
     // first scrolled the list up to its top doesn't arrive already maxed.
     anchorY: number | null;
   } | null>(null);
-  const wheelPull = useRef(0);
-  // Idle-decay timer: a wheel-up accumulates toward the commit, but two nudges
-  // seconds apart must not sum into a surprise toggle — the accumulator resets
-  // after a short quiet period.
+  // Wheel accumulation toward a shade commit: one direction at a time; a
+  // direction flip abandons the previous run.
+  const wheelPull = useRef<{ dir: 1 | -1; px: number }>({ dir: 1, px: 0 });
+  // Idle-decay timer: a wheel run accumulates toward the commit, but two
+  // nudges seconds apart must not sum into a surprise transition — the
+  // accumulator resets after a short quiet period.
   const wheelDecayTimer = useRef<number | null>(null);
-  // Armed for a beat after a wheel toggle so trailing momentum deltas from the
-  // same flick can't double-toggle (flag + timeout, no clock reads).
-  const wheelCoolingDown = useRef(false);
-  // Mirrors whether the shade currently has more to reveal (rested) — the
-  // native touch listeners read it without re-binding on every data change.
-  const canExpandRef = useRef(false);
-  // In-flight mouse swipe-down on a Z-stack (fans the stack out). Touch keeps
-  // vertical drags for the scroller; touch fans via peek taps.
-  const stackFanGesture = useRef<{ key: string; startY: number } | null>(null);
+  // Mirrors what the shade can currently do, read by the native touch
+  // listeners and the wheel handler without re-binding on every data change.
+  // The two are mutually exclusive (expand only from rested-with-hidden-rows,
+  // collapse only from expanded), which is what makes the gestures directional
+  // instead of a toggle.
+  const shadeGestureRef = useRef({ canExpand: false, canCollapse: false });
 
   const setPullPx = useCallback((px: number) => {
     pullPxRef.current = px;
     setPullPxState(px);
   }, []);
 
-  const toggleShade = useCallback(() => {
-    setShadeExpanded((v) => !v);
+  const setShade = useCallback((expanded: boolean) => {
+    setShadeExpanded(expanded);
     setExpandedRowId(null);
-    if (shadeExpanded) {
+    if (!expanded) {
       // Folding the shade folds every fanned stack with it — the rested shade
       // always comes back in its compact triage form.
       setExpandedStacks(new Set());
     }
     // Both modes start reading from the top of the shade.
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
-  }, [shadeExpanded]);
+  }, []);
 
   const commitPull = useCallback(() => {
-    if (pullPxRef.current >= PULL_COMMIT_PX) toggleShade();
+    const px = pullPxRef.current;
+    const { canExpand, canCollapse } = shadeGestureRef.current;
+    // Directional: a downward pull only expands, an upward push only
+    // collapses. A gesture in the direction of the current state is a no-op.
+    if (px >= PULL_COMMIT_PX && canExpand) setShade(true);
+    else if (px <= -PULL_COMMIT_PX && canCollapse) setShade(false);
     setPullPx(0);
-  }, [setPullPx, toggleShade]);
+  }, [setPullPx, setShade]);
 
   // Maintain the edge-fade attributes from real scroll geometry. Runs on
   // scroll and whenever the row count changes (a dismiss can end the overflow).
@@ -772,7 +784,20 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
         start = null;
         return;
       }
-      if (el.scrollTop <= 0 && canExpandRef.current) {
+      const { canExpand, canCollapse } = shadeGestureRef.current;
+      if (dy < -PULL_SLOP_PX) {
+        // Upward push: the collapse gesture. The pan-y scroller owns an upward
+        // drag whenever it has content to scroll, so the shade only claims it
+        // when the expanded list has no overflow (the pan has nothing to do —
+        // no preventDefault needed either).
+        if (canCollapse && el.scrollHeight - el.clientHeight <= 1) {
+          setPullPx(-dampenPull(-dy));
+        } else if (pullPxRef.current !== 0) {
+          setPullPx(0);
+        }
+        return;
+      }
+      if (el.scrollTop <= 0 && canExpand) {
         if (anchorY === null) anchorY = t.clientY;
         const pull = t.clientY - anchorY;
         if (pull > PULL_SLOP_PX) {
@@ -797,7 +822,7 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
     };
     const onTouchCancel = () => {
       // An OS-cancelled gesture (incoming call, edge-gesture takeover, palm
-      // rejection) ABORTS: snap back to rest, never toggle the shade from a
+      // rejection) ABORTS: snap back to rest, never change the shade from a
       // gesture the user never completed.
       start = null;
       anchorY = null;
@@ -816,7 +841,7 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
   }, [commitPull, setPullPx, hasNotifications]);
 
   // Clear the wheel-decay timer on unmount (the only timer that outlives a
-  // single gesture; the cooldown is a one-shot).
+  // single gesture).
   useEffect(
     () => () => {
       if (wheelDecayTimer.current) window.clearTimeout(wheelDecayTimer.current);
@@ -865,41 +890,57 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
   }, [notifications.length, setPullPx]);
 
   // Hook placement: MUST stay above the empty-inbox early return below.
+  //
+  // The desktop shade gesture. DIRECTIONAL, never a toggle: fingers-down on
+  // the trackpad (deltaY < 0, natural scrolling) at the list top only EXPANDS
+  // the rested shade; fingers-up (deltaY > 0) at the top only COLLAPSES the
+  // expanded one. Trailing same-direction momentum after a commit is a no-op —
+  // the old toggle re-fired on momentum deltas and snapped the shade shut
+  // right after opening it (the "expands for a second" bug).
   const onListWheel = useCallback(
     (e: React.WheelEvent) => {
       const el = scrollRef.current;
-      if (!el || !canExpandRef.current || wheelCoolingDown.current) return;
-      // Wheel-up while the list already sits at its top is the desktop pull.
-      if (el.scrollTop > 0 || e.deltaY >= 0) {
-        wheelPull.current = 0;
+      if (!el) return;
+      // Away from the top the scroller owns every wheel event.
+      if (el.scrollTop > 0) {
+        wheelPull.current.px = 0;
         return;
       }
-      wheelPull.current += -e.deltaY;
+      const { canExpand, canCollapse } = shadeGestureRef.current;
+      const dir: 1 | -1 = e.deltaY < 0 ? 1 : -1;
+      if (dir === 1 ? !canExpand : !canCollapse) {
+        wheelPull.current.px = 0;
+        return;
+      }
+      if (wheelPull.current.dir !== dir) {
+        wheelPull.current = { dir, px: 0 };
+      }
+      // Collapse shares its direction with ordinary downward scrolling, so a
+      // single flick must never commit it on its first event (see
+      // WHEEL_COLLAPSE_STEP_PX); the first real scroll resets the run above.
+      wheelPull.current.px +=
+        dir === 1 ? -e.deltaY : Math.min(e.deltaY, WHEEL_COLLAPSE_STEP_PX);
       // A wheel gesture has no end event: decay the accumulator after a short
-      // quiet period so two separate nudges don't sum into a toggle.
+      // quiet period so two separate nudges don't sum into a transition.
       if (wheelDecayTimer.current) window.clearTimeout(wheelDecayTimer.current);
       wheelDecayTimer.current = window.setTimeout(() => {
-        wheelPull.current = 0;
+        wheelPull.current.px = 0;
       }, 220);
-      if (wheelPull.current >= PULL_COMMIT_PX) {
-        wheelPull.current = 0;
+      if (wheelPull.current.px >= PULL_COMMIT_PX) {
+        wheelPull.current.px = 0;
         if (wheelDecayTimer.current)
           window.clearTimeout(wheelDecayTimer.current);
-        wheelCoolingDown.current = true;
-        window.setTimeout(() => {
-          wheelCoolingDown.current = false;
-        }, 500);
-        toggleShade();
+        setShade(dir === 1);
       }
     },
-    [toggleShade],
+    [setShade],
   );
 
   if (notifications.length === 0) return null;
 
   // Cap rendered rows, filter to the rested (interrupt-tier) slice unless
   // expanded, then group by view: the cap keeps the always-cheap paint budget;
-  // grouping happens on the shown slice so headers never count against rows.
+  // grouping happens on the shown slice.
   const capped = orderDashboardNotifications(notifications).slice(
     0,
     MAX_RENDERED_ROWS,
@@ -911,7 +952,7 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
   // sub-interrupt rows plus the stacked-behind cards.
   const hiddenCount = shadeExpanded ? 0 : capped.length - groups.length;
   const canExpand = !shadeExpanded && hiddenCount > 0;
-  canExpandRef.current = canExpand || shadeExpanded;
+  shadeGestureRef.current = { canExpand, canCollapse: shadeExpanded };
 
   const onListPointerDown = (e: React.PointerEvent) => {
     if (e.pointerType !== "mouse" || !e.isPrimary) return;
@@ -940,7 +981,17 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
       if (g.axis === "y") e.currentTarget.setPointerCapture?.(e.pointerId);
     }
     if (g.axis !== "y") return;
-    if (el.scrollTop <= 0 && canExpandRef.current) {
+    const { canExpand: mayExpand, canCollapse } = shadeGestureRef.current;
+    if (dy < 0) {
+      // Upward drag: the collapse gesture. A mouse drag never scrolls the
+      // list, so it is measured from the gesture start — no top-crossing to
+      // re-anchor at, and no scroll position to respect.
+      if (canCollapse) setPullPx(dy < -PULL_SLOP_PX ? -dampenPull(-dy) : 0);
+      else if (pullPxRef.current !== 0) setPullPx(0);
+      return;
+    }
+    // Downward drag: the expand gesture, only from the list top.
+    if (el.scrollTop <= 0 && mayExpand) {
       if (g.anchorY === null) g.anchorY = e.clientY;
       const pull = e.clientY - g.anchorY;
       setPullPx(pull > PULL_SLOP_PX ? dampenPull(pull) : 0);
@@ -969,9 +1020,10 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
     >
       <style>{NOTIF_SCROLL_CSS}</style>
       <LiquidGlassRefractionDefs />
-      {/* No "Notifications" header, no sort toggle, no more/less buttons; the
-          inbox is always priority-triaged, the view-group eyebrows carry the
-          only structure, and the pull gesture owns expand/collapse. */}
+      {/* No "Notifications" header, no group eyebrows, no dividers: the
+          physical gaps between card clusters ARE the grouping. The directional
+          pull gesture and the "N more"/"Show less" button own the shade
+          transition. */}
       <ul
         ref={scrollRef}
         onScroll={syncEdgeFades}
@@ -983,8 +1035,9 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
         data-testid="home-notification-list"
         data-shade-mode={shadeExpanded ? "expanded" : "rested"}
         style={{
-          // Rubber-band while pulling; springs back (or into the new mode)
-          // on release. Transform-only, so the glass never repaints.
+          // Rubber-band while pulling (down) or pushing (up); springs back
+          // (or into the new mode) on release. Transform-only, so the glass
+          // never repaints.
           transform: pullPx ? `translateY(${pullPx}px)` : undefined,
           transition: pullPx
             ? "none"
@@ -993,7 +1046,7 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
         className={cn(
           // select-none: a mouse pull-drag must read as a gesture, not a text
           // selection sweep across the cards (platform-shade idiom).
-          "eliza-notif-scroll flex min-h-0 flex-1 select-none flex-col gap-2 overflow-y-auto overscroll-y-contain px-1.5 pb-1.5",
+          "eliza-notif-scroll flex min-h-0 flex-1 select-none flex-col gap-2 overflow-y-auto overscroll-y-contain px-1.5 pb-1.5 pt-1",
         )}
       >
         {groups.map((group) => {
@@ -1003,107 +1056,20 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
           const rows = stacked
             ? [group.rows[0] as AgentNotification]
             : group.rows;
-          const fanable = group.rows.length > 1;
+          const fanned = stackExpanded && group.rows.length > 1;
           return (
             <li key={group.label} className="flex flex-col gap-1.5">
-              {/* View group header (Apple-shade idiom: group by destination).
-                  A quiet eyebrow — and for multi-row groups, the fold/unfold
-                  control: tap (or swipe up over it) folds a fanned group back
-                  into its stack. */}
-              <button
-                type="button"
-                data-testid="notification-group-label"
-                data-notif-control=""
-                disabled={!fanable}
-                onClick={fanable ? () => toggleStack(group.label) : undefined}
-                aria-expanded={fanable ? stackExpanded : undefined}
-                aria-label={
-                  fanable
-                    ? stackExpanded
-                      ? `Collapse ${group.label} notifications`
-                      : `Expand ${group.label} notifications`
-                    : undefined
-                }
-                onPointerDown={(e) => {
-                  if (
-                    !fanable ||
-                    !stackExpanded ||
-                    e.pointerType !== "mouse" ||
-                    e.button !== 0
-                  ) {
-                    return;
-                  }
-                  stackFanGesture.current = {
-                    key: group.label,
-                    startY: e.clientY,
-                  };
-                }}
-                onPointerMove={(e) => {
-                  const g = stackFanGesture.current;
-                  if (!g || g.key !== group.label || !stackExpanded) return;
-                  // Mouse swipe UP over the fanned group's header folds it
-                  // back into its stack (mirror of the swipe-down fan-out).
-                  if (g.startY - e.clientY >= STACK_FAN_SWIPE_PX) {
-                    stackFanGesture.current = null;
-                    toggleStack(group.label);
-                  }
-                }}
-                onPointerUp={() => {
-                  stackFanGesture.current = null;
-                }}
-                className="flex min-h-touch items-center px-2 pb-0.5 pt-2 text-left text-2xs font-medium uppercase tracking-[0.08em] text-white/55 first:pt-1 disabled:pointer-events-none"
-              >
-                {group.label}
-                {fanable ? (
-                  <>
-                    <span
-                      data-testid="notification-stack-count"
-                      className="pl-1.5 normal-case tracking-normal text-white/40 tabular-nums"
-                    >
-                      {group.rows.length}
-                    </span>
-                    <ChevronDown
-                      aria-hidden
-                      className={cn(
-                        "ml-1 h-3 w-3 text-white/40 transition-transform",
-                        stackExpanded && "rotate-180",
-                      )}
-                    />
-                  </>
-                ) : null}
-              </button>
               {stacked ? (
                 // The Z-stack: the group's highest-priority card on top, the
                 // next cards peeking out beneath it — depth in Z, ordered by
                 // the same priority→recency order the fanned list uses.
-                // A mouse swipe DOWN on the stack fans it out (touch fans via
-                // a tap on the peeked cards — a touch vertical drag belongs to
-                // the shade scroller).
+                // Fanning is TAP-ONLY (the peeked cards are buttons): every
+                // vertical drag — including one starting on a stack — belongs
+                // to the shade's directional pull/scroll, so the stack has no
+                // drag handling of its own and pointer events bubble through.
                 <div
                   data-testid="notification-stack"
                   className="relative"
-                  onPointerDown={(e) => {
-                    if (e.pointerType !== "mouse" || e.button !== 0) return;
-                    e.stopPropagation();
-                    stackFanGesture.current = {
-                      key: group.label,
-                      startY: e.clientY,
-                    };
-                  }}
-                  onPointerMove={(e) => {
-                    const g = stackFanGesture.current;
-                    if (!g || g.key !== group.label) return;
-                    if (e.clientY - g.startY >= STACK_FAN_SWIPE_PX) {
-                      stackFanGesture.current = null;
-                      toggleStack(group.label);
-                    }
-                  }}
-                  onPointerUp={() => {
-                    stackFanGesture.current = null;
-                  }}
-                  onPointerCancel={() => {
-                    stackFanGesture.current = null;
-                  }}
                   style={{
                     paddingBottom: peeks.length * STACK_PEEK_OFFSET_PX,
                   }}
@@ -1162,29 +1128,31 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
                   ))}
                 </ul>
               )}
+              {fanned ? (
+                // A fanned group's fold-back control (the group headers are
+                // gone, so the group carries its own quiet "Show less").
+                <button
+                  type="button"
+                  data-testid="notification-stack-collapse"
+                  data-notif-control=""
+                  aria-label={`Collapse ${group.label} notifications`}
+                  onClick={() => toggleStack(group.label)}
+                  className="flex min-h-touch items-center justify-center gap-1 px-3 py-1 text-2xs font-medium text-white/45 transition-colors hover:text-white/80"
+                >
+                  <ChevronDown aria-hidden className="h-3 w-3 rotate-180" />
+                  Show less
+                </button>
+              ) : null}
             </li>
           );
         })}
-        {/* The rested shade names what it is hiding with a quiet hint — NOT a
-            button; the pull gesture owns the transition. A visually-hidden
-            toggle keeps the same transition reachable for keyboard/AT. */}
-        {canExpand ? (
-          <li
-            aria-hidden
-            data-testid="notifications-pull-hint"
-            className="pointer-events-none flex items-center justify-center gap-1 px-3 py-2 text-2xs font-medium text-white/50"
-          >
-            <ChevronDown
-              className={cn(
-                "h-3 w-3 transition-transform",
-                pullPx >= PULL_COMMIT_PX && "rotate-180",
-              )}
-            />
-            {hiddenCount} more
-          </li>
-        ) : null}
+        {/* The shade's click affordance for the same transition the gestures
+            own: rested it names what is hidden ("N more") and expands;
+            expanded it reads "Show less" and collapses. One real button —
+            keyboard, AT, and mouse users all get the transition without the
+            gesture. */}
         {canExpand || shadeExpanded ? (
-          <li>
+          <li className="flex">
             <button
               type="button"
               data-testid="notifications-expand-toggle"
@@ -1192,12 +1160,17 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
               // ContinuousChatOverlay's isAboveShellOverlay): this control
               // lives outside [data-notif-row] but must own its activation.
               data-notif-control=""
-              className="sr-only"
-              onClick={toggleShade}
+              onClick={() => setShade(!shadeExpanded)}
+              className="flex min-h-touch flex-1 items-center justify-center gap-1 px-3 py-2 text-2xs font-medium text-white/50 transition-colors hover:text-white/85"
             >
-              {shadeExpanded
-                ? "Show fewer notifications"
-                : `Show ${hiddenCount} more notifications`}
+              <ChevronDown
+                aria-hidden
+                className={cn(
+                  "h-3 w-3 transition-transform",
+                  (shadeExpanded || pullPx >= PULL_COMMIT_PX) && "rotate-180",
+                )}
+              />
+              {shadeExpanded ? "Show less" : `${hiddenCount} more`}
             </button>
           </li>
         ) : null}

@@ -2555,15 +2555,17 @@ extern "C" bool setNativeWindowDragRegion(void *windowPtr, double x,
 	return success;
 }
 
-/** Enables the macOS two-finger trackpad swipe back/forward history gesture on
- *  the window's WKWebView(s). WKWebView defaults
- *  allowsBackForwardNavigationGestures to NO and Electrobun never sets it, so
- *  the gesture is dead without this. Idempotent — TS re-calls it from the same
- *  restack passes as setNativeWindowDragRegion because Electrobun may insert
- *  WKWebView after the first pass. Uses NSClassFromString + KVC so this file
- *  keeps zero WebKit imports and the dylib needs no WebKit linkage. Returns
- *  true once at least one WKWebView received the flag. */
-extern "C" bool enableWindowBackForwardNavigationGestures(void *windowPtr) {
+/** Forces the macOS two-finger trackpad swipe back/forward history gesture OFF
+ *  on the window's WKWebView(s). WKWebView defaults
+ *  allowsBackForwardNavigationGestures to NO, but the shell owns horizontal
+ *  swipe UI (chat-sheet dismiss, pager row-swipes) that the native gesture
+ *  would hijack, so the flag is pinned NO explicitly rather than left to a
+ *  default that a future Electrobun/WebKit could flip. Idempotent — TS re-calls
+ *  it from the same restack passes as setNativeWindowDragRegion because
+ *  Electrobun may insert WKWebView after the first pass. Uses NSClassFromString
+ *  + KVC so this file keeps zero WebKit imports and the dylib needs no WebKit
+ *  linkage. Returns true once at least one WKWebView received the flag. */
+extern "C" bool disableWindowBackForwardNavigationGestures(void *windowPtr) {
 	if (windowPtr == nullptr) {
 		return false;
 	}
@@ -2589,14 +2591,14 @@ extern "C" bool enableWindowBackForwardNavigationGestures(void *windowPtr) {
 		// path hosts WKWebView inside a container subview of contentView.
 		for (NSView *sv in [contentView subviews]) {
 			if ([sv isKindOfClass:webViewClass]) {
-				[sv setValue:@YES
+				[sv setValue:@NO
 					  forKey:@"allowsBackForwardNavigationGestures"];
 				success = YES;
 				continue;
 			}
 			for (NSView *inner in [sv subviews]) {
 				if ([inner isKindOfClass:webViewClass]) {
-					[inner setValue:@YES
+					[inner setValue:@NO
 							 forKey:@"allowsBackForwardNavigationGestures"];
 					success = YES;
 				}

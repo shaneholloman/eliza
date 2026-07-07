@@ -240,8 +240,23 @@ export function useThreadAutoScroll<T extends HTMLElement = HTMLDivElement>({
 
     if (!firstPin && isNewLine && !reduceMotion) {
       // A new line while resting at the bottom glides into view rather than
-      // teleporting — once per turn, so no rAF coalescing is needed.
-      scrollToBottom(el, true);
+      // teleporting — once per turn, so no rAF coalescing is needed. But the
+      // glide must start from where the reader ACTUALLY sits, never sweep the
+      // whole conversation up from the top: a thread that was short enough to
+      // fit (mt-auto pins it at scrollTop 0 with no overflow) becomes scrollable
+      // the instant a new line overflows it, and a smooth scroll from 0 to the
+      // fresh bottom animates the entire scrollHeight — the reported "chat
+      // animates from the top down to the bottom" sweep. Cap the glide to a
+      // single viewport: a short hop to the new tail eases; a jump larger than
+      // the viewport (the was-short-now-overflowing case, or a huge single
+      // append) snaps so the follow always reads as "from here down."
+      const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+      const glideDistance = maxScrollTop - el.scrollTop;
+      if (glideDistance > el.clientHeight) {
+        el.scrollTop = el.scrollHeight;
+      } else {
+        scrollToBottom(el, true);
+      }
       lastGrowthHeightRef.current = el.scrollHeight;
       setAtBottom(true);
       return;

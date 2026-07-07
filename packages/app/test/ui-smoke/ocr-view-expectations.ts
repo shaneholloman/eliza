@@ -26,6 +26,7 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
       "Ask ",
       "Eliza",
       "Weather",
+      "Mostly clear",
       "Today",
       "Good evening",
       "Good morning",
@@ -94,7 +95,19 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
     ],
   },
   "builtin-memories": {
-    requireAny: ["No memories yet", "Facts", "Browse"],
+    // Include the high-contrast chrome ("Memories" title, Feed/Import tabs,
+    // "Filter by type") — on mobile-landscape the low-contrast muted tokens
+    // ("Browse", "No memories yet") fall below pixel-OCR confidence even
+    // though the view renders correctly, which false-failed the audit.
+    requireAny: [
+      "No memories yet",
+      "Facts",
+      "Browse",
+      "Memories",
+      "Feed",
+      "Import",
+      "Filter by type",
+    ],
   },
   "builtin-stream": {
     requireAny: ["Stream Ready", "GO LIVE", "Go Live", "OFFLINE"],

@@ -96,7 +96,7 @@ import {
 import { getDesktopManager } from "./native/desktop";
 import { disposeNativeModules, initializeNativeModules } from "./native/index";
 import {
-  enableBackForwardNavigationGestures,
+  disableBackForwardNavigationGestures,
   ensureShadow,
   setNativeDragRegion,
   setTrafficLightsPosition,
@@ -447,19 +447,20 @@ function applyMacOSWindowEffects(win: BrowserWindow): void {
       MAC_NATIVE_DRAG_REGION_X,
       MAC_NATIVE_DRAG_REGION_HEIGHT,
     );
-  // WKWebView defaults allowsBackForwardNavigationGestures to NO and
-  // Electrobun never sets it, so the macOS two-finger swipe-back gesture is
-  // dead without this. The webview is often inserted after the first pass, so
-  // the call rides the same restack cadence as the drag region (idempotent).
-  const enableSwipeBackGesture = () =>
-    enableBackForwardNavigationGestures(
-      ptr as Parameters<typeof enableBackForwardNavigationGestures>[0],
+  // The shell owns horizontal swipe UI (chat-sheet dismiss, pager row-swipes)
+  // that the macOS two-finger swipe-back/forward history gesture would hijack,
+  // so pin allowsBackForwardNavigationGestures OFF on every WKWebView. The
+  // webview is often inserted after the first pass, so the call rides the same
+  // restack cadence as the drag region (idempotent).
+  const disableSwipeBackGesture = () =>
+    disableBackForwardNavigationGestures(
+      ptr as Parameters<typeof disableBackForwardNavigationGestures>[0],
     );
 
   const alignChrome = () => {
     alignButtons();
     alignDragRegion();
-    enableSwipeBackGesture();
+    disableSwipeBackGesture();
   };
 
   alignChrome();

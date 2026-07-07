@@ -348,20 +348,24 @@ async function maximizeByPull(p, pointer = "mouse") {
 async function restoreFromMaximized(p, pointer = "mouse") {
   const zone = p.getByTestId("chat-maximize-restore-zone");
   await zone.waitFor();
+  // 120px keeps the released height inside the FULL detent's magnet
+  // (SHEET_DETENT_MAGNET below the inset ceiling), so the restore
+  // deterministically snaps to the inset FULL detent instead of free-resting a
+  // few px under the magnet edge (140px sat right on that boundary).
   if (pointer === "mouse") {
     const b = await zone.boundingBox();
     const cx = b.x + b.width / 2;
     const cy = b.y + Math.max(24, b.height - 24);
     await p.mouse.move(cx, cy);
     await p.mouse.down();
-    await p.mouse.move(cx, cy + 140, { steps: 8 });
+    await p.mouse.move(cx, cy + 120, { steps: 8 });
     await p.mouse.up();
   } else {
     const drag = await touchDragHold(
       p,
       testIdSelector("chat-maximize-restore-zone"),
       0,
-      140,
+      120,
       { steps: 8, stepDelayMs: 12 },
     );
     await drag.release();
@@ -852,76 +856,161 @@ async function runContinuumSuite(p, pointer, tag) {
   await snap(p, `${tag}-continuum-final-input`);
 }
 
+/** Effective panel scale — the pill↔input morph shrinks the whole fieldset
+ *  (transform scale toward bottom-center). Reads the independent `scale`
+ *  property or the transform matrix, whichever the motion runtime rendered. */
+const panelScale = (p) =>
+  p.evaluate(() => {
+    const el = document.querySelector('[data-testid="chat-sheet"]');
+    if (!el) return -1;
+    const cs = getComputedStyle(el);
+    if (cs.scale && cs.scale !== "none") return Number.parseFloat(cs.scale);
+    const m = cs.transform.match(/matrix\(([^,]+),/);
+    return m ? Number.parseFloat(m[1]) : 1;
+  });
+
 /**
- * MID-DRAG COMMIT — the sheet must expand/collapse WHILE the finger is still
- * down, not only on release. Holds each signature drag past its threshold and
- * asserts the committed state BEFORE releasing:
- *   1. pill → hold-drag to the top → data-maximized flips true mid-hold;
- *   2. FULL → hold-drag past the bottom → data-detent flips to "pill" mid-hold;
- *   3. reversal: after a mid-drag maximize, pulling back DOWN past the resume
- *      slop un-maximizes mid-hold (the commit is reversible in the same drag).
- * Real-touch hold-drags coalesce mid-gesture, so this runs mouse-only (the
- * commit thresholds themselves are engine-agnostic; runContinuumSuite already
- * proves the touch release path).
+ * HELD-DRAG TRACKING — the follow-the-pointer contract. While the finger is
+ * down NOTHING springs ahead of it: the sheet's height, the input↔pill morph
+ * (panel scale + capsule crossfade), and the maximize shape all sit exactly
+ * where the pointer put them, in both directions, across any number of
+ * reversals in one gesture. Discrete state (pill / detents / maximized)
+ * commits on RELEASE from the gesture's intent. Asserted mid-hold:
+ *   1. INPUT → hold-drag down: the input visibly scales down into the pill
+ *      capsule under the finger (scale → PILL_MORPH_MIN_SCALE, pill painted);
+ *   2. pill → hold-drag to the top: height == finger travel − PILL_OPEN_DISTANCE
+ *      (nothing sprang ahead; not yet maximized mid-hold on this geometry),
+ *      and RELEASING commits MAXIMIZED (the long-haul intent);
+ *   3. up→down→up reversals in ONE held gesture track 1:1 with zero drift and
+ *      still maximize on release at the top;
+ *   4. FULL → hold-drag past the bottom: the thread height drains to 0 and the
+ *      input→pill morph engages under the held finger; release lands PILL.
+ * Real-touch hold-drags coalesce mid-gesture, so this runs mouse-only
+ * (runContinuumSuite already proves the touch release path).
  */
 async function runMidDragCommitSuite(p, tag) {
   const vh = await viewportH(p);
-  // Start from the INPUT resting state; collapse to the pill first.
-  await gesture(p, -120, { pointer: "mouse", slow: false, steps: 2 });
+  const cx = (await p.evaluate(() => window.innerWidth)) / 2;
+
+  // (1) INPUT → held pull DOWN: the input↔pill morph tracks the finger.
+  assert(
+    (await detent(p)) === "collapsed",
+    `[${tag}-held] starts at the INPUT resting state`,
+  );
+  await gesture(p, -170, {
+    pointer: "mouse",
+    hold: true,
+    slow: true,
+    steps: 14,
+  });
+  await p.waitForTimeout(220);
+  const heldScale = await panelScale(p);
+  assert(
+    heldScale <= 0.55,
+    `[${tag}-held] input SCALES DOWN to the pill under the held finger (scale ${heldScale.toFixed(2)} ≤ 0.55)`,
+  );
+  assert(
+    (await effectivePillOpacity(p)) >= 0.85,
+    `[${tag}-held] pill capsule is painted under the held finger (crossfade tracked)`,
+  );
+  await snap(p, `${tag}-held-input-to-pill`);
+  await p.mouse.up();
   await p.waitForTimeout(SETTLE);
   assert(
     (await detent(p)) === "pill",
-    `[${tag}-middrag] collapsed to PILL to start`,
+    `[${tag}-held] releasing the tracked collapse lands on the PILL`,
   );
 
-  // (1) HOLD a long drag from the pill to near the top — do NOT release.
-  await gesture(p, vh - 40, {
+  // (2) PILL → held pull to the top: exact-follow, then maximize on release.
+  const pillBox = await p.getByTestId("chat-pill").boundingBox();
+  const grabY = pillBox.y + pillBox.height / 2;
+  const topY = 40;
+  await gesture(p, grabY - topY, {
     pointer: "mouse",
     hold: true,
     slow: true,
     steps: 26,
     target: "chat-pill",
   });
+  await p.waitForTimeout(220);
+  const expectedH = grabY - topY - 120; // travel minus the pill→input morph
+  const heldH = await sheetHeight(p);
+  assert(
+    near(heldH, expectedH, 30),
+    `[${tag}-held] pill→top hold: height tracks the finger exactly (${Math.round(heldH)}px ≈ ${Math.round(expectedH)}px)`,
+  );
+  assert(
+    (await p
+      .locator('[data-testid="chat-sheet"][data-maximized="true"]')
+      .count()) === 0,
+    `[${tag}-held] nothing springs ahead of the finger mid-hold (not yet maximized)`,
+  );
+  await snap(p, `${tag}-held-pill-to-top`);
+  await p.mouse.up();
+  await p.waitForTimeout(SETTLE);
+  assert(
+    (await p
+      .locator('[data-testid="chat-sheet"][data-maximized="true"]')
+      .count()) === 1 && (await detent(p)) === "full",
+    `[${tag}-held] RELEASING the long-haul pull commits MAXIMIZED`,
+  );
+
+  // Put the chat away again for the reversal leg (restore-strip drag down).
+  await restoreFromMaximized(p, "mouse");
+  await gesture(p, -(vh + 80), { pointer: "mouse", slow: true, steps: 20 });
+  await p.waitForTimeout(SETTLE);
+  assert(
+    (await detent(p)) === "pill",
+    `[${tag}-held] back on the PILL for the reversal leg`,
+  );
+
+  // (3) ONE held gesture, up → down → up: tracks 1:1 with no drift, and the
+  // release at the top still maximizes (the up-down-up regression case).
+  const pill2 = await p.getByTestId("chat-pill").boundingBox();
+  const grabY2 = pill2.y + pill2.height / 2;
+  await p.mouse.move(cx, grabY2);
+  await p.mouse.down();
+  const leg = async (toY, steps = 18) => {
+    await p.mouse.move(cx, toY, { steps });
+    await p.waitForTimeout(120);
+    return await sheetHeight(p);
+  };
+  const upH1 = await leg(topY);
+  assert(
+    near(upH1, grabY2 - topY - 120, 30),
+    `[${tag}-held] reversal leg 1 (up) tracks (${Math.round(upH1)}px)`,
+  );
+  const downH = await leg(grabY2);
+  assert(
+    near(downH, 0, 20),
+    `[${tag}-held] reversal leg 2 (down) returns to the bottom with NO drift (${Math.round(downH)}px ≈ 0)`,
+  );
+  const upH2 = await leg(topY);
+  assert(
+    near(upH2, grabY2 - topY - 120, 30),
+    `[${tag}-held] reversal leg 3 (up again) tracks identically (${Math.round(upH2)}px)`,
+  );
+  await p.mouse.up();
   await p.waitForTimeout(SETTLE);
   assert(
     (await p
       .locator('[data-testid="chat-sheet"][data-maximized="true"]')
       .count()) === 1,
-    `[${tag}-middrag] MAXIMIZES mid-drag from the pill (still holding, not released)`,
+    `[${tag}-held] releasing at the top after reversals still MAXIMIZES`,
   );
-  await snap(p, `${tag}-middrag-maximized-held`);
+  await snap(p, `${tag}-held-up-down-up-maximized`);
 
-  // (3) REVERSAL: still holding, drag back DOWN a short way — un-maximizes
-  // mid-drag (the finger reversed past the resume slop).
-  const pillBox0 = await p.getByTestId("chat-pill").boundingBox().catch(() => null);
-  void pillBox0;
-  // Move the held mouse back down ~200px from the top.
-  await p.mouse.move(
-    (await p.evaluate(() => window.innerWidth)) / 2,
-    240,
-    { steps: 12 },
-  );
-  await p.waitForTimeout(SETTLE);
+  // (4) tall OPEN sheet → held drag past the bottom: the thread drains and the
+  // input→pill morph engages under the held finger; release lands on the PILL.
+  // (The restore drag rests the sheet at a tall inset height — the drain leg
+  // only needs it open and un-maximized so the grabber is mounted.)
+  await restoreFromMaximized(p, "mouse");
   assert(
     (await p
       .locator('[data-testid="chat-sheet"][data-maximized="true"]')
-      .count()) === 0,
-    `[${tag}-middrag] pulling back down UN-maximizes mid-drag (reversible in the same gesture)`,
+      .count()) === 0 && (await variant(p)) === "open",
+    `[${tag}-held] restored to a tall INSET sheet for the drain leg`,
   );
-  await p.mouse.up();
-  await p.waitForTimeout(SETTLE);
-
-  // (2) Open to FULL, then HOLD a drag past the bottom — collapses to the pill
-  // mid-drag. Flick up twice to FULL for a known start.
-  await gesture(p, 160, { pointer: "mouse", slow: false, steps: 2 });
-  await p.waitForTimeout(SETTLE);
-  await gesture(p, 200, { pointer: "mouse", slow: false, steps: 2 });
-  await p.waitForTimeout(SETTLE);
-  assert(
-    (await detent(p)) === "full",
-    `[${tag}-middrag] opened to FULL for the collapse-mid-drag check`,
-  );
-  // Hold-drag the grabber all the way down past the bottom of the screen.
   await gesture(p, -(vh + 80), {
     pointer: "mouse",
     hold: true,
@@ -929,17 +1018,22 @@ async function runMidDragCommitSuite(p, tag) {
     steps: 28,
     target: "chat-sheet-grabber",
   });
-  await p.waitForTimeout(SETTLE);
+  await p.waitForTimeout(220);
   assert(
-    (await detent(p)) === "pill",
-    `[${tag}-middrag] COLLAPSES to the pill mid-drag from FULL (still holding)`,
+    near(await sheetHeight(p), 0, 20),
+    `[${tag}-held] FULL→bottom hold drains the whole thread height under the finger`,
   );
-  await snap(p, `${tag}-middrag-pill-held`);
+  const drainScale = await panelScale(p);
+  assert(
+    drainScale <= 0.7,
+    `[${tag}-held] the input→pill morph engages under the held finger (scale ${drainScale.toFixed(2)} ≤ 0.7)`,
+  );
+  await snap(p, `${tag}-held-full-drained`);
   await p.mouse.up();
   await p.waitForTimeout(SETTLE);
   assert(
     (await detent(p)) === "pill",
-    `[${tag}-middrag] stays PILL after releasing the committed collapse`,
+    `[${tag}-held] releasing the drained drag lands on the PILL`,
   );
 }
 
@@ -1352,8 +1446,10 @@ async function runAnimationAppearanceSuite(page) {
     `[appearance] open-sheet grabber bar is a LIGHT bar, not black (${JSON.stringify(grabberRgb)})`,
   );
 
-  // (1) Composer border is IDENTICAL in full-bleed and inset (no fullscreen-only
-  // border) — both transparent.
+  // (1) Composer chrome per state: INSET dissolves into the sheet (transparent
+  // border — one continuous glass surface, #10710); FULL-BLEED floats the
+  // composer as its own glass capsule with the resting input bar's hairline
+  // border, so the maximized chat's input reads like the default input.
   await maximizeByPull(page);
   const borderFull = await composerBorder();
   await restoreFromMaximized(page, "mouse");
@@ -1361,8 +1457,12 @@ async function runAnimationAppearanceSuite(page) {
   const cf = parseColor(borderFull);
   const ci = parseColor(borderInset);
   assert(
-    !!cf && !!ci && (cf.a ?? 1) < 0.02 && (ci.a ?? 1) < 0.02,
-    `[appearance] composer border identical (transparent) in full-bleed and inset (full=${borderFull}, inset=${borderInset})`,
+    !!cf && (cf.a ?? 1) > 0.2,
+    `[appearance] full-bleed composer carries the default input capsule border (full=${borderFull})`,
+  );
+  assert(
+    !!ci && (ci.a ?? 1) < 0.02,
+    `[appearance] inset composer stays borderless — one continuous glass sheet (inset=${borderInset})`,
   );
 
   // (3) Tapping to collapse ANIMATES (many stepped frames, no single-frame
@@ -1555,7 +1655,8 @@ try {
     await desktop.waitForTimeout(700);
     await runContinuumSuite(desktop, "mouse", "desktop");
 
-    // Fresh load: mid-drag commit (expand/collapse WHILE holding, not on release).
+    // Fresh load: held-drag tracking (nothing springs ahead of a held finger;
+    // pill/maximize state commits on release from the gesture's intent).
     await gotoFixture(desktop);
     await desktop.waitForSelector('[data-testid="chat-sheet"]');
     await desktop.waitForTimeout(700);
@@ -2780,14 +2881,14 @@ try {
       !(await headerShown(p)),
       "STATES: OPEN_UNDER_HALF hides the status header",
     );
-    // With the header hidden below half, the thread viewport must be inset below
-    // the floating grabber so the topmost line isn't tucked under the handle.
+    // The transcript runs to the panel's top edge at every inset height — no
+    // grabber inset, no top padding, no fade (the floating handle overlays it).
     const padBelowHalf = await p
       .getByTestId("chat-thread")
       .evaluate((el) => Number.parseFloat(getComputedStyle(el).paddingTop) || 0);
     assert(
-      padBelowHalf > 8,
-      `STATES: OPEN_UNDER_HALF insets the thread below the grabber (paddingTop ${padBelowHalf})`,
+      padBelowHalf <= 1,
+      `STATES: OPEN_UNDER_HALF thread runs to the panel top edge — no inset (paddingTop ${padBelowHalf})`,
     );
     await snap(p, "state-OPEN_UNDER_HALF");
 
@@ -3183,11 +3284,14 @@ try {
         .includes("sign in"),
       "ONBOARDING: composer placeholder points to sign-in (#15039; honest copy per #15206)",
     );
+    // Sign-in-first onboarding (#15339 supersedes the #12178 unlocked design):
+    // the composer is locked until the user signs in, matching the sign-in
+    // placeholder above and ContinuousChatOverlay.firstrun.test.tsx.
     assert(
       (await p
         .getByTestId("chat-composer-textarea")
-        .isEnabled()),
-      "ONBOARDING: composer textarea is unlocked (#12178)",
+        .isDisabled()),
+      "ONBOARDING: composer textarea is locked sign-in-first (#15339)",
     );
     await snap(p, "state-onboarding-full-screen");
 

@@ -74,10 +74,10 @@ function sanitizeCliLoginReturnTo(value: string | null): string | null {
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
     if (!isAllowedCliReturnHost(url.hostname)) return null;
     return url.toString();
-    } catch (error) {
-      void error;
-      return null;
-    }
+  } catch (error) {
+    void error;
+    return null;
+  }
 }
 
 function getPageState({

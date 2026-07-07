@@ -832,6 +832,69 @@ describe("ContinuousChatOverlay", () => {
     expect(sheet.getAttribute("data-variant")).toBe("closed");
   });
 
+  it("dismisses the OPEN sheet to the pill on a horizontal swipe (left), never navigating", () => {
+    render(<ContinuousChatOverlay controller={makeController()} />);
+    const sheet = screen.getByTestId("chat-sheet");
+    const grabber = screen.getByTestId("chat-sheet-grabber");
+
+    // Open the sheet first (tap → half detent).
+    fireEvent.pointerDown(grabber, { clientY: 420, pointerId: 1 });
+    fireEvent.pointerUp(grabber, { clientY: 420, pointerId: 1 });
+    expect(sheet.getAttribute("data-detent")).toBe("half");
+
+    // Drag the open chat sideways → dismiss to the pill (the put-the-chat-away
+    // landing) — NOT the home↔launcher rail nav the collapsed swipe means.
+    fireEvent.pointerDown(grabber, {
+      clientX: 260,
+      clientY: 200,
+      pointerId: 2,
+    });
+    fireEvent.pointerMove(grabber, {
+      clientX: 120,
+      clientY: 206,
+      pointerId: 2,
+    });
+    fireEvent.pointerUp(grabber, {
+      clientX: 120,
+      clientY: 206,
+      pointerId: 2,
+    });
+
+    expect(sheet.getAttribute("data-detent")).toBe("pill");
+    expect(sheet.getAttribute("data-variant")).toBe("closed");
+    expect(getShellSurface().page).toBe("home");
+  });
+
+  it("dismisses the OPEN sheet to the pill on a horizontal swipe (right) too", () => {
+    render(<ContinuousChatOverlay controller={makeController()} />);
+    const sheet = screen.getByTestId("chat-sheet");
+    const grabber = screen.getByTestId("chat-sheet-grabber");
+
+    fireEvent.pointerDown(grabber, { clientY: 420, pointerId: 1 });
+    fireEvent.pointerUp(grabber, { clientY: 420, pointerId: 1 });
+    expect(sheet.getAttribute("data-detent")).toBe("half");
+
+    fireEvent.pointerDown(grabber, {
+      clientX: 120,
+      clientY: 200,
+      pointerId: 2,
+    });
+    fireEvent.pointerMove(grabber, {
+      clientX: 280,
+      clientY: 206,
+      pointerId: 2,
+    });
+    fireEvent.pointerUp(grabber, {
+      clientX: 280,
+      clientY: 206,
+      pointerId: 2,
+    });
+
+    expect(sheet.getAttribute("data-detent")).toBe("pill");
+    expect(sheet.getAttribute("data-variant")).toBe("closed");
+    expect(getShellSurface().page).toBe("home");
+  });
+
   it("routes a grabber flick whose moves were coalesced into the release to the launcher (#9943)", () => {
     // REAL touch on a janked Android WebView delivers pointerdown → pointerup
     // with the whole travel between them (every pointermove coalesced away).

@@ -127,14 +127,13 @@ const IconTile = memo(function IconTile({ entry, onLaunch }: IconTileProps) {
           </span>
         ) : null}
       </div>
-      {/* 5.25rem, not the icon's 4rem: the narrowest grid cell (4 cols on a
-          ~380px phone) is ~85px, and the longest single-word label
-          ("Relationships", ~79px at 11px) cannot wrap at a word boundary — a
-          tighter cap clipped it mid-glyph (#14427). line-clamp-2 still wraps
-          multi-word labels. */}
+      {/* 5.5rem, not the icon's 4rem: the narrowest grid cell (4 cols on a
+          ~380px phone) leaves just enough room for the longest single-word
+          label while keeping OCR-readable 12px copy from clipping mid-glyph
+          (#14427). line-clamp-2 still wraps multi-word labels. */}
       <span
         className={cn(
-          "line-clamp-2 max-w-[5.25rem] text-center text-[11px] font-medium leading-tight",
+          "line-clamp-2 max-w-[5.5rem] text-center text-xs font-semibold leading-tight tracking-normal",
           WALLPAPER_TEXT.base,
           WALLPAPER_FLOAT_SHADOW,
         )}

@@ -13,6 +13,7 @@ import {
   dispatchCloudHandoffPhase,
 } from "../../events";
 import { loadPersistedActiveServer } from "../../state";
+import { runAgentSessionRecovery } from "../../state/agent-session-recovery-runner";
 import {
   clearPendingCloudHandoff,
   loadPendingCloudHandoff,
@@ -20,7 +21,6 @@ import {
   savePendingCloudHandoff,
 } from "./pending-handoff-store";
 import { runCloudAgentHandoff } from "./run-cloud-agent-handoff";
-import { runAgentSessionRecovery } from "../../state/agent-session-recovery-runner";
 
 let resumeAttemptedThisSession = false;
 /**

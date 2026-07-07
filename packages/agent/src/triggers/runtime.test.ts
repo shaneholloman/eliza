@@ -505,17 +505,55 @@ describe("executeTriggerTask", () => {
     expect(handle.updatedTasks).toHaveLength(1);
   });
 
-  it("reports an error when the WORKFLOW_DISPATCH service is absent", async () => {
-    handle.setWorkflowServicePresent(false);
-    const task = makeTriggerTask({ triggerType: "interval" });
+  it("reports an error when the WORKFLOW_DISPATCH service never registers (bounded wait)", async () => {
+    // The dispatcher lookup waits out the deferred-boot window before giving
+    // up, so the absent-service verdict only lands after the bounded wait.
+    vi.useFakeTimers();
+    try {
+      handle.setWorkflowServicePresent(false);
+      const task = makeTriggerTask({ triggerType: "interval" });
 
-    const result = await executeTriggerTask(handle.runtime, task, {
-      source: "scheduler",
-    });
+      const pending = executeTriggerTask(handle.runtime, task, {
+        source: "scheduler",
+      });
+      await vi.advanceTimersByTimeAsync(16_000);
+      const result = await pending;
 
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("WORKFLOW_DISPATCH");
-    expect(handle.dispatchCalls).toHaveLength(0);
+      expect(result.status).toBe("error");
+      expect(result.error).toContain("workflow subsystem unavailable");
+      expect(handle.dispatchCalls).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for a dispatcher that registers during the deferred-boot window (no spurious failure)", async () => {
+    // plugin-workflow loads in the deferred boot phase; a trigger firing
+    // before its init must wait for the registration instead of emitting an
+    // 'Automation failed' notification for a race that resolves itself.
+    vi.useFakeTimers();
+    try {
+      handle.setWorkflowServicePresent(false);
+      const task = makeTriggerTask({ triggerType: "interval" });
+
+      const pending = executeTriggerTask(handle.runtime, task, {
+        source: "scheduler",
+      });
+      await vi.advanceTimersByTimeAsync(2_000);
+      handle.setWorkflowServicePresent(true);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await pending;
+
+      expect(result.status).toBe("success");
+      expect(handle.dispatchCalls).toHaveLength(1);
+      expect(
+        handle.notifyCalls.filter((n) =>
+          String(n.title ?? "").includes("failed"),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("skips a task with no trigger config", async () => {

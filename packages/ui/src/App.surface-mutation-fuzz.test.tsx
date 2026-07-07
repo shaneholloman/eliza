@@ -38,8 +38,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BuiltinTab } from "./navigation";
 import type { BackgroundConfig } from "./state/ui-preferences";
 import {
-  SurfaceRealmDeniedError,
   getActiveSurfaceRealmScope,
+  SurfaceRealmDeniedError,
   surfaceViewStoragePrefix,
 } from "./surface-realm-broker";
 import { shellHistory, shellLocalStorage } from "./surface-realm-channel";
@@ -175,6 +175,7 @@ vi.mock("./hooks", () => ({
     saveCommandText: "",
   }),
   useMediaQuery: () => false,
+  useDocumentVisibility: () => true,
   useRenderGuard: vi.fn(),
   useIntervalWhenDocumentVisible: () => {},
 }));
@@ -589,12 +590,17 @@ describe("App in-process host-realm mutation isolation (#14179)", () => {
           window.localStorage.getItem(SHELL_STORAGE_KEY),
           `${route.path}: shell storage key intact after raw attack`,
         ).toBe(SHELL_STORAGE_VALUE);
-        // A raw clear() from a view path wipes its own reach, never shell keys.
-        window.localStorage.setItem("junk-non-reserved", "x");
+        // A raw clear() from a view path wipes its own reach, never shell keys:
+        // a storage-granted view reaches host non-reserved keys, while an
+        // ungranted view reaches only its own namespaced keyspace.
+        const rawClearKey = grantsStorage
+          ? "junk-non-reserved"
+          : `${surfaceViewStoragePrefix(scope.viewId)}junk-non-reserved`;
+        window.localStorage.setItem(rawClearKey, "x");
         window.localStorage.clear();
         expect(
-          window.localStorage.getItem("junk-non-reserved"),
-          `${route.path}: raw clear removed non-reserved keys`,
+          window.localStorage.getItem(rawClearKey),
+          `${route.path}: raw clear removed reachable non-reserved keys`,
         ).toBeNull();
         expect(
           window.localStorage.getItem(SHELL_STORAGE_KEY),

@@ -4916,18 +4916,44 @@ export class ElizaSandboxService {
     newContainerName?: string;
     newDigest?: string | null;
     error?: string;
+    /**
+     * True when this failure is ROLLBACK-SAFE: the OLD container was never torn
+     * down (or was confirmed alive) and is still serving traffic, so the upgrade
+     * failed WITHOUT taking the agent down. The permanent-failure writeback must
+     * NOT mark such a sandbox terminal — doing so makes the dedicated proxy
+     * reject live traffic (dedicated-agent-proxy.ts) and exposes the still-live
+     * container to the orphan reconciler (docker-node-workloads.ts). Undefined
+     * on success. `false` means the agent is genuinely not serving on the old
+     * container (e.g. it was already not running), so the terminal error
+     * writeback is correct.
+     *
+     * INVARIANT: every `success:false` path in executeUpgrade below returns
+     * before the atomic swap commits, so the OLD container is untouched — the
+     * blue/health/digest/runtime/snapshot/swap-failure paths all tear down ONLY
+     * the freshly-provisioned blue and leave old alive. The only genuinely-dead
+     * outcome is `Agent not running` (old already not serving); `Agent not
+     * found` is intercepted upstream by completeIfAgentGone and never reaches
+     * the writeback. See #15357 / lalalune's #15311 review.
+     */
+    rolledBack?: boolean;
   }> {
     const agent = await agentSandboxesRepository.findByIdAndOrg(agentId, orgId);
     if (!agent) return { success: false, error: "Agent not found" };
     if (agent.status !== "running") {
+      // Genuinely-dead: the old container is not serving (status is not
+      // running), so the terminal error writeback is correct here.
       return {
         success: false,
+        rolledBack: false,
         error: `Agent not running (status: ${agent.status})`,
       };
     }
     if (!agent.node_id || !agent.container_name) {
+      // Shared-runtime / web-only row: nothing was torn down. The old serving
+      // path is untouched. (These are already excluded by the reconciler.)
       return {
         success: false,
+        rolledBack: true,
         error: "Agent has no node_id or container_name to upgrade from",
       };
     }
@@ -4940,8 +4966,10 @@ export class ElizaSandboxService {
     // re-provisions on the target image+digest, so moving a fleet-managed agent
     // to the current default is safe regardless of its current tag.
     if (agent.docker_image && imageRepo(agent.docker_image) !== imageRepo(dockerImage)) {
+      // Refusal before any container work: old container is untouched and live.
       return {
         success: false,
+        rolledBack: true,
         error: "Agent uses a custom docker image; refusing fleet upgrade",
       };
     }
@@ -4951,8 +4979,12 @@ export class ElizaSandboxService {
     const oldSandboxId = agent.sandbox_id;
     const oldNode = await dockerNodesRepository.findByNodeId(oldNodeId);
     if (!oldNode) {
+      // We could not resolve the old node to do a blue provision, but we did NOT
+      // touch the old container — it is still running wherever it was. Treat as
+      // rollback-safe: the agent keeps serving on the old container.
       return {
         success: false,
+        rolledBack: true,
         error: `Old node ${oldNodeId} not registered in docker_nodes`,
       };
     }
@@ -4960,8 +4992,10 @@ export class ElizaSandboxService {
     const provider = await this.getProvider();
     const { DockerSandboxProvider } = await import("./docker-sandbox-provider");
     if (!(provider instanceof DockerSandboxProvider)) {
+      // No container work happened; old container is untouched and live.
       return {
         success: false,
+        rolledBack: true,
         error: "Fleet upgrade only supported on docker provider",
       };
     }
@@ -4997,6 +5031,7 @@ export class ElizaSandboxService {
     } catch (err) {
       return {
         success: false,
+        rolledBack: true,
         oldNodeId,
         oldContainerName,
         error: `Blue provision failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -5015,6 +5050,7 @@ export class ElizaSandboxService {
       }
       return {
         success: false,
+        rolledBack: true,
         oldNodeId,
         oldContainerName,
         error: "Blue health check failed; rolled back to old container",
@@ -5036,6 +5072,7 @@ export class ElizaSandboxService {
       }
       return {
         success: false,
+        rolledBack: true,
         oldNodeId,
         oldContainerName,
         error: "Blue provisioner returned non-docker metadata",
@@ -5050,6 +5087,7 @@ export class ElizaSandboxService {
       );
       return {
         success: false,
+        rolledBack: true,
         oldNodeId,
         oldContainerName,
         error: `Blue image digest mismatch: expected ${toDigest}, got ${blueMeta.imageDigest}`,
@@ -5069,6 +5107,7 @@ export class ElizaSandboxService {
       );
       return {
         success: false,
+        rolledBack: true,
         oldNodeId,
         oldContainerName,
         error: `Blue runtime readiness gate failed: ${runtimeHealth.error}`,
@@ -5093,6 +5132,7 @@ export class ElizaSandboxService {
       );
       return {
         success: false,
+        rolledBack: true,
         oldNodeId,
         oldContainerName,
         error: `Pre-upgrade snapshot failed: ${preUpgradeSnapshot.error ?? "unknown error"}`,
@@ -5110,7 +5150,19 @@ export class ElizaSandboxService {
           current.container_name !== oldContainerName ||
           current.sandbox_id !== oldSandboxId ||
           current.image_digest !== fromDigest ||
-          (current.docker_image && current.docker_image !== dockerImage)
+          // The docker_image leg of this CAS exists to catch one concurrent
+          // COMPETING change: the agent being repointed at a custom image (a
+          // DIFFERENT repo) while the blue provisioned — adopting the blue
+          // would clobber that user choice. It must NOT demand textual ref
+          // equality: selection admits any tag/digest/empty pin of the fleet
+          // repo (#15101 repo-match), so an exact-string compare abandoned
+          // every selected sha-pinned or empty-pinned row AFTER the full blue
+          // provision + snapshot, exhausted the job's retries, and the
+          // exhaustion marker then froze the agent out of all future upgrades
+          // (#15358). Mirror the selection/pre-provision semantics — abandon
+          // only on a real repo change; the digest/node/container/sandbox legs
+          // above still detect every other concurrent mutation.
+          (current.docker_image && imageRepo(current.docker_image) !== imageRepo(dockerImage))
         ) {
           return false;
         }
@@ -5127,7 +5179,8 @@ export class ElizaSandboxService {
             headscale_ip = ${blueMeta.headscaleIp ?? null},
             image_digest = ${toDigest},
             previous_image_digest = ${fromDigest},
-            previous_docker_image = ${current.docker_image ?? dockerImage},
+            previous_docker_image = ${current.docker_image || dockerImage},
+            error_message = NULL,
             last_heartbeat_at = NOW(),
             updated_at = NOW()
           WHERE id = ${agentId}
@@ -5154,6 +5207,7 @@ export class ElizaSandboxService {
       );
       return {
         success: false,
+        rolledBack: true,
         oldNodeId,
         oldContainerName,
         error: `Atomic swap UPDATE failed: ${errMsg}`,
@@ -5278,7 +5332,7 @@ export class ElizaSandboxService {
       };
     }
 
-    const rollbackImage = agent.previous_docker_image ?? dockerImage;
+    const rollbackImage = agent.previous_docker_image || dockerImage;
     // Materialize at-rest-encrypted BYO secrets before container create (#11332).
     const rollbackEnv = await decryptAgentEnvVars(
       (agent.environment_vars as Record<string, string>) ?? {},
@@ -5427,7 +5481,12 @@ export class ElizaSandboxService {
           current.container_name !== oldContainerName ||
           current.sandbox_id !== oldSandboxId ||
           current.image_digest !== fromDigest ||
-          (current.docker_image && current.docker_image !== dockerImage)
+          // Same repo-match semantics as the upgrade swap's CAS above: this
+          // leg detects a concurrent repoint at a DIFFERENT repo, not textual
+          // pin drift within the fleet repo (an empty or tag/digest-pinned
+          // docker_image on the same repo is still the fleet image — #15101,
+          // #15358). `dockerImage` here is the recorded rollback ref.
+          (current.docker_image && imageRepo(current.docker_image) !== imageRepo(dockerImage))
         ) {
           return false;
         }

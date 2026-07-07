@@ -190,17 +190,17 @@ for (const [name, width, height] of [
   // unstyled tree). Skipped when the runtime couldn't be fetched.
   if (tailwindJs) {
     await page.waitForFunction(() => {
-      const label = document.querySelector(
-        '[data-testid="notification-group-label"]',
-      );
-      return !!label && getComputedStyle(label).textTransform === "uppercase";
+      const row = document.querySelector('[data-testid="notification-row"]');
+      // The row button carries `text-left`; buttons default to center, so a
+      // left alignment proves the JIT styles landed.
+      return !!row && getComputedStyle(row).textAlign === "left";
     });
   }
   await page.waitForTimeout(200);
 
   // 1. RESTED: interrupt triage — the task group is a Z-stack (urgent on top,
-  //    two glass peeks), the solo system row is flat, the rest hides behind a
-  //    passive "N more" hint. No more/less buttons anywhere.
+  //    two glass peeks, no header eyebrow), the solo system row is flat, the
+  //    rest hides behind the "N more" button.
   check("rested mode", (await shadeMode(page)) === "rested");
   check(
     "two interactive cards at rest (stack top + solo)",
@@ -218,26 +218,21 @@ for (const [name, width, height] of [
       2,
   );
   check(
-    "stack count names the group size",
+    "no group header eyebrows / stack counts",
+    (await page
+      .locator('[data-testid="notification-group-label"]')
+      .count()) === 0 &&
+      (await page
+        .locator('[data-testid="notification-stack-count"]')
+        .count()) === 0,
+  );
+  check(
+    'the "N more" button counts the hidden rows',
     (
       await page
-        .locator('[data-testid="notification-stack-count"]')
+        .locator('[data-testid="notifications-expand-toggle"]')
         .textContent()
-    )?.trim() === "3",
-  );
-  check(
-    "passive pull hint counts the hidden rows",
-    (
-      await page.locator('[data-testid="notifications-pull-hint"]').textContent()
     )?.includes("5 more"),
-  );
-  check(
-    "no show-all / show-less buttons",
-    (await page.locator('[data-testid="notifications-show-all"]').count()) ===
-      0 &&
-      (await page
-        .locator('[data-testid="notifications-show-less"]')
-        .count()) === 0,
   );
   check(
     "hidden tier not visible at rest",
@@ -280,11 +275,19 @@ for (const [name, width, height] of [
     (await page.locator('[data-testid="notification-stack-peek"]').count()) >
       0,
   );
-  // Fan every multi-row group via its eyebrow (the peek sliver taps too).
-  for (const label of await page
-    .locator('[data-testid="notification-group-label"]:not([disabled])')
-    .all()) {
-    await label.click();
+  // Fan every multi-row group via its peeked cards (headers are gone). Only
+  // the peek's bottom sliver protrudes beneath the top card, so click there —
+  // a center click would land on the card covering it.
+  while (
+    (await page.locator('[data-testid="notification-stack-peek"]').count()) > 0
+  ) {
+    const peek = page
+      .locator('[data-testid="notification-stack-peek"]')
+      .first();
+    const peekBox = await peek.boundingBox();
+    await peek.click({
+      position: { x: peekBox.width / 2, y: peekBox.height - 3 },
+    });
   }
   check("all seven rows visible", (await page.locator(ROW).count()) === 7);
   check(
@@ -364,21 +367,34 @@ for (const [name, width, height] of [
   });
   console.log(`  📸 notifications-${name}-after-swipe.png`);
 
-  // 5. SCROLL BACK UP TO COLLAPSE: wheel-up while the list sits at its top
-  //    compresses the shade back to triage.
+  // 5. DIRECTIONAL COLLAPSE: fingers-up (positive wheel deltas) at the top
+  //    compresses the shade back to triage; fingers-down (negative) while
+  //    expanded is a no-op — the gesture is directional, so trailing trackpad
+  //    momentum can never snap the shade shut right after opening it.
   const listBox = await page.locator(LIST).boundingBox();
   await page.mouse.move(
     listBox.x + listBox.width / 2,
     listBox.y + listBox.height / 3,
   );
   await page.mouse.wheel(0, -80);
+  await page.waitForTimeout(120);
+  check(
+    "fingers-down while expanded does NOT collapse (momentum-proof)",
+    (await shadeMode(page)) === "expanded",
+  );
+  // Collapse contributions are per-event capped, so it takes a sustained
+  // fingers-up run (several events) to commit.
+  for (let i = 0; i < 4; i++) {
+    await page.mouse.wheel(0, 30);
+    await page.waitForTimeout(30);
+  }
   await page.waitForFunction(
     (sel) =>
       document.querySelector(sel)?.getAttribute("data-shade-mode") === "rested",
     LIST,
   );
   check(
-    "wheel-up at the top collapses back to triage",
+    "fingers-up at the top collapses back to triage",
     (await shadeMode(page)) === "rested",
   );
 

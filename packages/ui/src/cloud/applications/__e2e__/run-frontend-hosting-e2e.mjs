@@ -56,8 +56,17 @@ function assert(cond, msg) {
 // ---------------------------------------------------------------------------
 
 const pgdata = mkdtempSync(join(tmpdir(), "w3-hosting-visual-pg-"));
+// Resolve @elizaos/* from source (no dist build needed in a fresh checkout) so
+// the spawned migrate and cloud-api-hono-dev subprocesses reach plugin-sql's
+// peer dependency on core — same trick as run-slop-removal-e2e.mjs /
+// packages/test/cloud-e2e/playwright.config.ts.
+const bunSourceCondition = "--conditions=eliza-source";
+const bunOptions = process.env.BUN_OPTIONS?.includes(bunSourceCondition)
+  ? process.env.BUN_OPTIONS
+  : `${process.env.BUN_OPTIONS ?? ""} ${bunSourceCondition}`.trim();
 const stackEnv = {
   ...process.env,
+  BUN_OPTIONS: bunOptions,
   MOCK_REDIS: "1",
   DATABASE_URL: `pglite://${pgdata}`,
   API_DEV_PORT: String(API_PORT),
@@ -157,41 +166,159 @@ const cssResult = await postcss([tailwindPostcss()]).process(cssEntry, {
 const css = cssResult.css;
 
 console.log("== bundle fixture ==");
-// packages/ui/tsconfig.json aliases @elizaos/* → workspace src (the Node
-// graph). Hand esbuild a bare tsconfig so package `exports` "browser"
-// conditions resolve instead (e.g. @elizaos/core → dist/browser).
+// Resolve @elizaos/* from source (fresh checkout has no dist) and self-bundle
+// the shipped dashboard tab for the browser — same recipe as the sibling
+// run-slop-removal-e2e.mjs harness.
 const bareTsconfig = join(outDir, "esbuild-tsconfig.json");
 await writeFile(bareTsconfig, JSON.stringify({ compilerOptions: {} }));
+
+// Under iife, esbuild's __require shim throws at module-eval time for node
+// builtins that never actually run in the browser — stub them all with inert
+// modules (concrete named exports are required: esbuild's CJS interop copies
+// own props).
+const nodeStubPlugin = {
+  name: "node-builtin-stub",
+  setup(pluginBuild) {
+    const filter =
+      /^(node:.*|fs|fs\/promises|dns\/promises|http|https|path|stream|constants|os|crypto|util|assert|events|url|buffer|child_process|tty|module|fs-extra|graceful-fs|jsonfile|worker_threads|zlib|net|tls|dns|readline|v8|vm|perf_hooks|async_hooks|string_decoder|querystring|punycode|domain|dgram|cluster|repl|inspector|trace_events|wasi|diagnostics_channel)$/;
+    pluginBuild.onResolve({ filter }, (args) => ({
+      path: args.path,
+      namespace: "node-stub",
+    }));
+    pluginBuild.onLoad({ filter: /.*/, namespace: "node-stub" }, () => ({
+      contents: `function anyfn() { return anyfn; }
+export default anyfn;
+export const createRequire = () => anyfn;
+export const homedir = anyfn;
+export const tmpdir = anyfn;
+export const platform = anyfn;
+export const isAbsolute = anyfn;
+export const join = anyfn;
+export const resolve = anyfn;
+export const dirname = anyfn;
+export const basename = anyfn;
+export const extname = anyfn;
+export const sep = "/";
+export const createHash = () => ({ update: () => ({ digest: () => "" }) });
+export const randomBytes = anyfn;
+export const randomUUID = () => "00000000-0000-0000-0000-000000000000";
+export const createHmac = () => ({ update: () => ({ digest: () => "" }) });
+export const timingSafeEqual = () => false;
+export const createCipheriv = anyfn;
+export const createDecipheriv = anyfn;
+export const pbkdf2Sync = anyfn;
+export const scryptSync = anyfn;
+export const realpathSync = anyfn;
+export const renameSync = anyfn;
+export const Buffer = {
+  from: () => ({}),
+  isBuffer: () => false,
+  alloc: () => ({}),
+  byteLength: () => 0,
+};
+export const promises = {};
+export const existsSync = () => false;
+export const readFileSync = anyfn;
+export const writeFileSync = anyfn;
+export const mkdirSync = anyfn;
+export const readdirSync = () => [];
+export const statSync = anyfn;
+export const EventEmitter = class {};
+export const fileURLToPath = anyfn;
+export const pathToFileURL = anyfn;
+export const lookup = anyfn;
+export const request = anyfn;
+export const execFile = anyfn;
+export const exec = anyfn;
+export const promisify = () => anyfn;
+export const readFile = anyfn;
+export const readlink = anyfn;
+export const rename = anyfn;
+export const rm = anyfn;
+export const symlink = anyfn;
+export const unlink = anyfn;
+export const writeFile = anyfn;
+export const mkdir = anyfn;
+export const stat = anyfn;
+export const readdir = () => [];
+export const isIP = () => 0;
+export const statfsSync = anyfn;
+export const cp = anyfn;
+export const unlinkSync = anyfn;
+export class AsyncLocalStorage {
+  run(_store, fn, ...args) {
+    return fn(...args);
+  }
+  getStore() {
+    return undefined;
+  }
+}`,
+      loader: "js",
+    }));
+  },
+};
+
+// Not every @elizaos/{shared,ui} subpath export carries the `eliza-source`
+// condition — several map only to dist/, which does not exist in a fresh
+// checkout. Resolve them straight into the package sources.
+const elizaSourceAliasPlugin = {
+  name: "eliza-source-alias",
+  setup(pluginBuild) {
+    pluginBuild.onResolve(
+      { filter: /^@elizaos\/(shared|ui)(\/.*)?$/ },
+      async (args) => {
+        if (args.namespace === "eliza-source-alias") return undefined;
+        const m = args.path.match(/^@elizaos\/(shared|ui)(?:\/(.*))?$/);
+        const pkgSrc = join(repoRoot, "packages", m[1], "src");
+        const sub = m[2] ?? "index";
+        return pluginBuild.resolve(`./${sub}`, {
+          resolveDir: pkgSrc,
+          kind: args.kind,
+          namespace: "eliza-source-alias",
+        });
+      },
+    );
+  },
+};
+
+// Optional wallet-connector deps that wagmi lazily requires but which are not
+// installed (and never execute in this harness) — stub them inert.
+const optionalDepStubPlugin = {
+  name: "optional-dep-stub",
+  setup(pluginBuild) {
+    const filter = /^(@metamask\/connect-evm|@base-org\/account|@safe-global\/safe-apps-sdk|@safe-global\/safe-apps-provider|cbw-sdk|porto(\/.*)?)$/;
+    pluginBuild.onResolve({ filter }, (args) => ({
+      path: args.path,
+      namespace: "optional-dep-stub",
+    }));
+    pluginBuild.onLoad(
+      { filter: /.*/, namespace: "optional-dep-stub" },
+      () => ({
+        contents: "export default {};",
+        loader: "js",
+      }),
+    );
+  },
+};
+
 const bundle = await build({
   entryPoints: [join(here, "frontend-hosting-fixture.tsx")],
   bundle: true,
   format: "iife",
   platform: "browser",
   jsx: "automatic",
-  loader: { ".tsx": "tsx", ".ts": "ts" },
-  define: { "process.env.NODE_ENV": '"production"' },
+  loader: { ".tsx": "tsx", ".ts": "ts", ".css": "empty" },
+  // Resolve @elizaos/* package exports from source — the fresh-checkout dist
+  // does not exist (same condition the cloud-e2e runner passes to bun).
+  conditions: ["eliza-source"],
+  define: {
+    "process.env.NODE_ENV": '"production"',
+    // iife leaves import.meta empty; a few sources read import.meta.env
+    // without optional chaining. Point it at a page-provided empty object.
+    "import.meta.env": "globalThis.__VITE_ENV__",
+  },
   tsconfig: bareTsconfig,
-  // @elizaos/core's browser dist keeps Node deps behind lazy requires that
-  // never execute in the browser; leave them as unbundled externals.
-  external: [
-    "node:*",
-    "fs",
-    "path",
-    "stream",
-    "constants",
-    "os",
-    "crypto",
-    "util",
-    "assert",
-    "events",
-    "url",
-    "buffer",
-    "child_process",
-    "tty",
-    "fs-extra",
-    "graceful-fs",
-    "jsonfile",
-  ],
+  plugins: [elizaSourceAliasPlugin, nodeStubPlugin, optionalDepStubPlugin],
   write: false,
 });
 const js = bundle.outputFiles[0].text;
@@ -202,6 +329,9 @@ const pageHtml = (apiBase) => `<!doctype html><html><head><meta charset="utf-8">
 <style>${css}</style>
 </head><body><div id="root"></div>
 <script>
+  window.global = window;
+  window.__VITE_ENV__ = {};
+  window.process = { env: {}, platform: "browser", cwd: () => "/", versions: {} };
   window.__W3_APP_ID__ = ${JSON.stringify(APP_ID)};
   window.__W3_API_BASE__ = ${JSON.stringify(apiBase)};
   localStorage.setItem("steward_session_token", ${JSON.stringify(KEY)});
