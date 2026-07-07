@@ -35,9 +35,15 @@ afterEach(() => {
 
 describe("notification-banner-store", () => {
   it("coalesces same-groupKey arrivals into one banner, keeping the newest", () => {
-    pushNotificationBanner(make({ id: "a", title: "1 file", groupKey: "files" }));
-    pushNotificationBanner(make({ id: "b", title: "2 files", groupKey: "files" }));
-    pushNotificationBanner(make({ id: "c", title: "3 files", groupKey: "files" }));
+    pushNotificationBanner(
+      make({ id: "a", title: "1 file", groupKey: "files" }),
+    );
+    pushNotificationBanner(
+      make({ id: "b", title: "2 files", groupKey: "files" }),
+    );
+    pushNotificationBanner(
+      make({ id: "c", title: "3 files", groupKey: "files" }),
+    );
     const q = __getBannersForTests();
     // One banner for the whole "files" burst, and it's the newest arrival.
     expect(q).toHaveLength(1);
