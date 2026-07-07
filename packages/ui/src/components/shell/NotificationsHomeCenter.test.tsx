@@ -605,7 +605,11 @@ describe("NotificationsHomeCenter (Z-stacked groups)", () => {
     );
     __ingestNotificationForTests(
       // Its own view-group (system), so the expanded shade shows it flat.
-      makeNotification({ title: "Quiet", priority: "normal", category: "system" }),
+      makeNotification({
+        title: "Quiet",
+        priority: "normal",
+        category: "system",
+      }),
     );
     render(<NotificationsHomeCenter />);
     const list = screen.getByTestId("home-notification-list");
