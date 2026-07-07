@@ -35,6 +35,7 @@
     "test:chat-sheet-e2e": "bun run --cwd ../.. packages/ui/src/components/shell/__e2e__/run-chat-sheet-e2e.mjs",
     "test:settings-e2e": "bun run --cwd ../.. packages/ui/src/components/pages/__e2e__/run-settings-e2e.mjs",
     "test:chat-dock-e2e": "bun run --cwd ../.. packages/ui/src/components/shell/__e2e__/run-chat-dock-e2e.mjs",
+    "test:settings-e2e": "bun run --cwd ../.. packages/ui/src/components/pages/__e2e__/run-settings-e2e.mjs",
     "test:chat-scroll-web-e2e": "bun run --cwd ../.. packages/ui/src/components/shell/__e2e__/run-chat-scroll-web-e2e.mjs",
     "test:widget-cert-e2e": "bun run --cwd ../.. packages/ui/src/testing/__e2e__/run-widget-cert-e2e.mjs",
     "test:chat-scroll-axis-lock-e2e": "bun run --cwd ../.. packages/ui/src/components/shell/__e2e__/run-chat-scroll-axis-lock-e2e.mjs",
