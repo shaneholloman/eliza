@@ -740,7 +740,8 @@ describe("ContinuousChatOverlay", () => {
         <ContinuousChatOverlay controller={makeController()} />,
       );
       const sheet = screen.getByTestId("chat-sheet");
-      const spanOf = () => screen.getByTestId("chat-pill").querySelector("span");
+      const spanOf = () =>
+        screen.getByTestId("chat-pill").querySelector("span");
       const barOf = () => spanOf()?.className ?? "";
       expect(barOf()).not.toContain("animate-pulse");
       // Resting bar color is an explicit light warm-white inline style (not the
