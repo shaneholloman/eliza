@@ -5680,12 +5680,12 @@ export async function runShortcutGate(args: {
 	// the shortcut path invoked the handler directly, so a shortcut lacking
 	// `requiresElevated` that targeted an OWNER-gated action (e.g. SECRETS) let any
 	// USER execute it — the registry's coarse auth/elevated flags were the only
-	// protection. The shortcut runs pre-planner, so no contexts are active yet:
-	// role-gated actions still gate by role; a context-gated action is conservatively
-	// withheld from the shortcut fast-path (it can still run through the planner).
+	// protection. Shortcuts execute before planner context selection, so seed the
+	// same general context that command actions use while preserving role gates.
 	const gateFailure = actionGateFailure(action, {
 		message: args.message,
 		userRoles: [args.senderRole],
+		activeContexts: ["general"],
 	});
 	if (gateFailure) {
 		args.runtime.logger?.debug?.(
