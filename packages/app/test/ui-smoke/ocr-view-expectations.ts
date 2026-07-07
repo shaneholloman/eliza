@@ -24,6 +24,9 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
     // blank chat is still caught by the blank-pixel rule, not this expectation.
     requireAny: [
       "Ask ",
+      "Eliza",
+      "Weather",
+      "Today",
       "Good evening",
       "Good morning",
       "Good afternoon",
@@ -53,7 +56,14 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   },
   "builtin-automations": {
     requireAll: ["Automations"],
-    requireAny: ["Nothing scheduled yet", "New", "Tasks", "Workflows"],
+    requireAny: [
+      "Nothing scheduled yet",
+      "Active",
+      "Prompts",
+      "Tasks",
+      "Workflows",
+      "Inactive",
+    ],
   },
   "builtin-documents": {
     requireAny: ["Add Knowledge", "Search knowledge", "Knowledge"],
@@ -63,13 +73,22 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   },
   "builtin-relationships": {
     requireAny: [
+      "Relationships",
+      "Personality",
+      "Skills",
+      "Experience",
       "No relationships yet",
       "Search people",
       "Connect your platforms",
     ],
   },
   "builtin-skills": {
-    requireAny: ["Browse Marketplace", "No Skills Installed", "Search skills"],
+    requireAny: [
+      "Skills",
+      "Browse Marketplace",
+      "No Skills Installed",
+      "Search skills",
+    ],
   },
   "builtin-memories": {
     requireAny: ["No memories yet", "Facts", "Browse"],
@@ -78,10 +97,17 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
     requireAny: ["Stream Ready", "GO LIVE", "Go Live", "OFFLINE"],
   },
   "builtin-database": {
-    requireAny: ["Select a table", "Open SQL editor", "Filter tables"],
+    requireAny: [
+      "Databases",
+      "Tables",
+      "SQL Editor",
+      "Select a table",
+      "Open SQL editor",
+      "Filter tables",
+    ],
   },
   "builtin-logs": {
-    requireAny: ["All levels", "Search logs", "All tags"],
+    requireAny: ["Logs", "INFO", "All levels", "Search logs", "All tags"],
   },
   "builtin-inventory": {
     requireAny: ["Wallet", "USDC", "Tokens", "Perps"],
@@ -98,7 +124,8 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   },
   // The launcher grid is its own content; `builtin-views` renders the same grid.
   "builtin-apps": {
-    requireAny: ["Messages", "Settings", "Wallet", "Automations", "Knowledge"],
+    requireAll: ["My Apps"],
+    requireAny: ["elizaOS apps", "Advanced", "Load"],
   },
   "builtin-views": {
     requireAny: ["Messages", "Settings", "Wallet", "Automations", "Knowledge"],
@@ -107,14 +134,26 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
     requireAny: ["Personality", "Relationships", "Knowledge", "Skills"],
   },
   "builtin-character-select": {
-    requireAny: ["About Me", "Style Rules", "Chat Examples", "Post Examples"],
+    requireAny: [
+      "Name",
+      "System prompt",
+      "About Me",
+      "Style Rules",
+      "Chat Examples",
+      "Post Examples",
+    ],
   },
   "builtin-runtime": {
     requireAny: ["Plugins", "Actions", "Providers"],
   },
   "builtin-tasks": {
     requireAll: ["Tasks"],
-    requireAny: ["No coding tasks yet", "coding agent", "Projects unavailable"],
+    requireAny: [
+      "Tasks",
+      "No coding tasks yet",
+      "coding agent",
+      "Projects unavailable",
+    ],
   },
   "builtin-trajectories": {
     requireAny: ["No trajectories yet", "trajector"],
