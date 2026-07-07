@@ -143,6 +143,18 @@ const GUI_INTERACTION_OWNERS: Readonly<
       ],
     },
   ],
+  cloud: [
+    {
+      spec: "plugins/plugin-elizacloud/src/components/cloud/CloudView.test.tsx",
+      proves:
+        "Exercises loading, signed-out, error/retry, ready account data, and designed section-level degradation for the Cloud account view.",
+      signals: [
+        "CloudView state-machine suite",
+        "cloud-credit-balance",
+        "Connect your Eliza Cloud account",
+      ],
+    },
+  ],
   hyperliquid: [
     {
       spec: "packages/app/test/ui-smoke/apps-utility-interactions.spec.ts",
@@ -150,14 +162,15 @@ const GUI_INTERACTION_OWNERS: Readonly<
       signals: ["Markets", "Orders"],
     },
   ],
-  lifeops: [
+  "lifeops-live-test": [
     {
-      spec: "packages/app/test/ui-smoke/apps-personal-assistant-feed-interactions.spec.ts",
+      spec: "plugins/plugin-scheduling/src/components/lifeops-live-test/LifeOpsLiveTestSpatialView.test.tsx",
       proves:
-        "Exercises reminders, alarms, creation, snooze/complete flows, and deterministic LifeOps routes.",
+        "Renders the LifeOps live-test spatial source through GUI/XR/TUI paths and verifies readiness, run, retry, and fire-now agent controls.",
       signals: [
-        "LifeOps app supports deterministic reminders",
-        "snoozeRequests",
+        "LifeOpsLiveTestSpatialView one source, three modalities",
+        'data-agent-id="run-reminder"',
+        'data-agent-id="fire-task-1"',
       ],
     },
   ],
@@ -201,14 +214,6 @@ const GUI_INTERACTION_OWNERS: Readonly<
       spec: "packages/app/test/ui-smoke/apps-utility-interactions.spec.ts",
       proves: "Verifies the Polymarket route shell.",
       signals: ["Polymarket"],
-    },
-  ],
-  shopify: [
-    {
-      spec: "packages/app/test/ui-smoke/apps-utility-interactions.spec.ts",
-      proves:
-        "Exercises products, create product dialog, orders, inventory, customers, and search controls.",
-      signals: ["Shopify create product", "Shopify inventory increase"],
     },
   ],
   wallet: [
@@ -279,23 +284,6 @@ const GUI_INTERACTION_OWNERS: Readonly<
       proves:
         "Exercises host start/open/copy/stop, remote connect, capability refresh, and request payloads.",
       signals: ["host lifecycle", "capability refresh", "screen-token-1"],
-    },
-  ],
-  "social-alpha": [
-    {
-      spec: "packages/app/test/ui-smoke/apps-session-direct-a.spec.ts",
-      proves:
-        "Exercises the manager-visible Social Alpha route through the app-session direct smoke matrix.",
-      signals: ["DIRECT_ROUTE_CASES", "escapeRegExp"],
-    },
-    {
-      spec: "plugins/plugin-social-alpha/src/index.test.ts",
-      proves:
-        "Locks the Social Alpha leaderboard view manifest, component export, and manager visibility contract.",
-      signals: [
-        "declares the Social Alpha leaderboard view",
-        "SocialAlphaView",
-      ],
     },
   ],
   "task-coordinator": [
@@ -428,7 +416,7 @@ describe("plugin view interaction coverage", () => {
       return !hasInteractionOwner && !(viewKey(view) in INTERACTION_DEBT);
     });
 
-    expect(visualCases.length).toBe(57);
+    expect(visualCases.length).toBe(56);
     expect(
       unclassified.map((view) => `${viewKey(view)} ${view.path}`),
       "Add an interaction owner or an explicit debt reason for each view case.",

@@ -19,11 +19,7 @@ const DEV_SMOKE_WORKFLOW = path.join(
 const ROOT_PACKAGE_JSON = path.join(REPO_ROOT, "package.json");
 const APP_PACKAGE_JSON = path.join(REPO_ROOT, "packages/app/package.json");
 
-const EXPECTED_NON_WORKSPACE_HMR_PROBES = new Set([
-  "shopify plugins/plugin-shopify/src/ShopifyView.tsx",
-  "social-alpha plugins/plugin-social-alpha/src/frontend/SocialAlphaView.tsx",
-  "trajectory-logger plugins/plugin-trajectory-logger/src/components/TrajectoryLoggerView.tsx",
-]);
+const EXPECTED_NON_WORKSPACE_HMR_PROBES = new Set<string>();
 
 type GuiViewCase = {
   id: string;

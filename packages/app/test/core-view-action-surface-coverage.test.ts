@@ -27,6 +27,7 @@ const CORE_SURFACE_OWNERS: Readonly<Record<string, CoreSurfaceOwner>> = {
     viewId: "documents",
     provider: "shell",
     files: [
+      "packages/ui/src/components/pages/KnowledgeView.tsx",
       "packages/ui/src/components/character/CharacterEditor.tsx",
       "packages/ui/src/components/character/CharacterHubView.tsx",
       "packages/ui/src/components/pages/DocumentsView.tsx",
@@ -175,7 +176,6 @@ const SETTINGS_SECTION_OWNER_FILES: Readonly<
   capabilities: ["packages/ui/src/components/settings/CapabilitiesSection.tsx"],
   apps: ["packages/ui/src/components/settings/AppsManagementSection.tsx"],
   connectors: ["packages/ui/src/components/settings/ConnectorsSection.tsx"],
-  runtime: ["packages/ui/src/components/settings/RuntimeSettingsSection.tsx"],
   appearance: [
     "packages/ui/src/components/settings/AppearanceSettingsSection.tsx",
   ],
@@ -183,27 +183,31 @@ const SETTINGS_SECTION_OWNER_FILES: Readonly<
     "packages/ui/src/components/settings/BackgroundSettingsSection.tsx",
     "packages/ui/src/components/settings/BackgroundSettingsControls.tsx",
   ],
-  "remote-plugins": [
-    "packages/ui/src/components/settings/RemotePluginHostSection.tsx",
+  notifications: [
+    "packages/ui/src/components/settings/WebPushSettingsSection.tsx",
   ],
+  runtime: ["packages/ui/src/components/settings/RuntimeSettingsSection.tsx"],
   "wallet-rpc": [
     "packages/ui/src/components/settings/WalletRpcSection.tsx",
     "packages/ui/src/components/settings/WalletKeysSection.tsx",
     "packages/ui/src/components/pages/ConfigPageView.tsx",
   ],
+  "remote-plugins": [
+    "packages/ui/src/components/settings/RemotePluginHostSection.tsx",
+  ],
   updates: ["packages/ui/src/components/pages/ReleaseCenterView.tsx"],
   advanced: ["packages/ui/src/components/settings/AdvancedSection.tsx"],
-  "app-permissions": [
-    "packages/ui/src/components/settings/AppPermissionsSection.tsx",
+  secrets: [
+    "packages/ui/src/components/settings/SecretsManagerSection.tsx",
+    "packages/ui/src/components/settings/settings-agent-rows.tsx",
+    "packages/ui/src/components/settings/VaultInventoryPanel.tsx",
   ],
   permissions: [
     "packages/ui/src/components/settings/PermissionsSection.tsx",
     "packages/ui/src/components/settings/permission-controls.tsx",
   ],
-  secrets: [
-    "packages/ui/src/components/settings/SecretsManagerSection.tsx",
-    "packages/ui/src/components/settings/settings-agent-rows.tsx",
-    "packages/ui/src/components/settings/VaultInventoryPanel.tsx",
+  "app-permissions": [
+    "packages/ui/src/components/settings/AppPermissionsSection.tsx",
   ],
   security: ["packages/ui/src/components/settings/SecuritySettingsSection.tsx"],
 };

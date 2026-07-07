@@ -82,6 +82,7 @@ const PLUGIN_VIEW_MANIFESTS = [
   "plugins/plugin-blocker/src/plugin.ts",
   "plugins/plugin-calendar/src/plugin.ts",
   "plugins/plugin-documents/src/plugin.ts",
+  "plugins/plugin-elizacloud/src/index.ts",
   "plugins/plugin-finances/src/plugin.ts",
   "plugins/plugin-goals/src/plugin.ts",
   "plugins/plugin-health/src/index.ts",
@@ -90,13 +91,12 @@ const PLUGIN_VIEW_MANIFESTS = [
   "plugins/plugin-todos/src/index.ts",
   "plugins/plugin-phone/src/plugin.ts",
   "plugins/plugin-polymarket/src/plugin.ts",
-  "plugins/plugin-shopify/src/plugin.ts",
   "plugins/plugin-wallet-ui/src/plugin.ts",
   "plugins/plugin-vector-browser/src/plugin.ts",
   "plugins/plugin-feed/src/index.ts",
   "plugins/plugin-app-control/src/index.ts",
+  "plugins/plugin-scheduling/src/plugin.ts",
   "plugins/plugin-screenshare/src/index.ts",
-  "plugins/plugin-social-alpha/src/index.ts",
   "plugins/plugin-task-coordinator/src/index.ts",
   "plugins/plugin-trajectory-logger/src/plugin.ts",
   "plugins/plugin-training/src/setup-routes.ts",
@@ -121,6 +121,8 @@ const NOT_APP_BOOT_LOADED_VIEW_MANIFESTS: Readonly<Record<string, string>> = {
     "Calendar is a decomposed personal-assistant domain view; it is discoverable through the View Manager but not yet a boot-loaded renderer module.",
   "plugins/plugin-documents/src/plugin.ts":
     "Documents is a decomposed personal-assistant domain view; it is discoverable through the View Manager but not yet a boot-loaded renderer module.",
+  "plugins/plugin-elizacloud/src/index.ts":
+    "Cloud account management is registered as a runtime/view-manager plugin view; it is not loaded through the renderer side-effect app-module scanner.",
   "plugins/plugin-finances/src/plugin.ts":
     "Finances is a decomposed personal-assistant domain view; it is discoverable through the View Manager but not yet a boot-loaded renderer module.",
   "plugins/plugin-goals/src/plugin.ts":
@@ -133,8 +135,8 @@ const NOT_APP_BOOT_LOADED_VIEW_MANIFESTS: Readonly<Record<string, string>> = {
     "Relationships is the entity/relationship knowledge-graph viewer; it is discoverable through the View Manager but not yet a boot-loaded renderer module.",
   "plugins/plugin-screenshare/src/index.ts":
     "Screenshare is registered by runtime capability loading, not the app boot side-effect loader.",
-  "plugins/plugin-social-alpha/src/index.ts":
-    "Social Alpha is an opt-in agent runtime plugin; its leaderboard view registers when the agent enables the plugin, not via the app boot loader.",
+  "plugins/plugin-scheduling/src/plugin.ts":
+    "LifeOps Live Test is a developer/QA validation surface; its route stays reachable for live-test workflows but it is not a launcher or app-boot view.",
   "plugins/plugin-todos/src/index.ts":
     "Todos is a decomposed personal-assistant domain view; it is discoverable through the View Manager but not yet a boot-loaded renderer module.",
 };
@@ -151,7 +153,6 @@ const BOOT_PLUGIN_VIEW_MANIFEST_BY_MODULE: Record<string, string | null> = {
   "@elizaos/plugin-messages": "plugins/plugin-messages/src/plugin.ts",
   "@elizaos/plugin-phone": "plugins/plugin-phone/src/plugin.ts",
   "@elizaos/plugin-polymarket": "plugins/plugin-polymarket/src/plugin.ts",
-  "@elizaos/plugin-shopify": "plugins/plugin-shopify/src/plugin.ts",
   "@elizaos/plugin-task-coordinator":
     "plugins/plugin-task-coordinator/src/index.ts",
   "@elizaos/plugin-task-coordinator/register":
@@ -210,12 +211,6 @@ const KNOWN_XR_VIEW_CASES: readonly PluginViewCase[] = [
     path: "/polymarket",
   },
   {
-    manifestPath: "plugins/plugin-shopify/src/plugin.ts",
-    id: "shopify",
-    viewType: "xr",
-    path: "/shopify",
-  },
-  {
     manifestPath: "plugins/plugin-wallet-ui/src/plugin.ts",
     id: "wallet",
     viewType: "xr",
@@ -240,6 +235,12 @@ const KNOWN_XR_VIEW_CASES: readonly PluginViewCase[] = [
     path: "/screenshare",
   },
   {
+    manifestPath: "plugins/plugin-scheduling/src/plugin.ts",
+    id: "lifeops-live-test",
+    viewType: "xr",
+    path: "/lifeops-live-test",
+  },
+  {
     manifestPath: "plugins/plugin-task-coordinator/src/index.ts",
     id: "task-coordinator",
     viewType: "xr",
@@ -250,6 +251,12 @@ const KNOWN_XR_VIEW_CASES: readonly PluginViewCase[] = [
     id: "orchestrator",
     viewType: "xr",
     path: "/orchestrator",
+  },
+  {
+    manifestPath: "plugins/plugin-task-coordinator/src/index.ts",
+    id: "cockpit",
+    viewType: "xr",
+    path: "/cockpit",
   },
   {
     manifestPath: "plugins/plugin-trajectory-logger/src/plugin.ts",
@@ -322,12 +329,6 @@ const KNOWN_XR_VIEW_CASES: readonly PluginViewCase[] = [
     id: "vector-browser",
     viewType: "xr",
     path: "/vector-browser",
-  },
-  {
-    manifestPath: "plugins/plugin-social-alpha/src/index.ts",
-    id: "social-alpha",
-    viewType: "xr",
-    path: "/social-alpha",
   },
   {
     // Facewear collapsed to one declaration: gui/xr/tui all draw from the same

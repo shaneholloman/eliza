@@ -24,8 +24,8 @@ import {
 } from "./check-startup-budget.mjs";
 
 const SCRIPT_PATH = path.resolve(
-  process.cwd(),
-  "packages/app/scripts/check-startup-budget.mjs",
+  import.meta.dirname,
+  "check-startup-budget.mjs",
 );
 
 function traceRun(kind: string, marks: Array<[string, number]>, extra = {}) {

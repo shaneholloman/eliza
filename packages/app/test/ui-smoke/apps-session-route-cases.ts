@@ -109,11 +109,11 @@ export const DIRECT_ROUTE_CASES: readonly DirectRouteCase[] = [
     selector: '[data-testid="wallet-shell"]',
     timeoutMs: 90_000,
   },
-  // Hyperliquid/Polymarket (wallet sub-views) and Shopify (connector surface)
-  // consolidated onto single adaptive spatial views — the rich-DOM app shells
-  // that carried `data-testid="<id>-shell"` and literal title text were
-  // deleted (PolymarketAppView, ShopifyAppView). The one element each view
-  // wrapper still renders unconditionally on mount is its agent toolbar
+  // Hyperliquid/Polymarket wallet sub-views consolidated onto single adaptive
+  // spatial views — the rich-DOM app shells that carried
+  // `data-testid="<id>-shell"` and literal title text were deleted
+  // (PolymarketAppView). The one element each view wrapper still renders
+  // unconditionally on mount is its agent toolbar
   // (`aria-label="<Name> controls"`), so that is the readiness anchor proving
   // the real view bundle mounted (and not the Launcher fallback).
   {
@@ -129,12 +129,6 @@ export const DIRECT_ROUTE_CASES: readonly DirectRouteCase[] = [
     name: "polymarket",
     path: "/polymarket",
     readyChecks: [{ selector: '[aria-label="Polymarket controls"]' }],
-    timeoutMs: 90_000,
-  },
-  {
-    name: "shopify",
-    path: "/shopify",
-    readyChecks: [{ selector: '[aria-label="Shopify controls"]' }],
     timeoutMs: 90_000,
   },
   {
@@ -228,6 +222,7 @@ export const DIRECT_ROUTE_CASES: readonly DirectRouteCase[] = [
 const managerVisibleViewTileCases = [
   { viewId: "birdclaw", path: "/birdclaw" },
   { viewId: "calendar", path: "/calendar" },
+  { viewId: "cloud", path: "/cloud" },
   { viewId: "contacts", path: "/contacts" },
   { viewId: "cockpit", path: "/cockpit" },
   { viewId: "documents", path: "/documents" },
@@ -243,7 +238,6 @@ const managerVisibleViewTileCases = [
   { viewId: "phone", path: "/phone" },
   { viewId: "relationships", path: "/relationships" },
   { viewId: "screenshare", path: "/screenshare" },
-  { viewId: "social-alpha", path: "/social-alpha" },
   { viewId: "task-coordinator", path: "/task-coordinator" },
   { viewId: "todos", path: "/todos" },
   { viewId: "training", path: "/apps/fine-tuning" },

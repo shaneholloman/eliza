@@ -65,7 +65,6 @@ const VALIDATED: Readonly<
  * specific contract test file. Promote to VALIDATED by adding a live-drift test.
  */
 const CONTRACT_TESTED: Readonly<Record<string, string>> = {
-  shopify: "plugins/plugin-shopify/src/routes.contract.test.ts",
 };
 
 /**

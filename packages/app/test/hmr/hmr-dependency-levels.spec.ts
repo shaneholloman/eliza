@@ -38,6 +38,10 @@ const LEVELS = [
     file: "plugins/plugin-contacts/src/components/ContactsAppView.tsx",
   },
   {
+    name: "plugin view cloud",
+    file: "plugins/plugin-elizacloud/src/components/cloud/CloudView.tsx",
+  },
+  {
     // Developer-only coding cockpit (/cockpit). CockpitRoute is the plugin-side
     // view container (wires the presentational @elizaos/ui CockpitView to the
     // live orchestrator client), so it is the source guaranteed in the view graph.
@@ -105,10 +109,6 @@ const LEVELS = [
     file: "plugins/plugin-polymarket/src/PolymarketView.tsx",
   },
   {
-    name: "plugin view shopify",
-    file: "plugins/plugin-shopify/src/ShopifyView.tsx",
-  },
-  {
     name: "plugin view wallet",
     file: "plugins/plugin-wallet-ui/src/InventoryView.tsx",
   },
@@ -127,10 +127,6 @@ const LEVELS = [
   {
     name: "plugin view screenshare",
     file: "plugins/plugin-screenshare/src/components/ScreenshareView.tsx",
-  },
-  {
-    name: "plugin view social alpha",
-    file: "plugins/plugin-social-alpha/src/frontend/SocialAlphaView.tsx",
   },
   {
     name: "plugin view task coordinator",

@@ -9,6 +9,7 @@
 
 import { BellRing } from "lucide-react";
 import { useCallback } from "react";
+import { useAgentElement } from "../../agent-surface";
 import { useWebPush } from "../../state/notifications/useWebPush";
 import { Switch } from "../ui/switch";
 import { SettingsGroup, SettingsRow, SettingsStack } from "./settings-layout";
@@ -75,6 +76,18 @@ export function WebPushSettingsSection() {
     },
     [subscribe, unsubscribe],
   );
+  const pushToggle = useAgentElement<HTMLButtonElement>({
+    id: "notifications-toggle-push",
+    role: "toggle",
+    label: view.label,
+    group: "settings-notifications",
+    description: view.description,
+    status: view.on ? "active" : "inactive",
+    onActivate: () => {
+      if (!view.canToggle || busy || !ready) return;
+      onToggle(!view.on);
+    },
+  });
 
   return (
     <SettingsStack>
@@ -85,10 +98,12 @@ export function WebPushSettingsSection() {
           description={error ?? view.description}
           control={
             <Switch
+              ref={pushToggle.ref}
               checked={view.on}
               disabled={!view.canToggle || busy || !ready}
               onCheckedChange={onToggle}
               aria-label="Toggle push notifications"
+              {...pushToggle.agentProps}
             />
           }
         />
