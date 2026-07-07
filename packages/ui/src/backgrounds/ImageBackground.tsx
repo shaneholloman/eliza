@@ -85,9 +85,8 @@ export function ImageBackground({
           the image layer (not a sibling) so the shell's exactly-one-background
           invariant holds and every image wallpaper — default or user-uploaded —
           gets the same treatment. NO cosmetic bottom-floor gradient below it:
-          the measured reclaim (parent `bottom`) makes the wallpaper reach the
-          true physical bottom, so the image's own pixels own the
-          home-indicator edge, lock-screen style. */}
+          the fixed wallpaper and mirrored root canvas make the image's own
+          pixels own the home-indicator edge, lock-screen style. */}
       <div
         aria-hidden="true"
         data-testid="app-background-image-scrim"

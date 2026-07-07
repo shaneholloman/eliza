@@ -48,7 +48,6 @@ import {
   __resetNotificationStoreForTests,
 } from "../../state/notifications/notification-store";
 import {
-  isInterruptPriority,
   NotificationsHomeCenter,
   notificationRowOptions,
   orderDashboardNotifications,

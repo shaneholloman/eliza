@@ -25,7 +25,7 @@ import {
   dismissNotificationBanner,
   useNotificationBanners,
 } from "../../state/notifications/notification-banner-store";
-import { markNotificationRead } from "../../state/notifications/notification-store";
+import { removeNotification } from "../../state/notifications/notification-store";
 import { RelativeTime } from "./RelativeTime";
 
 // Slide down from the top + fade; an upward swipe/close scales it away. Opacity
@@ -69,7 +69,7 @@ function BannerCard({
   }, [hovered, notification.id, notification.priority]);
 
   const open = () => {
-    if (!notification.readAt) void markNotificationRead(notification.id);
+    void removeNotification(notification.id);
     if (notification.deepLink && isSafeDeepLink(notification.deepLink)) {
       navigateDeepLink(notification.deepLink);
     }

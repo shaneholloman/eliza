@@ -145,7 +145,6 @@ body.native {
 body.native #root,
 body.pwa-standalone #root {
   min-height: 100vh;
-  /* biome-ignore lint/suspicious/noDuplicateProperties: progressive viewport fallback (vh→dvh). */
   min-height: 100dvh;
   max-height: 100vh;
   max-height: 100dvh;
@@ -195,9 +194,8 @@ body.pwa-standalone textarea {
        paints the collapsed-ICB strip. On device #root renders 873px tall (the
        collapsed fixed-body ICB), painting #160d07 across it, and the 59px below
        (873→932) is html/body #160d07 — together the recurring strip. Going
-       transparent lets the fixed AppBackground wallpaper (reclaimed to the true
-       bottom via --standalone-bottom-reclaim + mirrored onto the html canvas)
-       be the ONLY paint at the bottom edge. Folded into this geometry rule to
+       transparent lets the fixed AppBackground wallpaper plus the mirrored html
+       canvas be the ONLY paint at the bottom edge. Folded into this geometry rule to
        avoid a descending-specificity split. */
     background: transparent;
   }

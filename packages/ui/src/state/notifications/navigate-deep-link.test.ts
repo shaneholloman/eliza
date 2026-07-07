@@ -87,9 +87,7 @@ describe("navigateDeepLink", () => {
         (e: unknown): e is CustomEvent =>
           e instanceof CustomEvent && e.type === "eliza:chat:prefill",
       );
-    expect((evt?.detail as { text?: string }).text).toBe(
-      "Connect my calendar",
-    );
+    expect((evt?.detail as { text?: string }).text).toBe("Connect my calendar");
     const types = dispatchSpy.mock.calls
       .map((c: unknown[]) => c[0])
       .filter((e: unknown): e is CustomEvent => e instanceof CustomEvent)

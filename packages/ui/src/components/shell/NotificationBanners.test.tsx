@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * NotificationBanners: the top-of-screen glass banner queue. Drives the real
- * banner store; navigate + mark-read are mocked so tap-through and auto-dismiss
+ * banner store; navigate + remove are mocked so tap-through and auto-dismiss
  * are asserted without a server.
  */
 import {
@@ -19,9 +19,9 @@ vi.mock("../../state/notifications/navigate-deep-link", async (orig) => ({
   navigateDeepLink,
 }));
 
-const markNotificationRead = vi.hoisted(() => vi.fn());
+const removeNotification = vi.hoisted(() => vi.fn());
 vi.mock("../../state/notifications/notification-store", () => ({
-  markNotificationRead: (...a: unknown[]) => markNotificationRead(...a),
+  removeNotification: (...a: unknown[]) => removeNotification(...a),
 }));
 
 import type { AgentNotification } from "@elizaos/core";
@@ -51,7 +51,7 @@ afterEach(() => {
   cleanup();
   __resetNotificationBannersForTests();
   navigateDeepLink.mockReset();
-  markNotificationRead.mockReset();
+  removeNotification.mockReset();
   vi.useRealTimers();
 });
 
@@ -78,23 +78,23 @@ describe("NotificationBanners", () => {
     expect(screen.getByTestId("notification-banner-accent")).toBeTruthy();
   });
 
-  it("tapping marks read, follows a safe deep link, and dismisses the banner", () => {
+  it("tapping removes the inbox row, follows a safe deep link, and dismisses the banner", () => {
     render(<NotificationBanners />);
     act(() =>
       pushNotificationBanner(makeNotification({ deepLink: "/settings" })),
     );
     fireEvent.click(screen.getByTestId("notification-banner"));
-    expect(markNotificationRead).toHaveBeenCalledWith("b-1");
+    expect(removeNotification).toHaveBeenCalledWith("b-1");
     expect(navigateDeepLink).toHaveBeenCalledWith("/settings");
     expect(screen.queryByTestId("notification-banner")).toBeNull();
   });
 
-  it("the X dismisses the banner without marking it read", () => {
+  it("the X dismisses the banner without removing the inbox row", () => {
     render(<NotificationBanners />);
     act(() => pushNotificationBanner(makeNotification()));
     fireEvent.click(screen.getByTestId("notification-banner-dismiss"));
     expect(screen.queryByTestId("notification-banner")).toBeNull();
-    expect(markNotificationRead).not.toHaveBeenCalled();
+    expect(removeNotification).not.toHaveBeenCalled();
   });
 
   it("auto-dismisses after the priority-scaled dwell", () => {

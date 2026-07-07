@@ -86,7 +86,9 @@ export function resolveDedicatedAgentId(
 
   const base = server.apiBase?.trim();
   if (base) {
-    const match = base.match(/\/api\/v1\/eliza\/agents\/([^/]+)(?:\/bridge)?\/?$/);
+    const match = base.match(
+      /\/api\/v1\/eliza\/agents\/([^/]+)(?:\/bridge)?\/?$/,
+    );
     if (match?.[1]) {
       try {
         return decodeURIComponent(match[1]);
