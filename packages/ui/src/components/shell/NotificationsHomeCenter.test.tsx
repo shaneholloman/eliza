@@ -593,7 +593,7 @@ describe("NotificationsHomeCenter (Z-stacked groups)", () => {
     expect(screen.queryByTestId("notification-stack-peek")).toBeNull();
   });
 
-  it("swiping down on a stack fans it without also pulling the shade open", () => {
+  it("a drag that starts ON a stack still pulls the shade open and never fans the stack", () => {
     __ingestNotificationForTests(
       makeNotification({ title: "A", priority: "high" }),
     );
@@ -603,33 +603,45 @@ describe("NotificationsHomeCenter (Z-stacked groups)", () => {
     __ingestNotificationForTests(
       makeNotification({ title: "C", priority: "urgent" }),
     );
+    __ingestNotificationForTests(
+      // Its own view-group (system), so the expanded shade shows it flat.
+      makeNotification({ title: "Quiet", priority: "normal", category: "system" }),
+    );
     render(<NotificationsHomeCenter />);
     const list = screen.getByTestId("home-notification-list");
     const stack = screen.getByTestId("notification-stack");
+    // The stack has no drag handling of its own — the pointer events bubble to
+    // the list, whose directional pull expands the shade; the stack stays a
+    // stack (fanning is tap-only via the peeked cards).
     fireEvent.pointerDown(stack, {
       pointerType: "mouse",
       button: 0,
       isPrimary: true,
       pointerId: 8,
+      clientX: 10,
       clientY: 10,
     });
-    fireEvent.pointerMove(stack, {
+    fireEvent.pointerMove(list, {
       pointerType: "mouse",
       button: 0,
       isPrimary: true,
       pointerId: 8,
-      clientY: 110,
+      clientX: 12,
+      clientY: 140,
     });
     fireEvent.pointerUp(list, {
       pointerType: "mouse",
       button: 0,
       isPrimary: true,
       pointerId: 8,
-      clientY: 110,
+      clientX: 12,
+      clientY: 140,
     });
-    expect(list.getAttribute("data-shade-mode")).toBe("rested");
-    expect(screen.getAllByTestId("notification-row")).toHaveLength(3);
-    expect(screen.queryByTestId("notification-stack-peek")).toBeNull();
+    expect(list.getAttribute("data-shade-mode")).toBe("expanded");
+    // Still stacked: the pull revealed the sub-interrupt row, not the stack.
+    expect(screen.getByTestId("notification-stack")).toBeTruthy();
+    expect(screen.getAllByTestId("notification-stack-peek")).toHaveLength(2);
+    expect(screen.getByText("Quiet")).toBeTruthy();
   });
 
   it("swiping away the top card surfaces the next card in the stack", () => {

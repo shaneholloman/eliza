@@ -30,9 +30,9 @@
  * for keyboard, AT, and anyone who prefers clicking to pulling.
  *
  * Stacks are independent of the shade: the pull/wheel gesture NEVER fans a
- * stack. A stack fans out via a tap on its peeked cards (or a mouse swipe-down
- * over it) and folds back via its own quiet "Show less" control; folding the
- * whole shade folds every fanned stack with it.
+ * stack, and a drag that starts on a stack still belongs to the shade. A stack
+ * fans out via a tap on its peeked cards and folds back via its own quiet
+ * "Show less" control; folding the whole shade folds every fanned stack too.
  *
  * Acknowledgement is the platform-shade model (iOS lock screen / Android
  * shade) with an expand step: tap opens the row's contextual option strip
@@ -112,9 +112,6 @@ const WHEEL_COLLAPSE_STEP_PX = PULL_COMMIT_PX / 2;
 
 /** How many cards may peek out beneath a rested stack's top card. */
 const MAX_STACK_PEEKS = 2;
-
-/** Mouse travel (px) that fans a Z-stack out when swiping down over it. */
-const STACK_FAN_SWIPE_PX = 32;
 
 /** Vertical offset (px) each successive peek card protrudes beneath the top. */
 const STACK_PEEK_OFFSET_PX = 8;
@@ -660,9 +657,9 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
   // Single-open option strip: expanding one row collapses the others.
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   // Per-group stack expansion (iOS-shade idiom): a group fans out in place
-  // when its stack is tapped below the top card or swiped down, and folds back
-  // via its own "Show less" control. Independent of the shade mode — the
-  // pull/wheel gesture reveals more GROUPS and never fans a stack.
+  // when its stack is tapped below the top card, and folds back via its own
+  // "Show less" control. Independent of the shade mode — the pull/wheel
+  // gesture reveals more GROUPS and never fans a stack.
   const [expandedStacks, setExpandedStacks] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -707,9 +704,6 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
   // collapse only from expanded), which is what makes the gestures directional
   // instead of a toggle.
   const shadeGestureRef = useRef({ canExpand: false, canCollapse: false });
-  // In-flight mouse swipe-down on a Z-stack (fans the stack out). Touch keeps
-  // vertical drags for the scroller; touch fans via peek taps.
-  const stackFanGesture = useRef<{ key: string; startY: number } | null>(null);
 
   const setPullPx = useCallback((px: number) => {
     pullPxRef.current = px;
@@ -1069,35 +1063,13 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
                 // The Z-stack: the group's highest-priority card on top, the
                 // next cards peeking out beneath it — depth in Z, ordered by
                 // the same priority→recency order the fanned list uses.
-                // A mouse swipe DOWN on the stack fans it out (touch fans via
-                // a tap on the peeked cards — a touch vertical drag belongs to
-                // the shade scroller). The shade pull/wheel gesture never
-                // touches a stack.
+                // Fanning is TAP-ONLY (the peeked cards are buttons): every
+                // vertical drag — including one starting on a stack — belongs
+                // to the shade's directional pull/scroll, so the stack has no
+                // drag handling of its own and pointer events bubble through.
                 <div
                   data-testid="notification-stack"
                   className="relative"
-                  onPointerDown={(e) => {
-                    if (e.pointerType !== "mouse" || e.button !== 0) return;
-                    e.stopPropagation();
-                    stackFanGesture.current = {
-                      key: group.label,
-                      startY: e.clientY,
-                    };
-                  }}
-                  onPointerMove={(e) => {
-                    const g = stackFanGesture.current;
-                    if (!g || g.key !== group.label) return;
-                    if (e.clientY - g.startY >= STACK_FAN_SWIPE_PX) {
-                      stackFanGesture.current = null;
-                      toggleStack(group.label);
-                    }
-                  }}
-                  onPointerUp={() => {
-                    stackFanGesture.current = null;
-                  }}
-                  onPointerCancel={() => {
-                    stackFanGesture.current = null;
-                  }}
                   style={{
                     paddingBottom: peeks.length * STACK_PEEK_OFFSET_PX,
                   }}
