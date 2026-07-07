@@ -123,11 +123,7 @@ import {
   measureSafeAreaInsetTop,
   resolveChatPanelLayout,
 } from "./chat-panel-layout";
-import {
-  LIQUID_GLASS_EDGE_SHADOW,
-  LiquidGlassDefs,
-  LiquidGlassRefraction,
-} from "./liquid-glass";
+import { LIQUID_GLASS_EDGE_SHADOW, LIQUID_GLASS_SHEEN } from "./liquid-glass";
 import { SlashCommandMenu, useSlashMenu } from "./SlashCommandMenu";
 import {
   filterRenderableShellMessages,
@@ -4713,25 +4709,29 @@ export function ContinuousChatOverlay({
               // covers the whole screen — nothing to see through). The blur is the
               // battery-costly bit the prior opaque pass removed (#10698/#9141);
               // it's back by product direction for the frosted look.
+              // Frosted glass tuned to read CLEAN over any backdrop, including
+              // the bright orange app theme: a deep warm-near-black fill (86%)
+              // so the backdrop only softly darkens the glass instead of
+              // bleeding through as muddy brown, and NO saturate() boost — the
+              // old `saturate(1.3)` amplified the orange behind and read as a
+              // dirty brown slab. Blur alone softens the backdrop to a clean
+              // frost. Full-bleed stays fully opaque (nothing to see through).
               backgroundColor: fullBleed
                 ? "var(--bg)"
-                : "color-mix(in srgb, var(--card) 68%, transparent)",
-              backdropFilter: fullBleed
-                ? undefined
-                : "blur(24px) saturate(1.3)",
-              WebkitBackdropFilter: fullBleed
-                ? undefined
-                : "blur(24px) saturate(1.3)",
+                : "color-mix(in srgb, var(--card) 86%, transparent)",
+              backdropFilter: fullBleed ? undefined : "blur(20px)",
+              WebkitBackdropFilter: fullBleed ? undefined : "blur(20px)",
               // Liquid-glass bevel: a bright top-left rim over a soft
               // bottom-right shade so the frosted edge catches light like a real
               // glass slab. Only on the inset sheet — full-bleed has no edge to
               // catch light. Depth here is the glass rim, not a drop shadow (the
               // flat system keeps all shadow tokens none).
               boxShadow: fullBleed ? undefined : LIQUID_GLASS_EDGE_SHADOW,
-              // Faint neutral top-edge highlight (a glass sheen), NOT the warm
-              // `--surface` gradient that read as brown.
-              backgroundImage:
-                "linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 22%)",
+              // Specular sheen: a soft radial highlight near the top-left (as if
+              // lit from above) over the faint neutral top-edge fade — the glass
+              // catches light instead of just fading. Neutral white only, NOT the
+              // warm `--surface` gradient that read as brown.
+              backgroundImage: `${LIQUID_GLASS_SHEEN}, linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 22%)`,
               // Full-bleed: extend the glass UP through the safe-area-top so the
               // dark background reaches the true top of the screen. The panel
               // height comes from visualViewport (which excludes the Android
@@ -4745,21 +4745,6 @@ export function ContinuousChatOverlay({
                 : null),
             }}
           />
-          {/* Liquid-glass refraction: bends the ember field / home widgets
-              behind the inset sheet at the panel edge (Chromium
-              `backdrop-filter: url()`; a no-op that degrades to the frosted
-              surface elsewhere). Full-bleed is opaque, so there is nothing to
-              refract. The defs mount once; the layer tracks the live radius so
-              the refracted edge stays flush through the morph. */}
-          {fullBleed ? null : (
-            <>
-              <LiquidGlassDefs />
-              <LiquidGlassRefraction
-                radius={morphRadius}
-                opacity={glassOpacity}
-              />
-            </>
-          )}
           {/* AX-tree mirror of data-detent: the native gesture e2e suites
               (XCUITest) can only observe web state through the accessibility
               tree, and data attributes never surface there. sr-only text does.
