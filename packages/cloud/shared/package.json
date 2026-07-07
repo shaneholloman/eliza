@@ -35,7 +35,7 @@
     "preflight:messaging-gateways:strict": "node scripts/messaging-gateway-preflight.mjs --strict",
     "db:check-migrations": "drizzle-kit check",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "bun run ../../../packages/scripts/cloud/admin/migrate-with-diagnostics.ts",
+    "db:migrate": "bun --conditions=eliza-source ../../../packages/scripts/cloud/admin/migrate-with-diagnostics.ts",
     "db:migrate:drizzle": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "pglite:server": "bun run ../../../packages/scripts/cloud/admin/dev/pglite-server.ts",
