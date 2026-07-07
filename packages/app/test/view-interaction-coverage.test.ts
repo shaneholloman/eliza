@@ -29,6 +29,8 @@ type InteractionOwner = {
   signals: readonly string[];
 };
 
+// Shipped TUI inventory is empty (#15269); this owner remains as the
+// classification a reintroduced TUI case would pick up automatically.
 const DEFAULT_TUI_OWNER: InteractionOwner = {
   spec: "packages/agent/src/__tests__/plugin-tui-view-coverage.test.ts",
   proves:
@@ -336,23 +338,17 @@ const GUI_INTERACTION_OWNERS: Readonly<
 // hijacks the `/character/documents` route. It stays tracked debt until that
 // view path is disambiguated.
 const INTERACTION_DEBT: Readonly<Record<string, string>> = {
+  "cloud:gui":
+    "Eliza Cloud's view fronts the hosted cloud dashboard (external auth); " +
+    "newly ratchet-tracked by the #15269 sweep, no keyless interaction spec yet.",
+  "lifeops-live-test:gui":
+    "HITL live-validation view (needs real connector credentials + a human in " +
+    "the loop, #11632); no keyless interaction spec can drive it yet.",
   "documents:gui":
     "The decomposed documents view path `/documents` collides with the built-in " +
     "`documents` tab (/character/documents) via App.tsx findView, so it cannot be " +
     "registered in the ui-smoke stub without hijacking that route. Needs a " +
     "disambiguated view path before a keyless interaction spec can drive it.",
-  "cloud:gui":
-    "The Eliza Cloud account view (`/cloud`, plugin-elizacloud) renders live " +
-    "credits, hosted agents, API keys, and billing that only exist behind an " +
-    "authenticated Cloud session; the keyless ui-smoke harness has no signed-in " +
-    "Cloud account to drive meaningful interactions. Needs a seeded Cloud session " +
-    "fixture before a keyless interaction spec can drive it.",
-  "lifeops-live-test:gui":
-    "The LifeOps Live Test view (`/lifeops-live-test`, plugin-scheduling) is a " +
-    "developer-only QA surface gated behind Developer Mode and kept off the " +
-    "launcher grid and View Manager; the keyless view-manager smoke path cannot " +
-    "reach it. Needs a developer-mode ui-smoke entry point before an interaction " +
-    "spec can drive it.",
 };
 
 const MAX_INTERACTION_DEBT = 3;
@@ -415,7 +411,7 @@ describe("plugin view interaction coverage", () => {
       return !hasInteractionOwner && !(viewKey(view) in INTERACTION_DEBT);
     });
 
-    expect(visualCases.length).toBe(56);
+    expect(visualCases.length).toBe(28);
     expect(
       unclassified.map((view) => `${viewKey(view)} ${view.path}`),
       "Add an interaction owner or an explicit debt reason for each view case.",
