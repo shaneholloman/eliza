@@ -7,6 +7,15 @@
 // handler: an in-flight capture is discarded via recorder.cancel() (release the
 // mic, close the context, NO transcribe POST) and the listening state resets so
 // the next gesture re-arms from a clean idle.
+//
+// #voice-crickets: the discard is now gated by a permission-prompt grace window
+// (CAPTURE_PAUSE_GRACE_MS). On the installed iOS PWA the native getUserMedia
+// dialog steals focus the instant capture starts, firing visibilitychange →
+// APP_PAUSE; cancelling there kills the mic the user is about to grant (tap →
+// prompt → grant → crickets). A capture younger than the grace window is KEPT;
+// only an APP_PAUSE after the window (a genuine background) cancels. These
+// tests therefore advance fake time past the grace before asserting the
+// real-suspend cancel, and add cases that lock the young-capture keep.
 
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,7 +25,12 @@ import {
   isLocalAsrCaptureSupported,
   startLocalAsrRecorder,
 } from "../voice/local-asr-capture";
-import { useVoiceChat } from "./useVoiceChat";
+import { __voiceChatInternals, useVoiceChat } from "./useVoiceChat";
+
+const { CAPTURE_PAUSE_GRACE_MS } = __voiceChatInternals;
+// Comfortably past the permission-prompt grace so an APP_PAUSE reads as a
+// genuine background-suspend rather than the getUserMedia dialog focus-steal.
+const PAST_GRACE_MS = CAPTURE_PAUSE_GRACE_MS + 100;
 
 vi.mock("../api/csrf-client", () => ({
   fetchWithCsrf: vi.fn(),
@@ -33,6 +47,11 @@ const startLocalAsrRecorderMock = vi.mocked(startLocalAsrRecorder);
 
 describe("useVoiceChat app-suspend capture teardown (#voice-V1)", () => {
   beforeEach(() => {
+    // Fake timers so the capture-age math (Date.now() - captureStartedAt) is
+    // deterministic: a young capture (pause inside the grace) is kept; a pause
+    // after advancing past the grace cancels. `shouldAdvanceTime` keeps async
+    // microtasks (the recorder start promise) resolving under fake timers.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     isLocalAsrCaptureSupportedMock.mockReturnValue(true);
     fetchWithCsrfMock.mockImplementation(async (input) => {
       const url = typeof input === "string" ? input : String(input);
@@ -77,6 +96,12 @@ describe("useVoiceChat app-suspend capture teardown (#voice-V1)", () => {
     });
     expect(startLocalAsrRecorderMock).toHaveBeenCalledTimes(1);
 
+    // A genuine background-suspend arrives AFTER the permission-prompt grace
+    // window — advance past it so the pause reads as a real suspend, not the
+    // getUserMedia dialog focus-steal.
+    await act(async () => {
+      vi.advanceTimersByTime(PAST_GRACE_MS);
+    });
     // iOS suspends the PWA mid-capture.
     await act(async () => {
       document.dispatchEvent(new Event(APP_PAUSE_EVENT));
@@ -149,6 +174,10 @@ describe("useVoiceChat app-suspend capture teardown (#voice-V1)", () => {
     await act(async () => {
       await result.current.startListening("push-to-talk");
     });
+    // Past the grace — a genuine background-suspend cancels the capture.
+    await act(async () => {
+      vi.advanceTimersByTime(PAST_GRACE_MS);
+    });
     await act(async () => {
       document.dispatchEvent(new Event(APP_PAUSE_EVENT));
     });
@@ -160,5 +189,92 @@ describe("useVoiceChat app-suspend capture teardown (#voice-V1)", () => {
     });
     expect(startLocalAsrRecorderMock).toHaveBeenCalledTimes(2);
     expect(result.current.isListening).toBe(true);
+  });
+
+  it("KEEPS a just-started capture on APP_PAUSE within the permission grace (#voice-crickets)", async () => {
+    // The iOS getUserMedia permission dialog fires visibilitychange → APP_PAUSE
+    // the instant capture starts. Cancelling there kills the mic the user is
+    // about to grant — the tap-prompt-grant-then-crickets bug. A capture younger
+    // than the grace window must be KEPT (no cancel, still listening).
+    const stop = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
+    const cancel = vi.fn();
+    startLocalAsrRecorderMock.mockResolvedValue({
+      stop,
+      cancel,
+      analyser: null,
+    });
+    const onTranscript = vi.fn();
+
+    const { result } = renderHook(() =>
+      useVoiceChat({
+        onTranscript,
+        voiceConfig: {
+          provider: "eliza-cloud",
+          asr: { provider: "eliza-cloud" },
+        },
+      }),
+    );
+
+    await act(async () => {
+      await result.current.startListening("push-to-talk");
+    });
+    expect(startLocalAsrRecorderMock).toHaveBeenCalledTimes(1);
+
+    // The permission dialog's visibilitychange lands well inside the grace.
+    await act(async () => {
+      vi.advanceTimersByTime(CAPTURE_PAUSE_GRACE_MS - 200);
+      document.dispatchEvent(new Event(APP_PAUSE_EVENT));
+    });
+
+    // Capture KEPT: no cancel, no stop, still listening — the grant lands on a
+    // live mic instead of a corpse.
+    expect(cancel).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+    expect(result.current.isListening).toBe(true);
+  });
+
+  it("cancels once the capture ages past the grace (young keep, then real suspend)", async () => {
+    // A pause inside the grace keeps the capture; a later pause past the grace
+    // (a genuine background) still tears it down — the grace only defers the
+    // permission-prompt bounce, it does not disable suspend teardown.
+    const stop = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
+    const cancel = vi.fn();
+    startLocalAsrRecorderMock.mockResolvedValue({
+      stop,
+      cancel,
+      analyser: null,
+    });
+    const onTranscript = vi.fn();
+
+    const { result } = renderHook(() =>
+      useVoiceChat({
+        onTranscript,
+        voiceConfig: {
+          provider: "eliza-cloud",
+          asr: { provider: "eliza-cloud" },
+        },
+      }),
+    );
+
+    await act(async () => {
+      await result.current.startListening("push-to-talk");
+    });
+
+    // Permission-prompt bounce: kept.
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+      document.dispatchEvent(new Event(APP_PAUSE_EVENT));
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(result.current.isListening).toBe(true);
+
+    // Later, a real background-suspend past the grace: torn down.
+    await act(async () => {
+      vi.advanceTimersByTime(PAST_GRACE_MS);
+      document.dispatchEvent(new Event(APP_PAUSE_EVENT));
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(stop).not.toHaveBeenCalled();
+    expect(result.current.isListening).toBe(false);
   });
 });

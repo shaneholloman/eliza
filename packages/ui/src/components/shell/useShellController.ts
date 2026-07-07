@@ -47,6 +47,7 @@ import {
 } from "../../state/persistence";
 import { goHome } from "../../state/shell-surface-store";
 import { deriveAgentReady } from "../../state/types";
+import { voiceCaptureDebug } from "../../utils/voice-capture-debug";
 import { TurnAggregator } from "../../voice/end-of-turn";
 import {
   type MicrophonePermissionState,
@@ -94,6 +95,17 @@ export {
 /** Upper bound (ms) the conversation-switch / clear loading spinner may show
  *  before it is force-cleared — see `runWithConversationLoading`. */
 const CONVERSATION_LOADING_MAX_MS = 12_000;
+
+/**
+ * Grace window (ms) after a capture starts during which an APP_PAUSE is treated
+ * as the iOS getUserMedia permission-dialog focus-steal (a transient
+ * visibilitychange) rather than a real background-suspend, so the just-started
+ * capture is NOT discarded out from under the grant (#voice-crickets). Matches
+ * the composer-side CAPTURE_PAUSE_GRACE_MS in useVoiceChat. Transcription mode
+ * never re-arms on resume, so without this a permission-prompt pause on the
+ * transcribe surface is unrecoverable crickets.
+ */
+const SHELL_CAPTURE_PAUSE_GRACE_MS = 1500;
 
 /** How a voice capture turn is consumed when it produces a final transcript.
  *  `"transcription"` records long-form: finals accumulate into ONE recording
@@ -541,6 +553,14 @@ export function useShellController(): ShellController {
   // whether the agent's reply is spoken back — typed turns stay silent.
   const [lastTurnVoice, setLastTurnVoice] = React.useState(false);
   const captureRef = React.useRef<VoiceCaptureHandle | null>(null);
+  // Wall-clock (ms) the current capture handle was created. On the installed
+  // iOS PWA the native getUserMedia permission dialog steals focus the instant
+  // capture starts, firing visibilitychange → APP_PAUSE; discarding there kills
+  // the mic the user is about to grant (tap → prompt → grant → crickets), and
+  // transcription mode never re-arms on resume so it can't self-heal. A capture
+  // younger than SHELL_CAPTURE_PAUSE_GRACE_MS is kept across such a pause
+  // (#voice-crickets).
+  const captureStartedAtRef = React.useRef<number>(0);
   // Semantic end-of-turn aggregator for the always-on/converse path: holds a
   // turn that trails off mid-clause (a trailing conjunction/preposition) and
   // appends the speaker's continuation, so a slow speaker is not cut off and
@@ -833,6 +853,24 @@ export function useShellController(): ShellController {
   const discardCaptureForSuspend = React.useCallback(() => {
     const handle = captureRef.current;
     if (!handle) return;
+    // Permission-prompt grace (#voice-crickets): the iOS getUserMedia dialog
+    // fires visibilitychange → APP_PAUSE the instant capture starts. Discarding
+    // there kills the mic the user is about to grant, and transcription mode
+    // never re-arms on resume, so keep a capture younger than the grace window.
+    // A genuine background that stalls the WebAudio graph is still caught at
+    // stop() by the empty-WAV guard, so keeping a young capture alive is safe.
+    if (captureStartedAtRef.current > 0) {
+      const captureAgeMs = Date.now() - captureStartedAtRef.current;
+      if (captureAgeMs < SHELL_CAPTURE_PAUSE_GRACE_MS) {
+        voiceCaptureDebug("pause:kept", {
+          surface: "shell",
+          captureAgeMs,
+          graceMs: SHELL_CAPTURE_PAUSE_GRACE_MS,
+        });
+        return;
+      }
+    }
+    voiceCaptureDebug("pause:cancel", { surface: "shell" });
     captureRef.current = null;
     explicitStopRef.current = true;
     turnCarryoverRef.current = "";
@@ -928,6 +966,14 @@ export function useShellController(): ShellController {
         // window hasn't fired. Converse stops only on toggle-off, where a
         // partial must NOT be submitted.
         finalizeOnStop: intent === "dictate",
+        // Pre-POST silence guard fired: a near-silent tap was dropped without a
+        // cloud round-trip (correct), but the user got nothing. Surface a subtle
+        // "didn't catch that" hint so the dead-air is legible instead of
+        // crickets (#voice-crickets). Info-severity + short: it's a nudge to
+        // speak up, not an error.
+        onSilentDrop: () => {
+          setActionNotice("Didn't catch that — try again.", "info", 2500);
+        },
         onTranscript: (segment) => {
           const text = segment.text.trim();
           if (!segment.final) {
@@ -1061,6 +1107,7 @@ export function useShellController(): ShellController {
         },
       });
       captureRef.current = handle;
+      captureStartedAtRef.current = Date.now();
       setRecording(true);
       handle
         .start()

@@ -399,20 +399,47 @@ export async function startLocalAsrRecorder(
   });
   const context = new AudioContextCtor();
   if (context.state === "suspended") {
-    // A context that cannot resume produces silence — surface the failure to
-    // the caller (voice-capture-factory setState("error")) instead of
-    // recording a dead stream. Release the mic + context first so the failed
+    // A context that cannot resume produces silence (all-zero PCM → the WAV
+    // reads as silent → a quiet no-op → the user sees crickets). Surface the
+    // failure to the caller (voice-capture-factory setState("error")) instead
+    // of recording a dead stream. Release the mic + context first so the failed
     // start does not leave the capture indicator on.
-    try {
-      await context.resume();
-    } catch (err) {
+    //
+    // iOS/WebKit quirk (#voice-crickets): `context.resume()` can RESOLVE while
+    // `state` is still "suspended" — the resume is queued behind a user gesture
+    // that the getUserMedia permission dialog interrupted. A single await
+    // therefore isn't proof the graph is live; re-check the state and retry a
+    // couple of times before giving up, so a context that just needed a beat to
+    // actually resume after the dialog dismissed isn't misread as dead.
+    const failResume = async (cause: unknown): Promise<never> => {
       // error-policy:J2 release the hot mic, then rethrow with context
       for (const track of stream.getTracks()) track.stop();
       // error-policy:J6 teardown — the context may already be closed
       await context.close().catch(() => undefined);
       throw new Error("AudioContext could not resume for local ASR capture", {
-        cause: err,
+        cause,
       });
+    };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await context.resume();
+      } catch (err) {
+        await failResume(err);
+      }
+      // resume() resolved — but on iOS it may not have actually taken effect.
+      // Re-read the LIVE state: the `if (context.state === "suspended")` guard
+      // above narrows the literal, but resume() can have flipped it to
+      // "running". The cast widens the read back to the full union so the
+      // comparison reflects the mutated value instead of the stale narrow.
+      const liveState = context.state as AudioContextState;
+      if (liveState !== "suspended") break;
+      if (attempt === 2) {
+        await failResume(
+          new Error("AudioContext stayed suspended after resume"),
+        );
+      }
+      // Yield a frame so a gesture-queued resume can land before the re-check.
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
 

@@ -1265,6 +1265,12 @@ describe("useShellController — voice capture routing", () => {
     expect(result.current.recording).toBe(true);
     expect(createVoiceCaptureMock).toHaveBeenCalledTimes(1);
 
+    // Age the capture past the permission-prompt grace (#voice-crickets) so the
+    // pause reads as a genuine background-suspend, not the iOS getUserMedia
+    // dialog focus-steal (which must NOT discard the just-started capture).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600);
+    });
     // Background the app mid-capture.
     await act(async () => {
       document.dispatchEvent(new Event("eliza:app-pause"));
@@ -1287,6 +1293,10 @@ describe("useShellController — voice capture routing", () => {
     });
     expect(createVoiceCaptureMock).toHaveBeenCalledTimes(1);
 
+    // Past the permission-prompt grace — a genuine background-suspend discards.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600);
+    });
     await act(async () => {
       document.dispatchEvent(new Event("eliza:app-pause"));
     });
@@ -1314,6 +1324,31 @@ describe("useShellController — voice capture routing", () => {
     });
     // Nothing to re-arm — no phantom capture is created on resume.
     expect(createVoiceCaptureMock).not.toHaveBeenCalled();
+  });
+
+  it("KEEPS a just-started capture on APP_PAUSE within the permission grace (#voice-crickets)", async () => {
+    // The iOS getUserMedia permission dialog fires visibilitychange → APP_PAUSE
+    // the instant capture starts. Discarding there kills the mic the user is
+    // about to grant — and transcription mode never re-arms on resume, so this
+    // is unrecoverable crickets. A capture younger than the grace is KEPT.
+    const { result } = renderHook(() => useShellController());
+    await act(async () => {
+      result.current.toggleHandsFree();
+    });
+    expect(result.current.recording).toBe(true);
+    expect(createVoiceCaptureMock).toHaveBeenCalledTimes(1);
+
+    // Permission dialog's visibilitychange lands well inside the grace window.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+      document.dispatchEvent(new Event("eliza:app-pause"));
+    });
+
+    // Capture KEPT: not disposed, still recording — the grant lands on a live
+    // mic instead of a corpse, and no phantom re-arm is needed.
+    expect(captureHandles[0]?.dispose).not.toHaveBeenCalled();
+    expect(result.current.recording).toBe(true);
+    expect(createVoiceCaptureMock).toHaveBeenCalledTimes(1);
   });
 });
 

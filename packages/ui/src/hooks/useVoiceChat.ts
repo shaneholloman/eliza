@@ -41,6 +41,7 @@ import {
   ttsDebug,
   ttsDebugTextPreview,
 } from "../utils/tts-debug";
+import { voiceCaptureDebug } from "../utils/voice-capture-debug";
 import { hasConfiguredApiKey } from "../voice";
 import {
   isLocalAsrCaptureSupported,
@@ -147,6 +148,17 @@ const CLOUD_TTS_TIMEOUT_MS = 60_000;
 const LOCAL_INFERENCE_TTS_TIMEOUT_MS = 60_000;
 /** How long the transient `micReconnected` pulse stays set after an auto-restart. */
 const MIC_RECONNECT_PULSE_MS = 1500;
+/**
+ * Grace window (ms) after a capture starts during which an APP_PAUSE is treated
+ * as the iOS permission-dialog focus-steal (a transient visibilitychange the
+ * native getUserMedia prompt fires) rather than a real background-suspend, so
+ * the just-started capture is NOT cancelled out from under the grant
+ * (#voice-crickets). A genuine background that actually stalls the WebAudio
+ * graph is still caught at stop() by the empty-WAV guard, so keeping a young
+ * capture alive here is safe. 1500ms comfortably covers the tap→dialog→grant
+ * round-trip without lingering long enough to strand a real suspend.
+ */
+const CAPTURE_PAUSE_GRACE_MS = 1500;
 
 // ── Internal helpers ─────────────────────────────────────────────────
 
@@ -240,6 +252,7 @@ interface VoiceTranscriptUpdateMetadata {
 // ── Test-visible internals ───────────────────────────────────────────
 
 export const __voiceChatInternals = {
+  CAPTURE_PAUSE_GRACE_MS,
   isWindowsElectrobunRenderer,
   shouldPreferNativeTalkMode,
   shouldAutoRestartBrowserRecognition,
@@ -312,6 +325,13 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
   const speechTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const enabledRef = useRef(false);
   const listeningModeRef = useRef<VoiceCaptureMode>("idle");
+  // Wall-clock (ms) the current capture recorder began. Used by the APP_PAUSE
+  // handler to distinguish a genuine background-suspend from the transient
+  // visibilitychange the iOS permission dialog fires the instant getUserMedia
+  // pops its native prompt (#voice-crickets). A capture younger than
+  // CAPTURE_PAUSE_GRACE_MS is almost certainly mid-permission-prompt, not
+  // backgrounded — cancelling it there kills the mic the user is about to grant.
+  const captureStartedAtRef = useRef<number>(0);
   const transcriptBufferRef = useRef("");
   const latestTranscriptTurnRef = useRef<VoiceTurn | null>(null);
   const emitTranscript = useEffectEvent(
@@ -775,8 +795,28 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
     if (listeningModeRef.current === "idle" && !localAsrRecorderRef.current) {
       return;
     }
-    enabledRef.current = false;
+    // Permission-prompt grace (#voice-crickets): on the installed iOS PWA the
+    // native getUserMedia dialog steals focus the instant capture starts, which
+    // fires `visibilitychange → hidden` → APP_PAUSE. If we cancel here we kill
+    // the mic the user is about to grant — tap, prompt, grant, then crickets.
+    // A capture younger than the grace window is treated as "mid-permission
+    // prompt, not backgrounded" and KEPT. A genuine background that actually
+    // stalls the WebAudio graph is still caught at stop() by the empty-WAV
+    // guard, so keeping a young capture alive here is safe.
     const recorder = localAsrRecorderRef.current;
+    if (recorder && captureStartedAtRef.current > 0) {
+      const captureAgeMs = Date.now() - captureStartedAtRef.current;
+      if (captureAgeMs < CAPTURE_PAUSE_GRACE_MS) {
+        voiceCaptureDebug("pause:kept", {
+          captureAgeMs,
+          graceMs: CAPTURE_PAUSE_GRACE_MS,
+          mode: listeningModeRef.current,
+        });
+        return;
+      }
+    }
+    voiceCaptureDebug("pause:cancel", { mode: listeningModeRef.current });
+    enabledRef.current = false;
     localAsrRecorderRef.current = null;
     if (recorder) {
       // cancel() releases the mic tracks + closes the context, no throw, no POST.
@@ -914,6 +954,7 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
       try {
         const recorder = await startLocalAsrRecorder();
         localAsrRecorderRef.current = recorder;
+        captureStartedAtRef.current = Date.now();
         sttBackendRef.current = "local-inference";
         enabledRef.current = true;
         listeningModeRef.current = mode;
@@ -948,6 +989,7 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
       try {
         const recorder = await startLocalAsrRecorder();
         localAsrRecorderRef.current = recorder;
+        captureStartedAtRef.current = Date.now();
         sttBackendRef.current = "cloud";
         enabledRef.current = true;
         listeningModeRef.current = mode;
