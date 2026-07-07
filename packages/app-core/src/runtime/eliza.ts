@@ -1200,9 +1200,8 @@ let warmupInFlight: Promise<void> | null = null;
 // path). ELIZA_SKIP_LOCAL_EMBEDDING_WARMUP still skips warmup entirely
 // (checked inside the warmup policy).
 function isLocalEmbeddingWarmupDeferredByEnv(): boolean {
-  const raw = process.env.ELIZA_DEFER_LOCAL_EMBEDDING_WARMUP
-    ?.trim()
-    .toLowerCase();
+  const raw =
+    process.env.ELIZA_DEFER_LOCAL_EMBEDDING_WARMUP?.trim().toLowerCase();
   return !(raw === "0" || raw === "false" || raw === "no" || raw === "off");
 }
 
