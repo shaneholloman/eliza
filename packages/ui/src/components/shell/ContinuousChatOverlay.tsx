@@ -910,6 +910,7 @@ export function ContinuousChatOverlay({
   agentName = "Eliza",
   slash: slashProp,
   firstRunOpen = false,
+  dockPinned = false,
 }: {
   controller: ShellController;
   /** Name shown in the composer placeholder ("Ask {agentName}"). Defaults to Eliza. */
@@ -929,6 +930,14 @@ export function ContinuousChatOverlay({
    * the opaque backdrop fades to the normal scrim, revealing the home screen.
    */
   firstRunOpen?: boolean;
+  /**
+   * True while the desktop/web docked-chat idiom hosts this overlay inside the
+   * left dock pane (CHAT_DOCK_UX.md). Pins the sheet open FULL + edge-to-edge
+   * exactly like the onboarding pin: vertical sheet gestures, Escape, back
+   * intents, and every collapse path are no-ops — the vertical divider pill
+   * owns open/close on that idiom.
+   */
+  dockPinned?: boolean;
 }): React.JSX.Element {
   const {
     messages,
@@ -1166,8 +1175,12 @@ export function ContinuousChatOverlay({
   // detent are all DERIVED from it — so the impossible "open but not open" or
   // pilled-and-full combos can't exist and no transition has to hand-sync two
   // separate states (which is what bred the old stuck states).
+  // Openness pin shared by onboarding and the docked-chat idiom: while true
+  // the sheet is structurally FULL and undismissable (see firstRunOpen /
+  // dockPinned docs above).
+  const pinnedOpen = firstRunOpen || dockPinned;
   const [mode, setMode] = React.useState<ChatMode>(
-    firstRunOpen ? "full" : "input",
+    pinnedOpen ? "full" : "input",
   );
   // The pin-at-full + auto-collapse edge effect lives below `goToDetent` (it
   // needs the detent animator); the mount state above still opens FULL first.
@@ -1180,7 +1193,7 @@ export function ContinuousChatOverlay({
   // while firstRunOpen, the derived openness is always FULL regardless of the
   // underlying `mode` transition state. The effect still drives the real `mode`
   // so the falling edge (onboarding done) collapses correctly.
-  const effectiveMode: ChatMode = firstRunOpen ? "full" : mode;
+  const effectiveMode: ChatMode = pinnedOpen ? "full" : mode;
   const pilled = effectiveMode === "pill";
   const sheetOpen = effectiveMode === "half" || effectiveMode === "full";
   const expanded = effectiveMode === "full";
@@ -1195,7 +1208,7 @@ export function ContinuousChatOverlay({
   // leave-full transition resets it. Onboarding (firstRunOpen) starts here — the
   // login/first-run chat opens edge-to-edge full-screen (kept in sync by the
   // first-run pin effect below), then the falling edge collapses it to half.
-  const [maximized, setMaximized] = React.useState(firstRunOpen);
+  const [maximized, setMaximized] = React.useState(pinnedOpen);
   // A restore drag is in flight (pull-down out of full-bleed). Declared up here
   // (not by the restore binding) because `fullBleedFrame` below reads it to keep
   // the panel MAX-HEIGHT full-screen-sized for the drag (so the height can track
@@ -2351,7 +2364,7 @@ export function ContinuousChatOverlay({
     !hasImages &&
     !recording &&
     !responding &&
-    !firstRunOpen;
+    !pinnedOpen;
 
   // In short landscape the resting composer moves to the bottom inline-end
   // corner. Publish that footprint separately from bottom clearance so hosted
@@ -2532,7 +2545,7 @@ export function ContinuousChatOverlay({
   // shape instead of popping/snapping. Only the SHAPE eases (side inset, corner
   // radius, composer bottom-inset); the height is still the finger/detent spring,
   // so the two read as one motion. Reduced-motion sets it instantly.
-  const fullBleedT = useMotionValue(firstRunOpen ? 1 : 0);
+  const fullBleedT = useMotionValue(pinnedOpen ? 1 : 0);
   // Mirror the settled full-bleed flag so release handlers can settle the morph
   // toward the committed shape without waiting for a re-render.
   const fullBleedRef = React.useRef(fullBleed);
@@ -2973,8 +2986,18 @@ export function ContinuousChatOverlay({
       setMaximized(true);
       return;
     }
-    if (was) goToDetent("half");
-  }, [firstRunOpen, goToDetent]);
+    if (was && !dockPinned) goToDetent("half");
+  }, [firstRunOpen, dockPinned, goToDetent]);
+
+  // Dock pin: when the dock idiom mounts (or flips on at a live resize), snap
+  // the sheet to its pinned FULL + edge-to-edge shape immediately — the dock
+  // pane's geometry owns the chat's footprint from here.
+  React.useEffect(() => {
+    if (!dockPinned) return;
+    setMode("full");
+    setMaximized(true);
+    fullBleedT.set(1);
+  }, [dockPinned, fullBleedT]);
 
   // First-run opaque backdrop (#12178). While onboarding pins the sheet FULL,
   // the backdrop is an OPAQUE `bg-bg` layer that hides the launcher/home behind
@@ -3015,7 +3038,7 @@ export function ContinuousChatOverlay({
     // Undismissable during onboarding: Escape (document, thread, composer),
     // outside taps, the grabber close, and the sheet-open grabber tap all
     // funnel here — every one is a no-op until first-run completes.
-    if (firstRunOpen) return;
+    if (pinnedOpen) return;
     // If focus is sitting inside the thread log, pull it out before the log
     // becomes aria-hidden / tabIndex=-1 — never park focus on a hidden element.
     if (
@@ -3028,7 +3051,7 @@ export function ContinuousChatOverlay({
     }
     closeSheet();
     inputRef.current?.blur();
-  }, [closeSheet, firstRunOpen]);
+  }, [closeSheet, pinnedOpen]);
 
   // Dismiss the keyboard and return to the resting state from BEFORE the composer
   // was focused — the single restore path shared by every "drop the keyboard"
@@ -3148,14 +3171,14 @@ export function ContinuousChatOverlay({
   React.useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const onOpen = () => {
-      if (firstRunOpen) return;
+      if (pinnedOpen) return;
       setMode((m) => (m === "pill" ? "input" : m));
       expand();
       requestAnimationFrame(() => inputRef.current?.focus());
     };
     window.addEventListener(CHAT_OPEN_EVENT, onOpen);
     return () => window.removeEventListener(CHAT_OPEN_EVENT, onOpen);
-  }, [firstRunOpen, expand]);
+  }, [pinnedOpen, expand]);
 
   // OS assistant / deep-link entry (Siri, Shortcuts, App Actions, the assistant
   // entry point) routes into `#chat?text=…&source=…&voice=1`. On desktop the
@@ -3682,14 +3705,14 @@ export function ContinuousChatOverlay({
     const onBackIntent = (event: Event) => {
       const detail = (event as CustomEvent<BackIntentEventDetail>).detail;
       if (!detail || detail.handled) return;
-      if (!sheetOpen || firstRunOpen) return;
+      if (!sheetOpen || pinnedOpen) return;
       detail.handled = true;
       collapse();
     };
     window.addEventListener(ELIZA_BACK_INTENT_EVENT, onBackIntent);
     return () =>
       window.removeEventListener(ELIZA_BACK_INTENT_EVENT, onBackIntent);
-  }, [sheetOpen, firstRunOpen, collapse]);
+  }, [sheetOpen, pinnedOpen, collapse]);
 
   // Auto-grow the composer with multi-line input: snap to the content height
   // (capped by `max-h` in CSS, which then scrolls). Runs on every draft change
@@ -3803,7 +3826,7 @@ export function ContinuousChatOverlay({
   const onDragOffset = React.useCallback(
     (offset: number) => {
       // Onboarding pins the sheet at FULL: the live drag must not move it.
-      if (firstRunOpen) return;
+      if (pinnedOpen) return;
       if (!draggingRef.current) {
         stopThreadAnimation();
         stopOpenProgressAnimation();
@@ -4127,7 +4150,7 @@ export function ContinuousChatOverlay({
       }
     },
     [
-      firstRunOpen,
+      pinnedOpen,
       pilled,
       sheetOpen,
       baseH,
@@ -4163,7 +4186,7 @@ export function ContinuousChatOverlay({
   // detent. Returns true when it took over the release so the caller skips its
   // normal detent settle. Onboarding never re-triggers this (pinned full-bleed).
   const maybeMaximizeOnRelease = React.useCallback((): boolean => {
-    if (firstRunOpen) return false;
+    if (pinnedOpen) return false;
     // Two distinct maximize intents, both read from the gesture itself:
     //  - OVER-PULL: the peak raw pull carried at least half the maximize morph
     //    PAST the FULL detent (the finger visibly squared the corners) — the
@@ -4192,7 +4215,7 @@ export function ContinuousChatOverlay({
     }
     return false;
   }, [
-    firstRunOpen,
+    pinnedOpen,
     viewportH,
     viewport.innerHeight,
     insetPanelMaxH,
@@ -4280,7 +4303,7 @@ export function ContinuousChatOverlay({
       }
       setDragPreviewMounted(false);
       // Onboarding: a pull-down must not step the pinned-FULL sheet down.
-      if (firstRunOpen) return settleDrag();
+      if (pinnedOpen) return settleDrag();
       if (pilled) return settleDrag(); // already the lowest detent
       if (sheetOpen) {
         // Step down from the LIVE height, so a flick and a held-drag-then-flick
@@ -4334,7 +4357,7 @@ export function ContinuousChatOverlay({
       draggingRef.current = false;
       setDragPreviewMounted(false);
       // Onboarding: a released drag always springs back to the pinned FULL.
-      if (firstRunOpen) return settleDrag();
+      if (pinnedOpen) return settleDrag();
       if (pilled) {
         // From the pill: a slow drag under the halfway-open mark (openProgress
         // < 0.5) springs back to the capsule; past it we commit to LEAVING the
@@ -4408,9 +4431,9 @@ export function ContinuousChatOverlay({
   // ArrowDown) does the discrete restore. Onboarding pins the sheet, so the zone
   // is never rendered during first-run (guarded anyway for safety).
   const restoreFromMaximizedGuarded = React.useCallback(() => {
-    if (firstRunOpen) return;
+    if (pinnedOpen) return;
     restoreFromMaximized();
-  }, [firstRunOpen, restoreFromMaximized]);
+  }, [pinnedOpen, restoreFromMaximized]);
   // Live drag: reuse the shared drag math (onDragOffset) so the panel tracks
   // the finger identically to a grabber drag — the height AND the edge-to-edge
   // ↔ inset shape morph (a pure function of the height in onDragOffset) both
@@ -4420,7 +4443,7 @@ export function ContinuousChatOverlay({
   // full-bleed ceiling.
   const onRestoreDrag = React.useCallback(
     (offset: number) => {
-      if (firstRunOpen) return;
+      if (pinnedOpen) return;
       // Fresh gesture (onDragOffset flips draggingRef on its first frame). Seed
       // the peak at 0 — the maximized sheet sits at the ceiling, which is
       // gesture-start offset 0 — NOT the first sampled offset (a fast/coalesced
@@ -4447,7 +4470,7 @@ export function ContinuousChatOverlay({
       }
       onDragOffset(offset);
     },
-    [firstRunOpen, maximized, onDragOffset],
+    [pinnedOpen, maximized, onDragOffset],
   );
   // Release from a restore drag: if it never un-maximized (an upward/stationary
   // gesture) keep it pinned full-bleed; otherwise settle at the released height —
@@ -4463,7 +4486,7 @@ export function ContinuousChatOverlay({
       dragCommitRef.current = null;
       return settleDrag();
     }
-    if (firstRunOpen || !restoreDidUnmaximizeRef.current) return settleDrag();
+    if (pinnedOpen || !restoreDidUnmaximizeRef.current) return settleDrag();
     // A restore that un-maximized always lands on the inset shape; drive the
     // morph home (0) so a release mid-return finishes un-morphing the edges.
     animateFullBleedTo(0);
@@ -4484,7 +4507,7 @@ export function ContinuousChatOverlay({
       setMode("half");
     }
   }, [
-    firstRunOpen,
+    pinnedOpen,
     settleDrag,
     threadHeight,
     panelMaxH,
@@ -5000,7 +5023,7 @@ export function ContinuousChatOverlay({
                 over the top bar fall THROUGH to this strip (only the button
                 clusters keep their taps). Keyboard-operable (Enter/Space/ArrowDown
                 restore) so the gesture-only affordance stays WCAG 2.1.1 operable. */}
-            {(fullBleed || restoreDragging) && !firstRunOpen ? (
+            {(fullBleed || restoreDragging) && !pinnedOpen ? (
               <button
                 {...maximizeRestoreBinding}
                 type="button"
