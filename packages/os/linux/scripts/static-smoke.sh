@@ -3,6 +3,11 @@
 
 set -euo pipefail
 
+# This gate is a long `set -e` assertion chain of silent test/grep commands, so
+# an unannotated failure exits with no output at all — that silence hid a red
+# nightly for over a week. Name the dying assertion on the way out.
+trap 'echo "static-smoke: FAILED at ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "${ROOT}/../../.." && pwd)"
 SOURCE_ONLY="${ELIZAOS_STATIC_SOURCE_ONLY:-0}"
