@@ -110,14 +110,16 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
     ],
   },
   "builtin-logs": {
-    requireAny: ["Logs", "INFO", "All levels", "Search logs", "All tags"],
     requireAny: [
+      "Logs",
+      "INFO",
       "All levels",
       "Alllevels",
       "Search logs",
       "searchlogs",
       "All tags",
       "Alltags",
+    ],
   },
   "builtin-inventory": {
     requireAny: ["Wallet", "USDC", "Tokens", "Perps"],
@@ -135,9 +137,10 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   // The launcher grid is its own content; `builtin-views` renders the same grid.
   "builtin-apps": {
     requireAll: ["My Apps"],
-    requireAny: ["elizaOS apps", "Advanced", "Load"],
     requireAny: [
-      "My Apps",
+      "elizaOS apps",
+      "Advanced",
+      "Load",
       "No apps installed",
       "Create new app",
       "Install, create",
@@ -178,7 +181,6 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
     requireAny: ["No trajectories yet", "trajector"],
   },
   "builtin-transcripts": {
-    requireAny: ["Live meeting", "Paste a Meet", "transcri", "recording"],
     requireAny: [
       "Live meeting",
       "Paste a Meet",
