@@ -1166,6 +1166,103 @@ async function runFingerTrackingSuite(page) {
     (await variant(page)) === "closed",
     `[finger] DOWN drag collapses the chat to the bottom`,
   );
+
+  // (C) MAXIMIZE ROUND-TRIP from the FULL detent — the reported regression:
+  // starting AT the inset-full ceiling, dragging up must keep scaling to the
+  // screen top under the finger (no freeze, and it must maximize with the finger
+  // still ON screen, not far past it), and reversing DOWN in the same gesture
+  // must un-scale 1:1 (no displaced dead zone from a committed-maximize state).
+  // Reset to a clean INSET-full sheet (Escape → input → two flicks half→full):
+  // opening from the pill/half and over-flicking lands NEAR-maximized, which
+  // would make the round trip start inside the overshoot region.
+  if ((await detent(page)) === "pill") {
+    await page.getByTestId("chat-pill").click();
+    await page.waitForTimeout(SETTLE);
+  }
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(SETTLE);
+  await gesture(page, 160, { pointer: "mouse", slow: false, steps: 2 });
+  await page.waitForTimeout(SETTLE);
+  await gesture(page, 160, { pointer: "mouse", slow: false, steps: 2 });
+  await page.waitForTimeout(SETTLE);
+  assert(
+    (await detent(page)) === "full" &&
+      (await page
+        .locator('[data-testid="chat-sheet"][data-maximized="true"]')
+        .count()) === 0,
+    `[finger] reached INSET-full before the maximize round-trip (detent ${await detent(page)})`,
+  );
+  {
+    const b = await page.getByTestId("chat-sheet-grabber").boundingBox();
+    const cx = b.x + b.width / 2;
+    const startY = b.y + b.height / 2;
+    const topY = -28; // just past the screen top
+    const rows = [];
+    const readTop = async (cursorY, phase) => {
+      const top = await page
+        .getByTestId("chat-sheet")
+        .boundingBox()
+        .then((box) => box?.y ?? null)
+        .catch(() => null);
+      rows.push({ phase, cursorY, top });
+    };
+    await page.mouse.move(cx, startY);
+    await page.mouse.down();
+    for (let i = 1; i <= 40; i += 1) {
+      const cy = startY + ((topY - startY) * i) / 40;
+      await page.mouse.move(cx, cy);
+      await page.waitForTimeout(20);
+      await readTop(cy, "up");
+    }
+    let maxedAtCursor = null;
+    if (
+      (await page
+        .locator('[data-testid="chat-sheet"][data-maximized="true"]')
+        .count()) === 1
+    ) {
+      maxedAtCursor = rows.find((r) => r.top != null && r.top <= 6)?.cursorY;
+    }
+    for (let i = 1; i <= 40; i += 1) {
+      const cy = topY + ((startY - topY) * i) / 40;
+      await page.mouse.move(cx, cy);
+      await page.waitForTimeout(20);
+      await readTop(cy, "down");
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(SETTLE);
+    // UP reached the true top (≤6px) — no freeze.
+    const upTop = Math.min(
+      ...rows.filter((r) => r.phase === "up" && r.top != null).map((r) => r.top),
+    );
+    assert(
+      upTop <= 8,
+      `[finger] FULL→top drag reaches the screen top under the finger (min top ${Math.round(upTop)}px ≤ 8px — no freeze)`,
+    );
+    // The DOWN phase must track the finger 1:1 (constant offset) — no dead zone
+    // from a committed-maximize state. This round trip only spans the over-pull
+    // region (top ~0→inset-full), so trim just the pinned-at-screen-top boundary
+    // (top ≤ 6, where the grabber gap compresses) and measure the divergence's
+    // spread directly.
+    const downDivs = rows
+      .filter((r) => r.phase === "down" && r.top != null && r.top > 6)
+      .map((r) => r.top - r.cursorY);
+    let downWorst = -1;
+    if (downDivs.length >= 6) {
+      const sorted = [...downDivs].sort((a, c) => a - c);
+      const med = sorted[Math.floor(sorted.length / 2)];
+      downWorst = Math.max(...downDivs.map((d) => Math.abs(d - med)));
+      assert(
+        downWorst <= 34,
+        `[finger] MAXIMIZE reversal DOWN tracks 1:1 (max drift ${Math.round(downWorst)}px from the ${Math.round(med)}px offset ≤ 34px — no committed-maximize dead zone)`,
+      );
+    } else {
+      assert(false, `[finger] MAXIMIZE reversal: too few down samples (${downDivs.length})`);
+    }
+    console.log(
+      `  ℹ maximize round-trip: up top ${Math.round(upTop)}px, maximized at cursorY ${maxedAtCursor == null ? "n/a" : Math.round(maxedAtCursor)}, down drift ${Math.round(downWorst)}px`,
+    );
+  }
+
   console.log(
     `  ℹ finger tracking: up drift ${Math.round(upStats?.worst ?? -1)}px, down drift ${Math.round(downStats?.worst ?? -1)}px (handle offsets ${Math.round(upStats?.median ?? 0)}/${Math.round(downStats?.median ?? 0)}px)`,
   );
