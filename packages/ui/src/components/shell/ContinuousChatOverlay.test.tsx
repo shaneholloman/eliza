@@ -1585,7 +1585,7 @@ describe("ContinuousChatOverlay", () => {
     expect(input.hasAttribute("readonly")).toBe(false);
   });
 
-  it("uses the pulsing chrome cue instead of rendering interim transcript text", () => {
+  it("uses the pulsing composer glyph instead of rendering interim transcript text", () => {
     render(
       <ContinuousChatOverlay
         controller={makeController({
@@ -1596,10 +1596,18 @@ describe("ContinuousChatOverlay", () => {
       />,
     );
     expect(screen.queryByText(/tell me about the coast/)).toBeNull();
+    // The "capture is hot" cue is the composer voice glyph's accent pulse —
+    // NOT the drag handle: while the composer is visible the handle stays
+    // quiet during a recording (a second pulsing bar right above the already-
+    // pulsing glyph read as noise). Only the collapsed PILL pulses for a live
+    // capture (see the morph regression suite).
+    expect(screen.getByTestId("chat-composer-mic").className).toContain(
+      "animate-pulse",
+    );
     const grabberCue = screen
       .getByTestId("chat-sheet-grabber")
       .querySelector("span");
-    expect(grabberCue?.className).toContain("animate-pulse");
+    expect(grabberCue?.className).not.toContain("animate-pulse");
   });
 
   it("keeps the ambient layer non-blocking for controls behind it", () => {
