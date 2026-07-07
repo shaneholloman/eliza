@@ -189,7 +189,7 @@ export function CharacterIdentityPanel({
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-2">
-        <span className="text-xs font-medium text-muted">
+        <span className="text-sm font-semibold text-txt-strong">
           {t("common.name", { defaultValue: "Name" })}
         </span>
         <Input
@@ -206,7 +206,7 @@ export function CharacterIdentityPanel({
         />
       </div>
       <div className="flex flex-col gap-2">
-        <span className="text-xs font-medium text-muted">
+        <span className="text-sm font-semibold text-txt-strong">
           {t("settings.identity.systemPromptLabel", {
             defaultValue: "System prompt",
           })}
@@ -226,7 +226,7 @@ export function CharacterIdentityPanel({
         />
       </div>
       <div className="flex flex-col gap-2">
-        <span className="text-xs font-medium text-muted">
+        <span className="text-sm font-semibold text-txt-strong">
           {t("charactereditor.AboutMe", { defaultValue: "About Me" })}
         </span>
         <Textarea

@@ -1,6 +1,6 @@
 /**
  * The Settings hub — an iOS/Android-style grouped row list that IS the settings
- * main screen. Each group renders as a labelled rounded card of tappable rows
+ * main screen. Each group renders as a labelled rounded surface of tappable rows
  * (icon medallion, section label, trailing chevron); tapping a row opens that
  * section as a subview (the SettingsView swaps the hub for the section body and
  * the shared ViewHeader's back returns here). Replaces the old horizontal
@@ -39,8 +39,8 @@ export function SettingsHubList({
           <h2 className="mb-1.5 px-1 text-2xs font-medium uppercase tracking-wide text-muted/80">
             {groupLabel}
           </h2>
-          <div className="overflow-hidden rounded-xl border border-border/50 bg-card/60">
-            {items.map((section, index) => {
+          <div className="overflow-hidden rounded-xl bg-card/60">
+            {items.map((section) => {
               const Icon = section.icon;
               const sectionLabel = label(section.label, section.defaultLabel);
               return (
@@ -52,7 +52,6 @@ export function SettingsHubList({
                   className={cn(
                     "flex min-h-11 w-full items-center gap-3 px-3 py-2.5 text-left transition-colors",
                     "hover:bg-surface/80 focus-visible:bg-surface/80 focus-visible:outline-none",
-                    index > 0 && "border-t border-border/40",
                   )}
                 >
                   <span
