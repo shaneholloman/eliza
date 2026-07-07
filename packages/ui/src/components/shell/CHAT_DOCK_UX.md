@@ -150,8 +150,10 @@ interface ChatDockState {
   the agent path and the UI path drive the same state.
 
 Simplification opportunities this unlocks (do while implementing, not after):
-- `HomePill.tsx` + `AssistantOverlay` legacy pill is vestigial — fold or delete
-  once the dock pill lands rather than shipping three pills.
+- `HomePill.tsx` + `AssistantOverlay` are NOT vestigial — they are the chat
+  surface of the desktop chat-overlay window (`ChatOverlayShell`) and the OS
+  kiosk shell (`KioskShell`), both of which sit outside the dock idiom. They
+  stay.
 - The right pane reuses `HomeLauncherSurface`/`ViewRouter` mounts as-is; no new
   router. The dock is a *layout* around existing surfaces, not a new surface.
 - Overlay z-9000 float becomes unnecessary in dock idiom: the chat pane is real
