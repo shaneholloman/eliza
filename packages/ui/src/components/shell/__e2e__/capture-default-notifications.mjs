@@ -105,7 +105,14 @@ if (!tailwindJs) console.log("(tailwind CDN unavailable — unstyled pixels)");
 
 const html = `<!doctype html><html><head><meta charset="utf-8"><title>notifications e2e</title>
 ${tailwindJs ? '<script src="/tailwind.js"></script>' : ""}
-<style>html,body{margin:0;height:100%;background:#0a0d16;color:#f4f4f5;font-family:ui-sans-serif,system-ui}</style>
+<style>html,body{margin:0;height:100%;color:#f4f4f5;font-family:ui-sans-serif,system-ui;
+  background-color:#0a0d16;
+  background-image:
+    radial-gradient(55% 50% at 22% 14%, rgba(255,150,60,0.30), transparent 60%),
+    radial-gradient(50% 45% at 80% 82%, rgba(255,90,40,0.20), transparent 60%),
+    repeating-linear-gradient(120deg, rgba(255,255,255,0.06) 0 1px, transparent 1px 24px),
+    repeating-linear-gradient(30deg, rgba(255,255,255,0.05) 0 1px, transparent 1px 24px);
+  background-attachment:fixed;}</style>
 <script>window.process=window.process||{env:{NODE_ENV:"production"},platform:"browser",cwd:function(){return "/"}};</script>
 </head><body><div id="root"></div><script>${js}</script></body></html>`;
 const htmlPath = join(outDir, "notifications.html");
@@ -155,17 +162,25 @@ async function shadeMode(page) {
   return page.locator(LIST).getAttribute("data-shade-mode");
 }
 
-const browser = await chromium.launch();
+const HEADFUL =
+  process.argv.includes("--headful") || process.env.HEADFUL === "1";
+console.log(HEADFUL ? "mode: HEADFUL (real Chromium)" : "mode: headless");
+const browser = await chromium.launch({
+  headless: !HEADFUL,
+  slowMo: HEADFUL ? 120 : 0,
+});
 for (const [name, width, height] of [
   ["desktop", 1280, 900],
   ["mobile", 390, 844],
 ]) {
   console.log(`\n── ${name} (${width}x${height}) ──`);
   const page = await browser.newPage({ viewport: { width, height } });
-  // Still the entrance + scroll-driven (`animation-timeline: view()`) effects:
-  // deterministic pixels, and the headless-shell compositor has crashed
-  // driving view-timeline rows while the scroller itself transforms (the pull).
-  await page.emulateMedia({ reducedMotion: "reduce" });
+  // Headless: still the entrance + scroll-driven (`animation-timeline: view()`)
+  // effects for deterministic pixels and to dodge the headless-shell compositor
+  // crash driving view-timeline rows while the scroller transforms. Headful
+  // shows the real motion + the SVG backdrop-filter refraction (which
+  // headless-shell can't composite), which is the whole point of --headful.
+  if (!HEADFUL) await page.emulateMedia({ reducedMotion: "reduce" });
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -361,6 +376,10 @@ for (const [name, width, height] of [
     failures += 1;
   }
   await page.close();
+}
+if (HEADFUL) {
+  console.log("HEADFUL: holding the window open 8s for live inspection…");
+  await new Promise((r) => setTimeout(r, 8000));
 }
 await browser.close();
 server.close();
