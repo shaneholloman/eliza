@@ -2900,17 +2900,19 @@ export function App() {
           <AppBackground visible={renderSharedAppBackground} />
           {/* Readability scrim for text-dense shared-background views. It sits
               between the wallpaper (z-0) and content (z-10) and covers safe
-              areas too. Settings deliberately shows the LIVE launcher
-              wallpaper behind a 50% dark veil (theme-independent black, not
-              bg/, so light mode never washes it out) — the user can change the
-              background from Settings and watch it apply behind the panel.
-              Opaque or overlay-app routes use the plain underlay instead, so
-              the wallpaper cannot leak through. */}
+              areas too. A THEME-AWARE frosted veil (bg/75 + blur), not a fixed
+              black wash: view copy renders in theme tokens, so the veil must
+              pull toward the theme surface for text to stay legible on any
+              wallpaper in both light and dark. The wallpaper reads through as
+              a tint; the immersive surfaces (chat, /background, launcher
+              roots) stay unscrimmed by design. Opaque or overlay-app routes
+              use the plain underlay instead, so the wallpaper cannot leak
+              through. */}
           {renderSharedAppBackground && wallpaperScrimActive ? (
             <div
               aria-hidden="true"
               data-testid="app-background-scrim"
-              className="pointer-events-none fixed inset-0 z-[1] bg-black/50"
+              className="pointer-events-none fixed inset-0 z-[1] bg-bg/75 backdrop-blur-2xl"
             />
           ) : null}
           {renderOpaqueAppBackground ? (
