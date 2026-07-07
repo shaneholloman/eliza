@@ -277,10 +277,12 @@ for (const f of await readdir(outDir)) {
 }
 
 // Page errors from stubbed-data sections are contained by the per-section
-// error boundary; the shell itself must never throw. Filter the known benign
-// unhandled-rejection noise from proxy async stubs.
-const fatal = pageErrors.filter((e) => !e.includes("is not a function"));
-assert(fatal.length === 0, `no uncaught shell page errors (${fatal.length})`);
+// error boundary; NOTHING may escape to a page error — a real shell TypeError
+// must fail the suite, so no message-shape filtering here.
+assert(
+  pageErrors.length === 0,
+  `no uncaught page errors (${pageErrors.length}): ${pageErrors[0] ?? ""}`,
+);
 
 if (failures > 0) {
   console.error(`\n${failures} assertion(s) failed`);

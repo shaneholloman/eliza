@@ -3610,7 +3610,7 @@ export function ContinuousChatOverlay({
     const isAboveShellOverlay = (target: EventTarget | null): boolean =>
       target instanceof Element &&
       !!target.closest(
-        '[data-above-shell-overlay], [role="dialog"], [data-notif-row]',
+        '[data-above-shell-overlay], [role="dialog"], [data-notif-row], [data-notif-control]',
       );
 
     const onPointerDown = (event: PointerEvent) => {

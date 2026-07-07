@@ -751,6 +751,11 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
         if (pull > PULL_SLOP_PX) {
           e.preventDefault();
           setPullPx(dampenPull(pull));
+        } else if (pullPxRef.current !== 0) {
+          // Finger reversed back above the anchor — the pull is withdrawn, so
+          // the release must not commit from the stale peak (parity with the
+          // pointer path).
+          setPullPx(0);
         }
       } else if (anchorY !== null) {
         // Scrolled back down into content — abandon the pull and re-anchor.
@@ -763,15 +768,23 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
       anchorY = null;
       commitPull();
     };
+    const onTouchCancel = () => {
+      // An OS-cancelled gesture (incoming call, edge-gesture takeover, palm
+      // rejection) ABORTS: snap back to rest, never toggle the shade from a
+      // gesture the user never completed.
+      start = null;
+      anchorY = null;
+      setPullPx(0);
+    };
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: false });
     el.addEventListener("touchend", onTouchEnd);
-    el.addEventListener("touchcancel", onTouchEnd);
+    el.addEventListener("touchcancel", onTouchCancel);
     return () => {
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
       el.removeEventListener("touchend", onTouchEnd);
-      el.removeEventListener("touchcancel", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchCancel);
     };
   }, [commitPull, setPullPx, hasNotifications]);
 
@@ -927,8 +940,7 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
       className="eliza-notif-center-in flex min-h-0 flex-1 flex-col overflow-hidden"
     >
       <style>{NOTIF_SCROLL_CSS}</style>
-      {/* Refraction defs mount once per document via the shell's GlassStyles
-          (src/glass); a second mount here would duplicate the SVG filter id. */}
+      <LiquidGlassRefractionDefs />
       {/* No "Notifications" header, no sort toggle, no more/less buttons; the
           inbox is always priority-triaged, the view-group eyebrows carry the
           only structure, and the pull gesture owns expand/collapse. */}
@@ -1064,6 +1076,10 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
             <button
               type="button"
               data-testid="notifications-expand-toggle"
+              // Exempt from the chat overlay's outside-tap swallower (see
+              // ContinuousChatOverlay's isAboveShellOverlay): this control
+              // lives outside [data-notif-row] but must own its activation.
+              data-notif-control=""
               className="sr-only"
               onClick={toggleShade}
             >
