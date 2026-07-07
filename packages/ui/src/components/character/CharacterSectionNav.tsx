@@ -32,16 +32,10 @@ const CHARACTER_SECTION_GROUP = "character";
  * The fixed Character family sections, in strip order. `aliases` list any legacy
  * `/character/*` deep-link that must still mark the tab active after the section
  * was promoted to a top-level route (Relationships lives at `/apps/relationships`
- * but kept its `/character/relationships` alias; `/character/select` is the
- * legacy Personality editor deep-link).
+ * but kept its `/character/relationships` alias).
  */
 const CHARACTER_SECTION_TABS: readonly SectionTab[] = [
-  {
-    id: "character",
-    label: "Personality",
-    path: "/character",
-    aliases: ["/character/select"],
-  },
+  { id: "character", label: "Personality", path: "/character" },
   {
     id: "relationships",
     label: "Relationships",
