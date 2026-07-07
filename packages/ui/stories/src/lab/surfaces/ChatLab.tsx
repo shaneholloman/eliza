@@ -40,6 +40,15 @@ const PHASES: { value: ShellController["phase"]; label: string }[] = [
   { value: "booting", label: "Booting" },
 ];
 
+// Fire the cloud-handoff phase event the in-chat provisioning card listens for
+// (useCloudHandoffPhase). "switched" is the self-hide terminal.
+const cloudPhase = (phase: string) =>
+  window.dispatchEvent(
+    new CustomEvent("eliza:cloud-handoff-phase", {
+      detail: { agentId: "lab-cloud-agent", phase },
+    }),
+  );
+
 export function ChatLab({
   controlsEl,
   onboarding = false,
@@ -109,6 +118,30 @@ export function ChatLab({
           checked={noProvider}
           onChange={setNoProvider}
         />
+      </ControlGroup>
+
+      <ControlGroup label="Cloud provisioning (in-chat)">
+        <Hint>
+          The dedicated cloud-agent setup status now renders INSIDE the chat,
+          above the composer — not as a home widget above it. Fire a handoff
+          phase to see it.
+        </Hint>
+        <Row>
+          <ActionButton onClick={() => cloudPhase("migrating")}>
+            Provisioning
+          </ActionButton>
+          <ActionButton onClick={() => cloudPhase("failed")}>
+            Failed
+          </ActionButton>
+        </Row>
+        <Row>
+          <ActionButton onClick={() => cloudPhase("insufficient-credits")}>
+            No credits
+          </ActionButton>
+          <ActionButton onClick={() => cloudPhase("switched")}>
+            Clear
+          </ActionButton>
+        </Row>
       </ControlGroup>
 
       <ControlGroup label="Drive the thread">

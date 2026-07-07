@@ -105,6 +105,7 @@ import { findChoiceRegions } from "../chat/message-choice-parser";
 import { parseFormSubmitDisplay } from "../chat/message-parser-helpers";
 import { MessageSearchPanel } from "../chat/message-search/MessageSearchPanel";
 import { ThinkingBlock } from "../chat/ThinkingBlock";
+import { AgentProvisioningWidget } from "../chat/widgets/agent-provisioning";
 import {
   buildReplyTargetFromMessage,
   ChatMessage,
@@ -5268,6 +5269,13 @@ export function ContinuousChatOverlay({
                 ) : null}
               </motion.div>
             ) : null}
+            {/* Cloud-agent provisioning status — rendered IN the chat, just
+                above the composer, NOT as a home widget floating above the
+                sheet. The widget consumes the same `useCloudHandoffPhase` event
+                and self-hides entirely unless a dedicated cloud agent is booting
+                (or a credit/retry state is live), so this is inert in the common
+                case. Full chat-column width, styled to sit in the sheet. */}
+            <AgentProvisioningWidget spanClassName="relative z-10 mx-auto w-full max-w-3xl shrink-0 px-3 pt-2" />
             {/* Reply target pill, just above the input (glass chrome). */}
             {chatReplyTarget ? (
               <div className="relative z-10 shrink-0 px-3 pt-2">

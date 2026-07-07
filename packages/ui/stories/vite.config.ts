@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react-swc";
 import { defineConfig, type Plugin } from "vite";
 
@@ -74,7 +75,12 @@ export default defineConfig({
   define: {
     "process.env": "({})",
   },
-  plugins: [react(), brandAssetsPlugin()],
+  // Tailwind v4 generates the utility classes from the `@source` globs in
+  // src/styles/styles.css (which already point at packages/ui/src). Without this
+  // the catalog/lab rendered every component with its inline styles only —
+  // positioning utilities like `fixed`/`absolute` silently no-op'd, so the
+  // floating chat overlay flowed statically instead of anchoring to the frame.
+  plugins: [tailwindcss(), react(), brandAssetsPlugin()],
   resolve: {
     alias: [
       { find: "@ui-src", replacement: uiSrc },

@@ -30,7 +30,6 @@ export {
 
 import { MusicLibraryCharacterWidget } from "../components/character/MusicLibraryCharacterWidget";
 import { AGENT_ORCHESTRATOR_PLUGIN_WIDGETS } from "../components/chat/widgets/agent-orchestrator";
-import { AGENT_PROVISIONING_HOME_WIDGET } from "../components/chat/widgets/agent-provisioning";
 import { BROWSER_STATUS_WIDGET } from "../components/chat/widgets/browser-status.helpers";
 import { CALENDAR_HOME_WIDGET } from "../components/chat/widgets/calendar-upcoming";
 import { MODEL_DOWNLOAD_HOME_WIDGET } from "../components/chat/widgets/model-download";
@@ -71,11 +70,9 @@ registerWidgetComponent(
   MODEL_DOWNLOAD_HOME_WIDGET.id,
   MODEL_DOWNLOAD_HOME_WIDGET.Component,
 );
-registerWidgetComponent(
-  AGENT_PROVISIONING_HOME_WIDGET.pluginId,
-  AGENT_PROVISIONING_HOME_WIDGET.id,
-  AGENT_PROVISIONING_HOME_WIDGET.Component,
-);
+// Cloud-agent provisioning is no longer a host/home widget — it renders in the
+// chat (ContinuousChatOverlay, above the composer), so it is neither registered
+// as a widget component here nor given a home slot below.
 // Per-plugin frontpage widgets: each surfaces a compact, attention-ranked slice
 // of its plugin's own state on the home grid, self-hides when empty, and
 // self-publishes a home-attention signal so it floats up on its own data
@@ -226,24 +223,12 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     // whole row with a real progress bar (it self-hides once ready).
     size: { cols: 4, rows: 2 },
   },
-  // Cloud-agent provisioning (CLOUD mode): while a freshly-provisioned dedicated
-  // cloud agent boots, the user already chats on the shared agent and this tile
-  // shows the background setup plus a Retry control. Self-hides once the
-  // dedicated agent attaches or for a pure-local runtime.
-  {
-    id: AGENT_PROVISIONING_HOME_WIDGET.id,
-    pluginId: AGENT_PROVISIONING_HOME_WIDGET.pluginId,
-    slot: "home",
-    label: "Cloud agent",
-    icon: "CloudCog",
-    order: AGENT_PROVISIONING_HOME_WIDGET.order,
-    defaultEnabled: true,
-    // Setup-progress tile backed by the cloud handoff phase, not a loadable
-    // plugin - always-visible, self-hides once the dedicated agent attaches.
-    visibility: "always",
-    signalKinds: AGENT_PROVISIONING_HOME_WIDGET.signalKinds,
-    size: { cols: 2, rows: 1 },
-  },
+  // Cloud-agent provisioning (CLOUD mode) is NO LONGER a home tile: while a
+  // freshly-provisioned dedicated cloud agent boots, the status belongs IN the
+  // chat (rendered above the composer by ContinuousChatOverlay via the same
+  // AgentProvisioningWidget + useCloudHandoffPhase event), not floating in the
+  // home widget grid above the chat. The component + its home-widget definition
+  // stay exported for that in-chat render.
   // The wallet, sleep, and standalone goals residents are NO LONGER home
   // residents (spec §B "Explicitly NOT residents" / §E items 3-5):
   //  - wallet: a balance is state, not change. It fails the two-second "what
