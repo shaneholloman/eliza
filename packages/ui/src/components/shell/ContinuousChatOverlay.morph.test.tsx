@@ -8,7 +8,13 @@
 // jsdom with the API client mocked; gesture velocity is controlled by mocking
 // performance.now (jsdom otherwise reads every move as a flick).
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../api/client", () => ({
@@ -162,6 +168,9 @@ describe("follow-the-finger after an over-pull past the top (overshoot rebase)",
 
     // jsdom viewport: innerHeight 768 → insetPanelMaxH 696, full ceiling 768,
     // halfH 353, detent magnet 64.
+    const threadBasis = () =>
+      (screen.queryByTestId("chat-thread") as HTMLElement | null)?.style
+        .flexBasis;
     const now = vi.spyOn(performance, "now");
     now.mockReturnValue(0);
     fireEvent.pointerDown(el, { clientY: 800, pointerId: 1 });
@@ -169,15 +178,24 @@ describe("follow-the-finger after an over-pull past the top (overshoot rebase)",
     fireEvent.pointerMove(el, { clientY: 500, pointerId: 1 }); // up 300
     await frame();
     // Pull far BEYOND the full-bleed ceiling (up 1032 > 768): the excess must
-    // be CONSUMED, not banked.
+    // be CONSUMED, not banked. Wait for the observable style so the sample is
+    // provably DELIVERED (the coalescer + framer each apply on their own rAF)
+    // before reversing — the reversal must be seen as a later frame.
     now.mockReturnValue(400);
     fireEvent.pointerMove(el, { clientY: -232, pointerId: 1 });
+    await waitFor(() => expect(threadBasis()).toBe("768px"));
+    // Reverse back down into the canvas — SLOWLY (whole-press AND final-segment
+    // velocity must stay under the 0.5 px/ms flick threshold, or the release
+    // reads as an upward flick and legitimately steps to a detent). With the
+    // overshoot consumed, the sheet height is finger-locked again immediately:
+    // the release height is ceiling − reversal (768 − 332 = 436), NOT
+    // start-relative 700.
+    now.mockReturnValue(2000);
+    fireEvent.pointerMove(el, { clientY: 90, pointerId: 1 });
     await frame();
-    // Reverse back down into the canvas. With the overshoot consumed, the
-    // sheet height is finger-locked again immediately: the release height is
-    // ceiling − reversal (768 − 332 = 436), NOT start-relative 700.
-    now.mockReturnValue(800); // slow ⇒ deliberate drag ⇒ free-rest release
+    now.mockReturnValue(2900);
     fireEvent.pointerMove(el, { clientY: 100, pointerId: 1 });
+    now.mockReturnValue(3000); // 700px net over 3s ⇒ deliberate drag ⇒ free-rest
     fireEvent.pointerUp(el, { clientY: 100, pointerId: 1 });
     now.mockRestore();
 
