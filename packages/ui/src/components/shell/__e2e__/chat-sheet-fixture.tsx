@@ -7,6 +7,7 @@ import * as React from "react";
 import { createRoot } from "react-dom/client";
 
 import { MockAppProvider } from "../../../storybook/mock-providers";
+import { GlassStyles } from "../../../glass";
 import { ContinuousChatOverlay } from "../ContinuousChatOverlay";
 import type { ShellMessage } from "../shell-state";
 import type { CaptureIntent, ShellController } from "../useShellController";
@@ -526,6 +527,8 @@ function Harness(): React.JSX.Element {
           ))}
         </div>
       </div>
+      {/* One glass stylesheet per document, as the app shell mounts it. */}
+      <GlassStyles />
       <ContinuousChatOverlay
         controller={controller}
         firstRunOpen={firstRunOpen}

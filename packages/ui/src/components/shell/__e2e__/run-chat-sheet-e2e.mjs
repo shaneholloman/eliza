@@ -1789,6 +1789,14 @@ try {
     assert(await p.getByTestId("chat-composer-plus").isVisible(), "EMPTY: chat actions (+) button shown");
     await p.getByTestId("chat-composer-plus").click();
     assert(await p.getByText("Upload file", { exact: true }).isVisible(), "EMPTY: upload lives in the chat-actions menu");
+    // The + menu is the first migrated liquid-glass menu surface: assert the
+    // glass class is live (GlassStyles mounted by the fixture shell) and
+    // capture the open-menu state for visual evidence.
+    assert(
+      (await p.locator(".eliza-glass-menu").count()) >= 1,
+      "EMPTY: chat-actions menu renders on the glass menu variant",
+    );
+    await snap(p, "state-plus-menu-glass");
     await p.keyboard.press("Escape");
     assert((await p.getByTestId("chat-composer-mic").count()) === 1, "EMPTY: mic button shown (no draft)");
     await snap(p, "state-empty");
