@@ -995,7 +995,6 @@ export function ContinuousChatOverlay({
   agentName = "Eliza",
   slash: slashProp,
   firstRunOpen = false,
-  dockPinned = false,
 }: {
   controller: ShellController;
   /** Name shown in the composer placeholder ("Ask {agentName}"). Defaults to Eliza. */
@@ -1014,14 +1013,6 @@ export function ContinuousChatOverlay({
    * revealing the home screen.
    */
   firstRunOpen?: boolean;
-  /**
-   * True while the desktop/web docked-chat idiom hosts this overlay inside the
-   * left dock pane (CHAT_DOCK_UX.md). Pins the sheet open FULL + edge-to-edge
-   * exactly like the onboarding pin: vertical sheet gestures, Escape, back
-   * intents, and every collapse path are no-ops — the vertical divider pill
-   * owns open/close on that idiom.
-   */
-  dockPinned?: boolean;
 }): React.JSX.Element {
   const {
     messages,
@@ -2594,15 +2585,10 @@ export function ContinuousChatOverlay({
   React.useEffect(() => {
     setHeaderVisible(evalHeaderVisible(threadHeight.get()));
   }, [evalHeaderVisible]);
-  // Backdrop dimming + the suggestion-strip fade follow the live height; the
-  // thread's flex-basis is the live height as a px string.
-  const revealed = useTransform(threadHeight, (h) =>
-    Math.min(1, Math.max(0, h / Math.max(1, openH))),
-  );
-  // At rest (threadHeight 0 = INPUT/CLOSED) the full-viewport dimming scrim sits
-  // at opacity 0. Drive `visibility` off the SAME motion value so it drops out
-  // of compositing/paint at rest (no reflow, compositor-only, zero re-render) and
-  // flips back the instant the thread opens.
+  // The thread's flex-basis is the live height as a px string. At rest
+  // (threadHeight 0 = INPUT/CLOSED) the structural backdrop marker drops out of
+  // compositing via `visibility` — compositor-only, no reflow, no re-render —
+  // and flips back the instant the thread opens.
   const scrimVisibility = useTransform(threadHeight, (h) =>
     h > 0 ? "visible" : "hidden",
   );
@@ -3105,18 +3091,8 @@ export function ContinuousChatOverlay({
       setMaximized(true);
       return;
     }
-    if (was && !dockPinned) goToDetent("half");
-  }, [firstRunOpen, dockPinned, goToDetent]);
-
-  // Dock pin: when the dock idiom mounts (or flips on at a live resize), snap
-  // the sheet to its pinned FULL + edge-to-edge shape immediately — the dock
-  // pane's geometry owns the chat's footprint from here.
-  React.useEffect(() => {
-    if (!dockPinned) return;
-    setMode("full");
-    setMaximized(true);
-    fullBleedT.set(1);
-  }, [dockPinned, fullBleedT]);
+    if (was) goToDetent("half");
+  }, [firstRunOpen, goToDetent]);
 
   // First-run opaque backdrop (#12178). While onboarding pins the sheet FULL,
   // the backdrop is an OPAQUE `bg-bg` layer that hides the launcher/home behind
@@ -4607,27 +4583,19 @@ export function ContinuousChatOverlay({
           wallpaper under the floating composer — the residual "gap" on the
           standalone home view. Everything below the composer must simply show
           whatever the shell paints: wallpaper, lockscreen-style. */}
-      {/* Visual dimming scrim behind the open chat. It fades in WITH the reveal
-          but never captures pointer events; outside taps are handled by the
-          document-level detector above, and outside drags pass through to the
-          launcher/home surface. */}
+      {/* Structural inset-0 marker behind the open chat. It NO LONGER dims the
+          background — pulling the chat up used to darken everything behind it,
+          which fought the frosted-glass panel; the panel's own backdrop blur now
+          carries the separation, so the live view stays bright behind the glass.
+          Kept as a transparent, pointer-transparent element (outside taps are
+          owned by the document-level detector; e2e uses it as a coordinate
+          target) with the same data-active flag consumers read. */}
       <motion.div
         aria-hidden="true"
         data-testid="chat-sheet-backdrop"
         data-active={sheetOpen ? "true" : "false"}
-        // Overhaul: a solid warm-ember dim scrim (the --scrim token, brand-black
-        // at a fixed dim) so the open chat reads on an opaque dim field instead
-        // of letting the background bleed through. Flat system: no GPU blur
-        // (battery gate #9141) — the opaque scrim carries the contrast on its
-        // own. Outside-tap dismissal is NOT wired here on purpose: this element
-        // keeps pointerEvents:none (below) and the document-level pointerdown
-        // detector owns outside taps.
-        className="fixed inset-0 bg-scrim"
-        // Opacity follows the live history height (motion value) — no re-render
-        // during a drag. Pointer events stay disabled so background gestures
-        // keep their original targets while chat is open.
+        className="fixed inset-0"
         style={{
-          opacity: revealed,
           visibility: scrimVisibility,
           pointerEvents: "none",
         }}
@@ -4824,34 +4792,25 @@ export function ContinuousChatOverlay({
               // sheet radius squares off as it maximizes and rounds back as it
               // de-maximizes, in lockstep with the side/bottom insets.
               borderRadius: morphRadius,
-              // SOLID warm-dark fill (no translucency) so the ember field / home
-              // widgets can't bleed through the open thread (the #1 "too
-              // transparent" complaint this fixes). Kept inline (not just the
-              // Tailwind bg-card / --surface-1) because inline wins and this is
-              // the value that actually renders. No GPU backdrop blur (#10698,
-              // #9141 battery gate) is needed anymore since the fill is opaque; a
-              // faint top-sheen gradient (backgroundImage below) still reads as
-              // glass. The collapsed pill stays chrome-free via glassOpacity fade.
-              // `--card` / `--bg` are scoped by CHAT_PANEL_THEME on the fieldset,
-              // not inherited from the orange app theme behind the overlay.
-              // Frosted glass (not the opaque warm slab): a translucent panel
-              // with a real backdrop blur so the ember field behind reads as a
-              // soft blur instead of a brown fill. Full-bleed stays opaque (it
-              // covers the whole screen — nothing to see through). The blur is the
-              // battery-costly bit the prior opaque pass removed (#10698/#9141);
-              // it's back by product direction for the frosted look.
-              // Frosted glass tuned to read CLEAN over any backdrop, including
-              // the bright orange app theme: a deep warm-near-black fill (86%)
-              // so the backdrop only softly darkens the glass instead of
-              // bleeding through as muddy brown, and NO saturate() boost — the
-              // old `saturate(1.3)` amplified the orange behind and read as a
-              // dirty brown slab. Blur alone softens the backdrop to a clean
-              // frost. Full-bleed stays fully opaque (nothing to see through).
+              // REAL frosted glass on the inset sheet: a mostly-translucent dark
+              // fill over a strong backdrop blur, so the live view behind reads
+              // as a soft, bright frost — not the grayish near-opaque slab a high
+              // fill produced. The heavy blur (30px) + light saturate is what
+              // keeps text readable while letting the backdrop's color and light
+              // through: nothing sharp bleeds, but the panel is unmistakably
+              // glass, not a gray card. `--card` / `--bg` are scoped by
+              // CHAT_PANEL_THEME on the fieldset, not the orange app theme behind.
+              // Full-bleed stays fully opaque (it covers the whole screen — there
+              // is nothing to see through, and the blur would be wasted battery).
               backgroundColor: fullBleed
                 ? "var(--bg)"
-                : "color-mix(in srgb, var(--card) 86%, transparent)",
-              backdropFilter: fullBleed ? undefined : "blur(20px)",
-              WebkitBackdropFilter: fullBleed ? undefined : "blur(20px)",
+                : "color-mix(in srgb, var(--card) 56%, transparent)",
+              backdropFilter: fullBleed
+                ? undefined
+                : "blur(30px) saturate(1.4)",
+              WebkitBackdropFilter: fullBleed
+                ? undefined
+                : "blur(30px) saturate(1.4)",
               // Liquid-glass bevel: a bright top-left rim over a soft
               // bottom-right shade so the frosted edge catches light like a real
               // glass slab. Only on the inset sheet — full-bleed has no edge to
@@ -5166,7 +5125,7 @@ export function ContinuousChatOverlay({
                   // horizontal scrollbar strip across the sheet on iOS — the
                   // "weird side scroll thingy." This transcript only ever scrolls
                   // vertically; pin the horizontal axis closed.
-                  className="scrollbar-hide relative flex min-h-0 w-full flex-1 touch-pan-y flex-col overflow-y-auto overflow-x-hidden overscroll-contain px-5 outline-none [scrollbar-width:none] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[rgba(255,247,240,0.22)] [-webkit-overflow-scrolling:touch] [&::-webkit-scrollbar]:hidden"
+                  className="scrollbar-hide relative flex min-h-0 w-full flex-1 touch-pan-y flex-col overflow-y-auto overflow-x-hidden overscroll-contain px-5 outline-none [scrollbar-width:none] [-webkit-overflow-scrolling:touch] [&::-webkit-scrollbar]:hidden"
                   style={{ opacity: threadContentOpacity }}
                 >
                   {/* Empty-thread loading: a fresh/cleared chat awaiting its
