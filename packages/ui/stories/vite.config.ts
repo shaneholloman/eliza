@@ -98,6 +98,10 @@ export default defineConfig({
       { find: "node:fs", replacement: nodeBuiltinsShim },
       { find: "node:path", replacement: nodeBuiltinsShim },
       { find: "node:os", replacement: nodeBuiltinsShim },
+      // The @elizaos/shared loopback/sandbox guards read node:net.isIP (and a
+      // few node:crypto bits) at module load — shim them so the barrel resolves.
+      { find: "node:net", replacement: nodeBuiltinsShim },
+      { find: "node:crypto", replacement: nodeBuiltinsShim },
     ],
   },
   optimizeDeps: {

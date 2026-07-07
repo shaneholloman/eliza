@@ -309,3 +309,141 @@ export function satisfiesRoleGate(
   }
   return true;
 }
+
+// The @elizaos/shared barrel (pulled by MockAppProvider) drags in modules like
+// email-classifier that value-import `runWithTrajectoryPurpose`. It never runs in
+// the lab — it only needs to resolve — so mirror it as a direct pass-through.
+export function runWithTrajectoryPurpose<T>(
+  _purpose: string,
+  fn: () => T | Promise<T>,
+): T | Promise<T> {
+  return fn();
+}
+
+export * from "../../../core/src/connectors.ts";
+export * from "../../../core/src/name-tokens.ts";
+export * from "../../../core/src/recent-messages-state.ts";
+// --- Design Lab: extra exports the shell/home/chat/widgets surfaces reach ----
+// The Design Lab (stories/lab.html) mounts real full-viewport surfaces
+// (ContinuousChatOverlay, HomeScreen, WidgetHost, notifications) that pull more
+// of @elizaos/core than the atomic-component gallery. These live in core's
+// browser-safe leaf modules — pure logic + constant tables, no runtime/node
+// deps — so we re-export them straight from source. Node builtins are already
+// aliased to browser shims in stories/vite.config.ts, so the transitive graph
+// resolves without the runtime barrel. Anything that pulls a runtime-heavy
+// relative (roles.ts → logger/entities) is mirrored as a literal below instead.
+export {
+  MESSAGE_SOURCE_AGENT_GREETING,
+  MESSAGE_SOURCE_CLIENT_CHAT,
+  MESSAGE_SOURCE_CODING_AGENT,
+} from "../../../core/src/types/message-source.ts";
+
+// settings-debug.ts pulls boot-env (process.env reads); these three functions
+// are diagnostics that never fire in the lab, so mirror them as inert stubs.
+export function isElizaSettingsDebugEnabled(): boolean {
+  return false;
+}
+export function sanitizeForSettingsDebug<T>(value: T): T {
+  return value;
+}
+export function settingsDebugCloudSummary(): Record<string, unknown> {
+  return {};
+}
+export { activityEventToPlaintext } from "../../../core/src/activity-plaintext.ts";
+export { findInteractionRegions } from "../../../core/src/messaging/interactions/parse.ts";
+export { matchShortcut } from "../../../core/src/runtime/shortcut-registry.ts";
+export {
+  DEFAULT_NOTIFICATION_CATEGORY,
+  DEFAULT_NOTIFICATION_PRIORITY,
+  tierForPriority,
+} from "../../../core/src/types/notification.ts";
+export { toSwarmActivity } from "../../../core/src/types/swarm-coordinator.ts";
+export {
+  isViewKindEnabled,
+  isViewVisible,
+  resolveViewKind,
+} from "../../../core/src/types/view-kind.ts";
+// surface-manifest.ts + types/plugin.ts pull the runtime graph (route-helpers,
+// response handlers, trajectory context) — the exact node-heavy barrel the shim
+// exists to avoid. These four functions are pure, so mirror them as faithful
+// copies of the core source instead of re-exporting.
+export const SURFACE_ISOLATION_LEVELS = [
+  "in-process",
+  "sandboxed-iframe",
+  "native-webview",
+  "immersive",
+] as const;
+
+interface ResolvedSurfaceManifestLite {
+  background: string;
+  header: string;
+  isolation: string;
+  lifecycle: string;
+  capabilities: Set<string>;
+}
+
+export function resolveSurfaceManifest(
+  decl:
+    | {
+        surface?: {
+          capabilities?: readonly string[];
+          background?: string;
+          header?: string;
+          isolation?: string;
+          lifecycle?: string;
+        };
+        backgroundPolicy?: string;
+        headerPolicy?: string;
+      }
+    | null
+    | undefined,
+): ResolvedSurfaceManifestLite {
+  const surface = decl?.surface;
+  const capabilities = new Set(surface?.capabilities ?? []);
+  const declaredBackground =
+    surface?.background ?? decl?.backgroundPolicy ?? "opaque";
+  const background =
+    declaredBackground === "shared" && capabilities.has("wallpaper")
+      ? "shared"
+      : "opaque";
+  return {
+    background,
+    header: surface?.header ?? decl?.headerPolicy ?? "normal",
+    isolation: surface?.isolation ?? "in-process",
+    lifecycle: surface?.lifecycle ?? "ephemeral",
+    capabilities,
+  };
+}
+
+export function surfaceGrants(
+  manifest: ResolvedSurfaceManifestLite,
+  capability: string,
+): boolean {
+  return manifest.capabilities.has(capability);
+}
+
+export function resolveSurfaceBackgroundPolicy(
+  decl: Parameters<typeof resolveSurfaceManifest>[0],
+): string {
+  return resolveSurfaceManifest(decl).background;
+}
+
+export const IMMERSIVE_WALLPAPER_SURFACE = {
+  background: "shared",
+  header: "immersive",
+  isolation: "immersive",
+  capabilities: ["wallpaper", "background:apply"],
+} as const;
+
+export function dedupeModalities<T>(mods: readonly T[]): T[] {
+  return [...new Set(mods ?? [])];
+}
+
+// roles.ts drags in the runtime logger + entity helpers, so mirror the
+// canonical role ranks as a literal instead of re-exporting.
+export const ROLE_RANK: Record<string, number> = {
+  GUEST: CANONICAL_ROLE_RANK.GUEST,
+  USER: CANONICAL_ROLE_RANK.USER,
+  ADMIN: CANONICAL_ROLE_RANK.ADMIN,
+  OWNER: CANONICAL_ROLE_RANK.OWNER,
+};
