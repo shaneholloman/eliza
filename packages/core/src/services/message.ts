@@ -6993,6 +6993,25 @@ export async function runV5MessageRuntimeStage1(args: {
 				}),
 			);
 
+		// Track visible text an action already delivered to the user through the
+		// callback during this planner run. An action that both emits its own
+		// user-facing callback AND leaves the planner to emit a `finalMessage`
+		// duplicating that text would otherwise deliver the same string twice (the
+		// action reply, then an identical "simple" planner reply). This mirrors the
+		// early-reply dedup below — the planner reply is suppressed only when it is
+		// an exact (normalized) repeat of what the user already saw.
+		const deliveredVisibleTexts = new Set<string>();
+		const recordingCallback: HandlerCallback | undefined = args.callback
+			? async (content, ...rest) => {
+					if (typeof content?.text === "string" && content.text.trim()) {
+						deliveredVisibleTexts.add(
+							normalizeVisibleTextForDuplicateCheck(content.text),
+						);
+					}
+					return args.callback?.(content, ...rest) ?? [];
+				}
+			: undefined;
+
 		let plannerResult: PlannerLoopResult;
 		try {
 			plannerResult = await runPlannerLoop({
@@ -7016,7 +7035,7 @@ export async function runV5MessageRuntimeStage1(args: {
 							selectedContexts,
 							senderRole,
 							previousResults: collectPreviousActionResults(ctx.trajectory),
-							...(args.callback ? { callback: args.callback } : {}),
+							...(recordingCallback ? { callback: recordingCallback } : {}),
 						}),
 						plannerRuntime,
 						executorOptions: { actions: exposedPlannerActions },
@@ -7050,7 +7069,7 @@ export async function runV5MessageRuntimeStage1(args: {
 				recorder,
 				trajectoryId,
 				plannerLoopConfig: args.plannerLoopConfig,
-				...(args.callback ? { callback: args.callback } : {}),
+				...(recordingCallback ? { callback: recordingCallback } : {}),
 				plannerError: error,
 			});
 			if (!fallbackResult) {
@@ -7109,8 +7128,28 @@ export async function runV5MessageRuntimeStage1(args: {
 			earlyReplySent &&
 			normalizeVisibleTextForDuplicateCheck(effectiveReplyText) ===
 				normalizeVisibleTextForDuplicateCheck(earlyReplyText);
+		// An action that already delivered this text through its own callback makes
+		// the planner's finalMessage a redundant second bubble. Suppress the planner
+		// echo when an action already delivered the same text OR a strict superset of
+		// it — the action's richer confirmation (a created-issue URL, an id, a "reply
+		// yes to confirm" follow-up) carries everything the planner's shorter
+		// restatement does and more, so keep the action's text and drop the echo. The
+		// non-word-boundary guard stops a short prefix from swallowing an unrelated
+		// longer line ("created" must not match "created issue …").
+		const normalizedPlannedReply =
+			normalizeVisibleTextForDuplicateCheck(effectiveReplyText);
+		const plannedTextRepeatsActionReply =
+			normalizedPlannedReply.length > 0 &&
+			[...deliveredVisibleTexts].some(
+				(delivered) =>
+					delivered === normalizedPlannedReply ||
+					(delivered.startsWith(normalizedPlannedReply) &&
+						/[^a-z0-9]/i.test(delivered.charAt(normalizedPlannedReply.length))),
+			);
 		const shouldSendPlannedText =
-			Boolean(effectiveReplyText) && !plannedTextRepeatsEarlyReply;
+			Boolean(effectiveReplyText) &&
+			!plannedTextRepeatsEarlyReply &&
+			!plannedTextRepeatsActionReply;
 
 		return {
 			kind: "planned_reply",
