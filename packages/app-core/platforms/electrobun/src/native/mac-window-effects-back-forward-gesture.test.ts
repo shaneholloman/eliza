@@ -11,7 +11,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const mmSource = readFileSync(
-  fileURLToPath(new URL("../../native/macos/window-effects.mm", import.meta.url)),
+  fileURLToPath(
+    new URL("../../native/macos/window-effects.mm", import.meta.url),
+  ),
   "utf8",
 );
 const wrapperSource = readFileSync(
@@ -42,9 +44,7 @@ describe("macOS webview back/forward swipe gesture stays disabled", () => {
 
   it("exposes a disable-named native symbol and no enable-named remnant", () => {
     expect(mmSource).toContain("disableWindowBackForwardNavigationGestures");
-    expect(mmSource).not.toContain(
-      "enableWindowBackForwardNavigationGestures",
-    );
+    expect(mmSource).not.toContain("enableWindowBackForwardNavigationGestures");
     expect(wrapperSource).toContain(
       "disableWindowBackForwardNavigationGestures",
     );

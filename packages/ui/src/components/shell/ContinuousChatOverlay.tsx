@@ -289,7 +289,13 @@ const CHAT_CLEARANCE_MAX_PX = 220;
 // full-bleed and tracks the finger. 0.9 = "top 90%" — nearly the whole panel is
 // grabbable (only the bottom composer strip is excluded), and it sits UNDER the
 // top bar whose empty space is pointer-transparent so pulls there reach it too.
-const MAXIMIZE_RESTORE_ZONE_VH = 0.9;
+// The pull-down-to-restore grab zone is scoped to the TOP BAR only (safe-area +
+// this many px), NOT the whole panel. A full-height strip stole the transcript's
+// scroll (every touch-drag/wheel over the messages read as a restore pull) and
+// made an accidental tap twitch the sheet out of full-screen. Confining it to
+// the top leaves the transcript freely scrollable and makes "exit full-screen"
+// an explicit drag from the top edge.
+const MAXIMIZE_RESTORE_ZONE_PX = 72;
 // The panel's top clearance + max height (which decide how the full-bleed header
 // clears the notch) live in the pure, unit-tested `resolveChatPanelLayout` — see
 // chat-panel-layout.ts.
@@ -377,10 +383,11 @@ const MAXIMIZE_COMMIT_T = 0.5;
 const MAXIMIZE_RELEASE_T = 0.3;
 
 // Finger travel (px) below the restore drag's upward peak at which the panel
-// drops full-bleed and starts tracking the finger down out of maximize. Small
-// so a downward intent un-maximizes promptly, but non-zero so a hand held at
-// the ceiling with sub-pixel jitter doesn't flap in and out of full-bleed.
-const RESTORE_UNMAX_SLOP = 6;
+// drops full-bleed and starts tracking the finger down out of maximize. Sized
+// so an accidental TAP or a few px of pointer jitter is a no-op (only the drag
+// exits full-screen, per product direction) while a deliberate downward pull
+// still un-maximizes promptly.
+const RESTORE_UNMAX_SLOP = 24;
 
 const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
 
@@ -2689,7 +2696,11 @@ export function ContinuousChatOverlay({
   //  - a small side inset (width shrinks by 24px at t=1) keeps the capsule off
   //    the screen edges on narrow viewports;
   //  - border + frosted fill alphas scale with the morph.
-  const composerCapsuleMarginBottom = useMotionTemplate`calc(${fullBleedT} * max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)))`;
+  // A comfortable float above the bottom edge: the home-gesture inset PLUS a
+  // base 0.75rem, so the capsule never sits flush against the screen bottom in
+  // full-screen (the "margin goes away in fullscreen" complaint) even on a
+  // device with no safe-area inset.
+  const composerCapsuleMarginBottom = useMotionTemplate`calc(${fullBleedT} * (max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)) + 0.75rem))`;
   const composerCapsuleWidth = useMotionTemplate`calc(100% - ${fullBleedT} * 24px)`;
   const composerCapsuleBorder = useMotionTemplate`color-mix(in srgb, var(--border-strong) calc(${fullBleedT} * 100%), transparent)`;
   const composerCapsuleBg = useMotionTemplate`color-mix(in srgb, var(--card) calc(${fullBleedT} * 86%), transparent)`;
@@ -4920,17 +4931,19 @@ export function ContinuousChatOverlay({
               }
             }}
           >
-            {/* Top-90% pull-down-to-restore grab zone (#13531). Mounted while
-                full-bleed AND for the duration of a restore drag (`restoreDragging`)
-                so it keeps the pointer capture after the drag drops full-bleed —
-                a downward pull starting anywhere in the top 90% (all but the
-                bottom composer strip) drops full-bleed and tracks the finger
-                down. NOT during onboarding (it pins full-bleed and keeps the
-                inert grabber). `z-[15]` sits UNDER the header (`z-20`), but the
-                bar's empty space is `pointer-events-none`, so pulls that START
-                over the top bar fall THROUGH to this strip (only the button
-                clusters keep their taps). Keyboard-operable (Enter/Space/ArrowDown
-                restore) so the gesture-only affordance stays WCAG 2.1.1 operable. */}
+            {/* Top-bar pull-down-to-restore grab zone (#13531). Confined to the
+                safe-area + MAXIMIZE_RESTORE_ZONE_PX strip at the very top so the
+                transcript BELOW it stays freely scrollable (wheel + touch-drag)
+                and an accidental tap can't jog the sheet out of full-screen — a
+                deliberate DOWNWARD drag from the top edge is the only exit.
+                Mounted while full-bleed AND for the duration of a restore drag
+                (`restoreDragging`) so it keeps the pointer capture after the drag
+                drops full-bleed. NOT during onboarding (it pins full-bleed and
+                keeps the inert grabber). `z-[15]` sits UNDER the header (`z-20`),
+                whose empty space is `pointer-events-none`, so pulls that START
+                over the top bar fall THROUGH to this strip. Keyboard-operable
+                (Enter/Space/ArrowDown restore) so the gesture-only affordance
+                stays WCAG 2.1.1 operable. */}
             {(fullBleed || restoreDragging) && !pinnedOpen ? (
               <button
                 {...maximizeRestoreBinding}
@@ -4948,7 +4961,9 @@ export function ContinuousChatOverlay({
                   }
                 }}
                 className="pointer-events-auto absolute inset-x-0 top-0 z-[15] touch-none bg-transparent"
-                style={{ height: `${MAXIMIZE_RESTORE_ZONE_VH * 100}%` }}
+                style={{
+                  height: `calc(env(safe-area-inset-top, 0px) + ${MAXIMIZE_RESTORE_ZONE_PX}px)`,
+                }}
               />
             ) : null}
 
