@@ -13,6 +13,8 @@ import {
 } from "../../../config/branding-base";
 import { createTranslator } from "../../../i18n";
 
+declare const module: { exports: unknown };
+
 const t = createTranslator("en", appNameInterpolationVars(DEFAULT_BRANDING));
 
 const fixtureState: Record<string, unknown> = {
@@ -40,8 +42,7 @@ const useAppSelectorShallow = useAppSelector;
 // Runtime-resolving export surface: real hooks above, permissive no-op for any
 // other named symbol a section imports from the barrel.
 const noop = new Proxy(() => noop, { get: () => noop });
-// biome-ignore lint/suspicious/noExplicitAny: CJS interop escape hatch for the fixture bundle
-(module as any).exports = new Proxy(
+module.exports = new Proxy(
   { useApp, useAppSelector, useAppSelectorShallow, __esModule: true },
   {
     get: (target, prop) =>
