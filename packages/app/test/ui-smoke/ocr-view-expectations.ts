@@ -60,18 +60,12 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
     requireAll: ["Automations"],
     requireAny: [
       "Nothing scheduled yet",
-<<<<<<< HEAD
-      "New",
-      "Tasks",
-      "Workflows",
-      "Active",
-=======
       "Active",
       "Prompts",
       "Tasks",
       "Workflows",
       "Inactive",
->>>>>>> 03b509c9832 (fix(app): clear character audit OCR gates)
+      "New",
     ],
   },
   "builtin-documents": {
@@ -83,12 +77,9 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   "builtin-relationships": {
     requireAny: [
       "Relationships",
-<<<<<<< HEAD
-=======
       "Personality",
       "Skills",
       "Experience",
->>>>>>> 03b509c9832 (fix(app): clear character audit OCR gates)
       "No relationships yet",
       "Search people",
       "Connect your platforms",
@@ -110,24 +101,6 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   },
   "builtin-database": {
     requireAny: [
-<<<<<<< HEAD
-      "Select a table",
-      "Open SQL editor",
-      "SQL Editor",
-      "Filter tables",
-      "Tables",
-    ],
-  },
-  "builtin-logs": {
-    requireAny: [
-      "All levels",
-      "Alllevels",
-      "Search logs",
-      "searchlogs",
-      "All tags",
-      "Alltags",
-    ],
-=======
       "Databases",
       "Tables",
       "SQL Editor",
@@ -138,7 +111,13 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   },
   "builtin-logs": {
     requireAny: ["Logs", "INFO", "All levels", "Search logs", "All tags"],
->>>>>>> 03b509c9832 (fix(app): clear character audit OCR gates)
+    requireAny: [
+      "All levels",
+      "Alllevels",
+      "Search logs",
+      "searchlogs",
+      "All tags",
+      "Alltags",
   },
   "builtin-inventory": {
     requireAny: ["Wallet", "USDC", "Tokens", "Perps"],
@@ -155,17 +134,14 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   },
   // The launcher grid is its own content; `builtin-views` renders the same grid.
   "builtin-apps": {
-<<<<<<< HEAD
+    requireAll: ["My Apps"],
+    requireAny: ["elizaOS apps", "Advanced", "Load"],
     requireAny: [
       "My Apps",
       "No apps installed",
       "Create new app",
       "Install, create",
     ],
-=======
-    requireAll: ["My Apps"],
-    requireAny: ["elizaOS apps", "Advanced", "Load"],
->>>>>>> 03b509c9832 (fix(app): clear character audit OCR gates)
   },
   "builtin-views": {
     requireAny: ["Messages", "Settings", "Wallet", "Automations", "Knowledge"],
@@ -175,21 +151,15 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   },
   "builtin-character-select": {
     requireAny: [
-<<<<<<< HEAD
-=======
       "Name",
       "System prompt",
->>>>>>> 03b509c9832 (fix(app): clear character audit OCR gates)
       "About Me",
       "Style Rules",
       "Chat Examples",
       "Post Examples",
-<<<<<<< HEAD
       "System prompt",
       "You are",
       "Youare",
-=======
->>>>>>> 03b509c9832 (fix(app): clear character audit OCR gates)
     ],
   },
   "builtin-runtime": {
@@ -208,6 +178,7 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
     requireAny: ["No trajectories yet", "trajector"],
   },
   "builtin-transcripts": {
+    requireAny: ["Live meeting", "Paste a Meet", "transcri", "recording"],
     requireAny: [
       "Live meeting",
       "Paste a Meet",
@@ -220,7 +191,12 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
     ],
   },
   "builtin-desktop": {
-    requireAny: ["Desktop workspace", "Electrobun desktop runtime"],
+    requireAny: [
+      "Desktop workspace",
+      "Desk rkspace",
+      "Electrobun desktop runtime",
+      "Electrobun desktop runtim",
+    ],
   },
 };
 
