@@ -197,8 +197,8 @@ function approvalsPayload() {
         createdAt: Date.now() - 45 * 60_000,
         roomId: "11111111-1111-1111-1111-111111111111",
         options: [
-          { name: "approve", description: "Approve and send" },
-          { name: "deny", description: "Don't send", isCancel: true },
+          { id: "approve", label: "Approve and send" },
+          { id: "deny", label: "Don't send", isCancel: true },
         ],
       },
       {
