@@ -13,7 +13,13 @@ import { ViewHeader } from "../shared/ViewHeader";
 export function MyAppsView() {
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
-      <ViewHeader title="My Apps" />
+      <ViewHeader
+        title={
+          <span className="text-2xl font-extrabold tracking-normal text-txt-strong">
+            My Apps
+          </span>
+        }
+      />
       <div className="min-h-0 flex-1 overflow-y-auto eliza-continuous-chat-scroll pb-[var(--eliza-continuous-chat-clearance,5.25rem)]">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
           <p className="text-sm text-muted">
