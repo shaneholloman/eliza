@@ -3885,7 +3885,6 @@
       "name": "@elizaos/plugin-inbox",
       "version": "2.0.3-beta.7",
       "dependencies": {
-        "@elizaos/agent": "workspace:*",
         "@elizaos/app-core": "workspace:*",
         "@elizaos/core": "workspace:*",
         "@elizaos/plugin-google": "workspace:*",
@@ -5206,6 +5205,7 @@
       "dependencies": {
         "@elizaos/agent": "workspace:*",
         "@elizaos/core": "workspace:*",
+        "@elizaos/plugin-inbox": "workspace:*",
         "@elizaos/scenario-runner": "workspace:*",
         "@elizaos/shared": "workspace:*",
         "@elizaos/ui": "workspace:*",
