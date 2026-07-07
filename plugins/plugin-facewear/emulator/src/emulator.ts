@@ -50,7 +50,10 @@ import type {
 const cameraCanvas = document.createElement("canvas");
 cameraCanvas.width = 640;
 cameraCanvas.height = 480;
-const cameraCtx = cameraCanvas.getContext("2d")!;
+const cameraCtx = cameraCanvas.getContext("2d");
+if (!cameraCtx) {
+  throw new Error("[XR Emulator] Canvas 2D context unavailable");
+}
 
 // Fill with a recognisable test pattern (grey + crosshair)
 function drawTestPattern(ctx: CanvasRenderingContext2D, w: number, h: number) {
@@ -657,6 +660,8 @@ const api: XREmulatorAPI = {
       }
     }
 
+    const leftController = controller("left");
+    const rightController = controller("right");
     const snapshot: TelemetrySnapshot = {
       t: performance.now() - installedAt,
       sessionActive: activeSession !== null,
@@ -666,16 +671,16 @@ const api: XREmulatorAPI = {
         orientation: quat(xrDevice.quaternion),
       },
       controllers: {
-        left: controller("left")?.connected
+        left: leftController?.connected
           ? {
-              position: vec3(controller("left")!.position),
-              orientation: quat(controller("left")!.quaternion),
+              position: vec3(leftController.position),
+              orientation: quat(leftController.quaternion),
             }
           : undefined,
-        right: controller("right")?.connected
+        right: rightController?.connected
           ? {
-              position: vec3(controller("right")!.position),
-              orientation: quat(controller("right")!.quaternion),
+              position: vec3(rightController.position),
+              orientation: quat(rightController.quaternion),
             }
           : undefined,
       },
