@@ -2,9 +2,11 @@
 
 // Dashboard notification center behavior against the real notification store
 // (driven via the test-only ingest; HTTP mutations mocked at the API client).
-// Pins the shade spec: priority-only triage, liquid-glass Z-stacked groups,
-// pull-gesture expand/collapse (no more/less buttons), single-open chromeless
-// option strips, and swipe-to-dismiss.
+// Pins the shade spec: priority-only triage, liquid-glass Z-stacked groups
+// with no headers/dividers, DIRECTIONAL pull/wheel expand-collapse (down
+// expands, up collapses — never a toggle, so trailing trackpad momentum can't
+// snap the shade back shut), a visible "N more"/"Show less" button for the
+// same transition, single-open chromeless option strips, and swipe-to-dismiss.
 
 import {
   act,
@@ -430,13 +432,17 @@ describe("NotificationsHomeCenter", () => {
     expect(screen.queryByTestId("notifications-sort-time")).toBeNull();
   });
 
-  it("has no Notifications header — view-group eyebrows carry the structure", () => {
+  it("renders no headers or dividers — the physical grouping is the structure", () => {
     __ingestNotificationForTests(makeNotification());
+    __ingestNotificationForTests(
+      makeNotification({ category: "reminder", title: "Water the plants" }),
+    );
     render(<NotificationsHomeCenter />);
     expect(screen.queryByText("Notifications")).toBeNull();
-    expect(
-      screen.getAllByTestId("notification-group-label").length,
-    ).toBeGreaterThan(0);
+    // The view-group eyebrow headers (and their counts) are gone: groups are
+    // separated by spacing only.
+    expect(screen.queryByTestId("notification-group-label")).toBeNull();
+    expect(screen.queryByTestId("notification-stack-count")).toBeNull();
   });
 
   it("caps rendering at 100 rows when the shade + stack are expanded", () => {
@@ -445,8 +451,8 @@ describe("NotificationsHomeCenter", () => {
     }
     render(<NotificationsHomeCenter />);
     fireEvent.click(screen.getByTestId("notifications-expand-toggle"));
-    // Stacks persist through the shade toggle; fan the group to see its rows.
-    fireEvent.click(screen.getByTestId("notification-group-label"));
+    // Stacks persist through the shade change; fan the group via a peek tap.
+    fireEvent.click(screen.getAllByTestId("notification-stack-peek")[0]);
     expect(screen.getAllByTestId("notification-row")).toHaveLength(100);
   });
 
@@ -459,7 +465,7 @@ describe("NotificationsHomeCenter", () => {
     );
     render(<NotificationsHomeCenter />);
     fireEvent.click(screen.getByTestId("notifications-expand-toggle"));
-    fireEvent.click(screen.getByTestId("notification-group-label"));
+    fireEvent.click(screen.getAllByTestId("notification-stack-peek")[0]);
     // A notification is its glass card - no leading edge highlight even for
     // urgent rows, no per-row icon chip.
     expect(screen.getAllByTestId("notification-row")).toHaveLength(2);
@@ -467,25 +473,13 @@ describe("NotificationsHomeCenter", () => {
     expect(screen.queryByTestId("notification-row-icon")).toBeNull();
   });
 
-  it("renders a count chip when data.count > 1 (§C.3 coalescing)", () => {
+  it("never renders a count chip — the title line is title + time only", () => {
     __ingestNotificationForTests(
       makeNotification({ title: "3 new files", data: { count: 3 } }),
     );
     render(<NotificationsHomeCenter />);
-    const chip = screen.getByTestId("notification-count-chip");
-    // The visible glyph is the count; a visually-hidden suffix names it for AT.
-    expect(chip.textContent).toContain("3");
-    expect(chip.querySelector(".sr-only")?.textContent).toContain("grouped");
-  });
-
-  it("omits the count chip for a single (count ≤ 1 or absent) notification", () => {
-    __ingestNotificationForTests(
-      makeNotification({ title: "one", data: { count: 1 } }),
-    );
-    __ingestNotificationForTests(
-      makeNotification({ title: "plain", category: "system" }),
-    );
-    render(<NotificationsHomeCenter />);
+    // Coalesced arrivals speak through their title/body; no bare number rides
+    // the notification header.
     expect(screen.queryByTestId("notification-count-chip")).toBeNull();
   });
 });
@@ -525,10 +519,8 @@ describe("NotificationsHomeCenter (Z-stacked groups)", () => {
     );
     expect(peeks[0].style.transform).toContain("translateY(8px)");
     expect(peeks[1].style.transform).toContain("translateY(16px)");
-    // The eyebrow names the stack size.
-    expect(screen.getByTestId("notification-stack-count").textContent).toBe(
-      "3",
-    );
+    // No eyebrow, no stack-size number — the peeks themselves are the cue.
+    expect(screen.queryByTestId("notification-stack-count")).toBeNull();
   });
 
   it("stacks cap their visual depth at two peeks", () => {
@@ -538,9 +530,6 @@ describe("NotificationsHomeCenter (Z-stacked groups)", () => {
     render(<NotificationsHomeCenter />);
     expect(screen.getAllByTestId("notification-row")).toHaveLength(1);
     expect(screen.getAllByTestId("notification-stack-peek")).toHaveLength(2);
-    expect(screen.getByTestId("notification-stack-count").textContent).toBe(
-      "5",
-    );
   });
 
   it("a single-row group renders flat — no stack, no peeks", () => {
@@ -576,10 +565,12 @@ describe("NotificationsHomeCenter (Z-stacked groups)", () => {
       .getAllByTestId("notification-row")
       .map((el) => el.textContent ?? "");
     expect(titles[0]).toContain("C");
-    // The eyebrow folds it back into the stack.
-    fireEvent.click(screen.getByTestId("notification-group-label"));
+    // The fanned group's own "Show less" control folds it back into the stack
+    // (there is no group header to tap).
+    fireEvent.click(screen.getByTestId("notification-stack-collapse"));
     expect(screen.getAllByTestId("notification-row")).toHaveLength(1);
     expect(screen.getByTestId("notification-stack")).toBeTruthy();
+    expect(screen.queryByTestId("notification-stack-collapse")).toBeNull();
   });
 
   it("keeps a fanned stack open when the shade expands", () => {
@@ -727,26 +718,30 @@ describe("NotificationsHomeCenter (pull to expand / collapse)", () => {
     );
   }
 
-  it("has NO more/less buttons — a passive hint and an sr-only toggle instead", () => {
+  it('the "N more" hint is a real button that expands, and its expanded twin reads "Show less"', () => {
     seedTriage();
     render(<NotificationsHomeCenter />);
-    // The buttons are gone (regression for the removed affordance).
-    expect(screen.queryByTestId("notifications-show-all")).toBeNull();
-    expect(screen.queryByTestId("notifications-show-less")).toBeNull();
-    // Rested: only the interrupt-tier row renders; a quiet non-interactive
-    // hint names the hidden count.
+    // Rested: only the interrupt-tier row renders; the visible foot button
+    // names the hidden count and owns the click path of the same transition
+    // the gestures drive. The old passive hint + sr-only pair are gone.
     expect(screen.getAllByTestId("notification-row")).toHaveLength(1);
-    const hint = screen.getByTestId("notifications-pull-hint");
-    expect(hint.textContent).toContain("2 more");
-    expect(hint.getAttribute("aria-hidden")).toBe("true");
-    expect(hint.className).toContain("pointer-events-none");
-    // Keyboard/AT path: visually hidden, still a real button.
+    expect(screen.queryByTestId("notifications-pull-hint")).toBeNull();
     const toggle = screen.getByTestId("notifications-expand-toggle");
-    expect(toggle.className).toContain("sr-only");
+    expect(toggle.className).not.toContain("sr-only");
+    expect(toggle.className).not.toContain("pointer-events-none");
     expect(toggle.textContent).toContain("2 more");
+    fireEvent.click(toggle);
+    expect(
+      screen
+        .getByTestId("home-notification-list")
+        .getAttribute("data-shade-mode"),
+    ).toBe("expanded");
+    expect(
+      screen.getByTestId("notifications-expand-toggle").textContent,
+    ).toContain("Show less");
   });
 
-  it("the sr-only toggle expands to all priorities and compresses back", () => {
+  it("the foot button expands to all priorities and compresses back", () => {
     seedTriage();
     render(<NotificationsHomeCenter />);
     const list = screen.getByTestId("home-notification-list");
@@ -754,7 +749,7 @@ describe("NotificationsHomeCenter (pull to expand / collapse)", () => {
     fireEvent.click(screen.getByTestId("notifications-expand-toggle"));
     expect(list.getAttribute("data-shade-mode")).toBe("expanded");
     // All three priorities are now represented — still stacked (1 top card +
-    // 2 tappable peeks); the shade toggle reveals groups, never flattens them.
+    // 2 tappable peeks); the shade change reveals groups, never flattens them.
     expect(screen.getAllByTestId("notification-row")).toHaveLength(1);
     expect(screen.getAllByTestId("notification-stack-peek")).toHaveLength(2);
     fireEvent.click(screen.getByTestId("notifications-expand-toggle"));
@@ -863,7 +858,7 @@ describe("NotificationsHomeCenter (pull to expand / collapse)", () => {
     expect(list.getAttribute("data-shade-mode")).toBe("expanded");
   });
 
-  it("wheel-up at the top of the rested shade expands it", () => {
+  it("trackpad fingers-down (wheel deltaY < 0) at the top expands the rested shade", () => {
     seedTriage();
     render(<NotificationsHomeCenter />);
     const list = screen.getByTestId("home-notification-list");
@@ -871,17 +866,117 @@ describe("NotificationsHomeCenter (pull to expand / collapse)", () => {
     expect(list.getAttribute("data-shade-mode")).toBe("expanded");
   });
 
-  it("scrolling back up past the top compresses the expanded shade", () => {
+  it("the wheel gesture is DIRECTIONAL: trailing same-direction momentum never collapses what it just expanded", () => {
+    seedTriage();
+    render(<NotificationsHomeCenter />);
+    const list = screen.getByTestId("home-notification-list");
+    fireEvent.wheel(list, { deltaY: -(PULL_COMMIT_PX + 10) });
+    expect(list.getAttribute("data-shade-mode")).toBe("expanded");
+    // The macOS momentum tail: the same flick keeps emitting deltaY < 0 events
+    // after the commit. The old toggle re-fired on these and snapped the shade
+    // shut ("expands but only for a second"); the directional gesture treats
+    // expand-direction input while expanded as a no-op.
+    for (let i = 0; i < 8; i++) {
+      fireEvent.wheel(list, { deltaY: -(PULL_COMMIT_PX + 10) });
+    }
+    expect(list.getAttribute("data-shade-mode")).toBe("expanded");
+  });
+
+  it("trackpad fingers-up (wheel deltaY > 0) at the top collapses the expanded shade", () => {
     seedTriage();
     render(<NotificationsHomeCenter />);
     const list = screen.getByTestId("home-notification-list");
     fireEvent.click(screen.getByTestId("notifications-expand-toggle"));
     expect(list.getAttribute("data-shade-mode")).toBe("expanded");
-    // At the top (jsdom scrollTop = 0), continuing to scroll up overscrolls →
-    // the shade compresses back to triage.
+    // Fingers-down (deltaY < 0) while already expanded must NOT collapse —
+    // that direction only expands.
     fireEvent.wheel(list, { deltaY: -(PULL_COMMIT_PX + 10) });
+    expect(list.getAttribute("data-shade-mode")).toBe("expanded");
+    // Fingers-up at the top (jsdom list has no scroll overflow) collapses.
+    // Collapse contributions are per-event capped so a single scroll flick on
+    // an overflowing list can never commit — it takes a sustained gesture.
+    fireEvent.wheel(list, { deltaY: PULL_COMMIT_PX + 10 });
+    expect(list.getAttribute("data-shade-mode")).toBe("expanded");
+    fireEvent.wheel(list, { deltaY: PULL_COMMIT_PX + 10 });
     expect(list.getAttribute("data-shade-mode")).toBe("rested");
     expect(screen.getAllByTestId("notification-row")).toHaveLength(1);
+  });
+
+  it("a mouse drag UP collapses the expanded shade; drag down while expanded is a no-op", () => {
+    seedTriage();
+    render(<NotificationsHomeCenter />);
+    const list = screen.getByTestId("home-notification-list");
+    fireEvent.click(screen.getByTestId("notifications-expand-toggle"));
+    expect(list.getAttribute("data-shade-mode")).toBe("expanded");
+    // Drag DOWN while expanded: the expand direction in a state with nothing
+    // left to expand — springs back, never collapses.
+    fireEvent.pointerDown(list, {
+      pointerType: "mouse",
+      isPrimary: true,
+      pointerId: 4,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(list, {
+      pointerType: "mouse",
+      pointerId: 4,
+      clientX: 10,
+      clientY: 150,
+    });
+    fireEvent.pointerUp(list, {
+      pointerType: "mouse",
+      pointerId: 4,
+      clientX: 10,
+      clientY: 150,
+    });
+    expect(list.getAttribute("data-shade-mode")).toBe("expanded");
+    // Drag UP past the commit travel collapses.
+    fireEvent.pointerDown(list, {
+      pointerType: "mouse",
+      isPrimary: true,
+      pointerId: 5,
+      clientX: 10,
+      clientY: 160,
+    });
+    fireEvent.pointerMove(list, {
+      pointerType: "mouse",
+      pointerId: 5,
+      clientX: 12,
+      clientY: 20,
+    });
+    fireEvent.pointerUp(list, {
+      pointerType: "mouse",
+      pointerId: 5,
+      clientX: 12,
+      clientY: 20,
+    });
+    expect(list.getAttribute("data-shade-mode")).toBe("rested");
+  });
+
+  it("a touch drag UP collapses the expanded shade when the list has no scroll overflow", () => {
+    seedTriage();
+    render(<NotificationsHomeCenter />);
+    const list = screen.getByTestId("home-notification-list");
+    fireEvent.click(screen.getByTestId("notifications-expand-toggle"));
+    expect(list.getAttribute("data-shade-mode")).toBe("expanded");
+    // jsdom geometry: scrollHeight == clientHeight == 0 → no overflow, so the
+    // pan-y scroller has nothing to do and the shade owns the upward drag.
+    fireEvent.touchStart(list, { touches: [{ clientX: 10, clientY: 200 }] });
+    fireEvent.touchMove(list, { touches: [{ clientX: 12, clientY: 60 }] });
+    fireEvent.touchEnd(list, { touches: [] });
+    expect(list.getAttribute("data-shade-mode")).toBe("rested");
+  });
+
+  it("a touch drag DOWN while expanded never collapses (directional, not a toggle)", () => {
+    seedTriage();
+    render(<NotificationsHomeCenter />);
+    const list = screen.getByTestId("home-notification-list");
+    fireEvent.click(screen.getByTestId("notifications-expand-toggle"));
+    expect(list.getAttribute("data-shade-mode")).toBe("expanded");
+    fireEvent.touchStart(list, { touches: [{ clientX: 10, clientY: 10 }] });
+    fireEvent.touchMove(list, { touches: [{ clientX: 12, clientY: 150 }] });
+    fireEvent.touchEnd(list, { touches: [] });
+    expect(list.getAttribute("data-shade-mode")).toBe("expanded");
   });
 
   it("the pull is inert while the list is scrolled away from the top", () => {

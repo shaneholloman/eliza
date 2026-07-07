@@ -570,18 +570,18 @@ try {
       "the seeded notification renders as a single row",
     );
     assert(
-      (await center.getByTestId("notification-group-label").count()) === 1,
-      "the row renders under its destination group header",
+      (await center.getByTestId("notification-group-label").count()) === 0,
+      "no group header eyebrows render — grouping is physical only",
     );
     assert(
       (await center.getByText("Payment failed", { exact: false }).count()) > 0,
       "the notification row shows the seeded title",
     );
     // A single interrupt notification hides nothing, so the rested inbox shows
-    // no "N more" pull hint / expand toggle (there is no shade to expand into).
+    // no "N more" button (there is no shade to expand into).
     assert(
-      (await center.getByTestId("notifications-pull-hint").count()) === 0,
-      "no pull-to-expand hint with a single interrupt notification",
+      (await center.getByTestId("notifications-expand-toggle").count()) === 0,
+      "no expand button with a single interrupt notification",
     );
     // Tap expands the row's option strip; a `system` row with no safe deep link
     // offers only Dismiss. Acting on it acknowledges the row → inbox self-hides.

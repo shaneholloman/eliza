@@ -164,10 +164,10 @@ describe("NotificationsHomeCenter render count (#14559)", () => {
       vi.advanceTimersByTime(0);
     });
     // Fan the shade AND the group's stack out so all 30 rows paint flat
-    // (stacks persist through the shade toggle now).
+    // (stacks persist through the shade change; a peek tap fans the group).
     fireEvent.click(screen.getByTestId("notifications-expand-toggle"));
-    for (const label of screen.getAllByTestId("notification-group-label")) {
-      if (!(label as HTMLButtonElement).disabled) fireEvent.click(label);
+    for (const peek of screen.getAllByTestId("notification-stack-peek")) {
+      fireEvent.click(peek);
     }
     expect(screen.getAllByTestId("notification-row")).toHaveLength(30);
     expect(rowRenders).toBeGreaterThanOrEqual(30);
@@ -193,7 +193,7 @@ describe("NotificationsHomeCenter render count (#14559)", () => {
     // The memo's equality function is the surgical part of the fix: `createdAt`
     // is excluded (it feeds only the leaf), so the once-a-minute newer-timestamp
     // never re-renders the row; but any field that changes the row's OWN markup
-    // (title, body, deepLink, data.count, the single-open expanded flag) does.
+    // (title, body, deepLink, the single-open expanded flag) does.
     // Read state and priority no longer style the row (platform-shade model),
     // so they are not compared.
     const base = makeNotification({
