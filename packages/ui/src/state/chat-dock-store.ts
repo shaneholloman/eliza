@@ -17,6 +17,7 @@
  * the dock idiom, and `setChatDockIdiomActive` gates the agent-driven
  * auto-split so narrow/touch layouts are never affected.
  */
+import { logger } from "@elizaos/logger";
 import * as React from "react";
 
 export type ChatDockDetent = "collapsed" | "split" | "maximized";
@@ -115,9 +116,10 @@ function commit(s: DockStore, next: ChatDockState): void {
   s.state = next;
   try {
     globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(next));
-  } catch {
+  } catch (error) {
     // error-policy:J6 best-effort persistence — private mode / quota denial
     // must not break the live layout; the session state stays authoritative.
+    logger.debug({ error }, "Chat dock persistence failed");
   }
   for (const l of s.listeners) l();
 }
@@ -214,8 +216,9 @@ export function resetChatDockForTests(): void {
   s.idiomActive = false;
   try {
     globalThis.localStorage?.removeItem(STORAGE_KEY);
-  } catch {
+  } catch (error) {
     // error-policy:J6 best-effort teardown in tests.
+    logger.debug({ error }, "Chat dock test persistence reset failed");
   }
   s.state = DEFAULT_STATE;
   for (const l of s.listeners) l();
