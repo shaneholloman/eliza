@@ -14,7 +14,7 @@ type MacEffectsSymbols = {
   ensureWindowShadow(ptr: Pointer): boolean;
   setWindowTrafficLightsPosition(ptr: Pointer, x: number, y: number): boolean;
   setNativeWindowDragRegion(ptr: Pointer, x: number, height: number): boolean;
-  enableWindowBackForwardNavigationGestures(ptr: Pointer): boolean;
+  disableWindowBackForwardNavigationGestures(ptr: Pointer): boolean;
   orderOutWindow(ptr: Pointer): boolean;
   makeKeyAndOrderFrontWindow(ptr: Pointer): boolean;
   isAppActive(): boolean;
@@ -72,7 +72,7 @@ function loadLib(): MacEffectsLib {
         args: [FFIType.ptr, FFIType.f64, FFIType.f64],
         returns: FFIType.bool,
       },
-      enableWindowBackForwardNavigationGestures: {
+      disableWindowBackForwardNavigationGestures: {
         args: [FFIType.ptr],
         returns: FFIType.bool,
       },
@@ -170,16 +170,17 @@ export function setNativeDragRegion(
 }
 
 /**
- * Enable the macOS two-finger trackpad swipe back/forward history gesture on
+ * Force the macOS two-finger trackpad swipe back/forward history gesture OFF on
  * the window's WKWebView(s). WKWebView defaults
- * `allowsBackForwardNavigationGestures` to NO and Electrobun never sets it, so
- * the gesture stays dead without this. Idempotent; WKWebView is often inserted
- * after first layout, so call it from every restack pass. Returns true once at
- * least one WKWebView received the flag.
+ * `allowsBackForwardNavigationGestures` to NO, but the shell owns horizontal
+ * swipe UI (chat-sheet dismiss, pager row-swipes) that the native gesture would
+ * hijack, so the flag is pinned NO explicitly rather than trusted to a default.
+ * Idempotent; WKWebView is often inserted after first layout, so call it from
+ * every restack pass. Returns true once at least one WKWebView received the flag.
  */
-export function enableBackForwardNavigationGestures(ptr: Pointer): boolean {
+export function disableBackForwardNavigationGestures(ptr: Pointer): boolean {
   return (
-    getLib()?.symbols.enableWindowBackForwardNavigationGestures(ptr) ?? false
+    getLib()?.symbols.disableWindowBackForwardNavigationGestures(ptr) ?? false
   );
 }
 
