@@ -2668,11 +2668,12 @@ export function ContinuousChatOverlay({
   // At full-bleed the header must clear the status bar (safe-area top + 8px)
   // and drop its 100px reveal cap. Both EASE with the shape morph instead of
   // swapping discretely at commit — the discrete swap popped the header down a
-  // status-bar height on notch devices the frame `fullBleed` flipped.
-  const headerPadTopMorph = useTransform(
-    [headerPadTop, fullBleedT] as MotionValue<number>[],
-    ([pad, t]: number[]) => pad + (safeAreaTop + 8 - pad) * clamp01(t),
-  );
+  // status-bar height on notch devices the frame `fullBleed` flipped. The
+  // safe-area term stays a CSS `var(--safe-area-top)` INSIDE the calc (not a
+  // JS-measured number): the host seeds that var on native — and the e2e
+  // harness drives it — so the padding must honor it even where the env()
+  // probe reads 0.
+  const headerPadTopMorph = useMotionTemplate`calc(${headerPadTop}px + ${fullBleedT} * (var(--safe-area-top, 0px) + 0.5rem - ${headerPadTop}px))`;
   const headerMaxHMorph = useTransform(
     [headerMaxH, fullBleedT] as MotionValue<number>[],
     // 400px stands in for "uncapped": the safe-area inset + badge row is well

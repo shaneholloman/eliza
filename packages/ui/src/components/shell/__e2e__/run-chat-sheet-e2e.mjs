@@ -1836,13 +1836,23 @@ try {
       (await p.getByText("tell me the plan for", { exact: false }).count()) === 0,
       "LISTENING: interim transcript text is NOT rendered above the composer",
     );
+    // The capture-hot cue lives on the composer voice glyph, NOT the handle:
+    // while the composer is visible the grabber stays quiet during a recording
+    // (a second pulsing bar above the already-pulsing glyph read as noise);
+    // only the collapsed PILL pulses for a live capture.
     assert(
       await p
+        .getByTestId("chat-composer-mic")
+        .evaluate((el) => el.className.includes("animate-pulse")),
+      "LISTENING: the composer voice glyph pulses while the mic is hot",
+    );
+    assert(
+      !(await p
         .getByTestId("chat-sheet-grabber")
         .locator("span")
         .first()
-        .evaluate((el) => el.className.includes("animate-pulse")),
-      "LISTENING: the grabber bar pulses while the mic is hot",
+        .evaluate((el) => el.className.includes("animate-pulse"))),
+      "LISTENING: the grabber bar stays QUIET while the mic is hot (pill-only pulse)",
     );
     await snap(p, "state-recording-listening");
     await p.close();
