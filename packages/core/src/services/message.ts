@@ -9022,10 +9022,7 @@ export class DefaultMessageService implements IMessageService {
 			}
 			await runtime.queueEmbeddingGeneration(memoryToQueue, "high");
 		} else {
-			const memoryId = await runtime.createMemory(
-				persistableMessage,
-				"messages",
-			);
+			const memoryId = await runtime.createMemory(persistableMessage, "messages");
 			message.id = memoryId;
 			memoryToQueue = { ...persistableMessage, id: memoryId };
 			await runtime.queueEmbeddingGeneration(memoryToQueue, "normal");

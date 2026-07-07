@@ -97,11 +97,9 @@ RUN if [ -n "${VERSION_CLEAN}" ]; then \
   "; \
   fi
 
-# plugin-agent-orchestrator used to be removed here as "desktop-only, unbuilt"
-# (crashed tsx when dist/ was missing). The agent now imports it statically at
-# boot (server-helpers-swarm.ts), and the link step rewrites unbuilt linked
-# plugins to .ts-source exports which the tsx loader resolves (same path
-# plugin-documents already ships through) -- so it must stay in the image.
+# plugin-agent-orchestrator is imported during agent boot
+# (server-helpers-swarm.ts). Keep it linked in the image; the link step rewrites
+# unbuilt package exports to source paths that the tsx loader resolves.
 
 # Safe pruning only (GPU binaries + obvious dead weight)
 RUN rm -rf \

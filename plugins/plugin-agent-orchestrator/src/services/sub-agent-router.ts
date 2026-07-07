@@ -827,10 +827,8 @@ export class SubAgentRouter extends Service {
           isLegacySubAgentEntityMetadata(entity.metadata),
       );
       if (stale.length === 0) return;
-      await Promise.all(
-        stale.map((entity) =>
-          this.runtime.removeParticipant(entity.id, roomId),
-        ),
+      await this.runtime.deleteParticipants(
+        stale.map((entity) => ({ entityId: entity.id, roomId })),
       );
       this.log(
         "info",

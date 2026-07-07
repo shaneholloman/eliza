@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Supports app-core build, packaging, or development orchestration for link docker local app packages mjs. */
+/** Links workspace packages into the prebuilt agent Docker image. */
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
