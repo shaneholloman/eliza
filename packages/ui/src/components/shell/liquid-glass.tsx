@@ -11,7 +11,7 @@
  * until that exists, the rim + bevel + sheen carry the look without per-frame
  * filter cost.
  *
- * Consumed by ContinuousChatOverlay (the inset sheet surface). Values are
+ * Consumed by ContinuousChatOverlay (the inset sheet surface) and the notification cards (NotificationsHomeCenter). Values are
  * neutral white/black only (no accent, no blue), and depth is inset light with
  * no outer drop shadow per the shell's flat surface system.
  */

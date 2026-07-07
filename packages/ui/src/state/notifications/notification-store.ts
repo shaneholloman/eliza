@@ -1,7 +1,9 @@
 /**
  * Client store for agent notifications: validates untrusted WS payloads into
- * typed AgentNotification records, tracks unread state, and fans out to the
- * banner + native-notification bridges. Subscribed via useSyncExternalStore.
+ * typed AgentNotification records, tracks unread state, and delivers each
+ * arrival to one interrupt surface, native-first (OS notification on
+ * desktop/mobile, in-app glass banner as the web fallback). Subscribed via
+ * useSyncExternalStore.
  */
 import {
   type AgentNotification,
@@ -15,7 +17,10 @@ import { logger } from "@elizaos/logger";
 import { useSyncExternalStore } from "react";
 import { client } from "../../api/client";
 import { invokeDesktopBridgeRequest } from "../../bridge/electrobun-rpc";
-import { showNativeNotification } from "../../bridge/native-notifications";
+import {
+  showNativeNotification,
+  showWebNotification,
+} from "../../bridge/native-notifications";
 import { pushNotificationBanner } from "./notification-banner-store";
 
 /**
@@ -24,11 +29,12 @@ import { pushNotificationBanner } from "./notification-banner-store";
  * Self-contained module store (no React context) feeding the in-app
  * notification center. It hydrates the inbox from `GET /api/notifications`
  * once, subscribes to the live WS `agent_event` stream filtered to
- * `stream === "notification"`, and fans each new notification out to the
- * interrupt sinks (desktop OS notification, mobile native notification, and the
- * in-app top banner queue) based on priority and window focus. The inbox itself
- * is always updated — the center is the source-of-truth surface; the OS/banner
- * sinks are best-effort interrupts.
+ * `stream === "notification"`, and delivers each new notification to exactly
+ * one interrupt surface, native-first: the OS notification on desktop
+ * (Electrobun) and mobile (Capacitor), falling back to the in-app glass banner
+ * on the web and wherever no native channel delivered. The inbox itself is
+ * always updated — the center is the source-of-truth surface; the interrupt
+ * surfaces are best-effort.
  */
 
 export interface NotificationState {
@@ -95,10 +101,15 @@ function isWindowFocused(): boolean {
   return document.visibilityState === "visible" && document.hasFocus();
 }
 
+/**
+ * Fire the Electrobun host's OS notification. Resolves true only when the
+ * desktop bridge exists and handled the request (the RPC helper resolves null
+ * when the bridge is absent, i.e. web/mobile).
+ */
 async function fireDesktopNotification(
   notification: AgentNotification,
-): Promise<void> {
-  await invokeDesktopBridgeRequest<{ id: string }>({
+): Promise<boolean> {
+  const result = await invokeDesktopBridgeRequest<{ id: string }>({
     rpcMethod: "desktopShowNotification",
     ipcChannel: "desktop:showNotification",
     params: {
@@ -113,45 +124,51 @@ async function fireDesktopNotification(
       silent: notification.priority === "low",
     },
   }).catch(() => {
-    // error-policy:J6 best-effort OS-interrupt sink; desktop bridge absent on
-    // web/mobile — the inbox + other sinks still deliver.
+    // error-policy:J6 best-effort OS-interrupt sink; a failing desktop bridge
+    // reads as "no native surface" so the glass fallback takes over.
+    return null;
   });
+  return result !== null;
 }
 
 /**
- * Deliver a notification to the interrupt sinks. The inbox is updated
- * separately; this only decides whether to also raise an OS/toast alert.
+ * Deliver a notification to exactly one interrupt surface, native-first. The
+ * inbox is updated separately in ingest; this only raises the alert.
+ *
+ * Policy: platforms with an OS-native channel (Electrobun desktop, Capacitor
+ * mobile) alert through it — the OS owns loudness/heads-up semantics via the
+ * priority mapping, and the in-app glass banner stays out of the way (no
+ * double alert). Where no native channel delivers (web, or a denied/absent
+ * bridge), the glass banner is the surface while the window is visible; a
+ * hidden tab falls back to the browser Notification API, and only if that also
+ * fails does the banner queue so a returning user still gets the heads-up.
  */
-function deliver(notification: AgentNotification): void {
+async function deliver(notification: AgentNotification): Promise<void> {
   // §C.1 Silent tier is inbox-only: no OS/native interrupt, no toast, no badge.
   if (notification.priority === "low") return;
 
-  const focused = isWindowFocused();
-  const interruptive =
-    notification.priority === "high" || notification.priority === "urgent";
+  if (await fireDesktopNotification(notification)) return;
 
-  // Desktop OS + mobile native: fire when the window is backgrounded, or for
-  // interruptive priorities even when focused.
-  if (!focused || interruptive) {
-    void fireDesktopNotification(notification);
-    // error-policy:J6 best-effort OS-interrupt sink; the inbox (set separately
-    // in ingest) is the source of truth, so a failed native alert must not
-    // disturb delivery. Absent on web/desktop-without-bridge.
-    void showNativeNotification({
-      id: notification.id,
-      title: notification.title,
-      body: notification.body,
-      deepLink: notification.deepLink,
-      priority: notification.priority,
-    }).catch(() => {});
+  const request = {
+    id: notification.id,
+    title: notification.title,
+    body: notification.body,
+    deepLink: notification.deepLink,
+    priority: notification.priority,
+  };
+  // error-policy:J6 best-effort OS-interrupt sink; the inbox (set separately
+  // in ingest) is the source of truth, so a failed native alert must not
+  // disturb delivery — it reads as "none" and the glass fallback takes over.
+  const nativeChannel = await showNativeNotification(request).catch(
+    () => "none" as const,
+  );
+  if (nativeChannel !== "none") return;
+
+  if (isWindowFocused()) {
+    pushNotificationBanner(notification);
+    return;
   }
-
-  // In-app banner: interruptive priorities always surface a top banner card;
-  // quieter notifications only banner when the window is focused (so the user
-  // who is looking still gets a glance) and otherwise rely on the OS
-  // notification. The banner is the momentary heads-up; the inbox (updated in
-  // ingest) is the durable record.
-  if (interruptive || focused) {
+  if (!showWebNotification(request)) {
     pushNotificationBanner(notification);
   }
 }
@@ -172,7 +189,7 @@ function ingest(
         : countUnread(notifications),
   });
   if (options.deliver !== false) {
-    deliver(notification);
+    void deliver(notification);
   }
 }
 
