@@ -19,7 +19,6 @@ import {
   getCloudAuthToken,
   isDirectCloudSharedAgentBase,
 } from "../api/client-cloud";
-import { getBootConfig } from "../config/boot-config";
 import {
   appendIosBootTrace,
   isIosInProcessLocalAgentBase,
@@ -28,6 +27,7 @@ import {
 } from "../api/ios-local-agent-transport";
 import { getBackendStartupTimeoutMs } from "../bridge";
 import { resumePendingCloudHandoff } from "../cloud/handoff/resume-pending-handoff";
+import { getBootConfig } from "../config/boot-config";
 import {
   ANDROID_LOCAL_AGENT_SERVER_ID,
   isMobileLocalAgentIpcBase,
@@ -46,6 +46,8 @@ import {
   isDedicatedCloudAgentBase,
   isElizaCloudControlPlaneAgentlessBase,
 } from "../utils/cloud-agent-base";
+import { resolveAgentSessionRecovery } from "./agent-session-recovery";
+import { runAgentSessionRecovery } from "./agent-session-recovery-runner";
 import {
   asApiLikeError,
   deriveFirstRunResumeFieldsFromConfig,
@@ -59,8 +61,6 @@ import {
 import type { PlatformPolicy, StartupEvent } from "./startup-coordinator";
 import { buildStaticFirstRunOptions } from "./startup-first-run-options";
 import type { RestoringSessionCtx } from "./startup-phase-restore";
-import { resolveAgentSessionRecovery } from "./agent-session-recovery";
-import { runAgentSessionRecovery } from "./agent-session-recovery-runner";
 
 function isCapacitorNative(): boolean {
   try {

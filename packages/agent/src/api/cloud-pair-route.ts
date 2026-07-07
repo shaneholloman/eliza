@@ -228,9 +228,9 @@ export async function handleStandaloneCloudPairRoute(
     clearTimeout(timeoutId);
     status = response.status;
     if (response.ok) {
-      exchanged = (await response.json().catch(() => null)) as
-        | PairResponse
-        | null;
+      exchanged = (await response
+        .json()
+        .catch(() => null)) as PairResponse | null;
     } else {
       logger.warn(
         `[cloud-pair] exchange returned non-2xx status=${status} url=${exchangeUrl}`,

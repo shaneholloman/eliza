@@ -18,8 +18,8 @@ import {
 import { getBootConfig } from "../config/boot-config";
 import {
   buildCloudSharedAgentApiBase,
-  isElizaCloudControlPlaneAgentlessBase,
   isDedicatedCloudAgentBase,
+  isElizaCloudControlPlaneAgentlessBase,
   normalizeDirectCloudSharedAgentApiBase,
 } from "../utils/cloud-agent-base";
 import { ElizaClient } from "./client-base";

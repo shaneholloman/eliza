@@ -166,9 +166,7 @@ describe("resolveAgentSessionRecovery", () => {
 
     expect(decision.action).toBe("re-pair");
     if (decision.action === "re-pair") {
-      expect(decision.agentId).toBe(
-        "23766030-c096-4a14-932a-a4e43c562432",
-      );
+      expect(decision.agentId).toBe("23766030-c096-4a14-932a-a4e43c562432");
     }
   });
 });

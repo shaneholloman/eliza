@@ -96,12 +96,14 @@ describe("handleStandaloneCloudPairRoute", () => {
   });
 
   it("exchanges a one-time token and serves the session handoff HTML", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({ apiKey: "agent_secret_value", agentName: "Nova" }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ apiKey: "agent_secret_value", agentName: "Nova" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const harness = fakeRes();

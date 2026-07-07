@@ -45,8 +45,8 @@ import {
 } from "../platform";
 import {
   buildCloudSharedAgentApiBase,
-  isElizaCloudControlPlaneAgentlessBase,
   isDedicatedCloudAgentBase,
+  isElizaCloudControlPlaneAgentlessBase,
   normalizeDirectCloudSharedAgentApiBase,
 } from "../utils/cloud-agent-base";
 import { getElizaApiBase } from "../utils/eliza-globals";

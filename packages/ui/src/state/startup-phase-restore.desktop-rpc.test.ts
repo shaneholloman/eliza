@@ -13,8 +13,8 @@ import {
 } from "../platform";
 import {
   clearPersistedActiveServer,
-  savePersistedFirstRunComplete,
   savePersistedActiveServer,
+  savePersistedFirstRunComplete,
 } from "./persistence";
 import {
   type RestoringSessionDeps,

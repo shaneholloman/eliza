@@ -11,8 +11,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildSameTabCloudLoginPath,
-  canNavigateSameTabForBlockedPopup,
   CLOUD_LOGIN_POPUP_NAME,
+  canNavigateSameTabForBlockedPopup,
   hasSameOriginStewardLogin,
   isTouchPrimaryWebBrowser,
   preOpenCloudLoginWindow,
