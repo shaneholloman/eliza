@@ -883,7 +883,8 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
       }, 220);
       if (wheelPull.current >= PULL_COMMIT_PX) {
         wheelPull.current = 0;
-        if (wheelDecayTimer.current) window.clearTimeout(wheelDecayTimer.current);
+        if (wheelDecayTimer.current)
+          window.clearTimeout(wheelDecayTimer.current);
         wheelCoolingDown.current = true;
         window.setTimeout(() => {
           wheelCoolingDown.current = false;
