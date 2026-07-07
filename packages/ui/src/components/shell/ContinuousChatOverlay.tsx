@@ -4931,6 +4931,13 @@ export function ContinuousChatOverlay({
               }
             }}
           >
+            {/* Specular sheen — a soft light from the top edge, the liquid-glass
+                highlight. Subtle + non-interactive. */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 top-0 z-0 h-20 bg-gradient-to-b from-surface to-transparent"
+            />
+
             {/* Top-bar pull-down-to-restore grab zone (#13531). Confined to the
                 safe-area + MAXIMIZE_RESTORE_ZONE_PX strip at the very top so the
                 transcript BELOW it stays freely scrollable (wheel + touch-drag)
