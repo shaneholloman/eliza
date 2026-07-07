@@ -3843,6 +3843,12 @@ export function ContinuousChatOverlay({
     // pilled) sheet state and treat this deliberate open as a re-collapse.
     contentRef.current?.removeAttribute("inert");
     suppressExpandOnFocusRef.current = true;
+    // A stale thread-focus intent (queued by an earlier maximize/settle whose
+    // sheetOpen edge never consumed it) would fire on THIS open's sheetOpen
+    // flip and steal focus from the composer the very tap just focused —
+    // breaking the grabber's two-step keyboard dismiss. This open's focus
+    // target is explicitly the composer, so void any queued intent.
+    focusThreadRef.current = false;
     inputRef.current?.focus();
   }, [
     openProgress,
@@ -3928,13 +3934,16 @@ export function ContinuousChatOverlay({
         // 0 — the first delivered frame's whole travel integrates (an rAF-
         // coalesced first move can already carry real distance).
         dragLastOffsetRef.current = 0;
-        // Reset the measured-top maximize tracking for the fresh gesture.
+        // Reset the measured-top maximize tracking for the fresh gesture. Never
+        // seeded pinned: a gesture that starts at the ceiling (a restore grab)
+        // is fully described by rawOverpullT — a pinned seed would misread the
+        // whole downward track as measuredOverpullT = 1.
         const el0 = getPanelElement();
         dragStartTopRef.current = el0
           ? el0.getBoundingClientRect().top
           : Number.POSITIVE_INFINITY;
         dragMinTopRef.current = dragStartTopRef.current;
-        dragPinnedRef.current = maximized;
+        dragPinnedRef.current = false;
         dragOffAtPinRef.current = 0;
         dragPinTopRef.current = 0;
       }
@@ -3988,7 +3997,10 @@ export function ContinuousChatOverlay({
       // ceiling before the raw height has consumed the whole morph budget.
       const rawOverpullT = clamp01((cont - insetPanelMaxH) / maxOverPull);
       let measuredOverpullT = 0;
-      if (cont > 0) {
+      // The latch only makes sense while the gesture is net-ABOVE its start —
+      // a descending drag (a restore, or a pull-shut) is fully described by
+      // rawOverpullT and must never re-engage the measured pin.
+      if (cont > 0 && cont > dragStartContRef.current) {
         const el = getPanelElement();
         const top = el ? el.getBoundingClientRect().top : null;
         if (top != null) {
