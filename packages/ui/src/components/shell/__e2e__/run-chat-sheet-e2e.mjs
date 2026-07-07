@@ -1294,6 +1294,78 @@ async function runAnimationAppearanceSuite(page) {
   );
 }
 
+if (process.env.MAX_PROBE) {
+  // Slow-drag the grabber from the full detent past the screen top, sampling
+  // cursor Y, panel top, and maximized state so the maximize handoff can be
+  // inspected without stepping through Playwright manually.
+  const page = await browser.newPage({ viewport: { width: 420, height: 880 } });
+  attachConsole(page, sink);
+  await gotoFixture(page);
+  await page.waitForSelector('[data-testid="chat-sheet"]');
+  await page.waitForTimeout(700);
+  // Open to full via the normal half -> full gesture path.
+  await gesture(page, 160, { pointer: "mouse", slow: false, steps: 2 });
+  await page.waitForTimeout(SETTLE);
+  await gesture(page, 220, { pointer: "mouse", slow: false, steps: 2 });
+  await page.waitForTimeout(SETTLE);
+  console.log(`start detent: ${await detent(page)}`);
+  const b = await page.getByTestId("chat-sheet-grabber").boundingBox();
+  const cx = b.x + b.width / 2;
+  const startY = b.y + b.height / 2;
+  const rows = [];
+  const readInfo = async (cursorY, phase) => {
+    const info = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="chat-sheet"]');
+      return {
+        top: el.getBoundingClientRect().top,
+        max: el.getAttribute("data-maximized") === "true",
+      };
+    });
+    rows.push({
+      phase,
+      cursorY: Math.round(cursorY),
+      top: Math.round(info.top),
+      max: info.max,
+    });
+  };
+  await page.mouse.move(cx, startY);
+  await page.mouse.down();
+  // Upward leg: from full to just above the screen top.
+  const topY = -30;
+  for (let i = 1; i <= 44; i += 1) {
+    const cursorY = startY + ((topY - startY) * i) / 44;
+    await page.mouse.move(cx, cursorY);
+    await page.waitForTimeout(20);
+    await readInfo(cursorY, "up");
+  }
+  // Downward leg: reverse all the way back to the full region.
+  for (let i = 1; i <= 44; i += 1) {
+    const cursorY = topY + ((startY - topY) * i) / 44;
+    await page.mouse.move(cx, cursorY);
+    await page.waitForTimeout(20);
+    await readInfo(cursorY, "down");
+  }
+  await page.mouse.up();
+  console.log("phase,cursorY,panelTop,maximized");
+  for (const r of rows) console.log(`${r.phase},${r.cursorY},${r.top},${r.max}`);
+  const up = rows.filter((r) => r.phase === "up");
+  const down = rows.filter((r) => r.phase === "down");
+  const maxAt = up.find((r) => r.max);
+  // On the way down, divergence = panelTop - cursorY should stay near the
+  // handle offset.
+  const downDiv = down
+    .filter((r) => r.top > 40 && r.top < 800)
+    .map((r) => r.top - r.cursorY);
+  const downMed =
+    downDiv.sort((a, c) => a - c)[Math.floor(downDiv.length / 2)] ?? 0;
+  const downWorst = Math.max(...downDiv.map((d) => Math.abs(d - downMed)), 0);
+  console.log(
+    `\nmaximized at cursorY=${maxAt ? maxAt.cursorY : "NEVER"} (screen top=0). Min panel top=${Math.min(...up.map((r) => r.top))}. DOWN drift from median offset=${Math.round(downWorst)}px`,
+  );
+  await browser.close();
+  process.exit(0);
+}
+
 if (process.env.ANIM_PROBE) {
   const page = await browser.newPage({ viewport: { width: 420, height: 880 } });
   attachConsole(page, sink);

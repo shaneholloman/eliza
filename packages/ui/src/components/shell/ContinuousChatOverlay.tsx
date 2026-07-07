@@ -3960,15 +3960,24 @@ export function ContinuousChatOverlay({
       const overpullT = Math.max(rawOverpullT, measuredOverpullT);
       fullBleedT.set(overpullT);
       if (reduce) return;
-      // MID-DRAG COMMITS — fired the moment the finger crosses the intent so the
-      // sheet expands/collapses WHILE dragging: maximize once the over-pull has
-      // collapsed the margin at least halfway (the top is more than halfway to
-      // the screen edge under the finger); pill when carried past the bottom by
-      // the overshoot, or a big yank that started above half+magnet runs out the
-      // bottom of the screen.
-      if (dragMaxArmedRef.current && overpullT >= 0.5) {
-        commitMaximizeMidDrag(offset);
-        return;
+      // Continuous maximize stays reversible: the over-pull morph tracks the
+      // finger in both directions, while `maximized` only mirrors that motion
+      // with hysteresis so edge-to-edge flags flip near the top.
+      // A discrete commit would spring the panel ahead of the finger and force a
+      // later threshold crossing before the sheet could follow the drag down.
+      if (dragMaxArmedRef.current) {
+        if (overpullT >= 0.99 && !maximized) {
+          setFreeH(null);
+          setMode("full");
+          setMaximized(true);
+          focusThreadRef.current = true;
+          detentHaptic();
+        } else if (overpullT < 0.9 && maximized) {
+          setMaximized(false);
+          // Void the peak so the release decision does not re-maximize from an
+          // abandoned high-water mark.
+          maxPullRawRef.current = 0;
+        }
       }
       if (
         sheetOpen &&
@@ -4456,7 +4465,7 @@ export function ContinuousChatOverlay({
         // home-indicator clearance contract is exact.
         paddingBottom: keyboardLiftActive
           ? "0.75rem"
-          : fullBleed || restoreDragging
+          : fullBleed || restoreDragging || isDragging
             ? overlayPadBottom
             : "calc(var(--eliza-mobile-nav-offset, 0px) + max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)) + 0.5rem)",
       }}
