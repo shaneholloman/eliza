@@ -27,8 +27,20 @@ writeFileSync(
   "[test]\ntimeout = 120000\ncoverage = false\n",
 );
 
+// The unit lane runs with NO database service (Cloud Tests → unit-tests calls
+// cloud-setup-test-env without setup-db). DB-touching suites are built to fall
+// back to in-process PGlite, but that fallback only engages when DATABASE_URL is
+// empty or `pglite://` — and the Cloud Tests workflow sets a real
+// `postgresql://…:5432` URL at the workflow level, which every job inherits.
+// Left as-is, that ambient URL points every suite at a Postgres socket nothing
+// is listening on: the isolated-PGlite guards disable themselves (their loud
+// "pglite applied" assertions fail) and the raw-SQL suites hit ECONNREFUSED.
+// Pin the unit lane to in-process PGlite so it is self-contained; suites that
+// need a networked DB opt out via SKIP_DB_DEPENDENT.
 const env = {
   ...process.env,
+  DATABASE_URL: "pglite://memory",
+  TEST_DATABASE_URL: "pglite://memory",
   SKIP_DB_DEPENDENT: "1",
   SKIP_SERVER_CHECK: "true",
 };
