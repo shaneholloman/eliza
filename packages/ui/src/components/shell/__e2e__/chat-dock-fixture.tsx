@@ -127,6 +127,8 @@ function Harness(): React.JSX.Element {
     speaking: false,
     agentVoiceMuted: false,
     needsAudioUnlock: false,
+    micPermission: "unknown",
+    recheckMicPermission: async () => "unknown",
     transcriptionMode: false,
     toggleTranscriptionMode: noop("toggleTranscriptionMode"),
     stopTranscriptionAndMic: noop("stopTranscriptionAndMic"),

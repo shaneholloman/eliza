@@ -61,6 +61,7 @@ import {
   sqrtRubberBand,
   useRafCoalescer,
 } from "../../gestures";
+import { useConversationRenderWindow } from "../../hooks/useConversationRenderWindow";
 import {
   LAYOUT_SHIFT_INTENT_ATTR,
   LAYOUT_SHIFT_INTENT_TRANSIENT,
@@ -136,9 +137,6 @@ import { LIQUID_GLASS_EDGE_SHADOW, LIQUID_GLASS_SHEEN } from "./liquid-glass";
 import { SlashCommandMenu, useSlashMenu } from "./SlashCommandMenu";
 import {
   filterRenderableShellMessages,
-  MAX_LOADED_SHELL_WINDOW,
-  MAX_RENDERED_SHELL_MESSAGES,
-  planScrollTopLoadOlder,
   type ShellMessage,
 } from "./shell-state";
 import { TopicChipsBar } from "./TopicChipsBar";
@@ -201,27 +199,28 @@ const EMPTY_SLASH_CONTROLLER: SlashCommandController = {
  */
 
 // The chat floats over arbitrary app surfaces, including theme-app where
-// `--card` is brand orange. Keep the sheet's local tokens dark and self-owned so
-// open/maximized chat never turns into a transparent-looking orange overlay.
+// `--card` is brand orange. Keep the sheet's local tokens dark, neutral, and
+// self-owned so open/maximized chat never turns into a transparent-looking
+// orange overlay.
 const CHAT_PANEL_THEME = {
-  "--bg": "#120c08",
+  "--bg": "#101114",
   "--bg-hover": "rgba(255, 255, 255, 0.08)",
   "--bg-muted": "rgba(255, 255, 255, 0.06)",
-  "--card": "#1d130c",
-  "--card-foreground": "#fff7f0",
-  "--surface": "rgba(255, 255, 255, 0.06)",
-  "--txt": "#fff7f0",
-  "--text": "#fff7f0",
+  "--card": "#181a20",
+  "--card-foreground": "#f4f5f7",
+  "--surface": "rgba(255, 255, 255, 0.07)",
+  "--txt": "#f4f5f7",
+  "--text": "#f4f5f7",
   "--text-strong": "#ffffff",
-  "--foreground": "#fff7f0",
-  "--muted": "rgba(255, 247, 240, 0.68)",
-  "--muted-strong": "rgba(255, 247, 240, 0.86)",
-  "--muted-foreground": "rgba(255, 247, 240, 0.68)",
+  "--foreground": "#f4f5f7",
+  "--muted": "rgba(244, 245, 247, 0.68)",
+  "--muted-strong": "rgba(244, 245, 247, 0.86)",
+  "--muted-foreground": "rgba(244, 245, 247, 0.68)",
   "--border": "rgba(255, 255, 255, 0.18)",
   "--border-strong": "rgba(255, 255, 255, 0.34)",
-  "--ring": "rgba(255, 247, 240, 0.8)",
+  "--ring": "rgba(244, 245, 247, 0.8)",
   "--accent": "#ff7a3d",
-  "--accent-foreground": "#120c08",
+  "--accent-foreground": "#101114",
 } as React.CSSProperties;
 
 // The drag-handle bar color. Set EXPLICITLY (not `bg-muted-strong`) because the
@@ -505,7 +504,12 @@ function SoftButton({
         // Pulse the accent glyph while capture is hot; reduced-motion falls back
         // to the static accent without adding background or border chrome.
         pulse && "animate-pulse motion-reduce:animate-none",
-        disabled && "opacity-40",
+        // Blocked controls (e.g. voice/transcript during sign-in-first
+        // onboarding) read as inert: dimmed AND non-interactive to the pointer
+        // (no hover color shift, no cursor) — matching the attachment "+".
+        // Keyboard focus is unaffected, so the aria-disabled label still
+        // announces.
+        disabled && "pointer-events-none opacity-40",
       )}
     >
       {Icon ? (
@@ -892,6 +896,52 @@ function shellToChatMessageData(m: ShellMessage): ChatMessageData {
   return data;
 }
 
+const FIRST_RUN_SIGN_IN_FALLBACK_MESSAGE: ShellMessage = {
+  id: "first-run:cloud-signin-fallback",
+  role: "assistant",
+  source: "first_run",
+  createdAt: 0,
+  content: [
+    "Sign in to Eliza Cloud to start chatting.",
+    "",
+    "[CHOICE:first-run id=runtime]",
+    "__first_run__:runtime:cloud=Sign in to Eliza Cloud",
+    "[/CHOICE]",
+  ].join("\n"),
+};
+const FIRST_RUN_SIGN_IN_FALLBACK_DELAY_MS = 600;
+
+function isFirstRunShellMessage(m: ShellMessage): boolean {
+  return (
+    m.id.startsWith("first-run:") ||
+    m.source === "first_run" ||
+    m.source === "first-run"
+  );
+}
+
+function selectFirstRunDisplayMessages(
+  messages: readonly ShellMessage[],
+  showFallback: boolean,
+): ShellMessage[] {
+  const firstRunMessages = messages.filter(isFirstRunShellMessage);
+  if (firstRunMessages.length === 0) {
+    return showFallback ? [FIRST_RUN_SIGN_IN_FALLBACK_MESSAGE] : [];
+  }
+
+  const latest = firstRunMessages.at(-1);
+  if (!latest) return [];
+
+  const previous = firstRunMessages.at(-2);
+  if (
+    previous?.id === "first-run:appearance" &&
+    latest.id === "first-run:tutorial"
+  ) {
+    return [previous, latest];
+  }
+
+  return [latest];
+}
+
 /**
  * Render a settled transcript row exactly as the overlay does (glass chrome,
  * settled body). Test-only seam for the component-tree render-parity contract
@@ -938,15 +988,14 @@ export function ContinuousChatOverlay({
   slash?: SlashCommandController;
   /**
    * True while in-chat first-run onboarding is active (`firstRunComplete ===
-   * false` upstream). The overlay opens to FULL and pins there: every collapse
-   * path (Escape, outside tap, grabber pull-down/close) is a no-op, and the
-   * backdrop is OPAQUE (`bg-bg`) so the launcher/home behind is
-   * hidden. The composer TEXT + SEND are unlocked (#12178) — typed text is
-   * answered locally by the in-chat conductor and never reaches the server —
-   * while attach + mic stay disabled (no agent to take media yet); the seeded
-   * choice/OAuth widgets remain the primary input. On the falling edge —
-   * onboarding just completed — the sheet auto-collapses to the input bar and
-   * the opaque backdrop fades to the normal scrim, revealing the home screen.
+   * false` upstream). The overlay opens as the normal full-screen chat and pins
+   * there: every collapse path (Escape, outside tap, drag/close) is a no-op,
+   * the drag handle is hidden, and the backdrop is OPAQUE (`bg-bg`) so the
+   * launcher/home behind is hidden. The composer is sign-in-first and locked;
+   * the seeded transcript choice/OAuth widget is the only input until setup
+   * completes. On the falling edge — onboarding just completed — the sheet
+   * settles to half and the opaque backdrop fades to the normal scrim,
+   * revealing the home screen.
    */
   firstRunOpen?: boolean;
   /**
@@ -993,18 +1042,15 @@ export function ContinuousChatOverlay({
   // cancel/switch controls; the placeholder tells the user they can keep typing.
   const modelStatus = controller.modelStatus;
   const modelBlocksSend = modelStatus?.blocksSend ?? false;
-  // The shared action funnel — the SAME seam the transcript's CHOICE widgets
-  // use. During onboarding the unlocked composer routes free text through it so
-  // it reaches the in-chat conductor (and never the server); post-onboarding it
-  // is unused here (the composer sends via `controller.send`). In stories/tests
-  // with no AppContext the store returns an inert no-op.
+  // App-level chat handlers shared with the desktop chat surface. The first-run
+  // transcript's CHOICE widgets still use the action funnel inside their own
+  // renderer; this overlay-level selection only needs message-management
+  // handlers.
   const {
-    sendActionMessage,
     handleChatDelete,
     handleSelectConversation,
     loadConversationMessagesAround,
   } = useAppSelectorShallow((s) => ({
-    sendActionMessage: s.sendActionMessage,
     // Persistent per-message delete (#13533): server DELETE + optimistic
     // removal with rollback. Inert no-op in stories/tests with no AppContext.
     handleChatDelete: s.handleChatDelete,
@@ -1214,14 +1260,12 @@ export function ContinuousChatOverlay({
   // The pin-at-full + auto-collapse edge effect lives below `goToDetent` (it
   // needs the detent animator); the mount state above still opens FULL first.
   //
-  // During onboarding the sheet MUST stay open — the seeded greeting + choices
-  // are the only way forward and the composer is frozen behind them. Deriving
-  // openness from the effect alone proved raceable on a home-view boot (the
-  // sheet could settle collapsed with the options hidden behind the grabber and
-  // only a misleading "tap an option above" hint showing). Pin it STRUCTURALLY:
-  // while firstRunOpen, the derived openness is always FULL regardless of the
-  // underlying `mode` transition state. The effect still drives the real `mode`
-  // so the falling edge (onboarding done) collapses correctly.
+  // During onboarding and docked chat the sheet MUST stay open. Deriving
+  // openness from the effect alone proved raceable on a home-view boot, and the
+  // dock idiom delegates close/open to the divider pill. Pin it STRUCTURALLY:
+  // while pinned, the derived openness is always FULL regardless of the
+  // underlying `mode` transition state. The effects still drive the real `mode`
+  // so the first-run falling edge collapses correctly.
   const effectiveMode: ChatMode = pinnedOpen ? "full" : mode;
   const pilled = effectiveMode === "pill";
   const sheetOpen = effectiveMode === "half" || effectiveMode === "full";
@@ -1234,9 +1278,9 @@ export function ContinuousChatOverlay({
   // FULL-SCREEN (maximized): at the FULL detent the user can drop the inset
   // (max-width, side padding, top margin, rounding) so the chat is edge-to-edge.
   // Invariant: only true while at FULL (sheetOpen && expanded && !pilled); every
-  // leave-full transition resets it. Onboarding (firstRunOpen) starts here — the
-  // login/first-run chat opens edge-to-edge full-screen (kept in sync by the
-  // first-run pin effect below), then the falling edge collapses it to half.
+  // leave-full transition resets it. Pinned sessions start here: first-run opens
+  // edge-to-edge full-screen, then its falling edge collapses to half; the dock
+  // pin stays edge-to-edge while the dock idiom owns close/open.
   const [maximized, setMaximized] = React.useState(pinnedOpen);
   // A restore drag is in flight (pull-down out of full-bleed). Declared up here
   // (not by the restore binding) because `fullBleedFrame` below reads it to keep
@@ -1561,14 +1605,6 @@ export function ContinuousChatOverlay({
   // after the user has moved on.
   const pendingExpandOnRevealRef = React.useRef(false);
   const focusThreadRef = React.useRef(false);
-  // The render window slides UP as the reader scrolls into history (#14329):
-  // it starts at MAX_RENDERED_SHELL_MESSAGES (lean idle/drag DOM) and grows a
-  // page per scroll-to-top — first revealing already-loaded turns, then paging
-  // older ones in — bounded by MAX_LOADED_SHELL_WINDOW so a long thread never
-  // unbounds the DOM. Reset when the active conversation changes (below).
-  const [renderWindowSize, setRenderWindowSize] = React.useState(
-    MAX_RENDERED_SHELL_MESSAGES,
-  );
   // Recomputed only when the thread or phase changes — NOT on every drag/draft
   // re-render. Pure windowing (empty-turn filter, with the streaming-assistant
   // exception) lives in shell-state so it's unit-tested; the count of renderable
@@ -1577,13 +1613,67 @@ export function ContinuousChatOverlay({
     () => filterRenderableShellMessages(messages, phase),
     [messages, phase],
   );
-  const visibleMessages = React.useMemo(
-    () =>
-      renderableMessages.length > renderWindowSize
-        ? renderableMessages.slice(-renderWindowSize)
-        : renderableMessages,
-    [renderableMessages, renderWindowSize],
+  // Mirror the active id so an async older-page result is dropped after a
+  // mid-flight conversation switch: a page fetched for the previous thread must
+  // never prepend into the newly active one.
+  const loadOlderConversationIdRef = React.useRef(activeConversationId);
+  loadOlderConversationIdRef.current = activeConversationId;
+  const fetchOlder = React.useCallback(async () => {
+    const conversationId = activeConversationId;
+    if (!conversationId) return { hasMore: false, prependedCount: 0 };
+    return await loadOlderConversationMessages({
+      client,
+      conversationId,
+      currentMessages: conversationMessages,
+      prependMessages: (older) => {
+        if (loadOlderConversationIdRef.current === conversationId) {
+          prependConversationMessages(older);
+        }
+      },
+    });
+  }, [activeConversationId, conversationMessages, prependConversationMessages]);
+  // The render window slides UP as the reader scrolls into history (#14329,
+  // #15281): it opens at MAX_RENDERED_SHELL_MESSAGES (lean idle/drag DOM) and
+  // grows a page per scroll-to-top — first revealing already-loaded turns, then
+  // paging older ones in — bounded by MAX_LOADED_SHELL_WINDOW so a long thread
+  // never unbounds the DOM. The one shared engine (also drives ChatView),
+  // reset when the active conversation changes.
+  const renderWindow = useConversationRenderWindow({
+    renderableCount: renderableMessages.length,
+    conversationKey: activeConversationId,
+    fetchOlder,
+  });
+  const hasFirstRunMessages = React.useMemo(
+    () => renderableMessages.some(isFirstRunShellMessage),
+    [renderableMessages],
   );
+  const [firstRunFallbackReady, setFirstRunFallbackReady] =
+    React.useState(false);
+  React.useEffect(() => {
+    if (!firstRunOpen || hasFirstRunMessages) {
+      setFirstRunFallbackReady(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setFirstRunFallbackReady(true);
+    }, FIRST_RUN_SIGN_IN_FALLBACK_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [firstRunOpen, hasFirstRunMessages]);
+  const visibleMessages = React.useMemo(() => {
+    if (firstRunOpen)
+      return selectFirstRunDisplayMessages(
+        renderableMessages,
+        firstRunFallbackReady,
+      );
+    return renderableMessages.length > renderWindow.windowSize
+      ? renderableMessages.slice(-renderWindow.windowSize)
+      : renderableMessages;
+  }, [
+    firstRunFallbackReady,
+    firstRunOpen,
+    renderableMessages,
+    renderWindow.windowSize,
+  ]);
   const lastId = visibleMessages.at(-1)?.id ?? null;
   const lastContent = visibleMessages.at(-1)?.content ?? "";
   // The thread body is mounted while the sheet is open OR during an upward
@@ -1647,84 +1737,22 @@ export function ContinuousChatOverlay({
     [visibleMessages],
   );
 
-  // ── Infinite upward scroll (#13532), wired into the overlay per #14279 ────
-  // The overlay is the primary mobile/PWA chat surface, but until now only the
-  // desktop ChatView wired load-older. Share the SAME scroller (`threadRef`,
-  // owned by useThreadAutoScroll for bottom-follow) plus a top sentinel so a
-  // scroll toward the oldest line seamlessly prepends an older page — with the
-  // reader's viewport anchored (no jump) by useLoadOlderOnScroll.
+  // ── Infinite upward scroll (#13532/#14329), wired into the overlay per #14279
+  // The overlay is the primary mobile/PWA chat surface. Share the SAME scroller
+  // (`threadRef`, owned by useThreadAutoScroll for bottom-follow) plus a top
+  // sentinel so a scroll toward the oldest line seamlessly reveals/prepends an
+  // older page — viewport anchored (no jump) by useLoadOlderOnScroll. Paging +
+  // windowing state lives in the shared useConversationRenderWindow above.
   const topSentinelRef = React.useRef<HTMLDivElement>(null);
-  const [hasMoreOlder, setHasMoreOlder] = React.useState(true);
-  // The active id captured for the async load-older result, so a page fetched
-  // for the previous conversation can't prepend into (or re-arm paging for) the
-  // newly active one after a mid-flight switch.
-  const loadOlderConversationIdRef = React.useRef(activeConversationId);
-  loadOlderConversationIdRef.current = activeConversationId;
-  // Live copies for the scroll-up handler so its identity stays stable across
-  // window growth / message churn (the observer captures it through a ref).
-  const renderWindowSizeRef = React.useRef(renderWindowSize);
-  renderWindowSizeRef.current = renderWindowSize;
-  const renderableCountRef = React.useRef(renderableMessages.length);
-  renderableCountRef.current = renderableMessages.length;
-  const hasMoreOlderRef = React.useRef(hasMoreOlder);
-  hasMoreOlderRef.current = hasMoreOlder;
-  const loadOlderMessages = React.useCallback(async () => {
-    const conversationId = activeConversationId;
-    if (!conversationId) return;
-    // Reveal-before-fetch: grow the render window a page to surface
-    // already-loaded older turns before hitting the network. Only when the
-    // window has consumed every loaded turn do we page the next older server
-    // window (and grow to render it). Both grows go through the SAME
-    // scrollHeight-delta anchor in useLoadOlderOnScroll, so the reader stays put.
-    const plan = planScrollTopLoadOlder(
-      renderWindowSizeRef.current,
-      renderableCountRef.current,
-      hasMoreOlderRef.current,
-    );
-    if (plan.nextWindowSize !== renderWindowSizeRef.current) {
-      setRenderWindowSize(plan.nextWindowSize);
-    }
-    if (!plan.shouldFetch) return;
-    const result = await loadOlderConversationMessages({
-      client,
-      conversationId,
-      currentMessages: conversationMessages,
-      prependMessages: (older) => {
-        if (loadOlderConversationIdRef.current === conversationId) {
-          prependConversationMessages(older);
-        }
-      },
-    });
-    if (loadOlderConversationIdRef.current === conversationId) {
-      setHasMoreOlder(result.hasMore);
-      if (result.prependedCount > 0) {
-        setRenderWindowSize((n) =>
-          Math.min(n + result.prependedCount, MAX_LOADED_SHELL_WINDOW),
-        );
-      }
-    }
-  }, [activeConversationId, conversationMessages, prependConversationMessages]);
-  // A fresh/switched conversation may have older history — re-arm the loader and
-  // collapse the render window back to the lean initial size.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: activeConversationId is the intentional re-arm trigger; the body only calls stable setters.
-  React.useEffect(() => {
-    setHasMoreOlder(true);
-    setRenderWindowSize(MAX_RENDERED_SHELL_MESSAGES);
-  }, [activeConversationId]);
   useLoadOlderOnScroll<HTMLDivElement>({
     scrollRef: threadRef,
     sentinelRef: topSentinelRef,
-    onLoadOlder: loadOlderMessages,
+    onLoadOlder: renderWindow.onLoadOlder,
     // Topic grouping wraps rows in collapsible segments, which breaks the
     // sentinel's flat-prepend anchor math; restrict load-older to the flat
     // transcript (the common case). A topic-grouped thread still shows its
-    // recent window; scroll-up paging there is a follow-up. The observer stays
-    // armed while older turns can still be revealed (window below the loaded
-    // count) OR paged (server has more), and latches off at the DOM bound.
-    hasMore:
-      !hasTopics &&
-      renderWindowSize < MAX_LOADED_SHELL_WINDOW &&
-      (renderWindowSize < renderableMessages.length || hasMoreOlder),
+    // recent window; scroll-up paging there is a follow-up.
+    hasMore: !hasTopics && renderWindow.canLoadOlder,
     topItemKey: visibleMessages[0]?.id ?? "",
     enabled: threadPresented && !hasTopics,
   });
@@ -1813,12 +1841,15 @@ export function ContinuousChatOverlay({
         let el = await waitForSearchAnchor(anchorId, 20);
         if (!el) {
           // The hit predates the loaded recent window: load a window CENTERED on
-          // it, let the thread re-render, then scroll.
+          // it, then reveal the full loaded set so the centered pivot is not
+          // sliced out of the render window (#15281) — without the reveal a
+          // windowed transcript drops the anchor and the jump silently no-ops.
           const loaded = await loadConversationMessagesAround(
             result.conversationId,
             result.messageId,
           );
           if (loaded) {
+            renderWindow.revealFullWindow();
             el = await waitForSearchAnchor(anchorId, 20);
           }
         }
@@ -1830,6 +1861,7 @@ export function ContinuousChatOverlay({
       loadConversationMessagesAround,
       waitForSearchAnchor,
       scrollAndFlashSearchAnchor,
+      renderWindow.revealFullWindow,
     ],
   );
 
@@ -1907,7 +1939,13 @@ export function ContinuousChatOverlay({
       return (
         <ChatMessage
           key={m.id}
-          appearance={firstRunOpen ? "panel" : "glass"}
+          // Always the app's canonical glass chrome — onboarding included. The
+          // first-run greeting used to force "panel" (a bordered card), a
+          // different, duplicate-looking bubble from the real in-app chat; glass
+          // is the chromeless bubble with the same rise/fade entrance, matching
+          // the app and the documented first-run intent (agent prose floats as
+          // plain wallpaper text with its CTA beneath).
+          appearance="glass"
           agentName={agentName}
           message={shellToChatMessageData(m)}
           reduceMotion={reduce}
@@ -1928,7 +1966,6 @@ export function ContinuousChatOverlay({
     },
     [
       visibleMessages.length,
-      firstRunOpen,
       agentName,
       reduce,
       handleCopyMessage,
@@ -1996,16 +2033,10 @@ export function ContinuousChatOverlay({
       const trimmed = text.trim();
       // An image-only turn is valid; only bail when there's nothing to send.
       if (!trimmed && images.length === 0) return;
-      // During onboarding the composer is unlocked (#12178). Route free text
-      // through the shared action funnel: before a runtime is chosen it is
-      // answered locally by the in-chat conductor (classify → "conductor") and
-      // does not reach the server; once a Cloud agent is provisioning behind a
-      // ready bootstrap bridge the funnel classifies it as "send" so the first
-      // real message reaches the bootstrap-bridge agent (#14103). Either way
-      // `controller.send` is never called here — the funnel owns the decision.
-      // Attach is disabled during onboarding, so any images are dropped.
+      // During onboarding the composer is sign-in-first and locked. Ignore any
+      // synthetic draft entry point that reaches submit, and keep setup choice
+      // handling inside the transcript widgets.
       if (firstRunOpen) {
-        if (trimmed) void sendActionMessage(trimmed);
         setDraft("");
         setSlashDismissed(false);
         setPendingImages([]);
@@ -2075,15 +2106,7 @@ export function ContinuousChatOverlay({
       detentHaptic();
       inputRef.current?.focus();
     },
-    [
-      canSend,
-      firstRunOpen,
-      sendActionMessage,
-      send,
-      setDraft,
-      setPendingImages,
-      viewChatBinding,
-    ],
+    [canSend, firstRunOpen, send, setDraft, setPendingImages, viewChatBinding],
   );
 
   const addImageFiles = React.useCallback(
@@ -2601,7 +2624,9 @@ export function ContinuousChatOverlay({
   // shape instead of popping/snapping. Only the SHAPE eases (side inset, corner
   // radius, composer bottom-inset); the height is still the finger/detent spring,
   // so the two read as one motion. Reduced-motion sets it instantly.
-  const fullBleedT = useMotionValue(pinnedOpen ? 1 : 0);
+  // Start at the committed shape so pinned first paint does not flash the inset
+  // panel before the full-screen morph effect catches up.
+  const fullBleedT = useMotionValue(fullBleed ? 1 : 0);
   // Mirror the settled full-bleed flag so release handlers can settle the morph
   // toward the committed shape without waiting for a re-render.
   const fullBleedRef = React.useRef(fullBleed);
@@ -3023,38 +3048,6 @@ export function ContinuousChatOverlay({
     ],
   );
 
-  // First-run onboarding pin + release. While onboarding is active the sheet
-  // stays pinned FULL — a true full-screen chat (the seeded greeting/choices
-  // own the screen and the chat is undismissable; every collapse path below is
-  // also gated on `firstRunOpen`). On the FALLING edge — onboarding just
-  // completed — settle to the HALF detent: the sheet springs full → half in
-  // step with the opaque backdrop fade, so the home screen is revealed behind
-  // the top half while the conversation stays in hand. Edge-detected via a ref
-  // so an ordinary session (onboarding never active) never triggers it.
-  const wasFirstRunOpenRef = React.useRef(firstRunOpen);
-  React.useEffect(() => {
-    const was = wasFirstRunOpenRef.current;
-    wasFirstRunOpenRef.current = firstRunOpen;
-    if (firstRunOpen) {
-      // Pin FULL + edge-to-edge full-bleed: the login/first-run chat owns the
-      // whole screen (see the `maximized` initial state above).
-      setMode("full");
-      setMaximized(true);
-      return;
-    }
-    if (was && !dockPinned) goToDetent("half");
-  }, [firstRunOpen, dockPinned, goToDetent]);
-
-  // Dock pin: when the dock idiom mounts (or flips on at a live resize), snap
-  // the sheet to its pinned FULL + edge-to-edge shape immediately — the dock
-  // pane's geometry owns the chat's footprint from here.
-  React.useEffect(() => {
-    if (!dockPinned) return;
-    setMode("full");
-    setMaximized(true);
-    fullBleedT.set(1);
-  }, [dockPinned, fullBleedT]);
-
   // Trackpad two-finger swipe steps the sheet through its detents
   // (pill ↔ input ↔ half ↔ full ↔ maximized) — the macOS-feel complement to
   // the pointer drag. Wheel events accumulate with a short decay and step once
@@ -3116,6 +3109,37 @@ export function ContinuousChatOverlay({
       collapseToPill,
     ],
   );
+
+  // First-run onboarding pin + release. While onboarding is active the sheet
+  // stays pinned FULL — a true full-screen chat (the seeded greeting/choices
+  // own the screen and the chat is undismissable; every collapse path below is
+  // also gated on `firstRunOpen`). On the FALLING edge — onboarding just
+  // completed — settle to the HALF detent: the sheet springs full → half in
+  // step with the opaque backdrop fade, so the home screen is revealed behind
+  // the top half while the conversation stays in hand. Edge-detected via a ref
+  // so an ordinary session (onboarding never active) never triggers it.
+  const wasFirstRunOpenRef = React.useRef(firstRunOpen);
+  React.useEffect(() => {
+    const was = wasFirstRunOpenRef.current;
+    wasFirstRunOpenRef.current = firstRunOpen;
+    if (firstRunOpen) {
+      setFreeH(null);
+      setMode("full");
+      setMaximized(true);
+      return;
+    }
+    if (was && !dockPinned) goToDetent("half");
+  }, [firstRunOpen, dockPinned, goToDetent]);
+
+  // Dock pin: when the dock idiom mounts (or flips on at a live resize), snap
+  // the sheet to its pinned FULL + edge-to-edge shape immediately — the dock
+  // pane's geometry owns the chat's footprint from here.
+  React.useEffect(() => {
+    if (!dockPinned) return;
+    setMode("full");
+    setMaximized(true);
+    fullBleedT.set(1);
+  }, [dockPinned, fullBleedT]);
 
   // First-run opaque backdrop (#12178). While onboarding pins the sheet FULL,
   // the backdrop is an OPAQUE `bg-bg` layer that hides the launcher/home behind
@@ -3256,6 +3280,7 @@ export function ContinuousChatOverlay({
   React.useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const onPrefill = (event: Event) => {
+      if (firstRunOpen) return;
       const detail = (event as CustomEvent<ChatPrefillEventDetail>).detail;
       const text = typeof detail?.text === "string" ? detail.text : "";
       if (!text.trim()) return;
@@ -3280,7 +3305,7 @@ export function ContinuousChatOverlay({
     };
     window.addEventListener(CHAT_PREFILL_EVENT, onPrefill);
     return () => window.removeEventListener(CHAT_PREFILL_EVENT, onPrefill);
-  }, [clearPrefillFocusSchedule, setDraft]);
+  }, [clearPrefillFocusSchedule, firstRunOpen, setDraft]);
 
   // "Open chat" intent (the launcher's Messages tile). Land the user IN an open
   // conversation instead of the wordless home with a collapsed pill: un-pill to
@@ -3309,6 +3334,7 @@ export function ContinuousChatOverlay({
   React.useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const consumeFromHash = () => {
+      if (firstRunOpen) return;
       const hash = window.location.hash;
       // Read the voice flag off the ORIGINAL hash first — claiming clears the
       // launch params (text/source/action/launchId) but leaves `voice`, and we
@@ -3347,6 +3373,7 @@ export function ContinuousChatOverlay({
   }, [
     clearPrefillFocusSchedule,
     expand,
+    firstRunOpen,
     handsFree,
     recording,
     setDraft,
@@ -3522,11 +3549,8 @@ export function ContinuousChatOverlay({
   );
 
   const submit = React.useCallback(() => {
-    // Onboarding: skip slash/shortcut resolution entirely — every submit is
-    // answered by the in-chat conductor, so nothing runs a command or reaches
-    // the server (submitText routes free text to the conductor).
+    // Onboarding is sign-in-first; transcript choice widgets are the only input.
     if (firstRunOpen) {
-      submitText(draft, pendingImages);
       return;
     }
     const shortcut =
@@ -4899,17 +4923,15 @@ export function ContinuousChatOverlay({
         style={{ maxWidth: wrapperMaxW }}
         className="pointer-events-none relative flex w-full flex-col items-center"
       >
-        {(!fullBleed && !restoreDragging) ||
-        draggingRef.current ||
-        firstRunOpen ? (
+        {!firstRunOpen &&
+        ((!fullBleed && !restoreDragging) || draggingRef.current) ? (
           // Suppressed while full-bleed (the restore strip owns the top) and
           // while a restore drag is in flight (so the strip keeps the pointer
           // capture through the un-maximize) — EXCEPT while a grabber drag is
           // live: a MID-DRAG commit (pill or maximize) must not unmount or
-          // disable the element holding the pointer capture, or the gesture
-          // dies at the exact moment it commits. Onboarding keeps the inert
-          // grabber even at full-bleed — the restore gesture is a no-op there,
-          // so the "drag to exit full screen" strip would lie.
+          // disable the element holding the pointer capture, or the gesture dies
+          // at the exact moment it commits. Onboarding hides the grabber
+          // entirely: it is pinned, undismissable, and sign-in-first.
           <SheetGrabber
             open={sheetOpen}
             onOpen={openFromGrabber}
@@ -5387,18 +5409,16 @@ export function ContinuousChatOverlay({
                   ) : null}
                   {/* `mt-auto` keeps the latest line at the bottom (nearest the
                   input) until the thread overflows, then it scrolls. During
-                  onboarding the transcript is TOP-aligned instead: the sheet is
-                  pinned full-screen, and bottom-anchoring would shift every
-                  existing choice button UP each time the conductor seeds a new
-                  turn — the second tap of a fast double-tap would land on a
-                  button that just slid under the finger (a mis-pick straight
-                  into the wrong flow). Top-aligned, turns append BELOW what's
-                  already on screen and nothing moves under a pointer. */}
+                  onboarding only the current first-run turn is displayed, so
+                  center that setup card in the available full-screen chat space
+                  and bias it above the locked composer. */}
                   <div
                     ref={threadContentRef}
                     className={cn(
                       "flex flex-col pb-3 pt-1",
                       !firstRunOpen && "mt-auto",
+                      firstRunOpen &&
+                        "min-h-full justify-center pb-[18vh] pt-0",
                     )}
                   >
                     {/* Top sentinel for infinite upward scroll (#13532, #14279):
@@ -5409,7 +5429,7 @@ export function ContinuousChatOverlay({
                         Only meaningful in the flat (non-topic) transcript. */}
                     {!firstRunOpen &&
                     !hasTopics &&
-                    hasMoreOlder &&
+                    renderWindow.canLoadOlder &&
                     visibleMessages.length > 0 ? (
                       <div
                         ref={topSentinelRef}
@@ -5728,6 +5748,9 @@ export function ContinuousChatOverlay({
                 ref={inputRef}
                 rows={1}
                 value={draft}
+                // Onboarding is sign-in-first: lock the composer until the user
+                // signs in, so they can't type into a chat that isn't ready yet.
+                disabled={firstRunOpen}
                 onChange={(e) => {
                   const nextDraft = e.target.value;
                   if (
@@ -5762,14 +5785,14 @@ export function ContinuousChatOverlay({
                 onBlur={() => setComposerFocused(false)}
                 onPaste={handleComposerPaste}
                 onKeyDown={handleComposerKeyDown}
-                // The composer is unlocked during onboarding (#12178): typing is
-                // always allowed. Free text is answered locally by the in-chat
-                // conductor and never reaches the server (submitText routes it).
+                // The composer is LOCKED during onboarding: first-run is
+                // sign-in-first, so the input is disabled (see `disabled` above)
+                // until the user signs in.
                 // (This surface's strings are plain literals by design — see
                 // the imageError note above.)
                 placeholder={
                   firstRunOpen
-                    ? `Ask ${agentName} anything, or sign in above`
+                    ? "Sign in to start chatting"
                     : noProviderConfigured
                       ? "Connect a model provider in Settings to chat"
                       : modelBlocksSend
@@ -5783,7 +5806,7 @@ export function ContinuousChatOverlay({
                 aria-label="message"
                 data-testid="chat-composer-textarea"
                 aria-describedby={
-                  booting && !noProviderConfigured
+                  booting && !noProviderConfigured && !firstRunOpen
                     ? "cc-booting-hint"
                     : undefined
                 }
@@ -5791,16 +5814,19 @@ export function ContinuousChatOverlay({
                 // and only when a slash catalog is wired in — a plain message
                 // box otherwise.
                 {...comboboxAria}
-                // During onboarding the placeholder invites the unlocked
-                // composer ("Ask … anything, or sign in above"), so brighten it
-                // from the resting 45% to 70% to read clearly beside the choices.
-                className={`scrollbar-hide max-h-[8.5rem] min-h-8 min-w-0 flex-1 resize-none self-center border-none bg-transparent px-1.5 py-1 text-left text-sm leading-relaxed text-txt outline-none ${
+                // During onboarding the composer is locked (sign-in-first); the
+                // placeholder points at the sign-in above, brightened from the
+                // resting 45% to 70% to read clearly. `disabled:pointer-events-none`
+                // blocks it cleanly like the attachment "+" (no "not-allowed"
+                // cursor on hover), and `disabled:opacity-100` keeps the
+                // placeholder legible rather than dimming it.
+                className={`scrollbar-hide max-h-[8.5rem] min-h-8 min-w-0 flex-1 resize-none self-center border-none bg-transparent px-1.5 py-1 text-left text-sm leading-relaxed text-txt outline-none disabled:pointer-events-none disabled:opacity-100 ${
                   firstRunOpen
                     ? "placeholder:text-muted-strong"
                     : "placeholder:text-muted"
                 }`}
               />
-              {booting && !noProviderConfigured ? (
+              {booting && !noProviderConfigured && !firstRunOpen ? (
                 <span id="cc-booting-hint" className="sr-only">
                   {agentName} is waking up — you can type now; your message
                   sends and the reply arrives in a moment.
@@ -5853,11 +5879,9 @@ export function ContinuousChatOverlay({
                             ? "send another"
                             : "send"
                       }
-                      // During onboarding the send button stays live regardless
-                      // of agent readiness — a typed message reaches the in-chat
-                      // conductor, not the (absent) agent. Post-onboarding a
-                      // stopped agent disables it as before.
-                      disabled={!firstRunOpen && !canSend}
+                      // Onboarding is sign-in-first; if a synthetic draft exists
+                      // anyway, send stays locked with the rest of the composer.
+                      disabled={firstRunOpen || !canSend}
                       // Keep focus in the textarea on tap: without this the
                       // button steals focus, the textarea blurs, the keyboard
                       // retracts and the composer relayouts between pointerdown

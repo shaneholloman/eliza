@@ -58,6 +58,11 @@ type VectorBrowserBootConfig = AppBootConfig & {
   companionVectorBrowser?: VectorBrowserRuntime;
 };
 
+type ColumnMetadataRow = {
+  column_name?: unknown;
+  data_type?: unknown;
+};
+
 function resolveConfiguredVectorBrowserRuntime(): VectorBrowserRuntime | null {
   const runtime = (getBootConfig() as VectorBrowserBootConfig)
     .companionVectorBrowser;
@@ -1028,7 +1033,9 @@ export function VectorBrowserRichView({
       const colResult: QueryResult = await client.executeDatabaseQuery(
         `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '${table.replace(/'/g, "''")}' AND table_schema NOT IN ('pg_catalog','information_schema') ORDER BY ordinal_position`,
       );
-      const rows = Array.isArray(colResult.rows) ? colResult.rows : [];
+      const rows: ColumnMetadataRow[] = Array.isArray(colResult.rows)
+        ? colResult.rows
+        : [];
       const cols = rows.map((r) => {
         const name = String(r.column_name);
         const dtype = String(r.data_type).toLowerCase();
