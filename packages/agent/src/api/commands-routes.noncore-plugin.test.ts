@@ -16,16 +16,22 @@
  * the connector bridges use, exercised from a non-core contributor.
  */
 
-import type { Action, Content, IAgentRuntime, Memory, Plugin } from "@elizaos/core";
+import type {
+  Action,
+  Content,
+  IAgentRuntime,
+  Memory,
+  Plugin,
+} from "@elizaos/core";
 import { createMockRuntime } from "@elizaos/core/testing";
 import { initForRuntime } from "@elizaos/plugin-commands";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   ORCHESTRATOR_STATUS_COMMAND_ACTION,
   ORCHESTRATOR_STATUS_COMMAND_KEY,
   orchestratorStatusCommandAction,
   registerOrchestratorCommands,
 } from "../../../../plugins/plugin-task-coordinator/src/orchestrator-command.ts";
-import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { handleCommandsRoutes } from "./commands-routes.ts";
 
