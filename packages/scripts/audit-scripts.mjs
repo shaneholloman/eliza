@@ -120,6 +120,7 @@ const ALLOWED_EXACT = new Set([
   "audit:voice-policy-ratchet:self-test",
   "check:loadperf-bundle:json",
   "check:pr-evidence",
+  "evidence:pr",
   "evidence:open",
   "evidence:review:no-open",
   "seed:messages",
