@@ -82,6 +82,12 @@ function WeatherTile(): React.JSX.Element {
     <div
       data-testid="home-weather"
       data-status={weather.status}
+      data-approximate={weather.approximate || undefined}
+      title={
+        weather.status === "ready" && weather.approximate
+          ? "Estimated from your network address — enable precise location in Settings → Capabilities"
+          : undefined
+      }
       className={cn(
         "col-span-2 row-span-2 flex min-w-0 flex-col items-end justify-end text-right text-white",
         WALLPAPER_FLOAT_SHADOW,

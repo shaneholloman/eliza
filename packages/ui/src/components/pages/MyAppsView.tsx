@@ -6,8 +6,9 @@
  * first-class destination rather than buried in preferences. The body is the
  * reused {@link AppsManagementSection}, wrapped in a titled scroll page.
  */
-import { ViewHeader } from "../shared/ViewHeader";
+
 import { AppsManagementSection } from "../settings/AppsManagementSection";
+import { ViewHeader } from "../shared/ViewHeader";
 
 export function MyAppsView() {
   return (

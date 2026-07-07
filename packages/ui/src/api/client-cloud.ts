@@ -259,11 +259,32 @@ function shouldUseNativeStewardRefreshHttp(endpoint: string): boolean {
   return Capacitor.isNativePlatform() || isElectrobunRuntime();
 }
 
+/**
+ * True when the document is itself served from a known Eliza Cloud host, which
+ * is the only place a cloud-API request can collapse to a same-origin path. The
+ * cloud web host proxies `/api` to the worker; localhost dev, custom-scheme
+ * WebViews, and third-party embeds do not.
+ */
+function isPageServedFromDirectCloudHost(): boolean {
+  if (typeof window === "undefined") return false;
+  return DIRECT_ELIZA_CLOUD_API_BY_HOST.has(
+    window.location.hostname.toLowerCase(),
+  );
+}
+
 function resolveBrowserCloudApiRequestUrl(url: string): string {
   if (shouldUseNativeCloudHttp() || typeof window === "undefined") return url;
   try {
     const parsed = new URL(url);
     if (!DIRECT_ELIZA_CLOUD_API_BY_HOST.has(parsed.hostname.toLowerCase())) {
+      return url;
+    }
+    // Same-origin collapse is valid only for production co-hosting, where
+    // app.elizacloud.ai proxies `/api` to the worker. On localhost dev, including
+    // shifted Vite ports such as 2160, the same path targets the local agent API
+    // and trips its default-deny gate for `/api/auth/*`. Keep the absolute cloud
+    // URL there; the worker CORS allowlist covers localhost ports.
+    if (!isPageServedFromDirectCloudHost()) {
       return url;
     }
     return `${parsed.pathname}${parsed.search}${parsed.hash}`;

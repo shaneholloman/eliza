@@ -1436,7 +1436,9 @@ describe("runPollingBackend bounded native boot (#11030)", () => {
       { current: null },
     );
 
-    expect(androidBootStateMock.getAndroidLocalAgentBootStateForUrl).toHaveBeenCalled();
+    expect(
+      androidBootStateMock.getAndroidLocalAgentBootStateForUrl,
+    ).toHaveBeenCalled();
     expect(dispatch).toHaveBeenCalledWith({ type: "BACKEND_TIMEOUT" });
     expect(deps.setStartupError).not.toHaveBeenCalledWith(
       expect.objectContaining({

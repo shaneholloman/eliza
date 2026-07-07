@@ -32,7 +32,11 @@ interface PairingTokenResponse {
 
 export type AgentSessionRecoveryResult =
   | { ok: true; redirectUrl: string }
-  | { ok: false; reason: "not-ready" | "unauthorized" | "error"; message: string };
+  | {
+      ok: false;
+      reason: "not-ready" | "unauthorized" | "error";
+      message: string;
+    };
 
 export interface RunAgentSessionRecoveryDeps {
   /** Cloud control-plane base (boot config `cloudApiBase`). */

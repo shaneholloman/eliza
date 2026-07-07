@@ -552,11 +552,10 @@ const NotificationRow = memo(function NotificationRow({
           ) : null}
         </button>
         {expanded ? (
-          <div
-            role="group"
+          <fieldset
             aria-label="Notification actions"
             data-testid="notification-row-options"
-            className="flex flex-wrap items-center gap-1.5 px-3 pb-2.5 pt-0.5"
+            className="m-0 flex min-w-0 flex-wrap items-center gap-1.5 border-0 px-3 pb-2.5 pt-0.5"
           >
             {options.map((option) => (
               <button
@@ -570,7 +569,7 @@ const NotificationRow = memo(function NotificationRow({
                   else onDismiss(notification.id);
                 }}
                 className={cn(
-                  "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                  "min-h-touch rounded-full px-3 py-2 text-xs font-medium transition-colors pointer-coarse:min-w-touch",
                   option.kind === "dismiss"
                     ? "bg-white/8 text-white/65 hover:bg-white/14 hover:text-white"
                     : "bg-white/14 text-white hover:bg-white/22",
@@ -579,7 +578,7 @@ const NotificationRow = memo(function NotificationRow({
                 {option.label}
               </button>
             ))}
-          </div>
+          </fieldset>
         ) : null}
       </div>
     </li>
@@ -692,7 +691,7 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
             data-testid={`notifications-sort-${mode}`}
             onClick={() => changeSortMode(mode)}
             className={cn(
-              "rounded-full p-1.5 transition-colors",
+              "rounded-full p-2 transition-colors pointer-coarse:min-h-touch pointer-coarse:min-w-touch",
               sortMode === mode
                 ? "bg-white/12 text-white"
                 : "text-white/45 hover:bg-white/8 hover:text-white/80",
@@ -742,7 +741,7 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
               type="button"
               data-testid="notifications-show-all"
               onClick={() => setShowAll(true)}
-              className="flex w-full items-center justify-center gap-1 rounded-xl px-3 py-1.5 text-2xs font-medium text-white/55 transition-colors hover:bg-white/8 hover:text-white/85"
+              className="flex min-h-touch w-full items-center justify-center gap-1 rounded-xl px-3 py-2 text-xs font-medium text-white/55 transition-colors hover:bg-white/8 hover:text-white/85"
             >
               <ChevronDown className="h-3.5 w-3.5" />
               {hiddenCount} more
@@ -755,7 +754,7 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
               type="button"
               data-testid="notifications-show-less"
               onClick={() => setShowAll(false)}
-              className="flex w-full items-center justify-center gap-1 rounded-xl px-3 py-1.5 text-2xs font-medium text-white/55 transition-colors hover:bg-white/8 hover:text-white/85"
+              className="flex min-h-touch w-full items-center justify-center gap-1 rounded-xl px-3 py-2 text-xs font-medium text-white/55 transition-colors hover:bg-white/8 hover:text-white/85"
             >
               <ChevronUp className="h-3.5 w-3.5" />
               Show less

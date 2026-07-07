@@ -1,7 +1,7 @@
 /**
- * html-canvas-paint — the belt-AND-suspenders cure for the recurring iOS
- * standalone-PWA "bottom bar" (device r8), sitting UNDER the JS-measured
- * `--standalone-bottom-reclaim` (#15036) that already re-seats the composer.
+ * Mirrors the active wallpaper onto the root viewport canvas, curing the
+ * recurring iOS standalone-PWA "bottom bar" where fixed app boxes can stop
+ * short of the drawable screen.
  *
  * ── WHY A CANVAS PAINT AND NOT ANOTHER BOX FIX ──
  * Per the CSS backgrounds spec, the background of the ROOT element (`html`)
@@ -29,11 +29,9 @@
  *     a box), so we mirror the field's base color; the strip matches the shader
  *     field's darkest tone instead of #160d07.
  *
- * This is INVISIBLE-BY-CONSTRUCTION: it does not depend on measuring the gap
- * correctly (unlike the var reclaim, whose measurement can itself fail if
- * innerHeight/visualViewport ALSO report the collapsed layout viewport). Even a
- * measurement no-op leaves the canvas painting the wallpaper, so the strip is
- * gone regardless.
+ * This is invisible-by-construction: it does not depend on measuring the gap
+ * correctly. Even if viewport APIs report a collapsed layout viewport, the
+ * canvas still paints the wallpaper, so the strip is gone regardless.
  *
  * ── FOUC / --launch-bg ──
  * `index.html` sets `--launch-bg` on `:root` as the pre-boot paint (avoids a
@@ -58,7 +56,7 @@ import { resolveApiUrl, resolveAppAssetUrl } from "../utils/asset-url";
  * the box image reference identical bytes (no double-fetch of a different URL).
  *  - `data:` / `blob:` / absolute `http(s):` / protocol-relative — pass through.
  *  - `/api/media/<hash>` — an agent-API path, resolve against the API base.
- *  - `/wallpapers/<id>.webp` / `/bg-sunset.jpg` — a public static asset, resolve
+ *  - `/wallpapers/<id>.webp` / `/bg-sunset.webp` — a public static asset, resolve
  *    against the SPA asset base (correct on packaged `file://` / `capacitor://`).
  */
 function resolveWallpaperUrl(url: string): string {
@@ -124,8 +122,8 @@ export function computeRootCanvasPaint(
  * moment the app knows it. No-op under SSR / missing document.
  *
  * `background-position: center bottom` deliberately anchors the cover image to
- * the BOTTOM edge: the box wallpaper uses `center` (its own reclaim reaches the
- * true bottom), but the canvas exists specifically to fill the strip UNDER the
+ * the BOTTOM edge: the box wallpaper uses `center`, but the canvas exists
+ * specifically to fill the strip UNDER the
  * box, so biasing its crop toward the bottom keeps the seam between the box
  * image and the canvas image visually continuous at the home-indicator edge.
  */

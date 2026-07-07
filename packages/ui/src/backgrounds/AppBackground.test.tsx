@@ -46,7 +46,7 @@ describe("AppBackground", () => {
     // The wallpaper is `fixed inset-0`; with the mobile/PWA body scroll-locked
     // WITHOUT `position: fixed` (styles/base.css), a fixed layer's containing
     // block is the true viewport, so `inset-0` reaches the physical screen
-    // bottom on its own — no `bottom` reclaim offset, no `--standalone-bottom-reclaim`.
+    // bottom on its own — no measured bottom offset.
     seed({ mode: "shader", color: "#ef5a1f" });
     const { container } = render(<AppBackground />);
     const shader = container.querySelector<HTMLElement>(
@@ -98,14 +98,12 @@ describe("AppBackground", () => {
     expect(scrim?.className).toContain("bg-bg/50");
   });
 
-  it("does NOT reintroduce the cosmetic warm bottom-floor gradient (measured reclaim makes the wallpaper own the true bottom)", () => {
+  it("does NOT reintroduce the cosmetic warm bottom-floor gradient", () => {
     // The cosmetic warm-ember floor lift existed ONLY to disguise the launch-bg
-    // band that showed when the wallpaper stopped ~59px short under the useless
-    // CSS-unit reclaim. With the JS-MEASURED reclaim the wallpaper's own pixels
-    // reach the true physical bottom, so the cosmetic strip is dead weight and
-    // must NOT return (it re-tinted the home-indicator zone a warm brown — the
-    // recurring "bottom bar" in disguise). Only the legibility scrim remains
-    // inside the single image layer.
+    // band that showed when fixed app boxes stopped short of the drawable
+    // screen. The wallpaper plus root-canvas mirror own the edge now, so the
+    // cosmetic strip is dead weight and must NOT return. Only the legibility
+    // scrim remains inside the single image layer.
     seed({ mode: "image", color: "#000000", imageUrl: "/api/media/x.png" });
     const { container } = render(<AppBackground />);
     expect(
@@ -176,10 +174,10 @@ describe("AppBackground", () => {
     // fixed-body ICB. Mounting AppBackground with an image config must mirror
     // that image onto documentElement so the bottom strip paints the wallpaper.
     document.documentElement.style.backgroundImage = "";
-    seed({ mode: "image", color: "#160d07", imageUrl: "/bg-sunset.jpg" });
+    seed({ mode: "image", color: "#160d07", imageUrl: "/bg-sunset.webp" });
     render(<AppBackground />);
     const bg = document.documentElement.style.backgroundImage;
-    expect(bg).toContain("bg-sunset.jpg");
+    expect(bg).toContain("bg-sunset.webp");
     expect(document.documentElement.style.backgroundSize).toBe("cover");
     expect(document.documentElement.style.backgroundPosition).toBe(
       "center bottom",

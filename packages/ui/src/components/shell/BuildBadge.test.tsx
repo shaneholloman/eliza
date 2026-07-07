@@ -42,8 +42,8 @@ describe("BuildBadge", () => {
     expect(badge.textContent).toContain("58f6bb3beb · Jul 03 17:42 MDT");
     const anchor = badge.closest("[data-aesthetic-overlay-ignore='true']");
     expect(anchor).not.toBeNull();
-    expect((anchor as HTMLElement).style.paddingBottom).toContain(
-      "--eliza-continuous-chat-clearance",
+    expect((anchor as HTMLElement).style.paddingTop).toContain(
+      "safe-area-inset-top",
     );
     expect(fetch).toHaveBeenCalledWith(
       "/build-info.json",
@@ -51,14 +51,14 @@ describe("BuildBadge", () => {
     );
   });
 
-  it("reserves the floating chat clearance above the bottom edge", async () => {
+  it("anchors to the top-left, clearing the top safe-area inset", async () => {
     mockFetchOk(BUILD_INFO);
     render(<BuildBadge />);
     await screen.findByTestId("build-badge");
     const anchor = screen.getByTestId("build-badge-anchor");
-    expect(anchor.getAttribute("style")).toContain(
-      "--eliza-continuous-chat-clearance",
-    );
+    expect(anchor.className).toContain("top-0");
+    expect(anchor.className).toContain("left-0");
+    expect(anchor.getAttribute("style")).toContain("safe-area-inset-top");
   });
 
   it("falls back to commit + builtAt when label is missing", async () => {
@@ -121,26 +121,24 @@ describe("BuildBadge", () => {
     // Compact single line with every probed geometry value so the NEXT device
     // screenshot reveals the exact viewport numbers — innerHeight (ih),
     // visualViewport (vv), documentElement.clientHeight (ce), screen.height
-    // (sh), the measured reclaim var (rc), and the 100lvh/100dvh offsetHeight
-    // probes (lv/dv). jsdom returns 0 for these, but the KEYS must all be
-    // present and correctly formatted.
-    for (const key of ["ih", "vv", "ce", "sh", "rc", "lv", "dv"]) {
+    // (sh), and the 100lvh/100dvh offsetHeight probes (lv/dv). jsdom returns 0
+    // for these, but the keys must all be present and correctly formatted.
+    for (const key of ["ih", "vv", "ce", "sh", "lv", "dv"]) {
       expect(geom.textContent).toMatch(new RegExp(`${key}[0-9?]`));
     }
   });
 
-  it("(d) surfaces the lvh/dvh offset probes + reclaim var in the diagnostics overlay", async () => {
+  it("(d) surfaces the lvh/dvh offset probes in the diagnostics overlay", async () => {
     mockFetchOk(BUILD_INFO);
     const user = userEvent.setup();
     render(<BuildBadge />);
     const badge = await screen.findByTestId("build-badge");
     await user.click(badge);
     const diag = await screen.findByTestId("build-badge-diag");
-    // The offsetHeight-based 100lvh/100dvh probes and the live reclaim var are
-    // the numbers that test the measurement-failure hypothesis on device.
+    // The offsetHeight-based 100lvh/100dvh probes test the viewport-unit
+    // measurement hypothesis on device.
     expect(diag.textContent).toContain("100lvh(offset)");
     expect(diag.textContent).toContain("100dvh(offset)");
-    expect(diag.textContent).toContain("reclaim-var");
     expect(diag.textContent).toContain("docEl.clientH");
     expect(diag.textContent).toContain("screen.height");
   });

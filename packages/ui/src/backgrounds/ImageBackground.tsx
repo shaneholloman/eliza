@@ -19,7 +19,7 @@ export interface ImageBackgroundProps {
  *  - `/api/media/<hash>` (a re-hosted upload/generation) — an AGENT-API path, so
  *    resolve it against the runtime API base (`resolveApiUrl`); a bare `/api/…`
  *    on `file://` would point at the SPA, not the backend, and 404.
- *  - `/bg-sunset.jpg` / `/wallpapers/<id>.webp` (curated static assets in
+ *  - `/bg-sunset.webp` / `/wallpapers/<id>.webp` (curated static assets in
  *    `packages/app/public`) — a PUBLIC ASSET path, so resolve it against the SPA
  *    asset base (`resolveAppAssetUrl`); on packaged `file://` a bare `/wallpapers`
  *    would resolve to `file:///wallpapers` and fail. This is the same
@@ -85,9 +85,8 @@ export function ImageBackground({
           the image layer (not a sibling) so the shell's exactly-one-background
           invariant holds and every image wallpaper — default or user-uploaded —
           gets the same treatment. NO cosmetic bottom-floor gradient below it:
-          the measured reclaim (parent `bottom`) makes the wallpaper reach the
-          true physical bottom, so the image's own pixels own the
-          home-indicator edge, lock-screen style. */}
+          the fixed wallpaper and mirrored root canvas make the image's own
+          pixels own the home-indicator edge, lock-screen style. */}
       <div
         aria-hidden="true"
         data-testid="app-background-image-scrim"
