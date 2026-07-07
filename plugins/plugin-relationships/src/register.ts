@@ -8,10 +8,3 @@
  * leave this a no-op (a DOM is present), so the same import is safe everywhere.
  */
 
-if (typeof window === "undefined") {
-  void import("./register-terminal-view.js")
-    .then((m) => m.registerRelationshipsTerminalView())
-    .catch(() => {
-      // Terminal rendering is best-effort; never block plugin load.
-    });
-}

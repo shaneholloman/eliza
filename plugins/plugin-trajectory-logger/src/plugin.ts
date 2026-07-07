@@ -27,7 +27,7 @@ const trajectoryLoggerPlugin: Plugin = {
         "Realtime view of the agent's last and pending HANDLE / PLAN / ACTION / EVALUATE turns",
       icon: "Activity",
       path: "/trajectory-logger",
-      modalities: ["gui", "xr", "tui"],
+      modalities: ["gui"],
       bundlePath: "dist/views/bundle.js",
       componentExport: "TrajectoryLoggerView",
       relatedActions: ["TASKS"],

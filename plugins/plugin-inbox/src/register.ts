@@ -7,10 +7,3 @@
  * import inert, so the same import is safe everywhere.
  */
 
-if (typeof window === "undefined") {
-  void import("./register-terminal-view.tsx")
-    .then((m) => m.registerInboxTerminalView())
-    .catch(() => {
-      // Terminal rendering is best-effort; never block plugin load.
-    });
-}

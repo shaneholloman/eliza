@@ -37,7 +37,7 @@ export const birdclawPlugin: Plugin = {
       // ONE declaration → GUI + XR + TUI, all drawn from the single
       // BirdclawSpatialView source. `modalities` stays a plain literal here
       // (plugin.ts is not in the view bundle).
-      modalities: ["gui", "xr", "tui"],
+      modalities: ["gui"],
       bundlePath: "dist/views/bundle.js",
       // First-party instrumented view (data-agent-id controls): grant the
       // agent-surface capability so the view broker admits agent-driven

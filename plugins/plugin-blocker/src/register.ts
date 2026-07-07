@@ -7,10 +7,3 @@
  * no-op (the GUI/XR surface mounts `FocusView` from the view bundle instead).
  */
 
-if (typeof window === "undefined") {
-  void import("./register-terminal-view.tsx")
-    .then((m) => m.registerFocusTerminalView())
-    .catch(() => {
-      // Terminal rendering is best-effort; never block plugin load.
-    });
-}

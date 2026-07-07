@@ -22,7 +22,7 @@ const feedPlugin: Plugin = {
       description: "Feed prediction market operator dashboard",
       icon: "Gamepad2",
       path: "/feed",
-      modalities: ["gui", "xr", "tui"],
+      modalities: ["gui"],
       bundlePath: "dist/views/bundle.js",
       // First-party instrumented view (data-agent-id controls): grant the
       // agent-surface capability so the view broker admits agent-driven
@@ -57,16 +57,6 @@ const feedPlugin: Plugin = {
   ],
 };
 
-// In a terminal host (the Node agent, no DOM), register the Feed view so it
-// renders inline in the terminal. Lazy + DOM-guarded so the terminal engine
-// stays out of browser/mobile bundles.
-if (typeof window === "undefined") {
-  void import("./register-terminal-view.js")
-    .then((m) => m.registerFeedTerminalView())
-    .catch(() => {
-      // Terminal rendering is best-effort; never block plugin load.
-    });
-}
 
 export default feedPlugin;
 export * from "./routes.js";

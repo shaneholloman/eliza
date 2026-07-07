@@ -29,7 +29,7 @@ export const appContactsPlugin: Plugin = {
       description: "Android address book — read-only contact lookup",
       icon: "Users",
       path: "/contacts",
-      modalities: ["gui", "xr", "tui"],
+      modalities: ["gui"],
       bundlePath: "dist/views/bundle.js",
       // First-party instrumented view (data-agent-id controls): grant the
       // agent-surface capability so the view broker admits agent-driven

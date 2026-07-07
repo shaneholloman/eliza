@@ -24,15 +24,3 @@ registerSettingsSection({
 });
 
 // DOM-guarded dynamic imports keep terminal rendering out of browser bundles.
-if (typeof window === "undefined") {
-	void import("./register-terminal-view.tsx")
-		.then((m) => {
-			m.registerFacewearTerminalView();
-			m.registerSmartglassesTerminalView();
-		})
-		.catch((err) => {
-			// error-policy:J6 terminal rendering is best-effort and must never
-			// block plugin load; log so a genuine import failure stays visible.
-			logger.warn({ err }, "[facewear] terminal view registration failed");
-		});
-}

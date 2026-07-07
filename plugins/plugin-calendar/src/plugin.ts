@@ -42,7 +42,7 @@ export const calendarPlugin: Plugin = {
         "Unified Google + Apple calendar with day/week/month tabs and inline conflict detection.",
       icon: "Calendar",
       path: "/calendar",
-      modalities: ["gui", "xr", "tui"],
+      modalities: ["gui"],
       bundlePath: "dist/views/bundle.js",
       // First-party instrumented view (data-agent-id controls): grant the
       // agent-surface capability so the view broker admits agent-driven

@@ -39,7 +39,7 @@ export const appPhonePlugin: Plugin = {
       description: "Android dialer and recent-calls log",
       icon: "Phone",
       path: "/phone",
-      modalities: ["gui", "xr", "tui"],
+      modalities: ["gui"],
       bundlePath: "dist/views/bundle.js",
       // First-party instrumented view (data-agent-id controls): grant the
       // agent-surface capability so the view broker admits agent-driven

@@ -72,10 +72,6 @@ export * from "./payment-recurrence.ts";
 export * from "./payment-types.ts";
 export { default, financesPlugin } from "./plugin.ts";
 export {
-  registerFinancesTerminalView,
-  setFinancesTerminalSnapshot,
-} from "./register-terminal-view.js";
-export {
   createSubscriptionsBrowserGateway,
   type SubscriptionsBrowserGateway,
 } from "./services/browser-bridge-seam.ts";

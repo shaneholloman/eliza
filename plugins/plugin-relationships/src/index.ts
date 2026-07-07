@@ -26,10 +26,6 @@ export {
 } from "./db/schema.js";
 export { relationshipsPlugin } from "./plugin.js";
 export { entityGraphProvider } from "./providers/entity-graph.js";
-export {
-  registerRelationshipsTerminalView,
-  setRelationshipsTerminalSnapshot,
-} from "./register-terminal-view.js";
 export * from "./types.js";
 
 import { relationshipsPlugin } from "./plugin.js";

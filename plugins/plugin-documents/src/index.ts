@@ -14,10 +14,6 @@ export {
   type DocumentsViewProps,
 } from "./components/documents/DocumentsView.js";
 export * from "./plugin.js";
-export {
-  registerDocumentsTerminalView,
-  setDocumentsTerminalSnapshot,
-} from "./register-terminal-view.js";
 export * from "./routes.js";
 export * from "./service-loader.js";
 

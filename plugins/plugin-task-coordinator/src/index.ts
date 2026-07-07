@@ -219,7 +219,7 @@ const taskCoordinatorPlugin: Plugin = {
       description: "Coding agent task threads, sessions, and controls",
       icon: "SquareTerminal",
       path: "/task-coordinator",
-      modalities: ["gui", "xr", "tui"],
+      modalities: ["gui"],
       bundlePath: "dist/views/bundle.js",
       // First-party instrumented view (data-agent-id controls): grant the
       // agent-surface capability so the view broker admits agent-driven
@@ -282,7 +282,7 @@ const taskCoordinatorPlugin: Plugin = {
       description: "Multi-agent task orchestration workbench",
       icon: "Layers",
       path: "/orchestrator",
-      modalities: ["gui", "xr", "tui"],
+      modalities: ["gui"],
       bundlePath: "dist/views/bundle.js",
       // First-party instrumented view (data-agent-id controls): grant the
       // agent-surface capability so the view broker admits agent-driven
@@ -306,7 +306,7 @@ const taskCoordinatorPlugin: Plugin = {
       description: "Mobile-first coding cockpit — your agents on one screen",
       icon: "TerminalSquare",
       path: "/cockpit",
-      modalities: ["gui", "xr"],
+      modalities: ["gui"],
       bundlePath: "dist/views/bundle.js",
       // First-party instrumented view (data-agent-id controls): grant the
       // agent-surface capability so the view broker admits agent-driven

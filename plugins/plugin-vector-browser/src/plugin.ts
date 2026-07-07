@@ -33,7 +33,7 @@ export const vectorBrowserPlugin: Plugin = {
         "Browse agent memories and visualise their embeddings as a 2D or 3D projection",
       icon: "ScatterChart",
       path: "/vector-browser",
-      modalities: ["gui", "xr", "tui"],
+      modalities: ["gui"],
       bundlePath: "dist/views/bundle.js",
       // First-party instrumented view (data-agent-id controls): grant the
       // agent-surface capability so the view broker admits agent-driven

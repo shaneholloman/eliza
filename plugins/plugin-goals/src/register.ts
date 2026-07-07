@@ -7,10 +7,3 @@
  * startup; in a browser/mobile host it is a no-op.
  */
 
-if (typeof window === "undefined") {
-  void import("./register-terminal-view.tsx")
-    .then((m) => m.registerGoalsTerminalView())
-    .catch(() => {
-      // Terminal rendering is best-effort; never block plugin load.
-    });
-}

@@ -144,20 +144,6 @@ export type {
 } from "./types.js";
 export { appAction, availableAppsProvider, createAppAction };
 
-// In a terminal host (the Node agent, no DOM), register the views-manager,
-// settings, and voice views so they render inline in the terminal. Lazy +
-// DOM-guarded so the terminal engine stays out of browser/mobile bundles.
-if (typeof window === "undefined") {
-	void import("./register-terminal-view.js")
-		.then((m) => {
-			m.registerViewManagerTerminalView();
-			m.registerSettingsTerminalView();
-			m.registerVoiceTerminalView();
-		})
-		.catch(() => {
-			// Terminal rendering is best-effort; never block plugin load.
-		});
-}
 
 export const appControlPlugin: Plugin = {
 	name: "@elizaos/plugin-app-control",
@@ -230,20 +216,13 @@ export const appControlPlugin: Plugin = {
 			?.stop();
 	},
 	views: [
-		// ONE declaration → GUI + XR + TUI, all drawn from the single
-		// ViewManagerView spatial-catalog source (the rich deduped manager:
-		// collapse-by-id + modality chips + per-view open/available state). The
-		// terminal surface renders the registered ViewManagerSpatialView via the
-		// spatial terminal registry (see register-terminal-view.tsx). `modalities`
-		// is a plain literal here (index.ts is not in the view bundle), so no
-		// brand-new `@elizaos/core` runtime export reaches the bundle build.
 		{
 			id: "views-manager",
 			label: "Views",
 			description: "Browse and open available views contributed by plugins",
 			icon: "LayoutGrid",
 			path: "/views",
-			modalities: ["gui", "xr", "tui"],
+			modalities: ["gui"],
 			bundlePath: "dist/views/bundle.js",
 			// First-party instrumented view (data-agent-id controls): grant the
 			// agent-surface capability so the view broker admits agent-driven
@@ -254,8 +233,8 @@ export const appControlPlugin: Plugin = {
 			desktopTabEnabled: true,
 			capabilities: [
 				{
-					id: "terminal-open-view",
-					description: "Open a listed view from the terminal view manager",
+					id: "open-view",
+					description: "Open a listed view from the view manager",
 					params: {
 						viewId: {
 							type: "string",
@@ -265,21 +244,16 @@ export const appControlPlugin: Plugin = {
 					},
 				},
 				{
-					id: "terminal-list-views",
-					description: "Return the TUI-mode view list as structured data",
+					id: "list-views",
+					description: "Return the available view list as structured data",
 				},
 			],
-			// Headless capability handler (#8798): both capabilities are answerable
-			// server-side over loopback, so the agent can list/open views even when
-			// no terminal frontend is actively responding to a `view:interact`
-			// round-trip. This is the reference implementation that keeps
-			// `serverInteract` a live extension point rather than dead type surface.
 			serverInteract: async (capability, params) => {
 				const client = createViewsClient();
-				if (capability === "terminal-list-views") {
+				if (capability === "list-views") {
 					return { views: await client.listViews() };
 				}
-				if (capability === "terminal-open-view") {
+				if (capability === "open-view") {
 					const viewId =
 						params && typeof params.viewId === "string"
 							? params.viewId
@@ -292,44 +266,6 @@ export const appControlPlugin: Plugin = {
 				}
 				return { success: false, error: `unknown capability: ${capability}` };
 			},
-		},
-		// Terminal-only surfaces: settings and voice/transcription render in the
-		// agent terminal via the spatial terminal registry (see
-		// register-terminal-view.tsx). They have no GUI bundle — the TUI mounts the
-		// registered SettingsSpatialView / VoiceSpatialView directly. `modalities:
-		// ["tui"]` lists them under GET /api/views?viewType=tui so the terminal can
-		// open them; a host pushes live config via set*TerminalSnapshot.
-		{
-			id: "settings",
-			label: "Settings",
-			description: "Agent settings and configuration",
-			icon: "Settings",
-			path: "/settings/tui",
-			modalities: ["tui"],
-			visibleInManager: true,
-			capabilities: [
-				{
-					id: "settings-get-state",
-					description:
-						"Return the current settings snapshot as structured data",
-				},
-			],
-		},
-		{
-			id: "voice",
-			label: "Voice",
-			description: "Voice configuration and recent transcript",
-			icon: "Mic",
-			path: "/voice/tui",
-			modalities: ["tui"],
-			visibleInManager: true,
-			capabilities: [
-				{
-					id: "voice-get-state",
-					description:
-						"Return the current voice/transcript snapshot as structured data",
-				},
-			],
 		},
 	],
 };

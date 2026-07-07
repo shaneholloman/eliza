@@ -34,16 +34,6 @@ import { handleTrajectoryRoute } from "./routes/trajectory-routes.js";
 import { getActiveTrainingService } from "./services/training-service-registry.js";
 import { VastTrainingService } from "./services/training-vast-service.js";
 
-// In a terminal host (the Node agent, no DOM), register the training view so it
-// renders inline in the terminal. Lazy + DOM-guarded so the terminal engine
-// stays out of browser/mobile bundles.
-if (typeof window === "undefined") {
-  void import("./register-terminal-view.js")
-    .then((m) => m.registerFineTuningTerminalView())
-    .catch(() => {
-      // Terminal rendering is best-effort; never block plugin load.
-    });
-}
 
 const LOOPBACK_HOSTS = new Set([
   "localhost",
@@ -362,7 +352,7 @@ export const trainingPlugin: Plugin = {
         "Fine-tuning jobs, data collection, analysis, evals, benchmarks, trained models, and trajectory management",
       icon: "BrainCircuit",
       path: "/apps/fine-tuning",
-      modalities: ["gui", "xr", "tui"],
+      modalities: ["gui"],
       bundlePath: "dist/views/bundle.js",
       componentExport: "FineTuningView",
       // FineTuningView instruments its panels with useAgentElement; without

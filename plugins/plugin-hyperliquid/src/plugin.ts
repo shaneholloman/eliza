@@ -146,7 +146,7 @@ export const hyperliquidPlugin: Plugin = {
 			icon: "TrendingUp",
 			path: "/hyperliquid",
 			group: "wallet",
-			modalities: ["gui", "xr", "tui"],
+			modalities: ["gui"],
 			bundlePath: "dist/views/bundle.js",
 			// First-party instrumented view (data-agent-id controls): grant the
 			// agent-surface capability so the view broker admits agent-driven
