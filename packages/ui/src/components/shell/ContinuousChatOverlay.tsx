@@ -3596,13 +3596,18 @@ export function ContinuousChatOverlay({
     // exemption the capture-phase pointerup below preventDefault +
     // stopImmediatePropagation'd the row's tap and set suppressNextOutsideClick,
     // so the click-swallower ate the row's onClick, tapping a notification did
-    // NOTHING ("interacting is cooked", device r8). Exempt the notification
-    // center (rows, its menu, the header actions) so its own handlers win; a
-    // real tap on the bare field AROUND the rows still collapses the chat.
+    // NOTHING ("interacting is cooked", device r8). Exempt the ROWS
+    // (`[data-notif-row]` — the option strip lives inside the row) so their own
+    // handlers win. Scope the exemption to the rows, NOT the whole center
+    // section: the section is `flex-1` and chromeless, so it fills most of the
+    // home band with invisible field — exempting the section (as it once did)
+    // killed outside-tap collapse everywhere around the rows. A real tap on the
+    // bare field still collapses the chat; a pull-drag is a drag (not a tap) so
+    // the swallower ignores it either way.
     const isAboveShellOverlay = (target: EventTarget | null): boolean =>
       target instanceof Element &&
       !!target.closest(
-        '[data-above-shell-overlay], [role="dialog"], [data-testid="home-notification-center"], [data-notif-row]',
+        '[data-above-shell-overlay], [role="dialog"], [data-notif-row]',
       );
 
     const onPointerDown = (event: PointerEvent) => {
