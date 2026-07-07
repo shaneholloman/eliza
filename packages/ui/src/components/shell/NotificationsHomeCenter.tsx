@@ -1021,6 +1021,33 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
                       : `Expand ${group.label} notifications`
                     : undefined
                 }
+                onPointerDown={(e) => {
+                  if (
+                    !fanable ||
+                    !stackExpanded ||
+                    e.pointerType !== "mouse" ||
+                    e.button !== 0
+                  ) {
+                    return;
+                  }
+                  stackFanGesture.current = {
+                    key: group.label,
+                    startY: e.clientY,
+                  };
+                }}
+                onPointerMove={(e) => {
+                  const g = stackFanGesture.current;
+                  if (!g || g.key !== group.label || !stackExpanded) return;
+                  // Mouse swipe UP over the fanned group's header folds it
+                  // back into its stack (mirror of the swipe-down fan-out).
+                  if (g.startY - e.clientY >= STACK_FAN_SWIPE_PX) {
+                    stackFanGesture.current = null;
+                    toggleStack(group.label);
+                  }
+                }}
+                onPointerUp={() => {
+                  stackFanGesture.current = null;
+                }}
                 className="flex items-center px-2 pb-0.5 pt-2 text-left text-2xs font-medium uppercase tracking-[0.08em] text-white/55 first:pt-1 disabled:pointer-events-none"
               >
                 {group.label}

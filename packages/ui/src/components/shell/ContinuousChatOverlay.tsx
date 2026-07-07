@@ -2934,7 +2934,6 @@ export function ContinuousChatOverlay({
     detentHaptic();
   }, [stopThreadAnimation]);
 
-
   // The single detent→detent animator: whenever the settled detent (or viewport)
   // changes and we're not mid finger-drag, spring the history height to it. The
   // gesture / open paths just flip sheetOpen/expanded and this reacts — no
