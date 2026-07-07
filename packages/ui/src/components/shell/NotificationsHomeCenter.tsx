@@ -643,6 +643,8 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
     axis: "none" | "x" | "y";
   } | null>(null);
   const wheelPull = useRef(0);
+  // Timestamp guard: a wheel pull reads the clock only in the input handler,
+  // and trailing momentum before this deadline cannot double-toggle the shade.
   const wheelCooldownUntil = useRef(0);
   // Mirrors whether the shade currently has more to reveal (rested) — the
   // native touch listeners read it without re-binding on every data change.
@@ -875,7 +877,9 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
             : "transform 200ms cubic-bezier(0.22,1,0.36,1)",
         }}
         className={cn(
-          "eliza-notif-scroll flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overscroll-y-contain px-1.5 pb-1.5",
+          // select-none: a mouse pull-drag must read as a gesture, not a text
+          // selection sweep across the cards (platform-shade idiom).
+          "eliza-notif-scroll flex min-h-0 flex-1 select-none flex-col gap-1 overflow-y-auto overscroll-y-contain px-1.5 pb-1.5",
         )}
       >
         {groups.map((group) => {
