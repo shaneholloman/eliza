@@ -198,6 +198,7 @@ import {
   subscribeAppShellPages,
 } from "./app-shell-registry";
 import {
+  isImmersiveWallpaperRoute,
   resolveBuiltinBackgroundPolicy,
   resolveBuiltinTabId,
 } from "./builtin-tab-registry";
@@ -843,13 +844,16 @@ function useCurrentNavigationPath(): string {
 function viewRegistrationBackgroundPolicy(
   decl: SurfaceManifestBearer | null | undefined,
 ): AppShellBackgroundPolicy {
-  // Host default: a view that declares NO background sits on the shared
-  // launcher wallpaper (with the readability scrim). Explicit declarations
-  // still resolve through the grant-gated core resolver, so a declared
-  // "opaque" (browser) is honored and a declared "shared" without the
-  // `wallpaper` grant still downgrades to opaque (#13452).
+  // Host default: a BUILTIN view that declares no background sits on the
+  // shared launcher wallpaper (with the readability scrim). The wallpaper
+  // default is scoped to first-party registrations only — an undeclared
+  // remote/plugin view keeps the grant-gated default-deny (#13452: shared is
+  // an explicit opt-in via the `wallpaper` grant, never an accident), and an
+  // explicit declaration always resolves through the core resolver (browser
+  // stays opaque; ungranted "shared" downgrades).
   const declared = decl?.surface?.background ?? decl?.backgroundPolicy;
-  if (declared === undefined) return "shared";
+  const builtin = (decl as { builtin?: boolean } | null | undefined)?.builtin;
+  if (declared === undefined && builtin === true) return "shared";
   return resolveSurfaceBackgroundPolicy(decl);
 }
 
@@ -2313,15 +2317,12 @@ export function App() {
   const isSettingsPage = tab === "settings";
   // Readability scrim over the shared wallpaper for every content view that is
   // NOT an immersive wallpaper surface (chat/background and the launcher roots
-  // design directly against the wallpaper; text-dense views get a 50% dark
-  // veil so copy stays legible on any image).
-  const wallpaperScrimActive =
-    tab !== "chat" &&
-    tab !== "background" &&
-    !(
-      (tab === "views" || tab === "apps") &&
-      (navigationPath === "/views" || navigationPath === "/apps")
-    );
+  // design directly against the wallpaper); derived from the builtin-tab
+  // registry so the immersive set has one owner.
+  const wallpaperScrimActive = !isImmersiveWallpaperRoute(
+    tab,
+    trimmedNavigationPath(navigationPath),
+  );
   const isFullBleed = useTabIsFullBleed(tab);
 
   // Keep hook order stable across first-run/auth state transitions.

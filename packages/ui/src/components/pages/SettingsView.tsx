@@ -269,7 +269,11 @@ export function SettingsView({
     if (typeof window === "undefined") return;
     const handleHashChange = () => {
       const nextSection = readSettingsHashSection();
-      if (nextSection && visibleSectionIds.has(nextSection)) {
+      if (
+        nextSection &&
+        (visibleSectionIds.has(nextSection) ||
+          getAllSettingsSections().some((s) => s.id === nextSection))
+      ) {
         setActiveSection(nextSection);
       } else {
         setActiveSection(null);
@@ -279,11 +283,17 @@ export function SettingsView({
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, [visibleSectionIds]);
 
-  const activeSectionDef: SettingsSectionDef | null =
-    activeSection && visibleSectionIds.has(activeSection)
-      ? (visibleSections.find((section) => section.id === activeSection) ??
-        null)
-      : null;
+  // Explicit navigation (hash / initialSection / agent anchor) resolves
+  // against the full registry, not just the visible hub rows: hidden sections
+  // stay registered exactly so their deep-links keep working (the mvp-hidden
+  // contract). The hub itself only lists visible sections.
+  const activeSectionDef: SettingsSectionDef | null = activeSection
+    ? (visibleSections.find((section) => section.id === activeSection) ??
+      getAllSettingsSections().find(
+        (section) => section.id === activeSection,
+      ) ??
+      null)
+    : null;
 
   // Uniform top bar: a hub shows "Settings" with a launcher back; an open
   // section shows its label with a back to the hub. One header, both states.
