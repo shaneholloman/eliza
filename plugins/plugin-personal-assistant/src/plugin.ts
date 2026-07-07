@@ -81,6 +81,7 @@ import {
   personalAssistantAction,
 } from "./actions/owner-surfaces.js";
 import { prioritizeAction } from "./actions/prioritize.js";
+import { resolveReferentAction } from "./actions/resolve-referent.js";
 import { resolveRequestAction } from "./actions/resolve-request.js";
 import { scheduledTaskAction } from "./actions/scheduled-task.js";
 import { voiceCallAction } from "./actions/voice-call.js";
@@ -652,6 +653,7 @@ const rawPersonalAssistantPlugin: Plugin = {
       promoteSubactionsToActions(action),
     ),
     ...promoteSubactionsToActions(personalAssistantAction),
+    resolveReferentAction,
     entityAction,
     ...promoteSubactionsToActions(ownerDocumentsAction),
     ...promoteSubactionsToActions(creativeDraftAction),
