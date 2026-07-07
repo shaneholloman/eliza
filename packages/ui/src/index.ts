@@ -293,6 +293,7 @@ export {
   type ChatSurfaceProps,
 } from "./components/shell/ChatSurface";
 export { HomePill, type HomePillProps } from "./components/shell/HomePill";
+export * from "./glass";
 export {
   HomeScreen,
   type HomeScreenProps,

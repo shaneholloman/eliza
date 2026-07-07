@@ -96,6 +96,7 @@ import { persistMobileRuntimeModeForServerTarget } from "./first-run/mobile-runt
 import { BootRecoveryConductorMount } from "./first-run/use-boot-recovery-conductor";
 import { FirstRunConductorMount } from "./first-run/use-first-run-conductor";
 import { ModelStatusConductorMount } from "./first-run/use-model-status-conductor";
+import { GlassStyles } from "./glass";
 import { BugReportProvider, useBugReportState, useContextMenu } from "./hooks";
 import { useAgentSessionRecovery } from "./hooks/useAgentSessionRecovery";
 import { useAuthStatus } from "./hooks/useAuthStatus";
@@ -2824,6 +2825,9 @@ export function App() {
               background event channel mounted for the whole session, but only
               renders the visual wallpaper when the active route opts into the
               Home/Launcher background. */}
+          {/* One glass stylesheet + refraction defs per document; every
+              eliza-glass-* surface (menus, cards, pills) resolves here. */}
+          <GlassStyles />
           <AppBackground visible={renderSharedAppBackground} />
           {/* Readability scrim for text-dense shared-background views. It sits
               between the wallpaper (z-0) and content (z-10) and covers safe

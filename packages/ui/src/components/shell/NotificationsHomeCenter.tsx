@@ -927,7 +927,8 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
       className="eliza-notif-center-in flex min-h-0 flex-1 flex-col overflow-hidden"
     >
       <style>{NOTIF_SCROLL_CSS}</style>
-      <LiquidGlassRefractionDefs />
+      {/* Refraction defs mount once per document via the shell's GlassStyles
+          (src/glass); a second mount here would duplicate the SVG filter id. */}
       {/* No "Notifications" header, no sort toggle, no more/less buttons; the
           inbox is always priority-triaged, the view-group eyebrows carry the
           only structure, and the pull gesture owns expand/collapse. */}

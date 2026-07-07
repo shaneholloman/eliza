@@ -5559,7 +5559,10 @@ export function ContinuousChatOverlay({
                   // Above the shell overlay (z 9000); mirrors the config-select
                   // floating layer so the menu never hides behind the glass.
                   style={{ zIndex: 12000 }}
-                  className="min-w-[13rem] border-border-strong"
+                  // Unified liquid-glass menu chrome (glass/tokens.ts `menu`
+                  // variant) instead of the flat opaque card.
+                  glass
+                  className="min-w-[13rem]"
                 >
                   <DropdownMenuItem
                     className="cursor-pointer gap-2.5 data-[highlighted]:bg-bg-hover"
