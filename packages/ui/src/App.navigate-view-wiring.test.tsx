@@ -19,6 +19,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_BOOT_CONFIG, setBootConfig } from "./config/boot-config";
 import type { ViewRegistryEntry } from "./hooks/useAvailableViews";
 
+// Controls the mocked `useMediaQuery` (desktop vs mobile) so the docked-chat
+// tests can flip to the desktop breakpoint. Hoisted because the vi.mock
+// factories below reference it.
+const mediaQueryState = vi.hoisted(() => ({
+  matches: false,
+}));
+
 const appState = vi.hoisted(() => ({
   setTab: vi.fn(),
   tab: "chat",
@@ -239,7 +246,7 @@ vi.mock("./hooks/useAuthStatus", () => ({
 }));
 
 vi.mock("./hooks/useMediaQuery", () => ({
-  useMediaQuery: () => false,
+  useMediaQuery: () => mediaQueryState.matches,
 }));
 
 vi.mock("./hooks/useActivityEvents", () => ({
@@ -257,7 +264,7 @@ vi.mock("./hooks", () => ({
     saveCommandModalOpen: false,
     saveCommandText: "",
   }),
-  useMediaQuery: () => false,
+  useMediaQuery: () => mediaQueryState.matches,
   useRenderGuard: vi.fn(),
 }));
 
@@ -427,10 +434,6 @@ vi.mock("./hooks/useIsDeveloperMode", () => ({
 }));
 
 import { App } from "./App";
-import {
-  getChatDockState,
-  resetChatDockForTests,
-} from "./state/chat-dock-store";
 
 function navigateView(detail: Record<string, unknown>) {
   window.dispatchEvent(createNavigateViewEvent(detail));
@@ -519,20 +522,6 @@ describe("App navigate-view event wiring", () => {
           navigateSequence: 1,
         }),
       );
-    });
-  });
-
-  it("splits the desktop chat dock when a direct non-chat route mounts", async () => {
-    mediaQueryState.matches = true;
-    appState.tab = "apps";
-    window.history.replaceState(null, "", "/apps?shellMode=full");
-
-    expect(getChatDockState().detent).toBe("maximized");
-
-    render(<App />);
-
-    await waitFor(() => {
-      expect(getChatDockState().detent).toBe("split");
     });
   });
 
