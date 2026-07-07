@@ -5401,7 +5401,9 @@ export function ContinuousChatOverlay({
               // this is a no-op outside the morph). Skipped while the keyboard
               // is up, which already covers that zone.
               style={{
-                ...(keyboardLiftActive ? {} : { paddingBottom: composerPadBottom }),
+                ...(keyboardLiftActive
+                  ? {}
+                  : { paddingBottom: composerPadBottom }),
               }}
             >
               {/* Inline slash-command autocomplete, floating just above the
