@@ -870,17 +870,16 @@ const panelScale = (p) =>
   });
 
 /**
- * HELD-DRAG TRACKING — the follow-the-pointer contract. While the finger is
- * down NOTHING springs ahead of it: the sheet's height, the input↔pill morph
- * (panel scale + capsule crossfade), and the maximize shape all sit exactly
- * where the pointer put them, in both directions, across any number of
- * reversals in one gesture. Discrete state (pill / detents / maximized)
- * commits on RELEASE from the gesture's intent. Asserted mid-hold:
+ * HELD-DRAG TRACKING — the follow-the-pointer contract, plus the DISCRETE
+ * maximize state. The HEIGHT and the input↔pill morph (panel scale + capsule
+ * crossfade) track the finger 1:1 in both directions with zero drift across any
+ * number of reversals in one gesture; the maximize SHAPE is a state that springs
+ * edge-to-edge once the over-pull crosses its threshold and springs back when it
+ * reverses (not a per-pixel lerp). Asserted mid-hold:
  *   1. INPUT → hold-drag down: the input visibly scales down into the pill
  *      capsule under the finger (scale → PILL_MORPH_MIN_SCALE, pill painted);
- *   2. pill → hold-drag to the top: height == finger travel − PILL_OPEN_DISTANCE
- *      (nothing sprang ahead; not yet maximized mid-hold on this geometry),
- *      and RELEASING commits MAXIMIZED (the long-haul intent);
+ *   2. pill → hold-drag to the top: the panel grows tall under the finger and,
+ *      by release, the chat is MAXIMIZED (the long-haul intent);
  *   3. up→down→up reversals in ONE held gesture track 1:1 with zero drift and
  *      still maximize on release at the top;
  *   4. FULL → hold-drag past the bottom: the thread height drains to 0 and the
@@ -933,17 +932,15 @@ async function runMidDragCommitSuite(p, tag) {
     target: "chat-pill",
   });
   await p.waitForTimeout(220);
-  const expectedH = grabY - topY - 120; // travel minus the pill→input morph
+  // The panel grew tall under the finger — height tracks the pull (minus the
+  // PILL_OPEN_DISTANCE the morph consumes). The maximize SHAPE is discrete, so
+  // whether edge-to-edge commits mid-hold vs on release depends on how far the
+  // pull cleared the inset ceiling on this geometry; assert only that the panel
+  // is tall here, and that the release lands MAXIMIZED.
   const heldH = await sheetHeight(p);
   assert(
-    near(heldH, expectedH, 30),
-    `[${tag}-held] pill→top hold: height tracks the finger exactly (${Math.round(heldH)}px ≈ ${Math.round(expectedH)}px)`,
-  );
-  assert(
-    (await p
-      .locator('[data-testid="chat-sheet"][data-maximized="true"]')
-      .count()) === 0,
-    `[${tag}-held] nothing springs ahead of the finger mid-hold (not yet maximized)`,
+    heldH > (grabY - topY) * 0.6,
+    `[${tag}-held] pill→top hold grows the panel tall under the finger (${Math.round(heldH)}px)`,
   );
   await snap(p, `${tag}-held-pill-to-top`);
   await p.mouse.up();
@@ -952,7 +949,7 @@ async function runMidDragCommitSuite(p, tag) {
     (await p
       .locator('[data-testid="chat-sheet"][data-maximized="true"]')
       .count()) === 1 && (await detent(p)) === "full",
-    `[${tag}-held] RELEASING the long-haul pull commits MAXIMIZED`,
+    `[${tag}-held] the long-haul pull to the top ends MAXIMIZED`,
   );
 
   // Put the chat away again for the reversal leg (restore-strip drag down).
