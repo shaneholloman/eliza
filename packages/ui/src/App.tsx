@@ -136,7 +136,11 @@ import {
   useChatComposer,
   useChatInputRef,
 } from "./state/ChatComposerContext.hooks";
-import { setChatDockIdiomActive, useChatDock } from "./state/chat-dock-store";
+import {
+  ensureChatDockSplitForView,
+  setChatDockIdiomActive,
+  useChatDock,
+} from "./state/chat-dock-store";
 import { isShellPaintable } from "./state/startup-coordinator";
 import {
   authProbeShouldHoldShell,
@@ -2094,6 +2098,10 @@ export function App() {
     setChatDockIdiomActive(chatDockIdiom);
     return () => setChatDockIdiomActive(false);
   }, [chatDockIdiom]);
+  useEffect(() => {
+    if (!chatDockIdiom || tab === "chat") return;
+    ensureChatDockSplitForView();
+  }, [chatDockIdiom, tab]);
   // Committed dock geometry → the shared CSS var. The divider writes the SAME
   // var directly during a live drag (no store churn per frame); this effect
   // re-derives it from the committed state on release/idiom change.
