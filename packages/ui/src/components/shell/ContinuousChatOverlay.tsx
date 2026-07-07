@@ -379,9 +379,14 @@ const PANEL_RADIUS_PX = 32;
 // composer capsule) stays the inset chat shape until the over-pull crosses
 // MAXIMIZE_COMMIT_T — then the whole shape SPRINGS to full-bleed at once. Pulling
 // back down below MAXIMIZE_RELEASE_T springs it back to the inset shape. The
-// hysteresis gap keeps the state from flapping at the threshold.
-const MAXIMIZE_COMMIT_T = 0.5;
-const MAXIMIZE_RELEASE_T = 0.3;
+// commit fraction is LOW so a small pull into the over-pull "top zone" snaps to
+// full promptly (the panel is pinned at the inset ceiling through the zone — it
+// does not stretch 1:1 with the finger — so a high threshold reads as a long
+// dead pull before anything happens). The same fraction gates the release-time
+// maximize and the peak-void so a mid-drag commit and a release commit agree on
+// where the zone begins; the hysteresis gap below keeps the state from flapping.
+const MAXIMIZE_COMMIT_T = 0.3;
+const MAXIMIZE_RELEASE_T = 0.15;
 
 // Finger travel (px) below the restore drag's upward peak at which the panel
 // drops full-bleed and starts tracking the finger down out of maximize. Sized
@@ -2410,6 +2415,14 @@ export function ContinuousChatOverlay({
   const nativeLift = Math.max(0, nativeKeyboardHeight - layoutShrink);
   const effectiveKeyboardInset = Math.max(keyboardInset, nativeLift);
   const keyboardLiftActive = effectiveKeyboardInset > 0;
+  // A REAL keyboard (not the few-px inset mobile emulation reports) blocks the
+  // over-pull maximize: the edge-to-edge panel is sized against the LAYOUT
+  // viewport, so with the keyboard up it would spill above the shrunk visual
+  // viewport. Gating on the same intrusion threshold the keyboardInset math uses
+  // keeps a genuine keyboard from over-maximizing while never tripping on the
+  // sub-threshold inset a touch page carries at rest.
+  const keyboardBlocksMaximize =
+    effectiveKeyboardInset >= KEYBOARD_INTRUSION_THRESHOLD_PX;
 
   // FULL-SCREEN derived gate: maximized only takes effect AT the full detent, so
   // a stale flag can never leak into half/collapsed/pill. Drives the edge-to-edge
@@ -3995,7 +4008,7 @@ export function ContinuousChatOverlay({
       // dragged back down.
       if (
         cont < insetPanelMaxH &&
-        maxPullRawRef.current >= insetPanelMaxH + maxOverPull / 2
+        maxPullRawRef.current >= insetPanelMaxH + maxOverPull * MAXIMIZE_COMMIT_T
       ) {
         maxPullRawRef.current = 0;
       }
@@ -4073,7 +4086,10 @@ export function ContinuousChatOverlay({
       // The height still tracked the finger 1:1 above (threadHeight); only the
       // SHAPE is stateful. Reversible with hysteresis: pulling back down below
       // the release threshold springs it home. Reduced-motion cuts instantly.
-      if (overpullT >= MAXIMIZE_COMMIT_T && !maximized) {
+      // A real keyboard blocks maximize (the edge-to-edge panel would spill above
+      // the keyboard-shrunk visual viewport); a pull-to-full with the keyboard up
+      // settles at the inset FULL detent instead.
+      if (overpullT >= MAXIMIZE_COMMIT_T && !maximized && !keyboardBlocksMaximize) {
         setFreeH(null);
         setMode("full");
         setMaximized(true);
@@ -4111,6 +4127,7 @@ export function ContinuousChatOverlay({
       setDragPreviewMounted,
       getPanelElement,
       maximized,
+      keyboardBlocksMaximize,
     ],
   );
 
@@ -4124,6 +4141,10 @@ export function ContinuousChatOverlay({
   // normal detent settle. Onboarding never re-triggers this (pinned full-bleed).
   const maybeMaximizeOnRelease = React.useCallback((): boolean => {
     if (pinnedOpen) return false;
+    // A real keyboard blocks the release-time maximize too (mirrors the mid-drag
+    // gate): a pull-to-full with the keyboard up settles at the inset FULL detent
+    // instead of an edge-to-edge maximize that would spill above the visible area.
+    if (keyboardBlocksMaximize) return false;
     // Two distinct maximize intents, both read from the gesture itself:
     //  - OVER-PULL: the peak raw pull carried at least half the maximize morph
     //    PAST the FULL detent (the finger visibly squared the corners) — the
@@ -4142,7 +4163,7 @@ export function ContinuousChatOverlay({
     const peak = maxPullRawRef.current;
     // "At least half the real morph gap past the inset FULL height" — the
     // finger visibly carried the panel more than halfway to edge-to-edge.
-    const overPulled = peak >= insetPanelMaxH + maxOverPull / 2;
+    const overPulled = peak >= insetPanelMaxH + maxOverPull * MAXIMIZE_COMMIT_T;
     // Long haul measures TRAVEL, not height: a pull that began on the pill
     // spends PILL_OPEN_DISTANCE forming the input before any height exists, so
     // shift the peak by the below-zero start to compare finger distance.
@@ -4157,6 +4178,7 @@ export function ContinuousChatOverlay({
     return false;
   }, [
     pinnedOpen,
+    keyboardBlocksMaximize,
     viewportH,
     viewport.innerHeight,
     insetPanelMaxH,
@@ -4805,7 +4827,7 @@ export function ContinuousChatOverlay({
               // is nothing to see through, and the blur would be wasted battery).
               backgroundColor: fullBleed
                 ? "var(--bg)"
-                : "color-mix(in srgb, var(--card) 56%, transparent)",
+                : "color-mix(in srgb, var(--card) 62%, transparent)",
               backdropFilter: fullBleed
                 ? undefined
                 : "blur(30px) saturate(1.4)",
