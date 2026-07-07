@@ -686,10 +686,13 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
   // back. A non-passive touchmove that preventDefault()s only the at-top
   // downward overscroll is the one way to own the pull without breaking
   // ordinary scrolling (see reference: pan-y pull gestures are dead on arrival
-  // without this).
+  // without this). `hasNotifications` re-runs the bind when the inbox goes
+  // empty↔populated — the empty inbox renders nothing, so on first arrival the
+  // list element only exists after that re-render.
+  const hasNotifications = notifications.length > 0;
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el) return;
+    if (!el || !hasNotifications) return;
     let start: { x: number; y: number } | null = null;
     const onTouchStart = (e: TouchEvent) => {
       const t = e.touches[0];
@@ -725,7 +728,7 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
       el.removeEventListener("touchend", onTouchEnd);
       el.removeEventListener("touchcancel", onTouchEnd);
     };
-  }, [commitPull, setPullPx]);
+  }, [commitPull, setPullPx, hasNotifications]);
 
   const openNotification = useCallback((n: AgentNotification) => {
     // Platform-shade acknowledgement (iOS/Android): tapping a notification
