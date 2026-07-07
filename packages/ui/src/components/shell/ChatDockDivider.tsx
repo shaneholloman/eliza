@@ -150,6 +150,7 @@ export function ChatDockDivider({
       <button
         type="button"
         role="separator"
+        data-aesthetic-overlay-ignore="true"
         aria-orientation="vertical"
         aria-label="Toggle chat split"
         aria-valuenow={

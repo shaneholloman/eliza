@@ -50,6 +50,10 @@ const desktopBridgeMock = vi.hoisted(() => ({
   openDesktopLauncherWindow: vi.fn(async () => ({ id: "launcher-1" })),
 }));
 
+const mediaQueryState = vi.hoisted(() => ({
+  matches: false,
+}));
+
 const dynamicViewLoaderMock = vi.hoisted(() => ({
   render: vi.fn(
     ({
@@ -246,6 +250,10 @@ vi.mock("./hooks/useAuthStatus", () => ({
   useIsAuthenticated: () => true,
 }));
 
+vi.mock("./hooks/useMediaQuery", () => ({
+  useMediaQuery: () => mediaQueryState.matches,
+}));
+
 vi.mock("./hooks/useActivityEvents", () => ({
   useActivityEvents: () => ({ events: [], clearEvents: vi.fn() }),
 }));
@@ -431,6 +439,10 @@ vi.mock("./hooks/useIsDeveloperMode", () => ({
 }));
 
 import { App } from "./App";
+import {
+  getChatDockState,
+  resetChatDockForTests,
+} from "./state/chat-dock-store";
 
 function navigateView(detail: Record<string, unknown>) {
   window.dispatchEvent(createNavigateViewEvent(detail));
@@ -448,6 +460,8 @@ describe("App navigate-view event wiring", () => {
     Reflect.deleteProperty(window, "__ELIZA_API_TOKEN__");
     Reflect.deleteProperty(window, "__ELIZAOS_API_TOKEN__");
     appState.tab = "chat";
+    mediaQueryState.matches = false;
+    resetChatDockForTests();
     desktopTabsState.tabs = [];
     resetMockAvailableViews();
     appState.setTab.mockClear();
@@ -519,6 +533,20 @@ describe("App navigate-view event wiring", () => {
           navigateSequence: 1,
         }),
       );
+    });
+  });
+
+  it("splits the desktop chat dock when a direct non-chat route mounts", async () => {
+    mediaQueryState.matches = true;
+    appState.tab = "apps";
+    window.history.replaceState(null, "", "/apps?shellMode=full");
+
+    expect(getChatDockState().detent).toBe("maximized");
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(getChatDockState().detent).toBe("split");
     });
   });
 
