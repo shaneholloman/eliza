@@ -90,17 +90,17 @@ const PLUGIN_VIEW_MANIFESTS = [
   "plugins/plugin-todos/src/index.ts",
   "plugins/plugin-phone/src/plugin.ts",
   "plugins/plugin-polymarket/src/plugin.ts",
-  "plugins/plugin-shopify/src/plugin.ts",
   "plugins/plugin-wallet-ui/src/plugin.ts",
   "plugins/plugin-vector-browser/src/plugin.ts",
   "plugins/plugin-feed/src/index.ts",
   "plugins/plugin-app-control/src/index.ts",
   "plugins/plugin-screenshare/src/index.ts",
-  "plugins/plugin-social-alpha/src/index.ts",
   "plugins/plugin-task-coordinator/src/index.ts",
   "plugins/plugin-trajectory-logger/src/plugin.ts",
   "plugins/plugin-training/src/setup-routes.ts",
   "plugins/plugin-facewear/src/index.ts",
+  "plugins/plugin-elizacloud/src/index.ts",
+  "plugins/plugin-scheduling/src/plugin.ts",
 ] as const;
 
 const APP_SHELL_REGISTRATION_SOURCES = [
@@ -133,10 +133,12 @@ const NOT_APP_BOOT_LOADED_VIEW_MANIFESTS: Readonly<Record<string, string>> = {
     "Relationships is the entity/relationship knowledge-graph viewer; it is discoverable through the View Manager but not yet a boot-loaded renderer module.",
   "plugins/plugin-screenshare/src/index.ts":
     "Screenshare is registered by runtime capability loading, not the app boot side-effect loader.",
-  "plugins/plugin-social-alpha/src/index.ts":
-    "Social Alpha is an opt-in agent runtime plugin; its leaderboard view registers when the agent enables the plugin, not via the app boot loader.",
   "plugins/plugin-todos/src/index.ts":
     "Todos is a decomposed personal-assistant domain view; it is discoverable through the View Manager but not yet a boot-loaded renderer module.",
+  "plugins/plugin-elizacloud/src/index.ts":
+    "Cloud is the Eliza Cloud account view; it is discoverable through the View Manager but not registered by the app boot side-effect loader (no elizaos.appRegister marker, not imported in main.tsx).",
+  "plugins/plugin-scheduling/src/plugin.ts":
+    "LifeOps Live Test is a developer-only QA validation view gated behind Developer Mode; the route is reachable for the live-test workflow but it is not a boot-loaded renderer module.",
 };
 
 const BOOT_PLUGIN_VIEW_MANIFEST_BY_MODULE: Record<string, string | null> = {
@@ -151,7 +153,6 @@ const BOOT_PLUGIN_VIEW_MANIFEST_BY_MODULE: Record<string, string | null> = {
   "@elizaos/plugin-messages": "plugins/plugin-messages/src/plugin.ts",
   "@elizaos/plugin-phone": "plugins/plugin-phone/src/plugin.ts",
   "@elizaos/plugin-polymarket": "plugins/plugin-polymarket/src/plugin.ts",
-  "@elizaos/plugin-shopify": "plugins/plugin-shopify/src/plugin.ts",
   "@elizaos/plugin-task-coordinator":
     "plugins/plugin-task-coordinator/src/index.ts",
   "@elizaos/plugin-task-coordinator/register":
@@ -210,12 +211,6 @@ const KNOWN_XR_VIEW_CASES: readonly PluginViewCase[] = [
     path: "/polymarket",
   },
   {
-    manifestPath: "plugins/plugin-shopify/src/plugin.ts",
-    id: "shopify",
-    viewType: "xr",
-    path: "/shopify",
-  },
-  {
     manifestPath: "plugins/plugin-wallet-ui/src/plugin.ts",
     id: "wallet",
     viewType: "xr",
@@ -250,6 +245,12 @@ const KNOWN_XR_VIEW_CASES: readonly PluginViewCase[] = [
     id: "orchestrator",
     viewType: "xr",
     path: "/orchestrator",
+  },
+  {
+    manifestPath: "plugins/plugin-task-coordinator/src/index.ts",
+    id: "cockpit",
+    viewType: "xr",
+    path: "/cockpit",
   },
   {
     manifestPath: "plugins/plugin-trajectory-logger/src/plugin.ts",
@@ -324,10 +325,10 @@ const KNOWN_XR_VIEW_CASES: readonly PluginViewCase[] = [
     path: "/vector-browser",
   },
   {
-    manifestPath: "plugins/plugin-social-alpha/src/index.ts",
-    id: "social-alpha",
+    manifestPath: "plugins/plugin-scheduling/src/plugin.ts",
+    id: "lifeops-live-test",
     viewType: "xr",
-    path: "/social-alpha",
+    path: "/lifeops-live-test",
   },
   {
     // Facewear collapsed to one declaration: gui/xr/tui all draw from the same
