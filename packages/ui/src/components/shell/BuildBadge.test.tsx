@@ -42,8 +42,8 @@ describe("BuildBadge", () => {
     expect(badge.textContent).toContain("58f6bb3beb · Jul 03 17:42 MDT");
     const anchor = badge.closest("[data-aesthetic-overlay-ignore='true']");
     expect(anchor).not.toBeNull();
-    expect((anchor as HTMLElement).style.paddingBottom).toContain(
-      "--eliza-continuous-chat-clearance",
+    expect((anchor as HTMLElement).style.paddingTop).toContain(
+      "safe-area-inset-top",
     );
     expect(fetch).toHaveBeenCalledWith(
       "/build-info.json",
@@ -51,14 +51,14 @@ describe("BuildBadge", () => {
     );
   });
 
-  it("reserves the floating chat clearance above the bottom edge", async () => {
+  it("anchors to the top-left, clearing the top safe-area inset", async () => {
     mockFetchOk(BUILD_INFO);
     render(<BuildBadge />);
     await screen.findByTestId("build-badge");
     const anchor = screen.getByTestId("build-badge-anchor");
-    expect(anchor.getAttribute("style")).toContain(
-      "--eliza-continuous-chat-clearance",
-    );
+    expect(anchor.className).toContain("top-0");
+    expect(anchor.className).toContain("left-0");
+    expect(anchor.getAttribute("style")).toContain("safe-area-inset-top");
   });
 
   it("falls back to commit + builtAt when label is missing", async () => {
