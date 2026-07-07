@@ -60,6 +60,11 @@ import { PermissionPrimingOverlay } from "./components/permissions/PermissionPri
 import { AssistantOverlay } from "./components/shell/AssistantOverlay";
 import { BugReportModal } from "./components/shell/BugReportModal";
 import { BuildBadge } from "./components/shell/BuildBadge";
+import {
+  CHAT_DOCK_X_VAR,
+  ChatDockDivider,
+  chatDockWidthFor,
+} from "./components/shell/ChatDockDivider";
 import { ChatSurface } from "./components/shell/ChatSurface";
 import { ConnectionLostOverlay } from "./components/shell/ConnectionLostOverlay";
 import { ContinuousChatOverlay } from "./components/shell/ContinuousChatOverlay";
@@ -72,17 +77,6 @@ import { NotificationBanners } from "./components/shell/NotificationBanners";
 import { NotificationsShellBoot } from "./components/shell/notifications-boot";
 import { ShellControllerProvider } from "./components/shell/ShellControllerContext";
 import { useShellControllerContext } from "./components/shell/ShellControllerContext.hooks";
-import {
-  CHAT_DOCK_X_VAR,
-  ChatDockDivider,
-  chatDockWidthFor,
-} from "./components/shell/ChatDockDivider";
-import { useMediaQuery } from "./hooks/useMediaQuery";
-import { Z_SHELL_OVERLAY } from "./lib/floating-layers";
-import {
-  setChatDockIdiomActive,
-  useChatDock,
-} from "./state/chat-dock-store";
 import { ShellOverlays } from "./components/shell/ShellOverlays";
 import { StartupFailureView } from "./components/shell/StartupFailureView";
 import { StartupScreen } from "./components/shell/StartupScreen";
@@ -110,9 +104,11 @@ import { ModelStatusConductorMount } from "./first-run/use-model-status-conducto
 import { BugReportProvider, useBugReportState, useContextMenu } from "./hooks";
 import { useAgentSessionRecovery } from "./hooks/useAgentSessionRecovery";
 import { useAuthStatus } from "./hooks/useAuthStatus";
+import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useRole } from "./hooks/useRole";
 import { useSecretsManagerModalState } from "./hooks/useSecretsManagerModal";
 import { useSecretsManagerShortcut } from "./hooks/useSecretsManagerShortcut";
+import { Z_SHELL_OVERLAY } from "./lib/floating-layers";
 import { cn } from "./lib/utils";
 import {
   APPS_ENABLED,
@@ -139,6 +135,7 @@ import {
   useChatComposer,
   useChatInputRef,
 } from "./state/ChatComposerContext.hooks";
+import { setChatDockIdiomActive, useChatDock } from "./state/chat-dock-store";
 import { isShellPaintable } from "./state/startup-coordinator";
 import {
   authProbeShouldHoldShell,
@@ -2064,7 +2061,9 @@ export function App() {
   // the routed view/launcher content becomes the RIGHT pane. Touch/narrow
   // layouts keep the floating bottom sheet untouched.
   const chatDockIdiom =
-    useMediaQuery("(pointer: fine) and (hover: hover) and (min-width: 900px)") &&
+    useMediaQuery(
+      "(pointer: fine) and (hover: hover) and (min-width: 900px)",
+    ) &&
     shellMode === "full" &&
     !isPopout;
   const chatDock = useChatDock();

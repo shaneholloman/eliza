@@ -148,9 +148,7 @@ export function ChatDockDivider({
     >
       <button
         type="button"
-        // biome-ignore lint/a11y/useSemanticElements: a draggable window
-        // divider is a separator by ARIA semantics but must stay a real
-        // focusable button for the tap-toggle.
+        // biome-ignore lint/a11y/useSemanticElements: a draggable divider is a separator by ARIA semantics but must stay a real focusable button for the tap-toggle
         role="separator"
         aria-orientation="vertical"
         aria-label="Toggle chat split"
