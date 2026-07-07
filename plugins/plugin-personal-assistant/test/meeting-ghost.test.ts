@@ -92,7 +92,10 @@ describe("meeting ghost transcript analysis", () => {
 
     // "launch date" surfaces in the reprioritization decision and in the
     // rollback-plan action item; the owner cares about both.
-    expect(analysis.careHits.map((hit) => hit.speaker)).toEqual(["Ava", "Mira"]);
+    expect(analysis.careHits.map((hit) => hit.speaker)).toEqual([
+      "Ava",
+      "Mira",
+    ]);
     expect(analysis.careHits[0]).toMatchObject({
       careAbout: "launch date",
       speaker: "Ava",

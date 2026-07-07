@@ -942,39 +942,6 @@ describe("ContinuousChatOverlay", () => {
     expect(sheet.getAttribute("data-detent")).toBe("full");
   });
 
-  it("cancels delayed header navigation when unmounted before the close animation finishes", () => {
-    vi.useFakeTimers();
-    try {
-      const navigateHome = vi.fn();
-      const { unmount } = render(
-        <ContinuousChatOverlay
-          controller={makeController({
-            currentTab: "settings",
-            navigateHome,
-          } as unknown as Partial<ShellController>)}
-        />,
-      );
-      const grabber = screen.getByTestId("chat-sheet-grabber");
-      const pull = (fromY: number, toY: number) => {
-        fireEvent.pointerDown(grabber, { clientY: fromY, pointerId: 1 });
-        fireEvent.pointerMove(grabber, { clientY: toY, pointerId: 1 });
-        fireEvent.pointerUp(grabber, { clientY: toY, pointerId: 1 });
-      };
-      pull(420, 280); // collapsed → half
-      expect(screen.getByTestId("chat-full-launcher")).toBeTruthy();
-      fireEvent.click(screen.getByTestId("chat-full-launcher"));
-      unmount();
-
-      act(() => {
-        vi.advanceTimersByTime(500);
-      });
-
-      expect(navigateHome).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("opens on a fast flick even below the distance threshold (velocity)", () => {
     render(<ContinuousChatOverlay controller={makeController()} />);
     const sheet = screen.getByTestId("chat-sheet");
@@ -1041,19 +1008,30 @@ describe("ContinuousChatOverlay", () => {
   });
 
   it("renders composer controls icon-only — no capsule/border/fill, accent when active (#10711)", () => {
-    // Resting: the + and mic controls carry only the icon — no round capsule,
-    // no border, no translucent white fill — while keeping the 44×44 hit target.
+    // Resting: the +, transcribe, and voice controls carry only the icon — no
+    // round capsule, no border, no translucent white fill. The visible box is
+    // 40px with a 20px mark (the "icons slightly too big" fix); the invisible
+    // before-overlay pads the pointer target back out to 44×44 (WCAG 2.5.5).
     const { unmount } = render(
       <ContinuousChatOverlay controller={makeController()} />,
     );
-    for (const id of ["chat-composer-attach", "chat-composer-mic"]) {
+    for (const id of [
+      "chat-composer-plus",
+      "chat-composer-transcribe",
+      "chat-composer-mic",
+    ]) {
       const cls = screen.getByTestId(id).className;
       expect(cls).not.toMatch(/rounded-full/);
       expect(cls).not.toMatch(/\bborder\b/);
       expect(cls).not.toMatch(/bg-white/);
       expect(cls).toContain("bg-transparent");
-      expect(cls).toContain("h-11");
-      expect(cls).toContain("w-11");
+      expect(cls).toContain("h-10");
+      expect(cls).toContain("w-10");
+      expect(cls).not.toContain("h-11");
+      // The tighter 20px glyph (down from 22px)…
+      expect(cls).toContain("[&_svg]:size-5");
+      // …with the hit target padded back to ≥44px by the invisible overlay.
+      expect(cls).toContain("before:-inset-0.5");
     }
     unmount();
 
@@ -1524,7 +1502,8 @@ describe("ContinuousChatOverlay", () => {
 
   it("shows the attach (+) control", () => {
     render(<ContinuousChatOverlay controller={makeController()} />);
-    expect(screen.getByLabelText("attach image")).toBeTruthy();
+    expect(screen.getByTestId("chat-composer-plus")).toBeTruthy();
+    expect(screen.getByLabelText("chat actions")).toBeTruthy();
   });
 
   it("attaches an image and enables an image-only send", async () => {
@@ -1606,7 +1585,7 @@ describe("ContinuousChatOverlay", () => {
     expect(input.hasAttribute("readonly")).toBe(false);
   });
 
-  it("uses the pulsing chrome cue instead of rendering interim transcript text", () => {
+  it("uses the pulsing composer glyph instead of rendering interim transcript text", () => {
     render(
       <ContinuousChatOverlay
         controller={makeController({
@@ -1617,10 +1596,18 @@ describe("ContinuousChatOverlay", () => {
       />,
     );
     expect(screen.queryByText(/tell me about the coast/)).toBeNull();
+    // The "capture is hot" cue is the composer voice glyph's accent pulse —
+    // NOT the drag handle: while the composer is visible the handle stays
+    // quiet during a recording (a second pulsing bar right above the already-
+    // pulsing glyph read as noise). Only the collapsed PILL pulses for a live
+    // capture (see the morph regression suite).
+    expect(screen.getByTestId("chat-composer-mic").className).toContain(
+      "animate-pulse",
+    );
     const grabberCue = screen
       .getByTestId("chat-sheet-grabber")
       .querySelector("span");
-    expect(grabberCue?.className).toContain("animate-pulse");
+    expect(grabberCue?.className).not.toContain("animate-pulse");
   });
 
   it("keeps the ambient layer non-blocking for controls behind it", () => {
@@ -2101,12 +2088,39 @@ describe("ContinuousChatOverlay", () => {
     expect(screen.getByTestId("chat-composer-textarea")).toBeTruthy();
   });
 
-  it("hides the transcribe button when NOT in voice mode (#10699)", () => {
-    // Default controller: no hands-free, not recording → resting composer shows
-    // only the single mic control.
+  it("shows the transcribe (mic-glyph) button beside the voice control at rest — ChatGPT arrangement", () => {
+    // Resting composer: BOTH controls are always available — the mic glyph
+    // starts a transcription/dictation session, the waveform glyph next to it
+    // is the spoken conversation. (Previously transcribe only appeared once a
+    // voice session was already live.)
     render(<ContinuousChatOverlay controller={makeController()} />);
     expect(screen.getByTestId("chat-composer-mic")).toBeTruthy();
+    const transcribe = screen.getByTestId("chat-composer-transcribe");
+    expect(transcribe).toBeTruthy();
+    expect(transcribe.getAttribute("aria-label")).toBe("start transcription");
+  });
+
+  it("resting transcribe tap starts a transcription session", () => {
+    const toggleTranscriptionMode = vi.fn();
+    render(
+      <ContinuousChatOverlay
+        controller={makeController({
+          toggleTranscriptionMode,
+        } as unknown as Partial<ShellController>)}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("chat-composer-transcribe"));
+    expect(toggleTranscriptionMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides BOTH trailing voice controls while a draft exists (send owns the slot)", () => {
+    render(<ContinuousChatOverlay controller={makeController()} />);
+    fireEvent.change(screen.getByLabelText("message"), {
+      target: { value: "typing…" },
+    });
+    expect(screen.queryByTestId("chat-composer-mic")).toBeNull();
     expect(screen.queryByTestId("chat-composer-transcribe")).toBeNull();
+    expect(screen.getByTestId("chat-composer-action")).toBeTruthy();
   });
 
   it("shows the transcribe button in voice mode, next to the mic (#10699)", () => {
@@ -2331,7 +2345,7 @@ describe("ContinuousChatOverlay", () => {
     }
   });
 
-  it("drops the finished transcript into the composer as an attachment, not an auto-sent message", () => {
+  it("inserts the finished transcript at the END of the draft and attaches the recording (ChatGPT-style dictation)", () => {
     let sink:
       | ((
           segments: Array<Record<string, unknown>>,
@@ -2347,6 +2361,11 @@ describe("ContinuousChatOverlay", () => {
     render(<ContinuousChatOverlay controller={controller} />);
     expect(typeof sink).toBe("function");
 
+    // Text typed BEFORE the session must survive — the transcript appends.
+    const input = screen.getByLabelText("message") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "notes so far" } });
+
+    vi.mocked(client.createTranscript).mockClear();
     act(() => {
       sink?.(
         [
@@ -2359,13 +2378,53 @@ describe("ContinuousChatOverlay", () => {
           },
         ],
         1_700_000_000_000,
-        null,
+        new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0]),
       );
     });
 
-    // The transcript becomes a composer attachment chip (document kind) …
-    expect(screen.getByText(/^Transcript .*\.md$/)).toBeTruthy();
-    // … and is NOT auto-sent — the user sends it with their next message.
+    // The transcript lands as TEXT at the end of the draft — no markdown chip
+    // to open, matching ChatGPT dictation …
+    expect(input.value).toBe("notes so far hello world");
+    expect(screen.queryByText(/^Transcript .*\.md$/)).toBeNull();
+    // … and is NOT auto-sent — the user sends it when ready.
+    expect(controller.send).not.toHaveBeenCalled();
+    // The captured audio becomes a pending audio attachment — the sharable
+    // artifact that rides the next send into the content-addressed media store
+    // (attached synchronously here since the WAV bytes are already in hand;
+    // an over-cap recording is dropped with an inline notice — see the sink).
+    expect(screen.getByText(/^Recording .*\.wav$/)).toBeTruthy();
+    // The session is still archived (record + audio) for the Transcripts view.
+    expect(client.createTranscript).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(client.createTranscript).mock.calls[0][0]).toMatchObject({
+      audioContentType: "audio/wav",
+    });
+  });
+
+  it("a transcript with no captured audio still inserts text and attaches nothing", () => {
+    let sink:
+      | ((
+          segments: Array<Record<string, unknown>>,
+          startedAt: number,
+          audioWav: Uint8Array | null,
+        ) => void)
+      | null = null;
+    const controller = makeController({
+      setTranscriptSessionSink: ((fn: unknown) => {
+        sink = fn as typeof sink;
+      }) as unknown as ShellController["setTranscriptSessionSink"],
+    });
+    render(<ContinuousChatOverlay controller={controller} />);
+    act(() => {
+      sink?.(
+        [{ id: "s1", startMs: 0, endMs: 900, text: "just words", words: [] }],
+        1_700_000_000_000,
+        null,
+      );
+    });
+    expect(
+      (screen.getByLabelText("message") as HTMLTextAreaElement).value,
+    ).toBe("just words");
+    expect(screen.queryByText(/^Recording .*\.wav$/)).toBeNull();
     expect(controller.send).not.toHaveBeenCalled();
   });
 
@@ -2407,11 +2466,11 @@ describe("ContinuousChatOverlay", () => {
     expect(grabber.getAttribute("aria-hidden")).toBe("true");
   });
 
-  // ── chat-full Launcher. The header row no longer exposes Home /
-  // Views / Settings as a mini app nav. It keeps one Launcher icon that
-  // returns to the combined Home/Launcher surface; Settings lives in the
-  // Launcher grid.
-  it("renders only the Launcher in the chat-full header", () => {
+  // ── chat-full header carries NO nav buttons. Search / upload / camera /
+  // transcribe moved to the composer "+" menu and Home lives in the launcher,
+  // so the top bar no longer acts as a mini app nav (it only reserves the
+  // safe-area inset + hosts the transcription badge).
+  it("renders no nav buttons in the chat-full header", () => {
     render(
       <ContinuousChatOverlay
         controller={makeController({
@@ -2419,45 +2478,28 @@ describe("ContinuousChatOverlay", () => {
         } as Partial<ShellController>)}
       />,
     );
-    openSheetToHalf();
+    openSheetToFull();
 
-    const launcher = screen.getByTestId("chat-full-launcher");
-    expect((launcher as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId("chat-full-launcher")).toBeNull();
+    expect(screen.queryByTestId("chat-full-search")).toBeNull();
     expect(screen.queryByTestId("chat-full-home")).toBeNull();
     expect(screen.queryByTestId("chat-full-views")).toBeNull();
     expect(screen.queryByTestId("chat-full-settings")).toBeNull();
   });
 
-  // Open the sheet to the HALF detent so the chat-full header is revealed and
-  // interactive (its wrapper carries `inert` until `headerVisible` flips at the
-  // half threshold). A deliberate pull-up of the grabber past the distance
-  // threshold lands on half — the same gesture the COLLAPSED→HALF test uses.
-  function openSheetToHalf(): void {
+  // Open the sheet to the FULL detent so the chat-full header is revealed and
+  // interactive. Half keeps the header inert.
+  function openSheetToFull(): void {
     const sheet = screen.getByTestId("chat-sheet");
     const grabber = screen.getByTestId("chat-sheet-grabber");
     fireEvent.pointerDown(grabber, { clientY: 420, pointerId: 1 });
     fireEvent.pointerMove(grabber, { clientY: 280, pointerId: 1 });
     fireEvent.pointerUp(grabber, { clientY: 280, pointerId: 1 });
-    expect(sheet.getAttribute("data-detent")).toBe("half");
+    fireEvent.pointerDown(grabber, { clientY: 420, pointerId: 1 });
+    fireEvent.pointerMove(grabber, { clientY: 280, pointerId: 1 });
+    fireEvent.pointerUp(grabber, { clientY: 280, pointerId: 1 });
+    expect(sheet.getAttribute("data-detent")).toBe("full");
   }
-
-  it("routes the chat-full Launcher button to the home callback", async () => {
-    const navigateHome = vi.fn();
-    render(
-      <ContinuousChatOverlay
-        controller={makeController({
-          currentTab: "settings",
-          navigateHome,
-        } as Partial<ShellController>)}
-      />,
-    );
-    openSheetToHalf();
-
-    // navigateAndClose collapses the sheet then defers the navigation a frame
-    // (so the close animates first), so the callback fires on a short timer.
-    fireEvent.click(screen.getByTestId("chat-full-launcher"));
-    await vi.waitFor(() => expect(navigateHome).toHaveBeenCalledTimes(1));
-  });
 
   // ── Rich turn-status indicator (#8813) ──────────────────────────────────
   describe("turn status indicator", () => {
@@ -2658,10 +2700,32 @@ describe("ContinuousChatOverlay single-thread (no chat swipe, #13531)", () => {
   }
 
   function openSheet() {
+    const sheet = screen.getByTestId("chat-sheet");
     const grabber = screen.getByTestId("chat-sheet-grabber");
     fireEvent.pointerDown(grabber, { clientY: 420, pointerId: 1 });
     fireEvent.pointerMove(grabber, { clientY: 280, pointerId: 1 });
     fireEvent.pointerUp(grabber, { clientY: 280, pointerId: 1 });
+    fireEvent.pointerDown(grabber, { clientY: 420, pointerId: 1 });
+    fireEvent.pointerMove(grabber, { clientY: 280, pointerId: 1 });
+    fireEvent.pointerUp(grabber, { clientY: 280, pointerId: 1 });
+    expect(sheet.getAttribute("data-detent")).toBe("full");
+  }
+
+  // Search moved off the header into the composer "+" actions menu; open it the
+  // way a user now does — tap "+", then "Search chat…".
+  function openSearchFromComposerMenu(): void {
+    const plus = screen.getByTestId("chat-composer-plus");
+    fireEvent.pointerDown(plus, {
+      button: 0,
+      pointerId: 1,
+      pointerType: "mouse",
+    });
+    fireEvent.pointerUp(plus, {
+      button: 0,
+      pointerId: 1,
+      pointerType: "mouse",
+    });
+    fireEvent.click(screen.getByText("Search chat…"));
   }
 
   function thread(): HTMLElement {
@@ -2719,18 +2783,17 @@ describe("ContinuousChatOverlay single-thread (no chat swipe, #13531)", () => {
 
     // Maximize/minimize became a vertical pull in #13531 — still no button.
     expect(screen.queryByTestId("chat-full-maximize")).toBeNull();
-    // The launcher header control still renders.
-    expect(screen.getByTestId("chat-full-launcher")).toBeTruthy();
   });
 
-  it("exposes search as the ONLY left header control (no new-chat/refresh)", () => {
+  it("exposes no left header controls (search + new-chat moved off the header)", () => {
     const { controller } = makeSwipeController();
     render(<ContinuousChatOverlay controller={controller} />);
     openSheet();
 
-    // The thread is one infinite conversation: search is the sole left
-    // control; there is deliberately no new-chat/clear/refresh button.
-    expect(screen.getByTestId("chat-full-search")).toBeTruthy();
+    // The thread is one infinite conversation and the header carries no
+    // buttons: search moved to the composer "+" menu, and there is deliberately
+    // no new-chat/clear/refresh control anywhere.
+    expect(screen.queryByTestId("chat-full-search")).toBeNull();
     expect(screen.queryByTestId("chat-full-clear")).toBeNull();
   });
 
@@ -2746,20 +2809,17 @@ describe("ContinuousChatOverlay single-thread (no chat swipe, #13531)", () => {
     expect(controller.toggleHandsFree).toHaveBeenCalledTimes(1);
   });
 
-  it("opens the message-search panel from the header search control (#14279)", () => {
+  it("opens the message-search panel from the composer + menu (#14279)", () => {
     const { controller } = makeSwipeController();
     render(<ContinuousChatOverlay controller={controller} />);
     openSheet();
 
     // Panel is closed at rest.
     expect(screen.queryByTestId("chat-message-search")).toBeNull();
-    // Tapping the search control reveals the search panel over the transcript.
-    fireEvent.click(screen.getByTestId("chat-full-search"));
+    // "+" → "Search chat…" reveals the search panel over the transcript.
+    openSearchFromComposerMenu();
     expect(screen.getByTestId("chat-message-search")).toBeTruthy();
     expect(screen.getByTestId("message-search-panel")).toBeTruthy();
-    // Tapping again toggles it closed.
-    fireEvent.click(screen.getByTestId("chat-full-search"));
-    expect(screen.queryByTestId("chat-message-search")).toBeNull();
   });
 
   it("drives the header search → query → jump path against the real search API shape (#14330)", async () => {
@@ -2811,7 +2871,7 @@ describe("ContinuousChatOverlay single-thread (no chat swipe, #13531)", () => {
     render(<ContinuousChatOverlay controller={controller} />);
     openSheet();
 
-    fireEvent.click(screen.getByTestId("chat-full-search"));
+    openSearchFromComposerMenu();
     const input = screen.getByTestId("message-search-input");
     fireEvent.change(input, { target: { value: "budget" } });
 
@@ -2856,7 +2916,7 @@ describe("ContinuousChatOverlay single-thread (no chat swipe, #13531)", () => {
     render(<ContinuousChatOverlay controller={controller} />);
     openSheet();
 
-    fireEvent.click(screen.getByTestId("chat-full-search"));
+    openSearchFromComposerMenu();
     fireEvent.change(screen.getByTestId("message-search-input"), {
       target: { value: "budget" },
     });

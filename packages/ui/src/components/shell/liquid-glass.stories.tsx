@@ -1,17 +1,12 @@
 /**
  * Story fixtures for the chat-sheet liquid-glass recipe. A colorful mock
- * backdrop (standing in for the ember field + home widgets) sits behind an inset
- * panel that layers the frosted fill, the refraction layer, and the bevel — the
- * exact stack ContinuousChatOverlay renders — so the glass edge is reviewable in
- * isolation without booting the full shell.
+ * backdrop stands in for the ember field + home widgets behind an inset panel
+ * that layers the frosted fill, specular sheen, and bevel so the glass edge is
+ * reviewable in isolation without booting the full shell.
  */
 import type { Meta, StoryObj } from "@storybook/react";
 
-import {
-  LIQUID_GLASS_EDGE_SHADOW,
-  LiquidGlassDefs,
-  LiquidGlassRefraction,
-} from "./liquid-glass";
+import { LIQUID_GLASS_EDGE_SHADOW, LIQUID_GLASS_SHEEN } from "./liquid-glass";
 
 function Backdrop(): React.JSX.Element {
   return (
@@ -59,16 +54,13 @@ function GlassSheet({ radius }: { radius: number }): React.JSX.Element {
         backdropFilter: "blur(24px) saturate(1.3)",
         WebkitBackdropFilter: "blur(24px) saturate(1.3)",
         boxShadow: LIQUID_GLASS_EDGE_SHADOW,
-        backgroundImage:
-          "linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 22%)",
+        backgroundImage: `${LIQUID_GLASS_SHEEN}, linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 22%)`,
         color: "white",
         overflow: "hidden",
       }}
     >
-      <LiquidGlassDefs />
-      <LiquidGlassRefraction radius={radius} />
       <div style={{ position: "relative", padding: 20, fontSize: 14 }}>
-        Liquid-glass chat sheet — the backdrop refracts at the edge.
+        Liquid-glass chat sheet with inset rim, bevel, and sheen.
       </div>
     </div>
   );

@@ -500,7 +500,6 @@ function coercePromotionDecision(
 		: undefined;
 }
 
-
 function coerceStringArray(value: unknown): string[] | undefined {
 	if (!Array.isArray(value)) return undefined;
 	const out = value.filter(

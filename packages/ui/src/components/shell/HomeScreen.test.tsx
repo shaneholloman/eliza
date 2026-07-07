@@ -165,29 +165,9 @@ describe("HomeScreen", () => {
     expect(hostWrapper?.className).toContain("justify-center");
   });
 
-  // GESTURE-HINT OVERLAP FIX (#14945 follow-up): the one-time gesture hint
-  // ("Swipe for apps. Pull chat up. Hold wallpaper to restyle.") sat as the last
-  // flow item in the scroll column, flush against the top of the reserved
-  // composer-clearance zone — on device the floating composer overlapped it and
-  // only the top few pixels of the hint peeked above the composer edge. Its
-  // wrapper must carry an explicit bottom clearance keyed to the composer
-  // footprint + safe area so it can NEVER render under the composer.
-  it("anchors the gesture hint above the floating composer (explicit bottom clearance, never overlapping)", () => {
-    // The gesture hint is a one-time widget; ensure a pristine dismissal store
-    // so it renders on this mount.
-    __resetHomeDismissalsForTests();
-    render(<HomeScreen onOpenTile={vi.fn()} />);
-    const hint = screen.getByTestId("home-gesture-hint");
-    // The hint's positioning wrapper is its parent in the HomeScreen column.
-    const wrapper = hint.parentElement;
-    expect(wrapper).not.toBeNull();
-    const cls = wrapper?.className ?? "";
-    // The wrapper must reserve clearance for the floating composer footprint
-    // (the measured pill height var) plus the bottom safe area, so the hint
-    // always sits fully ABOVE the composer, not behind it.
-    expect(cls).toContain("--eliza-continuous-chat-clearance");
-    expect(cls).toMatch(/safe-area-bottom|android-gesture-inset-bottom/);
-  });
+  // (The one-time home "gesture hint" widget was removed from HomeScreen; its
+  // overlap-clearance test went with it. Reintroducing any always-mounted hint
+  // must re-add the composer-footprint bottom clearance the old test pinned.)
 
   it("tapping an inline row expands options; Open follows its safe deep link", () => {
     __ingestNotificationForTests(

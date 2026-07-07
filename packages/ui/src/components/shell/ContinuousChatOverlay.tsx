@@ -2,9 +2,11 @@
  * Renders the continuous chat overlay that keeps the composer and transcript
  * available across views.
  */
+import { MAX_CHAT_MEDIA_RAW_BYTES } from "@elizaos/shared";
 import { transcriptPlainText } from "@elizaos/shared/transcripts";
 import {
   ArrowDown,
+  AudioLines,
   Camera,
   Captions,
   FileText,
@@ -68,6 +70,12 @@ import { useThreadAutoScroll } from "../../hooks/useThreadAutoScroll";
 import { Z_SHELL_OVERLAY } from "../../lib/floating-layers";
 import { cn } from "../../lib/utils";
 import { claimAssistantLaunchPayloadFromHash } from "../../platform/assistant-launch-payload";
+import { isIOS, isNative, isStandalonePwa } from "../../platform/init";
+import {
+  KEYBOARD_INTRUSION_THRESHOLD_PX,
+  STANDALONE_BOTTOM_RECLAIM_OFFSET,
+  shouldInstallStandaloneBottomReclaim,
+} from "../../platform/standalone-bottom-reclaim";
 import { useAppSelectorShallow } from "../../state";
 import {
   clearChatDraft,
@@ -80,6 +88,7 @@ import { useViewChatBinding } from "../../state/view-chat-binding";
 import { tryHandleTutorialText } from "../../tutorial/tutorial-action-channel";
 import { copyTextToClipboard } from "../../utils/clipboard";
 import {
+  bytesToMb,
   CHAT_UPLOAD_ACCEPT,
   chatUploadKind,
   intakeAttachmentFiles,
@@ -96,7 +105,6 @@ import { findChoiceRegions } from "../chat/message-choice-parser";
 import { parseFormSubmitDisplay } from "../chat/message-parser-helpers";
 import { MessageSearchPanel } from "../chat/message-search/MessageSearchPanel";
 import { ThinkingBlock } from "../chat/ThinkingBlock";
-import { withTranscriptMarker } from "../chat/TranscriptViewerOverlay";
 import {
   buildReplyTargetFromMessage,
   ChatMessage,
@@ -123,11 +131,7 @@ import {
   measureSafeAreaInsetTop,
   resolveChatPanelLayout,
 } from "./chat-panel-layout";
-import {
-  LIQUID_GLASS_EDGE_SHADOW,
-  LiquidGlassDefs,
-  LiquidGlassRefraction,
-} from "./liquid-glass";
+import { LIQUID_GLASS_EDGE_SHADOW, LIQUID_GLASS_SHEEN } from "./liquid-glass";
 import { SlashCommandMenu, useSlashMenu } from "./SlashCommandMenu";
 import {
   filterRenderableShellMessages,
@@ -231,6 +235,18 @@ const HANDLE_BAR_COLOR = "rgba(255, 247, 240, 0.86)";
 // opacity/translate only: animating blur/filter or scaling a scrollable
 // transcript repaints too much of the viewport and visibly janks on laptops.
 const OVERLAY_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
+
+// `screen.height` is a useful keyboard-down reference only on the iOS
+// standalone/native surfaces that own the collapsed-viewport reclaim. On
+// desktop and Android it describes the monitor or physical device rather than
+// the layout viewport, so using it there would create false keyboard lifts.
+const SCREEN_KEYBOARD_SIGNAL_ACTIVE =
+  typeof window !== "undefined" &&
+  shouldInstallStandaloneBottomReclaim({
+    standalonePwa: isStandalonePwa(),
+    isNative,
+    isIOS,
+  });
 
 // Pull-sheet detents. The chat-history window is bottom-anchored just above the
 // fixed composer; its height animates between the closed composer/grabber and
@@ -351,6 +367,41 @@ const PILL_COMMIT_PROGRESS = 1 - PILL_COMMIT_OVERSHOOT / PILL_OPEN_DISTANCE;
 // back out of the state it just animated into.
 const MID_DRAG_RESUME_SLOP = 24;
 
+// Finger travel (px) below the restore drag's upward peak at which the panel
+// drops full-bleed and starts tracking the finger down out of maximize. Small
+// so a downward intent un-maximizes promptly, but non-zero so a hand held at
+// the ceiling with sub-pixel jitter doesn't flap in and out of full-bleed.
+const RESTORE_UNMAX_SLOP = 6;
+
+const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
+
+// Panel scale at the PILL end of the pill↔input morph. The collapse must read
+// as the whole chat shrinking down into the capsule — a hard, visible scale
+// lerp — not a near-imperceptible 0.9 nudge (the "barely animates down" bug).
+// The glass crossfades out over the same progress, so the deep scale never
+// shows a crumpled composer: by the time content would distort it has faded.
+export const PILL_MORPH_MIN_SCALE = 0.45;
+/** Panel scale for a pill↔input morph progress (0 = pill, 1 = input). */
+export function pillMorphScale(progress: number): number {
+  return PILL_MORPH_MIN_SCALE + (1 - PILL_MORPH_MIN_SCALE) * clamp01(progress);
+}
+
+/**
+ * Grabber-bar opacity from the two morphs that own it. It fades IN only after
+ * the pill capsule has fully faded out (strict anti-phase over [0.55, 0.95] of
+ * the pill→input open — the "two pills" guard), and back OUT as the over-pull
+ * shape morph (`fullBleedT`) approaches edge-to-edge — so the handle dissolves
+ * under the finger through the top ~10% of the pull instead of popping away
+ * the frame the maximize commits (which unmounts it for the restore strip).
+ */
+export function grabberBarOpacity(
+  openProgress: number,
+  fullBleedT: number,
+): number {
+  const openFade = clamp01((openProgress - 0.55) / 0.4);
+  return openFade * (1 - clamp01(fullBleedT));
+}
+
 // Glyphs (viewBox 0 0 36 36), rendered in currentColor inside a soft chip. Send
 // + mic now use lucide icons (SendHorizontal / Mic); the rest stay hand-drawn.
 // The plus fills nearly the whole 36-unit box (arms 3→33) so, rendered at the
@@ -371,10 +422,6 @@ function wavBytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** UTF-8-safe base64 for a transcript turned into a composer text attachment. */
-function textToBase64(text: string): string {
-  return wavBytesToBase64(new TextEncoder().encode(text));
-}
 // Muted-speaker glyph for the autoplay-blocked "tap to enable sound" prompt.
 const SPEAKER_MUTED_GLYPH =
   "M7 15H12L18 10V26L12 21H7Z M21 12.4L22.4 11L31 19.6L29.6 21Z";
@@ -443,17 +490,16 @@ function SoftButton({
       onPointerLeave={disabled ? undefined : onPointerLeave}
       className={cn(
         // Icon-only control: transparent, borderless, no capsule — just the
-        // glyph, sized up to carry weight without the removed background. The
-        // 44×44 hit target (WCAG 2.5.5) stays; only the visible chrome goes.
-        // Hover and active express through icon color alone — neutral resting →
-        // neutral hover, accent for active — never a background/border, never
-        // blue.
+        // glyph. Hover and active express through icon color alone — neutral
+        // resting → neutral hover, accent for active — never a background/
+        // border, never blue.
         //
-        // `[&_svg]:size-[22px]` OVERRIDES the kit Button's base `[&_svg]:size-4`
-        // (16px): the mark reads clearly in the 44px hit box without dominating
-        // the composer row. The box — and the composer row height — is unchanged;
-        // only the glyph size is tuned.
-        "grid h-11 w-11 shrink-0 place-items-center bg-transparent p-0 transition-colors hover:bg-transparent [&_svg]:size-[22px]",
+        // Visible box 40px with a 20px mark (`[&_svg]:size-5` OVERRIDES the kit
+        // Button's base `[&_svg]:size-4`): the composer marks sit quiet beside
+        // the text instead of dominating the row. The 44×44 hit target (WCAG
+        // 2.5.5) is preserved by the invisible `before` overlay that pads the
+        // pointer zone back out past the visible box.
+        "relative grid h-10 w-10 shrink-0 place-items-center bg-transparent p-0 transition-colors before:absolute before:-inset-0.5 before:content-[''] hover:bg-transparent [&_svg]:size-5",
         active ? "text-accent" : "text-muted-strong hover:text-txt",
         // Pulse the accent glyph while capture is hot; reduced-motion falls back
         // to the static accent without adding background or border chrome.
@@ -466,7 +512,7 @@ function SoftButton({
       ) : glyph ? (
         // Match the lucide marks: the parent [&_svg] rule governs the box, and
         // the widened glyph paths fill the same fraction of it.
-        <Glyph d={glyph} className="size-[22px]" />
+        <Glyph d={glyph} className="size-5" />
       ) : null}
     </Button>
   );
@@ -1180,6 +1226,14 @@ export function ContinuousChatOverlay({
   // runs in the SAME event as the drop and would otherwise read the stale,
   // pre-re-render `maximized` and snap back instead of resting where released.
   const restoreDidUnmaximizeRef = React.useRef(false);
+  // Highest (most-upward) offset the current restore drag has reached. The
+  // ceiling-consumption rebase in onDragOffset absorbs any upward drift while
+  // the panel sits at the full-bleed ceiling, so a raw `offset < 0` test fires
+  // late: the sheet already follows the finger DOWN off the ceiling (its
+  // fullBleedT un-morphs) for the first N px while `offset` is still positive,
+  // and a release in that window would snap back to full-bleed. Un-maximize the
+  // instant the finger nets downward from this peak instead.
+  const restorePeakOffsetRef = React.useRef(0);
   // Reactive composer-focus flag. Only the short-landscape compact resting
   // affordance reads it (#14173): focusing the field lifts the compact treatment
   // so the composer widens to full BEFORE the first keystroke, and blurring an
@@ -1402,9 +1456,23 @@ export function ContinuousChatOverlay({
   // sheet to its content (grow-from-the-bottom) instead of a tall empty panel.
   const threadContentRef = React.useRef<HTMLDivElement>(null);
   const layoutShiftIntentTimerRef = React.useRef<number | null>(null);
+  const layoutShiftIntentArmedAtRef = React.useRef(0);
   const markLayoutShiftIntent = React.useCallback(() => {
     const overlay = overlayRef.current;
     if (!overlay || typeof window === "undefined") return;
+    // Throttle the re-arm: this fires on EVERY threadHeight tick (60+/s for
+    // the whole of a drag or settle spring), and an unconditional
+    // setAttribute + clearTimeout + setTimeout per frame is pure churn. While
+    // a timer is already pending, re-arm at most every 100ms — the intent
+    // window still clears within ~280ms of the last motion.
+    const now = performance.now();
+    if (
+      layoutShiftIntentTimerRef.current !== null &&
+      now - layoutShiftIntentArmedAtRef.current < 100
+    ) {
+      return;
+    }
+    layoutShiftIntentArmedAtRef.current = now;
     overlay.setAttribute(
       LAYOUT_SHIFT_INTENT_ATTR,
       LAYOUT_SHIFT_INTENT_TRANSIENT,
@@ -2109,9 +2177,36 @@ export function ContinuousChatOverlay({
     const vv = window.visualViewport;
     const innerHeight = window.innerHeight;
     const height = vv?.height ?? innerHeight;
-    const keyboardInset = vv
-      ? Math.max(0, innerHeight - vv.height - vv.offsetTop)
-      : 0;
+    // On iOS standalone/native, the soft keyboard can shrink innerHeight and
+    // visualViewport.height together, making their delta read as zero. The
+    // gated screen-height signal recovers that keyboard intrusion on the same
+    // surfaces that install the bottom reclaim. The threshold filters the
+    // smaller resting collapse band so it is never treated as a keyboard.
+    let keyboardInset = 0;
+    if (vv) {
+      const insetFromInner = Math.max(
+        0,
+        innerHeight - vv.height - vv.offsetTop,
+      );
+      let screenKeyboard = 0;
+      if (SCREEN_KEYBOARD_SIGNAL_ACTIVE) {
+        const screenHeight =
+          typeof window.screen?.height === "number" && window.screen.height > 0
+            ? window.screen.height
+            : 0;
+        const insetFromScreen =
+          screenHeight > 0
+            ? Math.max(0, screenHeight - vv.height - vv.offsetTop)
+            : 0;
+        // Only trust the screen-based signal once it clears the resting-collapse
+        // band (so the ~59px fixed-body ICB collapse is never a keyboard).
+        screenKeyboard =
+          insetFromScreen >= KEYBOARD_INTRUSION_THRESHOLD_PX
+            ? insetFromScreen
+            : 0;
+      }
+      keyboardInset = Math.max(insetFromInner, screenKeyboard);
+    }
     // innerHeight is the LAYOUT viewport: on Android it shrinks (adjustResize)
     // when the keyboard opens, on iOS (`resize: "body"`) it does not. The lift
     // math below uses that to avoid double-counting the keyboard. innerWidth +
@@ -2556,11 +2651,22 @@ export function ContinuousChatOverlay({
   );
   const bottomInsetFactor = useTransform(fullBleedT, [0, 1], [1, 0]);
   const overlayPadBottom = useMotionTemplate`calc(${bottomInsetFactor} * (var(--eliza-mobile-nav-offset, 0px) + max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)) + 0.5rem))`;
+  // Full-bleed extends the glass UP under the status bar; riding the shape
+  // spring (instead of a discrete swap at commit) keeps the top edge from
+  // popping a safe-area-height on notch devices. 0px at rest (t=0).
+  const glassTopExtension = useMotionTemplate`calc(${fullBleedT} * -1 * env(safe-area-inset-top, 0px))`;
+  // The composer's home-gesture clearance likewise EASES in with the morph:
+  // at t=0 this is exactly the row's own 0.5rem padding (a no-op), growing by
+  // the gesture-bar inset as the panel squares off — no bottom-padding jump
+  // the frame the maximize commits.
+  const composerPadBottom = useMotionTemplate`calc(0.5rem + ${fullBleedT} * max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)))`;
   // --- Liquid-glass pill → input morph (driven by openProgress) ---------------
   // The panel is ONE persistent element; the pill capsule and the full
   // input crossfade by opacity (compositor-cheap) while the whole panel scales
-  // up from a capsule. transform + opacity only.
-  const panelScale = useTransform(openProgress, [0, 1], [0.9, 1]);
+  // up from a capsule. transform + opacity only. The scale runs the full
+  // pillMorphScale lerp (down to PILL_MORPH_MIN_SCALE) so collapsing to the
+  // pill reads as the chat HARD-shrinking into the capsule, not a 10% nudge.
+  const panelScale = useTransform(openProgress, pillMorphScale);
   // Glass surface + its content crossfade IN as the input forms (one wrapper, so
   // sheen/glow/thread/composer resolve together with the glass).
   const glassOpacity = useTransform(openProgress, [0, 1], [0, 1]);
@@ -2573,10 +2679,14 @@ export function ContinuousChatOverlay({
   // never both be on screen. The pill fades OUT over [0, 0.55]; the grabber fades
   // IN only over [0.55, 0.95] — a strict crossfade with no overlap. (Before, the
   // grabber mounted at full opacity the instant `pilled` flipped false, while the
-  // pill was still fading out → two bars = the "two pills" bug.)
-  const grabberOpacity = useTransform(openProgress, [0.55, 0.95], [0, 1], {
-    clamp: true,
-  });
+  // pill was still fading out → two bars = the "two pills" bug.) It ALSO fades
+  // back OUT with the over-pull shape morph (`fullBleedT`), so dragging up
+  // through the top ~10% dissolves the handle instead of popping it away when
+  // the maximize commits — see grabberBarOpacity.
+  const grabberOpacity = useTransform(
+    [openProgress, fullBleedT] as MotionValue<number>[],
+    ([p, t]: number[]) => grabberBarOpacity(p, t),
+  );
   // Header reveal tracks the LIVE height: as the panel approaches the half
   // detent the top buttons FADE in and their space LERPS open; pulling back
   // below half fades them out and collapses the space — no pop. (Maximized sits
@@ -2606,6 +2716,22 @@ export function ContinuousChatOverlay({
     {
       clamp: true,
     },
+  );
+  // At full-bleed the header must clear the status bar (safe-area top + 8px)
+  // and drop its 100px reveal cap. Both EASE with the shape morph instead of
+  // swapping discretely at commit — the discrete swap popped the header down a
+  // status-bar height on notch devices the frame `fullBleed` flipped. The
+  // safe-area term stays a CSS `var(--safe-area-top)` INSIDE the calc (not a
+  // JS-measured number): the host seeds that var on native — and the e2e
+  // harness drives it — so the padding must honor it even where the env()
+  // probe reads 0.
+  const headerPadTopMorph = useMotionTemplate`calc(${headerPadTop}px + ${fullBleedT} * (var(--safe-area-top, 0px) + 0.5rem - ${headerPadTop}px))`;
+  const headerMaxHMorph = useTransform(
+    [headerMaxH, fullBleedT] as MotionValue<number>[],
+    // 400px stands in for "uncapped": the safe-area inset + badge row is well
+    // under it, and a finite target lets the cap lerp instead of jumping to
+    // `none`.
+    ([mh, t]: number[]) => mh + (400 - mh) * clamp01(t),
   );
   // Grabber clearance: when the chat is OPEN but BELOW the half detent the header
   // is hidden, so the thread viewport would start at the panel's very top —
@@ -3146,12 +3272,14 @@ export function ContinuousChatOverlay({
     return () => setDictationSink(null);
   }, [setDictationSink, setDraft, expand]);
 
-  // A completed transcription SESSION drops its transcript into the composer as
-  // an ATTACHMENT — it does NOT auto-send as a message. The user sends it (with
-  // any typed text) when ready; the mic stays on the whole time, so transcribing
-  // is an additive layer, not a mode that takes over the conversation. The
-  // recording is also archived (Transcript record + audio + knowledge mirror)
-  // for the Transcripts view, best-effort and silent.
+  // A completed transcription SESSION works like ChatGPT dictation: the full
+  // transcript is INSERTED AS TEXT at the end of the composer draft — never
+  // auto-sent, never a document chip the user has to open. The captured audio
+  // becomes a pending AUDIO ATTACHMENT (the sharable artifact: sending it
+  // routes the WAV through the content-addressed media store, so the thread
+  // carries a playable, downloadable /api/media/<sha256>.wav recording). The
+  // session is also archived (Transcript record + audio) for the Transcripts
+  // view, best-effort and silent.
   React.useEffect(() => {
     setTranscriptSessionSink((segments, startedAtMs, audioWav) => {
       if (segments.length === 0) return;
@@ -3160,16 +3288,39 @@ export function ContinuousChatOverlay({
         .toISOString()
         .slice(0, 16)
         .replace("T", " ");
-      const attachmentName = `Transcript ${stamp}.md`;
       if (text) {
-        const attachment: ImageAttachment = {
-          data: textToBase64(text),
-          mimeType: "text/markdown",
-          name: attachmentName,
-        };
-        setPendingImages((prev) =>
-          [...prev, attachment].slice(0, MAX_CHAT_IMAGES),
-        );
+        // Append at the END of whatever is already typed (through the live
+        // ref — the shared context setter takes a plain string), mirroring the
+        // push-to-talk dictation sink above.
+        const current = draftRef.current;
+        setDraft(current ? `${current} ${text}` : text);
+      }
+      const hasAudio = Boolean(audioWav && audioWav.byteLength > 0);
+      if (audioWav && hasAudio) {
+        // Enforce the SAME per-file media size cap the attach/paste/drop paths
+        // go through (intakeAttachmentFiles → perFileByteCap): a several-minute
+        // dictation produces a large WAV, and hand-attaching it unchecked would
+        // blow past the server media limit and fail the whole send. Over the
+        // cap, drop just the audio artifact — the transcript TEXT inserted above
+        // is the primary output and always lands — and say so inline.
+        if (audioWav.byteLength > MAX_CHAT_MEDIA_RAW_BYTES) {
+          setImageError(
+            `Recording too large to attach (max ${bytesToMb(
+              MAX_CHAT_MEDIA_RAW_BYTES,
+            )}MB) — transcript kept.`,
+          );
+        } else {
+          const recording: ImageAttachment = {
+            data: wavBytesToBase64(audioWav),
+            mimeType: "audio/wav",
+            name: `Recording ${stamp}.wav`,
+          };
+          setPendingImages((prev) =>
+            [...prev, recording].slice(0, MAX_CHAT_IMAGES),
+          );
+        }
+      }
+      if (text || hasAudio) {
         expand();
         inputRef.current?.focus();
       }
@@ -3184,34 +3335,12 @@ export function ContinuousChatOverlay({
               }
             : {}),
         })
-        .then(({ transcript }) => {
-          // Link the pending attachment to the saved record so tapping it opens
-          // the editable viewer and edits persist — both via the client-only
-          // `transcriptId` field and a durable marker embedded in the markdown
-          // (which survives the server round-trip in the attachment's text).
-          if (!text) return;
-          setPendingImages((prev) =>
-            prev.map((a) =>
-              a.name === attachmentName &&
-              a.mimeType === "text/markdown" &&
-              !a.transcriptId
-                ? {
-                    ...a,
-                    transcriptId: transcript.id,
-                    data: textToBase64(
-                      withTranscriptMarker(transcript.id, text),
-                    ),
-                  }
-                : a,
-            ),
-          );
-        })
         .catch(() => {
           /* archival is best-effort; a failed save just skips the record */
         });
     });
     return () => setTranscriptSessionSink(null);
-  }, [setTranscriptSessionSink, setPendingImages, expand]);
+  }, [setTranscriptSessionSink, setDraft, setPendingImages, expand]);
 
   // Tell the controller whether a draft is pending so the hands-free always-on
   // loop pauses while the user is typing (or editing a PTT dictation) and
@@ -3819,20 +3948,41 @@ export function ContinuousChatOverlay({
       // continuous pull reads pill → input → chat (and a flick-up no longer
       // flashes a chat sliver, since the thread only grows after the morph).
       if (pilled) {
-        const up = Math.max(0, effOffset);
+        let up = Math.max(0, effOffset);
+        // The pill sits at height 0, so the raw finger travel IS the equivalent
+        // pull height. Tracking it here (like the open-sheet path below) lets a
+        // single held drag from the pill clear the maximize threshold — pill →
+        // input → chat → full-screen is one continuous gesture. Recorded BEFORE
+        // the ceiling rebase below so release intent still sees the true peak.
+        if (up > maxPullRawRef.current) maxPullRawRef.current = up;
+        let excess = up - PILL_OPEN_DISTANCE;
+        // Follow-the-finger contract: travel past the full-bleed ceiling is
+        // CONSUMED (the offset base absorbs it) rather than banked — there is
+        // no more screen to grow into, and banking it meant a reversal had to
+        // pay the whole overshoot back before the sheet moved again (the "pull
+        // beyond the top, drag back down, nothing follows" dead zone).
+        if (excess > fullPanelMaxH) {
+          const overshoot = excess - fullPanelMaxH;
+          dragOffsetBaseRef.current += overshoot;
+          up -= overshoot;
+          excess = fullPanelMaxH;
+        }
+        // Mirror of the open-sheet abandonment rule below: an over-pull that
+        // reversed back below the inset FULL height voids the peak, so the
+        // release can't re-maximize a sheet the finger already brought down.
+        if (
+          excess < insetPanelMaxH &&
+          maxPullRawRef.current >= insetPanelMaxH + maxOverPull / 2
+        ) {
+          maxPullRawRef.current = 0;
+        }
         openProgress.set(Math.min(1, up / PILL_OPEN_DISTANCE));
-        const excess = up - PILL_OPEN_DISTANCE;
         // Mount the panel body on ANY upward pull, even with no history yet, so
         // the height follows the finger on a brand-new/empty chat too (else it
         // just darkened the scrim and sprang back — the "won't drag" bug). Focus-
         // to-open stays gated in `expand` so boot never auto-pops an empty sheet.
         setDragPreviewMounted(excess > 0);
         threadHeight.set(excess > 0 ? clampHeight(excess) : 0);
-        // The pill sits at height 0, so the raw finger travel IS the equivalent
-        // pull height. Tracking it here (like the open-sheet path below) lets a
-        // single held drag from the pill clear the maximize threshold — pill →
-        // input → chat → full-screen is one continuous gesture.
-        if (up > maxPullRawRef.current) maxPullRawRef.current = up;
         // Same height-locked inset→edge-to-edge morph as the open-sheet path
         // (the thread height from the pill is `excess`), so the over-pull
         // squares the corners in lock-step with the panel growth here too.
@@ -3876,15 +4026,42 @@ export function ContinuousChatOverlay({
       // over-pull — the panel grows exactly with the pointer until it is
       // edge-to-edge (clampHeight rubber-bands only past the true full-bleed
       // ceiling, where there is no more screen).
-      const off = !sheetOpen ? Math.max(0, effOffset) : effOffset;
-      const raw = dragBaseHRef.current + off;
+      let off = !sheetOpen ? Math.max(0, effOffset) : effOffset;
+      let raw = dragBaseHRef.current + off;
       // Peak raw pull for the release decision. Track only REAL upward travel:
       // without the gate the tracker seeds itself with the base height on the
       // first frame, so a downward-only release from a tall detent would
       // "commit" a maximize the finger never pulled toward — re-maximizing the
-      // sheet the user was dragging shut.
+      // sheet the user was dragging shut. Recorded BEFORE the ceiling rebase
+      // below so the release decision still sees the true peak.
       if (effOffset > 0 && raw > maxPullRawRef.current)
         maxPullRawRef.current = raw;
+      // Follow-the-finger contract: travel past the full-bleed ceiling is
+      // CONSUMED (the offset base absorbs it) rather than banked. Banked
+      // overshoot meant a reversal had to pay the whole beyond-the-screen
+      // excess back before the height moved — the sheet sat frozen at the top
+      // while the finger came all the way back down. Rebasing the OFFSET (not
+      // the height base) keeps the measured-top pin latch below consistent:
+      // `off` stops growing at the ceiling, so its un-pin hysteresis reverses
+      // in step with the height.
+      if (raw > fullPanelMaxH) {
+        const overshoot = raw - fullPanelMaxH;
+        dragOffsetBaseRef.current += overshoot;
+        off -= overshoot;
+        raw = fullPanelMaxH;
+      }
+      // A pull that carried into the maximize over-pull zone but then reversed
+      // back BELOW the inset FULL height has given that intent up: void the
+      // peak so the RELEASE decision can't re-maximize the sheet the user just
+      // dragged back down. The state-driven un-maximize hysteresis (below)
+      // voids it too, but only after the mid-drag `maximized` re-render has
+      // committed — this is the deterministic, state-free guarantee.
+      if (
+        raw < insetPanelMaxH &&
+        maxPullRawRef.current >= insetPanelMaxH + maxOverPull / 2
+      ) {
+        maxPullRawRef.current = 0;
+      }
       // Re-arm the maximize commit only once the pull has dropped back below the
       // inset FULL height — hysteresis so leaving a committed maximize (which
       // resumes tracking AT the ceiling, above the threshold) can't re-commit.
@@ -4284,9 +4461,26 @@ export function ContinuousChatOverlay({
   const onRestoreDrag = React.useCallback(
     (offset: number) => {
       if (firstRunOpen) return;
-      // Fresh gesture (onDragOffset flips draggingRef on its first frame).
-      if (!draggingRef.current) restoreDidUnmaximizeRef.current = false;
-      if (offset < 0 && maximized) {
+      // Fresh gesture (onDragOffset flips draggingRef on its first frame). Seed
+      // the peak at 0 — the maximized sheet sits at the ceiling, which is
+      // gesture-start offset 0 — NOT the first sampled offset (a fast/coalesced
+      // first move can already be far down, and seeding the peak there would
+      // make `offset < peak` impossible so a plain pull-down never un-maximized).
+      if (!draggingRef.current) {
+        restoreDidUnmaximizeRef.current = false;
+        restorePeakOffsetRef.current = 0;
+      }
+      if (offset > restorePeakOffsetRef.current) {
+        restorePeakOffsetRef.current = offset;
+      }
+      // Drop full-bleed the moment the finger nets downward off the ceiling
+      // peak (any upward drift is consumed by onDragOffset's ceiling rebase, so
+      // the sheet leaves the ceiling exactly here, not at raw `offset < 0`).
+      // The small slop absorbs touch jitter so a held-at-top hand doesn't flap.
+      if (
+        maximized &&
+        offset < restorePeakOffsetRef.current - RESTORE_UNMAX_SLOP
+      ) {
         setMaximized(false);
         setRestoreDragging(true);
         restoreDidUnmaximizeRef.current = true;
@@ -4432,29 +4626,17 @@ export function ContinuousChatOverlay({
       // chat low without touching that zone.
       style={{
         zIndex: Z_SHELL_OVERLAY,
-        // At rest the overlay anchors `bottom: 0`. With the body scroll-locked
-        // WITHOUT `position: fixed` (see styles/base.css), this `fixed` overlay's
-        // containing block is the true viewport, so `bottom: 0` seats it at the
-        // physical screen bottom — no ICB collapse, no reclaim offset. When the
-        // keyboard is up the visual viewport shrinks and `effectiveKeyboardInset`
-        // drives the lift instead. The home-indicator clearance is the composer
-        // row's own `paddingBottom` (below), so buttons stay above the indicator.
-        bottom: keyboardLiftActive ? effectiveKeyboardInset : 0,
-        // Full-bleed fills the screen edge-to-edge: NO overlay bottom padding,
-        // so the glass panel reaches the true bottom (no orange gap). The
-        // gesture-zone clearance moves INSIDE the composer row (below) so the
-        // input still sits above the home-gesture bar. Non-full-bleed anchors
-        // the composer LOW, lock-screen style, CLEARING the home indicator: now
-        // that the overlay itself seats at the TRUE physical bottom (the `bottom`
-        // reclaim above), the resting padding must clear the WHOLE home-indicator
-        // safe area (env(safe-area-inset-bottom) ~34px) plus a small gap, so the
-        // composer rests ~42–46px off the physical edge — above the indicator,
-        // not floating in a dead band above it. (Previously this multiplied the
-        // inset by 0.4 to sit the pill ~13px up; that tuning was compensating
-        // for the collapsed-ICB float — with the overlay now correctly at the
-        // true bottom, the full inset + gap is the right, native-app clearance.)
-        // The same holds for Android gesture pills. Everything below the composer
-        // is the full-bleed wallpaper / app floor — no cosmetic strip repaints it.
+        // At rest, the measured reclaim offset seats the composer at the
+        // physical bottom on collapsed iOS standalone/native viewports. Off that
+        // surface the custom property is zero. When the keyboard is visible,
+        // effectiveKeyboardInset owns the lift instead of the reclaim offset.
+        bottom: keyboardLiftActive
+          ? effectiveKeyboardInset
+          : STANDALONE_BOTTOM_RECLAIM_OFFSET,
+        // Full-bleed uses no overlay bottom padding; gesture-zone clearance
+        // lives inside the composer row so controls sit above the home indicator.
+        // Non-full-bleed keeps the same safe-area clearance above the reclaimed
+        // physical bottom, with the wallpaper/app floor owning everything below.
         // Side inset eases with the shape spring (12px inset → 0 at full-bleed).
         paddingLeft: overlayPadX,
         paddingRight: overlayPadX,
@@ -4610,7 +4792,12 @@ export function ContinuousChatOverlay({
             onOpen={openFromGrabber}
             onClose={collapse}
             binding={pullBinding}
-            glow={listening || responding}
+            // The handle stays QUIET while the mic is recording — the composer
+            // mic/voice glyphs already carry the "capture is hot" pulse right
+            // next to the user's attention; a second pulsing bar above them
+            // read as noise. Only the collapsed PILL (where no composer glyph
+            // is visible) pulses for a live capture — see PillHandle below.
+            glow={(listening || responding) && !recording}
             opacity={grabberOpacity}
             pilled={pilled}
             inert={!sheetOpen && (hasImages || Boolean(imageError))}
@@ -4713,25 +4900,29 @@ export function ContinuousChatOverlay({
               // covers the whole screen — nothing to see through). The blur is the
               // battery-costly bit the prior opaque pass removed (#10698/#9141);
               // it's back by product direction for the frosted look.
+              // Frosted glass tuned to read CLEAN over any backdrop, including
+              // the bright orange app theme: a deep warm-near-black fill (86%)
+              // so the backdrop only softly darkens the glass instead of
+              // bleeding through as muddy brown, and NO saturate() boost — the
+              // old `saturate(1.3)` amplified the orange behind and read as a
+              // dirty brown slab. Blur alone softens the backdrop to a clean
+              // frost. Full-bleed stays fully opaque (nothing to see through).
               backgroundColor: fullBleed
                 ? "var(--bg)"
-                : "color-mix(in srgb, var(--card) 68%, transparent)",
-              backdropFilter: fullBleed
-                ? undefined
-                : "blur(24px) saturate(1.3)",
-              WebkitBackdropFilter: fullBleed
-                ? undefined
-                : "blur(24px) saturate(1.3)",
+                : "color-mix(in srgb, var(--card) 86%, transparent)",
+              backdropFilter: fullBleed ? undefined : "blur(20px)",
+              WebkitBackdropFilter: fullBleed ? undefined : "blur(20px)",
               // Liquid-glass bevel: a bright top-left rim over a soft
               // bottom-right shade so the frosted edge catches light like a real
               // glass slab. Only on the inset sheet — full-bleed has no edge to
               // catch light. Depth here is the glass rim, not a drop shadow (the
               // flat system keeps all shadow tokens none).
               boxShadow: fullBleed ? undefined : LIQUID_GLASS_EDGE_SHADOW,
-              // Faint neutral top-edge highlight (a glass sheen), NOT the warm
-              // `--surface` gradient that read as brown.
-              backgroundImage:
-                "linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 22%)",
+              // Specular sheen: a soft radial highlight near the top-left (as if
+              // lit from above) over the faint neutral top-edge fade — the glass
+              // catches light instead of just fading. Neutral white only, NOT the
+              // warm `--surface` gradient that read as brown.
+              backgroundImage: `${LIQUID_GLASS_SHEEN}, linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 22%)`,
               // Full-bleed: extend the glass UP through the safe-area-top so the
               // dark background reaches the true top of the screen. The panel
               // height comes from visualViewport (which excludes the Android
@@ -4739,27 +4930,12 @@ export function ContinuousChatOverlay({
               // so without this the glass starts a status-bar-height below the top
               // (the "safe-area gap" above maximized chat). overflow-visible on the
               // panel lets it bleed up; content (header, with its own safe-area
-              // padding) is untouched. Harmless when the inset is 0.
-              ...(fullBleed
-                ? { top: "calc(-1 * env(safe-area-inset-top, 0px))" }
-                : null),
+              // padding) is untouched. Rides the shape spring (0px at rest) so
+              // the extension eases in with the morph instead of popping at
+              // commit. Harmless when the inset is 0.
+              top: glassTopExtension,
             }}
           />
-          {/* Liquid-glass refraction: bends the ember field / home widgets
-              behind the inset sheet at the panel edge (Chromium
-              `backdrop-filter: url()`; a no-op that degrades to the frosted
-              surface elsewhere). Full-bleed is opaque, so there is nothing to
-              refract. The defs mount once; the layer tracks the live radius so
-              the refracted edge stays flush through the morph. */}
-          {fullBleed ? null : (
-            <>
-              <LiquidGlassDefs />
-              <LiquidGlassRefraction
-                radius={morphRadius}
-                opacity={glassOpacity}
-              />
-            </>
-          )}
           {/* AX-tree mirror of data-detent: the native gesture e2e suites
               (XCUITest) can only observe web state through the accessibility
               tree, and data attributes never surface there. sr-only text does.
@@ -4792,7 +4968,15 @@ export function ContinuousChatOverlay({
             inert={pilled || undefined}
             // overflow-hidden + the live radius clips the sheen/thread to the
             // panel's rounded shape (the clip the fieldset used to do) WITHOUT
-            // touching the sibling glass layer's shadow.
+            // touching the sibling glass layer's shadow. Spans the FULL glass
+            // width (no maxWidth here): the restore-drag strip (inset-x-0) and
+            // the drag-and-drop file intake below both live on this element and
+            // must cover the whole panel, including the edge-to-edge glass at
+            // full-bleed on wide viewports — a pinned wrapper left dead margins
+            // where a restore pull did nothing and a dropped file navigated the
+            // tab away. Column width is pinned on the inner rows (header /
+            // thread / composer all carry `mx-auto max-w-3xl`), so the chat
+            // content never reflows through the maximize morph regardless.
             className="relative z-10 flex min-h-0 w-full flex-col overflow-hidden"
             style={{
               opacity: glassOpacity,
@@ -4882,26 +5066,19 @@ export function ContinuousChatOverlay({
                 inert={!sheetOpen || !headerVisible || undefined}
                 style={{
                   // Full-bleed is always fully open: show the header at full
-                  // opacity and UNCAP its height. The reveal lerp tops out at
-                  // 100px, but the safe-area top padding (status-bar height +
-                  // 0.5rem) plus the button row exceeds that, so a 100px cap
-                  // clipped the buttons — uncap it edge-to-edge.
+                  // opacity (headerOpacity is already 1 at any height ≥ half,
+                  // which full-bleed guarantees).
                   opacity: fullBleed ? 1 : headerOpacity,
-                  // Uncapped only while pinned full-bleed (its safe-area padding +
-                  // button row exceed the 100px reveal cap); a restore drag drops
-                  // to the inset header, which fits `headerMaxH` normally.
-                  maxHeight: fullBleed ? "none" : headerMaxH,
-                  // Collapsed → 0 top padding (no leaked margin above the
-                  // composer); opens to ~10px as the header reveals. Maximized
-                  // goes edge-to-edge under the status bar, so the header insets
-                  // its buttons below the safe area (the clock/battery) while the
-                  // sheet bg stays full-bleed — set inline (not a Tailwind
-                  // arbitrary class, whose env(...,0px) comma breaks the parser
-                  // so no padding was generated and the buttons sat under the
-                  // status bar).
-                  paddingTop: fullBleed
-                    ? "calc(var(--safe-area-top, 0px) + 0.5rem)"
-                    : headerPadTop,
+                  // Height cap + safe-area top padding EASE with the shape
+                  // morph (headerMaxHMorph / headerPadTopMorph) — a discrete
+                  // swap at commit popped the header a status-bar height on
+                  // notch devices. Collapsed → 0 top padding (no leaked margin
+                  // above the composer); opens to ~10px as the header reveals;
+                  // grows to safe-area + 8px as the glass squares off under the
+                  // status bar. Set inline (not a Tailwind arbitrary class,
+                  // whose env(...,0px) comma breaks the parser).
+                  maxHeight: headerMaxHMorph,
+                  paddingTop: headerPadTopMorph,
                 }}
                 className={cn(
                   // `pointer-events-none` on the bar itself so a pull-down that
@@ -4978,8 +5155,19 @@ export function ContinuousChatOverlay({
                 // scrolls) instead of pushing the panel off-screen. paddingTop
                 // insets the scroll viewport below the floating grabber while the
                 // header is hidden (0 once the header reveals at half+).
+                // Onboarding (firstRunOpen) mounts locked at the FULL detent and
+                // never drags, but the `threadHeight` MotionValue that feeds
+                // `threadFlexBasis` starts at 0, so the FIRST paint renders the
+                // thread at 0 height and the composer stacks at the top — then a
+                // post-commit effect grows it to `openH` and the composer drops a
+                // full viewport to the bottom (~0.9 CLS on the first frame a new
+                // user sees, #15214). During onboarding there is no drag to track,
+                // so pin the flex-basis to the settled open height statically at
+                // render time — first paint already matches the resting layout, no
+                // reflow. Reverts to the live MotionValue the moment onboarding
+                // ends and the sheet becomes interactive.
                 style={{
-                  flexBasis: threadFlexBasis,
+                  flexBasis: firstRunOpen ? `${openH}px` : threadFlexBasis,
                   paddingTop: threadGrabberClearance,
                 }}
               >
@@ -5094,7 +5282,8 @@ export function ContinuousChatOverlay({
                         prefetches + prepends an older page a viewport early and
                         preserves the reader's anchor so the thread never jumps.
                         Only meaningful in the flat (non-topic) transcript. */}
-                    {!hasTopics &&
+                    {!firstRunOpen &&
+                    !hasTopics &&
                     hasMoreOlder &&
                     visibleMessages.length > 0 ? (
                       <div
@@ -5314,15 +5503,14 @@ export function ContinuousChatOverlay({
               )}
               // Full-bleed has no overlay bottom padding (the panel is
               // edge-to-edge), so the composer carries the home-gesture
-              // clearance itself — except while the keyboard is up, which
-              // already covers that zone.
+              // clearance itself — eased in with the shape morph
+              // (composerPadBottom equals the row's own 0.5rem at rest, so
+              // this is a no-op outside the morph). Skipped while the keyboard
+              // is up, which already covers that zone.
               style={{
-                ...(fullBleed && !keyboardLiftActive
-                  ? {
-                      paddingBottom:
-                        "calc(0.5rem + max(var(--safe-area-bottom, 0px), var(--android-gesture-inset-bottom, 0px)))",
-                    }
-                  : {}),
+                ...(keyboardLiftActive
+                  ? {}
+                  : { paddingBottom: composerPadBottom }),
               }}
             >
               {/* Inline slash-command autocomplete, floating just above the
@@ -5349,9 +5537,11 @@ export function ContinuousChatOverlay({
                     aria-label="chat actions"
                     disabled={firstRunOpen}
                     data-testid="chat-composer-plus"
-                    className="grid h-11 w-11 shrink-0 place-items-center bg-transparent p-0 text-muted-strong transition-colors hover:bg-transparent hover:text-txt data-[state=open]:text-txt [&_svg]:size-[22px]"
+                    // Same 40px box / 20px mark / padded-back-to-44px hit zone
+                    // as the SoftButton controls, so the row reads as one family.
+                    className="relative grid h-10 w-10 shrink-0 place-items-center bg-transparent p-0 text-muted-strong transition-colors before:absolute before:-inset-0.5 before:content-[''] hover:bg-transparent hover:text-txt data-[state=open]:text-txt [&_svg]:size-5"
                   >
-                    <Glyph d={PLUS_GLYPH} className="size-[22px]" />
+                    <Glyph d={PLUS_GLYPH} className="size-5" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
@@ -5451,7 +5641,7 @@ export function ContinuousChatOverlay({
                 // the imageError note above.)
                 placeholder={
                   firstRunOpen
-                    ? "Connect to cloud to enable chat"
+                    ? `Ask ${agentName} anything, or sign in above`
                     : noProviderConfigured
                       ? "Connect a model provider in Settings to chat"
                       : modelBlocksSend
@@ -5473,9 +5663,9 @@ export function ContinuousChatOverlay({
                 // and only when a slash catalog is wired in — a plain message
                 // box otherwise.
                 {...comboboxAria}
-                // During onboarding the placeholder is a directive hint ("Connect
-                // to cloud to enable chat"), so brighten it from the resting
-                // 45% to 70% so it reads clearly beside the seeded choices.
+                // During onboarding the placeholder invites the unlocked
+                // composer ("Ask … anything, or sign in above"), so brighten it
+                // from the resting 45% to 70% to read clearly beside the choices.
                 className={`max-h-[8.5rem] min-h-8 min-w-0 flex-1 resize-none self-center border-none bg-transparent px-1.5 py-1 text-left text-sm leading-relaxed text-txt outline-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
                   firstRunOpen
                     ? "placeholder:text-muted-strong"
@@ -5490,23 +5680,29 @@ export function ContinuousChatOverlay({
               ) : null}
               {/* Trailing controls. */}
               <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-                {/* Transcription start/stop — only in voice mode (hands-free /
-                recording), sitting next to the mic. The mic stays the master
-                voice control (a mic tap ends both); this button starts/stops the
-                record-only transcription layer and LEAVES THE MIC ON, matching
+                {/* Transcription start/stop — ChatGPT-style dictation, always
+                sitting next to the voice control (mic glyph = "transcribe my
+                speech into the box"; the waveform next door is the spoken
+                conversation). Tap to start; tap again (or say "exit
+                transcription mode") to stop — the full transcript lands at the
+                END of the draft and the recording attaches as a sharable audio
+                artifact (see the transcript-session sink). The voice button
+                stays the master control (a tap there ends transcription AND the
+                mic); this one LEAVES THE MIC ON, matching
                 toggleTranscriptionMode's off-path (#10699). Hidden when a
                 send/stop control is showing (a draft or a streaming reply). */}
-                {(handsFree || recording || transcriptionMode) &&
-                !((hasDraft || hasImages) && !recording) &&
+                {!((hasDraft || hasImages) && !recording) &&
                 !(!recording && responding) ? (
                   <SoftButton
-                    icon={FileText}
+                    icon={Mic}
                     label={
                       transcriptionMode
                         ? "stop transcription"
                         : "start transcription"
                     }
+                    disabled={firstRunOpen}
                     active={transcriptionMode}
+                    pulse={transcriptionMode}
                     onPointerDown={(e) => e.preventDefault()}
                     onClick={toggleTranscriptionMode}
                     testId="chat-composer-transcribe"
@@ -5556,8 +5752,13 @@ export function ContinuousChatOverlay({
                       testId="chat-composer-stop"
                     />
                   ) : (
+                    // VOICE — the spoken-conversation control (waveform glyph;
+                    // the mic glyph lives on the transcribe/dictate button
+                    // beside it). Tap = hands-free conversation; hold =
+                    // push-to-talk dictation; while transcribing a tap is the
+                    // master off (ends transcription AND the mic).
                     <SoftButton
-                      icon={Mic}
+                      icon={AudioLines}
                       label={
                         pttHolding
                           ? // Press-and-hold dictates into the composer draft; a
@@ -5566,7 +5767,12 @@ export function ContinuousChatOverlay({
                             // real behavior.
                             "release to insert"
                           : transcriptionMode
-                            ? "stop transcription"
+                            ? // Distinct from the transcribe button's "stop
+                              // transcription" (which leaves the mic on): the
+                              // voice control is the MASTER off — a tap ends
+                              // transcription AND the mic — so a screen reader
+                              // can tell the two adjacent controls apart.
+                              "stop transcription and mic"
                             : handsFree
                               ? "end conversation"
                               : recording
@@ -5602,7 +5808,10 @@ export function ContinuousChatOverlay({
             <PillHandle
               binding={pullBinding}
               onOpen={openFromPill}
-              glow={listening || responding}
+              // The pill IS the whole chat while collapsed, so it alone pulses
+              // for a live mic capture (`recording`) — the open-sheet grabber
+              // deliberately does not (the composer glyphs carry that cue).
+              glow={listening || responding || recording}
               pilled={pilled}
             />
           </motion.div>

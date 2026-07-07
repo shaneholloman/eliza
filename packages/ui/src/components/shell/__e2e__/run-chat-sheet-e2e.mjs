@@ -1836,13 +1836,23 @@ try {
       (await p.getByText("tell me the plan for", { exact: false }).count()) === 0,
       "LISTENING: interim transcript text is NOT rendered above the composer",
     );
+    // The capture-hot cue lives on the composer voice glyph, NOT the handle:
+    // while the composer is visible the grabber stays quiet during a recording
+    // (a second pulsing bar above the already-pulsing glyph read as noise);
+    // only the collapsed PILL pulses for a live capture.
     assert(
       await p
+        .getByTestId("chat-composer-mic")
+        .evaluate((el) => el.className.includes("animate-pulse")),
+      "LISTENING: the composer voice glyph pulses while the mic is hot",
+    );
+    assert(
+      !(await p
         .getByTestId("chat-sheet-grabber")
         .locator("span")
         .first()
-        .evaluate((el) => el.className.includes("animate-pulse")),
-      "LISTENING: the grabber bar pulses while the mic is hot",
+        .evaluate((el) => el.className.includes("animate-pulse"))),
+      "LISTENING: the grabber bar stays QUIET while the mic is hot (pill-only pulse)",
     );
     await snap(p, "state-recording-listening");
     await p.close();
@@ -1908,9 +1918,11 @@ try {
   }
 
   // TRANSCRIBING while an inline reply is in flight (regression, #9880 path):
-  // the mic reads "stop transcription" and must END the session on tap even
-  // while `responding` is true — the OFF path was gated on the reply finishing,
-  // leaving a lit, dead mic button.
+  // the voice control is the MASTER off — labeled "stop transcription and mic"
+  // (distinct from the transcribe button's "stop transcription", which leaves
+  // the mic on) — and must END the session on tap even while `responding` is
+  // true; the OFF path was gated on the reply finishing, leaving a lit, dead
+  // mic button.
   {
     const p = await ctrl();
     attachConsole(p, sink);
@@ -1921,8 +1933,8 @@ try {
     await p.waitForTimeout(500);
     assert(
       (await p.getByTestId("chat-composer-mic").getAttribute("aria-label")) ===
-        "stop transcription",
-      "TRANSCRIBING+REPLY: mic reads 'stop transcription'",
+        "stop transcription and mic",
+      "TRANSCRIBING+REPLY: voice control reads 'stop transcription and mic'",
     );
     await snap(p, "state-transcribing-inline-reply");
     await p.getByTestId("chat-composer-mic").click();
@@ -3154,10 +3166,14 @@ try {
       `ONBOARDING: sheet is full-screen, not content-sized at the bottom (top ${Math.round(top)} < ${Math.round(vh * 0.15)})`,
     );
     assert(
-      (await p
-        .getByTestId("chat-composer-textarea")
-        .getAttribute("placeholder")) === "Connect to cloud to enable chat",
-      "ONBOARDING: composer placeholder shows the cloud-connect directive (#15039)",
+      (
+        (await p
+          .getByTestId("chat-composer-textarea")
+          .getAttribute("placeholder")) ?? ""
+      )
+        .toLowerCase()
+        .includes("sign in"),
+      "ONBOARDING: composer placeholder points to sign-in (#15039; honest copy per #15206)",
     );
     assert(
       (await p
@@ -3171,7 +3187,10 @@ try {
     // the launcher/home so no launcher pixel shows through — the fixture's
     // "Workspace" view content behind the chat must be fully hidden. Assert the
     // backdrop is present, opaque, full-viewport, solid-colored, and that the
-    // real rendered pixel over the fixture heading reads the opaque bg-bg.
+    // real rendered pixel over the fixture heading reads as the dark onboarding
+    // layer rather than the orange home backdrop. The full-screen sheet may cover
+    // this coordinate above the backdrop, so this proves the user-visible
+    // invariant rather than one specific stacking-layer color.
     const backdrop = await p.evaluate(() => {
       const el = document.querySelector(
         '[data-testid="chat-first-run-backdrop"]',
@@ -3210,8 +3229,8 @@ try {
     });
     const hidePx = await pixelAt(p, headingCenter.x, headingCenter.y);
     assert(
-      hidePx.r < 40 && hidePx.g < 40 && hidePx.b < 50,
-      `ONBOARDING: launcher/home behind is hidden — pixel over the heading is the opaque bg-bg, not the home backdrop (got rgb(${hidePx.r}, ${hidePx.g}, ${hidePx.b}))`,
+      hidePx.r < 70 && hidePx.g < 70 && hidePx.b < 70,
+      `ONBOARDING: launcher/home behind is hidden — pixel over the heading is a dark onboarding layer, not the home backdrop (got rgb(${hidePx.r}, ${hidePx.g}, ${hidePx.b}))`,
     );
     await snap(p, "state-onboarding-opaque-backdrop");
 

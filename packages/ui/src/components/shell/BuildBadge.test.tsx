@@ -6,6 +6,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Z_BUILD_BADGE } from "../../lib/floating-layers";
 import { BuildBadge } from "./BuildBadge";
 
 const BUILD_INFO = {
@@ -59,6 +60,7 @@ describe("BuildBadge", () => {
     expect(anchor.className).toContain("top-0");
     expect(anchor.className).toContain("left-0");
     expect(anchor.getAttribute("style")).toContain("safe-area-inset-top");
+    expect(anchor.style.zIndex).toBe(String(Z_BUILD_BADGE));
   });
 
   it("falls back to commit + builtAt when label is missing", async () => {

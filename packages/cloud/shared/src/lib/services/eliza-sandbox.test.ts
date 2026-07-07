@@ -1,8 +1,11 @@
 // Exercises eliza sandbox behavior with deterministic cloud-shared lib fixtures.
 import { afterAll, afterEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
+import { KeyNotFoundError, KmsError, orgKey } from "@elizaos/security/kms";
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 
+import { decryptField, encryptField } from "../../db/crypto/field-crypto";
+import { resetKmsClientForTests } from "../../db/crypto/kms-client";
 import * as realHelpersNs from "../../db/helpers";
 import { agentBillingRepository } from "../../db/repositories/agent-billing";
 import type { AgentSandbox, AgentSandboxBackup } from "../../db/repositories/agent-sandboxes";
@@ -13,8 +16,49 @@ import { sharedRuntimeHistoryRepository } from "../../db/repositories/shared-run
 import { runWithCloudBindings } from "../runtime/cloud-bindings";
 import { logger } from "../utils/logger";
 import { apiKeysService } from "./api-keys";
+import { DockerSSHClient } from "./docker-ssh";
 import { resolveSandboxContainerLaunchConfig } from "./sandbox-container-launch-config";
 import type { SandboxProvider } from "./sandbox-provider-types";
+
+// Drive the REAL @elizaos/security crypto stack so the errors the snapshot-degrade
+// path classifies are genuine (`AeadError`, `KeyNotFoundError`) — not hand-rolled
+// stand-ins. In NODE_ENV=test, getKmsClient() resolves the in-process memory
+// backend, which is exactly what orphans keys across a restart in prod.
+const KMS_TEST_ORG = "org-test-1";
+const KMS_TEST_COORDS = {
+  table: "agent_sandbox_backups",
+  rowId: "00000000-0000-4000-8000-0000000000aa",
+  column: "state_data",
+};
+
+// A genuine AeadError: decrypt with the wrong AAD so the GCM auth tag fails to
+// verify — the shape a corrupt / wrong-key snapshot surfaces as.
+async function realAeadDecryptError(): Promise<Error> {
+  resetKmsClientForTests();
+  const enc = await encryptField(KMS_TEST_ORG, '{"memories":[]}', KMS_TEST_COORDS);
+  try {
+    await decryptField(enc, { ...KMS_TEST_COORDS, rowId: "00000000-0000-4000-8000-0000000000bb" });
+  } catch (e) {
+    if (e instanceof Error) return e;
+  }
+  throw new Error("expected a real AeadError from the AAD mismatch");
+}
+
+// A genuine KeyNotFoundError, reproducing the HQ #14308 incident: encrypt under
+// the memory backend, then "restart" it (resetKmsClientForTests → a fresh
+// MemoryKmsAdapter with an empty key map) so the key that encrypted the field is
+// gone, and decrypt of the older ciphertext can no longer find it.
+async function realKeyRotatedAwayError(): Promise<Error> {
+  resetKmsClientForTests();
+  const enc = await encryptField(KMS_TEST_ORG, '{"memories":[]}', KMS_TEST_COORDS);
+  resetKmsClientForTests();
+  try {
+    await decryptField(enc, KMS_TEST_COORDS);
+  } catch (e) {
+    if (e instanceof Error) return e;
+  }
+  throw new Error("expected a real KeyNotFoundError after the key was rotated away");
+}
 
 // `executeUpgrade()`'s blue/green swap runs inside `dbWrite.transaction(...)`.
 // `dbWrite` is a Proxy whose `get` trap always re-resolves the live connection,
@@ -720,6 +764,298 @@ describe("ElizaSandboxService heartbeat", () => {
       updateSpy.mockRestore();
     }
   });
+});
+
+// Stale-tailnet-IP reconciliation (heartbeat + recoverDisconnected). Agent
+// containers do not persist tailscale node state, so a container restart mints
+// a fresh node key → headscale assigns the NEXT IP → the stored headscale_ip /
+// bridge_url go stale while the container stays docker-healthy. These suites
+// pin the repair path (columns fixed in place, no reprovision of a healthy
+// container) AND every still-dies guard: dead containers, same-IP genuine
+// unreachability, failed re-probes, and the 3-cycle unresolvable escalation
+// must all still reach disconnected → the reprovision self-heal.
+describe("ElizaSandboxService tailnet-IP reconciliation", () => {
+  const OLD_IP = "100.64.0.10";
+  const NEW_IP = "100.64.0.11";
+  const STALE_BRIDGE = `http://${OLD_IP}:3000`;
+  const REPAIRED_BRIDGE = `http://${NEW_IP}:3000`;
+
+  function staleIpSandbox(overrides: Partial<AgentSandbox> = {}): AgentSandbox {
+    return {
+      ...customSandbox(),
+      bridge_url: STALE_BRIDGE,
+      health_url: `${STALE_BRIDGE}/api`,
+      headscale_ip: OLD_IP,
+      // 200s ago > 120s grace — the reconcile path only runs past grace.
+      last_heartbeat_at: new Date(Date.now() - 200_000),
+      ...overrides,
+    };
+  }
+
+  function nodeRecord(): DockerNode {
+    return {
+      node_id: "node-1",
+      hostname: "node-1.internal",
+      ssh_port: 22,
+      ssh_user: "root",
+      host_key_fingerprint: null,
+    } as unknown as DockerNode;
+  }
+
+  // One SSH client mock serving both node-side commands the reconcile issues:
+  // docker health inspect and the in-container `tailscale ip -4`.
+  function mockNodeSsh(opts: { health: string | Error; tailscaleIp: string | Error }) {
+    const exec = mock(async (cmd: string) => {
+      if (cmd.includes("docker inspect")) {
+        if (opts.health instanceof Error) throw opts.health;
+        return opts.health;
+      }
+      if (cmd.includes("tailscale ip")) {
+        if (opts.tailscaleIp instanceof Error) throw opts.tailscaleIp;
+        return opts.tailscaleIp;
+      }
+      throw new Error(`unexpected ssh command: ${cmd}`);
+    });
+    const getClientSpy = spyOn(DockerSSHClient, "getClient").mockReturnValue({
+      exec,
+    } as unknown as DockerSSHClient);
+    return { exec, getClientSpy };
+  }
+
+  // Bridge probes fail on the stale IP and answer 200 on the repaired one —
+  // exactly what a restarted container that re-registered under a new IP does.
+  function fetchAliveOnlyOnNewIp() {
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = fetchUrl(input);
+      if (url.includes(NEW_IP)) return new Response("ok", { status: 200 });
+      throw new Error(`unreachable: ${url}`);
+    });
+  }
+
+  function fetchAllDead() {
+    globalThis.fetch = mock(async () => {
+      throw new Error("unreachable");
+    });
+  }
+
+  test("(a) heartbeat: docker-healthy + new IP + repaired probe 200 → stays running with repaired columns", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const sandbox = staleIpSandbox();
+    const findSpy = spyOn(agentSandboxesRepository, "findRunningSandbox").mockResolvedValue(
+      sandbox,
+    );
+    const updateSpy = spyOn(agentSandboxesRepository, "update").mockResolvedValue(
+      undefined as never,
+    );
+    const nodeSpy = spyOn(dockerNodesRepository, "findByNodeId").mockResolvedValue(nodeRecord());
+    // tailscale CLI prints the v4 line first; the parser must take the 100.x line.
+    const { getClientSpy } = mockNodeSsh({
+      health: "healthy",
+      tailscaleIp: `${NEW_IP}\nfd7a:115c:a1e0::1\n`,
+    });
+    fetchAliveOnlyOnNewIp();
+
+    try {
+      const ok = await new ElizaSandboxService().heartbeat(sandbox.id, sandbox.organization_id);
+      expect(ok).toBe(true);
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+      const [id, patch] = updateSpy.mock.calls[0] as [string, Record<string, unknown>];
+      expect(id).toBe(sandbox.id);
+      expect(patch.headscale_ip).toBe(NEW_IP);
+      expect(patch.bridge_url).toBe(REPAIRED_BRIDGE);
+      expect(patch.last_heartbeat_at).toBeInstanceOf(Date);
+      expect(patch.error_count).toBe(0);
+      // The row must NOT be disconnected — the whole point is no reprovision.
+      expect(patch.status).toBeUndefined();
+    } finally {
+      findSpy.mockRestore();
+      updateSpy.mockRestore();
+      nodeSpy.mockRestore();
+      getClientSpy.mockRestore();
+    }
+  }, 20_000);
+
+  test("(b) heartbeat: docker NOT healthy → disconnected (dead containers still self-heal via reprovision)", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const sandbox = staleIpSandbox();
+    const findSpy = spyOn(agentSandboxesRepository, "findRunningSandbox").mockResolvedValue(
+      sandbox,
+    );
+    const updateSpy = spyOn(agentSandboxesRepository, "update").mockResolvedValue(
+      undefined as never,
+    );
+    const nodeSpy = spyOn(dockerNodesRepository, "findByNodeId").mockResolvedValue(nodeRecord());
+    const { exec, getClientSpy } = mockNodeSsh({ health: "unhealthy", tailscaleIp: NEW_IP });
+    fetchAllDead();
+
+    try {
+      const ok = await new ElizaSandboxService().heartbeat(sandbox.id, sandbox.organization_id);
+      expect(ok).toBe(false);
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+      const [, patch] = updateSpy.mock.calls[0] as [string, Record<string, unknown>];
+      expect(patch.status).toBe("disconnected");
+      expect(patch.headscale_ip).toBeUndefined();
+      // A dead container short-circuits — no IP resolve is attempted on it.
+      const tailscaleCalls = exec.mock.calls.filter(([cmd]) =>
+        String(cmd).includes("tailscale ip"),
+      );
+      expect(tailscaleCalls).toHaveLength(0);
+    } finally {
+      findSpy.mockRestore();
+      updateSpy.mockRestore();
+      nodeSpy.mockRestore();
+      getClientSpy.mockRestore();
+    }
+  }, 20_000);
+
+  test("(c) heartbeat: docker-healthy but the resolved IP equals the stored one → genuinely unreachable → disconnected", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const sandbox = staleIpSandbox();
+    const findSpy = spyOn(agentSandboxesRepository, "findRunningSandbox").mockResolvedValue(
+      sandbox,
+    );
+    const updateSpy = spyOn(agentSandboxesRepository, "update").mockResolvedValue(
+      undefined as never,
+    );
+    const nodeSpy = spyOn(dockerNodesRepository, "findByNodeId").mockResolvedValue(nodeRecord());
+    const { getClientSpy } = mockNodeSsh({ health: "healthy", tailscaleIp: OLD_IP });
+    fetchAllDead();
+
+    try {
+      const ok = await new ElizaSandboxService().heartbeat(sandbox.id, sandbox.organization_id);
+      expect(ok).toBe(false);
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+      const [, patch] = updateSpy.mock.calls[0] as [string, Record<string, unknown>];
+      expect(patch.status).toBe("disconnected");
+      expect(patch.headscale_ip).toBeUndefined();
+    } finally {
+      findSpy.mockRestore();
+      updateSpy.mockRestore();
+      nodeSpy.mockRestore();
+      getClientSpy.mockRestore();
+    }
+  }, 20_000);
+
+  test("(d) heartbeat: docker-healthy + IP unresolvable ratchets error_count and escalates to disconnected on the 3rd cycle", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    // error_count evolves across cycles the way the ratchet writes it.
+    let errorCount = 0;
+    const findSpy = spyOn(agentSandboxesRepository, "findRunningSandbox").mockImplementation(
+      async () => staleIpSandbox({ error_count: errorCount }),
+    );
+    const updateSpy = spyOn(agentSandboxesRepository, "update").mockResolvedValue(
+      undefined as never,
+    );
+    const nodeSpy = spyOn(dockerNodesRepository, "findByNodeId").mockResolvedValue(nodeRecord());
+    const { getClientSpy } = mockNodeSsh({
+      health: "healthy",
+      tailscaleIp: new Error("docker exec failed: container has no tailscale binary reachable"),
+    });
+    fetchAllDead();
+
+    try {
+      const svc = new ElizaSandboxService();
+      // Cycles 1 and 2: still running, error_count ratchets, NO disconnect.
+      for (const expected of [1, 2]) {
+        updateSpy.mockClear();
+        const ok = await svc.heartbeat(
+          "e06bb509-6c52-4c33-a9f7-66addc43e8c8",
+          "22222222-2222-4222-8222-222222222222",
+        );
+        expect(ok).toBe(false);
+        expect(updateSpy).toHaveBeenCalledTimes(1);
+        const [, patch] = updateSpy.mock.calls[0] as [string, Record<string, unknown>];
+        expect(patch.error_count).toBe(expected);
+        expect(patch.status).toBeUndefined();
+        errorCount = expected;
+      }
+      // Cycle 3 hits the cap: never keep an unreachable agent running forever.
+      updateSpy.mockClear();
+      const ok = await svc.heartbeat(
+        "e06bb509-6c52-4c33-a9f7-66addc43e8c8",
+        "22222222-2222-4222-8222-222222222222",
+      );
+      expect(ok).toBe(false);
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+      const [, patch] = updateSpy.mock.calls[0] as [string, Record<string, unknown>];
+      expect(patch.status).toBe("disconnected");
+    } finally {
+      findSpy.mockRestore();
+      updateSpy.mockRestore();
+      nodeSpy.mockRestore();
+      getClientSpy.mockRestore();
+    }
+  }, 40_000);
+
+  test("(e) recoverDisconnected: repaired IP + live re-probe → recovered with columns updated, no reprovision", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const sandbox = staleIpSandbox({ status: "disconnected" });
+    const findSpy = spyOn(agentSandboxesRepository, "findByIdAndOrg").mockResolvedValue(sandbox);
+    const casSpy = spyOn(
+      agentSandboxesRepository,
+      "markReconnectedFromDisconnected",
+    ).mockResolvedValue({ ...sandbox, status: "running" });
+    const updateSpy = spyOn(agentSandboxesRepository, "update").mockResolvedValue(
+      undefined as never,
+    );
+    const nodeSpy = spyOn(dockerNodesRepository, "findByNodeId").mockResolvedValue(nodeRecord());
+    const { getClientSpy } = mockNodeSsh({ health: "healthy", tailscaleIp: NEW_IP });
+    fetchAliveOnlyOnNewIp();
+
+    try {
+      const result = await new ElizaSandboxService().recoverDisconnected(
+        sandbox.id,
+        sandbox.organization_id,
+      );
+      expect(result).toBe("recovered");
+      expect(casSpy).toHaveBeenCalledTimes(1);
+      expect(casSpy.mock.calls[0]).toEqual([sandbox.id, "disconnected"]);
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+      const [id, patch] = updateSpy.mock.calls[0] as [string, Record<string, unknown>];
+      expect(id).toBe(sandbox.id);
+      expect(patch.headscale_ip).toBe(NEW_IP);
+      expect(patch.bridge_url).toBe(REPAIRED_BRIDGE);
+    } finally {
+      findSpy.mockRestore();
+      casSpy.mockRestore();
+      updateSpy.mockRestore();
+      nodeSpy.mockRestore();
+      getClientSpy.mockRestore();
+    }
+  }, 20_000);
+
+  test("(f) recoverDisconnected: repaired IP still dead → unreachable (reprovision path), nothing written", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const sandbox = staleIpSandbox({ status: "disconnected" });
+    const findSpy = spyOn(agentSandboxesRepository, "findByIdAndOrg").mockResolvedValue(sandbox);
+    const casSpy = spyOn(
+      agentSandboxesRepository,
+      "markReconnectedFromDisconnected",
+    ).mockResolvedValue(undefined);
+    const updateSpy = spyOn(agentSandboxesRepository, "update").mockResolvedValue(
+      undefined as never,
+    );
+    const nodeSpy = spyOn(dockerNodesRepository, "findByNodeId").mockResolvedValue(nodeRecord());
+    const { getClientSpy } = mockNodeSsh({ health: "healthy", tailscaleIp: NEW_IP });
+    fetchAllDead();
+
+    try {
+      const result = await new ElizaSandboxService().recoverDisconnected(
+        sandbox.id,
+        sandbox.organization_id,
+      );
+      // "unreachable" is the caller's contract to reprovision — same as before.
+      expect(result).toBe("unreachable");
+      expect(casSpy).not.toHaveBeenCalled();
+      expect(updateSpy).not.toHaveBeenCalled();
+    } finally {
+      findSpy.mockRestore();
+      casSpy.mockRestore();
+      updateSpy.mockRestore();
+      nodeSpy.mockRestore();
+      getClientSpy.mockRestore();
+    }
+  }, 30_000);
 });
 
 // The daemon handler for the `agent_resume` job. Covers the branch logic the
@@ -1825,6 +2161,275 @@ describe("ElizaSandboxService.provision dedup + port-collision retry (LARP H2)",
       pushStateSpy.mockRestore();
       getProviderSpy.mockRestore();
     }
+  });
+
+  // The KMS timebomb (HQ #14308): a provisioning worker misconfigured with the
+  // ephemeral `memory` KMS backend rotates its key on every restart, orphaning
+  // the pre-upgrade snapshot it wrote — decrypt then throws KeyNotFoundError on
+  // resume. That must degrade to a FRESH boot (agent comes up without prior
+  // in-memory state), NOT brick the whole provision closed. Drives the REAL
+  // provision() body; the thrown error is the REAL @elizaos/security
+  // KeyNotFoundError.
+  test("(10) an orphaned snapshot (KeyNotFoundError on getLatestBackup) degrades to a fresh boot", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const row = provisioningReadyRow();
+    const finalRow: AgentSandbox = { ...row, status: "running" };
+    const findSpy = spyOn(agentSandboxesRepository, "findByIdAndOrg").mockResolvedValue(row);
+    const lockSpy = spyOn(agentSandboxesRepository, "trySetProvisioning").mockResolvedValue({
+      ...row,
+      status: "provisioning",
+    });
+    // The org DEK that encrypted the snapshot is gone (memory backend restart).
+    const backupSpy = spyOn(agentSandboxesRepository, "getLatestBackup").mockRejectedValue(
+      new KeyNotFoundError(orgKey(ORG, "dek"), 1),
+    );
+    const pruneSpy = spyOn(agentSandboxesRepository, "pruneBackups").mockResolvedValue(1);
+    const updateSpy = spyOn(agentSandboxesRepository, "update").mockImplementation(
+      async (_id, data) => (data.status === "running" ? finalRow : { ...row, ...data }),
+    );
+    const apiKeySpy = spyOn(apiKeysService, "createForAgent").mockResolvedValue({
+      id: "22222222-2222-4222-8222-222222222222",
+      plainKey: "eliza_test_agent_key",
+      prefix: "eliza_test",
+    });
+    const errorLogSpy = spyOn(logger, "error").mockImplementation(() => {});
+    const svc = new ElizaSandboxService();
+    const ensureStartedSpy = spyOn(
+      svc as unknown as { ensureRuntimeAgentStarted: () => Promise<unknown> },
+      "ensureRuntimeAgentStarted",
+    ).mockResolvedValue(null);
+    // A fresh boot must NOT push any restore state.
+    const pushStateSpy = spyOn(
+      svc as unknown as { pushState: () => Promise<unknown> },
+      "pushState",
+    ).mockResolvedValue(null);
+    const create = mock(async () => providerHandle());
+    const stop = mock(async () => {});
+    const getProviderSpy = spyOn(
+      svc as unknown as { getProvider: () => Promise<SandboxProvider> },
+      "getProvider",
+    ).mockResolvedValue({ create, stop, checkHealth: async () => true } as SandboxProvider);
+    try {
+      const res = await svc.provision(AGENT, ORG);
+      // Fresh boot: the provision SUCCEEDS instead of bricking.
+      expect(res.success).toBe(true);
+      expect(res.sandboxRecord).toBe(finalRow);
+      expect(create).toHaveBeenCalledTimes(1);
+      // Orphaned snapshot discarded (never pushed) and its dead chain dropped so
+      // the next resume does not re-hit it.
+      expect(pushStateSpy).not.toHaveBeenCalled();
+      expect(pruneSpy).toHaveBeenCalledWith(AGENT, 0);
+      // The degrade is logged with context, never silent.
+      const logged = errorLogSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(logged).toContain("Undecryptable snapshot, booting fresh");
+      // A degrade is not a container failure — no ghost cleanup.
+      expect(stop).not.toHaveBeenCalled();
+    } finally {
+      findSpy.mockRestore();
+      lockSpy.mockRestore();
+      backupSpy.mockRestore();
+      pruneSpy.mockRestore();
+      updateSpy.mockRestore();
+      apiKeySpy.mockRestore();
+      errorLogSpy.mockRestore();
+      ensureStartedSpy.mockRestore();
+      pushStateSpy.mockRestore();
+      getProviderSpy.mockRestore();
+    }
+  });
+
+  // The other undecryptable shape: a corrupt / wrong-key snapshot whose AEAD auth
+  // tag will not verify surfaces as a real AeadError from reconstruction. Same
+  // degrade-to-fresh-boot outcome.
+  test("(11) a corrupt snapshot (AeadError on reconstruction) degrades to a fresh boot", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const aeadError = await realAeadDecryptError();
+    expect(aeadError.name).toBe("AeadError"); // guard: a genuine crypto failure
+    const row = provisioningReadyRow();
+    const finalRow: AgentSandbox = { ...row, status: "running" };
+    const backup: AgentSandboxBackup = {
+      id: "55555555-5555-4555-8555-555555555555",
+      sandbox_record_id: row.id,
+      snapshot_type: "pre-upgrade",
+      state_data: { memories: [], config: {}, workspaceFiles: {} },
+      state_data_storage: "inline",
+      state_data_key: null,
+      size_bytes: 2,
+      backup_kind: "full",
+      parent_backup_id: null,
+      content_hash: null,
+      created_at: new Date("2026-06-04T12:05:00.000Z"),
+    };
+    const findSpy = spyOn(agentSandboxesRepository, "findByIdAndOrg").mockResolvedValue(row);
+    const lockSpy = spyOn(agentSandboxesRepository, "trySetProvisioning").mockResolvedValue({
+      ...row,
+      status: "provisioning",
+    });
+    const backupSpy = spyOn(agentSandboxesRepository, "getLatestBackup").mockResolvedValue(backup);
+    const reconstructedSpy = spyOn(
+      agentSandboxesRepository,
+      "getReconstructedBackupState",
+    ).mockRejectedValue(aeadError);
+    const pruneSpy = spyOn(agentSandboxesRepository, "pruneBackups").mockResolvedValue(2);
+    const updateSpy = spyOn(agentSandboxesRepository, "update").mockImplementation(
+      async (_id, data) => (data.status === "running" ? finalRow : { ...row, ...data }),
+    );
+    const apiKeySpy = spyOn(apiKeysService, "createForAgent").mockResolvedValue({
+      id: "22222222-2222-4222-8222-222222222222",
+      plainKey: "eliza_test_agent_key",
+      prefix: "eliza_test",
+    });
+    const errorLogSpy = spyOn(logger, "error").mockImplementation(() => {});
+    const svc = new ElizaSandboxService();
+    const ensureStartedSpy = spyOn(
+      svc as unknown as { ensureRuntimeAgentStarted: () => Promise<unknown> },
+      "ensureRuntimeAgentStarted",
+    ).mockResolvedValue(null);
+    const pushStateSpy = spyOn(
+      svc as unknown as { pushState: () => Promise<unknown> },
+      "pushState",
+    ).mockResolvedValue(null);
+    const create = mock(async () => providerHandle());
+    const getProviderSpy = spyOn(
+      svc as unknown as { getProvider: () => Promise<SandboxProvider> },
+      "getProvider",
+    ).mockResolvedValue({
+      create,
+      stop: mock(async () => {}),
+      checkHealth: async () => true,
+    } as SandboxProvider);
+    try {
+      const res = await svc.provision(AGENT, ORG);
+      expect(res.success).toBe(true);
+      expect(res.sandboxRecord).toBe(finalRow);
+      expect(pushStateSpy).not.toHaveBeenCalled();
+      expect(pruneSpy).toHaveBeenCalledWith(AGENT, 0);
+      const logged = errorLogSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(logged).toContain("Undecryptable snapshot, booting fresh");
+    } finally {
+      findSpy.mockRestore();
+      lockSpy.mockRestore();
+      backupSpy.mockRestore();
+      reconstructedSpy.mockRestore();
+      pruneSpy.mockRestore();
+      updateSpy.mockRestore();
+      apiKeySpy.mockRestore();
+      errorLogSpy.mockRestore();
+      ensureStartedSpy.mockRestore();
+      pushStateSpy.mockRestore();
+      getProviderSpy.mockRestore();
+    }
+  });
+
+  // The load-bearing distinction: a transient (non-crypto) backup-read failure —
+  // a DB blip, network hiccup — must NOT be swallowed. Degrading on it would
+  // silently discard state a retry would have restored, so it propagates and the
+  // provision fails (the resume job then retries).
+  test("(12) a transient (non-crypto) backup-read failure propagates — provision fails, snapshot NOT discarded", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const row = provisioningReadyRow();
+    const findSpy = spyOn(agentSandboxesRepository, "findByIdAndOrg").mockResolvedValue(row);
+    const findByIdSpy = spyOn(agentSandboxesRepository, "findById").mockResolvedValue({
+      ...row,
+      status: "error",
+    });
+    const lockSpy = spyOn(agentSandboxesRepository, "trySetProvisioning").mockResolvedValue({
+      ...row,
+      status: "provisioning",
+    });
+    // A DB blip, NOT a crypto failure — must NOT degrade.
+    const backupSpy = spyOn(agentSandboxesRepository, "getLatestBackup").mockRejectedValue(
+      new Error("connection terminated unexpectedly"),
+    );
+    const pruneSpy = spyOn(agentSandboxesRepository, "pruneBackups").mockResolvedValue(0);
+    const updateSpy = spyOn(agentSandboxesRepository, "update").mockImplementation(
+      async (_id, data) => ({ ...row, ...data }),
+    );
+    const apiKeySpy = spyOn(apiKeysService, "createForAgent").mockResolvedValue({
+      id: "22222222-2222-4222-8222-222222222222",
+      plainKey: "eliza_test_agent_key",
+      prefix: "eliza_test",
+    });
+    const errorLogSpy = spyOn(logger, "error").mockImplementation(() => {});
+    const svc = new ElizaSandboxService();
+    const markErrorSpy = spyOn(
+      svc as unknown as { markError: (rec: AgentSandbox, msg: string) => Promise<void> },
+      "markError",
+    ).mockResolvedValue(undefined);
+    const ensureStartedSpy = spyOn(
+      svc as unknown as { ensureRuntimeAgentStarted: () => Promise<unknown> },
+      "ensureRuntimeAgentStarted",
+    ).mockResolvedValue(null);
+    const create = mock(async () => providerHandle());
+    const stop = mock(async () => {});
+    const getProviderSpy = spyOn(
+      svc as unknown as { getProvider: () => Promise<SandboxProvider> },
+      "getProvider",
+    ).mockResolvedValue({ create, stop, checkHealth: async () => true } as SandboxProvider);
+    try {
+      const res = await svc.provision(AGENT, ORG);
+      // A transient failure fails the provision (the resume job retries), rather
+      // than silently discarding recoverable state.
+      expect(res.success).toBe(false);
+      expect(res.error).toBe("connection terminated unexpectedly");
+      expect(markErrorSpy).toHaveBeenCalledTimes(1);
+      // Must NOT degrade: the snapshot chain is untouched, no degrade logged.
+      expect(pruneSpy).not.toHaveBeenCalled();
+      const logged = errorLogSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(logged).not.toContain("Undecryptable snapshot");
+      // Ghost cleanup still stops the just-created container.
+      expect(stop).toHaveBeenCalledTimes(1);
+    } finally {
+      findSpy.mockRestore();
+      findByIdSpy.mockRestore();
+      lockSpy.mockRestore();
+      backupSpy.mockRestore();
+      pruneSpy.mockRestore();
+      updateSpy.mockRestore();
+      apiKeySpy.mockRestore();
+      errorLogSpy.mockRestore();
+      markErrorSpy.mockRestore();
+      ensureStartedSpy.mockRestore();
+      getProviderSpy.mockRestore();
+    }
+  });
+});
+
+// Snapshot-degrade error classification (`isUndecryptableSnapshotError`), proven
+// against REAL @elizaos/security errors produced by the crypto stack — the
+// precise crypto-vs-transient distinction the degrade path keys on.
+describe("isUndecryptableSnapshotError (KMS timebomb classification)", () => {
+  test("classifies a real KeyNotFoundError (memory-KMS key rotated away) as undecryptable", async () => {
+    const { isUndecryptableSnapshotError } = await import("./eliza-sandbox.ts?actual");
+    const err = await realKeyRotatedAwayError();
+    // The exact prod incident: the memory backend restart orphaned the key.
+    expect(err).toBeInstanceOf(KeyNotFoundError);
+    expect(isUndecryptableSnapshotError(err)).toBe(true);
+  });
+
+  test("classifies a real AeadError (auth-tag failure) as undecryptable", async () => {
+    const { isUndecryptableSnapshotError } = await import("./eliza-sandbox.ts?actual");
+    const err = await realAeadDecryptError();
+    expect(err.name).toBe("AeadError");
+    expect(isUndecryptableSnapshotError(err)).toBe(true);
+  });
+
+  test("does NOT classify transient / non-crypto failures as undecryptable", async () => {
+    const { isUndecryptableSnapshotError } = await import("./eliza-sandbox.ts?actual");
+    // A DB/network blip, a base Steward KmsError (HTTP 5xx transient), and
+    // non-Errors must all propagate — degrading on them would discard state a
+    // retry would have restored.
+    expect(isUndecryptableSnapshotError(new Error("connection terminated unexpectedly"))).toBe(
+      false,
+    );
+    expect(
+      isUndecryptableSnapshotError(
+        new KmsError("Steward KMS decrypt failed (503 Service Unavailable)"),
+      ),
+    ).toBe(false);
+    expect(isUndecryptableSnapshotError("AEAD decrypt failed")).toBe(false);
+    expect(isUndecryptableSnapshotError(null)).toBe(false);
+    expect(isUndecryptableSnapshotError(undefined)).toBe(false);
   });
 });
 

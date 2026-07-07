@@ -65,6 +65,10 @@ const LINKED_WORKSPACE_PACKAGES = [
   "packages/cloud/sdk",
   "packages/shared",
   "packages/skills",
+  // @elizaos/agent's cli imports @elizaos/tui for the bundled `tui` command
+  // (packages/agent/src/tui/agent-terminal-tui.ts); without the link the
+  // command dies in the image with "Cannot find package '@elizaos/tui'".
+  "packages/tui",
   "packages/vault",
   // Compatibility package for remote workers that still import the historical
   // @elizaos/plugin-worker-runtime entrypoint. It wraps
@@ -96,6 +100,7 @@ const LINKED_WORKSPACE_PACKAGES = [
   "plugins/plugin-local-inference",
   "plugins/plugin-mcp",
   "plugins/plugin-pdf",
+  "plugins/plugin-registry",
   "plugins/plugin-signal",
   "plugins/plugin-streaming",
   "plugins/plugin-native-activity-tracker",

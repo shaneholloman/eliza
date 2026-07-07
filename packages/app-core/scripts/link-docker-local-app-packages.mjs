@@ -58,6 +58,9 @@ const localPackages = [
   "eliza/packages/cloud/sdk",
   "eliza/packages/shared",
   "eliza/packages/skills",
+  // @elizaos/agent's cli imports @elizaos/tui for the bundled `tui` command;
+  // keep it linked so the command works inside the image.
+  "eliza/packages/tui",
   "eliza/packages/ui",
   "eliza/packages/vault",
   "eliza/plugins/plugin-agent-skills",
@@ -72,6 +75,7 @@ const localPackages = [
   "eliza/plugins/plugin-local-inference",
   "eliza/plugins/plugin-mcp",
   "eliza/plugins/plugin-pdf",
+  "eliza/plugins/plugin-registry",
   "eliza/plugins/plugin-signal",
   "eliza/plugins/plugin-streaming",
   "eliza/plugins/plugin-native-activity-tracker",

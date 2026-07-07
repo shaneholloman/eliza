@@ -58,6 +58,8 @@ import { apiKeysService } from "./api-keys";
 import { imageRequiresDigestPin, isCodingContainerImageAllowed } from "./coding-containers";
 import type { CreditReconciliationResult, CreditReservation } from "./credits";
 import type { DockerSandboxMetadata } from "./docker-sandbox-provider";
+import { shellQuote } from "./docker-sandbox-utils";
+import { DockerSSHClient } from "./docker-ssh";
 import {
   reusesExistingElizaCharacter,
   stripReservedElizaConfigKeys,
@@ -286,6 +288,20 @@ const HEARTBEAT_PROBE_RETRY_MS = 2_000;
 // on success) is the downtime clock. The ~30s heartbeat itself keeps the
 // WireGuard NAT mapping warm, so a reachable agent never trips this.
 const HEARTBEAT_DISCONNECT_AFTER_MS = 120_000;
+// IP reconciliation (heartbeat + recovery): agent containers do not persist
+// tailscale node state, so a container restart mints a fresh node key and
+// headscale hands out the NEXT sequential IP — the stored headscale_ip /
+// bridge_url go stale while the container itself is healthy. Every consumer
+// reads those stored columns (the heartbeat probe, the agent-router's
+// subdomain resolution, and therefore the public dedicated-agent proxy), so
+// the heal must REPAIR the columns, not tolerate the miss.
+const RECONCILE_SSH_CMD_TIMEOUT_MS = 15_000;
+// Cap on consecutive heartbeat cycles a docker-healthy container may stay
+// `running` while its current tailnet IP cannot be resolved (node SSH down,
+// docker exec failing). Each such cycle ratchets error_count; hitting the cap
+// escalates to `disconnected` so the recovery cycle's reprovision self-heal
+// still fires — an unreachable paid agent must never look "running" forever.
+const IP_RECONCILE_MAX_UNRESOLVED_CYCLES = 3;
 const SNAPSHOT_FETCH_TIMEOUT_MS = 120_000;
 const SNAPSHOT_RESTORE_TIMEOUT_MS = 120_000;
 const UPGRADE_RUNTIME_HEALTH_GATE_TIMEOUT_MS = 30_000;
@@ -296,6 +312,19 @@ const UPGRADE_RUNTIME_HEALTH_GATE_TIMEOUT_MS = 30_000;
 // provisioning worker. Generous over the internal caps, well under the watchdog.
 const SANDBOX_DELETE_STOP_TIMEOUT_MS = 120_000;
 type LifecycleTx = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+/** Columns the tailnet-IP reconcile path reads to locate and repair an agent. */
+type ReconcilableSandbox = Pick<
+  AgentSandbox,
+  "id" | "node_id" | "container_name" | "environment_vars" | "bridge_url" | "headscale_ip"
+>;
+
+/** Outcome of a stale-tailnet-IP reconcile attempt (see reconcileStaleTailnetIp). */
+type TailnetIpReconcileResult =
+  | { outcome: "repaired"; headscaleIp: string; bridgeUrl: string }
+  | { outcome: "container-dead" }
+  | { outcome: "ip-unresolvable" }
+  | { outcome: "unrepairable" };
 
 function digestPinnedImageRef(imageRef: string, digest: string): string {
   if (imageRef.includes("@sha256:")) return imageRef;
@@ -364,6 +393,30 @@ export function computeManagedAgentDbEnv(
   return callerSuppliedDatabaseUrl || wantsLocalState
     ? { ELIZA_MANAGED_DATABASE_URL: dbUri }
     : { DATABASE_URL: dbUri };
+}
+
+/**
+ * True only when a stored backup snapshot can never be decrypted again: the
+ * AEAD auth tag fails to verify (corruption / wrong key / wrong AAD, surfaced
+ * by `@elizaos/security` as `AeadError`) or the KMS key version that encrypted
+ * it no longer exists (`KeyNotFoundError` — thrown only by the ephemeral
+ * `memory` KMS backend, which derives a fresh per-process key on every restart
+ * and thus orphans everything it previously encrypted). Both are permanent
+ * regardless of retries, so a resume degrades to a fresh boot on them rather
+ * than failing the whole provision closed (see the restore path in `provision`).
+ *
+ * Deliberately NARROW so it never swallows a recoverable failure: a transient
+ * KMS error (the Steward backend surfaces HTTP 5xx as a base `KmsError`, not
+ * `KeyNotFoundError`), a DB/network/IO error, or anything else is NOT matched
+ * and still propagates — degrading on one of those would silently discard state
+ * that a retry would have restored. Matched by error class NAME rather than
+ * `instanceof` because `AeadError` is internal to `@elizaos/security` (not
+ * exported) and this code runs bundled, where a cross-realm `instanceof` on a
+ * dependency's error class is unreliable.
+ */
+export function isUndecryptableSnapshotError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === "AeadError" || error.name === "KeyNotFoundError";
 }
 
 export class ElizaSandboxService {
@@ -1486,36 +1539,72 @@ export class ElizaSandboxService {
         await agentBillingRepository.reactivateSandboxBillingAfterFunding(rec.id, new Date());
 
         // 5. Restore from backup (reconstructs incrementals back to a full).
-        const backup = await agentSandboxesRepository.getLatestBackup(rec.id);
-        if (backup) {
-          const restoreState = await agentSandboxesRepository.getReconstructedBackupState(
-            backup.id,
-          );
-          if (restoreState) {
-            try {
-              await this.pushState(handle.bridgeUrl, restoreState, { trusted: true });
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              if (
-                rec.execution_tier !== "custom" ||
-                !message.startsWith("State restore failed: HTTP 404")
-              ) {
-                throw error;
-              }
-              logger.info(
-                "[agent-sandbox] Backup restore skipped: custom image has no restore endpoint",
-                {
-                  agentId: rec.id,
-                  backupId: backup.id,
-                },
-              );
-            }
-          } else {
-            logger.warn("[agent-sandbox] Backup restore skipped: reconstructed state was null", {
+        //
+        // Fetching + reconstructing the snapshot decrypts its state under the
+        // org DEK. An UNDECRYPTABLE snapshot — the key that encrypted it is gone
+        // (the ephemeral `memory` KMS backend rotates its key on every restart,
+        // orphaning older ciphertext) or the bytes are corrupt — is unrecoverable
+        // no matter how many times we retry, so it degrades to a FRESH boot
+        // instead of failing the whole provision closed (error-policy:J4 designed
+        // degrade — a corrupt snapshot is unrecoverable regardless, so booting
+        // without prior in-memory state is correct, not a fabricated success).
+        // Only crypto/auth/key-missing failures degrade; a transient DB/IO/network
+        // error is rethrown so the provision fails and the resume job retries
+        // rather than silently discarding recoverable state.
+        let backup: Awaited<ReturnType<typeof agentSandboxesRepository.getLatestBackup>>;
+        let restoreState: Awaited<
+          ReturnType<typeof agentSandboxesRepository.getReconstructedBackupState>
+        >;
+        try {
+          backup = await agentSandboxesRepository.getLatestBackup(rec.id);
+          restoreState = backup
+            ? await agentSandboxesRepository.getReconstructedBackupState(backup.id)
+            : undefined;
+        } catch (error) {
+          if (!isUndecryptableSnapshotError(error)) throw error;
+          logger.error("[agent-sandbox] Undecryptable snapshot, booting fresh", {
+            agentId: rec.id,
+            backupId: backup?.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          // Drop the whole orphaned backup chain (all its rows share the now-lost
+          // org DEK) so the next resume boots clean instead of re-hitting this
+          // dead snapshot every time. error-policy:J6 best-effort — a failed prune
+          // only means we warn + degrade again next boot, never that we fail to
+          // boot fresh, so it must not throw out of the provision.
+          await agentSandboxesRepository.pruneBackups(rec.id, 0).catch((pruneErr) => {
+            logger.warn("[agent-sandbox] Failed to drop orphaned snapshot after degrade", {
               agentId: rec.id,
-              backupId: backup.id,
+              error: pruneErr instanceof Error ? pruneErr.message : String(pruneErr),
             });
+          });
+          backup = undefined;
+          restoreState = undefined;
+        }
+        if (restoreState) {
+          try {
+            await this.pushState(handle.bridgeUrl, restoreState, { trusted: true });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (
+              rec.execution_tier !== "custom" ||
+              !message.startsWith("State restore failed: HTTP 404")
+            ) {
+              throw error;
+            }
+            logger.info(
+              "[agent-sandbox] Backup restore skipped: custom image has no restore endpoint",
+              {
+                agentId: rec.id,
+                backupId: backup?.id,
+              },
+            );
           }
+        } else if (backup) {
+          logger.warn("[agent-sandbox] Backup restore skipped: reconstructed state was null", {
+            agentId: rec.id,
+            backupId: backup.id,
+          });
         }
 
         logger.info("[agent-sandbox] Provisioned", {
@@ -3876,9 +3965,48 @@ export class ElizaSandboxService {
         });
         return false;
       }
+      // Past-grace miss: before disconnecting (which reprovisions — destroying
+      // and rebuilding the container), check whether the container is alive but
+      // its stored tailnet IP went stale, and repair the columns in place. The
+      // repair heals every consumer at once (this probe, the agent-router, the
+      // public proxy) because they all read the same columns.
+      const reconcile = await this.reconcileStaleTailnetIp(rec);
+      if (reconcile.outcome === "repaired") {
+        await agentSandboxesRepository.update(rec.id, {
+          headscale_ip: reconcile.headscaleIp,
+          bridge_url: reconcile.bridgeUrl,
+          last_heartbeat_at: new Date(),
+          error_count: 0,
+        });
+        logger.info(
+          `[agent-sandbox] Reconciled stale tailnet IP ${rec.headscale_ip}→${reconcile.headscaleIp} for agent ${agentId}`,
+        );
+        return true;
+      }
+      if (reconcile.outcome === "ip-unresolvable") {
+        // Docker reports the container healthy but the node cannot tell us its
+        // current tailnet IP — indistinguishable from a transient SSH outage,
+        // so disconnecting now could destroy a healthy paid container. Ratchet
+        // error_count and only escalate once the cap of consecutive cycles is
+        // hit, so an agent that stays unresolvable still reaches the
+        // disconnect → reprovision self-heal instead of sitting unreachable
+        // at "running" forever.
+        const unresolvedCycles = (rec.error_count ?? 0) + 1;
+        if (unresolvedCycles < IP_RECONCILE_MAX_UNRESOLVED_CYCLES) {
+          await agentSandboxesRepository.update(rec.id, {
+            error_count: unresolvedCycles,
+          });
+          logger.warn(
+            "[agent-sandbox] Tailnet IP unresolvable for docker-healthy agent, deferring disconnect",
+            { agentId, unresolvedCycles },
+          );
+          return false;
+        }
+      }
       logger.warn("[agent-sandbox] Heartbeat failed past grace window, marking disconnected", {
         agentId,
         downForMs,
+        reconcileOutcome: reconcile.outcome,
       });
       await agentSandboxesRepository.update(rec.id, {
         status: "disconnected",
@@ -3887,6 +4015,10 @@ export class ElizaSandboxService {
     }
     await agentSandboxesRepository.update(rec.id, {
       last_heartbeat_at: new Date(),
+      // Reset the unresolvable-cycle grace counter on any clean heartbeat so the
+      // "escalate after 3 consecutive unresolvable cycles" window measures from
+      // the last healthy beat, not a stale prior error_count from an old episode.
+      error_count: 0,
     });
     return true;
   }
@@ -3929,6 +4061,141 @@ export class ElizaSandboxService {
       }
     }
     return false;
+  }
+
+  /**
+   * SSH client for the docker node hosting the agent's container. Returns null
+   * when the node cannot be located — the reconcile path treats that as "no
+   * signal", never as evidence either way.
+   */
+  private async getNodeSshForAgent(
+    rec: Pick<ReconcilableSandbox, "id" | "node_id">,
+  ): Promise<DockerSSHClient | null> {
+    if (!rec.node_id) return null;
+    // error-policy:J4 best-effort node resolve — a DB/SSH-config failure here is
+    // "cannot determine", not a heartbeat kill; the caller decides how to degrade.
+    try {
+      const node = await dockerNodesRepository.findByNodeId(rec.node_id);
+      if (!node) return null;
+      return DockerSSHClient.getClient(
+        node.hostname,
+        node.ssh_port,
+        node.host_key_fingerprint ?? undefined,
+        node.ssh_user,
+      );
+    } catch (error) {
+      logger.debug("[agent-sandbox] Failed to resolve docker node for reconcile", {
+        agentId: rec.id,
+        nodeId: rec.node_id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Node-side docker health for the agent's container. This is the authority
+   * that distinguishes a dead container (safe to disconnect → reprovision)
+   * from a live one whose stored tailnet IP went stale (must be repaired, not
+   * destroyed).
+   */
+  private async isContainerDockerHealthy(rec: ReconcilableSandbox): Promise<boolean> {
+    if (!rec.container_name) return false;
+    const ssh = await this.getNodeSshForAgent(rec);
+    if (!ssh) return false;
+    // error-policy:J4 best-effort probe — an exec failure yields "not proven
+    // healthy" (falls through to the existing disconnect self-heal), never a throw.
+    try {
+      const status = (
+        await ssh.exec(
+          `docker inspect --format '{{.State.Health.Status}}' ${shellQuote(rec.container_name)}`,
+          RECONCILE_SSH_CMD_TIMEOUT_MS,
+        )
+      ).trim();
+      return status === "healthy";
+    } catch (error) {
+      logger.debug("[agent-sandbox] Docker health inspect failed during reconcile", {
+        agentId: rec.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Resolve the container's CURRENT tailnet IP authoritatively from the node:
+   * `tailscale ip -4` inside the container is the same source the container
+   * registered with, so it reflects the post-restart node key/IP — unlike the
+   * stored headscale_ip, which is a provision-time snapshot.
+   */
+  private async resolveCurrentAgentTailnetIp(rec: ReconcilableSandbox): Promise<string | null> {
+    if (!rec.container_name) return null;
+    const ssh = await this.getNodeSshForAgent(rec);
+    if (!ssh) return null;
+    // error-policy:J4 best-effort resolve — a failed resolve returns null (no
+    // positive signal), never throws; the caller ratchets toward disconnect.
+    try {
+      const out = await ssh.exec(
+        `docker exec ${shellQuote(rec.container_name)} tailscale ip -4`,
+        RECONCILE_SSH_CMD_TIMEOUT_MS,
+      );
+      // First 100.64.0.0/10-shaped line; the CLI can also print IPv6 lines.
+      const ip = out
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line.startsWith("100."));
+      return ip && isIP(ip) === 4 ? ip : null;
+    } catch (error) {
+      logger.debug("[agent-sandbox] Current tailnet IP resolve failed during reconcile", {
+        agentId: rec.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Attempt to reconcile a bridge-probe miss as a stale stored tailnet IP.
+   * Containers do not persist tailscale node state, so a restart mints a fresh
+   * node key and headscale assigns the next IP — leaving headscale_ip /
+   * bridge_url pointing at a dead address that EVERY consumer reads (the
+   * heartbeat probe, the agent-router's subdomain resolution, and therefore
+   * the public dedicated-agent proxy). Repairing the columns heals them all;
+   * anything unrepairable falls back to the existing disconnect → reprovision
+   * self-heal. The repaired bridge_url keeps the stored scheme/port and swaps
+   * only the host — the same `http://<tailnetIp>:<containerPort>` shape the
+   * provisioner writes.
+   */
+  private async reconcileStaleTailnetIp(
+    rec: ReconcilableSandbox,
+  ): Promise<TailnetIpReconcileResult> {
+    if (!(await this.isContainerDockerHealthy(rec))) return { outcome: "container-dead" };
+    const currentIp = await this.resolveCurrentAgentTailnetIp(rec);
+    if (!currentIp) return { outcome: "ip-unresolvable" };
+    // Same IP as stored = nothing to repair: the miss is genuine
+    // unreachability at the correct address, so the dead-agent path applies.
+    if (!rec.bridge_url || currentIp === rec.headscale_ip) return { outcome: "unrepairable" };
+
+    let bridgeUrl: string;
+    try {
+      const repaired = new URL(rec.bridge_url);
+      repaired.hostname = currentIp;
+      bridgeUrl = repaired.origin;
+    } catch (error) {
+      // error-policy:J4 a malformed stored bridge_url cannot be repaired in
+      // place; degrade to the existing disconnect → reprovision self-heal.
+      logger.warn("[agent-sandbox] Stored bridge_url unparsable during reconcile", {
+        agentId: rec.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { outcome: "unrepairable" };
+    }
+
+    // Only a live answer on the repaired address proves the new IP is the
+    // container we think it is — never persist an unverified repair.
+    const reachable = await this.probeBridgeHealth({ ...rec, bridge_url: bridgeUrl });
+    if (!reachable) return { outcome: "unrepairable" };
+    return { outcome: "repaired", headscaleIp: currentIp, bridgeUrl };
   }
 
   private async verifyUpgradeRuntimeHealth(args: {
@@ -4029,7 +4296,33 @@ export class ElizaSandboxService {
     if (!rec || (rec.status !== "disconnected" && rec.status !== "error")) return "gone";
     const recoverableStatus = rec.status;
     const reachable = await this.probeBridgeHealth(rec);
-    if (!reachable) return "unreachable";
+    if (!reachable) {
+      // The stored bridge_url may simply be stale (container restart → new
+      // tailnet IP) rather than the container being down. Repair-and-reprobe
+      // before declaring it unreachable, so recovery does not reprovision —
+      // destroy and rebuild — a healthy container that only needs its ingress
+      // columns fixed. Anything unrepairable stays "unreachable" and
+      // reprovisions exactly as before.
+      const reconcile = await this.reconcileStaleTailnetIp(rec);
+      if (reconcile.outcome !== "repaired") return "unreachable";
+      // Same guarded CAS as the plain recovery flip below: only revive a row
+      // that is STILL in the probed recoverable status, then persist the
+      // repaired ingress columns on the now-running row.
+      const revived = await agentSandboxesRepository.markReconnectedFromDisconnected(
+        rec.id,
+        recoverableStatus,
+      );
+      if (!revived) return "gone";
+      await agentSandboxesRepository.update(rec.id, {
+        headscale_ip: reconcile.headscaleIp,
+        bridge_url: reconcile.bridgeUrl,
+        error_count: 0,
+      });
+      logger.info(
+        `[agent-sandbox] Reconciled stale tailnet IP ${rec.headscale_ip}→${reconcile.headscaleIp} for agent ${agentId}`,
+      );
+      return "recovered";
+    }
     // Guarded CAS: the row can move to deletion_pending / stopped (which nulls
     // bridge_url) / provisioning during the multi-second probe. Only flip it if
     // it is STILL disconnected with a live bridge — otherwise we'd resurrect a
