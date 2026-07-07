@@ -1,9 +1,0 @@
-/**
- * Side-effect entry point — registers the inbox view for terminal rendering.
- *
- * In a terminal host (the Node agent, no DOM), register the inbox view so it
- * renders inline in the terminal. Lazy + DOM-guarded so the terminal engine
- * stays out of browser/mobile bundles. Web, iOS, desktop, and Android leave the
- * import inert, so the same import is safe everywhere.
- */
-

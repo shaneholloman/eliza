@@ -113,14 +113,6 @@ export default defineConfig({
         replacement: path.join(root, "packages/cloud/sdk/src/$1"),
       },
       {
-        find: /^@elizaos\/tui$/,
-        replacement: path.join(root, "packages/tui/src/index.ts"),
-      },
-      {
-        find: /^@elizaos\/tui\/(.+)$/,
-        replacement: path.join(root, "packages/tui/src/$1"),
-      },
-      {
         find: /^@elizaos\/ui$/,
         replacement: path.join(root, "packages/ui/src/index.ts"),
       },
@@ -135,14 +127,6 @@ export default defineConfig({
       {
         find: /^@elizaos\/vault\/(.+)$/,
         replacement: path.join(root, "packages/vault/src/$1"),
-      },
-      {
-        find: /^@elizaos\/tui$/,
-        replacement: path.join(root, "packages/tui/src/index.ts"),
-      },
-      {
-        find: /^@elizaos\/tui\/(.+)$/,
-        replacement: path.join(root, "packages/tui/src/$1"),
       },
     ],
   },

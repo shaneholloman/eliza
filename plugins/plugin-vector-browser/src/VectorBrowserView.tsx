@@ -41,10 +41,6 @@ import {
   useState,
 } from "react";
 import type * as Three from "three";
-import {
-  type VectorBrowserSnapshot,
-  VectorBrowserSpatialView,
-} from "./VectorBrowserSpatialView.tsx";
 
 type VectorBrowserRuntime = {
   THREE: typeof Three;
@@ -939,7 +935,7 @@ export function VectorGraph3D({
   );
 }
 
-// ── Rich GUI/XR surface (the Escape child) ─────────────────────────────
+// ── Rich GUI surface (the Escape child) ─────────────────────────────
 
 export function VectorBrowserRichView({
   leftNav,
@@ -1692,36 +1688,20 @@ export function VectorBrowserRichView({
 // ── Adaptive view (the single componentExport) ─────────────────────────
 
 /**
- * Terminal-safe summary shown when this view is evaluated on the TUI surface.
- * The rich three.js/canvas surface can't run in a terminal, so the wrapper's
- * `Escape` fallback degrades to the spatial summary. Live terminal stats come
- * from the dedicated terminal registration (`register-terminal-view.tsx`), which
- * a host can update via `setVectorBrowserTerminalSnapshot`; here the wrapper
- * fallback carries the zeroed default + the "renders in GUI/XR" note.
- */
-const TUI_FALLBACK_SNAPSHOT: VectorBrowserSnapshot = {
-  vectorCount: 0,
-  withEmbeddings: 0,
-  dimension: 0,
-  typeCount: 0,
-  points: [],
-};
-
-/**
  * The single adaptive vector-browser view (`componentExport`).
  *
- * GUI/XR render the full rich {@link VectorBrowserRichView} (three.js 3D point
- * cloud + 2D canvas projection + list/detail) as the {@link Escape} DOM child;
- * TUI renders the spatial {@link VectorBrowserSpatialView} summary fallback. One
- * registered component, no separate rich-DOM app — `SpatialSurface` auto-detects
- * GUI vs XR.
+ * The shipped surface renders the full rich {@link VectorBrowserRichView}
+ * (three.js 3D point cloud + 2D canvas projection + list/detail) as the
+ * {@link Escape} DOM child. The spatial summary export remains a presentational
+ * seam for future adapters, but this bundle no longer mounts a concrete terminal
+ * fallback.
  */
 export function VectorBrowserView(props: {
   leftNav?: ReactNode;
   contentHeader?: ReactNode;
 }) {
   return (
-    <Escape tui={<VectorBrowserSpatialView snapshot={TUI_FALLBACK_SNAPSHOT} />}>
+    <Escape>
       <VectorBrowserRichView {...props} />
     </Escape>
   );

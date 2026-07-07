@@ -14,8 +14,7 @@ const trajectoryLoggerPlugin: Plugin = {
   description:
     "Realtime trajectory inspector for HANDLE / PLAN / ACTION / EVALUATE phase drilldowns.",
   views: [
-    // ONE declaration → GUI + XR + TUI, all drawn from the single
-    // TrajectoryLoggerView spatial source. `modalities` is a plain literal here
+    // The shipped view is GUI-only. `modalities` is a plain literal here
     // (plugin.ts is not in the view bundle), so no brand-new `@elizaos/core`
     // runtime export reaches the bundle build.
     {
@@ -52,7 +51,7 @@ const trajectoryLoggerPlugin: Plugin = {
         },
         { id: "refresh", description: "Refresh trajectory logger state" },
       ],
-      tags: ["developer", "trajectory", "debugging", "terminal"],
+      tags: ["developer", "trajectory", "debugging"],
       visibleInManager: true,
       desktopTabEnabled: true,
     },

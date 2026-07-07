@@ -377,7 +377,6 @@
     "@elizaos/import-conversations": "workspace:*",
     "@elizaos/logger": "workspace:*",
     "@elizaos/shared": "workspace:*",
-    "@elizaos/tui": "workspace:*",
     "@fontsource/poppins": "^5.2.7",
     "@json-render/core": "0.19.0",
     "@json-render/react": "0.19.0",
@@ -442,7 +441,6 @@
     "vaul": "^1.1.2",
     "viem": "^2.48.8",
     "wagmi": "^3.6.15",
-    "webxr-polyfill": "^2.0.3",
     "ws": "^8.19.0"
   },
   "devDependencies": {
@@ -465,7 +463,6 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/three": "^0.185.0",
-    "@types/webxr": "^0.5.0",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react-swc": "^4.3.1",
     "esbuild": "^0.28.0",

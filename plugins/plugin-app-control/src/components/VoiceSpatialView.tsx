@@ -1,12 +1,12 @@
 /**
- * VoiceSpatialView — the voice/transcription surface authored once with the
- * spatial vocabulary (GUI / XR / TUI), purely presentational over a snapshot.
+ * VoiceSpatialView — the voice/transcription surface authored with the spatial
+ * vocabulary for the shipped GUI route, purely presentational over a snapshot.
  *
  * It surfaces the EXISTING voice configuration (provider, mode, ASR) from
  * `GET /api/config` plus the most recent transcript lines a host chooses to push
- * via `setVoiceTerminalSnapshot`. It does NOT open a microphone or run ASR — the
- * live capture pipeline is browser-side (WebRTC + AudioContext) and out of reach
- * of the Node terminal; this view renders the state that pipeline produces.
+ * via the host wrapper. It does NOT open a microphone or run ASR — the live
+ * capture pipeline is browser-side (WebRTC + AudioContext); this view renders
+ * the state that pipeline produces.
  */
 
 import {

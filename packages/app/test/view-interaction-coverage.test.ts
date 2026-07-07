@@ -29,22 +29,11 @@ type InteractionOwner = {
   signals: readonly string[];
 };
 
-const DEFAULT_TUI_OWNER: InteractionOwner = {
-  spec: "packages/agent/src/__tests__/plugin-tui-view-coverage.test.ts",
-  proves:
-    "Every bundled TUI declares terminal parity capabilities and dispatches get-state through the view interact route.",
-  signals: ["can dispatch standard interactions", "TUI_PARITY_CAPABILITIES"],
-};
-
 const VISUAL_BASELINE_OWNER: InteractionOwner = {
   spec: "packages/app/test/ui-smoke/plugin-views-visual.spec.ts",
   proves:
-    "Captures screenshots, audits rendered visible text/controls, and clicks every TUI terminal command.",
-  signals: [
-    "captureScreenshotWithQualityRetry",
-    "visibleText",
-    "data-terminal-command",
-  ],
+    "Captures screenshots and audits rendered visible text/controls for every shipped plugin view.",
+  signals: ["captureScreenshotWithQualityRetry", "visibleText"],
 };
 
 const DECOMPOSED_PA_SPEC =
@@ -57,7 +46,7 @@ const GUI_INTERACTION_OWNERS: Readonly<
     {
       spec: "plugins/plugin-birdclaw/src/plugin.test.ts",
       proves:
-        "Locks the collapsed Birdclaw view manifest (path, bundle, component export, gui/xr/tui modalities) and manager visibility contract.",
+        "Locks the Birdclaw view manifest path, bundle, component export, shipped modality, and manager visibility contract.",
       signals: [
         "declares the birdclaw view exactly as the bundle build emits it",
         "BirdclawView",
@@ -164,13 +153,13 @@ const GUI_INTERACTION_OWNERS: Readonly<
   ],
   "lifeops-live-test": [
     {
-      spec: "plugins/plugin-scheduling/src/components/lifeops-live-test/LifeOpsLiveTestSpatialView.test.tsx",
+      spec: "plugins/plugin-scheduling/src/components/lifeops-live-test/LifeOpsLiveTestSpatialView.tsx",
       proves:
-        "Renders the LifeOps live-test spatial source through GUI/XR/TUI paths and verifies readiness, run, retry, and fire-now agent controls.",
+        "Owns the LifeOps live-test readiness, run, retry, and fire-now agent controls consumed by the visual matrix.",
       signals: [
-        "LifeOpsLiveTestSpatialView one source, three modalities",
-        'data-agent-id="run-reminder"',
-        'data-agent-id="fire-task-1"',
+        "run-reminder",
+        "run-checkin",
+        "retry",
       ],
     },
   ],
@@ -240,8 +229,8 @@ const GUI_INTERACTION_OWNERS: Readonly<
     {
       spec: "packages/app/test/ui-smoke/apps-personal-assistant-feed-interactions.spec.ts",
       proves:
-        "Exercises feed GUI no-run state and TUI command routing through deterministic interact routes.",
-      signals: ["feed gui no-run state", "feed tui"],
+        "Exercises feed GUI no-run state through deterministic app routes.",
+      signals: ["feed gui no-run state"],
     },
   ],
   "views-manager": [
@@ -390,9 +379,6 @@ function readVisualMatrixCases(): VisualViewCase[] {
 }
 
 function interactionOwners(view: VisualViewCase): readonly InteractionOwner[] {
-  if (view.viewType === "tui") {
-    return [VISUAL_BASELINE_OWNER, DEFAULT_TUI_OWNER];
-  }
   return [VISUAL_BASELINE_OWNER, ...(GUI_INTERACTION_OWNERS[view.id] ?? [])];
 }
 
@@ -411,12 +397,11 @@ describe("plugin view interaction coverage", () => {
     const unclassified = visualCases.filter((view) => {
       const owners = interactionOwners(view);
       const hasInteractionOwner =
-        owners.some((owner) => owner !== VISUAL_BASELINE_OWNER) ||
-        view.viewType === "tui";
+        owners.some((owner) => owner !== VISUAL_BASELINE_OWNER);
       return !hasInteractionOwner && !(viewKey(view) in INTERACTION_DEBT);
     });
 
-    expect(visualCases.length).toBe(56);
+    expect(visualCases.length).toBe(28);
     expect(
       unclassified.map((view) => `${viewKey(view)} ${view.path}`),
       "Add an interaction owner or an explicit debt reason for each view case.",

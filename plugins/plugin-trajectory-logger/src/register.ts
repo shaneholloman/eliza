@@ -1,12 +1,11 @@
 /**
- * Side-effect entry — registers the Trajectory Logger terminal view (TUI) and,
- * on native, the in-process app-shell page.
+ * Side-effect entry — registers the Trajectory Logger in-process app-shell page
+ * on native.
  *
  * Load once during app startup.
  */
 
 import { registerAppShellPage } from "@elizaos/ui/app-shell-registry";
-
 
 // iOS/Android disable DynamicViewLoader, so register this view's already-bundled
 // component as an in-process app-shell page. Web/desktop dedupe it against the

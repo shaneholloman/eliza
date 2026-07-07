@@ -23,7 +23,6 @@ const nodeBuiltinsShim = path.resolve(
   here,
   "src/node-builtins-browser-shim.ts",
 );
-const tuiBrowserShim = path.resolve(here, "src/elizaos-tui-browser-shim.ts");
 const loggerSrc = path.resolve(repoRoot, "packages/logger/src/index.ts");
 
 // Brand components (ElizaLogo, lockups, …) reference assets under `/brand/*`
@@ -90,11 +89,6 @@ export default defineConfig({
       { find: "@elizaos/logger", replacement: loggerSrc },
       { find: /^@elizaos\/shared$/, replacement: sharedSrc },
       { find: /^@elizaos\/shared\/(.+)$/, replacement: `${sharedSrc}/$1` },
-      // The spatial views' register modules import @elizaos/ui/spatial/tui →
-      // @elizaos/tui; the full tui entry pulls a node:child_process access that
-      // throws in the browser. Shim it to the pure registry + width utils so the
-      // GUI/XR registered-views page can populate the registry and render.
-      { find: "@elizaos/tui", replacement: tuiBrowserShim },
       { find: "fast-redact", replacement: fastRedactShim },
       // The shared barrel re-exports a node-only package-root resolver
       // (utils/eliza-root.ts). The catalog never calls it, but its top-level

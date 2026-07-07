@@ -133,10 +133,6 @@ export {
 } from "./components/health/HealthSpatialView.js";
 export { HealthView } from "./components/health/HealthView.js";
 
-// Side-effect: in a terminal host (Node agent, no DOM) this registers the health
-// terminal view. DOM-guarded so the terminal engine stays out of browser bundles.
-import "./register.js";
-
 // `./<name>.js` (without /index) is a TypeScript-only directory-shorthand
 // that Bun's runtime ESM resolver does not honor. The `./sleep`,
 // `./health-bridge`, `./screen-time`, and `./actions` are all directories

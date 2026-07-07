@@ -4,11 +4,8 @@ const feedPlugin: Plugin = {
   name: "@elizaos/plugin-feed",
   description: "Feed prediction market game operator surface.",
   views: [
-    // ONE declaration → GUI + XR + TUI, all drawn from the single FeedView
-    // spatial source. `modalities` is a plain literal here (index.ts is not in
-    // the view bundle), so no brand-new `@elizaos/core` runtime export reaches
-    // the bundle build. The terminal surface mounts the same FeedSpatialView via
-    // register-terminal-view.tsx.
+    // One shipped GUI declaration. Future modalities should extend this entry
+    // instead of duplicating the view.
     {
       id: "feed",
       // Preview-gated: the Feed operator surface is an early-stage, non-MVP
@@ -30,7 +27,7 @@ const feedPlugin: Plugin = {
       surface: { capabilities: ["agent-surface"] },
       componentExport: "FeedView",
       capabilities: [
-        { id: "get-state", description: "Return Feed terminal state" },
+        { id: "get-state", description: "Return Feed view state" },
         {
           id: "refresh-agent-status",
           description: "Refresh agent status, dashboard, and market state",
@@ -57,12 +54,10 @@ const feedPlugin: Plugin = {
   ],
 };
 
-
 export default feedPlugin;
 export * from "./routes.js";
 export * from "./ui/feed-data.js";
 // NOTE: only the pure proxy + data layers are re-exported here. The Node agent
 // imports this entry to register the plugin's views; pulling React/UI in would
-// break that bundle. The GUI/XR surface loads from the dedicated view bundle
-// (src/ui/feed-view-bundle.ts → FeedView), and the terminal surface mounts the
-// same FeedSpatialView via register-terminal-view.tsx.
+// break that bundle. The GUI view loads from the dedicated view bundle
+// (src/ui/feed-view-bundle.ts -> FeedView).

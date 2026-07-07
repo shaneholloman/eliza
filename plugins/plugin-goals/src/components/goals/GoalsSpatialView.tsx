@@ -2,9 +2,8 @@
  * GoalsSpatialView — the owner life-direction surface authored once with the
  * spatial vocabulary, so it renders correctly wherever it is displayed:
  *
- *   - GUI / XR — mounted in `<SpatialSurface>` (DOM; XR scales up).
- *   - TUI      — rendered to real terminal lines by the agent terminal, via
- *                `registerSpatialTerminalView` (see `register-terminal-view.tsx`).
+ *   - GUI today through `<SpatialSurface>` (DOM).
+ *   - Future adapters can reuse the same snapshot contract behind the retained modality types.
  *
  * It is purely presentational (a snapshot + an action callback in, primitives
  * out) and imports only the cross-modality primitives plus this plugin's own

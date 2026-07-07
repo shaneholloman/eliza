@@ -31,10 +31,9 @@ export const calendarPlugin: Plugin = {
   providers: [],
   routes: calendarHttpRoutes,
   views: [
-    // ONE declaration → GUI + XR + TUI, all drawn from the single CalendarView
-    // spatial source. `modalities` is a plain literal here (plugin.ts is not in
-    // the view bundle), so no brand-new `@elizaos/core` runtime export reaches
-    // the bundle build.
+    // The shipped view is GUI-only. `modalities` is a plain literal here
+    // (plugin.ts is not in the view bundle), so no brand-new `@elizaos/core`
+    // runtime export reaches the bundle build.
     {
       id: "calendar",
       label: "Calendar",

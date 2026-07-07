@@ -2,14 +2,12 @@
  * CalendarSpatialView — the calendar surface authored once with the spatial
  * vocabulary, so it renders correctly wherever it is displayed:
  *
- *   - GUI / XR — mounted in `<SpatialSurface>` (DOM; XR scales up).
- *   - TUI      — rendered to real terminal lines by the agent terminal, via
- *                `registerSpatialTerminalView` (see `register-terminal-view.tsx`).
+ *   - GUI today through `<SpatialSurface>` (DOM).
+ *   - Future adapters can reuse the same snapshot contract behind the retained modality types.
  *
  * It is purely presentational (a snapshot + an action callback in, primitives
  * out) and imports ONLY the cross-modality primitives, so it is safe to render
- * in the Node agent process where the terminal lives (no DOM / browser-only
- * client import).
+ * without pulling browser-only runtime imports into the presentational layer.
  *
  * A terminal calendar is an AGENDA list, not a pixel grid: each row is a time +
  * title with a trailing "Open" control. The header carries the period label,

@@ -13,7 +13,7 @@ export {
   type SpatialContextValue,
   useSpatialContext,
 } from "./context.ts";
-// DOM (GUI/XR) host + render context.
+// DOM host + render context.
 export {
   detectDomModality,
   SpatialSurface,

@@ -1,9 +1,9 @@
 /**
- * Compatibility seam for the retired spatial terminal renderer.
+ * Compatibility seam for the retired terminal adapter.
  *
  * `viewType: "tui"` remains a public contract so older payloads and future
  * reintroductions can compile, but this package no longer ships a concrete
- * React-to-terminal renderer or plugin terminal registry.
+ * alternate renderer or plugin registry.
  */
 
 import type { ReactElement } from "react";
@@ -13,14 +13,20 @@ export interface SpatialTuiComponentOptions {
 }
 
 function unsupported(): never {
-  throw new Error("The spatial TUI renderer is not shipped in this build.");
+  throw new Error("The terminal adapter is not shipped in this build.");
 }
 
-export function renderViewToLines(_view: ReactElement, _width?: number): string[] {
+export function renderViewToLines(
+  _view: ReactElement,
+  _width?: number,
+): string[] {
   unsupported();
 }
 
-export function renderSpatialToLines(_view: ReactElement, _width?: number): string[] {
+export function renderSpatialToLines(
+  _view: ReactElement,
+  _width?: number,
+): string[] {
   unsupported();
 }
 

@@ -769,25 +769,21 @@ function expectHttpLoad(status: number, body: unknown): string | undefined {
   return undefined;
 }
 
-function expectViewsList(
-  viewType: "gui" | "tui",
-): (status: number, body: unknown) => string | undefined {
+function expectViewsList(): (status: number, body: unknown) => string | undefined {
   return (status, body) => {
     if (status !== 200) return `expected 200, saw ${status}`;
     const views = arrayOfRecords(record(body)?.views);
     const view = views.find((candidate) => {
-      return (
-        candidate.id === "views-manager" && candidate.viewType === viewType
-      );
+      return candidate.id === "views-manager" && candidate.viewType === "gui";
     });
     if (!view) {
-      return `expected ${viewType} views-manager registration, saw ${JSON.stringify(body)}`;
+      return `expected gui views-manager registration, saw ${JSON.stringify(body)}`;
     }
     if (view.pluginName !== appControlPlugin.name) {
       return `expected pluginName=${appControlPlugin.name}, saw ${String(view.pluginName)}`;
     }
-    if (viewType === "tui" && !Array.isArray(view.capabilities)) {
-      return "expected TUI views-manager capabilities";
+    if (!Array.isArray(view.capabilities)) {
+      return "expected views-manager capabilities";
     }
     return undefined;
   };
@@ -983,15 +979,7 @@ export default scenario({
       method: "GET",
       path: "/api/views?viewType=gui",
       expectedStatus: 200,
-      assertResponse: expectViewsList("gui"),
-    },
-    {
-      kind: "api",
-      name: "app-control TUI view is registered in the real views registry",
-      method: "GET",
-      path: "/api/views?viewType=tui",
-      expectedStatus: 200,
-      assertResponse: expectViewsList("tui"),
+      assertResponse: expectViewsList(),
     },
   ],
   finalChecks: [

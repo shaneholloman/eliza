@@ -8,4 +8,3 @@
  */
 
 import "./register-companion-page";
-

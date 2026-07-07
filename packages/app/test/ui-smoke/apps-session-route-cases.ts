@@ -168,34 +168,10 @@ export const DIRECT_ROUTE_CASES: readonly DirectRouteCase[] = [
     timeoutMs: 90_000,
   },
   {
-    // Facewear GUI config now lives in Settings -> Wearables, not a launcher
-    // app window. In the browser app-shell matrix the TUI-only path resolves to
-    // the view catalog fallback; terminal command coverage lives in the TUI
-    // view tests, not this GUI click-safe route pass.
-    name: "facewear tui app shell page",
-    path: "/apps/facewear/tui",
-    readyChecks: [{ text: "views" }, { text: "tui ready" }],
-    timeoutMs: 30_000,
-  },
-  {
-    // Smartglasses GUI config now lives in Settings -> Wearables; the browser
-    // app-shell matrix sees the same view catalog fallback as Facewear.
-    name: "smartglasses tui app shell page",
-    path: "/apps/smartglasses/tui",
-    readyChecks: [{ text: "views" }, { text: "tui ready" }],
-    timeoutMs: 30_000,
-  },
-  {
     name: "orchestrator app shell page",
     path: "/orchestrator",
     selector: '[data-testid="orchestrator-workbench"]',
     timeoutMs: 90_000,
-  },
-  {
-    name: "orchestrator tui app shell page",
-    path: "/orchestrator/tui",
-    readyChecks: [{ text: "views" }, { text: "tui ready" }],
-    timeoutMs: 30_000,
   },
   {
     // Pinned home tile → Settings.

@@ -15,4 +15,3 @@ registerAppRoutePluginLoader(
   "@elizaos/plugin-vector-browser",
   async () => vectorBrowserPlugin,
 );
-

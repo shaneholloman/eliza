@@ -1,6 +1,6 @@
 /**
- * Contract tests for Model Tester TUI capability wiring.
- * They keep the exported capability list, plugin view declaration, and bundle `interact` handler aligned so terminal dispatch cannot drift silently.
+ * Contract tests for Model Tester view capability wiring.
+ * They keep the exported capability list, plugin view declaration, and bundle `interact` handler aligned so dispatch cannot drift silently.
  */
 
 import { readFileSync } from "node:fs";
@@ -8,7 +8,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   interact,
-  MODEL_TESTER_TUI_CAPABILITIES,
+  MODEL_TESTER_VIEW_CAPABILITIES,
 } from "./ModelTesterAppView.interact";
 
 const HERE = import.meta.dirname;
@@ -21,9 +21,9 @@ function okFetch(body: unknown): typeof fetch {
     })) as unknown as typeof fetch;
 }
 
-describe("Model Tester TUI capability wiring", () => {
+describe("Model Tester view capability wiring", () => {
   it("exports the exact registered capability id set", () => {
-    expect([...MODEL_TESTER_TUI_CAPABILITIES]).toEqual([
+    expect([...MODEL_TESTER_VIEW_CAPABILITIES]).toEqual([
       "get-status",
       "run-text-small",
       "run-transcription",
@@ -34,7 +34,7 @@ describe("Model Tester TUI capability wiring", () => {
 
   it("plugin.ts declares the same capabilities the view surfaces", () => {
     const pluginSrc = readFileSync(resolve(HERE, "plugin.ts"), "utf8");
-    for (const id of MODEL_TESTER_TUI_CAPABILITIES) {
+    for (const id of MODEL_TESTER_VIEW_CAPABILITIES) {
       expect(pluginSrc).toContain(`id: "${id}"`);
     }
   });
@@ -48,7 +48,7 @@ describe("Model Tester TUI capability wiring", () => {
       segments: [],
     });
     try {
-      for (const id of MODEL_TESTER_TUI_CAPABILITIES) {
+      for (const id of MODEL_TESTER_VIEW_CAPABILITIES) {
         // A handled capability resolves (or fails on data shape); only an
         // unregistered one throws the "does not support" error.
         await expect(

@@ -72,7 +72,3 @@ export {
   type UpdateTodoInput,
 } from "./service.js";
 export * from "./types.js";
-
-// Side-effect: in a terminal host (Node agent, no DOM) this registers the todos
-// terminal view. DOM-guarded so the terminal engine stays out of browser bundles.
-import "./register.js";

@@ -111,12 +111,6 @@ const viewsManagerView = {
   viewType: "gui" as const,
 };
 
-const viewsManagerTuiView = {
-  ...viewsManagerView,
-  path: "/views/tui",
-  viewType: "tui" as const,
-};
-
 const shopifyView = {
   id: "shopify",
   label: "Shopify",
@@ -184,7 +178,6 @@ const sandboxedFrameView = {
 const mockAvailableViews: ViewRegistryEntry[] = [
   remoteLedgerView,
   viewsManagerView,
-  viewsManagerTuiView,
   shopifyView,
   calendarView,
   sharedCanvasView,
@@ -197,7 +190,6 @@ function resetMockAvailableViews() {
     mockAvailableViews.length,
     remoteLedgerView,
     viewsManagerView,
-    viewsManagerTuiView,
     shopifyView,
     calendarView,
     sharedCanvasView,

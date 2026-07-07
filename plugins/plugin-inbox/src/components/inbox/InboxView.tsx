@@ -1,14 +1,13 @@
 /**
- * InboxView — the single GUI/XR data wrapper for the cross-channel inbox.
+ * InboxView — the GUI data wrapper for the cross-channel inbox.
  *
  * It owns the live inbox data (the single read-only endpoint served by the
  * personal-assistant routes, the background poll, the channel-filter selection,
  * and the loading/error/empty/ready state machine) and renders the one
  * presentational {@link InboxSpatialView} inside a {@link SpatialSurface}.
- * Omitting the `modality` prop lets `SpatialSurface` auto-detect GUI vs XR via
- * `window.__elizaXRContext`, so the SAME component serves both surfaces. The TUI
- * surface renders the same `InboxSpatialView` through the terminal registry
- * (see `register-terminal-view.tsx`).
+ * Omitting the `modality` prop lets `SpatialSurface` render the browser DOM
+ * surface today while the retained modality contract stays available for future
+ * adapters.
  *
  * Data source (PA owns the persistence + connector pulls; this plugin renders):
  *   GET {base}/api/lifeops/inbox?channels=

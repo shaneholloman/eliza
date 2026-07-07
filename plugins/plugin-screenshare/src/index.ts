@@ -17,10 +17,8 @@ const rawScreensharePlugin: Plugin = {
   description:
     "Streams the local desktop and accepts authenticated mouse and keyboard control from the Screen Share app.",
   views: [
-    // ONE declaration → GUI + XR + TUI, all drawn from the single
-    // ScreenshareView spatial source. `modalities` is a plain literal here
-    // (index.ts is not in the view bundle), so no brand-new `@elizaos/core`
-    // runtime export reaches the bundle build.
+    // One shipped GUI declaration drawn from ScreenshareView. The modality enum
+    // is retained in the contract for future alternate view entries.
     {
       id: "screenshare",
       label: "Screen Share",
@@ -58,4 +56,3 @@ export {
 
 export default screensharePlugin;
 export * from "./routes.js";
-

@@ -16,16 +16,14 @@ import {
 
 export const facewearConnectAction: Action = {
 	name: "FACEWEAR_CONNECT",
-	description:
-		"Show connection instructions for Even Realities smartglasses.",
-	similes: [
-		"CONNECT_GLASSES",
-		"PAIR_DEVICE",
-		"CONNECT_FACEWEAR",
-	],
+	description: "Show connection instructions for Even Realities smartglasses.",
+	similes: ["CONNECT_GLASSES", "PAIR_DEVICE", "CONNECT_FACEWEAR"],
 	examples: [
 		[
-			{ name: "{{user1}}", content: { text: "How do I connect my G1 glasses?" } },
+			{
+				name: "{{user1}}",
+				content: { text: "How do I connect my G1 glasses?" },
+			},
 			{
 				name: "{{user2}}",
 				content: {
@@ -37,7 +35,7 @@ export const facewearConnectAction: Action = {
 	validate: async (_runtime: IAgentRuntime, _message: Memory) => true,
 	handler: async (
 		runtime: IAgentRuntime,
-		message: Memory,
+		_message: Memory,
 		_state: State | undefined,
 		_options: Record<string, unknown> | undefined,
 		callback?: HandlerCallback,

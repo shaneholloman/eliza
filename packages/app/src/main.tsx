@@ -2900,7 +2900,7 @@ function resolveAppWindowSlug(): string | null {
 
 function shouldLoadModelTesterShellRoute(): boolean {
   const path = getWindowNavigationPath().replace(/[?#].*$/, "");
-  return path === "/model-tester" || path === "/model-tester/tui";
+  return path === "/model-tester";
 }
 
 /**

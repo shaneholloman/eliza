@@ -13,7 +13,6 @@ export interface FacewearDeviceProfile {
 	sdkName?: string;
 	sdkVersion?: string;
 	sdkUrl?: string;
-	emulatorSupported: boolean;
 	nativeAppPlatform?: "android" | "visionos" | "both";
 	nativeAppPath?: string;
 }
@@ -35,7 +34,6 @@ export const DEVICE_REGISTRY: Record<
 			"wifi-provisioning",
 		],
 		sdkName: "G1 BLE Protocol (built-in)",
-		emulatorSupported: true,
 		nativeAppPlatform: "android",
 		nativeAppPath: "native/android/even-realities",
 	},

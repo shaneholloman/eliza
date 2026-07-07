@@ -34,9 +34,8 @@ export const birdclawPlugin: Plugin = {
         "Local-first Twitter/X memory — browse your archived timeline, mentions, likes, and bookmarks",
       icon: "Bird",
       path: "/birdclaw",
-      // ONE declaration → GUI + XR + TUI, all drawn from the single
-      // BirdclawSpatialView source. `modalities` stays a plain literal here
-      // (plugin.ts is not in the view bundle).
+      // One declaration for the shipped GUI view. Future modalities should
+      // extend this entry instead of duplicating the view.
       modalities: ["gui"],
       bundlePath: "dist/views/bundle.js",
       // First-party instrumented view (data-agent-id controls): grant the

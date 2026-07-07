@@ -1,7 +1,7 @@
 /**
  * Guards the appPhonePlugin manifest shape: no actions (VOICE_CALL stays
  * host-adapted by personal-assistant), exactly the phoneCallLog provider, and
- * one phone view spanning all three modalities.
+ * one shipped phone GUI view.
  */
 
 import { describe, expect, it } from "vitest";
@@ -14,19 +14,19 @@ describe("appPhonePlugin manifest", () => {
     expect("voiceCallAction" in phoneExports).toBe(false);
   });
 
-  it("registers ONE phone view drawing all three modalities + the read-only call-log provider", () => {
+  it("registers one phone GUI view and the read-only call-log provider", () => {
     expect(appPhonePlugin.providers?.map((provider) => provider.name)).toEqual([
       "phoneCallLog",
     ]);
 
-    // Single source of truth: one declaration, modalities ["gui","xr","tui"],
-    // the unified PhoneView spatial component.
+    // Single source of truth: one GUI declaration drawn from PhoneView. The
+    // modality enum remains available for future alternate view entries.
     const views = appPhonePlugin.views ?? [];
     expect(views).toHaveLength(1);
     const [view] = views;
     expect(view.id).toBe("phone");
     expect(view.componentExport).toBe("PhoneView");
-    expect(view.modalities).toEqual(["gui", "xr", "tui"]);
+    expect(view.modalities).toEqual(["gui"]);
     // No per-viewType duplicate declarations remain.
     expect(view.viewType).toBeUndefined();
   });

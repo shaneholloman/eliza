@@ -34,7 +34,6 @@ import { handleTrajectoryRoute } from "./routes/trajectory-routes.js";
 import { getActiveTrainingService } from "./services/training-service-registry.js";
 import { VastTrainingService } from "./services/training-vast-service.js";
 
-
 const LOOPBACK_HOSTS = new Set([
   "localhost",
   "127.0.0.1",
@@ -338,13 +337,8 @@ export const trainingPlugin: Plugin = {
     "Training jobs, datasets, models, blueprints, and trajectory routes",
   routes: trainingRoutes,
   views: [
-    // ONE declaration → GUI + XR + TUI, ONE componentExport. `FineTuningView`
-    // is an adaptive wrapper: GUI/XR render the rich `FineTuningDashboard`
-    // through the spatial `Escape` hatch, TUI falls back to the presentational
-    // `FineTuningSpatialView` — the same source the agent terminal renders
-    // directly via the spatial terminal registry (see register-terminal-view.tsx).
-    // `modalities` is a plain literal here, so no brand-new `@elizaos/core`
-    // runtime export reaches the bundle build.
+    // One shipped GUI declaration drawn from FineTuningView. The modality enum
+    // is retained in the contract for future alternate view entries.
     {
       id: "training",
       label: "Training",

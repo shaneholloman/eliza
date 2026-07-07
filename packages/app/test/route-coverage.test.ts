@@ -60,10 +60,8 @@ type PluginViewCase = {
 };
 
 /**
- * A collapsed operator view: ONE declaration that draws several modalities from
- * one source (`modalities`), one `path`, one `componentExport` (a
- * SpatialSurface-wrapped view). The gate asserts that single declaration keeps
- * its canonical path, bundle, component, and modality coverage.
+ * A bundled operator view: one source, one `path`, one `componentExport`, and
+ * the shipped modalities the app can actually render.
  */
 type PluginViewManifestContract = {
   manifestPath: string;
@@ -167,218 +165,35 @@ const BOOT_PLUGIN_VIEW_MANIFEST_BY_MODULE: Record<string, string | null> = {
   "@elizaos/app-model-tester": "plugins/app-model-tester/src/plugin.ts",
 };
 
-const KNOWN_XR_VIEW_CASES: readonly PluginViewCase[] = [
-  {
-    manifestPath: "plugins/plugin-birdclaw/src/plugin.ts",
-    id: "birdclaw",
-    viewType: "xr",
-    path: "/birdclaw",
-  },
-  {
-    manifestPath: "plugins/plugin-contacts/src/plugin.ts",
-    id: "contacts",
-    viewType: "xr",
-    path: "/contacts",
-  },
-  {
-    manifestPath: "plugins/plugin-hyperliquid/src/plugin.ts",
-    id: "hyperliquid",
-    viewType: "xr",
-    path: "/hyperliquid",
-  },
-  {
-    manifestPath: "plugins/plugin-messages/src/plugin.ts",
-    id: "messages",
-    viewType: "xr",
-    path: "/messages",
-  },
-  {
-    manifestPath: "plugins/app-model-tester/src/plugin.ts",
-    id: "model-tester",
-    viewType: "xr",
-    path: "/model-tester",
-  },
-  {
-    manifestPath: "plugins/plugin-phone/src/plugin.ts",
-    id: "phone",
-    viewType: "xr",
-    path: "/phone",
-  },
-  {
-    manifestPath: "plugins/plugin-polymarket/src/plugin.ts",
-    id: "polymarket",
-    viewType: "xr",
-    path: "/polymarket",
-  },
-  {
-    manifestPath: "plugins/plugin-wallet-ui/src/plugin.ts",
-    id: "wallet",
-    viewType: "xr",
-    path: "/wallet",
-  },
-  {
-    manifestPath: "plugins/plugin-feed/src/index.ts",
-    id: "feed",
-    viewType: "xr",
-    path: "/feed",
-  },
-  {
-    manifestPath: "plugins/plugin-app-control/src/index.ts",
-    id: "views-manager",
-    viewType: "xr",
-    path: "/views",
-  },
-  {
-    manifestPath: "plugins/plugin-screenshare/src/index.ts",
-    id: "screenshare",
-    viewType: "xr",
-    path: "/screenshare",
-  },
-  {
-    manifestPath: "plugins/plugin-scheduling/src/plugin.ts",
-    id: "lifeops-live-test",
-    viewType: "xr",
-    path: "/lifeops-live-test",
-  },
-  {
-    manifestPath: "plugins/plugin-task-coordinator/src/index.ts",
-    id: "task-coordinator",
-    viewType: "xr",
-    path: "/task-coordinator",
-  },
-  {
-    manifestPath: "plugins/plugin-task-coordinator/src/index.ts",
-    id: "orchestrator",
-    viewType: "xr",
-    path: "/orchestrator",
-  },
-  {
-    manifestPath: "plugins/plugin-task-coordinator/src/index.ts",
-    id: "cockpit",
-    viewType: "xr",
-    path: "/cockpit",
-  },
-  {
-    manifestPath: "plugins/plugin-trajectory-logger/src/plugin.ts",
-    id: "trajectory-logger",
-    viewType: "xr",
-    path: "/trajectory-logger",
-  },
-  {
-    manifestPath: "plugins/plugin-training/src/setup-routes.ts",
-    id: "training",
-    viewType: "xr",
-    path: "/apps/fine-tuning",
-  },
-  {
-    manifestPath: "plugins/plugin-blocker/src/plugin.ts",
-    id: "focus",
-    viewType: "xr",
-    path: "/focus",
-  },
-  {
-    manifestPath: "plugins/plugin-calendar/src/plugin.ts",
-    id: "calendar",
-    viewType: "xr",
-    path: "/calendar",
-  },
-  {
-    manifestPath: "plugins/plugin-documents/src/plugin.ts",
-    id: "documents",
-    viewType: "xr",
-    path: "/documents",
-  },
-  {
-    manifestPath: "plugins/plugin-finances/src/plugin.ts",
-    id: "finances",
-    viewType: "xr",
-    path: "/finances",
-  },
-  {
-    manifestPath: "plugins/plugin-goals/src/plugin.ts",
-    id: "goals",
-    viewType: "xr",
-    path: "/goals",
-  },
-  {
-    manifestPath: "plugins/plugin-health/src/index.ts",
-    id: "health",
-    viewType: "xr",
-    path: "/health",
-  },
-  {
-    manifestPath: "plugins/plugin-inbox/src/plugin.ts",
-    id: "inbox",
-    viewType: "xr",
-    path: "/inbox",
-  },
-  {
-    manifestPath: "plugins/plugin-relationships/src/plugin.ts",
-    id: "relationships",
-    viewType: "xr",
-    path: "/relationships",
-  },
-  {
-    manifestPath: "plugins/plugin-todos/src/index.ts",
-    id: "todos",
-    viewType: "xr",
-    path: "/todos",
-  },
-  {
-    manifestPath: "plugins/plugin-vector-browser/src/plugin.ts",
-    id: "vector-browser",
-    viewType: "xr",
-    path: "/vector-browser",
-  },
-  {
-    // Facewear collapsed to one declaration: gui/xr/tui all draw from the same
-    // `/apps/facewear` route (the standalone `/apps/facewear/xr` route is gone).
-    manifestPath: "plugins/plugin-facewear/src/index.ts",
-    id: "facewear",
-    viewType: "xr",
-    path: "/apps/facewear",
-  },
-  {
-    manifestPath: "plugins/plugin-facewear/src/index.ts",
-    id: "smartglasses",
-    viewType: "xr",
-    path: "/apps/smartglasses",
-  },
-];
-
-const ALL_MODALITIES: ReadonlyArray<"gui" | "tui" | "xr"> = [
-  "gui",
-  "xr",
-  "tui",
-];
+const SHIPPED_MODALITIES: ReadonlyArray<"gui" | "tui" | "xr"> = ["gui"];
 
 const OPERATOR_VIEW_MANIFEST_CONTRACTS: readonly PluginViewManifestContract[] =
   [
     {
       manifestPath: "plugins/plugin-feed/src/index.ts",
       id: "feed",
-      modalities: ALL_MODALITIES,
+      modalities: SHIPPED_MODALITIES,
       path: "/feed",
       componentExport: "FeedView",
     },
     {
       manifestPath: "plugins/plugin-screenshare/src/index.ts",
       id: "screenshare",
-      modalities: ALL_MODALITIES,
+      modalities: SHIPPED_MODALITIES,
       path: "/screenshare",
       componentExport: "ScreenshareView",
     },
     {
       manifestPath: "plugins/plugin-task-coordinator/src/index.ts",
       id: "task-coordinator",
-      modalities: ALL_MODALITIES,
+      modalities: SHIPPED_MODALITIES,
       path: "/task-coordinator",
       componentExport: "TaskCoordinatorView",
     },
     {
       manifestPath: "plugins/plugin-task-coordinator/src/index.ts",
       id: "orchestrator",
-      modalities: ALL_MODALITIES,
+      modalities: SHIPPED_MODALITIES,
       path: "/orchestrator",
       componentExport: "OrchestratorView",
     },
@@ -446,10 +261,10 @@ function stringField(source: string, field: string): string | null {
 }
 
 /**
- * The surfaces a single view object draws. A collapsed declaration uses
- * `modalities: ["gui","xr","tui"]` — one source, one route, drawn in several
- * modes — and expands to one logical case per surface (all sharing the same
- * `path`). A legacy declaration uses a single `viewType` (default "gui").
+ * The surfaces a single view object draws. A collapsed declaration can use
+ * `modalities` — one source, one route, drawn in several modes — and expands to
+ * one logical case per surface (all sharing the same `path`). A legacy
+ * declaration uses a single `viewType` (default "gui").
  */
 function viewObjectViewTypes(object: string): Array<"gui" | "tui" | "xr"> {
   const modalitiesMatch = object.match(/modalities:\s*\[([^\]]*)\]/);
@@ -550,10 +365,6 @@ function pluginViewCasesFromVisualSpec(): PluginViewCase[] {
 
 function pluginViewCaseKey(viewCase: Pick<PluginViewCase, "id" | "viewType">) {
   return `${viewCase.id}:${viewCase.viewType}`;
-}
-
-function pluginViewCaseFullKey(viewCase: PluginViewCase) {
-  return `${viewCase.manifestPath}:${viewCase.id}:${viewCase.viewType}:${viewCase.path}`;
 }
 
 function appMainPluginIds(): string[] {
@@ -728,7 +539,7 @@ describe("app route coverage gate", () => {
     ).toEqual([]);
   });
 
-  it("plugin views visual matrix covers every bundled gui/tui view", () => {
+  it("plugin views visual matrix covers every bundled gui view", () => {
     const expectedCases = PLUGIN_VIEW_MANIFESTS.flatMap((manifestPath) =>
       pluginViewCasesFromManifest(manifestPath),
     ).filter((viewCase) => viewCase.viewType !== "xr");
@@ -775,7 +586,7 @@ describe("app route coverage gate", () => {
     ).toEqual([]);
   });
 
-  it("operator plugin view manifests keep one collapsed gui/xr/tui contract", () => {
+  it("operator plugin view manifests keep the shipped gui contract", () => {
     const contractsByManifest = new Map<string, PluginViewManifestContract[]>();
     for (const contract of OPERATOR_VIEW_MANIFEST_CONTRACTS) {
       const contracts = contractsByManifest.get(contract.manifestPath) ?? [];
@@ -789,7 +600,7 @@ describe("app route coverage gate", () => {
           path.resolve(REPO_ROOT, manifestPath),
           "utf8",
         );
-        // One collapsed declaration per id (no longer one per viewType).
+        // One declaration per id; future modalities extend this declaration.
         const objectsById = new Map(
           viewObjects(source).map((object) => [
             stringField(object, "id") ?? "",
@@ -884,40 +695,6 @@ describe("app route coverage gate", () => {
     expect(
       pathMismatches,
       `Tracked visual-review report paths drifted: ${pathMismatches.join(", ")}`,
-    ).toEqual([]);
-  });
-
-  it("plugin view manifest ratchet tracks bundled xr view declarations", () => {
-    const actualCases = PLUGIN_VIEW_MANIFESTS.flatMap((manifestPath) =>
-      pluginViewCasesFromManifest(manifestPath),
-    ).filter((viewCase) => viewCase.viewType === "xr");
-    const expectedByKey = new Map(
-      KNOWN_XR_VIEW_CASES.map((viewCase) => [
-        pluginViewCaseFullKey(viewCase),
-        viewCase,
-      ]),
-    );
-    const actualByKey = new Map(
-      actualCases.map((viewCase) => [
-        pluginViewCaseFullKey(viewCase),
-        viewCase,
-      ]),
-    );
-
-    const missing = KNOWN_XR_VIEW_CASES.filter(
-      (viewCase) => !actualByKey.has(pluginViewCaseFullKey(viewCase)),
-    ).map(pluginViewCaseFullKey);
-    const stale = actualCases
-      .filter((viewCase) => !expectedByKey.has(pluginViewCaseFullKey(viewCase)))
-      .map(pluginViewCaseFullKey);
-
-    expect(
-      missing,
-      `Bundled XR view declarations changed or disappeared: ${missing.join(", ")}`,
-    ).toEqual([]);
-    expect(
-      stale,
-      `New bundled XR views need explicit runtime coverage classification: ${stale.join(", ")}`,
     ).toEqual([]);
   });
 

@@ -15,8 +15,7 @@ import { SMARTGLASSES_SERVICE_NAME } from "../services/smartglasses-service.ts";
 
 export const facewearContextProvider: Provider = {
 	name: "facewearContext",
-	description:
-		"Provides context about connected Even Realities smartglasses.",
+	description: "Provides context about connected Even Realities smartglasses.",
 
 	get: async (
 		runtime: IAgentRuntime,

@@ -1,16 +1,12 @@
 /**
- * SettingsSpatialView — the agent settings/config surface authored once with the
- * spatial vocabulary, so it renders wherever it is mounted:
- *
- *   - GUI / XR — inside `<SpatialSurface>` (DOM; XR scales up).
- *   - TUI      — rendered to real terminal lines by the agent terminal via
- *                `registerSpatialTerminalView` (see `register-terminal-view.tsx`).
+ * Settings config surface authored with the spatial vocabulary. The shipped
+ * settings route is GUI-only today, while this presentational component keeps a
+ * small snapshot contract for future modality adapters.
  *
  * Purely presentational: a snapshot of already-exposed settings in, primitives
- * out — no fetch, no React state, no shell-host import — so it is safe to render
- * in the Node agent process where the terminal lives. A host pushes live values
- * from `GET /api/config` via `setSettingsTerminalSnapshot`; with no host it shows
- * the labelled rows with em-dash placeholders, so the panel is always meaningful.
+ * out, with no fetch, React state, or shell-host import. With no host data it
+ * shows labelled rows with em-dash placeholders, so the panel is always
+ * meaningful.
  */
 
 import {

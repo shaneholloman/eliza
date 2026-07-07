@@ -19,4 +19,3 @@ registerAppShellPage({
       default: module.FeedView,
     })),
 });
-

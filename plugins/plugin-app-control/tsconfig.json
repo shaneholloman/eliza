@@ -13,7 +13,7 @@
 		"outDir": "./dist",
 		"rootDir": "../..",
 		"lib": ["ES2022", "DOM"],
-		"types": ["node", "webxr"],
+		"types": ["node"],
 		"typeRoots": [
 			"./node_modules/@types",
 			"../../node_modules/@types",
@@ -26,13 +26,17 @@
 			"@elizaos/logger": ["../../packages/logger/src/index.ts"],
 			"@elizaos/shared": ["../../packages/shared/src/index.ts"],
 			"@elizaos/shared/*": ["../../packages/shared/src/*"],
-			"@elizaos/tui": ["../../packages/tui/src/index.ts"],
-			"@elizaos/tui/*": ["../../packages/tui/src/*"],
 			"@elizaos/ui": ["../../packages/ui/src/index.ts"],
 			"@elizaos/ui/*": ["../../packages/ui/src/*"],
-			"@elizaos/import-conversations": ["../../packages/import-conversations/src/index.ts"],
-			"@elizaos/import-conversations/*": ["../../packages/import-conversations/src/*"],
-			"@elizaos/import-conversations/browser": ["../../packages/import-conversations/src/browser.ts"]
+			"@elizaos/import-conversations": [
+				"../../packages/import-conversations/src/index.ts"
+			],
+			"@elizaos/import-conversations/*": [
+				"../../packages/import-conversations/src/*"
+			],
+			"@elizaos/import-conversations/browser": [
+				"../../packages/import-conversations/src/browser.ts"
+			]
 		}
 	},
 	"include": ["src/**/*"],

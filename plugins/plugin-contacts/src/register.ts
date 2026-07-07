@@ -13,4 +13,3 @@ import { registerContactsApp } from "./components/contacts-app";
 if (isElizaOS()) {
   registerContactsApp();
 }
-

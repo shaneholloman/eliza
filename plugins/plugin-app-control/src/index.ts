@@ -144,7 +144,6 @@ export type {
 } from "./types.js";
 export { appAction, availableAppsProvider, createAppAction };
 
-
 export const appControlPlugin: Plugin = {
 	name: "@elizaos/plugin-app-control",
 	description:

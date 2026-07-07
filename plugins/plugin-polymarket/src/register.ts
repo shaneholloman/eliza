@@ -1,10 +1,8 @@
 /**
- * `appRegister` side-effect entry: registers the Polymarket view for the
- * terminal host (DOM-guarded) and as an app-shell page for native platforms
- * that disable `DynamicViewLoader`.
+ * App-register side-effect entry that registers the Polymarket view as an
+ * app-shell page for native platforms that disable DynamicViewLoader.
  */
 import { registerAppShellPage } from "@elizaos/ui/app-shell-registry";
-
 
 // iOS/Android disable DynamicViewLoader, so register this view's already-bundled
 // component as an in-process app-shell page. Web/desktop dedupe it against the

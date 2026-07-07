@@ -1,6 +1,6 @@
 /**
  * `walletAppPlugin` — the plugin descriptor registering the wallet inventory
- * shell page, the shared GUI/XR/TUI wallet view, and the chat-sidebar wallet
+ * shell page, the shared GUI wallet view, and the chat-sidebar wallet
  * status widget.
  */
 import type { Plugin } from "@elizaos/core";
@@ -30,10 +30,8 @@ export const walletAppPlugin: Plugin = {
     ],
   },
   views: [
-    // ONE declaration → GUI + XR + TUI, all drawn from the single InventoryView
-    // spatial source. `modalities` is a plain literal here (plugin.ts is not in
-    // the view bundle), so no brand-new `@elizaos/core` runtime export reaches
-    // the bundle build.
+    // One shipped GUI declaration drawn from InventoryView. The modality enum is
+    // retained in the contract for future alternate view entries.
     {
       id: "wallet",
       viewKind: "system",

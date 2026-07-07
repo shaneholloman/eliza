@@ -1,21 +1,11 @@
 /**
- * VectorBrowserSpatialView — the spatial-TUI fallback for the vector-browser
- * view, authored once with the spatial vocabulary so it renders correctly
- * wherever it is displayed:
+ * VectorBrowserSpatialView is a lightweight spatial summary for the
+ * vector-browser view, retained as a future adapter seam.
  *
- *   - GUI / XR — the adaptive `VectorBrowserView` wrapper renders the rich WebGL
- *     surface (`VectorBrowserRichView`) through a spatial `Escape`; the 3D point
- *     cloud (three.js) and the 2D canvas projection are INFEASIBLE in a
- *     terminal, so they stay GUI/XR-only.
- *   - TUI      — the terminal renders THIS view (a summary-stats + points-list
- *     fallback) via `registerSpatialTerminalView` (see
- *     `register-terminal-view.tsx`), which is also the wrapper's `Escape`
- *     fallback.
- *
- * It is purely presentational (a flat snapshot + an action callback in,
- * primitives out) and imports ONLY the cross-modality primitives, so it is safe
- * to render in the Node agent process where the terminal lives — no heavy
- * client, no three.js, no `@elizaos/ui` shell-host import reaches the bundle.
+ * The shipped GUI component renders the rich WebGL/canvas surface directly; this
+ * component is purely presentational (a flat snapshot + an action callback in,
+ * primitives out) and imports only cross-modality primitives, so it does not pull
+ * the heavy client or three.js runtime into adapter tests.
  */
 
 import {
@@ -28,7 +18,7 @@ import {
   VStack,
 } from "@elizaos/ui/spatial";
 
-/** A flat, terminal-safe preview of one memory/embedding point. */
+/** A flat preview of one memory/embedding point. */
 export interface VectorBrowserPoint {
   id: string;
   type: string;
@@ -39,7 +29,7 @@ export interface VectorBrowserPoint {
 /**
  * Flat, presentational snapshot of the vector-browser state. Derived entirely
  * from the loaded memories + selected table; carries no client handles, no
- * embeddings, and no three.js geometry — only what the terminal can draw.
+ * embeddings, and no three.js geometry.
  */
 export interface VectorBrowserSnapshot {
   /** Total memories in the selected table (the full count, not the page). */
@@ -147,7 +137,7 @@ export function VectorBrowserSpatialView({
       )}
 
       <Text tone="muted" style="caption">
-        3D point cloud renders in GUI/XR
+        3D point cloud renders in the GUI view
       </Text>
       <Button agent="refresh" onPress={() => onAction?.("refresh")}>
         Refresh

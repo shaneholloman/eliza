@@ -1,14 +1,7 @@
 /**
- * ScreenshareSpatialView - the screen-share operator surface authored once with
- * the spatial vocabulary, so it renders correctly wherever it is displayed:
- *
- *   - GUI / XR - mounted in `<SpatialSurface>` (DOM; XR scales up).
- *   - TUI      - rendered to real terminal lines by the agent terminal, via
- *                `registerSpatialTerminalView` (see `register-terminal-view.tsx`).
- *
- * It is purely presentational (a snapshot + an action callback in, primitives
- * out) and imports only the cross-modality primitives, so it is safe to render
- * in the Node agent process where the terminal lives (no DOM/browser import).
+ * Screen-share operator presentation built from spatial primitives for the
+ * shipped GUI view. It consumes a resolved snapshot plus an action callback;
+ * host lifecycle and remote control calls stay in ScreenshareView.
  *
  * The actual screen pixels are streamed in the external viewer page; this view
  * is the session manager + capability dashboard (status, platform, frame/input

@@ -62,7 +62,6 @@ export {
 } from "./devices/registry.ts";
 export * from "./protocol/smartglasses.ts";
 export { smartglassesStatusProvider } from "./providers/smartglasses-status.ts";
-export { AudioPipeline } from "./services/audio-pipeline.ts";
 export {
 	FACEWEAR_SERVICE_TYPE,
 	FacewearService,

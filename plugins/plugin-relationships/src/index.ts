@@ -1,6 +1,6 @@
 /**
  * Public entry for `@elizaos/plugin-relationships`: the entity graph-CRUD action,
- * the relationships views (browser + spatial/TUI), the drizzle schema, and the
+ * the relationships views, the drizzle schema, and the
  * entity-graph provider.
  */
 export type { EntityActionParameters } from "./actions/entity.js";
@@ -31,8 +31,3 @@ export * from "./types.js";
 import { relationshipsPlugin } from "./plugin.js";
 
 export default relationshipsPlugin;
-
-// Side-effect: in a terminal host (Node agent, no DOM) this registers the
-// relationships terminal view. DOM-guarded so the terminal engine stays out of
-// browser bundles.
-import "./register.js";
