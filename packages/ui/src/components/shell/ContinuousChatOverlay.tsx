@@ -366,6 +366,16 @@ const PILL_COMMIT_PROGRESS = 1 - PILL_COMMIT_OVERSHOOT / PILL_OPEN_DISTANCE;
 // them off toward edge-to-edge).
 const PANEL_RADIUS_PX = 32;
 
+// Maximize is a DISCRETE STATE, not a finger-tracked lerp. As a drag carries the
+// panel up through the over-pull gap (inset FULL → edge-to-edge), the height
+// tracks the finger 1:1 but the SHAPE (border, radius, side inset, width,
+// composer capsule) stays the inset chat shape until the over-pull crosses
+// MAXIMIZE_COMMIT_T — then the whole shape SPRINGS to full-bleed at once. Pulling
+// back down below MAXIMIZE_RELEASE_T springs it back to the inset shape. The
+// hysteresis gap keeps the state from flapping at the threshold.
+const MAXIMIZE_COMMIT_T = 0.5;
+const MAXIMIZE_RELEASE_T = 0.3;
+
 // Finger travel (px) below the restore drag's upward peak at which the panel
 // drops full-bleed and starts tracking the finger down out of maximize. Small
 // so a downward intent un-maximizes promptly, but non-zero so a hand held at
@@ -1249,11 +1259,14 @@ export function ContinuousChatOverlay({
   // The pin-at-full + auto-collapse edge effect lives below `goToDetent` (it
   // needs the detent animator); the mount state above still opens FULL first.
   //
-  // During onboarding the sheet MUST stay open. Deriving openness from the
-  // effect alone proved raceable on a home-view boot. Pin it STRUCTURALLY:
-  // while pinned, the derived openness is always FULL regardless of the
-  // underlying `mode` transition state. The effects still drive the real `mode`
-  // so the first-run falling edge collapses correctly.
+  // During onboarding the sheet MUST stay open — the seeded greeting + choices
+  // are the only way forward and the composer is frozen behind them. Deriving
+  // openness from the effect alone proved raceable on a home-view boot (the
+  // sheet could settle collapsed with the options hidden behind the grabber and
+  // only a misleading "tap an option above" hint showing). Pin it STRUCTURALLY:
+  // while onboarding is active, the derived openness is always FULL regardless
+  // of the underlying `mode` transition state. The effect still drives the real
+  // `mode` so the falling edge collapses correctly.
   const effectiveMode: ChatMode = pinnedOpen ? "full" : mode;
   const pilled = effectiveMode === "pill";
   const sheetOpen = effectiveMode === "half" || effectiveMode === "full";
@@ -4045,23 +4058,26 @@ export function ContinuousChatOverlay({
         }
       }
       const overpullT = Math.max(rawOverpullT, measuredOverpullT);
-      fullBleedT.set(overpullT);
-      if (reduce) return;
-      // Continuous maximize stays reversible: the over-pull morph tracks the
-      // finger in both directions, while `maximized` only MIRRORS that motion
-      // with hysteresis so the edge-to-edge flags flip near the top. No spring
-      // ever fires mid-drag — a discrete commit would carry the panel ahead of
-      // the finger, and the resulting height/pointer mismatch is exactly the
-      // "drag up, down, up — it stops following" drift. Starting maximized
-      // (fullBleedT already 1) is naturally a no-op.
-      if (overpullT >= 0.99 && !maximized) {
+      // DISCRETE full-bleed. The finger NEVER sets `fullBleedT` directly — the
+      // "awkward lerp" of border/radius/width easing with every pixel. Instead
+      // the over-pull flips a state at the threshold and the shape SPRINGS to it
+      // once (border, radius, side inset, width, composer capsule, and the panel
+      // height CAP all ride `fullBleedT` together, so they transition as one).
+      // The height still tracked the finger 1:1 above (threadHeight); only the
+      // SHAPE is stateful. Reversible with hysteresis: pulling back down below
+      // the release threshold springs it home. Reduced-motion cuts instantly.
+      if (overpullT >= MAXIMIZE_COMMIT_T && !maximized) {
         setFreeH(null);
         setMode("full");
         setMaximized(true);
         focusThreadRef.current = true;
+        if (reduce) fullBleedT.set(1);
+        else animateFullBleedTo(1);
         detentHaptic();
-      } else if (overpullT < 0.9 && maximized) {
+      } else if (overpullT <= MAXIMIZE_RELEASE_T && maximized) {
         setMaximized(false);
+        if (reduce) fullBleedT.set(0);
+        else animateFullBleedTo(0);
         // Void the peak so the release decision does not re-maximize from an
         // abandoned high-water mark.
         maxPullRawRef.current = 0;
@@ -4084,6 +4100,7 @@ export function ContinuousChatOverlay({
       stopThreadAnimation,
       stopOpenProgressAnimation,
       stopFullBleedAnimation,
+      animateFullBleedTo,
       setDragPreviewMounted,
       getPanelElement,
       maximized,
@@ -5548,17 +5565,12 @@ export function ContinuousChatOverlay({
                 // and only when a slash catalog is wired in — a plain message
                 // box otherwise.
                 {...comboboxAria}
-                // During onboarding the composer is locked (sign-in-first); the
-                // placeholder points at the sign-in above, brightened from the
-                // resting 45% to 70% to read clearly. `disabled:pointer-events-none`
-                // blocks it cleanly like the attachment "+" (no "not-allowed"
-                // cursor on hover), and `disabled:opacity-100` keeps the
-                // placeholder legible rather than dimming it.
-                className={`scrollbar-hide max-h-[8.5rem] min-h-8 min-w-0 flex-1 resize-none self-center border-none bg-transparent px-1.5 py-1 text-left text-sm leading-relaxed text-txt outline-none disabled:pointer-events-none disabled:opacity-100 ${
-                  firstRunOpen
-                    ? "placeholder:text-muted-strong"
-                    : "placeholder:text-muted"
-                }`}
+                // The floating composer is the primary chat affordance on the
+                // ambient home surface, so its placeholder must stay readable
+                // even when the glass pill sits over dark wallpaper. During
+                // onboarding `disabled:opacity-100` prevents the browser from
+                // dimming the locked cue.
+                className="scrollbar-hide max-h-[8.5rem] min-h-8 min-w-0 flex-1 resize-none self-center border-none bg-transparent px-1.5 py-1 text-left text-sm leading-relaxed text-txt outline-none placeholder:text-muted-strong disabled:pointer-events-none disabled:opacity-100"
               />
               {booting && !noProviderConfigured && !firstRunOpen ? (
                 <span id="cc-booting-hint" className="sr-only">
