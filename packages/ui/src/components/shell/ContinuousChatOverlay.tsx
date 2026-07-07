@@ -4132,14 +4132,20 @@ export function ContinuousChatOverlay({
   const pullBinding: PullGestureBinding = usePullGesture({
     onDrag: onDragOffset,
     onDragReset: settleDrag,
-    swipeEnabled: !sheetOpen,
+    // Horizontal swipe carries two meanings by sheet state: collapsed, it is
+    // the home↔launcher rail nav; with the sheet OPEN, dragging the chat
+    // sideways (either direction) DISMISSES it — collapse to the pill, the
+    // shared "put the chat away" landing.
+    swipeEnabled: true,
     onSwipeLeft: () => {
       settleDrag();
-      if (!sheetOpen) goLauncher();
+      if (sheetOpen) collapseToPill();
+      else goLauncher();
     },
     onSwipeRight: () => {
       settleDrag();
-      if (!sheetOpen) goHome();
+      if (sheetOpen) collapseToPill();
+      else goHome();
     },
     // Flicks step one detent; released drags from the collapsed input honor the
     // live height so a long pull can land full instead of snapping back to half.
@@ -4407,8 +4413,19 @@ export function ContinuousChatOverlay({
     settleDrag();
   }, [settleDrag]);
   const maximizeRestoreBinding: PullGestureBinding = usePullGesture({
-    // No horizontal nav on the maximize grab strip.
-    swipeEnabled: false,
+    // Sideways swipe on the maximize grab strip dismisses the chat to the
+    // pill — the same drag-the-chat-away gesture the open-sheet grabber owns
+    // (fullBleed is derived from mode, so its settle animation unwinds the
+    // full-bleed frame on the flip). Never nav: the chat is full-screen here.
+    swipeEnabled: true,
+    onSwipeLeft: () => {
+      setRestoreDragging(false);
+      collapseToPill();
+    },
+    onSwipeRight: () => {
+      setRestoreDragging(false);
+      collapseToPill();
+    },
     onDrag: onRestoreDrag,
     onDragReset: resetRestore,
     // Flick or slow-release both settle at the current finger height.
