@@ -27,7 +27,6 @@ vi.mock("../../api/client", () => ({
   },
 }));
 
-import * as React from "react";
 import {
   CHAT_COLUMN_MAX_WIDTH,
   ContinuousChatOverlay,
