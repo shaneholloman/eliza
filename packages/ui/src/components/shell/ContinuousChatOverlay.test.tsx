@@ -1008,19 +1008,30 @@ describe("ContinuousChatOverlay", () => {
   });
 
   it("renders composer controls icon-only — no capsule/border/fill, accent when active (#10711)", () => {
-    // Resting: the + and mic controls carry only the icon — no round capsule,
-    // no border, no translucent white fill — while keeping the 44×44 hit target.
+    // Resting: the +, transcribe, and voice controls carry only the icon — no
+    // round capsule, no border, no translucent white fill. The visible box is
+    // 40px with a 20px mark (the "icons slightly too big" fix); the invisible
+    // before-overlay pads the pointer target back out to 44×44 (WCAG 2.5.5).
     const { unmount } = render(
       <ContinuousChatOverlay controller={makeController()} />,
     );
-    for (const id of ["chat-composer-plus", "chat-composer-mic"]) {
+    for (const id of [
+      "chat-composer-plus",
+      "chat-composer-transcribe",
+      "chat-composer-mic",
+    ]) {
       const cls = screen.getByTestId(id).className;
       expect(cls).not.toMatch(/rounded-full/);
       expect(cls).not.toMatch(/\bborder\b/);
       expect(cls).not.toMatch(/bg-white/);
       expect(cls).toContain("bg-transparent");
-      expect(cls).toContain("h-11");
-      expect(cls).toContain("w-11");
+      expect(cls).toContain("h-10");
+      expect(cls).toContain("w-10");
+      expect(cls).not.toContain("h-11");
+      // The tighter 20px glyph (down from 22px)…
+      expect(cls).toContain("[&_svg]:size-5");
+      // …with the hit target padded back to ≥44px by the invisible overlay.
+      expect(cls).toContain("before:-inset-0.5");
     }
     unmount();
 
@@ -2069,12 +2080,39 @@ describe("ContinuousChatOverlay", () => {
     expect(screen.getByTestId("chat-composer-textarea")).toBeTruthy();
   });
 
-  it("hides the transcribe button when NOT in voice mode (#10699)", () => {
-    // Default controller: no hands-free, not recording → resting composer shows
-    // only the single mic control.
+  it("shows the transcribe (mic-glyph) button beside the voice control at rest — ChatGPT arrangement", () => {
+    // Resting composer: BOTH controls are always available — the mic glyph
+    // starts a transcription/dictation session, the waveform glyph next to it
+    // is the spoken conversation. (Previously transcribe only appeared once a
+    // voice session was already live.)
     render(<ContinuousChatOverlay controller={makeController()} />);
     expect(screen.getByTestId("chat-composer-mic")).toBeTruthy();
+    const transcribe = screen.getByTestId("chat-composer-transcribe");
+    expect(transcribe).toBeTruthy();
+    expect(transcribe.getAttribute("aria-label")).toBe("start transcription");
+  });
+
+  it("resting transcribe tap starts a transcription session", () => {
+    const toggleTranscriptionMode = vi.fn();
+    render(
+      <ContinuousChatOverlay
+        controller={makeController({
+          toggleTranscriptionMode,
+        } as unknown as Partial<ShellController>)}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("chat-composer-transcribe"));
+    expect(toggleTranscriptionMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides BOTH trailing voice controls while a draft exists (send owns the slot)", () => {
+    render(<ContinuousChatOverlay controller={makeController()} />);
+    fireEvent.change(screen.getByLabelText("message"), {
+      target: { value: "typing…" },
+    });
+    expect(screen.queryByTestId("chat-composer-mic")).toBeNull();
     expect(screen.queryByTestId("chat-composer-transcribe")).toBeNull();
+    expect(screen.getByTestId("chat-composer-action")).toBeTruthy();
   });
 
   it("shows the transcribe button in voice mode, next to the mic (#10699)", () => {
@@ -2299,7 +2337,7 @@ describe("ContinuousChatOverlay", () => {
     }
   });
 
-  it("drops the finished transcript into the composer as an attachment, not an auto-sent message", () => {
+  it("inserts the finished transcript at the END of the draft and attaches the recording (ChatGPT-style dictation)", () => {
     let sink:
       | ((
           segments: Array<Record<string, unknown>>,
@@ -2315,6 +2353,11 @@ describe("ContinuousChatOverlay", () => {
     render(<ContinuousChatOverlay controller={controller} />);
     expect(typeof sink).toBe("function");
 
+    // Text typed BEFORE the session must survive — the transcript appends.
+    const input = screen.getByLabelText("message") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "notes so far" } });
+
+    vi.mocked(client.createTranscript).mockClear();
     act(() => {
       sink?.(
         [
@@ -2327,13 +2370,51 @@ describe("ContinuousChatOverlay", () => {
           },
         ],
         1_700_000_000_000,
-        null,
+        new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0]),
       );
     });
 
-    // The transcript becomes a composer attachment chip (document kind) …
-    expect(screen.getByText(/^Transcript .*\.md$/)).toBeTruthy();
-    // … and is NOT auto-sent — the user sends it with their next message.
+    // The transcript lands as TEXT at the end of the draft — no markdown chip
+    // to open, matching ChatGPT dictation …
+    expect(input.value).toBe("notes so far hello world");
+    expect(screen.queryByText(/^Transcript .*\.md$/)).toBeNull();
+    // … and is NOT auto-sent — the user sends it when ready.
+    expect(controller.send).not.toHaveBeenCalled();
+    // The captured audio becomes a pending audio attachment — the sharable
+    // artifact that rides the next send into the content-addressed media store.
+    expect(screen.getByText(/^Recording .*\.wav$/)).toBeTruthy();
+    // The session is still archived (record + audio) for the Transcripts view.
+    expect(client.createTranscript).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(client.createTranscript).mock.calls[0][0]).toMatchObject({
+      audioContentType: "audio/wav",
+    });
+  });
+
+  it("a transcript with no captured audio still inserts text and attaches nothing", () => {
+    let sink:
+      | ((
+          segments: Array<Record<string, unknown>>,
+          startedAt: number,
+          audioWav: Uint8Array | null,
+        ) => void)
+      | null = null;
+    const controller = makeController({
+      setTranscriptSessionSink: ((fn: unknown) => {
+        sink = fn as typeof sink;
+      }) as unknown as ShellController["setTranscriptSessionSink"],
+    });
+    render(<ContinuousChatOverlay controller={controller} />);
+    act(() => {
+      sink?.(
+        [{ id: "s1", startMs: 0, endMs: 900, text: "just words", words: [] }],
+        1_700_000_000_000,
+        null,
+      );
+    });
+    expect(
+      (screen.getByLabelText("message") as HTMLTextAreaElement).value,
+    ).toBe("just words");
+    expect(screen.queryByText(/^Recording .*\.wav$/)).toBeNull();
     expect(controller.send).not.toHaveBeenCalled();
   });
 

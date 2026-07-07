@@ -3899,6 +3899,15 @@ export function ContinuousChatOverlay({
           up -= overshoot;
           excess = fullPanelMaxH;
         }
+        // Mirror of the open-sheet abandonment rule below: an over-pull that
+        // reversed back below the inset FULL height voids the peak, so the
+        // release can't re-maximize a sheet the finger already brought down.
+        if (
+          excess < insetPanelMaxH &&
+          maxPullRawRef.current >= insetPanelMaxH + maxOverPull / 2
+        ) {
+          maxPullRawRef.current = 0;
+        }
         openProgress.set(Math.min(1, up / PILL_OPEN_DISTANCE));
         // Mount the panel body on ANY upward pull, even with no history yet, so
         // the height follows the finger on a brand-new/empty chat too (else it
@@ -3972,6 +3981,18 @@ export function ContinuousChatOverlay({
         dragOffsetBaseRef.current += overshoot;
         off -= overshoot;
         raw = fullPanelMaxH;
+      }
+      // A pull that carried into the maximize over-pull zone but then reversed
+      // back BELOW the inset FULL height has given that intent up: void the
+      // peak so the RELEASE decision can't re-maximize the sheet the user just
+      // dragged back down. The state-driven un-maximize hysteresis (below)
+      // voids it too, but only after the mid-drag `maximized` re-render has
+      // committed — this is the deterministic, state-free guarantee.
+      if (
+        raw < insetPanelMaxH &&
+        maxPullRawRef.current >= insetPanelMaxH + maxOverPull / 2
+      ) {
+        maxPullRawRef.current = 0;
       }
       // Re-arm the maximize commit only once the pull has dropped back below the
       // inset FULL height — hysteresis so leaving a committed maximize (which
