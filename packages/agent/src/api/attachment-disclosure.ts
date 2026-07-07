@@ -93,7 +93,7 @@ function serializeRedactedAttachments(
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
     const a = item as Record<string, unknown>;
-    const redactedUrl = str(a.redactedUrl) ?? "";
+    const redactedUrl = str(a.redactedUrl);
     if (!redactedUrl || !RENDERABLE_ATTACHMENT_URL.test(redactedUrl)) continue;
     out.push({
       id: str(a.id) ?? `att-${out.length}`,
