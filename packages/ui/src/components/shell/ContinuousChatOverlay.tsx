@@ -2934,6 +2934,7 @@ export function ContinuousChatOverlay({
     detentHaptic();
   }, [stopThreadAnimation]);
 
+
   // The single detent→detent animator: whenever the settled detent (or viewport)
   // changes and we're not mid finger-drag, spring the history height to it. The
   // gesture / open paths just flip sheetOpen/expanded and this reacts — no
@@ -3020,6 +3021,68 @@ export function ContinuousChatOverlay({
     }
     if (was) goToDetent("half");
   }, [firstRunOpen, goToDetent]);
+
+  // Trackpad two-finger swipe steps the sheet through its detents
+  // (pill ↔ input ↔ half ↔ full ↔ maximized) — the macOS-feel complement to
+  // the pointer drag. Wheel events accumulate with a short decay and step once
+  // per threshold with a cooldown, so a single physical swipe moves ONE detent
+  // (no accidental multi-jumps). Scoped to the sheet chrome: events that
+  // originate inside the transcript scroller belong to transcript scrolling
+  // and are ignored here, so reading history never resizes the sheet.
+  const wheelStepAccRef = React.useRef(0);
+  const wheelStepCooldownRef = React.useRef(0);
+  const wheelStepDecayRef = React.useRef<number | null>(null);
+  const onSheetWheel = React.useCallback(
+    (e: React.WheelEvent) => {
+      if (firstRunOpen || draggingRef.current) return;
+      if (
+        e.target instanceof Element &&
+        e.target.closest("#continuous-thread")
+      ) {
+        return;
+      }
+      const now = performance.now();
+      if (now < wheelStepCooldownRef.current) return;
+      if (wheelStepDecayRef.current !== null) {
+        window.clearTimeout(wheelStepDecayRef.current);
+      }
+      wheelStepDecayRef.current = window.setTimeout(() => {
+        wheelStepAccRef.current = 0;
+        wheelStepDecayRef.current = null;
+      }, 250);
+      wheelStepAccRef.current += e.deltaY;
+      const STEP_PX = 60;
+      const acc = wheelStepAccRef.current;
+      if (Math.abs(acc) < STEP_PX) return;
+      wheelStepAccRef.current = 0;
+      wheelStepCooldownRef.current = now + 450;
+      // Natural-scroll semantics: swiping UP on the trackpad (content up,
+      // deltaY > 0) grows the sheet; swiping down shrinks it.
+      const grow = acc > 0;
+      if (grow) {
+        if (pilled) goToDetent("collapsed");
+        else if (!sheetOpen) goToDetent("half");
+        else if (!expanded) goToDetent("full");
+        else if (!maximized) maximizeFromPull();
+      } else {
+        if (maximized) restoreFromMaximized();
+        else if (expanded) goToDetent("half");
+        else if (sheetOpen) goToDetent("collapsed");
+        else if (!pilled) collapseToPill();
+      }
+    },
+    [
+      firstRunOpen,
+      pilled,
+      sheetOpen,
+      expanded,
+      maximized,
+      goToDetent,
+      maximizeFromPull,
+      restoreFromMaximized,
+      collapseToPill,
+    ],
+  );
 
   // First-run opaque backdrop (#12178). While onboarding pins the sheet FULL,
   // the backdrop is an OPAQUE `bg-bg` layer that hides the launcher/home behind
@@ -3956,7 +4019,13 @@ export function ContinuousChatOverlay({
       // continuous pull reads pill → input → chat (and a flick-up no longer
       // flashes a chat sliver, since the thread only grows after the morph).
       if (pilled) {
-        let up = Math.max(0, effOffset);
+        // FLOOR consumption (mirror of the ceiling rebase below): the pill is
+        // the bottom of the continuum — travel BELOW it has nothing to shrink,
+        // so absorb it into the offset base. Without this the below-floor
+        // travel was banked and a reversal had to pay it all back before the
+        // pill responded (the "drag down, drag up, sheet lags my mouse" drift).
+        if (effOffset < 0) dragOffsetBaseRef.current = offset;
+        let up = Math.max(0, offset - dragOffsetBaseRef.current);
         // The pill sits at height 0, so the raw finger travel IS the equivalent
         // pull height. Tracking it here (like the open-sheet path below) lets a
         // single held drag from the pill clear the maximize threshold — pill →
@@ -4069,6 +4138,19 @@ export function ContinuousChatOverlay({
         maxPullRawRef.current >= insetPanelMaxH + maxOverPull / 2
       ) {
         maxPullRawRef.current = 0;
+      }
+      // FLOOR consumption (mirror of the ceiling rebase above): once the drag
+      // has consumed the whole thread AND the input→pill morph
+      // (raw < -PILL_OPEN_DISTANCE) there is nothing left to shrink — absorb
+      // further downward travel into the offset base. Banked below-floor
+      // travel meant a full-screen down-up-down-up mouse drag drifted out of
+      // sync: the sheet sat at the bottom while the pointer's banked debt was
+      // paid back pixel-for-pixel before it would rise again.
+      if (sheetOpen && raw < -PILL_OPEN_DISTANCE) {
+        const overshoot = raw + PILL_OPEN_DISTANCE; // negative
+        dragOffsetBaseRef.current += overshoot;
+        off -= overshoot;
+        raw = -PILL_OPEN_DISTANCE;
       }
       // Re-arm the maximize commit only once the pull has dropped back below the
       // inset FULL height — hysteresis so leaving a committed maximize (which
@@ -4815,6 +4897,7 @@ export function ContinuousChatOverlay({
           ref={bindPanelRef}
           aria-label="Chat composer"
           data-testid="chat-sheet"
+          onWheel={onSheetWheel}
           data-variant={sheetOpen ? "open" : "closed"}
           data-detent={detentLabel}
           data-maximized={fullBleed ? "true" : undefined}
@@ -5559,7 +5642,10 @@ export function ContinuousChatOverlay({
                   // Above the shell overlay (z 9000); mirrors the config-select
                   // floating layer so the menu never hides behind the glass.
                   style={{ zIndex: 12000 }}
-                  className="min-w-[13rem] border-border-strong"
+                  // Unified liquid-glass menu chrome (glass/tokens.ts `menu`
+                  // variant) instead of the flat opaque card.
+                  glass
+                  className="min-w-[13rem]"
                 >
                   <DropdownMenuItem
                     className="cursor-pointer gap-2.5 data-[highlighted]:bg-bg-hover"
