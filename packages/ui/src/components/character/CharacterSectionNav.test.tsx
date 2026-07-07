@@ -3,9 +3,9 @@
 // jsdom tests for the Character family section strip (#13591): the fixed
 // host-owned tab set (Personality/Relationships/Skills/Experience), the
 // centered "Character" ViewHeader, active-tab resolution from the route
-// (including the legacy /character/relationships alias), click navigation, and
-// isCharacterSectionPath predicate coverage. Deterministic — no network, no
-// registry; the strip is a static declaration.
+// (including the legacy /character/select and /character/relationships aliases),
+// click navigation, and isCharacterSectionPath predicate coverage.
+// Deterministic — no network, no registry; the strip is a static declaration.
 
 import {
   cleanup,
@@ -26,9 +26,10 @@ afterEach(() => {
 });
 
 describe("isCharacterSectionPath", () => {
-  it("matches every family section route and the relationships alias", () => {
+  it("matches every family section route and legacy aliases", () => {
     for (const path of [
       "/character",
+      "/character/select",
       "/apps/relationships",
       "/character/relationships",
       "/character/skills",
@@ -81,19 +82,22 @@ describe("CharacterSectionNav", () => {
     ).toBeNull();
   });
 
-  it("marks Personality active at the /character root", () => {
-    render(<CharacterSectionNav activePath="/character" />);
-    const strip = screen.getByTestId("section-nav-character");
-    expect(
-      within(strip)
-        .getByRole("button", { name: "Personality" })
-        .getAttribute("aria-current"),
-    ).toBe("page");
-    expect(
-      within(strip)
-        .getByRole("button", { name: "Skills" })
-        .getAttribute("aria-current"),
-    ).toBeNull();
+  it("marks Personality active at the /character root and legacy select alias", () => {
+    for (const path of ["/character", "/character/select"]) {
+      render(<CharacterSectionNav activePath={path} />);
+      const strip = screen.getByTestId("section-nav-character");
+      expect(
+        within(strip)
+          .getByRole("button", { name: "Personality" })
+          .getAttribute("aria-current"),
+      ).toBe("page");
+      expect(
+        within(strip)
+          .getByRole("button", { name: "Skills" })
+          .getAttribute("aria-current"),
+      ).toBeNull();
+      cleanup();
+    }
   });
 
   it("marks Relationships active on both its canonical route and the legacy alias", () => {
