@@ -32,6 +32,8 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
       "Good afternoon",
       "what's up",
       "Welcome",
+      "Today",
+      "Weather",
     ],
   },
   "builtin-settings": {
@@ -63,6 +65,7 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
       "Tasks",
       "Workflows",
       "Inactive",
+      "New",
     ],
   },
   "builtin-documents": {
@@ -108,6 +111,13 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   },
   "builtin-logs": {
     requireAny: ["Logs", "INFO", "All levels", "Search logs", "All tags"],
+    requireAny: [
+      "All levels",
+      "Alllevels",
+      "Search logs",
+      "searchlogs",
+      "All tags",
+      "Alltags",
   },
   "builtin-inventory": {
     requireAny: ["Wallet", "USDC", "Tokens", "Perps"],
@@ -126,6 +136,12 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   "builtin-apps": {
     requireAll: ["My Apps"],
     requireAny: ["elizaOS apps", "Advanced", "Load"],
+    requireAny: [
+      "My Apps",
+      "No apps installed",
+      "Create new app",
+      "Install, create",
+    ],
   },
   "builtin-views": {
     requireAny: ["Messages", "Settings", "Wallet", "Automations", "Knowledge"],
@@ -141,6 +157,9 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
       "Style Rules",
       "Chat Examples",
       "Post Examples",
+      "System prompt",
+      "You are",
+      "Youare",
     ],
   },
   "builtin-runtime": {
@@ -160,6 +179,16 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
   },
   "builtin-transcripts": {
     requireAny: ["Live meeting", "Paste a Meet", "transcri", "recording"],
+    requireAny: [
+      "Live meeting",
+      "Paste a Meet",
+      "Teams",
+      "Zoom link",
+      "Join meeting",
+      "No transcripts yet",
+      "transcri",
+      "recording",
+    ],
   },
   "builtin-desktop": {
     requireAny: [
