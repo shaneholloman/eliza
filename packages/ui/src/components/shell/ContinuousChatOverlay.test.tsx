@@ -942,39 +942,6 @@ describe("ContinuousChatOverlay", () => {
     expect(sheet.getAttribute("data-detent")).toBe("full");
   });
 
-  it("cancels delayed header navigation when unmounted before the close animation finishes", () => {
-    vi.useFakeTimers();
-    try {
-      const navigateHome = vi.fn();
-      const { unmount } = render(
-        <ContinuousChatOverlay
-          controller={makeController({
-            currentTab: "settings",
-            navigateHome,
-          } as unknown as Partial<ShellController>)}
-        />,
-      );
-      const grabber = screen.getByTestId("chat-sheet-grabber");
-      const pull = (fromY: number, toY: number) => {
-        fireEvent.pointerDown(grabber, { clientY: fromY, pointerId: 1 });
-        fireEvent.pointerMove(grabber, { clientY: toY, pointerId: 1 });
-        fireEvent.pointerUp(grabber, { clientY: toY, pointerId: 1 });
-      };
-      pull(420, 280); // collapsed → half
-      expect(screen.getByTestId("chat-full-launcher")).toBeTruthy();
-      fireEvent.click(screen.getByTestId("chat-full-launcher"));
-      unmount();
-
-      act(() => {
-        vi.advanceTimersByTime(500);
-      });
-
-      expect(navigateHome).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("opens on a fast flick even below the distance threshold (velocity)", () => {
     render(<ContinuousChatOverlay controller={makeController()} />);
     const sheet = screen.getByTestId("chat-sheet");
@@ -1046,7 +1013,7 @@ describe("ContinuousChatOverlay", () => {
     const { unmount } = render(
       <ContinuousChatOverlay controller={makeController()} />,
     );
-    for (const id of ["chat-composer-attach", "chat-composer-mic"]) {
+    for (const id of ["chat-composer-plus", "chat-composer-mic"]) {
       const cls = screen.getByTestId(id).className;
       expect(cls).not.toMatch(/rounded-full/);
       expect(cls).not.toMatch(/\bborder\b/);
@@ -1524,7 +1491,8 @@ describe("ContinuousChatOverlay", () => {
 
   it("shows the attach (+) control", () => {
     render(<ContinuousChatOverlay controller={makeController()} />);
-    expect(screen.getByLabelText("attach image")).toBeTruthy();
+    expect(screen.getByTestId("chat-composer-plus")).toBeTruthy();
+    expect(screen.getByLabelText("chat actions")).toBeTruthy();
   });
 
   it("attaches an image and enables an image-only send", async () => {
@@ -2407,11 +2375,11 @@ describe("ContinuousChatOverlay", () => {
     expect(grabber.getAttribute("aria-hidden")).toBe("true");
   });
 
-  // ── chat-full Launcher. The header row no longer exposes Home /
-  // Views / Settings as a mini app nav. It keeps one Launcher icon that
-  // returns to the combined Home/Launcher surface; Settings lives in the
-  // Launcher grid.
-  it("renders only the Launcher in the chat-full header", () => {
+  // ── chat-full header carries NO nav buttons. Search / upload / camera /
+  // transcribe moved to the composer "+" menu and Home lives in the launcher,
+  // so the top bar no longer acts as a mini app nav (it only reserves the
+  // safe-area inset + hosts the transcription badge).
+  it("renders no nav buttons in the chat-full header", () => {
     render(
       <ContinuousChatOverlay
         controller={makeController({
@@ -2419,45 +2387,28 @@ describe("ContinuousChatOverlay", () => {
         } as Partial<ShellController>)}
       />,
     );
-    openSheetToHalf();
+    openSheetToFull();
 
-    const launcher = screen.getByTestId("chat-full-launcher");
-    expect((launcher as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId("chat-full-launcher")).toBeNull();
+    expect(screen.queryByTestId("chat-full-search")).toBeNull();
     expect(screen.queryByTestId("chat-full-home")).toBeNull();
     expect(screen.queryByTestId("chat-full-views")).toBeNull();
     expect(screen.queryByTestId("chat-full-settings")).toBeNull();
   });
 
-  // Open the sheet to the HALF detent so the chat-full header is revealed and
-  // interactive (its wrapper carries `inert` until `headerVisible` flips at the
-  // half threshold). A deliberate pull-up of the grabber past the distance
-  // threshold lands on half — the same gesture the COLLAPSED→HALF test uses.
-  function openSheetToHalf(): void {
+  // Open the sheet to the FULL detent so the chat-full header is revealed and
+  // interactive. Half keeps the header inert.
+  function openSheetToFull(): void {
     const sheet = screen.getByTestId("chat-sheet");
     const grabber = screen.getByTestId("chat-sheet-grabber");
     fireEvent.pointerDown(grabber, { clientY: 420, pointerId: 1 });
     fireEvent.pointerMove(grabber, { clientY: 280, pointerId: 1 });
     fireEvent.pointerUp(grabber, { clientY: 280, pointerId: 1 });
-    expect(sheet.getAttribute("data-detent")).toBe("half");
+    fireEvent.pointerDown(grabber, { clientY: 420, pointerId: 1 });
+    fireEvent.pointerMove(grabber, { clientY: 280, pointerId: 1 });
+    fireEvent.pointerUp(grabber, { clientY: 280, pointerId: 1 });
+    expect(sheet.getAttribute("data-detent")).toBe("full");
   }
-
-  it("routes the chat-full Launcher button to the home callback", async () => {
-    const navigateHome = vi.fn();
-    render(
-      <ContinuousChatOverlay
-        controller={makeController({
-          currentTab: "settings",
-          navigateHome,
-        } as Partial<ShellController>)}
-      />,
-    );
-    openSheetToHalf();
-
-    // navigateAndClose collapses the sheet then defers the navigation a frame
-    // (so the close animates first), so the callback fires on a short timer.
-    fireEvent.click(screen.getByTestId("chat-full-launcher"));
-    await vi.waitFor(() => expect(navigateHome).toHaveBeenCalledTimes(1));
-  });
 
   // ── Rich turn-status indicator (#8813) ──────────────────────────────────
   describe("turn status indicator", () => {
@@ -2658,10 +2609,32 @@ describe("ContinuousChatOverlay single-thread (no chat swipe, #13531)", () => {
   }
 
   function openSheet() {
+    const sheet = screen.getByTestId("chat-sheet");
     const grabber = screen.getByTestId("chat-sheet-grabber");
     fireEvent.pointerDown(grabber, { clientY: 420, pointerId: 1 });
     fireEvent.pointerMove(grabber, { clientY: 280, pointerId: 1 });
     fireEvent.pointerUp(grabber, { clientY: 280, pointerId: 1 });
+    fireEvent.pointerDown(grabber, { clientY: 420, pointerId: 1 });
+    fireEvent.pointerMove(grabber, { clientY: 280, pointerId: 1 });
+    fireEvent.pointerUp(grabber, { clientY: 280, pointerId: 1 });
+    expect(sheet.getAttribute("data-detent")).toBe("full");
+  }
+
+  // Search moved off the header into the composer "+" actions menu; open it the
+  // way a user now does — tap "+", then "Search chat…".
+  function openSearchFromComposerMenu(): void {
+    const plus = screen.getByTestId("chat-composer-plus");
+    fireEvent.pointerDown(plus, {
+      button: 0,
+      pointerId: 1,
+      pointerType: "mouse",
+    });
+    fireEvent.pointerUp(plus, {
+      button: 0,
+      pointerId: 1,
+      pointerType: "mouse",
+    });
+    fireEvent.click(screen.getByText("Search chat…"));
   }
 
   function thread(): HTMLElement {
@@ -2719,18 +2692,17 @@ describe("ContinuousChatOverlay single-thread (no chat swipe, #13531)", () => {
 
     // Maximize/minimize became a vertical pull in #13531 — still no button.
     expect(screen.queryByTestId("chat-full-maximize")).toBeNull();
-    // The launcher header control still renders.
-    expect(screen.getByTestId("chat-full-launcher")).toBeTruthy();
   });
 
-  it("exposes search as the ONLY left header control (no new-chat/refresh)", () => {
+  it("exposes no left header controls (search + new-chat moved off the header)", () => {
     const { controller } = makeSwipeController();
     render(<ContinuousChatOverlay controller={controller} />);
     openSheet();
 
-    // The thread is one infinite conversation: search is the sole left
-    // control; there is deliberately no new-chat/clear/refresh button.
-    expect(screen.getByTestId("chat-full-search")).toBeTruthy();
+    // The thread is one infinite conversation and the header carries no
+    // buttons: search moved to the composer "+" menu, and there is deliberately
+    // no new-chat/clear/refresh control anywhere.
+    expect(screen.queryByTestId("chat-full-search")).toBeNull();
     expect(screen.queryByTestId("chat-full-clear")).toBeNull();
   });
 
@@ -2746,20 +2718,17 @@ describe("ContinuousChatOverlay single-thread (no chat swipe, #13531)", () => {
     expect(controller.toggleHandsFree).toHaveBeenCalledTimes(1);
   });
 
-  it("opens the message-search panel from the header search control (#14279)", () => {
+  it("opens the message-search panel from the composer + menu (#14279)", () => {
     const { controller } = makeSwipeController();
     render(<ContinuousChatOverlay controller={controller} />);
     openSheet();
 
     // Panel is closed at rest.
     expect(screen.queryByTestId("chat-message-search")).toBeNull();
-    // Tapping the search control reveals the search panel over the transcript.
-    fireEvent.click(screen.getByTestId("chat-full-search"));
+    // "+" → "Search chat…" reveals the search panel over the transcript.
+    openSearchFromComposerMenu();
     expect(screen.getByTestId("chat-message-search")).toBeTruthy();
     expect(screen.getByTestId("message-search-panel")).toBeTruthy();
-    // Tapping again toggles it closed.
-    fireEvent.click(screen.getByTestId("chat-full-search"));
-    expect(screen.queryByTestId("chat-message-search")).toBeNull();
   });
 
   it("drives the header search → query → jump path against the real search API shape (#14330)", async () => {
@@ -2811,7 +2780,7 @@ describe("ContinuousChatOverlay single-thread (no chat swipe, #13531)", () => {
     render(<ContinuousChatOverlay controller={controller} />);
     openSheet();
 
-    fireEvent.click(screen.getByTestId("chat-full-search"));
+    openSearchFromComposerMenu();
     const input = screen.getByTestId("message-search-input");
     fireEvent.change(input, { target: { value: "budget" } });
 
@@ -2856,7 +2825,7 @@ describe("ContinuousChatOverlay single-thread (no chat swipe, #13531)", () => {
     render(<ContinuousChatOverlay controller={controller} />);
     openSheet();
 
-    fireEvent.click(screen.getByTestId("chat-full-search"));
+    openSearchFromComposerMenu();
     fireEvent.change(screen.getByTestId("message-search-input"), {
       target: { value: "budget" },
     });

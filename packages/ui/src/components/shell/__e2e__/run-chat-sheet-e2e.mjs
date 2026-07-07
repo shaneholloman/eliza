@@ -3171,7 +3171,10 @@ try {
     // the launcher/home so no launcher pixel shows through — the fixture's
     // "Workspace" view content behind the chat must be fully hidden. Assert the
     // backdrop is present, opaque, full-viewport, solid-colored, and that the
-    // real rendered pixel over the fixture heading reads the opaque bg-bg.
+    // real rendered pixel over the fixture heading reads as the dark onboarding
+    // layer rather than the orange home backdrop. The full-screen sheet may cover
+    // this coordinate above the backdrop, so this proves the user-visible
+    // invariant rather than one specific stacking-layer color.
     const backdrop = await p.evaluate(() => {
       const el = document.querySelector(
         '[data-testid="chat-first-run-backdrop"]',
@@ -3210,8 +3213,8 @@ try {
     });
     const hidePx = await pixelAt(p, headingCenter.x, headingCenter.y);
     assert(
-      hidePx.r < 40 && hidePx.g < 40 && hidePx.b < 50,
-      `ONBOARDING: launcher/home behind is hidden — pixel over the heading is the opaque bg-bg, not the home backdrop (got rgb(${hidePx.r}, ${hidePx.g}, ${hidePx.b}))`,
+      hidePx.r < 70 && hidePx.g < 70 && hidePx.b < 70,
+      `ONBOARDING: launcher/home behind is hidden — pixel over the heading is a dark onboarding layer, not the home backdrop (got rgb(${hidePx.r}, ${hidePx.g}, ${hidePx.b}))`,
     );
     await snap(p, "state-onboarding-opaque-backdrop");
 

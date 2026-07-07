@@ -1,14 +1,13 @@
 /**
  * The app's notification inbox, mounted INLINE on the home column (HomeScreen)
- * directly beneath the time/weather header — the same layer as the widgets, in
+ * directly beneath the time/weather header, the same layer as the widgets, in
  * the band between the header and the floating chat. It owns the inbox content
  * (rows, open/deep-link, per-row dismiss, mark-all-read) and self-hides when
  * empty, fading in Apple-style when the first notification arrives. It has no
- * card chrome and no "Notifications" header of its own — the view-group
- * eyebrows carry the structure; the only pinned control is the icon-only
- * priority ⇄ time sort toggle (default priority, persisted). At rest the shade
- * shows ONLY interrupt-tier (high/urgent) rows — triage, not a log — with a
- * quiet "N more" / "Show less" affordance to expand/compress the rest.
+ * card chrome and no "Notifications" header of its own. The view-group
+ * eyebrows carry the structure. At rest the shade shows only interrupt-tier
+ * rows, a triage view rather than a log, with a quiet "N more" / "Show less"
+ * affordance to expand/compress the rest.
  *
  * Rows are grouped by the VIEW they deep-link into (falling back to the
  * producer category), like a platform notification shade groups by app. The
@@ -21,17 +20,16 @@
  *
  * Acknowledgement is the platform-shade model (iOS lock screen / Android
  * shade) with an expand step: tap opens the row's contextual option strip
- * (Suggest a reply / Review / Open / Dismiss — see notificationRowOptions);
+ * (Suggest a reply / Review / Open / Dismiss; see notificationRowOptions);
  * acting on an option clears the row. Horizontal drag (mouse or touch)
  * dismisses. There is no read/unread bookkeeping, no dots, no corner X. Both
  * sort orders are stable total orders, so live arrivals never reshuffle
- * existing rows under the user's finger; groups inherit the position of
- * their highest-ranked row.
+ * existing rows under the user's finger; groups inherit the position of their
+ * highest-ranked row.
  */
 import type { AgentNotification, NotificationCategory } from "@elizaos/core";
 import { tierForPriority } from "@elizaos/core";
-import { logger } from "@elizaos/logger";
-import { ChevronDown, ChevronUp, Clock, Flag } from "lucide-react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { haptics } from "../../bridge/capacitor-bridge";
 import { dispatchChatPrefill } from "../../events";
@@ -142,35 +140,12 @@ const NOTIF_SCROLL_CSS = `
 }
 `;
 
-/** The two triage orders the shade's sort toggle flips between. */
+/**
+ * The triage orders `orderDashboardNotifications` can apply. The shade always
+ * renders `priority`; `time` remains a pure-function option used by tests and
+ * potential callers.
+ */
 export type NotificationSortMode = "priority" | "time";
-
-/** localStorage key persisting the sort toggle across sessions. */
-const SORT_MODE_STORAGE_KEY = "eliza:notifications:sort-mode";
-
-function loadSortMode(): NotificationSortMode {
-  try {
-    if (typeof window === "undefined") return "priority";
-    return window.localStorage.getItem(SORT_MODE_STORAGE_KEY) === "time"
-      ? "time"
-      : "priority";
-  } catch {
-    return "priority";
-  }
-}
-
-function storeSortMode(mode: NotificationSortMode): void {
-  try {
-    window.localStorage.setItem(SORT_MODE_STORAGE_KEY, mode);
-  } catch (err) {
-    // error-policy:J6 best-effort UI persistence — a failed write (private
-    // mode / quota) just means the sort toggle won't survive reload; the
-    // in-memory state still works. Keep it observable rather than silent.
-    logger.debug(
-      `[NotificationsHomeCenter] sort-mode persist skipped: ${String(err)}`,
-    );
-  }
-}
 
 /**
  * Stable dashboard order. `priority` (the default): priority bucket, then
@@ -594,14 +569,10 @@ NotificationRow.displayName = "NotificationRow";
 export function NotificationsHomeCenter(): React.JSX.Element | null {
   notificationsHomeCenterRenderObserverForTests?.();
   const { notifications } = useNotifications();
-  // Sort toggle (priority ⇄ time), persisted; priority is the default. The
-  // rested shade shows only interrupt-tier rows (`showAll` expands to all).
-  const [sortMode, setSortMode] = useState<NotificationSortMode>(loadSortMode);
+  // The inbox is always priority-triaged; there is no user-facing sort toggle.
+  // The rested shade shows only interrupt-tier rows (`showAll` expands to all).
+  const sortMode: NotificationSortMode = "priority";
   const [showAll, setShowAll] = useState(false);
-  const changeSortMode = useCallback((mode: NotificationSortMode) => {
-    setSortMode(mode);
-    storeSortMode(mode);
-  }, []);
   // No list-level clock tick here (binding pattern, spec §C.4): relative
   // timestamps live in the `<RelativeTime>` leaf inside each row, which owns the
   // shared visibility-gated ticker. The minute roll re-renders those text nodes
@@ -672,35 +643,8 @@ export function NotificationsHomeCenter(): React.JSX.Element | null {
       className="eliza-notif-center-in flex min-h-0 flex-1 flex-col overflow-hidden"
     >
       <style>{NOTIF_SCROLL_CSS}</style>
-      {/* No "Notifications" header — the view-group eyebrows carry the
-          structure. The only pinned control is the icon-only sort toggle
-          (priority ⇄ time), right-aligned in the band the header occupied. */}
-      <div className="flex shrink-0 items-center justify-end gap-0.5 px-2.5 pb-0.5 pt-2">
-        {(
-          [
-            { mode: "priority", Icon: Flag, label: "Sort by priority" },
-            { mode: "time", Icon: Clock, label: "Sort by time" },
-          ] as const
-        ).map(({ mode, Icon, label }) => (
-          <button
-            key={mode}
-            type="button"
-            aria-label={label}
-            title={label}
-            aria-pressed={sortMode === mode}
-            data-testid={`notifications-sort-${mode}`}
-            onClick={() => changeSortMode(mode)}
-            className={cn(
-              "rounded-full p-2 transition-colors pointer-coarse:min-h-touch pointer-coarse:min-w-touch",
-              sortMode === mode
-                ? "bg-white/12 text-white"
-                : "text-white/45 hover:bg-white/8 hover:text-white/80",
-            )}
-          >
-            <Icon className="h-3.5 w-3.5" />
-          </button>
-        ))}
-      </div>
+      {/* No "Notifications" header and no sort toggle; the inbox is always
+          priority-triaged; the view-group eyebrows carry the only structure. */}
       <ul
         ref={scrollRef}
         onScroll={syncEdgeFades}

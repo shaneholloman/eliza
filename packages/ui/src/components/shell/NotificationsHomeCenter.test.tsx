@@ -353,8 +353,7 @@ describe("NotificationsHomeCenter", () => {
     expect(screen.getAllByTestId("notification-row")).toHaveLength(1);
   });
 
-  it("sort toggle flips priority ⇄ time, defaults to priority, and persists", () => {
-    window.localStorage.removeItem("eliza:notifications:sort-mode");
+  it("always priority-triages without a sort toggle", () => {
     const urgentOld = makeNotification({
       priority: "urgent",
       title: "Urgent old",
@@ -368,19 +367,10 @@ describe("NotificationsHomeCenter", () => {
       screen
         .getAllByTestId("notification-row")
         .map((el) => el.textContent ?? "");
-    // Default: priority mode (urgent outranks high despite being older).
-    expect(
-      screen
-        .getByTestId("notifications-sort-priority")
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
+    // Priority order is fixed: urgent outranks high despite being older.
     expect(titles()[0]).toContain("Urgent old");
-    fireEvent.click(screen.getByTestId("notifications-sort-time"));
-    expect(titles()[0]).toContain("High new");
-    expect(window.localStorage.getItem("eliza:notifications:sort-mode")).toBe(
-      "time",
-    );
-    window.localStorage.removeItem("eliza:notifications:sort-mode");
+    expect(screen.queryByTestId("notifications-sort-priority")).toBeNull();
+    expect(screen.queryByTestId("notifications-sort-time")).toBeNull();
   });
 
   it("has no Notifications header — view-group eyebrows carry the structure", () => {

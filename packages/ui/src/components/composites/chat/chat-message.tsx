@@ -502,12 +502,15 @@ export const ChatMessage = memo(function ChatMessage({
   const canDelete =
     typeof onDelete === "function" && !message.id.startsWith("temp-");
   const normalizedSource = normalizeChatSourceKey(message.source) ?? undefined;
-  // Reply targets the persisted message by id, so an optimistic (temp-) turn —
-  // which has no server row yet — has nothing to reply to. A proactive
+  // Reply targets the persisted message by id, so an optimistic (temp-) turn,
+  // which has no server row yet, has nothing to reply to. A proactive
   // suggestion carries its own accept/dismiss affordances, not a reply.
   // Proactive interaction comments (#8792) are agent-initiated *suggestions*, not
-  // replies — render them with a distinct, one-tap-dismissible affordance.
+  // replies; render them with a distinct, one-tap-dismissible affordance.
   const isSuggestion = !isUser && normalizedSource === "proactive-interaction";
+  // First-run onboarding turns render chromeless: agent prose floats as plain
+  // wallpaper text with its CTA button directly beneath.
+  const isFirstRun = !isUser && message.source === "first_run";
   const canReply =
     typeof onReply === "function" &&
     !message.id.startsWith("temp-") &&
@@ -922,6 +925,7 @@ export const ChatMessage = memo(function ChatMessage({
           {bubbleInteractive ? (
             <ChatBubble
               variant="glass"
+              bare={isFirstRun}
               tone={isUser ? "user" : "assistant"}
               {...(holdHandlers ?? {})}
               role="button"
@@ -940,6 +944,7 @@ export const ChatMessage = memo(function ChatMessage({
           ) : (
             <ChatBubble
               variant="glass"
+              bare={isFirstRun}
               tone={isUser ? "user" : "assistant"}
               {...(holdHandlers ?? {})}
               className={bubbleExtraClassName}
