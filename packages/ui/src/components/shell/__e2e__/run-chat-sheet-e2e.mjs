@@ -3284,11 +3284,14 @@ try {
         .includes("sign in"),
       "ONBOARDING: composer placeholder points to sign-in (#15039; honest copy per #15206)",
     );
+    // Sign-in-first onboarding (#15339 supersedes the #12178 unlocked design):
+    // the composer is locked until the user signs in, matching the sign-in
+    // placeholder above and ContinuousChatOverlay.firstrun.test.tsx.
     assert(
       (await p
         .getByTestId("chat-composer-textarea")
         .isDisabled()),
-      "ONBOARDING: composer is LOCKED until sign-in (sign-in-first, #15339)",
+      "ONBOARDING: composer textarea is locked sign-in-first (#15339)",
     );
     await snap(p, "state-onboarding-full-screen");
 
