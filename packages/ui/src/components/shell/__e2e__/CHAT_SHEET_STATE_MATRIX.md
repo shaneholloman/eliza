@@ -25,7 +25,7 @@ Continuous motion values: `threadHeight` (px, finger-tracked), `openProgress`
 - **flick** — release ≥ 0.5 px/ms (whole-press or last-segment velocity).
 - **slow drag** — deliberate drag released below flick velocity → `onSettleFree` (rests where released, with detent magnetism ±64px).
 - **nudge** — small slow movement; springs back to the current state.
-- **held drag** — the live finger: `threadHeight` tracks 1:1; past FULL it rubber-bands and drives the maximize morph; past the bottom it drives the input→pill morph.
+- **held drag** — the live finger: `threadHeight` tracks 1:1; past FULL it drives the maximize morph up to the full-bleed ceiling, where further travel is **consumed** (never banked — see the follow-the-finger invariant); past the bottom it drives the input→pill morph.
 
 ## Transitions
 
@@ -56,7 +56,7 @@ Continuous motion values: `threadHeight` (px, finger-tracked), `openProgress`
 | Flick up | FULL. |
 | Flick down | free rest above half steps to HALF first; at/below half → INPUT. |
 | Slow drag | magnetism: ≤ 64px at the bottom → INPUT (PILL when the gesture started above half+64 or overshot the bottom ≥ 40px); near half/full → that detent; gaps → FREE rest. |
-| Held over-pull past FULL | tracks the finger 1:1: the panel grows from the inset FULL height to the full-bleed ceiling across the REAL pixel gap (`fullPanelMaxH − insetPanelMaxH`), the shape morph (corners/insets/width) a pure function of that height. Release with the morph ≥ half complete — or a long haul from ≤ HALF sweeping ≥ 80% of the screen — commits MAXIMIZED; short of it, springs back to FULL. Rubber-band only past the full-bleed ceiling. |
+| Held over-pull past FULL | tracks the finger 1:1: the panel grows from the inset FULL height to the full-bleed ceiling across the REAL pixel gap (`fullPanelMaxH − insetPanelMaxH`), the shape morph (corners/insets/height cap) a pure function of that height; the grabber bar fades OUT with the same morph (`grabberBarOpacity`), fully dissolved by edge-to-edge. Travel past the ceiling is CONSUMED (offset rebased), so a reversal moves the sheet with the very first downward pixel. Release with the morph ≥ half complete — or a long haul from ≤ HALF sweeping ≥ 80% of the screen — commits MAXIMIZED; short of it, springs back to FULL. A pull that entered the over-pull zone but reversed back below the inset FULL height ABANDONS the maximize (its peak is voided) — the release rests where the finger left it, never re-maximizing. |
 | Held drag past the bottom ≥ 40px overshoot | PILL (chat → input → pill in one motion). |
 | Tap scrim/outside | keyboard up → dismiss keyboard; else collapse to INPUT. |
 | Escape | collapse to INPUT. |
@@ -136,7 +136,10 @@ capture that is driving it.
 - Commits happen mid-drag (see above); the finger never has to let go to trigger the expand/collapse, and any commit is reversible within the same held gesture.
 - Only FULL may carry `maximized`; every other landing clears it.
 - `openProgress` always settles to 0 (pill) or 1 (anything else) on release — never strands mid-morph.
+- The pill ↔ input morph is a HARD scale lerp (`pillMorphScale`: 1 → `PILL_MORPH_MIN_SCALE` = 0.45, bottom-center origin) — collapsing to the pill visibly shrinks the whole chat into the capsule while the glass crossfades out.
 - Detent changes fire exactly one haptic; sub-threshold releases fire none.
-- The live drag is 1:1 with the pointer everywhere: down through the detents into the pill morph, and up from FULL through the maximize over-pull to the screen edge — no dead zones, no rubber-band until the true ceiling.
-- The content columns (header/transcript/composer) are ALWAYS the centered `max-w-3xl` reading width — through the morph and at full-bleed only the glass (wrapper width, insets, corners, height cap — all driven by `fullBleedT`) grows; the text never reflows.
+- The live drag is 1:1 with the pointer everywhere — down through the detents into the pill morph, and up from FULL through the maximize over-pull to the screen edge. Travel past the full-bleed ceiling is CONSUMED, not banked: pulling beyond the top of the canvas and back down moves the sheet with the first reversed pixel (no dead zone, no overshoot debt).
+- The chat COLUMN (header/transcript/reply pill/attachments/composer) is pinned to `CHAT_COLUMN_MAX_WIDTH` — `min(48rem, calc(100vw − 24px))`, exactly its resting width — in EVERY state. Through the maximize morph and at full-bleed only the glass (wrapper width, insets, corners, height cap — all driven by `fullBleedT`) grows; the chat itself never spreads or reflows.
+- The full-bleed swaps that used to fire discretely at commit (glass top extension under the status bar, header safe-area padding + height cap, composer home-gesture clearance) all EASE with `fullBleedT` — nothing pops the frame `maximized` flips.
+- The handle never pulses while the mic is recording — the composer voice glyph carries the capture-hot cue; only the collapsed PILL (no composer visible) pulses for a live capture. A streaming reply still pulses the handle.
 - Every collapse to INPUT/PILL blurs the composer (keyboard drops).
