@@ -5817,17 +5817,12 @@ export function ContinuousChatOverlay({
                 // and only when a slash catalog is wired in — a plain message
                 // box otherwise.
                 {...comboboxAria}
-                // During onboarding the composer is locked (sign-in-first); the
-                // placeholder points at the sign-in above, brightened from the
-                // resting 45% to 70% to read clearly. `disabled:pointer-events-none`
-                // blocks it cleanly like the attachment "+" (no "not-allowed"
-                // cursor on hover), and `disabled:opacity-100` keeps the
-                // placeholder legible rather than dimming it.
-                className={`scrollbar-hide max-h-[8.5rem] min-h-8 min-w-0 flex-1 resize-none self-center border-none bg-transparent px-1.5 py-1 text-left text-sm leading-relaxed text-txt outline-none disabled:pointer-events-none disabled:opacity-100 ${
-                  firstRunOpen
-                    ? "placeholder:text-muted-strong"
-                    : "placeholder:text-muted"
-                }`}
+                // The floating composer is the primary chat affordance on the
+                // ambient home surface, so its placeholder must stay readable
+                // even when the glass pill sits over dark wallpaper. During
+                // onboarding `disabled:opacity-100` prevents the browser from
+                // dimming the locked cue.
+                className="scrollbar-hide max-h-[8.5rem] min-h-8 min-w-0 flex-1 resize-none self-center border-none bg-transparent px-1.5 py-1 text-left text-sm leading-relaxed text-txt outline-none placeholder:text-muted-strong disabled:pointer-events-none disabled:opacity-100"
               />
               {booting && !noProviderConfigured && !firstRunOpen ? (
                 <span id="cc-booting-hint" className="sr-only">

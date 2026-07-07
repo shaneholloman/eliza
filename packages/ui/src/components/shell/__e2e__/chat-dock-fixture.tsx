@@ -122,6 +122,8 @@ function Harness(): React.JSX.Element {
     close: noop("close"),
     isOpen: true,
     recording: false,
+    micPermission: "unknown",
+    recheckMicPermission: async () => "unknown",
     handsFree: false,
     transcript: "",
     speaking: false,

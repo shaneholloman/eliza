@@ -38,7 +38,7 @@ export function HomeLauncherSurface({
   // The mounting route decides which half shows first. Re-runs only when the
   // route actually changes `initialPage`, so an in-session swipe is never
   // clobbered (the deps don't change on re-render).
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     setShellSurfacePage(initialPage);
   }, [initialPage]);
 
