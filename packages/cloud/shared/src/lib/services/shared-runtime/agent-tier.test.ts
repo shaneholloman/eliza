@@ -51,6 +51,8 @@ describe("runSharedAgentTurn (degraded path — no model configured)", () => {
   const MODEL_KEYS = [
     "CEREBRAS_API_KEY",
     "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "ANTHROPIC_API_KEY",
     "BITROUTER_API_KEY",
     "AI_GATEWAY_API_KEY",
     "AIGATEWAY_API_KEY",
@@ -84,7 +86,12 @@ describe("runSharedAgentTurn (degraded path — no model configured)", () => {
     expect(result.degraded).toBe(true);
     expect(result.reply).toContain("Nova");
     expect(result.history).toHaveLength(2);
-    expect(result.history[0]).toEqual({ role: "user", content: "hello there" });
+    expect(result.history[0]).toMatchObject({
+      role: "user",
+      content: "hello there",
+    });
+    expect(typeof result.history[0]?.createdAt).toBe("number");
     expect(result.history[1]?.role).toBe("assistant");
+    expect(typeof result.history[1]?.createdAt).toBe("number");
   });
 });
