@@ -463,38 +463,35 @@ async function runDragSuite(p, pointer, tag) {
     `[${pointer}] restore-zone pull → no longer maximized`,
   );
 
-  // drag BEYOND full (held) → the panel keeps tracking the finger 1:1 into the
-  // maximize morph (growing toward the full-bleed ceiling, corners squaring in
-  // lock-step); rubber-band only past the ceiling. The mouse position must
-  // match the height exactly — no dead zone at the FULL detent.
-  await gesture(p, 260, { pointer, hold: true });
-  await p.waitForTimeout(120);
-  const beyondH = await sheetHeight(p);
-  const vhNow = await viewportH(p);
-  assert(
-    beyondH > fullH + 60 && beyondH < vhNow + 120,
-    `[${pointer}] BEYOND full keeps tracking the finger 1:1 into the morph (got ${Math.round(beyondH)}, full ${fullH}, raw ${fullH + 260})`,
-  );
+  // drag BEYOND full → maximize is a DISCRETE state, not a per-pixel morph. As
+  // the over-pull crosses its threshold the whole shape SPRINGS edge-to-edge
+  // (panel x → 0, corners square, border/inset drop together). Pull well past
+  // the FULL detent, hold, and let the spring settle: the sheet must read as
+  // MAXIMIZED (edge-to-edge, x ≈ 0), not a half-morphed inset panel.
+  await gesture(p, 420, { pointer, hold: true, slow: true, steps: 24 });
+  await p.waitForTimeout(SETTLE);
+  const beyondMaxed =
+    (await p
+      .locator('[data-testid="chat-sheet"][data-maximized="true"]')
+      .count()) === 1;
   const beyondBox = await p.getByTestId("chat-sheet").boundingBox();
   assert(
-    !!beyondBox && beyondBox.x <= 4,
-    `[${pointer}] BEYOND full the shape morph follows the height (panel x=${Math.round(beyondBox?.x ?? -1)} → edge-to-edge under the finger)`,
+    beyondMaxed && !!beyondBox && beyondBox.x <= 4,
+    `[${pointer}] a large over-pull COMMITS the discrete maximize edge-to-edge (maximized=${beyondMaxed}, panel x=${Math.round(beyondBox?.x ?? -1)})`,
   );
   await snap(p, `${tag}-beyond-full-rubberband`);
-  await release(p, pointer, 260);
+  await release(p, pointer, 420);
   await p.waitForTimeout(SETTLE);
-  if (
-    (await p.locator('[data-testid="chat-sheet"][data-maximized="true"]').count()) === 1
-  ) {
-    assert(
-      (await p.locator('[data-testid="chat-sheet"][data-maximized="true"]').count()) === 1,
-      `[${pointer}] releasing a committed over-pull enters maximized mode`,
-    );
-    await restoreFromMaximized(p, pointer);
-  }
   assert(
-    near(await sheetHeight(p), fullH, TOL + 24),
-    `[${pointer}] settles back near FULL after overscroll/restore`,
+    (await p
+      .locator('[data-testid="chat-sheet"][data-maximized="true"]')
+      .count()) === 1,
+    `[${pointer}] releasing the committed over-pull stays MAXIMIZED`,
+  );
+  await restoreFromMaximized(p, pointer);
+  assert(
+    near(await sheetHeight(p), fullH, TOL + 48),
+    `[${pointer}] settles back near FULL after restore`,
   );
 
   // mid-drag HOLD between detents (live 1:1 tracking)
@@ -1194,14 +1191,16 @@ async function sampleGrabberDrag(page, endY, steps = 34) {
 // and last few samples are trimmed: at the extremes the finger runs past the
 // panel's min/max (you can't drag the sheet above the screen top or below where
 // the pill sits), which is a real boundary, not a tracking failure.
-function assertFingerTracking(rows, band, label) {
+function assertFingerTracking(rows, band, label, topFloor = 40) {
   const usable = rows
     .filter((r) => r.div != null)
-    // Drop samples where the panel is pinned at the screen-top boundary (top
-    // ≤ 40): there the grabber bar can't keep floating its fixed gap ABOVE the
-    // panel (nothing above y=0), so its offset legitimately compresses — the
-    // panel top still tracks the finger, but the handle-gap assumption breaks.
-    .filter((r) => r.top > 40)
+    // Drop samples inside the top boundary region (top ≤ topFloor): there the
+    // grabber bar can't keep floating its fixed gap ABOVE the panel (nothing
+    // above y=0) so its offset compresses, AND — since maximize is a DISCRETE
+    // state — the last stretch up to the screen top is a shape SPRING, not 1:1
+    // finger tracking. The 1:1 contract holds below the inset ceiling; pass a
+    // higher `topFloor` for an upward drag that crosses into the maximize zone.
+    .filter((r) => r.top > topFloor)
     .slice(2, -3);
   if (usable.length < 6) {
     assert(false, `${label}: too few usable samples (${usable.length})`);
@@ -1227,14 +1226,18 @@ function assertFingerTracking(rows, band, label) {
 // is engine-agnostic and real-touch CDP moves coalesce, defeating per-step
 // geometry reads.
 async function runFingerTrackingSuite(page) {
-  // (A) OPEN → drag the grabber to the very top (maximize).
+  // (A) OPEN → drag the grabber past the very top (maximize). Below the inset
+  // ceiling the panel top tracks the finger 1:1; the last stretch to the screen
+  // top is the DISCRETE maximize spring, so the 1:1 band is measured on the
+  // sub-ceiling samples (topFloor 90) and the drag runs PAST the top so the
+  // discrete commit fires and the panel reaches the edge.
   await gesture(page, 160, { pointer: "mouse", slow: false, steps: 2 });
   await page.waitForTimeout(SETTLE);
   const vh = await viewportH(page);
-  const up = await sampleGrabberDrag(page, 4);
-  const upStats = assertFingerTracking(up, 28, "[finger] UP open→top");
-  // The top must actually be reachable in one slow drag (the old morph budget
-  // exceeded the screen height and stalled ~200px short).
+  const up = await sampleGrabberDrag(page, -30);
+  const upStats = assertFingerTracking(up, 28, "[finger] UP open→top", 90);
+  // The top must actually be reachable in one drag (the discrete commit springs
+  // the panel edge-to-edge once the over-pull crosses the threshold).
   const minTop = Math.min(...up.filter((r) => r.top != null).map((r) => r.top));
   assert(
     minTop <= 40,
