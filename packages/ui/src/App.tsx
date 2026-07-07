@@ -72,6 +72,17 @@ import { NotificationBanners } from "./components/shell/NotificationBanners";
 import { NotificationsShellBoot } from "./components/shell/notifications-boot";
 import { ShellControllerProvider } from "./components/shell/ShellControllerContext";
 import { useShellControllerContext } from "./components/shell/ShellControllerContext.hooks";
+import {
+  CHAT_DOCK_X_VAR,
+  ChatDockDivider,
+  chatDockWidthFor,
+} from "./components/shell/ChatDockDivider";
+import { useMediaQuery } from "./hooks/useMediaQuery";
+import { Z_SHELL_OVERLAY } from "./lib/floating-layers";
+import {
+  setChatDockIdiomActive,
+  useChatDock,
+} from "./state/chat-dock-store";
 import { ShellOverlays } from "./components/shell/ShellOverlays";
 import { StartupFailureView } from "./components/shell/StartupFailureView";
 import { StartupScreen } from "./components/shell/StartupScreen";
@@ -1917,7 +1928,13 @@ function ShellFoundationMount() {
  * including the /chat route's ambient home. Returns null until a controller
  * provider is present.
  */
-function ContinuousChatOverlayMount(): ReactNode {
+function ContinuousChatOverlayMount({
+  dock = false,
+}: {
+  /** True when the docked-chat idiom hosts the overlay in the left pane. */
+  dock?: boolean;
+}): ReactNode {
+  const chatDock = useChatDock();
   const controller = useShellControllerContext();
   const { characterData, agentStatus, firstRunComplete } =
     useAppSelectorShallow((s) => ({
@@ -1940,13 +1957,35 @@ function ContinuousChatOverlayMount(): ReactNode {
   // reported name; "Eliza" is the default the overlay falls back to.
   const agentName =
     characterData?.name?.trim() || agentStatus?.agentName?.trim() || undefined;
-  return (
+  const overlay = (
     <ContinuousChatOverlay
       controller={controller}
       agentName={agentName}
       slash={slash}
       firstRunOpen={firstRunComplete === false}
+      dockPinned={dock}
     />
+  );
+  if (!dock) return overlay;
+  // COLLAPSED: the chat pane is fully off-stage; the divider pill at the left
+  // edge is the summon affordance. Unmounting is safe — the conversation lives
+  // in the shell controller, and the dock pin re-opens FULL on remount.
+  if (chatDock.detent === "collapsed") return null;
+  // The dock pane: a fixed, full-height LEFT strip whose `transform` makes it
+  // the containing block for the overlay's fixed positioning, so the sheet's
+  // edge-to-edge full-bleed geometry fills exactly this pane.
+  return (
+    <div
+      data-testid="chat-dock-pane"
+      className="fixed inset-y-0 left-0 overflow-hidden"
+      style={{
+        width: `var(${CHAT_DOCK_X_VAR}, 100%)`,
+        transform: "translateZ(0)",
+        zIndex: Z_SHELL_OVERLAY,
+      }}
+    >
+      {overlay}
+    </div>
   );
 }
 
@@ -2043,6 +2082,33 @@ export function App() {
   }));
   const isPopout = useIsPopout();
   const shellMode = useShellMode();
+  // Docked-chat idiom (CHAT_DOCK_UX.md): on a wide pointer display the chat is
+  // a real full-height LEFT pane with a draggable vertical divider pill, and
+  // the routed view/launcher content becomes the RIGHT pane. Touch/narrow
+  // layouts keep the floating bottom sheet untouched.
+  const chatDockIdiom =
+    useMediaQuery("(pointer: fine) and (hover: hover) and (min-width: 900px)") &&
+    shellMode === "full" &&
+    !isPopout;
+  const chatDock = useChatDock();
+  useEffect(() => {
+    setChatDockIdiomActive(chatDockIdiom);
+    return () => setChatDockIdiomActive(false);
+  }, [chatDockIdiom]);
+  // Committed dock geometry → the shared CSS var. The divider writes the SAME
+  // var directly during a live drag (no store churn per frame); this effect
+  // re-derives it from the committed state on release/idiom change.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!chatDockIdiom) {
+      root.style.removeProperty(CHAT_DOCK_X_VAR);
+      return;
+    }
+    root.style.setProperty(
+      CHAT_DOCK_X_VAR,
+      chatDockWidthFor(chatDock.detent, chatDock.splitRatio),
+    );
+  }, [chatDockIdiom, chatDock.detent, chatDock.splitRatio]);
   // Register the developer-only sandboxed-iframe consumer once at boot (#14180),
   // so the level has a shipped, navigable first-party view. Idempotent.
   useEffect(() => {
@@ -2858,7 +2924,19 @@ export function App() {
               className="pointer-events-none fixed inset-0 z-0 bg-bg"
             />
           ) : null}
-          <div className="relative z-10 flex min-h-0 w-full flex-1 flex-col">
+          <div
+            className="relative z-10 flex min-h-0 w-full flex-1 flex-col"
+            // Dock idiom: the routed content is the RIGHT pane — inset by the
+            // chat pane's live width (the same var the divider drags).
+            style={
+              chatDockIdiom
+                ? {
+                    marginLeft: `var(${CHAT_DOCK_X_VAR}, 0%)`,
+                    width: `calc(100% - var(${CHAT_DOCK_X_VAR}, 0%))`,
+                  }
+                : undefined
+            }
+          >
             <SystemWarningBanner />
             {shellContent}
           </div>
@@ -2898,7 +2976,10 @@ export function App() {
           is pointer-events-none except its own composer/messages, so the view
           behind stays live.
         */}
-        <ContinuousChatOverlayMount />
+        <ContinuousChatOverlayMount dock={chatDockIdiom} />
+        {chatDockIdiom ? (
+          <ChatDockDivider zIndex={Z_SHELL_OVERLAY + 1} />
+        ) : null}
         {/* In-chat first-run conductor (headless) — while firstRunComplete is
             false it seeds the onboarding greeting + choices into the SAME live
             transcript the overlay renders and routes first-run picks to the
