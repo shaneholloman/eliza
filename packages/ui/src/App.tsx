@@ -849,6 +849,13 @@ function useCurrentNavigationPath(): string {
 function viewRegistrationBackgroundPolicy(
   decl: SurfaceManifestBearer | null | undefined,
 ): AppShellBackgroundPolicy {
+  // Host default: a view that declares NO background sits on the shared
+  // launcher wallpaper (with the readability scrim). Explicit declarations
+  // still resolve through the grant-gated core resolver, so a declared
+  // "opaque" (browser) is honored and a declared "shared" without the
+  // `wallpaper` grant still downgrades to opaque (#13452).
+  const declared = decl?.surface?.background ?? decl?.backgroundPolicy;
+  if (declared === undefined) return "shared";
   return resolveSurfaceBackgroundPolicy(decl);
 }
 
