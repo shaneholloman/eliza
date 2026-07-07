@@ -5,6 +5,7 @@
 import { transcriptPlainText } from "@elizaos/shared/transcripts";
 import {
   ArrowDown,
+  AudioLines,
   Camera,
   Captions,
   FileText,
@@ -347,6 +348,35 @@ const PILL_COMMIT_PROGRESS = 1 - PILL_COMMIT_OVERSHOOT / PILL_OPEN_DISTANCE;
 // back out of the state it just animated into.
 const MID_DRAG_RESUME_SLOP = 24;
 
+const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
+
+// Panel scale at the PILL end of the pill↔input morph. The collapse must read
+// as the whole chat shrinking down into the capsule — a hard, visible scale
+// lerp — not a near-imperceptible 0.9 nudge (the "barely animates down" bug).
+// The glass crossfades out over the same progress, so the deep scale never
+// shows a crumpled composer: by the time content would distort it has faded.
+export const PILL_MORPH_MIN_SCALE = 0.45;
+/** Panel scale for a pill↔input morph progress (0 = pill, 1 = input). */
+export function pillMorphScale(progress: number): number {
+  return PILL_MORPH_MIN_SCALE + (1 - PILL_MORPH_MIN_SCALE) * clamp01(progress);
+}
+
+/**
+ * Grabber-bar opacity from the two morphs that own it. It fades IN only after
+ * the pill capsule has fully faded out (strict anti-phase over [0.55, 0.95] of
+ * the pill→input open — the "two pills" guard), and back OUT as the over-pull
+ * shape morph (`fullBleedT`) approaches edge-to-edge — so the handle dissolves
+ * under the finger through the top ~10% of the pull instead of popping away
+ * the frame the maximize commits (which unmounts it for the restore strip).
+ */
+export function grabberBarOpacity(
+  openProgress: number,
+  fullBleedT: number,
+): number {
+  const openFade = clamp01((openProgress - 0.55) / 0.4);
+  return openFade * (1 - clamp01(fullBleedT));
+}
+
 // Glyphs (viewBox 0 0 36 36), rendered in currentColor inside a soft chip. Send
 // + mic now use lucide icons (SendHorizontal / Mic); the rest stay hand-drawn.
 // The plus fills nearly the whole 36-unit box (arms 3→33) so, rendered at the
@@ -439,17 +469,16 @@ function SoftButton({
       onPointerLeave={disabled ? undefined : onPointerLeave}
       className={cn(
         // Icon-only control: transparent, borderless, no capsule — just the
-        // glyph, sized up to carry weight without the removed background. The
-        // 44×44 hit target (WCAG 2.5.5) stays; only the visible chrome goes.
-        // Hover and active express through icon color alone — neutral resting →
-        // neutral hover, accent for active — never a background/border, never
-        // blue.
+        // glyph. Hover and active express through icon color alone — neutral
+        // resting → neutral hover, accent for active — never a background/
+        // border, never blue.
         //
-        // `[&_svg]:size-[22px]` OVERRIDES the kit Button's base `[&_svg]:size-4`
-        // (16px): the mark reads clearly in the 44px hit box without dominating
-        // the composer row. The box — and the composer row height — is unchanged;
-        // only the glyph size is tuned.
-        "grid h-11 w-11 shrink-0 place-items-center bg-transparent p-0 transition-colors hover:bg-transparent [&_svg]:size-[22px]",
+        // Visible box 40px with a 20px mark (`[&_svg]:size-5` OVERRIDES the kit
+        // Button's base `[&_svg]:size-4`): the composer marks sit quiet beside
+        // the text instead of dominating the row. The 44×44 hit target (WCAG
+        // 2.5.5) is preserved by the invisible `before` overlay that pads the
+        // pointer zone back out past the visible box.
+        "relative grid h-10 w-10 shrink-0 place-items-center bg-transparent p-0 transition-colors before:absolute before:-inset-0.5 before:content-[''] hover:bg-transparent [&_svg]:size-5",
         active ? "text-accent" : "text-muted-strong hover:text-txt",
         // Pulse the accent glyph while capture is hot; reduced-motion falls back
         // to the static accent without adding background or border chrome.
@@ -462,7 +491,7 @@ function SoftButton({
       ) : glyph ? (
         // Match the lucide marks: the parent [&_svg] rule governs the box, and
         // the widened glyph paths fill the same fraction of it.
-        <Glyph d={glyph} className="size-[22px]" />
+        <Glyph d={glyph} className="size-5" />
       ) : null}
     </Button>
   );
@@ -2555,8 +2584,10 @@ export function ContinuousChatOverlay({
   // --- Liquid-glass pill → input morph (driven by openProgress) ---------------
   // The panel is ONE persistent element; the pill capsule and the full
   // input crossfade by opacity (compositor-cheap) while the whole panel scales
-  // up from a capsule. transform + opacity only.
-  const panelScale = useTransform(openProgress, [0, 1], [0.9, 1]);
+  // up from a capsule. transform + opacity only. The scale runs the full
+  // pillMorphScale lerp (down to PILL_MORPH_MIN_SCALE) so collapsing to the
+  // pill reads as the chat HARD-shrinking into the capsule, not a 10% nudge.
+  const panelScale = useTransform(openProgress, pillMorphScale);
   // Glass surface + its content crossfade IN as the input forms (one wrapper, so
   // sheen/glow/thread/composer resolve together with the glass).
   const glassOpacity = useTransform(openProgress, [0, 1], [0, 1]);
@@ -2569,10 +2600,14 @@ export function ContinuousChatOverlay({
   // never both be on screen. The pill fades OUT over [0, 0.55]; the grabber fades
   // IN only over [0.55, 0.95] — a strict crossfade with no overlap. (Before, the
   // grabber mounted at full opacity the instant `pilled` flipped false, while the
-  // pill was still fading out → two bars = the "two pills" bug.)
-  const grabberOpacity = useTransform(openProgress, [0.55, 0.95], [0, 1], {
-    clamp: true,
-  });
+  // pill was still fading out → two bars = the "two pills" bug.) It ALSO fades
+  // back OUT with the over-pull shape morph (`fullBleedT`), so dragging up
+  // through the top ~10% dissolves the handle instead of popping it away when
+  // the maximize commits — see grabberBarOpacity.
+  const grabberOpacity = useTransform(
+    [openProgress, fullBleedT] as MotionValue<number>[],
+    ([p, t]: number[]) => grabberBarOpacity(p, t),
+  );
   // Header reveal tracks the LIVE height: as the panel approaches the half
   // detent the top buttons FADE in and their space LERPS open; pulling back
   // below half fades them out and collapses the space — no pop. (Maximized sits
@@ -3142,12 +3177,14 @@ export function ContinuousChatOverlay({
     return () => setDictationSink(null);
   }, [setDictationSink, setDraft, expand]);
 
-  // A completed transcription SESSION drops its transcript into the composer as
-  // an ATTACHMENT — it does NOT auto-send as a message. The user sends it (with
-  // any typed text) when ready; the mic stays on the whole time, so transcribing
-  // is an additive layer, not a mode that takes over the conversation. The
-  // recording is also archived (Transcript record + audio + knowledge mirror)
-  // for the Transcripts view, best-effort and silent.
+  // A completed transcription SESSION works like ChatGPT dictation: the full
+  // transcript is INSERTED AS TEXT at the end of the composer draft — never
+  // auto-sent, never a document chip the user has to open. The captured audio
+  // becomes a pending AUDIO ATTACHMENT (the sharable artifact: sending it
+  // routes the WAV through the content-addressed media store, so the thread
+  // carries a playable, downloadable /api/media/<sha256>.wav recording). The
+  // session is also archived (Transcript record + audio) for the Transcripts
+  // view, best-effort and silent.
   React.useEffect(() => {
     setTranscriptSessionSink((segments, startedAtMs, audioWav) => {
       if (segments.length === 0) return;
@@ -3156,16 +3193,24 @@ export function ContinuousChatOverlay({
         .toISOString()
         .slice(0, 16)
         .replace("T", " ");
-      const attachmentName = `Transcript ${stamp}.md`;
       if (text) {
-        const attachment: ImageAttachment = {
-          data: textToBase64(text),
-          mimeType: "text/markdown",
-          name: attachmentName,
+        // Append at the END of whatever is already typed (through the live
+        // ref — the shared context setter takes a plain string), mirroring the
+        // push-to-talk dictation sink above.
+        const current = draftRef.current;
+        setDraft(current ? `${current} ${text}` : text);
+      }
+      if (audioWav && audioWav.byteLength > 0) {
+        const recording: ImageAttachment = {
+          data: wavBytesToBase64(audioWav),
+          mimeType: "audio/wav",
+          name: `Recording ${stamp}.wav`,
         };
         setPendingImages((prev) =>
-          [...prev, attachment].slice(0, MAX_CHAT_IMAGES),
+          [...prev, recording].slice(0, MAX_CHAT_IMAGES),
         );
+      }
+      if (text || (audioWav && audioWav.byteLength > 0)) {
         expand();
         inputRef.current?.focus();
       }
@@ -3180,34 +3225,12 @@ export function ContinuousChatOverlay({
               }
             : {}),
         })
-        .then(({ transcript }) => {
-          // Link the pending attachment to the saved record so tapping it opens
-          // the editable viewer and edits persist — both via the client-only
-          // `transcriptId` field and a durable marker embedded in the markdown
-          // (which survives the server round-trip in the attachment's text).
-          if (!text) return;
-          setPendingImages((prev) =>
-            prev.map((a) =>
-              a.name === attachmentName &&
-              a.mimeType === "text/markdown" &&
-              !a.transcriptId
-                ? {
-                    ...a,
-                    transcriptId: transcript.id,
-                    data: textToBase64(
-                      withTranscriptMarker(transcript.id, text),
-                    ),
-                  }
-                : a,
-            ),
-          );
-        })
         .catch(() => {
           /* archival is best-effort; a failed save just skips the record */
         });
     });
     return () => setTranscriptSessionSink(null);
-  }, [setTranscriptSessionSink, setPendingImages, expand]);
+  }, [setTranscriptSessionSink, setDraft, setPendingImages, expand]);
 
   // Tell the controller whether a draft is pending so the hands-free always-on
   // loop pauses while the user is typing (or editing a PTT dictation) and
@@ -4606,7 +4629,12 @@ export function ContinuousChatOverlay({
             onOpen={openFromGrabber}
             onClose={collapse}
             binding={pullBinding}
-            glow={listening || responding}
+            // The handle stays QUIET while the mic is recording — the composer
+            // mic/voice glyphs already carry the "capture is hot" pulse right
+            // next to the user's attention; a second pulsing bar above them
+            // read as noise. Only the collapsed PILL (where no composer glyph
+            // is visible) pulses for a live capture — see PillHandle below.
+            glow={(listening || responding) && !recording}
             opacity={grabberOpacity}
             pilled={pilled}
             inert={!sheetOpen && (hasImages || Boolean(imageError))}
@@ -5334,9 +5362,11 @@ export function ContinuousChatOverlay({
                     aria-label="chat actions"
                     disabled={firstRunOpen}
                     data-testid="chat-composer-plus"
-                    className="grid h-11 w-11 shrink-0 place-items-center bg-transparent p-0 text-muted-strong transition-colors hover:bg-transparent hover:text-txt data-[state=open]:text-txt [&_svg]:size-[22px]"
+                    // Same 40px box / 20px mark / padded-back-to-44px hit zone
+                    // as the SoftButton controls, so the row reads as one family.
+                    className="relative grid h-10 w-10 shrink-0 place-items-center bg-transparent p-0 text-muted-strong transition-colors before:absolute before:-inset-0.5 before:content-[''] hover:bg-transparent hover:text-txt data-[state=open]:text-txt [&_svg]:size-5"
                   >
-                    <Glyph d={PLUS_GLYPH} className="size-[22px]" />
+                    <Glyph d={PLUS_GLYPH} className="size-5" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
@@ -5587,7 +5617,10 @@ export function ContinuousChatOverlay({
             <PillHandle
               binding={pullBinding}
               onOpen={openFromPill}
-              glow={listening || responding}
+              // The pill IS the whole chat while collapsed, so it alone pulses
+              // for a live mic capture (`recording`) — the open-sheet grabber
+              // deliberately does not (the composer glyphs carry that cue).
+              glow={listening || responding || recording}
               pilled={pilled}
             />
           </motion.div>
