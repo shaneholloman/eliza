@@ -293,7 +293,6 @@ export {
   type ChatSurfaceProps,
 } from "./components/shell/ChatSurface";
 export { HomePill, type HomePillProps } from "./components/shell/HomePill";
-export * from "./glass";
 export {
   HomeScreen,
   type HomeScreenProps,
@@ -462,6 +461,7 @@ export * from "./first-run/mobile-runtime-mode";
 export * from "./first-run/pre-seed-local-runtime";
 export * from "./genui/index";
 export * from "./gestures";
+export * from "./glass";
 export {
   DEFAULT_FRAME_BUDGET,
   FRAME_SAMPLER_INIT,
