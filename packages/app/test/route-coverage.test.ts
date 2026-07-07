@@ -98,7 +98,6 @@ const PLUGIN_VIEW_MANIFESTS = [
   "plugins/plugin-task-coordinator/src/index.ts",
   "plugins/plugin-trajectory-logger/src/plugin.ts",
   "plugins/plugin-training/src/setup-routes.ts",
-  "plugins/plugin-facewear/src/index.ts",
 ] as const;
 
 const APP_SHELL_REGISTRATION_SOURCES = [
@@ -129,6 +128,8 @@ const NOT_APP_BOOT_LOADED_VIEW_MANIFESTS: Readonly<Record<string, string>> = {
     "Health is a decomposed personal-assistant domain view; it is discoverable through the View Manager but not yet a boot-loaded renderer module.",
   "plugins/plugin-inbox/src/plugin.ts":
     "Inbox is a decomposed personal-assistant domain view; it is discoverable through the View Manager but not yet a boot-loaded renderer module.",
+  "plugins/plugin-messages/src/plugin.ts":
+    "Messages is routed by the app shell and discoverable through the View Manager, but its plugin manifest is not imported by the app boot loader.",
   "plugins/plugin-relationships/src/plugin.ts":
     "Relationships is the entity/relationship knowledge-graph viewer; it is discoverable through the View Manager but not yet a boot-loaded renderer module.",
   "plugins/plugin-screenshare/src/index.ts":
@@ -142,13 +143,14 @@ const NOT_APP_BOOT_LOADED_VIEW_MANIFESTS: Readonly<Record<string, string>> = {
 const BOOT_PLUGIN_VIEW_MANIFEST_BY_MODULE: Record<string, string | null> = {
   "@elizaos/plugin-contacts": "plugins/plugin-contacts/src/plugin.ts",
   "@elizaos/plugin-native-settings": null,
-  "@elizaos/plugin-facewear": "plugins/plugin-facewear/src/index.ts",
+  // Facewear no longer declares plugin views; the boot module remains for the
+  // Settings wearables section.
+  "@elizaos/plugin-facewear": null,
   "@elizaos/plugin-feed": "plugins/plugin-feed/src/index.ts",
   "@elizaos/plugin-hyperliquid": "plugins/plugin-hyperliquid/src/plugin.ts",
   // PA no longer declares a view (the LifeOps overview was removed); it is a
   // boot plugin with no renderer module.
   "@elizaos/plugin-personal-assistant": null,
-  "@elizaos/plugin-messages": "plugins/plugin-messages/src/plugin.ts",
   "@elizaos/plugin-phone": "plugins/plugin-phone/src/plugin.ts",
   "@elizaos/plugin-polymarket": "plugins/plugin-polymarket/src/plugin.ts",
   "@elizaos/plugin-task-coordinator":

@@ -17,7 +17,7 @@ catalog with `SCENARIO_USE_LLM_PROXY=1` and
   real AppRegistryService and app-manager routes: registry persistence,
   catalog tile data, generated hero SVG, `/api/apps/:slug/*` package routing,
   run-scoped message/control dispatch, HTTP `load-from-directory`, and
-  app-control GUI view registration.
+  app-control GUI view registration plus compatibility-mode list fallback.
 - `deterministic-todos-actions` covers strict natural-language routing into
   `TODO`, then the real `TODO` action against real TodosService DB state and
   CURRENT_TODOS provider output for write, create, update, complete, cancel,

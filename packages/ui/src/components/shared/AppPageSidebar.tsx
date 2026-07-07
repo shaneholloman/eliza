@@ -11,6 +11,7 @@
 import { PanelLeftClose } from "lucide-react";
 import * as React from "react";
 import { useCallback, useMemo, useState } from "react";
+import { shellLocalStorage } from "../../surface-realm-channel";
 import { Sidebar } from "../composites/sidebar/sidebar-root";
 import type { SidebarProps } from "../composites/sidebar/sidebar-types";
 import { Button } from "../ui/button";
@@ -76,7 +77,7 @@ function readStoredSidebarWidth(
 function persistSidebarWidth(storageKey: string | null, width: number): void {
   if (!storageKey || typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(storageKey, String(width));
+    shellLocalStorage.setItem(storageKey, String(width));
   } catch {
     /* ignore sandboxed storage */
   }
@@ -131,6 +132,7 @@ export const AppPageSidebar = React.forwardRef<
     onCollapseRequest,
     onCollapsedChange,
     onWidthChange,
+    onWidthCommit,
     resizable,
     showExpandedCollapseButton = false,
     syncId,
@@ -189,20 +191,33 @@ export const AppPageSidebar = React.forwardRef<
   const controlledWidth = widthProp !== undefined;
   const width = controlledWidth ? widthProp : internalWidth;
 
+  // Per-frame during a drag: state only. localStorage writes happen once per
+  // drag in handleWidthCommit — a synchronous storage write per frame stalls
+  // the resize on high-rate pointer devices.
   const handleWidthChange = useCallback(
     (next: number) => {
       const clamped = clampSidebarWidth(next, minWidth, maxWidth);
       if (!controlledWidth) {
         setInternalWidth(clamped);
-        persistSidebarWidth(resolvedWidthStorageKey, clamped);
       }
       onWidthChange?.(clamped);
+    },
+    [controlledWidth, maxWidth, minWidth, onWidthChange],
+  );
+
+  const handleWidthCommit = useCallback(
+    (next: number) => {
+      const clamped = clampSidebarWidth(next, minWidth, maxWidth);
+      if (!controlledWidth) {
+        persistSidebarWidth(resolvedWidthStorageKey, clamped);
+      }
+      onWidthCommit?.(clamped);
     },
     [
       controlledWidth,
       maxWidth,
       minWidth,
-      onWidthChange,
+      onWidthCommit,
       resolvedWidthStorageKey,
     ],
   );
@@ -275,6 +290,7 @@ export const AppPageSidebar = React.forwardRef<
       resizable={effectiveResizable}
       width={effectiveResizable ? width : widthProp}
       onWidthChange={effectiveResizable ? handleWidthChange : onWidthChange}
+      onWidthCommit={effectiveResizable ? handleWidthCommit : onWidthCommit}
       minWidth={minWidth}
       maxWidth={maxWidth}
       onCollapseRequest={

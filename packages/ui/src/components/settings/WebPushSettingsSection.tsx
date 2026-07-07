@@ -76,16 +76,17 @@ export function WebPushSettingsSection() {
     },
     [subscribe, unsubscribe],
   );
-  const pushToggle = useAgentElement<HTMLButtonElement>({
-    id: "notifications-toggle-push",
+
+  // Agent-addressable so "turn on notifications" reaches the toggle from chat +
+  // voice, like every other settings control.
+  const { ref, agentProps } = useAgentElement<HTMLButtonElement>({
+    id: "notifications-push-toggle",
     role: "toggle",
     label: view.label,
-    group: "settings-notifications",
-    description: view.description,
-    status: view.on ? "active" : "inactive",
+    group: "settings",
+    status: view.canToggle ? (view.on ? "on" : "off") : "unavailable",
     onActivate: () => {
-      if (!view.canToggle || busy || !ready) return;
-      onToggle(!view.on);
+      if (view.canToggle && !busy && ready) onToggle(!view.on);
     },
   });
 
@@ -98,12 +99,12 @@ export function WebPushSettingsSection() {
           description={error ?? view.description}
           control={
             <Switch
-              ref={pushToggle.ref}
+              ref={ref}
               checked={view.on}
               disabled={!view.canToggle || busy || !ready}
               onCheckedChange={onToggle}
               aria-label="Toggle push notifications"
-              {...pushToggle.agentProps}
+              {...agentProps}
             />
           }
         />

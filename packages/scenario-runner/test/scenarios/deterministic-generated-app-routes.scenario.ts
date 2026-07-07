@@ -769,15 +769,20 @@ function expectHttpLoad(status: number, body: unknown): string | undefined {
   return undefined;
 }
 
-function expectViewsList(): (status: number, body: unknown) => string | undefined {
+function expectViewsList(
+  viewType: "gui" | "tui",
+): (status: number, body: unknown) => string | undefined {
   return (status, body) => {
     if (status !== 200) return `expected 200, saw ${status}`;
     const views = arrayOfRecords(record(body)?.views);
-    const view = views.find((candidate) => {
-      return candidate.id === "views-manager" && candidate.viewType === "gui";
-    });
+    // The views-manager ships GUI-only: compatibility-mode list requests still
+    // resolve to the GUI declaration instead of fabricating a TUI surface.
+    const view = views.find((candidate) => candidate.id === "views-manager");
     if (!view) {
-      return `expected gui views-manager registration, saw ${JSON.stringify(body)}`;
+      return `expected views-manager in ${viewType} list, saw ${JSON.stringify(body)}`;
+    }
+    if (view.viewType !== "gui") {
+      return `expected gui-only views-manager viewType, saw ${String(view.viewType)}`;
     }
     if (view.pluginName !== appControlPlugin.name) {
       return `expected pluginName=${appControlPlugin.name}, saw ${String(view.pluginName)}`;
@@ -979,7 +984,15 @@ export default scenario({
       method: "GET",
       path: "/api/views?viewType=gui",
       expectedStatus: 200,
-      assertResponse: expectViewsList(),
+      assertResponse: expectViewsList("gui"),
+    },
+    {
+      kind: "api",
+      name: "app-control views-manager surfaces in the TUI list as its GUI fallback",
+      method: "GET",
+      path: "/api/views?viewType=tui",
+      expectedStatus: 200,
+      assertResponse: expectViewsList("tui"),
     },
   ],
   finalChecks: [

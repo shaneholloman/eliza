@@ -188,6 +188,9 @@ describe("collapseViewEntries", () => {
 	});
 
 	it("honors a pre-set modalities array (one declaration drawing several surfaces)", () => {
+		// Non-shipping fixture (#15269): no plugin ships tui/xr views, but the
+		// collapse contract must keep honoring multi-modal declarations so
+		// reintroduction stays a manifest edit, not a schema change.
 		const collapsed = collapseViewEntries([
 			entry("future-surface", { modalities: ["gui", "xr", "tui"] }),
 		]);

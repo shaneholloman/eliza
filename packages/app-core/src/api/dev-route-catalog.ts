@@ -240,6 +240,8 @@ const ROUTES: DevRouteEntry[] = [
     platformGate: null,
   },
   {
+    // My Apps is the canonical `/apps` destination (mirrors TAB_PATHS in
+    // packages/ui/src/navigation; the launcher grid lives at `/views`).
     tabId: "my-apps",
     path: "/apps",
     label: "My Apps",

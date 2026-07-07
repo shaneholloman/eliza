@@ -26,10 +26,10 @@ const CORE_SURFACE_OWNERS: Readonly<Record<string, CoreSurfaceOwner>> = {
   knowledge: {
     viewId: "documents",
     provider: "shell",
+    // The /documents route is KnowledgeView (the shell-agent-surface host) which
+    // mounts the standalone DocumentsView + its upload controls (#13594).
     files: [
       "packages/ui/src/components/pages/KnowledgeView.tsx",
-      "packages/ui/src/components/character/CharacterEditor.tsx",
-      "packages/ui/src/components/character/CharacterHubView.tsx",
       "packages/ui/src/components/pages/DocumentsView.tsx",
       "packages/ui/src/components/pages/documents-upload.tsx",
     ],
@@ -67,9 +67,12 @@ const CORE_SURFACE_OWNERS: Readonly<Record<string, CoreSurfaceOwner>> = {
   automations: {
     viewId: "automations",
     provider: "shell",
+    // The feed has no create CTA by design (#13597 — the agent re-creates a
+    // workflow from chat instead), so its agent-addressable controls are the
+    // filter tabs, per-row open, and per-row run-workflow.
     files: ["packages/ui/src/components/pages/AutomationsFeed.tsx"],
-    minAgentElements: 4,
-    requiredSnippets: ["action-new", "run-workflow-"],
+    minAgentElements: 3,
+    requiredSnippets: ["run-workflow-"],
   },
   orchestrator: {
     viewId: "orchestrator",
@@ -160,6 +163,9 @@ const CORE_SURFACE_OWNERS: Readonly<Record<string, CoreSurfaceOwner>> = {
   },
 };
 
+// Keyed and ordered to mirror the canonical SETTINGS_SECTION_META (the
+// `settings subsection agent-surface coverage` gate asserts the keys equal
+// REQUIRED_SETTINGS_SECTION_IDS, which itself tracks that meta).
 const SETTINGS_SECTION_OWNER_FILES: Readonly<
   Record<string, readonly string[]>
 > = {

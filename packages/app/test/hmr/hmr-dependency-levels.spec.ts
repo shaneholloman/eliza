@@ -38,6 +38,8 @@ const LEVELS = [
     file: "plugins/plugin-contacts/src/components/ContactsAppView.tsx",
   },
   {
+    // The /cloud launcher view (Eliza Cloud account at a glance), served as
+    // plugin-elizacloud's `cloud` view bundle and mounted by DynamicViewLoader.
     name: "plugin view cloud",
     file: "plugins/plugin-elizacloud/src/components/cloud/CloudView.tsx",
   },

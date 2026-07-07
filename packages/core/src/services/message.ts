@@ -28,6 +28,7 @@ import {
 	enforceVerbosity,
 } from "../features/advanced-capabilities/personality";
 import { getPersonalityStore } from "../features/advanced-capabilities/personality/services/personality-store.ts";
+import { embedRecallQuery } from "../features/documents/recall-embed";
 import { runShouldRespondInjectionGate } from "../features/trust/should-respond-risk-gate";
 import {
 	emitInferenceTiming,
@@ -6992,6 +6993,25 @@ export async function runV5MessageRuntimeStage1(args: {
 				}),
 			);
 
+		// Track visible text an action already delivered to the user through the
+		// callback during this planner run. An action that both emits its own
+		// user-facing callback AND leaves the planner to emit a `finalMessage`
+		// duplicating that text would otherwise deliver the same string twice (the
+		// action reply, then an identical "simple" planner reply). This mirrors the
+		// early-reply dedup below — the planner reply is suppressed only when it is
+		// an exact (normalized) repeat of what the user already saw.
+		const deliveredVisibleTexts = new Set<string>();
+		const recordingCallback: HandlerCallback | undefined = args.callback
+			? async (content, ...rest) => {
+					if (typeof content?.text === "string" && content.text.trim()) {
+						deliveredVisibleTexts.add(
+							normalizeVisibleTextForDuplicateCheck(content.text),
+						);
+					}
+					return args.callback?.(content, ...rest) ?? [];
+				}
+			: undefined;
+
 		let plannerResult: PlannerLoopResult;
 		try {
 			plannerResult = await runPlannerLoop({
@@ -7015,7 +7035,7 @@ export async function runV5MessageRuntimeStage1(args: {
 							selectedContexts,
 							senderRole,
 							previousResults: collectPreviousActionResults(ctx.trajectory),
-							...(args.callback ? { callback: args.callback } : {}),
+							...(recordingCallback ? { callback: recordingCallback } : {}),
 						}),
 						plannerRuntime,
 						executorOptions: { actions: exposedPlannerActions },
@@ -7049,7 +7069,7 @@ export async function runV5MessageRuntimeStage1(args: {
 				recorder,
 				trajectoryId,
 				plannerLoopConfig: args.plannerLoopConfig,
-				...(args.callback ? { callback: args.callback } : {}),
+				...(recordingCallback ? { callback: recordingCallback } : {}),
 				plannerError: error,
 			});
 			if (!fallbackResult) {
@@ -7108,8 +7128,28 @@ export async function runV5MessageRuntimeStage1(args: {
 			earlyReplySent &&
 			normalizeVisibleTextForDuplicateCheck(effectiveReplyText) ===
 				normalizeVisibleTextForDuplicateCheck(earlyReplyText);
+		// An action that already delivered this text through its own callback makes
+		// the planner's finalMessage a redundant second bubble. Suppress the planner
+		// echo when an action already delivered the same text OR a strict superset of
+		// it — the action's richer confirmation (a created-issue URL, an id, a "reply
+		// yes to confirm" follow-up) carries everything the planner's shorter
+		// restatement does and more, so keep the action's text and drop the echo. The
+		// non-word-boundary guard stops a short prefix from swallowing an unrelated
+		// longer line ("created" must not match "created issue …").
+		const normalizedPlannedReply =
+			normalizeVisibleTextForDuplicateCheck(effectiveReplyText);
+		const plannedTextRepeatsActionReply =
+			normalizedPlannedReply.length > 0 &&
+			[...deliveredVisibleTexts].some(
+				(delivered) =>
+					delivered === normalizedPlannedReply ||
+					(delivered.startsWith(normalizedPlannedReply) &&
+						/[^a-z0-9]/i.test(delivered.charAt(normalizedPlannedReply.length))),
+			);
 		const shouldSendPlannedText =
-			Boolean(effectiveReplyText) && !plannedTextRepeatsEarlyReply;
+			Boolean(effectiveReplyText) &&
+			!plannedTextRepeatsEarlyReply &&
+			!plannedTextRepeatsActionReply;
 
 		return {
 			kind: "planned_reply",
@@ -8189,6 +8229,12 @@ export function wrapSingleTurnVisibleCallback(
 ): HandlerCallback | undefined {
 	if (!callback) return callback;
 	const fullRuntime = runtime as IAgentRuntime;
+	// The character-voice rewrite spends a TEXT_SMALL call per action callback and
+	// restyles the delivered text. Deterministic harnesses (the scenario runner)
+	// assert the raw action-callback contract and strict-fixture every model call,
+	// so they opt out via ACTION_CALLBACK_VOICE_REWRITE=false; production turns
+	// leave it on by default.
+	if (!actionCallbackVoiceRewriteEnabled(fullRuntime)) return callback;
 	const voiceActionReply = async (
 		response: Content,
 		actionName?: string,
@@ -8286,6 +8332,15 @@ function resolveCallbackActionName(
 		return actions.find((candidate) => candidate.trim().length > 0)?.trim();
 	}
 	return undefined;
+}
+
+function actionCallbackVoiceRewriteEnabled(runtime: IAgentRuntime): boolean {
+	if (typeof runtime.getSetting !== "function") return true;
+	const raw = runtime.getSetting("ACTION_CALLBACK_VOICE_REWRITE");
+	if (raw === undefined || raw === null) return true;
+	const normalized = String(raw).trim();
+	if (!normalized) return true;
+	return parseBooleanFromText(normalized);
 }
 
 function shouldRewriteActionCallback(
@@ -9406,6 +9461,39 @@ export class DefaultMessageService implements IMessageService {
 			};
 		}
 
+		// Prefetch the shared per-turn recall-query embed now that every cheap
+		// short-circuit gate (self, LLM-off, mute, personality reply-gate,
+		// bot-noise triage) has passed — so a dropped turn never issues a wasted
+		// embed and the "muted room = zero model calls" invariant holds. Placed
+		// before the remaining serial pre-compose work (room fetch, attachment
+		// processing, incoming hooks, composeState) so this embed round-trip
+		// overlaps it instead of gating the Stage-1 model call: the
+		// relevant-conversations provider, document recall, experience recall,
+		// and the FACTS path all route the same text through `embedRecallQuery`
+		// (keyed by this run), so they await this in-flight result rather than
+		// starting a fresh round-trip. Fire-and-forget; the value is re-read from
+		// the per-run cache by its normalized-text key.
+		// Present the turn's `messageId` so this prefetch ADOPTS the pre-run cache
+		// the API chat path's document augmentation already warmed under the same
+		// id (#15253): on a no-match turn the query text is byte-identical, so the
+		// adopted vector resolves here with ZERO new embed instead of a second
+		// identical round-trip.
+		// error-policy:J7 diagnostics-must-not-kill-the-loop — a warm failure only
+		// forfeits the overlap; the compose-time caller re-embeds and fails open.
+		const recallWarmText = message.content?.text;
+		if (typeof recallWarmText === "string" && recallWarmText.trim() !== "") {
+			const recallWarmMessageId =
+				typeof message.id === "string" ? message.id : undefined;
+			void embedRecallQuery(runtime, recallWarmText, {
+				messageId: recallWarmMessageId,
+			}).catch((error) =>
+				runtime.reportError("MessageService.recallEmbedPrefetch", error, {
+					roomId: message.roomId,
+					runId,
+				}),
+			);
+		}
+
 		// Room context for shouldRespond (fetch before compose so providers see
 		// post-attachment and post-incoming-hook message state).
 		const room = await runtime.getRoom(message.roomId);
@@ -9591,10 +9679,11 @@ export class DefaultMessageService implements IMessageService {
 		// conditional v5 stage) so a slash command can
 		// never be pre-empted by another handler.
 		if (!strategyResult) {
-			const shortcutSenderRole = await resolveStage1SenderRole(
-				runtime,
-				message,
-			);
+			// Reuse the role resolved once per turn in handleMessage (stamped on the
+			// trajectory context) — resolving again here costs a room+world lookup.
+			const shortcutSenderRole =
+				getTrajectoryContext()?.userRole ??
+				(await resolveStage1SenderRole(runtime, message));
 			const shortcutOutcome = await runShortcutGate({
 				runtime,
 				message,
@@ -9796,7 +9885,11 @@ export class DefaultMessageService implements IMessageService {
 			const injectionGate = await runShouldRespondInjectionGate({
 				runtime,
 				message,
-				resolveSenderRole: () => resolveStage1SenderRole(runtime, message),
+				// Per-turn role already resolved in handleMessage; fall back to a
+				// fresh lookup only outside a trajectory scope.
+				resolveSenderRole: () =>
+					getTrajectoryContext()?.userRole ??
+					resolveStage1SenderRole(runtime, message),
 			});
 			if (injectionGate.blocked) {
 				shouldRespondToMessage = false;
