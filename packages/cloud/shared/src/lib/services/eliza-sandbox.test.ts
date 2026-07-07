@@ -240,6 +240,84 @@ describe("resolveSandboxContainerLaunchConfig", () => {
   });
 });
 
+describe("ElizaSandboxService state restore auth", () => {
+  test("attaches the agent token when restoring to a trusted bridge URL string", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const requests: Array<{
+      url: string;
+      headers: Record<string, string>;
+      body: string;
+    }> = [];
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        url: fetchUrl(input),
+        headers: fetchHeaders(init?.headers),
+        body: String(init?.body ?? ""),
+      });
+      return Response.json({ ok: true });
+    });
+
+    const sandbox = customSandbox();
+    await (
+      new ElizaSandboxService() as unknown as {
+        pushState: (
+          bridgeUrl: string,
+          state: { memories: unknown[]; config: Record<string, unknown>; workspaceFiles: object },
+          options: { trusted: true; authRec: Pick<AgentSandbox, "id" | "environment_vars"> },
+        ) => Promise<void>;
+      }
+    ).pushState(
+      "https://runtime.example",
+      { memories: [], config: { restored: true }, workspaceFiles: {} },
+      { trusted: true, authRec: sandbox },
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].url).toBe("https://runtime.example/api/restore");
+    expect(requests[0].headers).toMatchObject({
+      "Content-Type": "application/json",
+      Authorization: "Bearer agent-token",
+      "X-Api-Key": "agent-token",
+      "X-Eliza-Token": "agent-token",
+    });
+    expect(JSON.parse(requests[0].body)).toEqual({
+      memories: [],
+      config: { restored: true },
+      workspaceFiles: {},
+    });
+  });
+
+  test("keeps legacy bridge URL restores unauthenticated when no sandbox record is supplied", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const requests: Array<{ headers: Record<string, string> }> = [];
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ headers: fetchHeaders(init?.headers) });
+      return Response.json({ ok: true });
+    });
+
+    await (
+      new ElizaSandboxService() as unknown as {
+        pushState: (
+          bridgeUrl: string,
+          state: { memories: unknown[]; config: Record<string, unknown>; workspaceFiles: object },
+          options?: { trusted?: boolean },
+        ) => Promise<void>;
+      }
+    ).pushState(
+      "https://runtime.example",
+      {
+        memories: [],
+        config: {},
+        workspaceFiles: {},
+      },
+      { trusted: true },
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].headers).toEqual({ "Content-Type": "application/json" });
+  });
+});
+
 describe("ElizaSandboxService bridge status", () => {
   test("reports web-only custom agents as running through the router origin in Workers", async () => {
     const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
@@ -810,7 +888,7 @@ describe("ElizaSandboxService tailnet-IP reconciliation", () => {
         if (opts.health instanceof Error) throw opts.health;
         return opts.health;
       }
-      if (cmd.includes("tailscale ip")) {
+      if (cmd.includes("tailscale --socket")) {
         if (opts.tailscaleIp instanceof Error) throw opts.tailscaleIp;
         return opts.tailscaleIp;
       }
@@ -897,7 +975,7 @@ describe("ElizaSandboxService tailnet-IP reconciliation", () => {
       expect(patch.headscale_ip).toBeUndefined();
       // A dead container short-circuits — no IP resolve is attempted on it.
       const tailscaleCalls = exec.mock.calls.filter(([cmd]) =>
-        String(cmd).includes("tailscale ip"),
+        String(cmd).includes("tailscale --socket"),
       );
       expect(tailscaleCalls).toHaveLength(0);
     } finally {
@@ -2106,6 +2184,7 @@ describe("ElizaSandboxService.provision dedup + port-collision retry (LARP H2)",
       agentSandboxesRepository,
       "getReconstructedBackupState",
     ).mockResolvedValue({ memories: [], config: {}, workspaceFiles: {} });
+    const pruneSpy = spyOn(agentSandboxesRepository, "pruneBackups").mockResolvedValue(0);
     let runningWrites = 0;
     const updateSpy = spyOn(agentSandboxesRepository, "update").mockImplementation(
       async (_id, data) => {
@@ -2148,12 +2227,16 @@ describe("ElizaSandboxService.provision dedup + port-collision retry (LARP H2)",
       expect(markErrorSpy).toHaveBeenCalledTimes(1);
       // Ghost cleanup still stops the container whose restore failed.
       expect(stop).toHaveBeenCalledWith("sandbox-blue-1");
+      // A transient 5xx must NOT be classified as unrecoverable: the snapshot
+      // chain stays intact for the retry that may restore it.
+      expect(pruneSpy).not.toHaveBeenCalled();
     } finally {
       findSpy.mockRestore();
       findByIdSpy.mockRestore();
       lockSpy.mockRestore();
       backupSpy.mockRestore();
       reconstructedSpy.mockRestore();
+      pruneSpy.mockRestore();
       updateSpy.mockRestore();
       apiKeySpy.mockRestore();
       markErrorSpy.mockRestore();
@@ -2221,7 +2304,7 @@ describe("ElizaSandboxService.provision dedup + port-collision retry (LARP H2)",
       expect(pruneSpy).toHaveBeenCalledWith(AGENT, 0);
       // The degrade is logged with context, never silent.
       const logged = errorLogSpy.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(logged).toContain("Undecryptable snapshot, booting fresh");
+      expect(logged).toContain("Unrecoverable snapshot, booting fresh");
       // A degrade is not a container failure — no ghost cleanup.
       expect(stop).not.toHaveBeenCalled();
     } finally {
@@ -2305,7 +2388,7 @@ describe("ElizaSandboxService.provision dedup + port-collision retry (LARP H2)",
       expect(pushStateSpy).not.toHaveBeenCalled();
       expect(pruneSpy).toHaveBeenCalledWith(AGENT, 0);
       const logged = errorLogSpy.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(logged).toContain("Undecryptable snapshot, booting fresh");
+      expect(logged).toContain("Unrecoverable snapshot, booting fresh");
     } finally {
       findSpy.mockRestore();
       lockSpy.mockRestore();
@@ -2376,7 +2459,7 @@ describe("ElizaSandboxService.provision dedup + port-collision retry (LARP H2)",
       // Must NOT degrade: the snapshot chain is untouched, no degrade logged.
       expect(pruneSpy).not.toHaveBeenCalled();
       const logged = errorLogSpy.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(logged).not.toContain("Undecryptable snapshot");
+      expect(logged).not.toContain("Unrecoverable snapshot");
       // Ghost cleanup still stops the just-created container.
       expect(stop).toHaveBeenCalledTimes(1);
     } finally {
@@ -2393,43 +2476,432 @@ describe("ElizaSandboxService.provision dedup + port-collision retry (LARP H2)",
       getProviderSpy.mockRestore();
     }
   });
+
+  // The HQ 14308 incident, end to end: the restore push to the new container is
+  // rejected 401 Unauthorized (bridge URL routing to a dead/rotated container),
+  // which is deterministic on every attempt — retrying only burned the
+  // provision attempts and bricked agent 23766030 into status=error
+  // ("Provisioning failed after 3 attempts: State restore failed: HTTP 401
+  // {"error":"Unauthorized"}"). It must instead degrade to a fresh boot on the
+  // FIRST detection. Drives the REAL pushState (fetch intercepted with the
+  // incident's exact response) so the classified error is the code's own throw
+  // shape, not a hand-rolled string.
+  test("(13) restore push rejected 401 (dead/rotated container) degrades to a fresh boot on the first attempt", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const row: AgentSandbox = { ...provisioningReadyRow(), execution_tier: "dedicated-lazy" };
+    const finalRow: AgentSandbox = { ...row, status: "running" };
+    const backup: AgentSandboxBackup = {
+      id: "66666666-6666-4666-8666-666666666666",
+      sandbox_record_id: row.id,
+      snapshot_type: "pre-shutdown",
+      state_data: { memories: [], config: {}, workspaceFiles: {} },
+      state_data_storage: "inline",
+      state_data_key: null,
+      size_bytes: 2,
+      backup_kind: "full",
+      parent_backup_id: null,
+      content_hash: null,
+      created_at: new Date("2026-06-04T12:05:00.000Z"),
+    };
+    const findSpy = spyOn(agentSandboxesRepository, "findByIdAndOrg").mockResolvedValue(row);
+    const lockSpy = spyOn(agentSandboxesRepository, "trySetProvisioning").mockResolvedValue({
+      ...row,
+      status: "provisioning",
+    });
+    const backupSpy = spyOn(agentSandboxesRepository, "getLatestBackup").mockResolvedValue(backup);
+    const reconstructedSpy = spyOn(
+      agentSandboxesRepository,
+      "getReconstructedBackupState",
+    ).mockResolvedValue({ memories: [], config: {}, workspaceFiles: {} });
+    const pruneSpy = spyOn(agentSandboxesRepository, "pruneBackups").mockResolvedValue(1);
+    const updateSpy = spyOn(agentSandboxesRepository, "update").mockImplementation(
+      async (_id, data) => (data.status === "running" ? finalRow : { ...row, ...data }),
+    );
+    const apiKeySpy = spyOn(apiKeysService, "createForAgent").mockResolvedValue({
+      id: "22222222-2222-4222-8222-222222222222",
+      plainKey: "eliza_test_agent_key",
+      prefix: "eliza_test",
+    });
+    const errorLogSpy = spyOn(logger, "error").mockImplementation(() => {});
+    const svc = new ElizaSandboxService();
+    const markErrorSpy = spyOn(
+      svc as unknown as { markError: (rec: AgentSandbox, msg: string) => Promise<void> },
+      "markError",
+    ).mockResolvedValue(undefined);
+    const ensureStartedSpy = spyOn(
+      svc as unknown as { ensureRuntimeAgentStarted: () => Promise<unknown> },
+      "ensureRuntimeAgentStarted",
+    ).mockResolvedValue(null);
+    // REAL pushState: only the fetch layer is intercepted, replaying the
+    // incident's exact response, so the thrown error is pushState's own
+    // `State restore failed: HTTP 401 {"error":"Unauthorized"}`.
+    const restoreCalls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      restoreCalls.push(fetchUrl(input));
+      return new Response('{"error":"Unauthorized"}', { status: 401 });
+    }) as typeof fetch;
+    const create = mock(async () => providerHandle());
+    const stop = mock(async () => {});
+    const getProviderSpy = spyOn(
+      svc as unknown as { getProvider: () => Promise<SandboxProvider> },
+      "getProvider",
+    ).mockResolvedValue({ create, stop, checkHealth: async () => true } as SandboxProvider);
+    try {
+      const res = await svc.provision(AGENT, ORG);
+      // Fresh boot: the provision SUCCEEDS instead of bricking the agent.
+      expect(res.success).toBe(true);
+      expect(res.sandboxRecord).toBe(finalRow);
+      // The restore POST really went to the new container's bridge.
+      expect(restoreCalls).toEqual(["https://runtime-blue.example/api/restore"]);
+      // Degrade on FIRST detection: one create, no retry burn, no ghost
+      // cleanup of the healthy container, no markError.
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(stop).not.toHaveBeenCalled();
+      expect(markErrorSpy).not.toHaveBeenCalled();
+      // A 401 is an AUTH failure — RECOVERABLE (#15263), not a permanently-lost
+      // snapshot. It degrades to a fresh boot so the agent never bricks, but the
+      // backup chain is PRESERVED so a later token-corrected resume can restore
+      // it. Pruning here would be silent, permanent data loss (#15274), so the
+      // chain-nuking `pruneBackups(agentId, 0)` must NOT fire on this path.
+      expect(pruneSpy).not.toHaveBeenCalledWith(AGENT, 0);
+      const logged = errorLogSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(logged).toContain("Unrecoverable snapshot, booting fresh");
+    } finally {
+      findSpy.mockRestore();
+      lockSpy.mockRestore();
+      backupSpy.mockRestore();
+      reconstructedSpy.mockRestore();
+      pruneSpy.mockRestore();
+      updateSpy.mockRestore();
+      apiKeySpy.mockRestore();
+      errorLogSpy.mockRestore();
+      markErrorSpy.mockRestore();
+      ensureStartedSpy.mockRestore();
+      getProviderSpy.mockRestore();
+    }
+  });
+
+  // A restore-endpoint 404 on a NON-custom tier is equally deterministic (the
+  // image will never grow the endpoint mid-provision) — same degrade, via the
+  // real pushState throw shape.
+  test("(14) restore push rejected 404 on a non-custom tier degrades to a fresh boot", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const row: AgentSandbox = { ...provisioningReadyRow(), execution_tier: "dedicated-lazy" };
+    const finalRow: AgentSandbox = { ...row, status: "running" };
+    const backup: AgentSandboxBackup = {
+      id: "77777777-7777-4777-8777-777777777777",
+      sandbox_record_id: row.id,
+      snapshot_type: "pre-shutdown",
+      state_data: { memories: [], config: {}, workspaceFiles: {} },
+      state_data_storage: "inline",
+      state_data_key: null,
+      size_bytes: 2,
+      backup_kind: "full",
+      parent_backup_id: null,
+      content_hash: null,
+      created_at: new Date("2026-06-04T12:05:00.000Z"),
+    };
+    const findSpy = spyOn(agentSandboxesRepository, "findByIdAndOrg").mockResolvedValue(row);
+    const lockSpy = spyOn(agentSandboxesRepository, "trySetProvisioning").mockResolvedValue({
+      ...row,
+      status: "provisioning",
+    });
+    const backupSpy = spyOn(agentSandboxesRepository, "getLatestBackup").mockResolvedValue(backup);
+    const reconstructedSpy = spyOn(
+      agentSandboxesRepository,
+      "getReconstructedBackupState",
+    ).mockResolvedValue({ memories: [], config: {}, workspaceFiles: {} });
+    const pruneSpy = spyOn(agentSandboxesRepository, "pruneBackups").mockResolvedValue(1);
+    const updateSpy = spyOn(agentSandboxesRepository, "update").mockImplementation(
+      async (_id, data) => (data.status === "running" ? finalRow : { ...row, ...data }),
+    );
+    const apiKeySpy = spyOn(apiKeysService, "createForAgent").mockResolvedValue({
+      id: "22222222-2222-4222-8222-222222222222",
+      plainKey: "eliza_test_agent_key",
+      prefix: "eliza_test",
+    });
+    const errorLogSpy = spyOn(logger, "error").mockImplementation(() => {});
+    const svc = new ElizaSandboxService();
+    const markErrorSpy = spyOn(
+      svc as unknown as { markError: (rec: AgentSandbox, msg: string) => Promise<void> },
+      "markError",
+    ).mockResolvedValue(undefined);
+    const ensureStartedSpy = spyOn(
+      svc as unknown as { ensureRuntimeAgentStarted: () => Promise<unknown> },
+      "ensureRuntimeAgentStarted",
+    ).mockResolvedValue(null);
+    globalThis.fetch = (async () => new Response("Not Found", { status: 404 })) as typeof fetch;
+    const create = mock(async () => providerHandle());
+    const stop = mock(async () => {});
+    const getProviderSpy = spyOn(
+      svc as unknown as { getProvider: () => Promise<SandboxProvider> },
+      "getProvider",
+    ).mockResolvedValue({ create, stop, checkHealth: async () => true } as SandboxProvider);
+    try {
+      const res = await svc.provision(AGENT, ORG);
+      expect(res.success).toBe(true);
+      expect(markErrorSpy).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+      expect(pruneSpy).toHaveBeenCalledWith(AGENT, 0);
+      const logged = errorLogSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(logged).toContain("Unrecoverable snapshot, booting fresh");
+    } finally {
+      findSpy.mockRestore();
+      lockSpy.mockRestore();
+      backupSpy.mockRestore();
+      reconstructedSpy.mockRestore();
+      pruneSpy.mockRestore();
+      updateSpy.mockRestore();
+      apiKeySpy.mockRestore();
+      errorLogSpy.mockRestore();
+      markErrorSpy.mockRestore();
+      ensureStartedSpy.mockRestore();
+      getProviderSpy.mockRestore();
+    }
+  });
+
+  // Custom-tier images legitimately lack /api/restore: that 404 stays the
+  // designed benign skip — the snapshot is KEPT (no prune) for a future image
+  // that has the endpoint. Guards the branch ordering: the skip must win over
+  // the unrecoverable degrade.
+  test("(15) restore push 404 on a custom tier stays a benign skip — snapshot kept, no degrade", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const row = provisioningReadyRow(); // execution_tier: "custom"
+    const finalRow: AgentSandbox = { ...row, status: "running" };
+    const backup: AgentSandboxBackup = {
+      id: "88888888-8888-4888-8888-888888888888",
+      sandbox_record_id: row.id,
+      snapshot_type: "pre-shutdown",
+      state_data: { memories: [], config: {}, workspaceFiles: {} },
+      state_data_storage: "inline",
+      state_data_key: null,
+      size_bytes: 2,
+      backup_kind: "full",
+      parent_backup_id: null,
+      content_hash: null,
+      created_at: new Date("2026-06-04T12:05:00.000Z"),
+    };
+    const findSpy = spyOn(agentSandboxesRepository, "findByIdAndOrg").mockResolvedValue(row);
+    const lockSpy = spyOn(agentSandboxesRepository, "trySetProvisioning").mockResolvedValue({
+      ...row,
+      status: "provisioning",
+    });
+    const backupSpy = spyOn(agentSandboxesRepository, "getLatestBackup").mockResolvedValue(backup);
+    const reconstructedSpy = spyOn(
+      agentSandboxesRepository,
+      "getReconstructedBackupState",
+    ).mockResolvedValue({ memories: [], config: {}, workspaceFiles: {} });
+    const pruneSpy = spyOn(agentSandboxesRepository, "pruneBackups").mockResolvedValue(0);
+    const updateSpy = spyOn(agentSandboxesRepository, "update").mockImplementation(
+      async (_id, data) => (data.status === "running" ? finalRow : { ...row, ...data }),
+    );
+    const apiKeySpy = spyOn(apiKeysService, "createForAgent").mockResolvedValue({
+      id: "22222222-2222-4222-8222-222222222222",
+      plainKey: "eliza_test_agent_key",
+      prefix: "eliza_test",
+    });
+    const infoLogSpy = spyOn(logger, "info").mockImplementation(() => {});
+    const errorLogSpy = spyOn(logger, "error").mockImplementation(() => {});
+    const svc = new ElizaSandboxService();
+    const ensureStartedSpy = spyOn(
+      svc as unknown as { ensureRuntimeAgentStarted: () => Promise<unknown> },
+      "ensureRuntimeAgentStarted",
+    ).mockResolvedValue(null);
+    globalThis.fetch = (async () => new Response("Not Found", { status: 404 })) as typeof fetch;
+    const create = mock(async () => providerHandle());
+    const getProviderSpy = spyOn(
+      svc as unknown as { getProvider: () => Promise<SandboxProvider> },
+      "getProvider",
+    ).mockResolvedValue({
+      create,
+      stop: mock(async () => {}),
+      checkHealth: async () => true,
+    } as SandboxProvider);
+    try {
+      const res = await svc.provision(AGENT, ORG);
+      expect(res.success).toBe(true);
+      // Benign skip, not a degrade: chain untouched, no error-level log.
+      expect(pruneSpy).not.toHaveBeenCalled();
+      const info = infoLogSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(info).toContain("custom image has no restore endpoint");
+      const logged = errorLogSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(logged).not.toContain("Unrecoverable snapshot");
+    } finally {
+      findSpy.mockRestore();
+      lockSpy.mockRestore();
+      backupSpy.mockRestore();
+      reconstructedSpy.mockRestore();
+      pruneSpy.mockRestore();
+      updateSpy.mockRestore();
+      apiKeySpy.mockRestore();
+      infoLogSpy.mockRestore();
+      errorLogSpy.mockRestore();
+      ensureStartedSpy.mockRestore();
+      getProviderSpy.mockRestore();
+    }
+  });
 });
 
-// Snapshot-degrade error classification (`isUndecryptableSnapshotError`), proven
+// Snapshot-degrade error classification (`isUnrecoverableSnapshotError`), proven
 // against REAL @elizaos/security errors produced by the crypto stack — the
 // precise crypto-vs-transient distinction the degrade path keys on.
-describe("isUndecryptableSnapshotError (KMS timebomb classification)", () => {
-  test("classifies a real KeyNotFoundError (memory-KMS key rotated away) as undecryptable", async () => {
-    const { isUndecryptableSnapshotError } = await import("./eliza-sandbox.ts?actual");
+describe("isUnrecoverableSnapshotError (permanent-vs-transient classification)", () => {
+  test("classifies a real KeyNotFoundError (memory-KMS key rotated away) as unrecoverable", async () => {
+    const { isUnrecoverableSnapshotError } = await import("./eliza-sandbox.ts?actual");
     const err = await realKeyRotatedAwayError();
     // The exact prod incident: the memory backend restart orphaned the key.
     expect(err).toBeInstanceOf(KeyNotFoundError);
-    expect(isUndecryptableSnapshotError(err)).toBe(true);
+    expect(isUnrecoverableSnapshotError(err)).toBe(true);
   });
 
-  test("classifies a real AeadError (auth-tag failure) as undecryptable", async () => {
-    const { isUndecryptableSnapshotError } = await import("./eliza-sandbox.ts?actual");
+  test("classifies a real AeadError (auth-tag failure) as unrecoverable", async () => {
+    const { isUnrecoverableSnapshotError } = await import("./eliza-sandbox.ts?actual");
     const err = await realAeadDecryptError();
     expect(err.name).toBe("AeadError");
-    expect(isUndecryptableSnapshotError(err)).toBe(true);
+    expect(isUnrecoverableSnapshotError(err)).toBe(true);
   });
 
-  test("does NOT classify transient / non-crypto failures as undecryptable", async () => {
-    const { isUndecryptableSnapshotError } = await import("./eliza-sandbox.ts?actual");
+  test("classifies permanent snapshot HTTP rejections (401/403/404/410) as unrecoverable", async () => {
+    const { isUnrecoverableSnapshotError } = await import("./eliza-sandbox.ts?actual");
+    // The exact HQ 14308 incident string, as pushState throws it (status +
+    // first 200 bytes of the response body).
+    expect(
+      isUnrecoverableSnapshotError(
+        new Error('State restore failed: HTTP 401 {"error":"Unauthorized"}'),
+      ),
+    ).toBe(true);
+    expect(isUnrecoverableSnapshotError(new Error("State restore failed: HTTP 403 "))).toBe(true);
+    expect(
+      isUnrecoverableSnapshotError(new Error("State restore failed: HTTP 404 Not Found")),
+    ).toBe(true);
+    expect(isUnrecoverableSnapshotError(new Error("State restore failed: HTTP 410 Gone"))).toBe(
+      true,
+    );
+    // fetchSnapshotState's shape (no body suffix). Its 404 is mapped to the
+    // SNAPSHOT_ENDPOINT_UNSUPPORTED sentinel before ever surfacing, but the
+    // auth statuses surface verbatim.
+    expect(isUnrecoverableSnapshotError(new Error("Snapshot fetch failed: HTTP 401"))).toBe(true);
+    expect(isUnrecoverableSnapshotError(new Error("Snapshot fetch failed: HTTP 403"))).toBe(true);
+    expect(isUnrecoverableSnapshotError(new Error("Snapshot fetch failed: HTTP 410"))).toBe(true);
+  });
+
+  test("does NOT classify transient snapshot HTTP failures — those must retry", async () => {
+    const { isUnrecoverableSnapshotError } = await import("./eliza-sandbox.ts?actual");
+    // 5xx (container mid-boot / overloaded), 408 (timeout), 429 (throttled):
+    // all can heal on the next attempt, so degrading would discard restorable
+    // state.
+    expect(
+      isUnrecoverableSnapshotError(
+        new Error("State restore failed: HTTP 500 Internal Server Error"),
+      ),
+    ).toBe(false);
+    expect(
+      isUnrecoverableSnapshotError(new Error("State restore failed: HTTP 502 Bad Gateway")),
+    ).toBe(false);
+    expect(isUnrecoverableSnapshotError(new Error("State restore failed: HTTP 503 "))).toBe(false);
+    expect(isUnrecoverableSnapshotError(new Error("State restore failed: HTTP 408 "))).toBe(false);
+    expect(isUnrecoverableSnapshotError(new Error("State restore failed: HTTP 429 "))).toBe(false);
+    expect(isUnrecoverableSnapshotError(new Error("Snapshot fetch failed: HTTP 500"))).toBe(false);
+    expect(isUnrecoverableSnapshotError(new Error("Snapshot fetch failed: HTTP 503"))).toBe(false);
+  });
+
+  test("matches only this file's snapshot throw shapes — anchored, exact status", async () => {
+    const { isUnrecoverableSnapshotError, SNAPSHOT_ENDPOINT_UNSUPPORTED } = await import(
+      "./eliza-sandbox.ts?actual"
+    );
+    // Network-level fetch failures carry no HTTP status and must propagate.
+    expect(isUnrecoverableSnapshotError(new TypeError("fetch failed"))).toBe(false);
+    // A message that merely EMBEDS the wrapper (e.g. the markError re-wrap) is
+    // not the raw restore-path error the degrade classifies.
+    expect(
+      isUnrecoverableSnapshotError(
+        new Error(
+          'Provisioning failed after 3 attempts: State restore failed: HTTP 401 {"error":"Unauthorized"}',
+        ),
+      ),
+    ).toBe(false);
+    // The "image has no snapshot endpoint" sentinel is a benign skip elsewhere,
+    // never a degrade.
+    expect(isUnrecoverableSnapshotError(new Error(SNAPSHOT_ENDPOINT_UNSUPPORTED))).toBe(false);
+    expect(isUnrecoverableSnapshotError(new Error("Sandbox is not running"))).toBe(false);
+  });
+
+  test("does NOT classify transient / non-crypto failures as unrecoverable", async () => {
+    const { isUnrecoverableSnapshotError } = await import("./eliza-sandbox.ts?actual");
     // A DB/network blip, a base Steward KmsError (HTTP 5xx transient), and
     // non-Errors must all propagate — degrading on them would discard state a
     // retry would have restored.
-    expect(isUndecryptableSnapshotError(new Error("connection terminated unexpectedly"))).toBe(
+    expect(isUnrecoverableSnapshotError(new Error("connection terminated unexpectedly"))).toBe(
       false,
     );
     expect(
-      isUndecryptableSnapshotError(
+      isUnrecoverableSnapshotError(
         new KmsError("Steward KMS decrypt failed (503 Service Unavailable)"),
       ),
     ).toBe(false);
-    expect(isUndecryptableSnapshotError("AEAD decrypt failed")).toBe(false);
-    expect(isUndecryptableSnapshotError(null)).toBe(false);
-    expect(isUndecryptableSnapshotError(undefined)).toBe(false);
+    expect(isUnrecoverableSnapshotError("AEAD decrypt failed")).toBe(false);
+    expect(isUnrecoverableSnapshotError(null)).toBe(false);
+    expect(isUnrecoverableSnapshotError(undefined)).toBe(false);
+  });
+});
+
+// Snapshot PRUNE-gating classification (`isPermanentlyLostSnapshot`, #15274).
+// A strict SUBSET of `isUnrecoverableSnapshotError`: an auth 401/403 is
+// unrecoverable for THIS provision (boot fresh) but the snapshot is NOT
+// permanently lost — a token-corrected resume (#15263) can still restore it —
+// so it must NEVER gate a `pruneBackups(agentId, 0)`. Only crypto-loss and
+// HTTP 404/410 are permanently lost and safe to prune.
+describe("isPermanentlyLostSnapshot (prune-vs-preserve gating)", () => {
+  test("classifies crypto-loss shapes (KeyNotFoundError / AeadError) as permanently lost", async () => {
+    const { isPermanentlyLostSnapshot } = await import("./eliza-sandbox.ts?actual");
+    const keyGone = await realKeyRotatedAwayError();
+    expect(keyGone).toBeInstanceOf(KeyNotFoundError);
+    expect(isPermanentlyLostSnapshot(keyGone)).toBe(true);
+    const corrupt = await realAeadDecryptError();
+    expect(corrupt.name).toBe("AeadError");
+    expect(isPermanentlyLostSnapshot(corrupt)).toBe(true);
+  });
+
+  test("classifies HTTP 404/410 (snapshot gone) as permanently lost — safe to prune", async () => {
+    const { isPermanentlyLostSnapshot } = await import("./eliza-sandbox.ts?actual");
+    expect(isPermanentlyLostSnapshot(new Error("State restore failed: HTTP 404 Not Found"))).toBe(
+      true,
+    );
+    expect(isPermanentlyLostSnapshot(new Error("State restore failed: HTTP 410 Gone"))).toBe(true);
+    expect(isPermanentlyLostSnapshot(new Error("Snapshot fetch failed: HTTP 410"))).toBe(true);
+  });
+
+  test("does NOT classify auth 401/403 as permanently lost — recoverable, must PRESERVE the chain (#15274)", async () => {
+    const { isPermanentlyLostSnapshot, isUnrecoverableSnapshotError } = await import(
+      "./eliza-sandbox.ts?actual"
+    );
+    // The exact HQ 14308 incident string. It IS unrecoverable-for-this-provision
+    // (degrade to fresh boot) but NOT permanently lost: PR #15263 shows the 401
+    // was a healthy container missing the agent token, which a corrected resume
+    // restores. Pruning here = silent permanent data loss.
+    const auth401 = new Error('State restore failed: HTTP 401 {"error":"Unauthorized"}');
+    expect(isUnrecoverableSnapshotError(auth401)).toBe(true);
+    expect(isPermanentlyLostSnapshot(auth401)).toBe(false);
+    const auth403 = new Error("State restore failed: HTTP 403 ");
+    expect(isUnrecoverableSnapshotError(auth403)).toBe(true);
+    expect(isPermanentlyLostSnapshot(auth403)).toBe(false);
+    expect(isPermanentlyLostSnapshot(new Error("Snapshot fetch failed: HTTP 401"))).toBe(false);
+    expect(isPermanentlyLostSnapshot(new Error("Snapshot fetch failed: HTTP 403"))).toBe(false);
+  });
+
+  test("does NOT classify transient / non-matching errors as permanently lost", async () => {
+    const { isPermanentlyLostSnapshot } = await import("./eliza-sandbox.ts?actual");
+    // Transient HTTP and network/DB errors were never unrecoverable to begin
+    // with; they must never prune.
+    expect(
+      isPermanentlyLostSnapshot(new Error("State restore failed: HTTP 500 Internal Server Error")),
+    ).toBe(false);
+    expect(isPermanentlyLostSnapshot(new Error("State restore failed: HTTP 503 "))).toBe(false);
+    expect(isPermanentlyLostSnapshot(new Error("connection terminated unexpectedly"))).toBe(false);
+    expect(isPermanentlyLostSnapshot(new TypeError("fetch failed"))).toBe(false);
+    expect(isPermanentlyLostSnapshot("AEAD decrypt failed")).toBe(false);
+    expect(isPermanentlyLostSnapshot(null)).toBe(false);
+    expect(isPermanentlyLostSnapshot(undefined)).toBe(false);
   });
 });
 

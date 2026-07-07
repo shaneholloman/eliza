@@ -10,6 +10,7 @@ import { cva } from "class-variance-authority";
 import { PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import * as React from "react";
 import { cn } from "../../../lib/utils";
+import { shellLocalStorage } from "../../../surface-realm-channel";
 import { Button } from "../../ui/button";
 import {
   buildSidebarAutoRailItems,
@@ -142,7 +143,7 @@ function readSidebarCollapsedSnapshot(
 function writeSidebarCollapsed(syncId: string, collapsed: boolean) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(
+    shellLocalStorage.setItem(
       getSidebarCollapsedStorageKey(syncId),
       String(collapsed),
     );
@@ -449,6 +450,7 @@ export const Sidebar = React.forwardRef<HTMLElement, SidebarProps>(
       resizable = false,
       width,
       onWidthChange,
+      onWidthCommit,
       minWidth = 200,
       maxWidth = 560,
       onCollapseRequest,
@@ -768,11 +770,16 @@ export const Sidebar = React.forwardRef<HTMLElement, SidebarProps>(
           }
           window.removeEventListener("pointermove", onMove);
           window.removeEventListener("pointerup", onUp);
+          window.removeEventListener("pointercancel", onUp);
         }
         const onUp = () => {
           // Flush the last pending width so the final position isn't dropped.
           if (rafId !== 0 && pendingWidth !== null)
             onWidthChange?.(pendingWidth);
+          // pendingWidth survives the per-frame flushes, so it is the final
+          // width of the whole drag; a no-move click leaves it null and
+          // commits nothing.
+          if (pendingWidth !== null) onWidthCommit?.(pendingWidth);
           try {
             target.releasePointerCapture(event.pointerId);
           } catch {
@@ -782,6 +789,7 @@ export const Sidebar = React.forwardRef<HTMLElement, SidebarProps>(
         };
         window.addEventListener("pointermove", onMove);
         window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
       },
       [
         collapseThreshold,
@@ -789,6 +797,7 @@ export const Sidebar = React.forwardRef<HTMLElement, SidebarProps>(
         minWidth,
         onCollapseRequest,
         onWidthChange,
+        onWidthCommit,
         resizeActive,
         width,
       ],

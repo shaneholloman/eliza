@@ -37,6 +37,7 @@ import { CHAT_MESSAGE_SEARCH_EVENT } from "../../events";
 import { useIntervalWhenDocumentVisible } from "../../hooks/useDocumentVisibility";
 import { useAppSelectorShallow } from "../../state";
 import { usePtySessions } from "../../state/PtySessionsContext.hooks";
+import { shellLocalStorage } from "../../surface-realm-channel";
 import { errorMessage } from "../../utils/errors";
 import { MessageSearchPanel } from "../chat/message-search/MessageSearchPanel";
 import { ChatConversationItem } from "../composites/chat/chat-conversation-item";
@@ -229,10 +230,15 @@ export function ConversationsSidebar({
     }
     return CHAT_SIDEBAR_DEFAULT_WIDTH;
   });
+  // Fires per frame during a resize drag: state only. Persistence happens
+  // once per drag in the commit handler below — a synchronous localStorage
+  // write per frame stalls the drag on high-rate pointer devices.
   const handleSidebarWidthChange = useCallback((next: number) => {
     setSidebarWidth(next);
+  }, []);
+  const handleSidebarWidthCommit = useCallback((next: number) => {
     try {
-      window.localStorage.setItem(CHAT_SIDEBAR_WIDTH_KEY, String(next));
+      shellLocalStorage.setItem(CHAT_SIDEBAR_WIDTH_KEY, String(next));
     } catch {
       // error-policy:J6 best-effort persistence — width still applies for
       // this session; private-mode storage may reject writes
@@ -903,6 +909,7 @@ export function ConversationsSidebar({
         minWidth={CHAT_SIDEBAR_MIN_WIDTH}
         maxWidth={CHAT_SIDEBAR_MAX_WIDTH}
         onWidthChange={handleSidebarWidthChange}
+        onWidthCommit={handleSidebarWidthCommit}
         onCollapseRequest={() => setSidebarCollapsed(true)}
         contentIdentity={
           mobile ? "chat-mobile" : isGameModal ? "chat-modal" : "chat"

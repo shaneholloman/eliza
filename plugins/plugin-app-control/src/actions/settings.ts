@@ -772,8 +772,13 @@ const VOICE_CONTINUOUS_ALIASES: ReadonlyMap<string, VoiceContinuousMode> =
 // mechanically by a test that imports the canonical constant.
 export const DEFAULT_VOICE_SETTINGS_PREFS: VoiceSettingsPrefs = {
 	continuous: "off",
+	// Must track the canonical capture default (`DEFAULT_LOCAL_ASR_AUTO_STOP` in
+	// @elizaos/ui): a chat-write that seeds a partial voice config must persist the
+	// same VAD sensitivity the running capture path uses, or the stored value
+	// diverges from what the Voice UI applies. #15267 dropped the canonical
+	// silence window 900 → 550; settings.test.ts pins these in sync.
 	vadAutoStop: {
-		silenceMs: 900,
+		silenceMs: 550,
 		speechRmsThreshold: 0.003,
 	},
 };
@@ -1388,6 +1393,13 @@ export const SETTINGS_WRITE_REGISTRY: Readonly<
 		kind: "delegate",
 		action: "BACKGROUND",
 		summary: "Set, generate, undo, or reset the app background.",
+	},
+	notifications: {
+		kind: "unwired",
+		reason:
+			"Push notification enrollment is a client/device permission handshake, not a server-side setting value SETTINGS can safely mutate.",
+		exemptionReason:
+			"SETTINGS can request the OS notification permission through section=permissions key=request permission=notifications, but push subscription and device-token registration must stay in the client Settings surface.",
 	},
 	connectors: {
 		kind: "delegate",

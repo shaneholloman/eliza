@@ -139,7 +139,14 @@ export const POST_TTS_ECHO_THRESHOLD_MULTIPLIER = 4;
 export const DEFAULT_LOCAL_ASR_AUTO_STOP: LocalAsrAutoStopConfig = {
   startGraceMs: 250,
   minSpeechMs: 180,
-  silenceMs: 900,
+  // Trailing-silence window that ends a hands-free turn (#voice-V6). 900 → 650:
+  // still shaves ~250ms off every turn's speech-end → capture-stop leg, but keeps
+  // headroom for natural inter-clause pauses (per review on #15267: 550 risks
+  // clipping slow/deliberate speakers, and mid-sentence pauses routinely exceed
+  // 550ms). The user override still wins: `loadVadAutoStop()` reads a persisted
+  // `silenceMs` first and only falls back to this default. On-device tuning can
+  // move this again once false-cutoff behavior is verified on the installed PWA.
+  silenceMs: 650,
   maxSpeechMs: 12_000,
   speechRmsThreshold: 0.003,
   speechPeakThreshold: 0.012,
@@ -246,6 +253,77 @@ export function encodeMonoPcm16Wav(
   }
 
   return new Uint8Array(buffer);
+}
+
+/**
+ * Decode a mono PCM16 WAV (as produced by {@link encodeMonoPcm16Wav}) back to a
+ * Float32 sample buffer in [-1, 1]. Used by the pre-POST silence guard
+ * (#voice-V5): the capture recorder hands the factory an already-encoded WAV,
+ * so to test it for silence with {@link isSilentPcmAudio} we read the PCM back
+ * out of the RIFF body rather than plumbing a second Float32 buffer through the
+ * recorder API.
+ *
+ * Best-effort + defensive: it locates the `data` chunk instead of assuming the
+ * canonical 44-byte header, and returns an empty buffer for anything it can't
+ * parse (a non-WAV / truncated body). An empty buffer reads as silent, which is
+ * the safe default for the guard (a body we can't decode is not worth a STT
+ * round-trip).
+ */
+export function decodeMonoPcm16Wav(wav: Uint8Array): Float32Array {
+  // Minimum parseable size: RIFF/WAVE header (12) + a `data` sub-chunk header
+  // (8) = 20. (The canonical encoder writes a 44-byte header, but a valid WAV
+  // with a non-canonical chunk layout can be smaller — don't over-reject.)
+  if (wav.length < 20) return new Float32Array(0);
+  const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
+  const riff =
+    view.getUint8(0) === 0x52 && // 'R'
+    view.getUint8(1) === 0x49 && // 'I'
+    view.getUint8(2) === 0x46 && // 'F'
+    view.getUint8(3) === 0x46; // 'F'
+  if (!riff) return new Float32Array(0);
+
+  // Walk sub-chunks from offset 12 to find `data` (chunks may precede it, e.g.
+  // `fmt `); don't assume the 44-byte canonical layout.
+  let offset = 12;
+  let dataStart = -1;
+  let dataBytes = 0;
+  while (offset + 8 <= wav.length) {
+    const id0 = view.getUint8(offset);
+    const id1 = view.getUint8(offset + 1);
+    const id2 = view.getUint8(offset + 2);
+    const id3 = view.getUint8(offset + 3);
+    const chunkBytes = view.getUint32(offset + 4, true);
+    // 'data'
+    if (id0 === 0x64 && id1 === 0x61 && id2 === 0x74 && id3 === 0x61) {
+      dataStart = offset + 8;
+      dataBytes = chunkBytes;
+      break;
+    }
+    // Chunks are word-aligned (odd sizes get a pad byte).
+    offset += 8 + chunkBytes + (chunkBytes % 2);
+  }
+  if (dataStart < 0) return new Float32Array(0);
+
+  // Clamp to the actual buffer length in case the header over-reports.
+  const available = Math.max(0, wav.length - dataStart);
+  const usableBytes = Math.min(dataBytes, available);
+  const sampleCount = Math.floor(usableBytes / 2);
+  const out = new Float32Array(sampleCount);
+  for (let i = 0; i < sampleCount; i += 1) {
+    const int16 = view.getInt16(dataStart + i * 2, true);
+    out[i] = int16 < 0 ? int16 / 0x8000 : int16 / 0x7fff;
+  }
+  return out;
+}
+
+/**
+ * True when a captured WAV carries no usable speech (peak amplitude below the
+ * {@link isSilentPcmAudio} floor) — the pre-POST silence guard (#voice-V5) uses
+ * this to no-op an accidental near-silent tap instead of burning a cloud STT
+ * round-trip / credit and surfacing a spurious empty-transcript error.
+ */
+export function isSilentWav(wav: Uint8Array): boolean {
+  return isSilentPcmAudio(decodeMonoPcm16Wav(wav));
 }
 
 export async function startLocalAsrRecorder(

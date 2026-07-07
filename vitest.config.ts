@@ -97,6 +97,20 @@ export default defineConfig({
         replacement: path.join(root, "packages/shared/src/$1"),
       },
       {
+        // Leaf auth package (account storage, credentials, oauth flows,
+        // atomic-json). It ships no dist in the test lane, so its `.` and `./*`
+        // exports resolve to `dist/*.js` and vite fails with "Cannot find
+        // package '@elizaos/auth/...'". Pin both the barrel and subpaths to
+        // source so targeted tests (e.g. remote-plugin-adapter → app-package
+        // -modules → `@elizaos/auth/atomic-json`) resolve without a build.
+        find: /^@elizaos\/auth$/,
+        replacement: path.join(root, "packages/auth/src/index.ts"),
+      },
+      {
+        find: /^@elizaos\/auth\/(.+)$/,
+        replacement: path.join(root, "packages/auth/src/$1"),
+      },
+      {
         find: /^@elizaos\/vault$/,
         replacement: path.join(root, "packages/vault/src/index.ts"),
       },
@@ -111,6 +125,20 @@ export default defineConfig({
       {
         find: /^@elizaos\/cloud-sdk\/(.+)$/,
         replacement: path.join(root, "packages/cloud/sdk/src/$1"),
+      },
+      {
+        // Core's src re-exports the cloud routing surface from
+        // `@elizaos/cloud-routing` (packages/core/src/cloud-routing.ts), which
+        // ships no dist. With @elizaos/core source-aliased above, that re-export
+        // only resolves when cloud-routing is pinned to source too — otherwise
+        // vite falls through to its `dist/index.js` entry and fails with
+        // "Failed to resolve entry for @elizaos/cloud-routing".
+        find: /^@elizaos\/cloud-routing$/,
+        replacement: path.join(root, "packages/cloud/routing/src/index.ts"),
+      },
+      {
+        find: /^@elizaos\/cloud-routing\/(.+)$/,
+        replacement: path.join(root, "packages/cloud/routing/src/$1"),
       },
       {
         find: /^@elizaos\/tui$/,

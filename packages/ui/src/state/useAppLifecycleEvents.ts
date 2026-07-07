@@ -20,7 +20,7 @@
  *    backoff (so a socket iOS silently killed during suspension recovers
  *    immediately instead of waiting for the 30s background probe), and refetch
  *    the active conversation tail so agent messages missed while backgrounded
- *    appear \u2014 critical for dedicated-agent REST mode where there is no WS to
+ *    appear - critical for dedicated-agent REST mode where there is no WS to
  *    reconnect and nothing else re-syncs. The stale empty-streaming-placeholder
  *    anomaly is still swept (mark interrupted). The whole resume sequence is
  *    debounced so rapid foreground/background flips (or a visibilitychange +
@@ -32,6 +32,7 @@ import type { MutableRefObject } from "react";
 import { useEffect, useRef } from "react";
 import { type ConversationMessage, client } from "../api";
 import { APP_PAUSE_EVENT, APP_RESUME_EVENT } from "../events";
+import { shellLocalStorage } from "../surface-realm-channel";
 import type { LoadConversationMessagesResult } from "./internal";
 
 /** Storage key for the last-known active conversation id. */
@@ -57,7 +58,7 @@ interface UseAppLifecycleEventsParams {
   ) => void;
   /**
    * Full-replace reload of a conversation's messages from the server. Called on
-   * resume so agent messages emitted while the app was backgrounded appear \u2014
+   * resume so agent messages emitted while the app was backgrounded appear -
    * the only re-sync path for dedicated-agent REST mode (no WS to reconnect).
    */
   loadConversationMessages: (
@@ -120,12 +121,12 @@ export function useAppLifecycleEvents({
       if (typeof window !== "undefined") {
         try {
           if (activeId) {
-            window.localStorage.setItem(
+            shellLocalStorage.setItem(
               ACTIVE_CONVERSATION_STORAGE_KEY,
               activeId,
             );
           } else {
-            window.localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+            shellLocalStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
           }
         } catch (error) {
           // error-policy:J4 active-conversation persistence mirrors through
@@ -233,7 +234,7 @@ export function useAppLifecycleEvents({
     // iOS commonly restores an installed PWA from the back/forward cache
     // (bfcache) where `visibilitychange` alone can miss the resume trigger. A
     // `pageshow` with `persisted === true` means the page came back from
-    // bfcache with a frozen (dead) socket \u2014 treat it as a resume. A
+    // bfcache with a frozen (dead) socket - treat it as a resume. A
     // non-persisted pageshow is a normal load (boot already connects), so it
     // is ignored. Sharing `scheduleResume` dedupes against a visibilitychange
     // APP_RESUME_EVENT that fires in the same tick.

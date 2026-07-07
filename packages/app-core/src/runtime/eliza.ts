@@ -12,7 +12,8 @@
  *
  * Also owns PGlite startup-error normalization + auto-reset (quarantine a
  * corrupt `.elizadb` and retry once), the ELIZA_SKIP_APP_ROUTE_PLUGINS /
- * ELIZA_DEFER_APP_ROUTES boot knobs (both default to byte-identical boot), the
+ * ELIZA_DEFER_APP_ROUTES boot knobs (the tail defers by default;
+ * ELIZA_DEFER_APP_ROUTES=0 opts back into the inline pre-ready tail), the
  * local-agent IPC port gate (#12180), and a direct-run CLI (help/version) when
  * executed as a script. Mobile platforms take a trimmed boot path. Several seams
  * (PostReadyBootSteps, __setLatestBootTailRuntimeForTest) exist only for focused
@@ -42,6 +43,7 @@ import {
   shutdownRuntime as upstreamShutdownRuntime,
   startEliza as upstreamStartEliza,
 } from "@elizaos/agent";
+import { markDeferredBootPhase } from "@elizaos/agent/runtime/deferred-boot-status";
 import { installAgentHostBridge } from "./install-agent-host-bridge.js";
 
 export { CHANNEL_PLUGIN_MAP } from "./channel-plugin-map.js";
@@ -114,6 +116,12 @@ import {
 
 const _require = createRequire(import.meta.url);
 
+import {
+  isRuntimeBootDeferred,
+  registerDeferredRuntimeBoot,
+  shouldDeferRuntimeBootUntilOnboarding,
+  triggerDeferredRuntimeBoot,
+} from "../api/deferred-runtime-boot.js";
 import { invalidateCorsAllowedPorts } from "../api/server-cors.js";
 import { bootLap } from "../boot-profile.js";
 import { isRuntimeAutonomyEnabled } from "./autonomy-policy.js";
@@ -478,22 +486,29 @@ export function getSkippedAppRoutePluginIds(): Set<string> {
 }
 
 /**
- * Opt-in dev knob: when set to the literal token `"1"`, the post-ready boot
- * tail (app-route plugins, training hooks, sensitive-request adapters, telegram
- * polling, trigger bridge, connector catalog, voice warmup) runs in the
- * background instead of blocking the readiness gate, so `/api/health` flips
- * `ready:true` and "Agent ready" prints sooner. Composes with
- * {@link getSkippedAppRoutePluginIds}: `ELIZA_SKIP_APP_ROUTE_PLUGINS` filters
- * WHICH route plugins load; this controls WHETHER that tail blocks ready.
+ * Whether the post-ready boot tail (app-route plugins, training hooks,
+ * sensitive-request adapters, telegram polling, trigger bridge, connector
+ * catalog, voice warmup) runs in the background instead of blocking the
+ * readiness gate. Deferred by DEFAULT: `/api/health` flips `ready:true` and
+ * "Agent ready" prints before the tail's ~11 app-route dynamic imports
+ * (lifeops alone registers 188 routes) finish, so feature routes can 404 for
+ * a sub-second-to-few-second window right after ready. Consumers that need
+ * those routes poll `/api/health` for `deferredBoot.settled` (this tail
+ * reports as phase `app-route-tail`) instead of sleeping.
  *
- * Returns true ONLY for `"1"` (undefined / `""` / `"0"` / `"false"` / `"true"`
- * all return false) so the default boot is byte-identical: the tail is awaited
- * inline exactly as before.
+ * Opt out with `ELIZA_DEFER_APP_ROUTES=0|false|no|off` to await the tail
+ * inline before ready — the pre-deferral boot shape, for callers that must
+ * have every feature route mounted at ready and accept the slower
+ * time-to-ready. Any other value (unset, `""`, `"1"`, `"true"`) defers.
+ * Composes with {@link getSkippedAppRoutePluginIds}:
+ * `ELIZA_SKIP_APP_ROUTE_PLUGINS` filters WHICH route plugins load; this
+ * controls WHETHER the tail blocks ready.
  */
 export function getDeferAppRoutesEnabled(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return env.ELIZA_DEFER_APP_ROUTES?.trim() === "1";
+  const raw = env.ELIZA_DEFER_APP_ROUTES?.trim().toLowerCase();
+  return !(raw === "0" || raw === "false" || raw === "no" || raw === "off");
 }
 
 /**
@@ -924,17 +939,40 @@ async function repairRuntimeAfterBoot(
 
   // Post-ready tail: feature-route plugins, training hooks, sensitive-request
   // adapters, telegram polling, the trigger bridge, the connector catalog, and
-  // voice warmup. None of these gate correctness of the first turn, so when
-  // ELIZA_DEFER_APP_ROUTES=1 they run in the background and ready flips before
-  // the tail completes (feature routes may 404 for a brief window — same
-  // audience as ELIZA_SKIP_APP_ROUTE_PLUGINS). When the knob is unset the tail
-  // is awaited inline, identical in steps and order to the pre-split path.
+  // voice warmup. None of these gate correctness of the first turn, so by
+  // default they run in the background and ready flips before the tail
+  // completes (feature routes may 404 for a brief window — poll /api/health
+  // `deferredBoot.settled` before hitting them). ELIZA_DEFER_APP_ROUTES=0
+  // opts back into awaiting the tail inline, identical in steps and order to
+  // the pre-split path. The phase is marked pending before ready can flip so
+  // a health probe never reads a not-yet-announced tail as settled.
   latestBootTailRuntime = runtime;
+  markDeferredBootPhase("app-route-tail", "pending");
   if (getDeferAppRoutesEnabled()) {
-    void runPostReadyBootTail(runtime);
+    void runPostReadyBootTail(runtime).catch((err: unknown) => {
+      // error-policy:J1 boundary translation — the deferred tail has no caller
+      // left to throw to; a TTS-handler or runtime-hook failure here would
+      // otherwise vanish into an unhandled rejection. Mark the phase failed
+      // (so health-pollers stop waiting) and surface it agent-visibly.
+      markDeferredBootPhase("app-route-tail", "failed");
+      logger.error(
+        `[eliza] post-ready boot tail failed: ${formatErrorWithStack(err)}`,
+      );
+      runtime.reportError("eliza.postReadyBootTail", err, {
+        phase: "app-route-tail",
+      });
+    });
     return runtime;
   }
-  await runPostReadyBootTail(runtime);
+  try {
+    await runPostReadyBootTail(runtime);
+  } catch (err) {
+    // error-policy:J2 context-preserving rethrow — inline mode keeps the
+    // pre-split contract (a tail failure fails the boot); only the phase
+    // marker is updated so health never reports a failed tail as pending.
+    markDeferredBootPhase("app-route-tail", "failed");
+    throw err;
+  }
   return runtime;
 }
 
@@ -1029,6 +1067,10 @@ export async function runPostReadyBootTail(
   // server-only + restart paths), so the warmup fires regardless of entry
   // point. Fire-and-forget; gated + non-fatal inside startDeferredVoiceWarmup.
   void steps.startDeferredVoiceWarmup(runtime);
+
+  // Marked here — not at the dispatch site — so a superseded tail (early
+  // return above) never stamps `complete` over the newer boot's `pending`.
+  markDeferredBootPhase("app-route-tail", "complete");
 }
 
 /**
@@ -1148,8 +1190,19 @@ async function ensureConnectorTargetCatalog(
 // uncaughtException and kills the agent.
 let warmupInFlight: Promise<void> | null = null;
 
+// Deferred by DEFAULT: the process-entry warmup fired a GGUF download +
+// hardware probe before the readiness gate on every CLI/server boot, while
+// the agent's deferred wave (startEmbeddingWarmup in @elizaos/agent) and the
+// dev-server ready hook already warm the same model after ready — and the
+// warmup self-skips when cloud embeddings are active. Only an explicit
+// falsy ELIZA_DEFER_LOCAL_EMBEDDING_WARMUP (0/false/no/off) restores the
+// eager process-entry fire (benchmarks that want the download on the boot
+// path). ELIZA_SKIP_LOCAL_EMBEDDING_WARMUP still skips warmup entirely
+// (checked inside the warmup policy).
 function isLocalEmbeddingWarmupDeferredByEnv(): boolean {
-  return isTruthyEnvValue(process.env.ELIZA_DEFER_LOCAL_EMBEDDING_WARMUP);
+  const raw =
+    process.env.ELIZA_DEFER_LOCAL_EMBEDDING_WARMUP?.trim().toLowerCase();
+  return !(raw === "0" || raw === "false" || raw === "no" || raw === "off");
 }
 
 function startLocalEmbeddingWarmup(
@@ -1678,6 +1731,15 @@ export async function startEliza(
       return repaired;
     };
 
+    // Fresh-install gate, decided BEFORE the API binds so the onRestart
+    // closure below can never race an in-flight deferral decision: on a
+    // genuinely-fresh install (the GUI will run onboarding; no provider env
+    // keys, not cloud-provisioned) the runtime a server-only boot would build
+    // is pure waste — onboarding discards it. Defer it and boot on the
+    // first-run commit instead (see ../api/deferred-runtime-boot.ts).
+    const deferRuntimeBootUntilOnboarding =
+      shouldDeferRuntimeBootUntilOnboarding();
+
     // Desktop launcher sets ELIZA_API_PORT (default 31337) to match the
     // renderer's hardcoded API base; honor it when present. CLI/server-only
     // mode (no ELIZA_API_PORT) keeps the legacy `resolveServerOnlyPort`
@@ -1709,12 +1771,44 @@ export async function startEliza(
         "[eliza] Local-agent IPC mode: initializing route kernel without a TCP listener (set ELIZA_API_EXPOSE_PORT=1 to re-open the port)",
       );
     }
+    // The deferred fresh-install boot: exactly the post-bind boot sequence
+    // below (boot → updateRuntime → "running"), reachable from the first-run
+    // commit handler and the agent start/restart endpoints. Registered BEFORE
+    // the API binds so every HTTP trigger finds it; `updateRuntime` /
+    // `updateStartup` are assigned by the bind below, before any request can
+    // arrive. A failed boot flips the reported state to "error" (the client's
+    // designed error state) and rethrows — the registration is kept so an
+    // explicit start/restart can retry.
+    if (deferRuntimeBootUntilOnboarding) {
+      registerDeferredRuntimeBoot(async () => {
+        updateStartup?.({ phase: "starting", state: "starting" });
+        try {
+          currentRuntime = await bootServerOnlyRuntime();
+        } catch (err) {
+          // error-policy:J2 context-adding rethrow — flip the reported agent
+          // state to "error" first so /api/status never reads healthy.
+          updateStartup?.({ phase: "error", state: "error" });
+          throw new Error("Runtime boot after onboarding failed", {
+            cause: err,
+          });
+        }
+        if (!currentRuntime) {
+          updateStartup?.({ phase: "error", state: "error" });
+          throw new Error("Runtime boot after onboarding returned no runtime");
+        }
+        updateRuntime?.(currentRuntime);
+        updateStartup?.({ phase: "running", attempt: 0, state: "running" });
+        bootLap("startEliza:deferred runtime booted + ready:true");
+      });
+    }
+
     bootLap(
       "startEliza:before startApiServer (config/registry/embedding setup done)",
     );
     try {
-      // Bind the API server FIRST with no runtime yet (state "starting"), so
-      // the desktop webview connects + hydrates in PARALLEL with the heavier
+      // Bind the API server FIRST with no runtime yet (state "starting", or
+      // "not_started" when the fresh-install gate deferred the boot), so the
+      // desktop webview connects + hydrates in PARALLEL with the heavier
       // agent boot instead of waiting the full boot. The runtime is wired in
       // via updateRuntime once it finishes booting below. Mirrors the
       // dev-server's bind-first orchestration. In local-agent IPC mode
@@ -1723,8 +1817,18 @@ export async function startEliza(
       const startedApiServer = await startApiServer({
         port: apiPort,
         skipListen: skipApiListen,
-        initialAgentState: "starting",
+        initialAgentState: deferRuntimeBootUntilOnboarding
+          ? "not_started"
+          : "starting",
         onRestart: async () => {
+          // Before the deferred first boot has succeeded, a restart request
+          // IS the boot request — funnel it into the single-flight trigger so
+          // it can never race the first-run commit into a second concurrent
+          // PGlite open.
+          if (isRuntimeBootDeferred()) {
+            await triggerDeferredRuntimeBoot("agent start requested via API");
+            return currentRuntime ?? null;
+          }
           if (currentRuntime) {
             await upstreamShutdownRuntime(
               currentRuntime,
@@ -1778,17 +1882,33 @@ export async function startEliza(
       bootLap("startEliza:route kernel ready (IPC mode, no TCP bind)");
     }
 
-    // Now boot the runtime; the API is already reachable (state "starting"),
-    // so the UI is connecting + hydrating while this runs, then flips to
-    // "running" once the agent is ready.
-    currentRuntime = await bootServerOnlyRuntime();
-    if (!currentRuntime) {
-      updateStartup?.({ phase: "error", state: "error" });
-      return currentRuntime;
+    if (deferRuntimeBootUntilOnboarding) {
+      // Fresh install: no runtime until onboarding commits. The API server
+      // already serves everything onboarding needs (first-run status/options,
+      // auth, config); /api/status reports the designed awaiting state
+      // (state "not_started", startup.phase "awaiting-onboarding") — never a
+      // fake "running". The boot fires from POST /api/first-run (local-target
+      // commit) or POST /api/agent/start|restart, whichever comes first; a
+      // cloud/remote-target commit leaves this process runtime-less on
+      // purpose (#13377 — the client binds the cloud agent instead).
+      updateStartup?.({ phase: "awaiting-onboarding", state: "not_started" });
+      logger.info(
+        "[eliza] Fresh install — agent runtime boot deferred until onboarding commits (onboarding API routes are live)",
+      );
+      bootLap("startEliza:runtime boot deferred (awaiting onboarding)");
+    } else {
+      // Now boot the runtime; the API is already reachable (state "starting"),
+      // so the UI is connecting + hydrating while this runs, then flips to
+      // "running" once the agent is ready.
+      currentRuntime = await bootServerOnlyRuntime();
+      if (!currentRuntime) {
+        updateStartup?.({ phase: "error", state: "error" });
+        return currentRuntime;
+      }
+      updateRuntime?.(currentRuntime);
+      updateStartup?.({ phase: "running", attempt: 0, state: "running" });
+      bootLap("startEliza:runtime booted + ready:true");
     }
-    updateRuntime?.(currentRuntime);
-    updateStartup?.({ phase: "running", attempt: 0, state: "running" });
-    bootLap("startEliza:runtime booted + ready:true");
 
     console.log("[eliza] Server running. Press Ctrl+C to stop.");
 

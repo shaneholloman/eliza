@@ -123,6 +123,20 @@ const pluginWorkflowSrc = path.join(
   "plugins/plugin-workflow/src",
 );
 const pluginX402Src = path.join(monorepoRoot, "plugins/plugin-x402/src");
+// Optional static plugins imported by
+// packages/agent/src/runtime/optional-plugin-imports.generated.ts. The Windows
+// CI app-and-cli shard runs vitest without a plugin build, so these must resolve
+// to source here like every other package in OPTIONAL_PLUGIN_IMPORTERS —
+// otherwise Vite fails the whole suite at `Failed to resolve entry for package`.
+const pluginNativeFilesystemSrc = path.join(
+  monorepoRoot,
+  "plugins/plugin-native-filesystem/src",
+);
+const pluginSchedulingSrc = path.join(
+  monorepoRoot,
+  "plugins/plugin-scheduling/src",
+);
+const pluginInboxSrc = path.join(monorepoRoot, "plugins/plugin-inbox/src");
 // Resolve react/react-dom from the location of this config file so the alias
 // works whether react is hoisted to the monorepo root or installed locally.
 // createRequire resolves through the normal Node resolution algorithm (walks up
@@ -185,16 +199,27 @@ export default defineConfig({
       "scripts/aosp/compile-libllama-zig-pin.test.mjs",
       ...(process.platform === "win32"
         ? [
+            // These suites fail ONLY on the GitHub-hosted windows-ci runner with
+            // a bare "SyntaxError: Invalid or unexpected token" at transform /
+            // collection time (each reports as a "0 test" failed suite). Every
+            // file is valid (`node --check` passes), byte-identical to develop
+            // (no BOM, no CRLF; content is not the trigger — the ones with zero
+            // non-ASCII bytes fail identically, and the two with a byte only
+            // carry an em-dash in a prose comment). Each passes on every Linux
+            // lane and locally on Windows under bun stable AND canary, both
+            // single-file and full-suite. Not reproducible off the CI runner →
+            // a windows-ci transform/environment anomaly, not a logic failure.
+            // Gated on Windows CI pending a root-cause that needs the runner
+            // itself; every one of these still runs on Linux.
             "scripts/lib/apple-entitlement-audit.test.mjs",
-            // Fails ONLY on windows-ci with a bare "SyntaxError: Invalid or
-            // unexpected token" at transform time. The file is valid
-            // (`node --check` passes), byte-identical to develop, and passes
-            // locally on Windows under bun stable AND canary, both single-file
-            // and full-suite (86 files / 692 tests, 0 fail). Not reproducible
-            // off the CI runner → a windows-ci transform/environment anomaly,
-            // not a logic failure. Gated on Windows CI pending root-cause; it
-            // still runs on Linux.
             "scripts/run-mobile-build-ios-engine-gate.test.mjs",
+            "scripts/run-mobile-build-android-cloud-strip.test.mjs",
+            "scripts/run-mobile-build-android-targets.test.mjs",
+            "scripts/run-mobile-build-ios-identity.test.mjs",
+            "scripts/run-mobile-build-plugin-manifest.test.mjs",
+            "scripts/voice-interactive.test.mjs",
+            "scripts/aosp/compile-libllama.test.mjs",
+            "test/scripts/mobile-auth-simulator-smoke.test.ts",
           ]
         : []),
       ".claude/**",
@@ -360,6 +385,30 @@ export default defineConfig({
       {
         find: /^@elizaos\/plugin-background-runner$/,
         replacement: path.join(pluginBackgroundRunnerSrc, "index.ts"),
+      },
+      {
+        find: /^@elizaos\/plugin-native-filesystem$/,
+        replacement: path.join(pluginNativeFilesystemSrc, "index.ts"),
+      },
+      {
+        find: /^@elizaos\/plugin-native-filesystem\/(.+)$/,
+        replacement: path.join(pluginNativeFilesystemSrc, "$1"),
+      },
+      {
+        find: /^@elizaos\/plugin-scheduling$/,
+        replacement: path.join(pluginSchedulingSrc, "index.ts"),
+      },
+      {
+        find: /^@elizaos\/plugin-scheduling\/(.+)$/,
+        replacement: path.join(pluginSchedulingSrc, "$1"),
+      },
+      {
+        find: /^@elizaos\/plugin-inbox$/,
+        replacement: path.join(pluginInboxSrc, "index.ts"),
+      },
+      {
+        find: /^@elizaos\/plugin-inbox\/(.+)$/,
+        replacement: path.join(pluginInboxSrc, "$1"),
       },
       {
         find: /^@elizaos\/plugin-commands$/,

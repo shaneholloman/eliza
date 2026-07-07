@@ -416,6 +416,7 @@ vi.mock("three", () => {
 });
 
 import { App } from "./App";
+import { shellHistory } from "./surface-realm-channel";
 
 // ── The full builtin tab universe (mirrors navigation/index.ts BuiltinTab). ──
 // Each entry: the tab id + the route path it activates.
@@ -464,10 +465,16 @@ const ALWAYS_SHARED = new Set([
   "background@/background",
   "views@/views",
   "apps@/apps",
+  // Default views paint NO surface of their own: they sit on the shared
+  // launcher wallpaper (readability scrim above it). Settings is the canonical
+  // representative asserted here.
+  "settings@/settings",
 ]);
 
 // Routes that must be isolated from the launcher wallpaper/global background.
-const MUST_BE_OPAQUE = new Set(["settings@/settings"]);
+// Only surfaces with an explicit opaque/native manifest remain (the browser's
+// native-webview isolation).
+const MUST_BE_OPAQUE = new Set<string>();
 
 // Deterministic PRNG (mulberry32) so the fuzz is reproducible — no Math.random.
 function makeRng(seed: number): () => number {
@@ -619,7 +626,7 @@ describe("App screen-background fuzz — color invariant across view switching",
   ): Promise<void> {
     await act(async () => {
       appState.tab = tab;
-      window.history.pushState(null, "", path);
+      shellHistory.pushState(null, "", path);
       window.dispatchEvent(new PopStateEvent("popstate"));
       rerender(<App />);
     });
@@ -865,7 +872,7 @@ describe("App view-surface mutation isolation — rogue view cannot leak global 
   ): Promise<void> {
     await act(async () => {
       appState.tab = tab;
-      window.history.pushState(null, "", path);
+      shellHistory.pushState(null, "", path);
       window.dispatchEvent(new PopStateEvent("popstate"));
       rerender(<App />);
     });
@@ -884,15 +891,12 @@ describe("App view-surface mutation isolation — rogue view cannot leak global 
     });
   }
 
-  // Opaque built-in surfaces the issue names explicitly (Settings/Browser/
-  // Wallet-Inventory) plus a registered opaque-by-default plugin view. These
-  // MUST stay opaque no matter what a view broadcasts.
+  // Opaque surfaces: with builtin views defaulting to the shared wallpaper,
+  // only a view with an explicit opaque manifest stays isolated — the
+  // browser's native-webview surface. It MUST stay opaque no matter what a
+  // view broadcasts.
   const OPAQUE_SURFACES: { tab: BuiltinTab; path: string }[] = [
     { tab: "browser", path: "/browser" },
-    { tab: "inventory", path: "/inventory" },
-    { tab: "documents", path: "/documents" },
-    { tab: "files", path: "/files" },
-    { tab: "logs", path: "/logs" },
   ];
 
   const SHARED_SURFACE = { tab: "chat" as BuiltinTab, path: "/chat" };

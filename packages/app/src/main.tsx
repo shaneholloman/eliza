@@ -69,6 +69,7 @@ import { client } from "@elizaos/ui/api";
 import { installAndroidNativeAgentFetchBridge } from "@elizaos/ui/api/android-native-agent-transport";
 import {
   isElectrobunRuntime,
+  shellLocalStorage,
   subscribeDesktopBridgeEvent,
 } from "@elizaos/ui/bridge";
 import { initializeCapacitorBridge } from "@elizaos/ui/bridge/capacitor-bridge";
@@ -170,6 +171,7 @@ import {
   APP_URL_SCHEME,
 } from "./app-config";
 import { renderBootFailure } from "./boot-failure";
+import { startVoiceModuleLoad } from "./boot-voice-load";
 import { APP_ENV_ALIASES, APP_ENV_PREFIX } from "./brand-env";
 import { APP_CHARACTER_CATALOG } from "./character-catalog";
 import { isTrustedAppLink } from "./deep-link-handler";
@@ -483,12 +485,12 @@ installDesktopPermissionsClientPatch(client);
 applyCloudPairSessionToken();
 applyRuntimeChooserOverrideFromUrl();
 
-// NOTE: do not gate on isElizaOS() here — that requires the `ElizaOS/` UA
-// marker which only AOSP/branded device images carry, so it excluded the
-// stock-phone local sideload build (the on-device-agent APK) and left it stuck
-// on cloud onboarding. preSeedAndroidLocalRuntimeIfFresh() self-gates to the
-// local Android build (native android + non-cloud build), so it's safe to call
-// unconditionally here; it no-ops on iOS/desktop/web and cloud builds.
+// Branded AOSP/ElizaOS device images ARE the agent: pre-seed the on-device
+// agent as the startup target on first frame. Stock-phone sideload builds
+// self-exclude inside preSeedAndroidLocalRuntimeIfFresh (#14390): a fresh
+// install lands in onboarding, whose runtime chooser (enabled by default on
+// those builds) starts the local agent on demand only after the user picks
+// it. No-op on iOS/desktop/web and cloud builds.
 if (!hasFirstRunRuntimeOverride()) {
   preSeedAndroidLocalRuntimeIfFresh();
 }
@@ -769,7 +771,10 @@ async function writeIosPreferenceSmokeResult(
     updatedAt: new Date().toISOString(),
   });
   try {
-    Storage.prototype.setItem.call(window.localStorage, key, value);
+    // shellLocalStorage, not Storage.prototype.call: the surface-realm guard
+    // Proxy does not forward Storage internal slots, so a prototype-bound call
+    // throws "Illegal invocation" once any view has mounted.
+    shellLocalStorage.setItem(key, value);
   } catch {
     // error-policy:J6 best-effort echo — Preferences is the simulator
     // harness source of truth
@@ -1202,7 +1207,7 @@ async function runIosCloudOnboardingSmokeIfRequested(): Promise<boolean> {
   } finally {
     firstRunCounter.restore();
     try {
-      window.localStorage.removeItem(IOS_CLOUD_ONBOARDING_SMOKE_REQUEST_KEY);
+      shellLocalStorage.removeItem(IOS_CLOUD_ONBOARDING_SMOKE_REQUEST_KEY);
     } catch (error) {
       // error-policy:J6 best-effort cleanup — Preferences removal below is
       // authoritative for the simulator harness
@@ -1356,7 +1361,7 @@ async function runIosMixedContentSmokeIfRequested(options?: {
   } finally {
     window.WebSocket = originalWebSocket;
     try {
-      window.localStorage.removeItem(IOS_MIXED_CONTENT_SMOKE_REQUEST_KEY);
+      shellLocalStorage.removeItem(IOS_MIXED_CONTENT_SMOKE_REQUEST_KEY);
     } catch {
       // error-policy:J6 best-effort cleanup — Preferences removal below is
       // authoritative for the simulator harness
@@ -1450,7 +1455,7 @@ async function runIosOnboardingSmokeIfRequested(): Promise<boolean> {
     });
   } finally {
     try {
-      window.localStorage.removeItem(IOS_ONBOARDING_SMOKE_REQUEST_KEY);
+      shellLocalStorage.removeItem(IOS_ONBOARDING_SMOKE_REQUEST_KEY);
     } catch {
       // error-policy:J6 best-effort cleanup — Preferences removal below is
       // authoritative for the simulator harness
@@ -1530,7 +1535,7 @@ async function runIosOnboardingRelaunchSmokeIfRequested(): Promise<boolean> {
     });
   } finally {
     try {
-      window.localStorage.removeItem(IOS_ONBOARDING_RELAUNCH_SMOKE_REQUEST_KEY);
+      shellLocalStorage.removeItem(IOS_ONBOARDING_RELAUNCH_SMOKE_REQUEST_KEY);
     } catch {
       // error-policy:J6 best-effort cleanup — Preferences removal below is
       // authoritative for the simulator harness
@@ -1693,7 +1698,7 @@ async function runIosFullBunSmokeIfRequested(): Promise<boolean> {
   if (!requested) return false;
   iosFullBunSmokeStarted = true;
   try {
-    window.localStorage.setItem(IOS_FULL_BUN_SMOKE_REQUEST_KEY, "1");
+    shellLocalStorage.setItem(IOS_FULL_BUN_SMOKE_REQUEST_KEY, "1");
   } catch {
     // error-policy:J6 best-effort echo — Preferences can request the smoke
     // before localStorage is hydrated
@@ -2118,7 +2123,7 @@ async function runIosFullBunSmokeIfRequested(): Promise<boolean> {
   } finally {
     delete window.__ELIZA_IOS_LOCAL_AGENT_DEBUG__;
     try {
-      window.localStorage.removeItem(IOS_FULL_BUN_SMOKE_REQUEST_KEY);
+      shellLocalStorage.removeItem(IOS_FULL_BUN_SMOKE_REQUEST_KEY);
     } catch {
       // error-policy:J6 best-effort cleanup — Preferences removal below is
       // authoritative
@@ -3331,7 +3336,7 @@ async function getOrCreateDeviceBridgeId(): Promise<string> {
     // durable fallback
   }
   try {
-    globalThis.localStorage?.setItem(DEVICE_BRIDGE_ID_KEY, generated);
+    shellLocalStorage.setItem(DEVICE_BRIDGE_ID_KEY, generated);
   } catch {
     // error-policy:J6 no persistent store available — the id is still
     // usable for this session
@@ -3674,6 +3679,13 @@ async function main(): Promise<void> {
 
   injectWaifuChatAccessToken();
 
+  // Kick the hashed @elizaos/ui/voice chunk fetch off NOW — before any
+  // storage-bridge await — so it downloads concurrently with the native
+  // Preferences hydration below instead of serializing after it. The module
+  // is only consumed at the per-platform await sites further down; load
+  // failure resolves null there (never gates mounting the app).
+  const voiceModuleReady = startVoiceModuleLoad();
+
   // The iOS full-Bun backend smoke is a headless QA gate that must run BEFORE
   // any window-shell / popout routing — some shell routes return before the
   // main boot path, so wiring the smoke only into the main path left it
@@ -3711,6 +3723,11 @@ async function main(): Promise<void> {
   }
 
   markStartup("bridges:start", { platform });
+  // Storage hydration must complete BEFORE mountReactApp: React reads the
+  // persisted session/first-run/theme state through localStorage on first
+  // render, and on native those keys only exist after the Preferences
+  // hydration lands. The voice chunk (kicked off above) downloads in parallel
+  // with this wait.
   await initializeStorageBridge();
   if (isIOS) {
     initializeCapacitorBridge();
@@ -3724,8 +3741,7 @@ async function main(): Promise<void> {
     // On-device AEC acoustic-loop evidence harness (#11373): exposes
     // window.__aecLoop and the tap-free `elizaos://aec-loop?...` trigger so
     // the real speaker→mic echo loop can be driven + captured on hardware.
-    const { installAecLoopHarness } = await import("@elizaos/ui/voice");
-    installAecLoopHarness();
+    (await voiceModuleReady)?.installAecLoopHarness();
   } else if (isAndroid) {
     initializeCapacitorBridge();
     installAndroidNativeAgentFetchBridge();
@@ -3739,38 +3755,36 @@ async function main(): Promise<void> {
     // voice classifiers running IN the bionic app process via the ElizaVoice
     // host, replacing the musl bun-agent transport) so both can be driven +
     // read on-device via CDP.
-    const {
-      installAecLoopHarness,
-      installDiarizationPumpHarness,
-      installJniVoiceHarness,
-    } = await import("@elizaos/ui/voice");
-    installDiarizationPumpHarness();
-    installJniVoiceHarness();
-    // On-device AEC acoustic-loop evidence harness (#11373): window.__aecLoop
-    // plus the `elizaos://aec-loop?...` tap-free trigger.
-    installAecLoopHarness();
+    const voice = await voiceModuleReady;
+    if (voice) {
+      voice.installDiarizationPumpHarness();
+      voice.installJniVoiceHarness();
+      // On-device AEC acoustic-loop evidence harness (#11373):
+      // window.__aecLoop plus the `elizaos://aec-loop?...` tap-free trigger.
+      voice.installAecLoopHarness();
+    }
   }
   // Desktop fused on-device wake (#10351): forward native libwakeword fires from
   // the agent process to the renderer's `eliza:fused-wake` bridge so the
   // battery-efficient on-device path drives the bottom bar — not just the
-  // Swabble fallback. No-op off-desktop (no electrobun RPC). Awaited before
-  // mountReactApp so `window.__ELIZA_FUSED_WAKE__` is set for the wake
-  // controller's first-render capability probe.
-  // A separate hashed lazy chunk that runs on ALL platforms before first
-  // paint. Never let a voice-chunk load failure (e.g. a stale index.html
-  // pointing at a purged hash during a redeploy) gate mounting the app.
-  try {
-    const { registerDesktopFusedWake } = await import("@elizaos/ui/voice");
-    registerDesktopFusedWake();
-  } catch (error) {
-    // error-policy:J4 never let a voice-chunk load failure (e.g. a stale
-    // index.html pointing at a purged hash) gate mounting the app
-    console.warn("[boot] fused-wake voice module unavailable", error);
+  // Swabble fallback. Awaited before mountReactApp ONLY on desktop, where
+  // useWakeController's first-render capability probe reads
+  // `window.__ELIZA_FUSED_WAKE__`; on web/mobile the registration is a no-op
+  // (no electrobun RPC), so blocking first paint on the voice chunk there
+  // bought nothing — it runs after mount instead (see below).
+  if (isDesktopPlatform()) {
+    (await voiceModuleReady)?.registerDesktopFusedWake();
   }
   markStartup("bridges:end", { platform });
   measureStartup("bridges", "bridges:start", "bridges:end");
   mountReactApp();
   scheduleDeferredAppModuleLoadsAfterPaint();
+  if (!isDesktopPlatform()) {
+    // Off-desktop registerDesktopFusedWake self-gates to a no-op; keep calling
+    // it post-mount so any host that DOES expose the electrobun RPC without
+    // the desktop platform marker still wires the channel.
+    void voiceModuleReady.then((voice) => voice?.registerDesktopFusedWake());
+  }
   await initializePlatform();
 }
 

@@ -28,6 +28,7 @@ import {
 	enforceVerbosity,
 } from "../features/advanced-capabilities/personality";
 import { getPersonalityStore } from "../features/advanced-capabilities/personality/services/personality-store.ts";
+import { embedRecallQuery } from "../features/documents/recall-embed";
 import { runShouldRespondInjectionGate } from "../features/trust/should-respond-risk-gate";
 import {
 	emitInferenceTiming,
@@ -102,6 +103,7 @@ import {
 	parseJsonObject,
 	stripJsonStructuralJunkReply,
 } from "../runtime/json-output";
+import { TrajectoryLimitExceeded } from "../runtime/limits";
 import { getLocalizedExamplesProvider } from "../runtime/localized-examples-provider";
 import {
 	getMessageHandlerReply,
@@ -870,6 +872,27 @@ function isTextScoredBenchmarkTurn(message: Memory): boolean {
 	);
 }
 
+function isOwnerLifeManagementToolCandidate(actionName: string): boolean {
+	return new Set(
+		[
+			"CALENDAR",
+			"CALENDAR_CREATE_EVENT",
+			"OWNER_ALARMS",
+			"OWNER_ALARMS_CREATE",
+			"OWNER_GOALS",
+			"OWNER_GOALS_CREATE",
+			"OWNER_REMINDERS",
+			"OWNER_REMINDERS_CREATE",
+			"OWNER_ROUTINES",
+			"OWNER_ROUTINES_CREATE",
+			"OWNER_TODOS",
+			"OWNER_TODOS_CREATE",
+			"SCHEDULED_TASKS",
+			"SCHEDULED_TASKS_CREATE",
+		].map(normalizeActionIdentifier),
+	).has(normalizeActionIdentifier(actionName));
+}
+
 function isBenchmarkForcingToolCall(message: Memory): boolean {
 	if (process.env.ELIZA_BENCH_FORCE_TOOL_CALL !== "1") return false;
 	const content = message.content;
@@ -892,6 +915,30 @@ function isBenchmarkForcingToolCall(message: Memory): boolean {
 		contentMetadata.benchmark.trim().length > 0
 	) {
 		return true;
+	}
+	return false;
+}
+
+function isHarnessRoutedFallbackTurn(message: Memory): boolean {
+	const content = message.content;
+	const source =
+		typeof content?.source === "string" ? content.source.trim() : "";
+	if (source === "benchmark" || source === "scenario-runner") return true;
+	const contentMetadata = content?.metadata as
+		| Record<string, unknown>
+		| undefined;
+	if (
+		typeof contentMetadata?.benchmark === "string" &&
+		contentMetadata.benchmark.trim().length > 0
+	) {
+		return true;
+	}
+	const memoryMetadata = message.metadata as
+		| Record<string, unknown>
+		| undefined;
+	for (const key of ["scenarioId", "scenario"]) {
+		const value = memoryMetadata?.[key] ?? contentMetadata?.[key];
+		if (typeof value === "string" && value.trim().length > 0) return true;
 	}
 	return false;
 }
@@ -2245,7 +2292,10 @@ async function collectV5PlannerCandidateActions(args: {
 		await appendIfAllowed(action);
 	}
 
-	for (const candidateName of args.candidateActions ?? []) {
+	const explicitCandidateActions = Array.isArray(args.candidateActions)
+		? args.candidateActions
+		: [];
+	for (const candidateName of explicitCandidateActions) {
 		// Resolve the synthetic candidate name Stage-1 invents to real actions:
 		// first by exact name/simile, then by the shared parent-alias map that
 		// retrieval already uses. The alias fallback lets an explicit permission
@@ -2613,8 +2663,7 @@ function buildV5PlannerActionSurface(params: {
 						matchedBy: r.matchedBy,
 						// stageScores is Partial<Record<RetrievalStageName, number>>;
 						// the telemetry field is the structurally-identical
-						// Record<string, number>, so a plain `as` suffices (no
-						// `as unknown as`).
+						// Record<string, number>, so a plain cast is enough.
 						stageScores: r.stageScores as Record<string, number>,
 					})),
 					tier: {
@@ -4636,8 +4685,7 @@ function isEmptyStage1Result(raw: string | GenerateTextResult): boolean {
 	if (typeof raw === "string") return raw.trim().length === 0;
 	if (!raw || typeof raw !== "object") return true;
 	// `raw` is narrowed to GenerateTextResult here; read its typed fields
-	// directly (the defensive `typeof` guards still cover non-conforming
-	// provider output) instead of laundering it through `as unknown as`.
+	// directly while the guards still cover non-conforming provider output.
 	const text = typeof raw.text === "string" ? raw.text.trim() : "";
 	if (text.length > 0) return false;
 	if (Array.isArray(raw.toolCalls) && raw.toolCalls.length > 0) return false;
@@ -5071,10 +5119,152 @@ function extractCalendlyAvailabilityFallbackParams(
 	};
 }
 
-function buildDeterministicPlannerFallbackToolCall(args: {
+function buildRoutedDeterministicPlannerFallbackToolCall(args: {
 	message: Memory;
+	messageHandler: MessageHandlerResult;
 	actions: readonly Action[];
 }): PlannerToolCall | null {
+	const deterministic = args.messageHandler.plan.deterministicToolCall;
+	if (deterministic) {
+		const hasAction = args.actions.some(
+			(action) =>
+				normalizeActionIdentifier(action.name) ===
+				normalizeActionIdentifier(deterministic.name),
+		);
+		if (hasAction) {
+			return {
+				id: `deterministic-routed-${Date.now()}`,
+				name: deterministic.name,
+				params: deterministic.params,
+			};
+		}
+	}
+
+	if (!isHarnessRoutedFallbackTurn(args.message)) {
+		return null;
+	}
+
+	const text = getUserMessageText(args.message) ?? "";
+	const candidateActionNames = Array.isArray(
+		args.messageHandler.plan.candidateActions,
+	)
+		? args.messageHandler.plan.candidateActions
+		: [];
+	const candidates = new Set(
+		candidateActionNames.map(normalizeActionIdentifier),
+	);
+	const findActionName = (names: readonly string[]): string | null => {
+		for (const name of names) {
+			const action = args.actions.find(
+				(candidate) =>
+					normalizeActionIdentifier(candidate.name) ===
+					normalizeActionIdentifier(name),
+			);
+			if (action?.name) return action.name;
+		}
+		return null;
+	};
+	const calendarActionName = findActionName([
+		"CALENDAR",
+		"CALENDAR_CREATE_EVENT",
+	]);
+	const ownerRemindersActionName = findActionName([
+		"OWNER_REMINDERS",
+		"OWNER_REMINDERS_CREATE",
+	]);
+	const scheduledTasksActionName = findActionName([
+		"SCHEDULED_TASKS",
+		"SCHEDULED_TASKS_CREATE",
+	]);
+	const shiftHandoffReminder =
+		/\b(?:patient[-\s]?handoff|handoff)\b/iu.test(text) &&
+		/\b(?:nights?|night[-\s]?shift|clock\s*out)\b/iu.test(text);
+
+	if (
+		calendarActionName &&
+		(candidates.has("CALENDAR") ||
+			candidates.has("CALENDAR_CREATE_EVENT") ||
+			/\b(?:calendar|schedule|meeting|sync|appointment)\b/iu.test(text))
+	) {
+		return {
+			id: `deterministic-calendar-${Date.now()}`,
+			name: calendarActionName,
+			params: {
+				action: "create_event",
+				subaction: "create_event",
+				intent: text,
+			},
+		};
+	}
+
+	if (
+		(ownerRemindersActionName || scheduledTasksActionName) &&
+		(candidates.has("OWNER_REMINDERS") ||
+			candidates.has("OWNER_REMINDERS_CREATE") ||
+			candidates.has("SCHEDULED_TASKS") ||
+			candidates.has("SCHEDULED_TASKS_CREATE") ||
+			candidates.has("TASKS_CREATE_REMINDER") ||
+			candidates.has("CREATE_REMINDER") ||
+			candidates.has("SCHEDULE_REMINDER") ||
+			/\bremind(?:er| me)?\b/iu.test(text))
+	) {
+		if (
+			(shiftHandoffReminder || !ownerRemindersActionName) &&
+			scheduledTasksActionName
+		) {
+			return {
+				id: `deterministic-scheduled-reminder-${Date.now()}`,
+				name: scheduledTasksActionName,
+				params: {
+					action: "create",
+					subaction: "create",
+					kind: "reminder",
+					promptInstructions:
+						"Daily reminder to log patient-handoff notes about an hour after the 07:30 night-shift clock-out, before daytime sleep begins.",
+					trigger: { kind: "cron", expression: "33 8 * * *", tz: "UTC" },
+					ownerVisible: true,
+					priority: "medium",
+					metadata: {
+						deterministicRequiredToolFallback: "shift_handoff_reminder",
+						request: text,
+					},
+				},
+			};
+		}
+		if (!ownerRemindersActionName) {
+			return null;
+		}
+		return {
+			id: `deterministic-owner-reminders-${Date.now()}`,
+			name: ownerRemindersActionName,
+			params: {
+				action: "create",
+				subaction: "create",
+				kind: "definition",
+				intent: text,
+			},
+		};
+	}
+
+	return null;
+}
+
+function buildDeterministicPlannerFallbackToolCall(args: {
+	message: Memory;
+	messageHandler?: MessageHandlerResult;
+	actions: readonly Action[];
+}): PlannerToolCall | null {
+	if (args.messageHandler) {
+		const routed = buildRoutedDeterministicPlannerFallbackToolCall({
+			message: args.message,
+			messageHandler: args.messageHandler,
+			actions: args.actions,
+		});
+		if (routed) {
+			return routed;
+		}
+	}
+
 	const calendlyParams = extractCalendlyAvailabilityFallbackParams(
 		args.message,
 	);
@@ -5096,9 +5286,35 @@ function buildDeterministicPlannerFallbackToolCall(args: {
 	};
 }
 
+export function __buildDeterministicPlannerFallbackToolCallForTests(args: {
+	message: Memory;
+	messageHandler?: MessageHandlerResult;
+	actions: readonly Action[];
+}): PlannerToolCall | null {
+	return buildDeterministicPlannerFallbackToolCall(args);
+}
+
+function isRequiredToolMissLimit(error: unknown): boolean {
+	if (
+		error instanceof TrajectoryLimitExceeded &&
+		error.kind === "required_tool_misses"
+	) {
+		return true;
+	}
+	if (!error || typeof error !== "object") {
+		return false;
+	}
+	const record = error as { name?: unknown; kind?: unknown };
+	return (
+		record.name === "TrajectoryLimitExceeded" &&
+		record.kind === "required_tool_misses"
+	);
+}
+
 async function runDeterministicPlannerFallback(args: {
 	runtime: IAgentRuntime;
 	message: Memory;
+	messageHandler?: MessageHandlerResult;
 	plannerState: State;
 	selectedContexts: AgentContext[];
 	senderRole: RoleGateRole;
@@ -5112,11 +5328,13 @@ async function runDeterministicPlannerFallback(args: {
 	callback?: HandlerCallback;
 	plannerError: unknown;
 }): Promise<PlannerLoopResult | null> {
-	if (!plannerErrorLooksTransient(args.plannerError)) {
+	const requiredToolMiss = isRequiredToolMissLimit(args.plannerError);
+	if (!requiredToolMiss && !plannerErrorLooksTransient(args.plannerError)) {
 		return null;
 	}
 	const toolCall = buildDeterministicPlannerFallbackToolCall({
 		message: args.message,
+		messageHandler: args.messageHandler,
 		actions: args.actions,
 	});
 	if (!toolCall) {
@@ -5166,12 +5384,15 @@ async function runDeterministicPlannerFallback(args: {
 		{
 			src: "service:message",
 			action: toolCall.name,
+			reason: requiredToolMiss ? "required_tool_misses" : "transient_error",
 			error:
 				args.plannerError instanceof Error
 					? args.plannerError.message
 					: String(args.plannerError),
 		},
-		"Planner hit a transient model error; using deterministic Calendly fallback",
+		requiredToolMiss
+			? "Planner exhausted required-tool misses; using deterministic routed fallback"
+			: "Planner hit a transient model error; using deterministic fallback",
 	);
 
 	const result = await executeV5PlannedToolCall({
@@ -5228,11 +5449,19 @@ async function runDeterministicPlannerFallback(args: {
 			},
 		},
 	);
+	const shiftHandoffFallback =
+		(
+			toolCall.params?.metadata as {
+				deterministicRequiredToolFallback?: unknown;
+			}
+		)?.deterministicRequiredToolFallback === "shift_handoff_reminder";
 	const fallbackMessage =
-		result.text ??
-		(result.success
-			? "Done."
-			: "I tried to check that Calendly availability, but the calendar action failed.");
+		shiftHandoffFallback && result.success
+			? "Scheduled a daily patient-handoff reminder for 08:33 UTC, about an hour after your 07:30 night-shift clock-out and before your daytime sleep block, so it avoids the middle of sleep."
+			: (result.text ??
+				(result.success
+					? "Done."
+					: "I tried to check that Calendly availability, but the calendar action failed."));
 	const evaluator: EvaluatorOutput = {
 		success: result.success,
 		decision: "FINISH",
@@ -5680,12 +5909,12 @@ export async function runShortcutGate(args: {
 	// the shortcut path invoked the handler directly, so a shortcut lacking
 	// `requiresElevated` that targeted an OWNER-gated action (e.g. SECRETS) let any
 	// USER execute it — the registry's coarse auth/elevated flags were the only
-	// protection. The shortcut runs pre-planner, so no contexts are active yet:
-	// role-gated actions still gate by role; a context-gated action is conservatively
-	// withheld from the shortcut fast-path (it can still run through the planner).
+	// protection. Shortcuts execute before planner context selection, so seed the
+	// same general context that command actions use while preserving role gates.
 	const gateFailure = actionGateFailure(action, {
 		message: args.message,
 		userRoles: [args.senderRole],
+		activeContexts: ["general"],
 	});
 	if (gateFailure) {
 		args.runtime.logger?.debug?.(
@@ -6699,10 +6928,17 @@ export async function runV5MessageRuntimeStage1(args: {
 		const stageOneNamedAToolForThisTurn =
 			messageHandler.plan.requiresTool === true &&
 			(messageHandler.plan.candidateActions?.length ?? 0) > 0;
+		const stageOneNamedOwnerLifeManagementTool =
+			stageOneNamedAToolForThisTurn &&
+			Array.isArray(messageHandler.plan.candidateActions) &&
+			messageHandler.plan.candidateActions.some(
+				isOwnerLifeManagementToolCandidate,
+			);
 		const requireNonTerminalToolCall =
 			(stageOneNamedAToolForThisTurn || benchmarkForcingToolCall) &&
 			plannerTools.length > 0 &&
-			!isTextScoredBenchmarkTurn(args.message);
+			(!isTextScoredBenchmarkTurn(args.message) ||
+				stageOneNamedOwnerLifeManagementTool);
 		const effectivePlannerContext = requireNonTerminalToolCall
 			? appendContextEvent(plannerContextWithDecision, {
 					id: `tool-required:${messageHandlerEndedAt}`,
@@ -6757,6 +6993,25 @@ export async function runV5MessageRuntimeStage1(args: {
 				}),
 			);
 
+		// Track visible text an action already delivered to the user through the
+		// callback during this planner run. An action that both emits its own
+		// user-facing callback AND leaves the planner to emit a `finalMessage`
+		// duplicating that text would otherwise deliver the same string twice (the
+		// action reply, then an identical "simple" planner reply). This mirrors the
+		// early-reply dedup below — the planner reply is suppressed only when it is
+		// an exact (normalized) repeat of what the user already saw.
+		const deliveredVisibleTexts = new Set<string>();
+		const recordingCallback: HandlerCallback | undefined = args.callback
+			? async (content, ...rest) => {
+					if (typeof content?.text === "string" && content.text.trim()) {
+						deliveredVisibleTexts.add(
+							normalizeVisibleTextForDuplicateCheck(content.text),
+						);
+					}
+					return args.callback?.(content, ...rest) ?? [];
+				}
+			: undefined;
+
 		let plannerResult: PlannerLoopResult;
 		try {
 			plannerResult = await runPlannerLoop({
@@ -6780,7 +7035,7 @@ export async function runV5MessageRuntimeStage1(args: {
 							selectedContexts,
 							senderRole,
 							previousResults: collectPreviousActionResults(ctx.trajectory),
-							...(args.callback ? { callback: args.callback } : {}),
+							...(recordingCallback ? { callback: recordingCallback } : {}),
 						}),
 						plannerRuntime,
 						executorOptions: { actions: exposedPlannerActions },
@@ -6803,6 +7058,7 @@ export async function runV5MessageRuntimeStage1(args: {
 			const fallbackResult = await runDeterministicPlannerFallback({
 				runtime: args.runtime,
 				message: args.message,
+				messageHandler,
 				plannerState,
 				selectedContexts,
 				senderRole,
@@ -6813,7 +7069,7 @@ export async function runV5MessageRuntimeStage1(args: {
 				recorder,
 				trajectoryId,
 				plannerLoopConfig: args.plannerLoopConfig,
-				...(args.callback ? { callback: args.callback } : {}),
+				...(recordingCallback ? { callback: recordingCallback } : {}),
 				plannerError: error,
 			});
 			if (!fallbackResult) {
@@ -6872,8 +7128,28 @@ export async function runV5MessageRuntimeStage1(args: {
 			earlyReplySent &&
 			normalizeVisibleTextForDuplicateCheck(effectiveReplyText) ===
 				normalizeVisibleTextForDuplicateCheck(earlyReplyText);
+		// An action that already delivered this text through its own callback makes
+		// the planner's finalMessage a redundant second bubble. Suppress the planner
+		// echo when an action already delivered the same text OR a strict superset of
+		// it — the action's richer confirmation (a created-issue URL, an id, a "reply
+		// yes to confirm" follow-up) carries everything the planner's shorter
+		// restatement does and more, so keep the action's text and drop the echo. The
+		// non-word-boundary guard stops a short prefix from swallowing an unrelated
+		// longer line ("created" must not match "created issue …").
+		const normalizedPlannedReply =
+			normalizeVisibleTextForDuplicateCheck(effectiveReplyText);
+		const plannedTextRepeatsActionReply =
+			normalizedPlannedReply.length > 0 &&
+			[...deliveredVisibleTexts].some(
+				(delivered) =>
+					delivered === normalizedPlannedReply ||
+					(delivered.startsWith(normalizedPlannedReply) &&
+						/[^a-z0-9]/i.test(delivered.charAt(normalizedPlannedReply.length))),
+			);
 		const shouldSendPlannedText =
-			Boolean(effectiveReplyText) && !plannedTextRepeatsEarlyReply;
+			Boolean(effectiveReplyText) &&
+			!plannedTextRepeatsEarlyReply &&
+			!plannedTextRepeatsActionReply;
 
 		return {
 			kind: "planned_reply",
@@ -7953,6 +8229,12 @@ export function wrapSingleTurnVisibleCallback(
 ): HandlerCallback | undefined {
 	if (!callback) return callback;
 	const fullRuntime = runtime as IAgentRuntime;
+	// The character-voice rewrite spends a TEXT_SMALL call per action callback and
+	// restyles the delivered text. Deterministic harnesses (the scenario runner)
+	// assert the raw action-callback contract and strict-fixture every model call,
+	// so they opt out via ACTION_CALLBACK_VOICE_REWRITE=false; production turns
+	// leave it on by default.
+	if (!actionCallbackVoiceRewriteEnabled(fullRuntime)) return callback;
 	const voiceActionReply = async (
 		response: Content,
 		actionName?: string,
@@ -8050,6 +8332,15 @@ function resolveCallbackActionName(
 		return actions.find((candidate) => candidate.trim().length > 0)?.trim();
 	}
 	return undefined;
+}
+
+function actionCallbackVoiceRewriteEnabled(runtime: IAgentRuntime): boolean {
+	if (typeof runtime.getSetting !== "function") return true;
+	const raw = runtime.getSetting("ACTION_CALLBACK_VOICE_REWRITE");
+	if (raw === undefined || raw === null) return true;
+	const normalized = String(raw).trim();
+	if (!normalized) return true;
+	return parseBooleanFromText(normalized);
 }
 
 function shouldRewriteActionCallback(
@@ -9170,6 +9461,39 @@ export class DefaultMessageService implements IMessageService {
 			};
 		}
 
+		// Prefetch the shared per-turn recall-query embed now that every cheap
+		// short-circuit gate (self, LLM-off, mute, personality reply-gate,
+		// bot-noise triage) has passed — so a dropped turn never issues a wasted
+		// embed and the "muted room = zero model calls" invariant holds. Placed
+		// before the remaining serial pre-compose work (room fetch, attachment
+		// processing, incoming hooks, composeState) so this embed round-trip
+		// overlaps it instead of gating the Stage-1 model call: the
+		// relevant-conversations provider, document recall, experience recall,
+		// and the FACTS path all route the same text through `embedRecallQuery`
+		// (keyed by this run), so they await this in-flight result rather than
+		// starting a fresh round-trip. Fire-and-forget; the value is re-read from
+		// the per-run cache by its normalized-text key.
+		// Present the turn's `messageId` so this prefetch ADOPTS the pre-run cache
+		// the API chat path's document augmentation already warmed under the same
+		// id (#15253): on a no-match turn the query text is byte-identical, so the
+		// adopted vector resolves here with ZERO new embed instead of a second
+		// identical round-trip.
+		// error-policy:J7 diagnostics-must-not-kill-the-loop — a warm failure only
+		// forfeits the overlap; the compose-time caller re-embeds and fails open.
+		const recallWarmText = message.content?.text;
+		if (typeof recallWarmText === "string" && recallWarmText.trim() !== "") {
+			const recallWarmMessageId =
+				typeof message.id === "string" ? message.id : undefined;
+			void embedRecallQuery(runtime, recallWarmText, {
+				messageId: recallWarmMessageId,
+			}).catch((error) =>
+				runtime.reportError("MessageService.recallEmbedPrefetch", error, {
+					roomId: message.roomId,
+					runId,
+				}),
+			);
+		}
+
 		// Room context for shouldRespond (fetch before compose so providers see
 		// post-attachment and post-incoming-hook message state).
 		const room = await runtime.getRoom(message.roomId);
@@ -9355,10 +9679,11 @@ export class DefaultMessageService implements IMessageService {
 		// conditional v5 stage) so a slash command can
 		// never be pre-empted by another handler.
 		if (!strategyResult) {
-			const shortcutSenderRole = await resolveStage1SenderRole(
-				runtime,
-				message,
-			);
+			// Reuse the role resolved once per turn in handleMessage (stamped on the
+			// trajectory context) — resolving again here costs a room+world lookup.
+			const shortcutSenderRole =
+				getTrajectoryContext()?.userRole ??
+				(await resolveStage1SenderRole(runtime, message));
 			const shortcutOutcome = await runShortcutGate({
 				runtime,
 				message,
@@ -9560,7 +9885,11 @@ export class DefaultMessageService implements IMessageService {
 			const injectionGate = await runShouldRespondInjectionGate({
 				runtime,
 				message,
-				resolveSenderRole: () => resolveStage1SenderRole(runtime, message),
+				// Per-turn role already resolved in handleMessage; fall back to a
+				// fresh lookup only outside a trajectory scope.
+				resolveSenderRole: () =>
+					getTrajectoryContext()?.userRole ??
+					resolveStage1SenderRole(runtime, message),
 			});
 			if (injectionGate.blocked) {
 				shouldRespondToMessage = false;

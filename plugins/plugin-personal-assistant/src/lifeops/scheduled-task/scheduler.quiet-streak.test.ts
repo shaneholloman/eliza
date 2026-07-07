@@ -20,6 +20,7 @@ import {
 import { resolveOwnerFactStore } from "../owner/fact-store.ts";
 import { resolvePendingPromptsStore } from "../pending-prompts/store.ts";
 import { LifeOpsRepository } from "../repository.ts";
+import { settleDeferredInboundScans } from "./deferred-inbound-scans.ts";
 import type { ScheduledTask } from "./index.ts";
 import {
   type ProcessDueScheduledTasksResult,
@@ -27,6 +28,8 @@ import {
 } from "./scheduler.ts";
 
 type Runtime = RealTestRuntimeResult["runtime"];
+
+const OWNER_ENTITY_ID = "owner-entity-1";
 
 let runtimeResult: RealTestRuntimeResult | undefined;
 
@@ -377,6 +380,7 @@ describe("processDueScheduledTasks — quiet streak softens the next no-reply la
   it("an owner reply through the REAL MESSAGE_RECEIVED seam appends the streak-breaking log entry", async () => {
     runtimeResult = await createLifeOpsTestRuntime();
     const { runtime } = runtimeResult;
+    runtime.setSetting("ELIZA_ADMIN_ENTITY_ID", OWNER_ENTITY_ID, false);
     const roomId = "room-quiet-streak-1";
 
     const repo = new LifeOpsRepository(runtime);
@@ -407,13 +411,15 @@ describe("processDueScheduledTasks — quiet streak softens the next no-reply la
     await runtime.emitEvent(EventType.MESSAGE_RECEIVED, {
       message: {
         id: "msg-quiet-streak-reply",
-        entityId: "owner-entity-1",
+        entityId: OWNER_ENTITY_ID,
         roomId,
         agentId: runtime.agentId,
         content: { text: "pretty good actually" },
         createdAt: Date.now(),
       } as unknown as Memory,
     });
+    // The completion scan runs detached off the awaited emit edge (#15255).
+    await settleDeferredInboundScans();
 
     const persisted = await repo.getScheduledTask(
       runtime.agentId,
