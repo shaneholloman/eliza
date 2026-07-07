@@ -241,7 +241,7 @@ const ROUTES: DevRouteEntry[] = [
   },
   {
     tabId: "my-apps",
-    path: "/apps/my-apps",
+    path: "/apps",
     label: "My Apps",
     group: "Apps",
     visibility: "all",
