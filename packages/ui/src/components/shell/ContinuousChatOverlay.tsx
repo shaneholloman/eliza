@@ -2,6 +2,7 @@
  * Renders the continuous chat overlay that keeps the composer and transcript
  * available across views.
  */
+import { MAX_CHAT_MEDIA_RAW_BYTES } from "@elizaos/shared";
 import { transcriptPlainText } from "@elizaos/shared/transcripts";
 import {
   ArrowDown,
@@ -81,6 +82,7 @@ import { useViewChatBinding } from "../../state/view-chat-binding";
 import { tryHandleTutorialText } from "../../tutorial/tutorial-action-channel";
 import { copyTextToClipboard } from "../../utils/clipboard";
 import {
+  bytesToMb,
   CHAT_UPLOAD_ACCEPT,
   chatUploadKind,
   intakeAttachmentFiles,
@@ -347,16 +349,13 @@ const PILL_COMMIT_PROGRESS = 1 - PILL_COMMIT_OVERSHOOT / PILL_OPEN_DISTANCE;
 // back out of the state it just animated into.
 const MID_DRAG_RESUME_SLOP = 24;
 
-const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
+// Finger travel (px) below the restore drag's upward peak at which the panel
+// drops full-bleed and starts tracking the finger down out of maximize. Small
+// so a downward intent un-maximizes promptly, but non-zero so a hand held at
+// the ceiling with sub-pixel jitter doesn't flap in and out of full-bleed.
+const RESTORE_UNMAX_SLOP = 6;
 
-// The chat COLUMN — header, thread, reply pill, attachment strip, composer —
-// keeps EXACTLY this width in every state, including through the maximize
-// morph and at full-bleed. 48rem is the resting reading column (max-w-3xl);
-// 24px is twice the 12px resting side inset, so on a narrow viewport this
-// equals the resting column too. Only the GLASS grows edge-to-edge on
-// maximize; the chat itself never reflows or spreads (the "width spreads a
-// little and glitches on maximize" bug).
-export const CHAT_COLUMN_MAX_WIDTH = "min(48rem, calc(100vw - 24px))";
+const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
 
 // Panel scale at the PILL end of the pill↔input morph. The collapse must read
 // as the whole chat shrinking down into the capsule — a hard, visible scale
@@ -1209,6 +1208,14 @@ export function ContinuousChatOverlay({
   // runs in the SAME event as the drop and would otherwise read the stale,
   // pre-re-render `maximized` and snap back instead of resting where released.
   const restoreDidUnmaximizeRef = React.useRef(false);
+  // Highest (most-upward) offset the current restore drag has reached. The
+  // ceiling-consumption rebase in onDragOffset absorbs any upward drift while
+  // the panel sits at the full-bleed ceiling, so a raw `offset < 0` test fires
+  // late: the sheet already follows the finger DOWN off the ceiling (its
+  // fullBleedT un-morphs) for the first N px while `offset` is still positive,
+  // and a release in that window would snap back to full-bleed. Un-maximize the
+  // instant the finger nets downward from this peak instead.
+  const restorePeakOffsetRef = React.useRef(0);
   // Reactive composer-focus flag. Only the short-landscape compact resting
   // affordance reads it (#14173): focusing the field lifts the compact treatment
   // so the composer widens to full BEFORE the first keystroke, and blurring an
@@ -3243,17 +3250,32 @@ export function ContinuousChatOverlay({
         const current = draftRef.current;
         setDraft(current ? `${current} ${text}` : text);
       }
-      if (audioWav && audioWav.byteLength > 0) {
-        const recording: ImageAttachment = {
-          data: wavBytesToBase64(audioWav),
-          mimeType: "audio/wav",
-          name: `Recording ${stamp}.wav`,
-        };
-        setPendingImages((prev) =>
-          [...prev, recording].slice(0, MAX_CHAT_IMAGES),
-        );
+      const hasAudio = Boolean(audioWav && audioWav.byteLength > 0);
+      if (audioWav && hasAudio) {
+        // Enforce the SAME per-file media size cap the attach/paste/drop paths
+        // go through (intakeAttachmentFiles → perFileByteCap): a several-minute
+        // dictation produces a large WAV, and hand-attaching it unchecked would
+        // blow past the server media limit and fail the whole send. Over the
+        // cap, drop just the audio artifact — the transcript TEXT inserted above
+        // is the primary output and always lands — and say so inline.
+        if (audioWav.byteLength > MAX_CHAT_MEDIA_RAW_BYTES) {
+          setImageError(
+            `Recording too large to attach (max ${bytesToMb(
+              MAX_CHAT_MEDIA_RAW_BYTES,
+            )}MB) — transcript kept.`,
+          );
+        } else {
+          const recording: ImageAttachment = {
+            data: wavBytesToBase64(audioWav),
+            mimeType: "audio/wav",
+            name: `Recording ${stamp}.wav`,
+          };
+          setPendingImages((prev) =>
+            [...prev, recording].slice(0, MAX_CHAT_IMAGES),
+          );
+        }
       }
-      if (text || (audioWav && audioWav.byteLength > 0)) {
+      if (text || hasAudio) {
         expand();
         inputRef.current?.focus();
       }
@@ -4395,8 +4417,21 @@ export function ContinuousChatOverlay({
     (offset: number) => {
       if (firstRunOpen) return;
       // Fresh gesture (onDragOffset flips draggingRef on its first frame).
-      if (!draggingRef.current) restoreDidUnmaximizeRef.current = false;
-      if (offset < 0 && maximized) {
+      if (!draggingRef.current) {
+        restoreDidUnmaximizeRef.current = false;
+        restorePeakOffsetRef.current = offset;
+      }
+      if (offset > restorePeakOffsetRef.current) {
+        restorePeakOffsetRef.current = offset;
+      }
+      // Drop full-bleed the moment the finger nets downward off the ceiling
+      // peak (any upward drift is consumed by onDragOffset's ceiling rebase, so
+      // the sheet leaves the ceiling exactly here, not at raw `offset < 0`).
+      // The small slop absorbs touch jitter so a held-at-top hand doesn't flap.
+      if (
+        maximized &&
+        offset < restorePeakOffsetRef.current - RESTORE_UNMAX_SLOP
+      ) {
         setMaximized(false);
         setRestoreDragging(true);
         restoreDidUnmaximizeRef.current = true;
@@ -4896,20 +4931,21 @@ export function ContinuousChatOverlay({
             inert={pilled || undefined}
             // overflow-hidden + the live radius clips the sheen/thread to the
             // panel's rounded shape (the clip the fieldset used to do) WITHOUT
-            // touching the sibling glass layer's shadow.
-            className="relative z-10 mx-auto flex min-h-0 w-full flex-col overflow-hidden"
+            // touching the sibling glass layer's shadow. Spans the FULL glass
+            // width (no maxWidth here): the restore-drag strip (inset-x-0) and
+            // the drag-and-drop file intake below both live on this element and
+            // must cover the whole panel, including the edge-to-edge glass at
+            // full-bleed on wide viewports — a pinned wrapper left dead margins
+            // where a restore pull did nothing and a dropped file navigated the
+            // tab away. Column width is pinned on the inner rows (header /
+            // thread / composer all carry `mx-auto max-w-3xl`), so the chat
+            // content never reflows through the maximize morph regardless.
+            className="relative z-10 flex min-h-0 w-full flex-col overflow-hidden"
             style={{
               opacity: glassOpacity,
               pointerEvents: pilled ? "none" : "auto",
               // Mirror the surface radius so the content clip matches it.
               borderRadius: morphRadius,
-              // Pin the ENTIRE chat column to its resting width. The glass
-              // (the fieldset + surface behind this wrapper) is what grows
-              // edge-to-edge on maximize; the chat content itself must render
-              // byte-identically in every state — same width, same margins —
-              // so the morph is pure glass growth with zero text reflow (the
-              // "spreads a little and glitches on maximize" bug).
-              maxWidth: CHAT_COLUMN_MAX_WIDTH,
             }}
             // Drag-and-drop attachment intake (#10722). The old ChatView chat
             // surface accepted file drops; the overlay replaced it with only
@@ -5683,7 +5719,12 @@ export function ContinuousChatOverlay({
                             // real behavior.
                             "release to insert"
                           : transcriptionMode
-                            ? "stop transcription"
+                            ? // Distinct from the transcribe button's "stop
+                              // transcription" (which leaves the mic on): the
+                              // voice control is the MASTER off — a tap ends
+                              // transcription AND the mic — so a screen reader
+                              // can tell the two adjacent controls apart.
+                              "stop transcription and mic"
                             : handsFree
                               ? "end conversation"
                               : recording

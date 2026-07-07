@@ -2389,7 +2389,9 @@ describe("ContinuousChatOverlay", () => {
     // … and is NOT auto-sent — the user sends it when ready.
     expect(controller.send).not.toHaveBeenCalled();
     // The captured audio becomes a pending audio attachment — the sharable
-    // artifact that rides the next send into the content-addressed media store.
+    // artifact that rides the next send into the content-addressed media store
+    // (attached synchronously here since the WAV bytes are already in hand;
+    // an over-cap recording is dropped with an inline notice — see the sink).
     expect(screen.getByText(/^Recording .*\.wav$/)).toBeTruthy();
     // The session is still archived (record + audio) for the Transcripts view.
     expect(client.createTranscript).toHaveBeenCalledTimes(1);

@@ -28,7 +28,6 @@ vi.mock("../../api/client", () => ({
 }));
 
 import {
-  CHAT_COLUMN_MAX_WIDTH,
   ContinuousChatOverlay,
   grabberBarOpacity,
   PILL_MORPH_MIN_SCALE,
@@ -250,21 +249,23 @@ describe("handle glow while recording (pill-only pulse)", () => {
 });
 
 describe("chat column width is pinned through maximize (no spread, no reflow)", () => {
-  it("keeps the exact same content max-width at rest and at full-bleed", () => {
+  it("keeps the inner reading column at mx-auto max-w-3xl when open and at full-bleed", () => {
     render(<ContinuousChatOverlay controller={makeController()} />);
-    const content = () =>
-      screen.getByTestId("chat-content") as HTMLElement | null;
-    const restingMaxWidth = content()?.style.maxWidth;
-    expect(restingMaxWidth).toBe(CHAT_COLUMN_MAX_WIDTH);
+    // The chat COLUMN is pinned on the inner rows (thread + composer both carry
+    // `mx-auto max-w-3xl`), NOT on chat-content — chat-content spans the full
+    // glass so the restore-drag strip and drag-drop intake cover the whole
+    // panel at full-bleed. Assert that the reading column stays centered at its
+    // reading width whether open at a detent or edge-to-edge maximized; only
+    // the glass grows. (The thread mounts only when the sheet is open.)
+    flick(grabber(), 400, 300); // pull up from the input bar → open
+    const threadClass = () => screen.getByTestId("chat-thread").className;
+    expect(threadClass()).toContain("mx-auto");
+    expect(threadClass()).toContain("max-w-3xl");
 
     // Maximize via the long-haul over-pull gesture (#13531).
     bigPullUp(grabber());
     expect(sheet().getAttribute("data-maximized")).toBe("true");
-
-    // The chat column's CSS is byte-identical — only the glass behind it grew.
-    expect(content()?.style.maxWidth).toBe(restingMaxWidth);
-    const threadClass = screen.getByTestId("chat-thread").className;
-    expect(threadClass).toContain("mx-auto");
-    expect(threadClass).toContain("max-w-3xl");
+    expect(threadClass()).toContain("mx-auto");
+    expect(threadClass()).toContain("max-w-3xl");
   });
 });
