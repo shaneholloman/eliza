@@ -84,13 +84,13 @@ describe("background catalog (#13538)", () => {
     }
   });
 
-  it("the boot default is the black ember shader field", () => {
-    // The app boots to the black field with the living orange ember glow —
-    // not a photo wallpaper (those stay gallery options). Black keeps the
-    // orange glow legible as the app background instead of flat paint.
-    expect(DEFAULT_BACKGROUND_CONFIG.mode).toBe("shader");
+  it("the boot default is the Canopy jungle wallpaper over the black base", () => {
+    // The app boots to the Canopy photo wallpaper (misty jungle river valley).
+    // The base color stays black so the host-chrome FOUC/manifest baseline is
+    // unchanged and the black→image settle is invisible at boot.
+    expect(DEFAULT_BACKGROUND_CONFIG.mode).toBe("image");
     expect(DEFAULT_BACKGROUND_CONFIG.color).toBe("#000000");
-    expect(DEFAULT_BACKGROUND_CONFIG.imageUrl).toBeUndefined();
+    expect(DEFAULT_BACKGROUND_CONFIG.imageUrl).toBe("/wallpapers/canopy.webp");
     // The Ember Night gallery tile still resolves to the served sunset asset.
     const def = BACKGROUND_CATALOG.find(
       (e) => e.id === DEFAULT_BACKGROUND_CATALOG_ID,

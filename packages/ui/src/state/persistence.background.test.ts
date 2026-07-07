@@ -15,7 +15,7 @@ import {
   DEFAULT_BACKGROUND_CONFIG,
 } from "./ui-preferences";
 
-// The boot default is now the curated "Ember Night" image (#13538), returned for
+// The boot default is the Canopy jungle wallpaper, returned for
 // empty/absent/unusable-record input.
 const DEFAULT = DEFAULT_BACKGROUND_CONFIG;
 // A present-but-malformed config still collapses to the plain shader field (a
@@ -150,6 +150,45 @@ describe("background config persistence", () => {
   it("returns the default when the stored value is corrupt", () => {
     localStorage.setItem("eliza:ui-background", "{not json");
     expect(loadBackgroundConfig()).toEqual(DEFAULT);
+  });
+});
+
+describe("boot-default migration (black shader → Canopy, one-shot)", () => {
+  it("rewrites a persisted old-default black shader to the Canopy default once", () => {
+    // The previous boot default was eagerly persisted on first boot, so an
+    // install that never chose a background stores exactly this shape.
+    localStorage.setItem(
+      "eliza:ui-background",
+      JSON.stringify({ mode: "shader", color: DEFAULT_BACKGROUND_COLOR }),
+    );
+    expect(loadBackgroundConfig()).toEqual(DEFAULT);
+    // The migration is one-shot: a deliberate return to the black shader
+    // afterwards sticks on every future load.
+    saveBackgroundConfig({ mode: "shader", color: DEFAULT_BACKGROUND_COLOR });
+    expect(loadBackgroundConfig()).toEqual({
+      mode: "shader",
+      color: DEFAULT_BACKGROUND_COLOR,
+    });
+  });
+
+  it("never touches an explicit non-default background", () => {
+    localStorage.setItem(
+      "eliza:ui-background",
+      JSON.stringify({ mode: "shader", color: "#059669" }),
+    );
+    expect(loadBackgroundConfig()).toEqual({
+      mode: "shader",
+      color: "#059669",
+    });
+  });
+
+  it("a fresh install is stamped migrated on first load (later black picks stick)", () => {
+    expect(loadBackgroundConfig()).toEqual(DEFAULT);
+    saveBackgroundConfig({ mode: "shader", color: DEFAULT_BACKGROUND_COLOR });
+    expect(loadBackgroundConfig()).toEqual({
+      mode: "shader",
+      color: DEFAULT_BACKGROUND_COLOR,
+    });
   });
 });
 

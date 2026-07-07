@@ -243,13 +243,37 @@ export function normalizeBackgroundConfig(value: unknown): BackgroundConfig {
   return { mode: "shader", color };
 }
 
+// One-shot boot-default migration flag. The boot default changed from the
+// black ember shader to the Canopy wallpaper, but the previous default was
+// eagerly persisted on first boot — "never chose a background" is stored as
+// exactly {mode:"shader", color:#000000} and is indistinguishable from a
+// deliberate pick of the plain black field. The migration rewrites that one
+// shape to the new default a single time; the flag guarantees a user who
+// deliberately returns to the black shader AFTERWARDS keeps it forever.
+const UI_BACKGROUND_DEFAULT_MIGRATION_KEY = "eliza:ui-background-default-v2";
+
 export function loadBackgroundConfig(): BackgroundConfig {
   return tryLocalStorage(
     () => {
       const raw = localStorage.getItem(UI_BACKGROUND_STORAGE_KEY);
-      return raw
-        ? normalizeBackgroundConfig(JSON.parse(raw))
-        : { ...DEFAULT_BACKGROUND_CONFIG };
+      const migrated = localStorage.getItem(
+        UI_BACKGROUND_DEFAULT_MIGRATION_KEY,
+      );
+      if (!migrated) {
+        // Stamp on the first load either way: a fresh install starts on the
+        // new default, so any later shader-black pick is deliberate.
+        shellLocalStorage.setItem(UI_BACKGROUND_DEFAULT_MIGRATION_KEY, "1");
+      }
+      if (!raw) return { ...DEFAULT_BACKGROUND_CONFIG };
+      const config = normalizeBackgroundConfig(JSON.parse(raw));
+      if (
+        !migrated &&
+        config.mode === "shader" &&
+        config.color === DEFAULT_BACKGROUND_COLOR
+      ) {
+        return { ...DEFAULT_BACKGROUND_CONFIG };
+      }
+      return config;
     },
     { ...DEFAULT_BACKGROUND_CONFIG },
   );
