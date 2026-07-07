@@ -916,7 +916,11 @@ function resolveActiveScreenBackgroundPolicy({
     return viewRegistrationBackgroundPolicy(registeredView);
   }
 
-  return "opaque";
+  // Default: builtin views paint NO surface of their own — they sit on the
+  // shared launcher wallpaper (with the readability scrim below). A view that
+  // needs an opaque surface declares it (manifest / registration), like the
+  // browser's native-webview isolation above.
+  return "shared";
 }
 
 function useActiveScreenBackgroundPolicy({
@@ -2367,6 +2371,17 @@ export function App() {
 
   const isChat = tab === "chat";
   const isSettingsPage = tab === "settings";
+  // Readability scrim over the shared wallpaper for every content view that is
+  // NOT an immersive wallpaper surface (chat/background and the launcher roots
+  // design directly against the wallpaper; text-dense views get a 50% dark
+  // veil so copy stays legible on any image).
+  const wallpaperScrimActive =
+    tab !== "chat" &&
+    tab !== "background" &&
+    !(
+      (tab === "views" || tab === "apps") &&
+      (navigationPath === "/views" || navigationPath === "/apps")
+    );
   const isFullBleed = useTabIsFullBleed(tab);
 
   // Keep hook order stable across first-run/auth state transitions.
@@ -2878,7 +2893,7 @@ export function App() {
               background from Settings and watch it apply behind the panel.
               Opaque or overlay-app routes use the plain underlay instead, so
               the wallpaper cannot leak through. */}
-          {renderSharedAppBackground && isSettingsPage ? (
+          {renderSharedAppBackground && wallpaperScrimActive ? (
             <div
               aria-hidden="true"
               data-testid="app-background-scrim"
