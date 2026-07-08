@@ -776,9 +776,10 @@ export const DEFAULT_VOICE_SETTINGS_PREFS: VoiceSettingsPrefs = {
 	// @elizaos/ui): a chat-write that seeds a partial voice config must persist the
 	// same VAD sensitivity the running capture path uses, or the stored value
 	// diverges from what the Voice UI applies. #15267 dropped the canonical
-	// silence window 900 → 550; settings.test.ts pins these in sync.
+	// silence window 900 → 550; #15276 raised it 550 → 650 on review.
+	// settings.test.ts pins these in sync.
 	vadAutoStop: {
-		silenceMs: 550,
+		silenceMs: 650,
 		speechRmsThreshold: 0.003,
 	},
 };
