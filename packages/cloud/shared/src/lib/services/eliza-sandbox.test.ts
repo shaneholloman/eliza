@@ -649,7 +649,8 @@ describe("ElizaSandboxService provision — node attribution guard (C1b)", () =>
       ...data,
       updated_at: now,
     }));
-    agentSandboxesRepository.update = updateSpy as unknown as typeof agentSandboxesRepository.update;
+    agentSandboxesRepository.update =
+      updateSpy as unknown as typeof agentSandboxesRepository.update;
     // prepareManagedElizaEnvironment mints an agent API key via createForAgent,
     // whose revoke path calls dbWrite.delete — unsupported by this file's
     // transaction-only dbWrite swap. Stub it like the wake suite does so
@@ -661,10 +662,7 @@ describe("ElizaSandboxService provision — node attribution guard (C1b)", () =>
     });
 
     try {
-      const result = await new ElizaSandboxService(provider).provision(
-        rec.id,
-        rec.organization_id,
-      );
+      const result = await new ElizaSandboxService(provider).provision(rec.id, rec.organization_id);
       return { result, create, stop, updateSpy };
     } finally {
       agentSandboxesRepository.findByIdAndOrg = originalFindByIdAndOrg;

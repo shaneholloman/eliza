@@ -12,8 +12,8 @@ import {
 import { AGENT_MANAGED_DISCORD_KEY } from "../../lib/services/eliza-agent-config";
 import { ObjectNamespaces } from "../../lib/storage/object-namespace";
 import { getObjectText, offloadJsonField } from "../../lib/storage/object-store";
-import { decryptAgentBackupStateData, encryptAgentBackupStateData } from "../crypto/agent-backups";
 import { logger } from "../../lib/utils/logger";
+import { decryptAgentBackupStateData, encryptAgentBackupStateData } from "../crypto/agent-backups";
 import { ensureAgentSandboxSchema } from "../ensure-agent-sandbox-schema";
 import { sqlRows } from "../execute-helpers";
 import { dbRead, dbWrite } from "../helpers";

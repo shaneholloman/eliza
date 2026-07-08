@@ -62,7 +62,7 @@ const select = mock(() => ({ from: selectFrom }));
 // so we can assert the null-node filter behavior without a live DB.
 type ExecuteResult = { rows: unknown[]; rowCount?: number };
 let executeHandler: (sqlText: string) => ExecuteResult = () => ({ rows: [] });
-let userRowForClaim: unknown = undefined;
+let userRowForClaim: unknown;
 const warmClaimUpdateSet = mock((values: Record<string, unknown>) => {
   void values;
   return {
@@ -555,9 +555,7 @@ describe("AgentSandboxesRepository", () => {
       // Observability: the skip is warned (not silent) with the counter event.
       const warned = warnLog.mock.calls.some((c) => {
         const meta = c[1] as { event?: string; skippedNullNodeCount?: number } | undefined;
-        return (
-          meta?.event === "warm_pool.null_node_skipped" && meta?.skippedNullNodeCount === 2
-        );
+        return meta?.event === "warm_pool.null_node_skipped" && meta?.skippedNullNodeCount === 2;
       });
       expect(warned).toBe(true);
     });
