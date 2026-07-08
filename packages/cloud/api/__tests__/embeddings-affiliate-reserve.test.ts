@@ -78,6 +78,7 @@ mock.module("@/lib/providers/language-model", () => ({
   getTextEmbeddingModel: () => ({}) as never,
   resolveEmbeddingProviderSource: () => "openai",
   getAiProviderConfigurationError: () => "AI services are not configured",
+  resolvePassthroughEmbeddingsUpstream: () => null,
 }));
 
 // --- Deterministic pricing so the affiliate math is exact. -------------------

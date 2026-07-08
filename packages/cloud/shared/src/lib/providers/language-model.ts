@@ -367,6 +367,39 @@ export function resolvePassthroughUpstreamForModel(model: string): PassthroughUp
   };
 }
 
+export interface PassthroughEmbeddingsUpstream {
+  providerId: "openai-api";
+  /** Full embeddings endpoint URL. */
+  url: string;
+  apiKey: string;
+  /** Model id to send upstream (normalized the same way getTextEmbeddingModel does). */
+  modelId: string;
+}
+
+/**
+ * Resolve the direct upstream for a pass-through embeddings request, mirroring
+ * getTextEmbeddingModel's routing precedence (OpenAI direct only — the Vercel
+ * AI Gateway fallback keeps the SDK path since its wire shape is not
+ * guaranteed OpenAI-verbatim). Null when no OpenAI key is configured — callers
+ * must fall through to the SDK path.
+ */
+export function resolvePassthroughEmbeddingsUpstream(
+  model: string,
+): PassthroughEmbeddingsUpstream | null {
+  const apiKey = getProviderKey("OPENAI_API_KEY");
+  if (!apiKey) return null;
+  const baseURL = (getProviderKey("OPENAI_BASE_URL") ?? "https://api.openai.com/v1").replace(
+    /\/+$/,
+    "",
+  );
+  return {
+    providerId: "openai-api",
+    url: `${baseURL}/embeddings`,
+    apiKey,
+    modelId: normalizeOpenAIModelId(model),
+  };
+}
+
 /**
  * Canonicalize a requested model id for pricing AND routing. Dedicated agents
  * emit decorated ids like "openai/gpt-oss-120b:nitro" / "openai/zai-glm-4.7:nitro"

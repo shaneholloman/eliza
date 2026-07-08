@@ -544,6 +544,52 @@ describe("usePullGesture rAF coalescing (#9141)", () => {
     expect(onPullUp).toHaveBeenCalledTimes(1);
   });
 
+  it("re-seeds a fresh gesture after the prior gesture's element unmounted mid-drag (stranded start)", () => {
+    // The maximize restore strip only exists while maximized: the instant a
+    // restore un-maximizes, its element unmounts BEFORE its captured pointerup
+    // lands, so `start` is stranded with the old pointerId. A later PRIMARY
+    // pointerdown on the remounted strip (a new id, no other finger down) must
+    // start a fresh gesture, not be rejected by the dead id — otherwise every
+    // restore after the first is dead-on-arrival (the touch-only regression the
+    // two-cycle maximize→restore→maximize→restore chat-sheet e2e path caught).
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((cb: FrameRequestCallback) => {
+        cb(0);
+        return 1;
+      }),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    const onStart = vi.fn();
+    const onDrag = vi.fn();
+    const onPullUp = vi.fn();
+    const { result } = renderHook(() =>
+      usePullGesture({ onStart, onDrag, onPullUp }),
+    );
+    const b = result.current;
+
+    // Gesture 1 (pid=1): press + drag, then its element unmounts — the pointerup
+    // NEVER arrives, so `start` stays set to pid=1.
+    b.onPointerDown(pointer(100, 300, 1));
+    b.onPointerMove(pointer(100, 200, 1));
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onDrag).toHaveBeenLastCalledWith(100);
+
+    onStart.mockClear();
+    onDrag.mockClear();
+
+    // Gesture 2 (pid=2, primary) on the remounted strip: must be adopted despite
+    // the stranded pid=1, so it drives + releases a full pull.
+    b.onPointerDown(pointer(100, 300, 2));
+    b.onPointerMove(pointer(100, 160, 2));
+    b.onPointerUp(pointer(100, 160, 2));
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onDrag).toHaveBeenLastCalledWith(140);
+    expect(onPullUp).toHaveBeenCalledTimes(1);
+  });
+
   it("calls onStart once for the accepted pointer and ignores secondary starts", () => {
     vi.stubGlobal(
       "requestAnimationFrame",
@@ -561,15 +607,35 @@ describe("usePullGesture rAF coalescing (#9141)", () => {
     );
     const b = result.current;
 
-    b.onPointerDown(pointer(100, 300, 2, undefined, { isPrimary: false, pointerType: "touch" }));
-    b.onPointerMove(pointer(100, 160, 2, undefined, { isPrimary: false, pointerType: "touch" }));
-    b.onPointerUp(pointer(100, 160, 2, undefined, { isPrimary: false, pointerType: "touch" }));
+    b.onPointerDown(
+      pointer(100, 300, 2, undefined, {
+        isPrimary: false,
+        pointerType: "touch",
+      }),
+    );
+    b.onPointerMove(
+      pointer(100, 160, 2, undefined, {
+        isPrimary: false,
+        pointerType: "touch",
+      }),
+    );
+    b.onPointerUp(
+      pointer(100, 160, 2, undefined, {
+        isPrimary: false,
+        pointerType: "touch",
+      }),
+    );
 
     expect(onStart).not.toHaveBeenCalled();
     expect(onPullUp).not.toHaveBeenCalled();
 
     b.onPointerDown(pointer(100, 300, 1));
-    b.onPointerDown(pointer(100, 280, 2, undefined, { isPrimary: false, pointerType: "touch" }));
+    b.onPointerDown(
+      pointer(100, 280, 2, undefined, {
+        isPrimary: false,
+        pointerType: "touch",
+      }),
+    );
     b.onPointerMove(pointer(100, 160, 1));
     b.onPointerUp(pointer(100, 160, 1));
 
