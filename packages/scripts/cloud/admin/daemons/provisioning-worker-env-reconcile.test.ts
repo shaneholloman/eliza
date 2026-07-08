@@ -23,6 +23,7 @@ const workflow = readFileSync(workflowPath, "utf8");
 
 const ENV_KEY = "SANDBOX_REGISTRY_REDIS_URL";
 const FIELD_ENCRYPTION_KEY = "SECRETS_MASTER_KEY";
+const BRIDGE_FALLBACK_KEY = "AGENT_ROUTER_ALLOW_BRIDGE_HOST_FALLBACK";
 
 // The reconcile loop runs the workflow's VERBATIM bash, which uses GNU
 // `sed -i "/^KEY=/d"` (no backup-suffix argument). BSD/macOS `sed -i` parses
@@ -90,12 +91,26 @@ describe("deploy-eliza-provisioning-worker.yml SANDBOX_REGISTRY_REDIS_URL wiring
       `"${FIELD_ENCRYPTION_KEY}=$${FIELD_ENCRYPTION_KEY}"`,
     );
   });
+
+  it("scrubs the deprecated bridge-host fallback flag during env reconciliation", () => {
+    expect(workflow).toContain(
+      `sed -i "/^${BRIDGE_FALLBACK_KEY}=/d" "$ENV_FILE"`,
+    );
+    const lanePinIdx = workflow.indexOf('sed -i "/^PROVISIONING_JOB_LANES=/d"');
+    const scrubIdx = workflow.indexOf(`${BRIDGE_FALLBACK_KEY}=/d`);
+    const secretLoopIdx = workflow.indexOf("for kv in \\");
+    expect(lanePinIdx).toBeGreaterThan(-1);
+    expect(scrubIdx).toBeGreaterThan(-1);
+    expect(secretLoopIdx).toBeGreaterThan(-1);
+    expect(lanePinIdx).toBeLessThan(scrubIdx);
+    expect(scrubIdx).toBeLessThan(secretLoopIdx);
+  });
 });
 
 // Extract the exact reconcile loop body from the workflow and run it in a
 // scratch dir so the test exercises the real bash, not a re-implementation.
 function extractReconcileLoop(): string {
-  const start = workflow.indexOf("for kv in \\");
+  const start = workflow.indexOf('sudo sed -i "/^PROVISIONING_JOB_LANES=/d"');
   expect(start).toBeGreaterThan(-1);
   const tail = workflow.slice(start);
   const doneIdx = tail.indexOf("\n            done");
@@ -113,6 +128,7 @@ function extractReconcileLoop(): string {
   expect(loop).toContain("sed -i");
   expect(loop).toContain("tee -a");
   expect(loop).toContain(ENV_KEY);
+  expect(loop).toContain(BRIDGE_FALLBACK_KEY);
   return loop;
 }
 
@@ -209,6 +225,16 @@ executedDescribe(
     it("skips the key when the secret is the empty string", () => {
       const out = runReconcile({ redisUrl: "" });
       expect(out).not.toContain(ENV_KEY);
+    });
+
+    it("removes the deprecated bridge-host fallback flag on every deploy", () => {
+      const out = runReconcile({
+        redisUrl: undefined,
+        seedEnvFile: `${BRIDGE_FALLBACK_KEY}=1\nOTHER=keep\n`,
+      });
+      expect(out).not.toContain(BRIDGE_FALLBACK_KEY);
+      expect(out).toContain("PROVISIONING_JOB_LANES=agent\n");
+      expect(out).toContain("OTHER=keep\n");
     });
   },
 );

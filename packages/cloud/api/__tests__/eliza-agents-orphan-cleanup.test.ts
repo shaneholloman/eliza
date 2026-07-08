@@ -84,9 +84,6 @@ mock.module("@/lib/services/eliza-sandbox", () => ({
     createAgent,
     updateAgentEnvironment,
     listAgents: mock(async () => []),
-    // #15516 reuse-peek: false = no reusable agent, so the worker-health gate
-    // behaves exactly as before the peek existed.
-    hasReusableNonTerminalAgent: mock(async () => false),
   },
 }));
 
