@@ -754,15 +754,16 @@ export async function expectChatFirstOnboarding(page: Page): Promise<Locator> {
   await expect(page.getByTestId(RUNTIME_CHOICE("remote"))).toBeVisible();
   await expect(page.getByTestId("first-run-runtime-chooser")).toHaveCount(0);
 
-  // Onboarding surface (#12178): the composer is UNLOCKED (typed text is
-  // answered by the in-chat conductor, never the server) with an inviting
-  // placeholder, the backdrop is OPAQUE so the launcher/home is hidden, and the
-  // pinned-open sheet is still non-dismissable — Escape must NOT collapse it.
+  // Onboarding surface (#15339): first-run is sign-in-first, so the composer is
+  // LOCKED (disabled) with a "Sign in to start chatting" cue until the user
+  // signs in — typing into a not-yet-ready chat is prevented. The backdrop is
+  // OPAQUE so the launcher/home is hidden, and the pinned-open sheet is still
+  // non-dismissable — Escape must NOT collapse it.
   const composer = page.getByTestId("chat-composer-textarea");
-  await expect(composer).toBeEnabled();
+  await expect(composer).toBeDisabled();
   await expect(composer).toHaveAttribute(
     "placeholder",
-    "Connect to cloud to enable chat",
+    "Sign in to start chatting",
   );
   await expect(page.getByTestId("chat-first-run-backdrop")).toHaveAttribute(
     "data-first-run-opaque",
@@ -1049,10 +1050,15 @@ export async function expectCloudOnlySignInOnboarding(
   await expect(
     page.getByText("where should your agent run?", { exact: false }),
   ).toHaveCount(0);
-  // Same onboarding surface contract as chooser mode: unlocked composer,
-  // opaque backdrop, non-dismissable pinned sheet.
+  // Same onboarding surface contract as chooser mode (#15339): sign-in-first
+  // locked composer ("Sign in to start chatting"), opaque backdrop,
+  // non-dismissable pinned sheet.
   const composer = page.getByTestId("chat-composer-textarea");
-  await expect(composer).toBeEnabled();
+  await expect(composer).toBeDisabled();
+  await expect(composer).toHaveAttribute(
+    "placeholder",
+    "Sign in to start chatting",
+  );
   await expect(page.getByTestId("chat-first-run-backdrop")).toHaveAttribute(
     "data-first-run-opaque",
     "true",
