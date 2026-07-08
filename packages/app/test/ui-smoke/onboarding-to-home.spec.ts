@@ -84,8 +84,8 @@ test.describe("in-chat onboarding → home → launcher", () => {
     await page.goto("/", { waitUntil: "domcontentloaded" });
 
     // Capture the chat-first onboarding landing before driving it. The helper
-    // also asserts the onboarding lock: composer disabled ("Choose an option
-    // to continue") and Escape NOT collapsing the pinned-open sheet.
+    // also asserts the onboarding lock: composer disabled ("Sign in to start
+    // chatting") and Escape NOT collapsing the pinned-open sheet.
     await expectChatFirstOnboarding(page);
     // NEGATIVE, restated at the spec level: mid-onboarding the sheet cannot be
     // dismissed — the old Escape-collapse-to-reach-the-launcher step is gone.
@@ -101,21 +101,25 @@ test.describe("in-chat onboarding → home → launcher", () => {
       tutorial: "skip",
     });
 
-    // Completion auto-collapsed the sheet (the launcher swipe below needs no
-    // manual collapse) and unlocked the composer.
-    await expect(
-      page.getByTestId("continuous-chat-overlay"),
-    ).not.toHaveAttribute("data-open", "true");
+    // Completion settled the sheet from the pinned FULL detent down to the HALF
+    // detent (#15339 / ContinuousChatOverlay.firstrun.test): the sheet stays
+    // OPEN with the home revealed behind its top half, and the composer unlocks.
+    // swipeLeftToLauncher collapses the open sheet before the flick.
+    await expect(page.getByTestId("chat-sheet")).toHaveAttribute(
+      "data-detent",
+      "half",
+    );
+    await expect(page.getByTestId("continuous-chat-overlay")).toHaveAttribute(
+      "data-open",
+      "true",
+    );
     await expect(page.getByTestId("chat-composer-textarea")).toBeEnabled();
 
-    // Post-login permission priming (#12331) opens over the home right after
-    // onboarding completes on the desktop platform (the injected electrobun
-    // host). Drive its soft-ask dismissal for real — it must appear, and
-    // skipping it must clear the way for the swipe below.
-    const primingSkip = page.getByRole("button", { name: "Skip for now" });
-    await expect(primingSkip).toBeVisible({ timeout: 15_000 });
-    await primingSkip.click();
-    await expect(primingSkip).toBeHidden({ timeout: 10_000 });
+    // Post-login permission priming (#12331) can open over the home on the
+    // completion edge; completeOnboardingToHome already drove its "Skip for now"
+    // dismissal (dismissPermissionPrimingIfShown), and swipeLeftToLauncher clears
+    // any residual before the flick — so no separate dismissal step is needed
+    // here (a second one races the helper's and flakes).
 
     // Capture the populated home.
     await settleHomeEntrance(page);

@@ -145,9 +145,9 @@ function stringField(source: string, field: string): string | null {
 function viewObjectModalities(object: string): RoutedViewType[] {
   const modalitiesMatch = object.match(/modalities:\s*\[([^\]]*)\]/);
   if (modalitiesMatch) {
-    const mods = [
-      ...modalitiesMatch[1].matchAll(/["'](gui|tui|xr)["']/g),
-    ].map((m) => m[1] as RoutedViewType);
+    const mods = [...modalitiesMatch[1].matchAll(/["'](gui|tui|xr)["']/g)].map(
+      (m) => m[1] as RoutedViewType,
+    );
     if (mods.length > 0) return mods;
   }
   return [(stringField(object, "viewType") ?? "gui") as RoutedViewType];

@@ -120,12 +120,22 @@ function runReconcile(opts: {
     // (GNU sed is the default) and when skipped this is a no-op.
     GNU_SED === "gsed" ? 'sed() { gsed "$@"; }' : "",
     `ENV_FILE='${envFile}'`,
-    // The ssh-action `envs:` allowlist always exports these (possibly empty);
-    // under `set -u` they must be defined or the loop aborts. Empty == skipped,
-    // isolating SANDBOX_REGISTRY_REDIS_URL behavior.
-    "HEADSCALE_API_URL=''",
-    "HEADSCALE_PUBLIC_URL=''",
-    "HEADSCALE_API_KEY=''",
+    // The ssh-action `envs:` allowlist always exports every key the loop reads
+    // (possibly empty); under `set -u` each must be defined or the loop aborts.
+    // Derive them from the loop's own `"KEY=$KEY"` entries and default every key
+    // EXCEPT the one under test to empty (empty == skipped, isolating
+    // SANDBOX_REGISTRY_REDIS_URL behavior) — so a workflow that forwards another
+    // secret (e.g. DATABASE_URL) can't silently abort this test on `set -u`.
+    ...Array.from(
+      new Set(
+        Array.from(
+          loop.matchAll(/"([A-Z0-9_]+)=\$[A-Z0-9_]+"/g),
+          (match) => match[1],
+        ),
+      ),
+    )
+      .filter((name) => name !== ENV_KEY)
+      .map((name) => `${name}=''`),
     loop,
   ].join("\n");
   try {

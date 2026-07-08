@@ -34,8 +34,18 @@ const refundCredits = mock(async () => ({
   newBalance: 70,
 }));
 
+class TestInsufficientCreditsError extends Error {
+  required: number;
+
+  constructor(required: number) {
+    super("Insufficient credits");
+    this.required = required;
+  }
+}
+
 mock.module("@/db/helpers", () => ({
   dbRead: {},
+  dbWrite: {},
 }));
 mock.module("@/db/repositories/organizations", () => ({
   organizationsRepository: {},
@@ -55,6 +65,21 @@ mock.module("@/lib/services/app-charge-settlement", () => ({
 mock.module("@/lib/services/app-credits", () => ({
   appCreditsService: {},
 }));
+// The mock replaces the whole module, so it must re-export every name any
+// module pulled into this route binds, or bun fails linking ("Export named
+// 'X' not found"). Cover ai-billing's full public surface — the clawback path
+// exercises none of these; the stubs exist only to satisfy static imports.
+mock.module("@/lib/services/ai-billing", () => ({
+  InsufficientCreditsError: TestInsufficientCreditsError,
+  estimateInputTokens: mock(() => 0),
+  normalizeUsage: mock(() => ({})),
+  reserveCredits: mock(async () => ({})),
+  billUsage: mock(async () => ({})),
+  billFlatUsage: mock(async () => ({})),
+  recordUsageAnalytics: mock(async () => undefined),
+  createOnFinishHandler: mock(() => () => undefined),
+}));
+
 mock.module("@/lib/services/credits", () => ({
   creditsService: {
     getTransactionByStripePaymentIntent,

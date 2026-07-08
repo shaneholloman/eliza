@@ -143,7 +143,7 @@ test("chat overlay: sending opens the chat, click-out collapses, Escape collapse
   });
 });
 
-test("chat overlay: the attach control opens an image picker", async ({
+test("chat overlay: the + menu's Upload file opens an image picker", async ({
   page,
 }) => {
   await openAppPath(page, "/chat");
@@ -151,23 +151,34 @@ test("chat overlay: the attach control opens an image picker", async ({
     timeout: 60_000,
   });
 
-  const attach = page.getByTestId("chat-composer-attach");
-  await expect(attach).toBeVisible({ timeout: 15_000 });
+  // Attachment is a chat-actions "+" menu affordance, not a standalone button:
+  // the plus opens the surface-local menu, and its "Upload file" item is what
+  // triggers the hidden file input / OS picker.
+  const plus = page.getByTestId("chat-composer-plus");
+  await expect(plus).toBeVisible({ timeout: 15_000 });
+  await plus.click();
+
+  const upload = page.getByRole("menuitem", { name: /upload file/i });
+  await expect(upload).toBeVisible({ timeout: 10_000 });
   const [chooser] = await Promise.all([
     page.waitForEvent("filechooser", { timeout: 10_000 }),
-    attach.click(),
+    upload.click(),
   ]);
   expect(chooser).toBeTruthy();
 });
 
-test("chat overlay: transcript text is selectable and the old transcribe toggle is absent", async ({
+test("chat overlay: transcript text is selectable and the transcribe toggle is present", async ({
   page,
 }) => {
   await openAppPath(page, "/chat");
   const overlay = page.getByTestId("continuous-chat-overlay");
   await expect(overlay).toBeVisible({ timeout: 60_000 });
 
-  await expect(page.getByTestId("chat-composer-transcribe")).toHaveCount(0);
+  // The mic dictation toggle is an intentional trailing composer control
+  // (#10699) that sits beside the voice button in the default (no-draft) state.
+  await expect(page.getByTestId("chat-composer-transcribe")).toBeVisible({
+    timeout: 15_000,
+  });
 
   const prompt = "show selectable transcript text";
   const composer = page.getByTestId("chat-composer-textarea");

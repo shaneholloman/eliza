@@ -87,6 +87,16 @@ export default defineConfig({
 			// React-free settings-section metadata consumed by the VIEWS action's
 			// subview deep-linking (token resolution + planner subview list).
 			// Resolve to source so tests need no built @elizaos/ui dist.
+			// ViewManagerView.tsx renders the kit Button. Resolve it to source so the
+			// render test needs no built @elizaos/ui dist — the Windows CI prep builds
+			// only core/shared, so a `dist/components/ui/button.js` export target is
+			// absent there and vite fails import-analysis. (Its transitive deps —
+			// cva, @radix-ui/react-slot, clsx, tailwind-merge — resolve from the
+			// workspace.)
+			{
+				find: "@elizaos/ui/components/ui/button",
+				replacement: path.join(uiSrc, "components/ui/button.tsx"),
+			},
 			{
 				find: "@elizaos/ui/components/settings/settings-section-tokens",
 				replacement: path.join(

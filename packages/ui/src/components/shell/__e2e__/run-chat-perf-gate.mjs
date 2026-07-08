@@ -40,9 +40,16 @@ const outDir = join(here, "output-perf-gate");
 
 // Deliberately not razor-thin so an unavoidable CI-VM frame doesn't redden the
 // lane, but tight enough that real jank (sustained slowdown, a maximize reflow)
-// trips.
+// trips. In a vsync-locked headless browser every frame delta quantizes to a
+// multiple of the 16.67ms budget (16.67, 33.33, 50…), so a SINGLE dropped frame
+// lands the p95 at ~33.4ms — right on a 2× threshold, which then flaps on
+// sub-millisecond jitter (the streaming window re-renders once per frame, so >5%
+// of its frames double and its p95 is reliably that one dropped frame). The p95
+// factor therefore sits in the empty gap between one dropped frame (33.3ms,
+// tolerated as the CI floor) and two (50ms, genuine sustained jank); the
+// dropped-frame RATIO below is the primary jank signal and is left untouched.
 const FRAME_BUDGET_OPTIONS = {
-  p95BudgetFactor: 2, // p95 may reach 2× the 60fps budget (33ms) before flagging
+  p95BudgetFactor: 2.5, // flag p95 ≥ 2 dropped frames (41.7ms); one (33.3ms) is the CI vsync floor
   droppedFrameRatio: 0.25, // >25% frames over budget = visible jank
   reportOnLongTask: false, // long tasks are noisy on shared CI runners
 };
@@ -197,6 +204,21 @@ async function pullToRestore(p) {
   }
   return !(await isMaximized(p));
 }
+
+// Median of a numeric sample, ignoring non-finite values. The streaming frame
+// budget is judged over several independent windows so one load-spiked window (a
+// GC pause, a co-tenant CI process stealing the core) cannot redden the lane,
+// while a genuine regression — which janks EVERY window — still trips the median.
+function medianNumber(values) {
+  const sorted = values
+    .filter((value) => Number.isFinite(value))
+    .toSorted((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)] ?? 0;
+}
+
+// Independent streaming windows sampled for the frame-budget median. Odd so the
+// median is a single window's real measurement, not an interpolation.
+const STREAM_WINDOWS = 3;
 
 await runBrowserFixtureE2E(
   {
@@ -358,54 +380,74 @@ await runBrowserFixtureE2E(
       .count();
     check(widgetBefore === 1, `CHOICE widget present before streaming (${widgetBefore})`);
 
-    // Reset the sampled windows so we measure ONLY the streaming window.
-    await page.evaluate(() => {
-      window.__ELIZA_PERF_FRAMES__ = [];
-      window.__ELIZA_LAYOUT_SHIFTS__ = [];
-      window.__ELIZA_REFLOW_SHIFTS__ = [];
-    });
-
-    // Drive ~120 tokens, a few characters each, one batch per animation frame —
-    // a sustained stream, not a single burst. Runs entirely in the page so the
-    // rAF cadence is real.
-    await page.evaluate(
-      () =>
-        new Promise((resolve) => {
-          let ticks = 0;
-          const pump = () => {
-            window.__ELIZA_PERF_STREAM__?.(3);
-            ticks += 1;
-            if (ticks >= 120) {
-              resolve(undefined);
-              return;
-            }
+    // Drive the streaming stress as SEVERAL independent windows and judge the
+    // MEDIAN, mirroring the home-screen rail-swipe gate. A single load-spiked
+    // window (a GC pause, a co-tenant CI process stealing the core) must not
+    // redden the lane, but a real regression — an unmemoized widget re-rendering
+    // on every token — janks EVERY window, so the median still trips. Each window
+    // resets the sampled buffers, drives ~120 tokens (a few chars each, one batch
+    // per animation frame — a sustained stream, not a burst) entirely in the page
+    // so the rAF cadence is real, then harvests the SAME real frame + shift +
+    // reflow entries and feeds them to the SAME shared detector.
+    const streamWindows = [];
+    const reflowAll = [];
+    for (let w = 0; w < STREAM_WINDOWS; w += 1) {
+      await page.evaluate(() => {
+        window.__ELIZA_PERF_FRAMES__ = [];
+        window.__ELIZA_LAYOUT_SHIFTS__ = [];
+        window.__ELIZA_REFLOW_SHIFTS__ = [];
+      });
+      await page.evaluate(
+        () =>
+          new Promise((resolve) => {
+            let ticks = 0;
+            const pump = () => {
+              window.__ELIZA_PERF_STREAM__?.(3);
+              ticks += 1;
+              if (ticks >= 120) {
+                resolve(undefined);
+                return;
+              }
+              requestAnimationFrame(pump);
+            };
             requestAnimationFrame(pump);
-          };
-          requestAnimationFrame(pump);
-        }),
-    );
-    await page.waitForTimeout(120);
+          }),
+      );
+      await page.waitForTimeout(120);
+      const { frames, shifts, reflow } = await page.evaluate(() => ({
+        frames: window.__ELIZA_PERF_FRAMES__ ?? [],
+        shifts: window.__ELIZA_LAYOUT_SHIFTS__ ?? [],
+        reflow: window.__ELIZA_REFLOW_SHIFTS__ ?? [],
+      }));
+      const summary = summarizeFrameSamples(frames);
+      const droppedRatio = summary.sampleCount
+        ? summary.droppedFrames / summary.sampleCount
+        : 1;
+      const flagged = shouldReportFrameBudget(summary, FRAME_BUDGET_OPTIONS);
+      const stability = summarizeStability(shifts, [], STABILITY_BUDGET);
+      streamWindows.push({ summary, droppedRatio, flagged, cls: stability.cls });
+      reflowAll.push(...reflow);
+      console.log(
+        `stream window ${w + 1}/${STREAM_WINDOWS}: frames ${summary.sampleCount} | fps ${summary.fps.toFixed(1)} | ` +
+          `p95 ${summary.p95FrameMs.toFixed(1)}ms | dropped ${summary.droppedFrames}/${summary.sampleCount} | flagged ${flagged}`,
+      );
+      // Each window must carry a meaningful sample or the median is noise.
+      check(
+        summary.sampleCount > 20,
+        `streaming window ${w + 1} captured a meaningful frame window (${summary.sampleCount} frames)`,
+      );
+    }
 
-    const {
-      frames: streamFrames,
-      shifts: streamShifts,
-      reflow,
-    } = await page.evaluate(() => ({
-      frames: window.__ELIZA_PERF_FRAMES__ ?? [],
-      shifts: window.__ELIZA_LAYOUT_SHIFTS__ ?? [],
-      reflow: window.__ELIZA_REFLOW_SHIFTS__ ?? [],
-    }));
-    const streamFrameSummary = summarizeFrameSamples(streamFrames);
-    const streamStability = summarizeStability(streamShifts, [], STABILITY_BUDGET);
-    const outsideChatShifts = reflow.filter((s) => s.outsideChat);
-
+    const outsideChatShifts = reflowAll.filter((s) => s.outsideChat);
+    const budgetMs = streamWindows[0].summary.budgetMs;
+    const medianP95 = medianNumber(streamWindows.map((s) => s.summary.p95FrameMs));
+    const medianDroppedRatio = medianNumber(streamWindows.map((s) => s.droppedRatio));
+    const medianCls = medianNumber(streamWindows.map((s) => s.cls));
+    const flaggedCount = streamWindows.filter((s) => s.flagged).length;
     console.log(
-      `\nstream frames: ${streamFrameSummary.sampleCount} | fps ${streamFrameSummary.fps.toFixed(1)} | ` +
-        `p95 ${streamFrameSummary.p95FrameMs.toFixed(1)}ms | dropped ${streamFrameSummary.droppedFrames}/${streamFrameSummary.sampleCount}`,
-    );
-    console.log(
-      `stream layout: cls ${streamStability.cls.toFixed(4)} | non-intentional shifts ${streamStability.shiftCount} | ` +
-        `reflow shifts total ${reflow.length} outside-chat ${outsideChatShifts.length}\n`,
+      `\nstream median: p95 ${medianP95.toFixed(1)}ms (budget ${(budgetMs * FRAME_BUDGET_OPTIONS.p95BudgetFactor).toFixed(1)}ms) | ` +
+        `dropped ${(medianDroppedRatio * 100).toFixed(1)}% | cls ${medianCls.toFixed(4)} | ` +
+        `flagged ${flaggedCount}/${STREAM_WINDOWS} windows | reflow ${reflowAll.length} outside-chat ${outsideChatShifts.length}\n`,
     );
 
     // The widget must still be mounted exactly once (never remounted/duplicated
@@ -419,19 +461,19 @@ await runBrowserFixtureE2E(
     );
 
     check(
-      streamFrameSummary.sampleCount > 20,
-      `captured a meaningful streaming frame window (${streamFrameSummary.sampleCount} frames)`,
-    );
-    const streamDroppedRatio = streamFrameSummary.sampleCount
-      ? streamFrameSummary.droppedFrames / streamFrameSummary.sampleCount
-      : 1;
-    check(
-      streamDroppedRatio <= FRAME_BUDGET_OPTIONS.droppedFrameRatio,
-      `streaming dropped-frame ratio ${(streamDroppedRatio * 100).toFixed(1)}% within ${(FRAME_BUDGET_OPTIONS.droppedFrameRatio * 100).toFixed(0)}%`,
+      medianDroppedRatio <= FRAME_BUDGET_OPTIONS.droppedFrameRatio,
+      `median streaming dropped-frame ratio ${(medianDroppedRatio * 100).toFixed(1)}% within ${(FRAME_BUDGET_OPTIONS.droppedFrameRatio * 100).toFixed(0)}%`,
     );
     check(
-      !shouldReportFrameBudget(streamFrameSummary, FRAME_BUDGET_OPTIONS),
-      "frame-budget detector does not flag the streaming window",
+      medianP95 <= budgetMs * FRAME_BUDGET_OPTIONS.p95BudgetFactor,
+      `median streaming p95 ${medianP95.toFixed(1)}ms within ${(budgetMs * FRAME_BUDGET_OPTIONS.p95BudgetFactor).toFixed(1)}ms`,
+    );
+    // The SAME shared detector the dev HUD uses must clear the MEDIAN streaming
+    // window (≤ half the windows flagged). A regression that janks every window
+    // flags them all → fails; a lone load-spiked window does not.
+    check(
+      flaggedCount <= Math.floor(STREAM_WINDOWS / 2),
+      `frame-budget detector does not flag the streaming window (${flaggedCount}/${STREAM_WINDOWS} windows flagged)`,
     );
 
     // NO-REFLOW GUARD: streaming into the open chat must reflow NOTHING outside
@@ -439,10 +481,10 @@ await runBrowserFixtureE2E(
     // resolve inside [data-testid="chat-sheet"]; a shift attributed to a node
     // outside it means the growing turn pushed the surrounding page around —
     // exactly the cross-subtree reflow the contained scroll surface + memoized
-    // widgets prevent. Zero is the only pass.
+    // widgets prevent. Zero across ALL windows is the only pass.
     check(
       outsideChatShifts.length === 0,
-      `streaming causes ZERO layout shifts outside the chat overlay (saw ${outsideChatShifts.length} of ${reflow.length})`,
+      `streaming causes ZERO layout shifts outside the chat overlay (saw ${outsideChatShifts.length} of ${reflowAll.length})`,
     );
 
     check(errors.length === 0, `no page errors (saw ${errors.length})`);

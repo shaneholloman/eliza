@@ -273,7 +273,13 @@ describe("adjacency-heavy random-assembly differential (byte-identical)", () => 
       // chunk = 1 is the strictest streaming: every single-char prefix is a frame.
       assertDifferential(false, prefixesByChunk(text, 1));
     }
-  });
+    // Explicit timeout, not the 5s default: this is a heavy deterministic
+    // correctness fuzz — 1500 fence-dense assemblies diffed at every single-char
+    // frame — and #15373's adjacent-fence-cluster full-parse fallback keeps the
+    // whole cluster in the live tail scan for exactly this corpus. The wall-clock
+    // cost is real but bounded; a shared CI runner under load must not flake it
+    // into a false red. The per-frame `toEqual` assertions are the coverage.
+  }, 30_000);
 });
 
 describe("normalize seam locality (computeSafeNormCut)", () => {
@@ -356,7 +362,12 @@ describe("work bound (O(delta), not O(N·L))", () => {
     // large fraction below the quadratic baseline.
     expect(incrementalScanned).toBeLessThan(20 * total);
     expect(incrementalScanned).toBeLessThan(baselineScanned / 10);
-  });
+    // Explicit timeout, not the 5s default: the baseline arm re-parses ~1600
+    // growing prefixes up to 100KB (an intentional O(N·L) reference), tens of
+    // millions of char-scans that take several seconds unloaded and far more on
+    // a contended shared runner. The work-bound ratios above — not wall-clock —
+    // are what actually guard the O(delta) property.
+  }, 30_000);
 
   it("keeps full parses rare across the stream", () => {
     const body = buildStreamBody(40 * 1024);

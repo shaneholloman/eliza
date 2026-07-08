@@ -90,12 +90,18 @@ test.describe("onboarding → home → launcher (mobile viewport)", () => {
       { state, tutorial: "skip" },
     );
 
-    // Restated at the spec level: completion auto-collapsed the sheet, so the
-    // touch flick below lands on the home rail with no manual collapse step,
-    // and the composer unlocked for normal chat.
-    await expect(
-      page.getByTestId("continuous-chat-overlay"),
-    ).not.toHaveAttribute("data-open", "true");
+    // Restated at the spec level: completion settled the sheet to the HALF
+    // detent (open, home revealed behind the top half — #15339) and unlocked the
+    // composer. The touch flick below lands on the home rail after
+    // swipeLeftToLauncher collapses the open sheet.
+    await expect(page.getByTestId("chat-sheet")).toHaveAttribute(
+      "data-detent",
+      "half",
+    );
+    await expect(page.getByTestId("continuous-chat-overlay")).toHaveAttribute(
+      "data-open",
+      "true",
+    );
     await expect(page.getByTestId("chat-composer-textarea")).toBeEnabled();
 
     // Capture the populated mobile home landing.

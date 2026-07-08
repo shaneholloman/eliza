@@ -98,6 +98,17 @@ function clearWaitForUrlCallbackTimer(): void {
   }
 }
 
+// Hold the tab at START for this long after the fixture first observes it there,
+// then flip it to CALLBACK. The window must comfortably exceed the latency
+// between BROWSER_WAIT_FOR_URL navigating the tab to START and its FIRST poll —
+// which is gated behind an awaited, streamed "watching…" callback whose cost
+// balloons on a contended CI runner. At 150ms that latency occasionally won the
+// race, so the tab reached CALLBACK before the first poll and the action matched
+// on poll 1 (< the asserted ≥2). 500ms keeps the first poll safely inside the
+// START window on any plausibly-loaded runner without approaching the action's
+// 4s poll budget.
+const WAIT_FOR_URL_START_HOLD_MS = 500;
+
 function scheduleWaitForUrlCallbackNavigation(): void {
   clearWaitForUrlCallbackTimer();
   const startedAt = Date.now();
@@ -110,7 +121,7 @@ function scheduleWaitForUrlCallbackNavigation(): void {
       );
       if (waitTab?.id) {
         startSeenAt ??= Date.now();
-        if (Date.now() - startSeenAt < 150) {
+        if (Date.now() - startSeenAt < WAIT_FOR_URL_START_HOLD_MS) {
           return;
         }
         clearWaitForUrlCallbackTimer();
@@ -122,11 +133,13 @@ function scheduleWaitForUrlCallbackNavigation(): void {
         return;
       }
 
-      if (Date.now() - startedAt > 3_000) {
+      // Give up only if START never appears; once seen, the hold above owns the
+      // timing (its window is deliberately shorter than this abort budget).
+      if (startSeenAt === null && Date.now() - startedAt > 6_000) {
         clearWaitForUrlCallbackTimer();
       }
     })().catch(() => {
-      if (Date.now() - startedAt > 3_000) {
+      if (Date.now() - startedAt > 6_000) {
         clearWaitForUrlCallbackTimer();
       }
     });

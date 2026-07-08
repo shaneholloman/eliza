@@ -554,8 +554,8 @@ const assetMetadataValidatorFailure = assertFails(
   agentPackageJson,
   providerSmokeSource,
   liveReportValidatorSource.replace(
-    "    manifestIntegrity !== undefined &&\n    manifestIntegrity !== assetIntegrity\n",
-    "    false\n",
+    "manifestIntegrity !== undefined && manifestIntegrity !== assetIntegrity",
+    "false",
   ),
   liveReportWriterSource,
   endpointConformanceSource,
@@ -686,8 +686,8 @@ assertValidatorSelfTestFailure(
 );
 
 assertFails(
-  "cloud live job is required by test-status",
-  // Replace in test-status.needs specifically: "zero-key-e2e\n      - cloud-live-e2e\n"
+  "cloud live job is required by ci-ok",
+  // Replace in ci-ok.needs specifically: "zero-key-e2e\n      - cloud-live-e2e\n"
   // is unique to that block. github-live-artifact-validate has no zero-key dep,
   // so a plain replace("      - cloud-live-e2e\n", ...) would hit that job first.
   workflow.replace(
@@ -697,7 +697,7 @@ assertFails(
 );
 
 assertFails(
-  "provider live job is required by test-status",
+  "provider live job is required by ci-ok",
   workflow.replace(
     '            "provider-live-e2e:${{ needs.provider-live-e2e.result }}"',
     "",
@@ -705,10 +705,12 @@ assertFails(
 );
 
 assertFails(
-  "provider live job is required by test-status",
+  "provider live job is required by ci-ok",
+  // Drop `schedule` from strict_results; the check requires both dispatch and
+  // schedule to gate the aggregate on the two live jobs.
   workflow.replace(
-    "strict_results=\"${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}\"",
-    "strict_results=\"${{ github.event_name == 'workflow_dispatch' }}\"",
+    "strict_results=\"${{ github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}\"",
+    "strict_results=\"${{ github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}\"",
   ),
 );
 
@@ -739,7 +741,7 @@ assertFails(
 assertFails(
   "cloud capability live smoke is explicitly configured",
   workflow.replace(
-    '          else\n            echo "::notice::Remote capability cloud sandbox live smoke skipped because ELIZA_REMOTE_CAPABILITY_CLOUD_LIVE_ENABLED is not configured."\n            echo "capability_skip=true" >> "$GITHUB_OUTPUT"\n          fi\n',
+    '            echo "::notice::Remote capability cloud sandbox live smoke skipped because ELIZA_REMOTE_CAPABILITY_CLOUD_LIVE_ENABLED is not configured."\n            echo "capability_skip=true" >> "$GITHUB_OUTPUT"\n          fi\n',
     "          fi\n",
   ),
 );
@@ -866,7 +868,7 @@ assertFails(
 assertFails(
   "provider live endpoints skip cleanly when absent",
   workflow.replace(
-    '            echo "::warning::No remote capability provider endpoints configured - skipping optional provider live E2E."\n            echo "skip=true" >> "$GITHUB_OUTPUT"\n            exit 0\n',
+    '            echo "::warning::${message} - skipping optional provider live E2E."\n            echo "skip=true" >> "$GITHUB_OUTPUT"\n            exit 0\n',
     '            echo "::error::No remote capability provider endpoints configured for observed provider live E2E."\n            exit 1\n',
   ),
 );

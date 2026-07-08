@@ -56,6 +56,22 @@ function trackSentinelLeaks(page: Page): string[] {
   return leaks;
 }
 
+/**
+ * Model a rapid double-tap on a first-run CHOICE. The first tap picks it; the
+ * conductor self-locks the widget AND replaces the visible turn (onboarding
+ * renders only the latest first-run turn — selectFirstRunDisplayMessages), so
+ * the same button is disabled/detached by the time the second tap lands. Re-tap
+ * the SAME testId (not whatever re-rendered into its old screen position, which
+ * is where a raw `dblclick`'s second click would mis-land): the conductor's
+ * guards (busyRef / provisionedRef / completedRef) absorb it. force + short
+ * timeout, swallowing the "element gone" rejection.
+ */
+async function doubleTapChoice(page: Page, testId: string): Promise<void> {
+  const button = page.getByTestId(testId);
+  await button.click();
+  await button.click({ force: true, timeout: 1500 }).catch(() => {});
+}
+
 test.describe("confused-user onboarding", () => {
   test.beforeEach(({ page }) => {
     installPageDiagnosticsGuard(page);
@@ -74,16 +90,15 @@ test.describe("confused-user onboarding", () => {
     await expectNoPageDiagnostics(page, testInfo.title);
   });
 
-  test("typing free text during onboarding gets an in-transcript reply and never reaches the server", async ({
+  test("the sign-in-first composer is locked during onboarding — prefilled/typed text is ignored and never reaches the server, and tapping still completes", async ({
     page,
   }) => {
     await injectFullCapabilityHost(page);
     const state = await installHomeRoutes(page);
     await seedAppStorage(page, { "eliza:first-run-complete": "" });
     const leaks = trackSentinelLeaks(page);
-    // The confused user types instead of tapping. Every keystroke-send must be
-    // answered locally by the conductor and NEVER reach the agent as a chat
-    // POST — capture any body that carries the typed sentence.
+    // The confused user's attempt to type must NEVER reach the agent as a chat
+    // POST — capture any body that carries the attempted sentence.
     const chatSends: string[] = [];
     page.on("request", (request) => {
       if (request.method() !== "POST") return;
@@ -94,43 +109,43 @@ test.describe("confused-user onboarding", () => {
     });
 
     await page.goto("/", { waitUntil: "domcontentloaded" });
+    // The onboarding surface is sign-in-first (#15339): the composer mounts
+    // LOCKED (disabled) with a "Sign in to start chatting" placeholder — the
+    // helper asserts that — so the confused user CANNOT type past setup, and the
+    // old #12178 "type free text → in-transcript reply" affordance is gone.
     await expectChatFirstOnboarding(page);
 
-    // Type a question BEFORE picking a runtime: the "choosing" persona answers.
     const composer = page.getByTestId("chat-composer-textarea");
-    await composer.fill("does this thing even work?");
-    await composer.press("Enter");
+    await expect(composer).toBeDisabled();
 
-    // The typed sentence appears as a local user turn, and the conductor's
-    // deterministic not-ready reply appears within the transcript.
-    await expect(
-      page.getByText("does this thing even work?", { exact: false }),
-    ).toBeVisible({ timeout: 15_000 });
-    await expect(
-      page.getByText("pick one of the options above", { exact: false }),
-    ).toBeVisible({ timeout: 15_000 });
-    await screenshot(page, "typed-free-text-reply");
-
-    // A second impatient send is acknowledged too (monotonic ids — never deduped).
-    await composer.fill("hello?? are you there");
-    await composer.press("Enter");
-    await expect(
-      page.getByText("hello?? are you there", { exact: false }),
-    ).toBeVisible({ timeout: 15_000 });
+    // The "just type at it" instinct — modeled by the same programmatic prefill
+    // path the app uses (CHAT_PREFILL_EVENT) — is IGNORED while onboarding is
+    // open: the draft is never set and nothing is sent. (The unit suite
+    // ContinuousChatOverlay.firstrun.test asserts the same behavior at the seam.)
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new CustomEvent("eliza:chat:prefill", {
+          detail: { text: "does this thing even work?" },
+        }),
+      );
+    });
+    await page.waitForTimeout(500);
+    await expect(composer).toHaveValue("");
+    await screenshot(page, "locked-composer-ignores-typing");
 
     // Nothing was POSTed to /api/first-run, and no typed text leaked as a send.
     expect(
       state.firstRunPosts.length,
-      "typing free text must not trigger any first-run POST",
+      "a locked onboarding composer must not trigger any first-run POST",
     ).toBe(0);
     expect(
       chatSends,
-      "typed free text must never reach the server before completion",
+      "prefilled/typed text must never reach the server before completion",
     ).toEqual([]);
     expect(leaks).toEqual([]);
 
-    // The user can still finish by tapping through — proving the composer never
-    // blocked the flow. One POST at the end, still zero leaks.
+    // The user finishes by tapping through — the only real path forward. One
+    // POST at the end, still zero leaks.
     await page.getByTestId(RUNTIME_CHOICE("local")).click();
     const onDevice = page.getByTestId(PROVIDER_CHOICE("on-device"));
     await expect(onDevice).toBeVisible({ timeout: 15_000 });
@@ -141,7 +156,7 @@ test.describe("confused-user onboarding", () => {
 
     await expectOnboardingSettleToHalf(page);
     await settleHomeEntrance(page);
-    await screenshot(page, "typed-then-tapped-home");
+    await screenshot(page, "tapped-through-home");
 
     expect(state.firstRunPosts.length).toBe(1);
     expect(chatSends).toEqual([]);
@@ -159,16 +174,17 @@ test.describe("confused-user onboarding", () => {
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await expectChatFirstOnboarding(page);
 
-    // Double-click every step: the two clicks of a dblclick dispatch without
-    // an actionability re-check between them, so the second lands before the
-    // widget's self-lock re-renders — the conductor guard must absorb it.
-    await page.getByTestId(RUNTIME_CHOICE("local")).dblclick();
+    // Double-tap every step. The second tap of each pair lands after the widget
+    // self-locked and the conductor replaced the visible turn, so the guards
+    // absorb it — and the flow still advances one step per choice, never
+    // double-POSTing or leaking a sentinel.
+    await doubleTapChoice(page, RUNTIME_CHOICE("local"));
     const onDevice = page.getByTestId(PROVIDER_CHOICE("on-device"));
     await expect(onDevice).toBeVisible({ timeout: 15_000 });
-    await onDevice.dblclick();
+    await doubleTapChoice(page, PROVIDER_CHOICE("on-device"));
     const skip = page.getByTestId(TUTORIAL_CHOICE("skip"));
     await expect(skip).toBeVisible({ timeout: 30_000 });
-    await skip.dblclick();
+    await doubleTapChoice(page, TUTORIAL_CHOICE("skip"));
 
     await expectOnboardingSettleToHalf(page);
     await settleHomeEntrance(page);
@@ -216,22 +232,24 @@ test.describe("confused-user onboarding", () => {
     // turn with its own recovery choice (retry / different-way / Settings) —
     // deliberately NOT an automatic runtime re-offer, which would loop forever
     // on a persistent finish error. Picking "Choose a different way to run"
-    // re-offers the runtime CHOICE, and that re-offer must be UNLOCKED (a
-    // second, fresh widget row — the greeting row locked itself on the first
-    // pick).
+    // seeds a FRESH (unlocked) runtime CHOICE turn. During onboarding the
+    // overlay renders ONLY the latest first-run turn
+    // (`selectFirstRunDisplayMessages`), so the stale locked greeting row is
+    // hidden and exactly ONE unlocked runtime:local widget is on screen.
     const differentWay = page.getByTestId("choice-__first_run__:error:restart");
     await expect(differentWay).toBeVisible({ timeout: 30_000 });
     await screenshot(page, "first-run-post-failed");
     await differentWay.click();
-    await expect(page.getByTestId(RUNTIME_CHOICE("local"))).toHaveCount(2, {
+    await expect(page.getByTestId(RUNTIME_CHOICE("local"))).toHaveCount(1, {
       timeout: 30_000,
     });
 
-    // Retry: re-pick local → the conductor seeds a FRESH provider turn (the
-    // original provider row is locked) → on-device → tutorial → home.
+    // Retry: re-pick local → the conductor seeds a FRESH provider turn, which
+    // (again, latest-turn-only) is the single visible provider row → on-device
+    // → tutorial → home.
     await page.getByTestId(RUNTIME_CHOICE("local")).last().click();
     await expect(page.getByTestId(PROVIDER_CHOICE("on-device"))).toHaveCount(
-      2,
+      1,
       { timeout: 15_000 },
     );
     await page.getByTestId(PROVIDER_CHOICE("on-device")).last().click();
@@ -268,8 +286,9 @@ test.describe("confused-user onboarding", () => {
     });
     await page.reload({ waitUntil: "domcontentloaded" });
 
-    // Nothing was persisted (no POST yet) → the conductor re-seeds a fresh,
-    // fully interactive onboarding: unlocked composer + unlocked runtime CHOICE.
+    // Nothing was persisted (no POST yet) → the conductor re-seeds a fresh
+    // onboarding surface: the runtime CHOICE is unlocked (re-offered) while the
+    // composer stays sign-in-first locked, same contract as the first paint.
     await expectChatFirstOnboarding(page);
     await screenshot(page, "after-reload-fresh-onboarding");
 
