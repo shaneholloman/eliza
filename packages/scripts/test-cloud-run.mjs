@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { shouldNormalizeBunStatus99 } from "./test-cloud-run-helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
@@ -194,6 +195,10 @@ function chunkByBudget(files) {
 }
 const batches = chunkByBudget(allTestFiles);
 
+function formatBatchFiles(batch) {
+  return batch.map((file) => `  - ${path.relative(repoRoot, file)}`).join("\n");
+}
+
 let anyFailed = false;
 for (let i = 0; i < batches.length; i++) {
   const batch = batches[i];
@@ -206,17 +211,38 @@ for (let i = 0; i < batches.length; i++) {
     {
       cwd: stagingDir,
       env,
-      stdio: "inherit",
+      encoding: "utf8",
+      maxBuffer: 128 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
       shell: process.platform === "win32",
     },
   );
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
   if (result.error) {
     console.error(result.error);
     process.exit(1);
   }
   // Run every batch even after a failure so one broken suite doesn't mask the
   // rest; aggregate into a single non-zero exit for the gate.
-  if ((result.status ?? 1) !== 0) anyFailed = true;
+  const status = result.status;
+  const signal = result.signal;
+  if ((status ?? 1) !== 0 || signal) {
+    if (shouldNormalizeBunStatus99({ status, signal, output })) {
+      console.warn(
+        `[test:cloud] batch ${i + 1}/${batches.length} exited with Bun status 99 ` +
+          "after reporting 0 failed tests; treating as pass (known PGlite/Emscripten exitCode pollution).",
+      );
+      continue;
+    }
+    anyFailed = true;
+    console.error(
+      `[test:cloud] batch ${i + 1}/${batches.length} exited non-zero ` +
+        `(status=${status ?? "null"}, signal=${signal ?? "none"})\n` +
+        `[test:cloud] files in failed batch:\n${formatBatchFiles(batch)}`,
+    );
+  }
 }
 
 process.exit(anyFailed ? 1 : 0);

@@ -61,6 +61,45 @@ try {
     process.exit(1);
   }
 
+  // Transitive 3-node cycle foo -> bar -> baz -> foo. A pairwise A<->B scan
+  // misses this shape; the SCC finder must catch it.
+  writeJson(path.join(tempRoot, "packages/bar/package.json"), {
+    name: "@fixture/bar",
+    scripts: { build: "echo build" },
+    dependencies: { "@fixture/baz": "workspace:*" },
+  });
+  writeJson(path.join(tempRoot, "packages/baz/package.json"), {
+    name: "@fixture/baz",
+    scripts: { build: "echo build" },
+    dependencies: { "@fixture/foo": "workspace:*" },
+  });
+  const transitiveResult = spawnSync(process.execPath, [scriptPath], {
+    cwd: tempRoot,
+    env: { ...process.env, AUDIT_TURBO_REPO_ROOT: tempRoot },
+    encoding: "utf8",
+  });
+  const transitiveOutput = `${transitiveResult.stdout}\n${transitiveResult.stderr}`;
+  if (transitiveResult.status === 0) {
+    console.error("expected transitive workspace cycle audit to fail");
+    process.exit(1);
+  }
+  for (const member of ["@fixture/foo", "@fixture/bar", "@fixture/baz"]) {
+    if (!transitiveOutput.includes(member)) {
+      console.error(`transitive cycle output missing member: ${member}`);
+      console.error(transitiveOutput);
+      process.exit(1);
+    }
+  }
+  if (!transitiveOutput.includes(" -> ")) {
+    console.error("transitive cycle should render as a path");
+    console.error(transitiveOutput);
+    process.exit(1);
+  }
+  fs.rmSync(path.join(tempRoot, "packages/baz"), {
+    recursive: true,
+    force: true,
+  });
+
   writeJson(path.join(tempRoot, "packages/bar/package.json"), {
     name: "@fixture/bar",
     scripts: { build: "echo build" },
