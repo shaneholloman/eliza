@@ -172,9 +172,11 @@ export const ChoiceWidget = memo(function ChoiceWidget({
             // rendered the user's own pick white-on-white on the dark cloud
             // surface (#15144).
             const recommended = isRecommended(option.label);
-            const variant = isSelected || recommended ? "default" : "surface";
+            const highlighted =
+              isSelected || (recommended && selected === null);
+            const variant = highlighted ? "default" : "surface";
             const choiceClass =
-              isSelected || recommended
+              highlighted
                 ? "h-11 w-full justify-between px-4 text-sm font-medium disabled:opacity-100 aria-disabled:opacity-100"
                 : "h-11 w-full justify-between border border-border-strong bg-card px-4 text-sm font-medium text-txt-strong hover:bg-surface disabled:opacity-40 aria-disabled:opacity-40";
             return (

@@ -360,6 +360,32 @@ describe("ChoiceWidget — pick an option", () => {
     expect(onChoose).toHaveBeenCalledWith("cloud");
   });
 
+  it("multi-option first-run: selecting the non-recommended row demotes the recommended row after lock", () => {
+    const onChoose = vi.fn();
+    render(
+      <ChoiceWidget
+        id="runtime"
+        scope="first-run"
+        options={[
+          { value: "cloud", label: "Eliza Cloud (recommended)" },
+          { value: "local", label: "On this device" },
+        ]}
+        onChoose={onChoose}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("choice-local"));
+
+    const recommended = screen.getByTestId("choice-cloud");
+    const picked = screen.getByTestId("choice-local");
+    expect(picked.className.split(/\s+/)).toContain("bg-accent");
+    expect(picked.className).toContain("disabled:opacity-100");
+    expect(recommended.className.split(/\s+/)).toContain("bg-card");
+    expect(recommended.className).toContain("disabled:opacity-40");
+    expect(recommended.className).not.toContain("disabled:opacity-100");
+    expect(onChoose).toHaveBeenCalledWith("local");
+  });
+
   it("multi-option first-run error choices use readable neutral rows (#15516)", () => {
     render(
       <ChoiceWidget
