@@ -250,7 +250,7 @@ export function VoiceCaptureHud() {
         zIndex: Z_BUILD_BADGE,
       }}
     >
-      <div className="pointer-events-auto flex max-w-[calc(100%-0.5rem)] items-stretch gap-1 rounded-md border border-border bg-black/85 px-1.5 py-1 shadow-lg backdrop-blur">
+      <div className="pointer-events-auto flex max-w-[calc(100%-0.5rem)] items-stretch gap-1 rounded-md border border-border bg-black/85 px-1.5 py-1 shadow-lg">
         <div
           ref={scrollRef}
           data-testid="voice-capture-hud-lines"
