@@ -603,6 +603,10 @@ app.post("/", async (c) => {
     }
 
     // ── Async path (default) ──────────────────────────────────────────────
+    // Only the cold provisioning job requires a live worker. Checking here
+    // keeps reuse, shared-tier creates, non-eager creates, and warm-pool claims
+    // available through heartbeat gaps, while still failing closed before a job
+    // is enqueued.
     const workerHealth = await checkProvisioningWorkerHealth();
     if (!workerHealth.ok) {
       try {

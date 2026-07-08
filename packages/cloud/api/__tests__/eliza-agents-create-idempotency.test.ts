@@ -174,6 +174,7 @@ describe("POST /api/v1/eliza/agents — reuse idempotency", () => {
     sandboxDelete.mockClear();
     prepareManagedElizaEnvironment.mockClear();
     loggerInfo.mockClear();
+    loggerError.mockClear();
   });
 
   test("(d) reuse → 200 with the existing agent, no second provision job", async () => {
@@ -410,7 +411,7 @@ describe("POST /api/v1/eliza/agents — reuse idempotency", () => {
       status: 503,
       code: "PROVISIONING_WORKER_UNHEALTHY",
     });
-    const agent = pendingAgent();
+    const agent = { ...pendingAgent(), status: "pending" };
     createAgent.mockResolvedValue({ agent, idempotent: false });
 
     const res = await postCreate({
@@ -422,6 +423,7 @@ describe("POST /api/v1/eliza/agents — reuse idempotency", () => {
     const body = (await res.json()) as { success: boolean; code: string };
     expect(body.success).toBe(false);
     expect(body.code).toBe("PROVISIONING_WORKER_UNHEALTHY");
+    expect(createAgent).toHaveBeenCalledTimes(1);
     expect(enqueueAgentProvision).not.toHaveBeenCalled();
     expect(sandboxDelete).toHaveBeenCalledTimes(1);
     expect(sandboxDelete).toHaveBeenCalledWith(agent.id, "org-1");
@@ -466,7 +468,11 @@ describe("POST /api/v1/eliza/agents — reuse idempotency", () => {
       status: 503,
       code: "PROVISIONING_WORKER_UNHEALTHY",
     });
-    const agent = pendingAgent();
+    const agent = {
+      ...pendingAgent(),
+      id: "dedicated-fresh",
+      status: "pending",
+    };
     createAgent.mockResolvedValue({ agent, idempotent: false });
 
     const res = await postCreate({
@@ -476,6 +482,7 @@ describe("POST /api/v1/eliza/agents — reuse idempotency", () => {
     });
 
     expect(res.status).toBe(503);
+    expect(createAgent).toHaveBeenCalledTimes(1);
     expect(enqueueAgentProvision).not.toHaveBeenCalled();
     expect(sandboxDelete).toHaveBeenCalledTimes(1);
     expect(sandboxDelete).toHaveBeenCalledWith(agent.id, "org-1");

@@ -14,6 +14,7 @@ import {
   TARGET_URL_HEADER,
 } from "@fal-ai/server-proxy";
 import { createRouteHandler } from "@fal-ai/server-proxy/hono";
+import type { Context, Handler } from "hono";
 import { Hono } from "hono";
 import { failureResponse } from "@/lib/api/cloud-worker-errors";
 import { requireUserOrApiKeyWithOrg } from "@/lib/auth/workers-hono-auth";
@@ -36,6 +37,11 @@ const falHandler = createRouteHandler({
   isAuthenticated: async () => true,
   resolveFalAuth: resolveApiKeyFromEnv,
 });
+const invokeFalProxy = (c: Context<AppEnv>): Promise<Response> =>
+  // @fal-ai/server-proxy currently carries its own Hono type copy. The runtime
+  // context shape is the same object this route receives; the cast is only the
+  // dependency-version boundary.
+  falHandler(c as never);
 
 const app = new Hono<AppEnv>();
 
@@ -111,7 +117,7 @@ function readString(body: unknown, keys: string[]): string | undefined {
   return undefined;
 }
 
-async function priceFalMutation(c: Parameters<typeof falHandler>[0]): Promise<{
+async function priceFalMutation(c: Context<AppEnv>): Promise<{
   model: string;
   cost: Awaited<ReturnType<typeof calculateVideoGenerationCostFromCatalog>>;
 }> {
@@ -160,7 +166,7 @@ async function priceFalMutation(c: Parameters<typeof falHandler>[0]): Promise<{
   return { model, cost };
 }
 
-const handle = async (c: Parameters<typeof falHandler>[0]) => {
+const handle: Handler<AppEnv> = async (c) => {
   const isMutation = c.req.method === "POST" || c.req.method === "PUT";
   let reservation: Awaited<ReturnType<typeof creditsService.reserve>> | null =
     null;
@@ -212,7 +218,7 @@ const handle = async (c: Parameters<typeof falHandler>[0]) => {
   }
 
   try {
-    const response = await falHandler(c);
+    const response = await invokeFalProxy(c);
 
     if (reservation && pricedMutation) {
       if (response.ok) {
