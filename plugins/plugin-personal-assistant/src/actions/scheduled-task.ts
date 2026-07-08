@@ -60,6 +60,7 @@ import {
 import { getScheduledTaskRunner } from "../lifeops/scheduled-task/service.js";
 import {
   latestDeferredLifeDraft,
+  readDeferredLifeDraftCache,
 } from "./lib/lifeops-deferred-draft.js";
 import { OWNER_OPERATION_VALIDATE, runLifeOperationHandler } from "./life.js";
 
@@ -302,11 +303,14 @@ function isExplicitLifeDraftConfirmation(message: Memory): boolean {
   );
 }
 
-function shouldDelegateLifeDraftConfirmation(
+async function shouldDelegateLifeDraftConfirmation(
+  runtime: IAgentRuntime,
   message: Memory,
   state: State | undefined,
-): boolean {
-  const draft = latestDeferredLifeDraft(state);
+): Promise<boolean> {
+  const draft =
+    latestDeferredLifeDraft(state) ??
+    (await readDeferredLifeDraftCache(runtime, message));
   return (
     draft?.operation === "create_goal" &&
     isExplicitLifeDraftConfirmation(message)
@@ -1415,7 +1419,7 @@ export const scheduledTaskAction: Action & {
 
     if (
       subaction === "create" &&
-      shouldDelegateLifeDraftConfirmation(message, state)
+      (await shouldDelegateLifeDraftConfirmation(runtime, message, state))
     ) {
       return runLifeOperationHandler(
         runtime,

@@ -73,13 +73,27 @@ describe("login page short-viewport scroll", () => {
   // Short screens (e.g. Light Phone III, 1080x1240) make the sign-in card
   // taller than the viewport. A flex `justify-center` centers it but the top
   // overflows above scrollTop 0 and is unreachable — the OAuth / wallet rows
-  // fell below an unscrollable fold. The card region must be `overflow-y-auto`
-  // with the card itself `my-auto`, so it centers when it fits and
-  // scrolls-from-top when it overflows.
+  // fell below an unscrollable fold. The viewport owner must be height-bounded
+  // and the card region must be `min-h-0 flex-1 overflow-y-auto` with the card
+  // itself `my-auto`, so it centers when it fits and scrolls from the top when
+  // it overflows.
+  it("bounds the login surface to the visual viewport instead of growing under a locked root", () => {
+    expect(
+      /theme-cloud[^"]*h-\[100dvh\][^"]*min-h-0[^"]*overflow-hidden/.test(
+        LOGIN_SRC,
+      ),
+      "the login surface must own a fixed 100dvh box so the child scroller has a real viewport",
+    ).toBe(true);
+    expect(
+      /flex h-full min-h-0 w-full flex-col/.test(LOGIN_SRC),
+      "the safe-area padded content owner must pass a bounded height to the scroll region",
+    ).toBe(true);
+  });
+
   it("makes the sign-in card region scrollable instead of clipping when it exceeds the viewport", () => {
     expect(
-      /flex-1[^"]*overflow-y-auto/.test(LOGIN_SRC),
-      "the sign-in card region must be overflow-y-auto to scroll when taller than the viewport",
+      /min-h-0 flex-1[^"]*overflow-y-auto/.test(LOGIN_SRC),
+      "the sign-in card region must be min-h-0 flex-1 overflow-y-auto to scroll when taller than the viewport",
     ).toBe(true);
   });
 
@@ -87,6 +101,10 @@ describe("login page short-viewport scroll", () => {
     expect(
       /\bmy-auto\b[^"]*\bmax-w-md\b/.test(LOGIN_SRC),
       "the sign-in card must center via my-auto so its top stays reachable while scrolling",
+    ).toBe(true);
+    expect(
+      /\bmax-w-md\b[^"]*\bshrink-0\b/.test(LOGIN_SRC),
+      "the card must not shrink to fake-fit inside the short viewport instead of scrolling",
     ).toBe(true);
     expect(
       /flex-1 items-center justify-center/.test(LOGIN_SRC),
