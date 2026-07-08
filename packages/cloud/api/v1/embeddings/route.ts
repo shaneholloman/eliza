@@ -51,6 +51,7 @@ import { usageService } from "@/lib/services/usage";
 import { createCreditReservationSettler } from "@/lib/utils/credit-reservation";
 import { logger } from "@/lib/utils/logger";
 import type { AppEnv } from "@/types/cloud-worker-env";
+import { tryPassthroughEmbeddingsRequest } from "./passthrough";
 
 interface EmbeddingsRequest {
   input: string | string[];
@@ -449,8 +450,30 @@ app.post("/", async (c) => {
 
     let embeddings: number[][];
     let actualTokens = 0;
+    let passthroughResponse:
+      | {
+          bodyText: string;
+          contentType: string;
+        }
+      | undefined;
 
-    if (Array.isArray(request.input)) {
+    const passthrough = await tryPassthroughEmbeddingsRequest({
+      model,
+      request,
+      estimatedInputTokens,
+      settleReservation,
+      abortSignal: c.req.raw.signal,
+    });
+    if (passthrough?.kind === "response") return passthrough.response;
+
+    if (passthrough?.kind === "success") {
+      embeddings = [];
+      actualTokens = passthrough.actualTokens;
+      passthroughResponse = {
+        bodyText: passthrough.bodyText,
+        contentType: passthrough.contentType,
+      };
+    } else if (Array.isArray(request.input)) {
       const result = await embedMany({
         model: getTextEmbeddingModel(model),
         values: request.input,
@@ -551,6 +574,13 @@ app.post("/", async (c) => {
 
     if (typeof c.executionCtx?.waitUntil === "function") {
       c.executionCtx.waitUntil(billedPromise);
+    }
+
+    if (passthroughResponse) {
+      return c.body(passthroughResponse.bodyText, 200, {
+        "Content-Type": passthroughResponse.contentType,
+        "X-Eliza-Inference-Path": "passthrough",
+      });
     }
 
     return c.json({

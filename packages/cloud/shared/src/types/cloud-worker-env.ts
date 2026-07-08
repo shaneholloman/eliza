@@ -256,6 +256,11 @@ export interface Bindings {
   // branch and billed through the existing settle chain. Default off;
   // rollback = flip off (the SDK path is untouched).
   INFERENCE_PASSTHROUGH_STREAMING?: string;
+  // Pass-through embeddings fast path (#15512): "true" forwards OpenAI-native
+  // embedding requests directly to the OpenAI-compatible upstream and bills
+  // from the returned usage. Separate from chat streaming so either path can be
+  // rolled back independently.
+  INFERENCE_PASSTHROUGH_EMBEDDINGS?: string;
   RATE_LIMIT_DISABLED?: string;
   RATE_LIMIT_MULTIPLIER?: string;
   PLAYWRIGHT_TEST_AUTH?: string;

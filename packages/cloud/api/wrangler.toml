@@ -170,6 +170,10 @@ INFERENCE_HOT_PATH_CACHES = "false"
 # through the AI SDK; usage is metered from a teed branch and billed through
 # the existing settle chain. Default off; rollback = flip off.
 INFERENCE_PASSTHROUGH_STREAMING = "false"
+# Pass-through embeddings fast path (#15512): "true" forwards OpenAI-native
+# embeddings directly to the OpenAI-compatible upstream, then bills from the
+# returned usage. Kept separate from streaming chat for isolated rollback.
+INFERENCE_PASSTHROUGH_EMBEDDINGS = "false"
 FORCE_REDIS_EVENTS = "false"
 R2_PUBLIC_HOST = "blob.elizacloud.ai"
 SQL_HEAVY_PAYLOAD_STORAGE = "r2"
@@ -388,6 +392,9 @@ INFERENCE_HOT_PATH_CACHES = "true"
 # through the AI SDK; usage is metered from a teed branch and billed through
 # the existing settle chain. Default off; rollback = flip off.
 INFERENCE_PASSTHROUGH_STREAMING = "true"
+# Pass-through embeddings fast path (#15512): direct OpenAI-native embeddings
+# forward + returned-usage billing. Rollback = flip off.
+INFERENCE_PASSTHROUGH_EMBEDDINGS = "true"
 FORCE_REDIS_EVENTS = "false"
 R2_PUBLIC_HOST = "blob-staging.elizacloud.ai"
 SQL_HEAVY_PAYLOAD_STORAGE = "r2"
@@ -540,6 +547,9 @@ INFERENCE_HOT_PATH_CACHES = "true"
 # through the AI SDK; usage is metered from a teed branch and billed through
 # the existing settle chain. Default off; rollback = flip off.
 INFERENCE_PASSTHROUGH_STREAMING = "true"
+# Pass-through embeddings fast path (#15512): direct OpenAI-native embeddings
+# forward + returned-usage billing. Rollback = flip off.
+INFERENCE_PASSTHROUGH_EMBEDDINGS = "true"
 FORCE_REDIS_EVENTS = "false"
 R2_PUBLIC_HOST = "blob.elizacloud.ai"
 SQL_HEAVY_PAYLOAD_STORAGE = "r2"

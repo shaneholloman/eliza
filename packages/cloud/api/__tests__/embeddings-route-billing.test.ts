@@ -69,6 +69,7 @@ mock.module("@/lib/providers/language-model", () => ({
   hasTextEmbeddingProviderConfigured: () => true,
   getTextEmbeddingModel: () => ({}) as never,
   resolveEmbeddingProviderSource: () => "openai",
+  resolvePassthroughEmbeddingsUpstreamForModel: () => null,
   getAiProviderConfigurationError: () => "AI services are not configured",
 }));
 

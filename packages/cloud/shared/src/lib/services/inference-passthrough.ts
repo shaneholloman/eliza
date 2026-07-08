@@ -15,6 +15,9 @@
  *   - the `INFERENCE_PASSTHROUGH_STREAMING` flag (default OFF — same
  *     soak-then-cutover discipline as the #9899 INFERENCE_* flags; flag off is
  *     byte-identical to today),
+ *   - the `INFERENCE_PASSTHROUGH_EMBEDDINGS` flag for the non-streaming
+ *     embeddings sibling path, kept separate so rollout can isolate chat TTFB
+ *     from memory-recall embedding latency,
  *   - the background meter: an SSE reader for the teed branch that extracts
  *     the terminal `stream_options.include_usage` usage frame plus the
  *     delivered text, which the route feeds into the EXISTING billing settle
@@ -37,6 +40,21 @@ type StringEnv = Record<string, string | undefined>;
  */
 export function isPassthroughStreamingEnabled(env: StringEnv = getCloudAwareEnv()): boolean {
   return (env.INFERENCE_PASSTHROUGH_STREAMING ?? "").trim() === "true";
+}
+
+/**
+ * Fast-path flag for POST /v1/embeddings. Default OFF; "true" forwards
+ * OpenAI-native embedding requests directly to the OpenAI-compatible upstream,
+ * then bills from the returned usage before handing the provider JSON back.
+ */
+export function isPassthroughEmbeddingsEnabled(env: StringEnv = getCloudAwareEnv()): boolean {
+  if (
+    env.NODE_ENV === "test" &&
+    (env.INFERENCE_PASSTHROUGH_EMBEDDINGS_TEST ?? "").trim() !== "true"
+  ) {
+    return false;
+  }
+  return (env.INFERENCE_PASSTHROUGH_EMBEDDINGS ?? "").trim() === "true";
 }
 
 /**
