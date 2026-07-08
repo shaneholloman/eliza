@@ -170,6 +170,12 @@ INFERENCE_HOT_PATH_CACHES = "false"
 # through the AI SDK; usage is metered from a teed branch and billed through
 # the existing settle chain. Default off; rollback = flip off.
 INFERENCE_PASSTHROUGH_STREAMING = "false"
+
+# Sibling flag for the non-streaming embeddings pipe (#15512): "true" forwards
+# qualifying embeddings requests (direct-OpenAI source) verbatim and returns
+# the upstream JSON untouched; usage parses from the same buffer and bills
+# through the identical settle chain. Default off; rollback = flip off.
+INFERENCE_PASSTHROUGH_EMBEDDINGS = "false"
 FORCE_REDIS_EVENTS = "false"
 R2_PUBLIC_HOST = "blob.elizacloud.ai"
 SQL_HEAVY_PAYLOAD_STORAGE = "r2"
@@ -388,6 +394,12 @@ INFERENCE_HOT_PATH_CACHES = "true"
 # through the AI SDK; usage is metered from a teed branch and billed through
 # the existing settle chain. Default off; rollback = flip off.
 INFERENCE_PASSTHROUGH_STREAMING = "true"
+
+# Sibling flag for the non-streaming embeddings pipe (#15512): "true" forwards
+# qualifying embeddings requests (direct-OpenAI source) verbatim and returns
+# the upstream JSON untouched; usage parses from the same buffer and bills
+# through the identical settle chain. Default off; rollback = flip off.
+INFERENCE_PASSTHROUGH_EMBEDDINGS = "true"
 FORCE_REDIS_EVENTS = "false"
 R2_PUBLIC_HOST = "blob-staging.elizacloud.ai"
 SQL_HEAVY_PAYLOAD_STORAGE = "r2"
@@ -540,6 +552,12 @@ INFERENCE_HOT_PATH_CACHES = "true"
 # through the AI SDK; usage is metered from a teed branch and billed through
 # the existing settle chain. Default off; rollback = flip off.
 INFERENCE_PASSTHROUGH_STREAMING = "true"
+
+# Sibling flag for the non-streaming embeddings pipe (#15512): "true" forwards
+# qualifying embeddings requests (direct-OpenAI source) verbatim and returns
+# the upstream JSON untouched; usage parses from the same buffer and bills
+# through the identical settle chain. Default off; rollback = flip off.
+INFERENCE_PASSTHROUGH_EMBEDDINGS = "true"
 FORCE_REDIS_EVENTS = "false"
 R2_PUBLIC_HOST = "blob.elizacloud.ai"
 SQL_HEAVY_PAYLOAD_STORAGE = "r2"
