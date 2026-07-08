@@ -440,6 +440,14 @@ id = "f7e24faaff734e7c8cd8e12b093c3571"
 
 [env.production]
 name = "eliza-cloud-api-prod"
+# Smart Placement (#15513, prod leg): staging soak showed mode=smart applied
+# cleanly but staging traffic is too thin for Cloudflare's placement analyzer
+# to ever qualify it — prod volume is what it learns from. Fail-safe by
+# design: CF only moves execution when its analysis concludes it improves
+# performance (back-end-heavy requests to api.cerebras.ai / api.openai.com /
+# Hyperdrive); otherwise requests keep default placement. Rollback = delete
+# this line + redeploy.
+placement = { mode = "smart" }
 workers_dev = false
 # The `*.elizacloud.ai/*` wildcard makes this Worker the default origin for
 # EVERY elizacloud.ai subdomain. Surfaces served by a different origin (e.g. the
