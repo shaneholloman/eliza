@@ -319,7 +319,7 @@ describe("ChoiceWidget — pick an option", () => {
         id="runtime"
         scope="first-run"
         options={[
-          { value: "cloud", label: "Eliza Cloud (managed)" },
+          { value: "cloud", label: "Eliza Cloud (recommended)" },
           { value: "local", label: "On this device" },
         ]}
         onChoose={onChoose}
@@ -334,13 +334,17 @@ describe("ChoiceWidget — pick an option", () => {
 
     const cloudBeforePick = screen.getByTestId("choice-cloud");
     const localBeforePick = screen.getByTestId("choice-local");
-    for (const choice of [cloudBeforePick, localBeforePick]) {
-      const classes = choice.className.split(/\s+/);
-      expect(classes).toContain("bg-card");
-      expect(classes).toContain("text-txt-strong");
-      expect(classes).toContain("border-border-strong");
-      expect(classes).not.toContain("bg-bg-accent");
-    }
+    const recommendedClasses = cloudBeforePick.className.split(/\s+/);
+    expect(recommendedClasses).toContain("bg-accent");
+    expect(recommendedClasses).toContain("text-accent-fg");
+    expect(recommendedClasses).not.toContain("bg-card");
+    expect(recommendedClasses).not.toContain("text-txt-strong");
+
+    const neutralClasses = localBeforePick.className.split(/\s+/);
+    expect(neutralClasses).toContain("bg-card");
+    expect(neutralClasses).toContain("text-txt-strong");
+    expect(neutralClasses).toContain("border-border-strong");
+    expect(neutralClasses).not.toContain("bg-bg-accent");
 
     fireEvent.click(screen.getByTestId("choice-cloud"));
 

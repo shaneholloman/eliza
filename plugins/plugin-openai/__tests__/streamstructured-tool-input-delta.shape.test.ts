@@ -51,7 +51,8 @@ function armToolForcedStream(opts?: { alsoText?: boolean }) {
       })(),
       fullStream: (async function* fullStream() {
         if (opts?.alsoText) {
-          yield { type: "text-delta", id: "t1", delta: "pre" };
+          // Alternate v6-minor spelling (`text` instead of `delta`).
+          yield { type: "text-delta", id: "t1", text: "pre" };
         }
         yield {
           type: "tool-input-start",
@@ -104,12 +105,14 @@ describe("streamStructured tool-input-delta forwarding", () => {
       onStreamChunk,
     } as never)) as {
       textStream: AsyncIterable<string>;
+      text: Promise<string>;
       toolCalls?: Promise<unknown>;
     };
 
     const chunks = await collect(stream);
 
     expect(chunks).toEqual(["pre", '{"replyText":"', "hello", '"}']);
+    await expect(stream.text).resolves.toBe('pre{"replyText":"hello"}');
     expect(onStreamChunk).toHaveBeenCalledTimes(4);
     // The authoritative envelope still arrives via the completed toolCalls.
     await expect(stream.toolCalls).resolves.toEqual([

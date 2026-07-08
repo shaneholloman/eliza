@@ -1661,7 +1661,24 @@ async function generateTextByModelType(
         capturedStreamError = error;
       },
     });
-    const textPromise = handledPromise(result.text);
+    let structuredTextSettled = false;
+    let resolveStructuredText: (text: string) => void = () => {};
+    let rejectStructuredText: (error: unknown) => void = () => {};
+    const structuredTextPromise = new Promise<string>((resolve, reject) => {
+      resolveStructuredText = resolve;
+      rejectStructuredText = reject;
+    });
+    const settleStructuredText = (error?: unknown): void => {
+      if (params.streamStructured !== true || structuredTextSettled) return;
+      structuredTextSettled = true;
+      if (error) {
+        rejectStructuredText(error);
+        return;
+      }
+      resolveStructuredText(responseChunks.join(""));
+    };
+    const sdkTextPromise = handledPromise(result.text);
+    const textPromise = params.streamStructured === true ? structuredTextPromise : sdkTextPromise;
     const rawUsagePromise = handledPromise(result.usage);
     const rawFinishReasonPromise = handledPromise(result.finishReason);
     const rawToolCallsPromise = handledPromise(result.toolCalls);
@@ -1765,15 +1782,11 @@ async function generateTextByModelType(
         } finally {
           await finalizeStreamingTelemetry();
         }
-        if (streamIterationError) {
-          throw streamIterationError;
-        }
-        if (capturedStreamError) {
-          throw capturedStreamError;
-        }
-        if (companionStreamError) {
-          throw companionStreamError;
-        }
+        const streamError = streamIterationError ?? capturedStreamError ?? companionStreamError;
+        settleStructuredText(streamError);
+        if (streamIterationError) throw streamIterationError;
+        if (capturedStreamError) throw capturedStreamError;
+        if (companionStreamError) throw companionStreamError;
       })(),
       text: textPromise,
       ...(shouldReturnNativeResult ? { toolCalls: restoredToolCallsPromise } : {}),

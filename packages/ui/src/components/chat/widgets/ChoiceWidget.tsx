@@ -173,6 +173,10 @@ export const ChoiceWidget = memo(function ChoiceWidget({
             // surface (#15144).
             const recommended = isRecommended(option.label);
             const variant = isSelected || recommended ? "default" : "surface";
+            const choiceClass =
+              isSelected || recommended
+                ? "h-11 w-full justify-between px-4 text-sm font-medium disabled:opacity-100 aria-disabled:opacity-100"
+                : "h-11 w-full justify-between border border-border-strong bg-card px-4 text-sm font-medium text-txt-strong hover:bg-surface disabled:opacity-40 aria-disabled:opacity-40";
             return (
               <Button
                 key={option.value}
@@ -183,11 +187,7 @@ export const ChoiceWidget = memo(function ChoiceWidget({
                 aria-label={option.label}
                 aria-pressed={isSelected}
                 data-testid={`choice-${option.value}`}
-                className={
-                  isSelected
-                    ? "h-11 w-full justify-between px-4 text-sm font-medium disabled:opacity-100 aria-disabled:opacity-100"
-                    : "h-11 w-full justify-between border border-border-strong bg-card px-4 text-sm font-medium text-txt-strong hover:bg-surface disabled:opacity-40 aria-disabled:opacity-40"
-                }
+                className={choiceClass}
                 onClick={() => handleChoose(option)}
               >
                 <span className="inline-flex items-center gap-2">
