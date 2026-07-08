@@ -1,6 +1,6 @@
 // Exercises cloud DB agent sandboxes behavior with deterministic repository fixtures.
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import type { SQL } from "drizzle-orm";
+import type { SQL, SQLWrapper } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 
 let capturedWhere: SQL | undefined;
@@ -55,13 +55,59 @@ const selectWhere = mock((clause: SQL) => {
 const selectFrom = mock(() => ({ where: selectWhere }));
 const select = mock(() => ({ from: selectFrom }));
 
+// --- claimWarmContainer (C1c) transaction harness ------------------------
+// claimWarmContainer runs inside dbWrite.transaction and uses sqlRows(tx, sql`..`)
+// (→ tx.execute) for the pool SELECTs, plus tx.select/.update/.delete for the
+// user-row read + claim + pool-row delete. Drive it with a per-test controller
+// so we can assert the null-node filter behavior without a live DB.
+type ExecuteResult = { rows: unknown[]; rowCount?: number };
+let executeHandler: (sqlText: string) => ExecuteResult = () => ({ rows: [] });
+let userRowForClaim: unknown;
+const warmClaimUpdateSet = mock((values: Record<string, unknown>) => {
+  void values;
+  return {
+    where: mock(() => ({
+      returning: mock(() => [{ ...(values as Record<string, unknown>), id: "user-row" }]),
+    })),
+  };
+});
+const warmClaimDeleteWhere = mock(() => Promise.resolve({ rowCount: 1 }));
+function makeTx() {
+  return {
+    execute: mock((query: SQLWrapper) => {
+      const sqlText = new PgDialect().sqlToQuery(query as SQL).sql;
+      return Promise.resolve(executeHandler(sqlText));
+    }),
+    select: mock(() => ({
+      from: mock(() => ({
+        where: mock(() => ({
+          for: mock(() => ({
+            limit: mock(() => [userRowForClaim].filter(Boolean)),
+          })),
+        })),
+      })),
+    })),
+    update: mock(() => ({ set: warmClaimUpdateSet })),
+    delete: mock(() => ({ where: warmClaimDeleteWhere })),
+  };
+}
+const transaction = mock(async (fn: (tx: ReturnType<typeof makeTx>) => Promise<unknown>) =>
+  fn(makeTx()),
+);
+
+const warnLog = mock((..._args: unknown[]) => {});
+
 mock.module("../helpers", () => ({
   dbRead: { select },
-  dbWrite: { update },
+  dbWrite: { update, transaction },
 }));
 
 mock.module("../ensure-agent-sandbox-schema", () => ({
   ensureAgentSandboxSchema,
+}));
+
+mock.module("../../lib/utils/logger", () => ({
+  logger: { warn: warnLog, info: mock(() => {}), error: mock(() => {}), debug: mock(() => {}) },
 }));
 
 describe("AgentSandboxesRepository", () => {
@@ -236,6 +282,23 @@ describe("AgentSandboxesRepository", () => {
     expect(params).not.toContain("ghcr.io/elizaos/eliza-agent:prod");
   });
 
+  test("markRunningFromProvisioning refuses rows without durable node attribution", async () => {
+    capturedWhere = undefined;
+
+    const { AgentSandboxesRepository } = await import("./agent-sandboxes");
+    await new AgentSandboxesRepository().markRunningFromProvisioning(
+      "e06bb509-6c52-4c33-a9f7-66addc43e8c8",
+    );
+
+    if (!capturedWhere)
+      throw new Error("markRunningFromProvisioning did not build a where clause");
+    const sql = new PgDialect().sqlToQuery(capturedWhere).sql.toLowerCase();
+    expect(sql).toContain("sandbox_id");
+    expect(sql).toContain("node_id");
+    expect(sql).toContain("is not null");
+    expect(sql).toContain("<> ''");
+  });
+
   test("fleet-upgrade candidates re-arm on a NEW target after a rollback-safe upgrade failure (#15357)", async () => {
     capturedWhere = undefined;
 
@@ -378,5 +441,140 @@ describe("AgentSandboxesRepository", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.id).toBe("55555555-5555-4555-8555-555555555555");
     expect(rows[0]?.snapshot_type).toBe("auto");
+  });
+
+  // C1c attribution guard (audit §C1c): claimWarmContainer must NEVER mint a
+  // user-facing running row from a pool entry with a null/empty node_id. Pool
+  // rows can carry a null node_id (the creator tolerates it), and a claim
+  // copies node_id verbatim then DELETEs the pool row — leaving an
+  // unattributable orphan with no record to reconcile against.
+  describe("claimWarmContainer null-node guard (C1c)", () => {
+    const IMAGE = "ghcr.io/example/bnancy:latest";
+    const params = {
+      userAgentId: "e06bb509-6c52-4c33-a9f7-66addc43e8c8",
+      organizationId: "22222222-2222-4222-8222-222222222222",
+      image: IMAGE,
+      agentName: "bnancy",
+    };
+
+    function pendingUserRow() {
+      return {
+        id: params.userAgentId,
+        organization_id: params.organizationId,
+        status: "pending",
+        database_status: null,
+        database_uri: null,
+        agent_config: {},
+        character_id: null,
+        updated_at: new Date("2026-07-07T12:00:00.000Z"),
+      };
+    }
+
+    test("the claim SELECT filters out null/empty node_id pool rows", async () => {
+      userRowForClaim = pendingUserRow();
+      let claimSelectSql = "";
+      executeHandler = (sqlText: string) => {
+        // The first/main SELECT is the pool-claim query. Capture it and return
+        // no rows so the guard's empty-pool branch runs.
+        if (sqlText.includes("FOR UPDATE SKIP LOCKED")) {
+          claimSelectSql = sqlText;
+          return { rows: [] };
+        }
+        // The skip-count query.
+        return { rows: [{ count: 0 }] };
+      };
+
+      const { AgentSandboxesRepository } = await import("./agent-sandboxes");
+      const result = await new AgentSandboxesRepository().claimWarmContainer(params);
+
+      expect(result).toBeNull();
+      const lowered = claimSelectSql.toLowerCase();
+      expect(lowered).toContain("node_id");
+      expect(lowered).toContain("is not null");
+    });
+
+    test("a valid (non-null-node) pool row IS claimed — guard does not over-filter", async () => {
+      userRowForClaim = pendingUserRow();
+      warmClaimUpdateSet.mockClear();
+      warmClaimDeleteWhere.mockClear();
+      const validPool = {
+        id: "pool-1",
+        pool_status: "unclaimed",
+        status: "running",
+        docker_image: IMAGE,
+        pool_ready_at: new Date("2026-07-07T11:00:00.000Z"),
+        node_id: "node-1",
+        container_name: "agent-pool-1",
+        bridge_port: 21060,
+        web_ui_port: 3000,
+        headscale_ip: "100.64.0.11",
+        bridge_url: "http://100.64.0.11:3000",
+        health_url: "http://100.64.0.11:3000/api",
+        sandbox_id: "agent-pool-1",
+        database_uri: "postgres://pool-db",
+        database_status: "ready",
+      };
+      executeHandler = (sqlText: string) => {
+        if (sqlText.includes("FOR UPDATE SKIP LOCKED")) {
+          // The filtered query returns the valid candidate.
+          return { rows: [validPool] };
+        }
+        return { rows: [{ count: 0 }] };
+      };
+
+      const { AgentSandboxesRepository } = await import("./agent-sandboxes");
+      const result = await new AgentSandboxesRepository().claimWarmContainer(params);
+
+      expect(result).not.toBeNull();
+      // The claim inherited the pool row's REAL node_id (never a null).
+      const setArg = warmClaimUpdateSet.mock.calls[0]?.[0] as { node_id?: string; status?: string };
+      expect(setArg.status).toBe("running");
+      expect(setArg.node_id).toBe("node-1");
+      // Pool row deleted on claim (single record now the user's).
+      expect(warmClaimDeleteWhere).toHaveBeenCalledTimes(1);
+    });
+
+    test("countUnclaimedPool excludes null/empty node_id rows (ready == claimable)", async () => {
+      // A poisoned null-node pool row must NOT count as ready capacity, or the
+      // replenisher sees a full pool while every claim skips it (starvation).
+      capturedWhere = undefined;
+      selectRows = [{ count: 0 }];
+
+      const { AgentSandboxesRepository } = await import("./agent-sandboxes");
+      await new AgentSandboxesRepository().countUnclaimedPool({ image: IMAGE });
+
+      if (!capturedWhere) throw new Error("countUnclaimedPool did not build a where clause");
+      const sql = new PgDialect().sqlToQuery(capturedWhere).sql.toLowerCase();
+      expect(sql).toContain("node_id");
+      expect(sql).toContain("is not null");
+      // and the empty-string exclusion
+      expect(sql).toContain("<> ''");
+    });
+
+    test("pool with ONLY null-node entries: returns null cleanly + warns on skip", async () => {
+      userRowForClaim = pendingUserRow();
+      warnLog.mockClear();
+      executeHandler = (sqlText: string) => {
+        if (sqlText.includes("FOR UPDATE SKIP LOCKED")) {
+          // Filtered query finds nothing (the only entries are null-node).
+          return { rows: [] };
+        }
+        // Skip-count query: two null-node rows were left behind.
+        return { rows: [{ count: 2 }] };
+      };
+
+      const { AgentSandboxesRepository } = await import("./agent-sandboxes");
+      const result = await new AgentSandboxesRepository().claimWarmContainer(params);
+
+      // Clean null return → caller falls through to the cold provision path
+      // (which enforces the C1b guard).
+      expect(result).toBeNull();
+      // Observability: the skip is warned (not silent) with the counter event.
+      const warned = warnLog.mock.calls.some((c) => {
+        const meta = c[1] as { event?: string; skippedNullNodeCount?: number } | undefined;
+        return meta?.event === "warm_pool.null_node_skipped" && meta?.skippedNullNodeCount === 2;
+      });
+      expect(warned).toBe(true);
+    });
   });
 });

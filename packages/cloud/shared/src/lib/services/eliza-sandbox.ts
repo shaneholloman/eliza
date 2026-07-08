@@ -75,7 +75,11 @@ import { prepareManagedElizaEnvironment } from "./managed-eliza-env";
 import { JOB_TYPES } from "./provisioning-job-types";
 import { mergeRuntimeAgentSecretsFromEnv } from "./runtime-agent-secrets";
 import { resolveSandboxContainerLaunchConfig } from "./sandbox-container-launch-config";
-import { createSandboxProvider, type SandboxProvider } from "./sandbox-provider";
+import {
+  createSandboxProvider,
+  type SandboxHandle,
+  type SandboxProvider,
+} from "./sandbox-provider";
 import { isDedicatedBootstrapWindow } from "./shared-runtime/dedicated-bootstrap";
 import {
   type RunSharedAgentTurnResult,
@@ -203,6 +207,20 @@ export function assertAgentImageAllowed(dockerImage: string | undefined): void {
   }
 }
 
+/**
+ * Thrown when the post-create readiness probe could not REACH the container
+ * (SSH transport unresolved), as distinct from the container being genuinely
+ * not-ready. The provision path uses it to keep the container in place and
+ * return a RETRYABLE failure instead of tearing down a likely-healthy container
+ * and marking the row terminally failed (#15310 failure mode #6).
+ */
+export class SandboxTransportUnresolvedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SandboxTransportUnresolvedError";
+  }
+}
+
 export type ProvisionResult =
   | {
       success: true;
@@ -210,7 +228,18 @@ export type ProvisionResult =
       bridgeUrl: string;
       healthUrl: string;
     }
-  | { success: false; sandboxRecord?: AgentSandbox; error: string };
+  | {
+      success: false;
+      sandboxRecord?: AgentSandbox;
+      error: string;
+      /**
+       * True when the failure is a transient, retryable condition (e.g. the
+       * readiness probe could not reach the container). The provision JOB
+       * should retry rather than treat this as a permanent failure that flips
+       * the sandbox row to `error`. Absent/false = terminal.
+       */
+      retryable?: boolean;
+    };
 
 export type DeleteAgentResult =
   | { success: true; deletedSandbox: AgentSandbox }
@@ -344,6 +373,39 @@ function isDockerSandboxMetadata(value: unknown): value is DockerSandboxMetadata
     typeof (value as { containerName?: unknown }).containerName === "string"
   );
 }
+
+/**
+ * True when a provider handle's metadata self-identifies as the real docker
+ * fleet provider (`provider: "docker"`) — REGARDLESS of whether the rest of the
+ * shape passes {@link isDockerSandboxMetadata}. This is deliberately laxer than
+ * the full type guard: a docker-fleet container whose metadata drifts (a missing
+ * field, an empty-string nodeId) still IS docker-backed and still occupies a
+ * real node slot, even though the strict guard would reject it.
+ *
+ * Used to detect the C1b failure class (audit §C1b): a handle that is docker-
+ * backed but for which we cannot recover a usable node_id. Such a row MUST NOT
+ * be flipped to `running` (it would be an unattributable orphan the recount
+ * undercounts and the orphan reconciler provably cannot reap — audit §C5).
+ *
+ * Non-docker providers (`local-docker`, `memory`) return false: they have no
+ * node concept, so the attribution guard does not apply to them.
+ */
+function isDockerBackedMetadata(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { provider?: unknown }).provider === "docker"
+  );
+}
+
+/**
+ * Distinguishable prefix for the C1b attribution-guard failure. Chosen so it can
+ * NEVER collide with the port-collision retry classifier in provision()'s catch
+ * (which matches "23505" / "unique" / "duplicate") — metadata drift is a
+ * permanent-ish condition, so this failure must classify as NON-retryable and
+ * fall through to markError, not spin the retry loop.
+ */
+const PROVISION_ATTRIBUTION_GUARD_PREFIX = "provision attribution guard:";
 
 type RuntimeAgentSummary = {
   id?: string;
@@ -1398,6 +1460,7 @@ export class ElizaSandboxService {
     let rec = await agentSandboxesRepository.findByIdAndOrg(agentId, orgId);
     if (!rec) return { success: false, error: "Agent not found" } as ProvisionResult;
 
+    const previousStatus = rec.status;
     const lock = await agentSandboxesRepository.trySetProvisioning(rec.id);
     if (!lock) {
       if (rec.status === "running" && rec.bridge_url && rec.health_url)
@@ -1413,6 +1476,7 @@ export class ElizaSandboxService {
         error: "Agent is already being provisioned",
       };
     }
+    rec = lock;
 
     // 1. Database
     let dbUri = rec.database_uri;
@@ -1488,42 +1552,54 @@ export class ElizaSandboxService {
       let handle;
 
       try {
-        // 2. Sandbox (via provider)
-        const callerEnv = materializedEnv;
-        // DATABASE_URL precedence: a self-contained image (e.g. a coding
-        // container running its own bot) can ship its OWN database. Do not
-        // silently clobber it with the managed shared DB URL — that would force the
-        // image onto a DB it never asked for. If the caller already set
-        // DATABASE_URL, keep it and expose the managed URL under a distinct
-        // name (ELIZA_MANAGED_DATABASE_URL) so the image can opt in. Only when
-        // the caller did NOT supply one do we inject the managed URL as
-        // DATABASE_URL — the normal managed-agent path, byte-identical to before.
-        const dbEnv = computeManagedAgentDbEnv(callerEnv, dbUri);
-        handle = await (await this.getProvider()).create({
-          agentId: rec.id,
-          agentName: rec.agent_name ?? "CloudAgent",
-          organizationId: rec.organization_id,
-          environmentVars: {
-            ...callerEnv,
-            ...dbEnv,
-          },
-          // Path A: pass the persisted character so the container boots AS
-          // this agent (see docker-sandbox-provider ELIZA_AGENT_CHARACTER_JSON
-          // injection + packages/agent/src/runtime/sandbox-character.ts).
-          agentConfig:
-            rec.agent_config &&
-            typeof rec.agent_config === "object" &&
-            !Array.isArray(rec.agent_config)
-              ? (rec.agent_config as Record<string, unknown>)
-              : undefined,
-          // Path A: the gateways route by character_id, so the container must
-          // register under, and answer as, that id (see
-          // SANDBOX_ROUTE_AGENT_ID injection).
-          routeAgentId: rec.character_id ?? undefined,
-          snapshotId: rec.snapshot_id ?? undefined,
-          dockerImage: rec.docker_image ?? undefined,
-          container: containerLaunch,
-        });
+        const retryHandle =
+          attempt === 1 && previousStatus === "provisioning"
+            ? this.buildProvisioningRetryHandle(rec)
+            : null;
+        if (retryHandle) {
+          handle = retryHandle;
+          logger.info("[agent-sandbox] Re-probing persisted provisioning container before create", {
+            agentId: rec.id,
+            sandboxId: handle.sandboxId,
+          });
+        } else {
+          // 2. Sandbox (via provider)
+          const callerEnv = materializedEnv;
+          // DATABASE_URL precedence: a self-contained image (e.g. a coding
+          // container running its own bot) can ship its OWN database. Do not
+          // silently clobber it with the managed shared DB URL — that would force the
+          // image onto a DB it never asked for. If the caller already set
+          // DATABASE_URL, keep it and expose the managed URL under a distinct
+          // name (ELIZA_MANAGED_DATABASE_URL) so the image can opt in. Only when
+          // the caller did NOT supply one do we inject the managed URL as
+          // DATABASE_URL — the normal managed-agent path, byte-identical to before.
+          const dbEnv = computeManagedAgentDbEnv(callerEnv, dbUri);
+          handle = await (await this.getProvider()).create({
+            agentId: rec.id,
+            agentName: rec.agent_name ?? "CloudAgent",
+            organizationId: rec.organization_id,
+            environmentVars: {
+              ...callerEnv,
+              ...dbEnv,
+            },
+            // Path A: pass the persisted character so the container boots AS
+            // this agent (see docker-sandbox-provider ELIZA_AGENT_CHARACTER_JSON
+            // injection + packages/agent/src/runtime/sandbox-character.ts).
+            agentConfig:
+              rec.agent_config &&
+              typeof rec.agent_config === "object" &&
+              !Array.isArray(rec.agent_config)
+                ? (rec.agent_config as Record<string, unknown>)
+                : undefined,
+            // Path A: the gateways route by character_id, so the container must
+            // register under, and answer as, that id (see
+            // SANDBOX_ROUTE_AGENT_ID injection).
+            routeAgentId: rec.character_id ?? undefined,
+            snapshotId: rec.snapshot_id ?? undefined,
+            dockerImage: rec.docker_image ?? undefined,
+            container: containerLaunch,
+          });
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         await this.markError(rec, `Sandbox creation failed: ${msg}`);
@@ -1535,12 +1611,84 @@ export class ElizaSandboxService {
       }
 
       try {
-        // 3. Health check (via provider)
-        if (!(await (await this.getProvider()).checkHealth(handle))) {
+        // 3. Health check (via provider). Use the detailed probe so a
+        // TRANSPORT-unresolved outcome (the probe never actually reached the
+        // container — SSH flapping / node briefly unreachable) is treated as a
+        // RETRYABLE condition instead of tearing down a likely-healthy
+        // container and marking the row failed (the readiness-probe
+        // false-negative split-brain, #15310 failure mode #6). A genuine
+        // not-ready still fails the provision and self-heals via the normal
+        // timeout path.
+        const provider = await this.getProvider();
+        const health = provider.checkHealthDetailed
+          ? await provider.checkHealthDetailed(handle)
+          : {
+              ready: await provider.checkHealth(handle),
+              verdict: "not_ready" as const,
+            };
+
+        const dockerMeta = isDockerSandboxMetadata(handle.metadata) ? handle.metadata : undefined;
+
+        if (!health.ready) {
+          if (health.verdict === "transport_unresolved") {
+            // Do NOT tear the container down: the probe never reached it, so it
+            // is probably up and serving. PERSIST the container handle onto the
+            // row (status stays `provisioning`) BEFORE throwing so that:
+            //   (1) the daemon-side stuck-provisioning reconciler can FIND the
+            //       row — it requires `sandbox_id IS NOT NULL` — and re-probe /
+            //       flip it to `running` once transport recovers, and
+            //   (2) a provision-job retry ADOPTS the same container (name +
+            //       ports already on the row) instead of re-creating the
+            //       deterministic container name, hitting an "already in use"
+            //       collision, and tearing down the very container we preserved.
+            // Without this write the leave-and-reconcile path is defeated for
+            // exactly the SSH-transport-blip case it exists for.
+            await this.persistContainerHandleForRetry(rec.id, handle, dockerMeta);
+            throw new SandboxTransportUnresolvedError(
+              "Sandbox readiness probe could not reach the container (SSH transport unresolved); " +
+                "leaving the container in place for retry/reconciliation",
+            );
+          }
           throw new Error("Sandbox health check timed out");
         }
 
-        const dockerMeta = isDockerSandboxMetadata(handle.metadata) ? handle.metadata : undefined;
+        // C1b attribution guard (audit §C1b/§C5): a docker-fleet container MUST
+        // carry a durable node_id before we flip the row to `running`. dockerMeta
+        // is undefined whenever the strict type guard fails (metadata shape
+        // drift: a missing field, or the empty-string nodeId that a partial
+        // provider handle can produce). In that case the row would be flipped to
+        // running + bridge_url set with node_id NULL — an unattributable orphan
+        // that (a) undercounts the node recount (over-scheduling, autoscaler
+        // spawns billable nodes — #15378), and (b) the orphan reconciler PROVABLY
+        // cannot reap (allHaveNodeAndStamp skips live null-node rows — §C5). So
+        // when the handle self-identifies as docker-backed but we have no usable
+        // nodeId, fail LOUD and NON-retryable instead of minting the orphan. The
+        // container already exists; the catch below stops it per the standard
+        // post-create-failure convention and this message (distinct from the
+        // unique/duplicate/23505 retry patterns) breaks straight to markError.
+        //
+        // Non-docker providers (local-docker, memory) have no node concept and
+        // are unaffected. This does NOT touch the shared-tier insert path
+        // (buildAgentInsertData), which is running-with-null-node BY DESIGN.
+        if (isDockerBackedMetadata(handle.metadata) && !dockerMeta?.nodeId) {
+          logger.warn(
+            "[agent-sandbox] Refusing to flip running: docker-backed handle has no durable node_id",
+            {
+              agentId: rec.id,
+              sandboxId: handle.sandboxId,
+              executionTier: rec.execution_tier,
+              hasDockerMeta: Boolean(dockerMeta),
+              metadataProvider:
+                typeof handle.metadata === "object" && handle.metadata !== null
+                  ? (handle.metadata as { provider?: unknown }).provider
+                  : undefined,
+            },
+          );
+          throw new Error(
+            `${PROVISION_ATTRIBUTION_GUARD_PREFIX} docker-backed sandbox ${handle.sandboxId} produced no durable node_id (metadata shape drift or empty nodeId); refusing to mark running with node_id NULL`,
+          );
+        }
+
         const runtimeRec = {
           ...rec,
           sandbox_id: handle.sandboxId,
@@ -1685,6 +1833,27 @@ export class ElizaSandboxService {
         // Ghost container deletion: provider.create() succeeded but DB update or health check failed
         const msg = err instanceof Error ? err.message : String(err);
         lastError = msg;
+
+        // Transport-unresolved readiness probe: the probe never reached the
+        // container, so it is likely healthy. DO NOT tear it down and DO NOT
+        // markError — that is exactly the false-negative that wedges a healthy
+        // row (#15310 #6). Leave the container running and return a RETRYABLE
+        // failure: the provision job retries, and the daemon stuck-provisioning
+        // reconciler re-probes and flips the row to `running` once transport
+        // recovers. Preserve the (pending/provisioning) row so the reconciler
+        // and job retry both have something to act on.
+        if (err instanceof SandboxTransportUnresolvedError) {
+          logger.warn(
+            "[agent-sandbox] Readiness probe transport-unresolved; leaving container in place for retry/reconciliation",
+            { agentId: rec.id, sandboxId: handle.sandboxId, attempt },
+          );
+          return {
+            success: false,
+            retryable: true,
+            sandboxRecord: await agentSandboxesRepository.findById(rec.id),
+            error: msg,
+          };
+        }
 
         logger.warn("[agent-sandbox] Post-create failure, cleaning up container", {
           agentId: rec.id,
@@ -4429,6 +4598,67 @@ export class ElizaSandboxService {
     return "recovered";
   }
 
+  /**
+   * Reconcile a row WEDGED in `provisioning` whose container may actually be
+   * healthy — the readiness-probe false-negative split-brain (#15310 #6). The
+   * Worker-side cleanup cron can only mark such rows `error` (no SSH); THIS runs
+   * on the daemon, which can re-probe the container node-side and, when it is
+   * genuinely healthy, flip the row straight to `running` instead of failing a
+   * live agent.
+   *
+   * Outcomes:
+   *   - `recovered` — the container re-probed healthy and the row was CAS-flipped
+   *     to `running`.
+   *   - `unresolved` — the probe still could not confirm health (transport
+   *     unresolved or genuinely not-ready). Left untouched for the next pass
+   *     (or, eventually, the Worker cron's error mark). NEVER destroys the
+   *     container: a wrong teardown here re-creates the very bug.
+   *   - `gone` — the row moved on (no longer `provisioning`, deleted, or lost
+   *     its container) during the multi-second probe; nothing to do.
+   */
+  async reconcileStuckProvisioning(
+    agentId: string,
+    orgId: string,
+  ): Promise<"recovered" | "unresolved" | "gone"> {
+    const rec = await agentSandboxesRepository.findByIdAndOrg(agentId, orgId);
+    if (!rec || rec.status !== "provisioning" || !rec.sandbox_id) return "gone";
+
+    const provider = await this.getProvider();
+    const handle: SandboxHandle = {
+      sandboxId: rec.sandbox_id,
+      bridgeUrl: rec.bridge_url ?? "",
+      healthUrl: rec.health_url ?? "",
+      metadata: rec.headscale_ip ? { headscaleIp: rec.headscale_ip } : undefined,
+    };
+
+    let healthy = false;
+    try {
+      healthy = provider.checkHealthDetailed
+        ? (await provider.checkHealthDetailed(handle)).ready
+        : await provider.checkHealth(handle);
+    } catch (error) {
+      // A probe that throws is "no signal" — leave the row for the next pass,
+      // never condemn or resurrect on an errored probe.
+      logger.debug("[agent-sandbox] Stuck-provisioning re-probe threw; leaving row", {
+        agentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return "unresolved";
+    }
+
+    if (!healthy) return "unresolved";
+
+    // Guarded CAS: only flip if still `provisioning` with a live container and
+    // no active provision job racing it (see markRunningFromProvisioning).
+    const flipped = await agentSandboxesRepository.markRunningFromProvisioning(rec.id);
+    if (!flipped) return "gone";
+    logger.info(
+      "[agent-sandbox] Reconciled wedged provisioning row to running (container re-probed healthy)",
+      { agentId },
+    );
+    return "recovered";
+  }
+
   // Shutdown
 
   async shutdown(agentId: string, orgId: string): Promise<{ success: boolean; error?: string }> {
@@ -5179,7 +5409,7 @@ export class ElizaSandboxService {
             headscale_ip = ${blueMeta.headscaleIp ?? null},
             image_digest = ${toDigest},
             previous_image_digest = ${fromDigest},
-            previous_docker_image = ${current.docker_image ?? dockerImage},
+            previous_docker_image = ${current.docker_image || dockerImage},
             error_message = NULL,
             last_heartbeat_at = NOW(),
             updated_at = NOW()
@@ -5332,7 +5562,7 @@ export class ElizaSandboxService {
       };
     }
 
-    const rollbackImage = agent.previous_docker_image ?? dockerImage;
+    const rollbackImage = agent.previous_docker_image || dockerImage;
     // Materialize at-rest-encrypted BYO secrets before container create (#11332).
     const rollbackEnv = await decryptAgentEnvVars(
       (agent.environment_vars as Record<string, string>) ?? {},
@@ -5801,6 +6031,78 @@ export class ElizaSandboxService {
       error_message: msg,
       error_count: (rec.error_count ?? 0) + 1,
     });
+  }
+
+  /**
+   * Resume a prior transport-unresolved provision attempt before creating a new
+   * deterministic Docker container. The provider's container name is
+   * `agent-${id}`; calling create again while the preserved container still
+   * exists turns Docker's "already in use" into a cleanup path that removes the
+   * very container the retry was meant to save.
+   */
+  private buildProvisioningRetryHandle(rec: AgentSandbox): SandboxHandle | null {
+    if (!rec.sandbox_id || !rec.bridge_url || !rec.health_url) return null;
+    return {
+      sandboxId: rec.sandbox_id,
+      bridgeUrl: rec.bridge_url,
+      healthUrl: rec.health_url,
+      metadata: rec.headscale_ip ? { headscaleIp: rec.headscale_ip } : undefined,
+    };
+  }
+
+  /**
+   * Persist a freshly-created container's handle onto the sandbox row while
+   * KEEPING `status: "provisioning"`. Used when the post-create readiness probe
+   * came back `transport_unresolved` (the probe never reached the container, so
+   * it is likely healthy): writing `sandbox_id` + ingress/metadata columns is
+   * what lets the daemon stuck-provisioning reconciler FIND the row (it filters
+   * on `sandbox_id IS NOT NULL`) and re-probe it, and what lets a provision-job
+   * retry adopt the existing container instead of colliding on its
+   * deterministic name. Deliberately does NOT flip to `running` — only a
+   * confirmed-healthy re-probe may do that. Best-effort: a write failure here is
+   * logged, not thrown (the retryable error is surfaced regardless).
+   */
+  private async persistContainerHandleForRetry(
+    agentId: string,
+    handle: SandboxHandle,
+    dockerMeta: DockerSandboxMetadata | undefined,
+  ): Promise<void> {
+    if (isDockerBackedMetadata(handle.metadata) && !dockerMeta?.nodeId) {
+      logger.error(
+        "[agent-sandbox] Refusing to persist retry handle: docker-backed handle has no durable node_id",
+        {
+          agentId,
+          sandboxId: handle.sandboxId,
+          hasDockerMeta: Boolean(dockerMeta),
+        },
+      );
+      throw new Error(
+        `${PROVISION_ATTRIBUTION_GUARD_PREFIX} docker-backed sandbox ${handle.sandboxId} produced no durable node_id during transport-unresolved retry; refusing to preserve an unattributable container handle`,
+      );
+    }
+
+    try {
+      const updateData: Parameters<typeof agentSandboxesRepository.update>[1] = {
+        sandbox_id: handle.sandboxId,
+        bridge_url: handle.bridgeUrl,
+        health_url: handle.healthUrl,
+      };
+      if (dockerMeta) {
+        if (dockerMeta.nodeId) updateData.node_id = dockerMeta.nodeId;
+        if (dockerMeta.containerName) updateData.container_name = dockerMeta.containerName;
+        if (dockerMeta.bridgePort) updateData.bridge_port = dockerMeta.bridgePort;
+        if (dockerMeta.webUiPort) updateData.web_ui_port = dockerMeta.webUiPort;
+        if (dockerMeta.headscaleIp) updateData.headscale_ip = dockerMeta.headscaleIp;
+        if (dockerMeta.dockerImage) updateData.docker_image = dockerMeta.dockerImage;
+        updateData.image_digest = dockerMeta.imageDigest;
+      }
+      await agentSandboxesRepository.update(agentId, updateData);
+    } catch (error) {
+      logger.warn(
+        "[agent-sandbox] Failed to persist container handle for transport-unresolved retry",
+        { agentId, error: error instanceof Error ? error.message : String(error) },
+      );
+    }
   }
 
   private async provisionAgentDatabase(

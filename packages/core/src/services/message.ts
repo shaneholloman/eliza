@@ -124,6 +124,8 @@ import {
 	type PlannerToolCall,
 	type PlannerToolResult,
 	type PlannerTrajectory,
+	PROGRESS_ONLY_ANSWER_REJECT,
+	PROGRESS_ONLY_REPLY_OPENERS_PATTERN,
 	runPlannerLoop,
 	summarizeActionResultForPlanner,
 } from "../runtime/planner-loop";
@@ -269,11 +271,13 @@ import { ChannelTopicsService } from "./channel-topics";
 import { runPostTurnEvaluators } from "./evaluator";
 import { runBotNoiseTriage } from "./message/bot-noise-triage";
 import {
+	type DirectCurrentRequestCandidateInference,
 	findCodingDelegationActionName,
 	findShellDirectActionName,
 	findWebLookupActionName,
 	findWebLookupActionNames,
 	inferDirectCurrentRequestCandidateActions as inferDirectCurrentRequestCandidateActionsFromHeuristics,
+	inferDirectCurrentRequestCandidateInference as inferDirectCurrentRequestCandidateInferenceFromHeuristics,
 	inferLocalShellCommandFromMessageText,
 	inferWebSearchQueryFromMessageText,
 	isShellDirectActionName,
@@ -3027,17 +3031,37 @@ export const BUILTIN_RESPONSE_HANDLER_EVALUATORS: readonly ResponseHandlerEvalua
 				if (nonSimpleContexts.length > 0) return false;
 				const text = getUserMessageText(message);
 				if (!text?.trim()) return false;
-				return (
-					inferDirectCurrentRequestCandidateActions(runtime.actions ?? [], text)
-						.length > 0
-				);
-			},
-			evaluate: ({ message, runtime }) => {
-				const text = getUserMessageText(message) ?? "";
-				const candidateActions = inferDirectCurrentRequestCandidateActions(
+				const inference = inferDirectCurrentRequestCandidateInference(
 					runtime.actions ?? [],
 					text,
 				);
+				if (inference.names.length === 0) return false;
+				// Same escalation valve as messageHandlerFromFieldResult: this
+				// evaluator re-runs the text inference on the SIMPLE path, so
+				// without the valve it re-promotes the exact answered turn the
+				// structured path just declined to force-plan (and clobbers the
+				// finished replyText with an "On it." ack that never delivers).
+				return !shouldSuppressInferredCandidateEscalation({
+					inference,
+					stageOneContexts: messageHandler.plan.contexts ?? [],
+					stageOneReplyText: String(messageHandler.plan.reply ?? ""),
+					stageOneCandidateActions: messageHandler.plan.candidateActions ?? [],
+				});
+			},
+			evaluate: ({ message, messageHandler, runtime }) => {
+				const text = getUserMessageText(message) ?? "";
+				const inference = inferDirectCurrentRequestCandidateInference(
+					runtime.actions ?? [],
+					text,
+				);
+				const candidateActions = shouldSuppressInferredCandidateEscalation({
+					inference,
+					stageOneContexts: messageHandler.plan.contexts ?? [],
+					stageOneReplyText: String(messageHandler.plan.reply ?? ""),
+					stageOneCandidateActions: messageHandler.plan.candidateActions ?? [],
+				})
+					? []
+					: inference.names;
 				if (candidateActions.length === 0) return undefined;
 				return {
 					requiresTool: true,
@@ -3827,13 +3851,25 @@ export function messageHandlerFromFieldResult(
 					return exposedActionMatches(runtimeContext.actions, normalized);
 				})
 			: candidateActions.length > 0;
-	const directCurrentCandidateActions =
+	const directCurrentInference =
 		!subAgentCompletionRelay && currentMessageText.trim().length > 0
-			? inferDirectCurrentRequestCandidateActions(
+			? inferDirectCurrentRequestCandidateInference(
 					runtimeContext?.actions ?? [],
 					currentMessageText,
 				)
-			: [];
+			: ({ names: [], kind: null } as DirectCurrentRequestCandidateInference);
+	// A weak view-capability token overlap must not force-plan a turn Stage 1
+	// already answered (see shouldSuppressInferredCandidateEscalation) — drop
+	// the inferred candidates entirely so the turn keeps its direct reply.
+	const directCurrentCandidateActions =
+		shouldSuppressInferredCandidateEscalation({
+			inference: directCurrentInference,
+			stageOneContexts: rawContexts,
+			stageOneReplyText: replyTextRaw,
+			stageOneCandidateActions: rawCandidateActions,
+		})
+			? []
+			: directCurrentInference.names;
 	const preferDirectCurrentCandidateActions =
 		shouldPreferDirectCurrentCandidateActions({
 			candidateActions,
@@ -4061,6 +4097,21 @@ export function messageHandlerFromFieldResult(
 	) {
 		plan.candidateActions = planCandidateActions;
 	}
+	// The escalation came ONLY from the text-derived view-surface inference on
+	// a turn Stage 1 already answered — cap the planner's miss budget so the
+	// answer-rescue fires after one rejected reply instead of four (see
+	// viewOverlapRequiredToolMissBudget).
+	if (shouldPlan && inferredDirectCandidateActions.length > 0) {
+		const inferredViewOverlapMissBudget = viewOverlapRequiredToolMissBudget({
+			inference: directCurrentInference,
+			stageOneContexts: rawContexts,
+			stageOneReplyText: replyTextRaw,
+			stageOneCandidateActions: rawCandidateActions,
+		});
+		if (inferredViewOverlapMissBudget !== undefined) {
+			plan.requiredToolMissBudget = inferredViewOverlapMissBudget;
+		}
+	}
 	const extract =
 		facts.length > 0 ||
 		relationships.length > 0 ||
@@ -4200,12 +4251,26 @@ export function applyDirectCurrentCandidateBackstopToMessageHandler(
 		return messageHandler;
 	}
 
-	const directCurrentCandidateActions =
-		inferDirectCurrentRequestCandidateActions(
-			runtimeContext.actions,
-			currentMessageText,
-		);
+	const directCurrentInference = inferDirectCurrentRequestCandidateInference(
+		runtimeContext.actions,
+		currentMessageText,
+	);
+	const directCurrentCandidateActions = directCurrentInference.names;
 	if (directCurrentCandidateActions.length === 0) return messageHandler;
+	// Same escalation valve as messageHandlerFromFieldResult: a plain-text
+	// Stage-1 answer routed through this backstop must not be force-planned
+	// over a weak view-capability token overlap either.
+	if (
+		shouldSuppressInferredCandidateEscalation({
+			inference: directCurrentInference,
+			stageOneContexts: messageHandler.plan.contexts ?? [],
+			stageOneReplyText: String(messageHandler.plan.reply ?? ""),
+			stageOneCandidateActions:
+				getMessageHandlerCandidateActions(messageHandler),
+		})
+	) {
+		return messageHandler;
+	}
 
 	const runnableCandidateActions = filterRunnableCandidateActions(
 		uniqueActionNames([
@@ -4258,6 +4323,15 @@ export function applyDirectCurrentCandidateBackstopToMessageHandler(
 	const planningContexts = (messageHandler.plan.contexts ?? []).filter(
 		(context) => context !== SIMPLE_CONTEXT_ID,
 	);
+	// Same view-overlap miss-budget cap as the structured path's plan
+	// construction: this backstop is the plain-text Stage-1 shape landing on
+	// the identical escalation, so the answered-turn waste is identical too.
+	const viewOverlapMissBudget = viewOverlapRequiredToolMissBudget({
+		inference: directCurrentInference,
+		stageOneContexts: messageHandler.plan.contexts ?? [],
+		stageOneReplyText: String(messageHandler.plan.reply ?? ""),
+		stageOneCandidateActions: getMessageHandlerCandidateActions(messageHandler),
+	});
 	return {
 		...messageHandler,
 		plan: {
@@ -4269,6 +4343,9 @@ export function applyDirectCurrentCandidateBackstopToMessageHandler(
 			simple: false,
 			requiresTool: true,
 			candidateActions: runnableCandidateActions,
+			...(viewOverlapMissBudget !== undefined
+				? { requiredToolMissBudget: viewOverlapMissBudget }
+				: {}),
 		},
 	};
 }
@@ -4282,13 +4359,20 @@ const PLANNING_ACK_REPLIES = new Set([
 	"working on it.",
 ]);
 
+// Built from the vocabulary single-sourced in planner-loop.ts (which cannot
+// import from this module) so the two progress-reply classifiers — this one
+// and the exhaustion-path PROGRESS_ONLY_ANSWER_REJECT — cannot drift apart
+// when a new progress verb is added. Case-insensitivity comes from the caller
+// lowercasing, not a flag, preserving the original matching exactly.
+const PROGRESS_ONLY_REPLY_REGEX = new RegExp(
+	`^(?:${PROGRESS_ONLY_REPLY_OPENERS_PATTERN})\\b`,
+);
+
 function looksLikeProgressOnlyReply(replyText: string): boolean {
 	const normalized = replyText.trim().toLowerCase();
 	if (!normalized) return false;
 	if (PLANNING_ACK_REPLIES.has(normalized)) return true;
-	return /^(?:checking|fetching|gathering|looking (?:up|into)|running|using|spawning|starting|working on|one moment|let me|i(?:'|’)ll|i will)\b/.test(
-		normalized,
-	);
+	return PROGRESS_ONLY_REPLY_REGEX.test(normalized);
 }
 
 function looksLikeCompleteDirectReply(replyText: string): boolean {
@@ -4531,6 +4615,100 @@ export function inferDirectCurrentRequestCandidateActions(
 			findCodingDelegationActionName,
 		},
 	);
+}
+
+function inferDirectCurrentRequestCandidateInference(
+	actions: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>,
+	messageText: string,
+): DirectCurrentRequestCandidateInference {
+	return inferDirectCurrentRequestCandidateInferenceFromHeuristics(
+		actions,
+		messageText,
+		{
+			looksLikeCodingWorkRequest,
+			findCodingDelegationActionName,
+		},
+	);
+}
+
+/**
+ * True when a text-inferred (never model-emitted) candidate set must NOT
+ * escalate this turn to a tool-required planner surface: Stage 1 already
+ * ANSWERED the turn (only simple/absent contexts, a non-empty replyText, and
+ * zero candidateActionNames of its own) and the only "evidence" for a tool is
+ * a weak view-capability token overlap (e.g. "whats 17 TIMES 23" matching the
+ * views action's "screen-time" tag via TIME). Observed live on both the app
+ * REST surface and Discord (trajectories tj-501e594bfb23a7, tj-5d1c9601f33e8d):
+ * the injected VIEWS candidate forced toolChoice=required, the planner's
+ * correct terminal answer was rejected maxRequiredToolMisses times, and the
+ * user got the generic transient-failure apology instead of the answer.
+ *
+ * Deliberately narrow — keyed on the Stage-1 plan SHAPE, not the connector:
+ * model-emitted candidates always escalate, shell/coding/web inferences keep
+ * their backstop behavior (live-info acks still force the fetch), and the
+ * strong view inferences (explicit surface nouns, bare-name voice navigation)
+ * still escalate so genuine view-switching UX is untouched.
+ */
+function shouldSuppressInferredCandidateEscalation(args: {
+	inference: DirectCurrentRequestCandidateInference;
+	stageOneContexts: readonly string[];
+	stageOneReplyText: string;
+	stageOneCandidateActions: readonly string[];
+}): boolean {
+	if (args.inference.kind !== "view-capability") return false;
+	if (args.stageOneCandidateActions.length > 0) return false;
+	if (args.stageOneReplyText.trim().length === 0) return false;
+	// An ack-shaped reply ("On it.", "Let me pull that up.") is a delegation
+	// commitment, not an answer — suppressing the candidate here would ship the
+	// ack as the whole turn with nothing behind it (the ack-rescue paths only
+	// cover shell/web/coding, never views). Only a genuinely answer-shaped
+	// replyText qualifies the turn as "already answered".
+	if (looksLikeProgressOnlyReply(args.stageOneReplyText)) return false;
+	return !args.stageOneContexts.some(
+		(context) => context.trim().toLowerCase() !== SIMPLE_CONTEXT_ID,
+	);
+}
+
+/**
+ * Per-turn required-tool miss-budget cap for the view-SURFACE flavor of the
+ * waste `shouldSuppressInferredCandidateEscalation` suppresses outright for
+ * view-capability overlaps. A view-surface inference on an already-answered
+ * simple turn (live: "whats the best way to close a window in vim" — WINDOW
+ * is a surface noun) must still escalate — a genuine "open the settings
+ * window" ask needs the tool — but when the planner then keeps ANSWERING
+ * instead of calling the view tool, every rejected answer burns a full
+ * planner round and the exhaustion rescue ships the stage-1 answer anyway
+ * (observed live: 18.5s, four rejected answers, right answer). Capping the
+ * budget to 0 fires that rescue after ONE rejected answer.
+ *
+ * Two-sided gate keeps genuine view work on the full corrective budget: this
+ * side requires the answer shape by the exhaustion path's own
+ * PROGRESS_ONLY_ANSWER_REJECT superset (an ack such as "Opening the settings
+ * panel." never qualifies), and the planner loop independently ignores the
+ * cap unless the stage-1 text passes its answer-shape gate (see
+ * PlannerLoopParams.requiredToolMissBudgetOverride). Shell / web / coding
+ * inferences and bare-noun view navigation (#9950) never reach here — the
+ * kind check excludes them.
+ */
+function viewOverlapRequiredToolMissBudget(args: {
+	inference: DirectCurrentRequestCandidateInference;
+	stageOneContexts: readonly string[];
+	stageOneReplyText: string;
+	stageOneCandidateActions: readonly string[];
+}): number | undefined {
+	if (args.inference.kind !== "view-surface") return undefined;
+	if (args.stageOneCandidateActions.length > 0) return undefined;
+	const replyText = args.stageOneReplyText.trim();
+	if (replyText.length === 0) return undefined;
+	if (PROGRESS_ONLY_ANSWER_REJECT.test(replyText)) return undefined;
+	if (
+		args.stageOneContexts.some(
+			(context) => context.trim().toLowerCase() !== SIMPLE_CONTEXT_ID,
+		)
+	) {
+		return undefined;
+	}
+	return 0;
 }
 
 const LIVE_LOOKUP_UNAVAILABLE_REPLY =
@@ -7020,6 +7198,23 @@ export async function runV5MessageRuntimeStage1(args: {
 				config: args.plannerLoopConfig,
 				tools: plannerTools.length > 0 ? plannerTools : undefined,
 				requireNonTerminalToolCall,
+				// Fallback honesty for required-tool exhaustion: Stage 1's own
+				// replyText (when answer-shaped) is surfaced instead of the
+				// generic transient-failure apology. Duplicate delivery is safe —
+				// early-reply turns dedup via plannedTextRepeatsEarlyReply.
+				stageOneReplyText:
+					typeof messageHandler.plan.reply === "string"
+						? messageHandler.plan.reply
+						: undefined,
+				// Per-turn miss-budget cap for answered turns escalated only by a
+				// view-surface token overlap (see viewOverlapRequiredToolMissBudget);
+				// the loop honors it only when stageOneReplyText is answer-shaped.
+				...(typeof messageHandler.plan.requiredToolMissBudget === "number"
+					? {
+							requiredToolMissBudgetOverride:
+								messageHandler.plan.requiredToolMissBudget,
+						}
+					: {}),
 				evaluatorEffects,
 				recorder,
 				trajectoryId,

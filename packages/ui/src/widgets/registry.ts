@@ -223,12 +223,11 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     // whole row with a real progress bar (it self-hides once ready).
     size: { cols: 4, rows: 2 },
   },
-  // Cloud-agent provisioning (CLOUD mode) is NO LONGER a home tile: while a
-  // freshly-provisioned dedicated cloud agent boots, the status belongs IN the
-  // chat (rendered above the composer by ContinuousChatOverlay via the same
-  // AgentProvisioningWidget + useCloudHandoffPhase event), not floating in the
-  // home widget grid above the chat. The component + its home-widget definition
-  // stay exported for that in-chat render.
+  // Cloud-agent provisioning is no longer a home resident: shared-tier users
+  // saw a permanent "Setting up..." card against a healthy running agent, and
+  // dedicated boot status belongs in chat above the composer. The component
+  // stays exported for CloudHandoffBanner, the chat provisioning tile, stories,
+  // and tests.
   // The wallet, sleep, and standalone goals residents are NO LONGER home
   // residents (spec §B "Explicitly NOT residents" / §E items 3-5):
   //  - wallet: a balance is state, not change. It fails the two-second "what
