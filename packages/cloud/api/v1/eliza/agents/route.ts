@@ -568,6 +568,31 @@ app.post("/", async (c) => {
             201,
           );
         }
+        // Claim returned null: either the pool was EMPTY (starvation — the
+        // steady state when replenish is broken) or the user's row was
+        // ineligible (already running / already has a DB). Distinguish them so
+        // the starvation signal isn't polluted by benign re-provisions. A
+        // genuinely empty pool means this create silently degrades to the
+        // 30-120s cold path; `warm_pool.empty_on_claim` makes that visible
+        // (the existing `warm_pool.claim_failed` only covers THROWs).
+        try {
+          const ready =
+            await agentSandboxesRepository.countReadyPoolEntriesForImage(
+              containersEnv.defaultAgentImage(),
+            );
+          if (ready === 0) {
+            logger.warn(
+              "[agent-api] Warm pool empty on create; degrading to cold path",
+              {
+                event: "warm_pool.empty_on_claim",
+                agentId: agent.id,
+                orgId: user.organization_id,
+              },
+            );
+          }
+        } catch {
+          // Observability probe is best-effort; never block the create path.
+        }
       } catch (err) {
         // Don't block on claim errors — fall through to the async job path.
         // Emit a stable `event` so a persistently broken warm pool is
