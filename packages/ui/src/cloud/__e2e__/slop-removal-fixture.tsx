@@ -5,9 +5,12 @@
  *
  * - default: registers every cloud surface (the real `registerAllCloudSurfaces`
  *   boot hook) and mounts the real {@link CloudRouterShell} with a probe
- *   catch-all, so the harness can drive the legacy `/dashboard/*` deep links
- *   and prove each one redirects to its canonical `/settings#<section>` home
- *   (query preserved, hash resolving to a registered settings section).
+ *   catch-all, so the harness can drive the `/dashboard/*` console routes (the
+ *   standalone dual-mount pages + the legacy → canonical redirects) and the
+ *   in-app `/settings#<section>` hash surface. The probe stands in for the
+ *   agent app under the catch-all: `/settings` falls through to it (it is an
+ *   in-app view, not a registered cloud route), so it reports the landed
+ *   location and the settings section the hash contract resolves.
  *
  * - `?surface=<billing|monetization|security|api-keys|account>`: mounts that
  *   surface's REAL registered settings section (the exact zero-prop component
