@@ -535,11 +535,11 @@ jobs:
           SERVED_URL: ${{ steps.env.outputs.deploy_environment == 'production' && 'https://api.elizacloud.ai' || 'https://api-staging.elizacloud.ai' }}
           FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true }}
         run: |
-          node packages/scripts/cloud/deploy-freshness-guard-cli.mjs \
-            --run-sha "$GITHUB_SHA" \
-            --served-url "$SERVED_URL" \
-            --served-path /api/health \
-            $([ "$FORCE" = "true" ] && echo --force)
+          args=(--run-sha "$GITHUB_SHA" --served-url "$SERVED_URL" --served-path /api/health)
+          if [ "$FORCE" = "true" ]; then
+            args+=(--force)
+          fi
+          node packages/scripts/cloud/deploy-freshness-guard-cli.mjs "${args[@]}"
 
       - name: Deploy to Cloudflare Workers
         if: steps.cf.outputs.configured == 'true' && steps.freshness.outputs.should_deploy == 'true'
@@ -548,6 +548,40 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: bunx wrangler deploy ${{ steps.env.outputs.wrangler_args }} --var ELIZA_DEPLOY_COMMIT:"$GITHUB_SHA"
+
+      - name: Verify deployed API commit
+        if: steps.cf.outputs.configured == 'true' && steps.freshness.outputs.should_deploy == 'true'
+        working-directory: ${{ env.CHECKOUT_DIR }}
+        env:
+          API_URL: ${{ steps.env.outputs.deploy_environment == 'production' && 'https://api.elizacloud.ai' || 'https://api-staging.elizacloud.ai' }}
+          DEPLOY_ENVIRONMENT: ${{ steps.env.outputs.deploy_environment }}
+        run: |
+          set -euo pipefail
+          expected_commit="$GITHUB_SHA"
+          expected_environment="$DEPLOY_ENVIRONMENT"
+          health_url="${API_URL%/}/api/health"
+          for attempt in 1 2 3 4 5 6; do
+            tmp="$(mktemp)"
+            code="$(curl -sS -o "$tmp" -w '%{http_code}' -m 20 "$health_url" || echo "000")"
+            if [ "$code" = "200" ] && head -c 1 "$tmp" | grep -q '[{[]'; then
+              observed_commit="$(node -e "const fs=require('fs'); const data=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); process.stdout.write(data.commit || '')" "$tmp")"
+              observed_environment="$(node -e "const fs=require('fs'); const data=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); process.stdout.write(data.environment || '')" "$tmp")"
+              if [ "$observed_commit" = "$expected_commit" ] && [ "$observed_environment" = "$expected_environment" ]; then
+                echo "API health serves commit ${observed_commit} for ${observed_environment}."
+                rm -f "$tmp"
+                exit 0
+              fi
+              echo "API health attempt ${attempt}: commit=${observed_commit:-<missing>} environment=${observed_environment:-<missing>}, expected commit=${expected_commit} environment=${expected_environment}" >&2
+            else
+              echo "API health attempt ${attempt}: HTTP ${code} from ${health_url}" >&2
+              head -c 300 "$tmp" >&2 2>/dev/null || true
+              echo >&2
+            fi
+            rm -f "$tmp"
+            [ "$attempt" -lt 6 ] && sleep 10
+          done
+          echo "::error::API health did not serve the deployed commit ${expected_commit} for ${expected_environment}."
+          exit 1
 
       - name: Clean temp checkout
         if: always()
@@ -853,10 +887,11 @@ jobs:
           SERVED_URL: ${{ ((github.event_name == 'workflow_dispatch' && inputs.environment == 'production') || github.ref == 'refs/heads/main') && 'https://elizacloud.ai' || 'https://staging.elizacloud.ai' }}
           FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true }}
         run: |
-          node packages/scripts/cloud/deploy-freshness-guard-cli.mjs \
-            --run-sha "$GITHUB_SHA" \
-            --served-url "$SERVED_URL" \
-            $([ "$FORCE" = "true" ] && echo --force)
+          args=(--run-sha "$GITHUB_SHA" --served-url "$SERVED_URL")
+          if [ "$FORCE" = "true" ]; then
+            args+=(--force)
+          fi
+          node packages/scripts/cloud/deploy-freshness-guard-cli.mjs "${args[@]}"
 
       - name: Deploy to Cloudflare Pages
         if: steps.cf.outputs.configured == 'true' && (github.event_name == 'pull_request' || steps.freshness.outputs.should_deploy == 'true')
@@ -1228,10 +1263,11 @@ jobs:
           SERVED_URL: ${{ ((github.event_name == 'workflow_dispatch' && inputs.environment == 'production') || github.ref == 'refs/heads/main') && 'https://app.elizacloud.ai' || 'https://app-staging.elizacloud.ai' }}
           FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true }}
         run: |
-          node packages/scripts/cloud/deploy-freshness-guard-cli.mjs \
-            --run-sha "$GITHUB_SHA" \
-            --served-url "$SERVED_URL" \
-            $([ "$FORCE" = "true" ] && echo --force)
+          args=(--run-sha "$GITHUB_SHA" --served-url "$SERVED_URL")
+          if [ "$FORCE" = "true" ]; then
+            args+=(--force)
+          fi
+          node packages/scripts/cloud/deploy-freshness-guard-cli.mjs "${args[@]}"
 
       - name: Deploy to Cloudflare Pages
         if: steps.cf.outputs.configured == 'true' && (github.event_name == 'pull_request' || steps.freshness.outputs.should_deploy == 'true')
