@@ -95,7 +95,12 @@ function makeRuntime() {
 		source: "test",
 		type: ChannelType.DM,
 	};
-	const useModel = vi.fn(async () => stage1DirectReply(MODEL_REPLY));
+	// Typed params so `mock.calls` carries the model type the caller passed
+	// (`runtime.useModel(modelType, params)`); the impl ignores them and always
+	// returns the same Stage 1 direct reply.
+	const useModel = vi.fn(async (_modelType: string, _params?: unknown) =>
+		stage1DirectReply(MODEL_REPLY),
+	);
 	const runActionsByMode = vi.fn(async () => undefined);
 	const emitEvent = vi.fn(async () => undefined);
 
@@ -190,8 +195,16 @@ describe("message service pre-LLM direct hook removed (#14715)", () => {
 			callback,
 		);
 
-		expect(useModel).toHaveBeenCalledTimes(1);
-		expect(useModel.mock.calls[0]?.[0]).toBe(ModelType.RESPONSE_HANDLER);
+		// Stage 1 (RESPONSE_HANDLER) must run exactly once — proving the turn reached
+		// the model/planner path, not a canned pre-LLM hook (which calls it zero
+		// times). Assert on the RESPONSE_HANDLER invocations specifically: the message
+		// path also fires an orthogonal pre-Stage-1 recall-embedding warm-up
+		// (`embedRecallQuery` → TEXT_EMBEDDING, added in #15252 to overlap recall with
+		// generation), so a raw call count is not the right invariant.
+		const responseHandlerCalls = useModel.mock.calls.filter(
+			([modelType]) => modelType === ModelType.RESPONSE_HANDLER,
+		);
+		expect(responseHandlerCalls).toHaveLength(1);
 		expect(result.didRespond).toBe(true);
 		expect(result.mode).toBe("simple");
 		expect(result.responseContent?.text).toBe(MODEL_REPLY);
