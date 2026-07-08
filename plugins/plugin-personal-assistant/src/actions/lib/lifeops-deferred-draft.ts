@@ -15,12 +15,12 @@ import {
   runWithTrajectoryPurpose,
 } from "@elizaos/core";
 import { getRecentMessagesData } from "@elizaos/shared";
-import { asCacheRuntime } from "../../lifeops/runtime-cache.js";
 import type {
   CreateLifeOpsDefinitionRequest,
   CreateLifeOpsGoalRequest,
   LifeOpsCadence,
 } from "../../contracts/index.js";
+import { asCacheRuntime } from "../../lifeops/runtime-cache.js";
 
 /** Maximum age (ms) for a deferred draft before it expires. */
 export const DRAFT_EXPIRY_MS = 5 * 60 * 1000;

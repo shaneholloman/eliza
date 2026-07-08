@@ -290,8 +290,7 @@ describe("AgentSandboxesRepository", () => {
       "e06bb509-6c52-4c33-a9f7-66addc43e8c8",
     );
 
-    if (!capturedWhere)
-      throw new Error("markRunningFromProvisioning did not build a where clause");
+    if (!capturedWhere) throw new Error("markRunningFromProvisioning did not build a where clause");
     const sql = new PgDialect().sqlToQuery(capturedWhere).sql.toLowerCase();
     expect(sql).toContain("sandbox_id");
     expect(sql).toContain("node_id");

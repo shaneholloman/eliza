@@ -4008,7 +4008,8 @@ export function ContinuousChatOverlay({
       // dragged back down.
       if (
         cont < insetPanelMaxH &&
-        maxPullRawRef.current >= insetPanelMaxH + maxOverPull * MAXIMIZE_COMMIT_T
+        maxPullRawRef.current >=
+          insetPanelMaxH + maxOverPull * MAXIMIZE_COMMIT_T
       ) {
         maxPullRawRef.current = 0;
       }
@@ -4089,7 +4090,11 @@ export function ContinuousChatOverlay({
       // A real keyboard blocks maximize (the edge-to-edge panel would spill above
       // the keyboard-shrunk visual viewport); a pull-to-full with the keyboard up
       // settles at the inset FULL detent instead.
-      if (overpullT >= MAXIMIZE_COMMIT_T && !maximized && !keyboardBlocksMaximize) {
+      if (
+        overpullT >= MAXIMIZE_COMMIT_T &&
+        !maximized &&
+        !keyboardBlocksMaximize
+      ) {
         setFreeH(null);
         setMode("full");
         setMaximized(true);

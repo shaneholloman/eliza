@@ -88,8 +88,8 @@ import {
   extractUpdateFieldsWithLlm,
 } from "./lib/extract-update-fields.js";
 import {
-  countTurnsSinceLatestDeferredLifeDraft,
   clearDeferredLifeDraftCache,
+  countTurnsSinceLatestDeferredLifeDraft,
   type DeferredLifeDefinitionDraft,
   type DeferredLifeDraft,
   type DeferredLifeDraftFollowupMode,
