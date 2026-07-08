@@ -44,9 +44,14 @@ const prepareManagedElizaEnvironment = mock(async () => ({
   environmentVars: {},
 }));
 
-const loggerInfo = mock(() => undefined);
-const loggerWarn = mock(() => undefined);
-const loggerError = mock(() => undefined);
+type LoggerWarnMeta = {
+  event?: string;
+  agentId?: string;
+  orgId?: string;
+};
+const loggerInfo = mock((_msg: string, _meta?: LoggerWarnMeta) => undefined);
+const loggerWarn = mock((_msg: string, _meta?: LoggerWarnMeta) => undefined);
+const loggerError = mock((_msg: string, _meta?: LoggerWarnMeta) => undefined);
 
 const claimWarmContainer = mock(async () => null);
 const listByOrganization = mock(async () => []);
