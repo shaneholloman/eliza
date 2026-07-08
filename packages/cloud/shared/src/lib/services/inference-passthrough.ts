@@ -40,6 +40,15 @@ export function isPassthroughStreamingEnabled(env: StringEnv = getCloudAwareEnv(
 }
 
 /**
+ * Sibling flag for the non-streaming embeddings pipe (#15512). Same soak
+ * discipline and rollback shape as the streaming flag; embeddings are simpler
+ * (single JSON response, no tee) so the two roll out independently.
+ */
+export function isPassthroughEmbeddingsEnabled(env: StringEnv = getCloudAwareEnv()): boolean {
+  return (env.INFERENCE_PASSTHROUGH_EMBEDDINGS ?? "").trim() === "true";
+}
+
+/**
  * Token usage extracted from the upstream's terminal usage frame, in the field
  * names `billUsage` normalizes — so the settle chain bills exactly what the
  * provider reported, same as the SDK path's `onFinish` usage.
