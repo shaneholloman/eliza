@@ -3883,7 +3883,7 @@ export function createRouter() {
               methods: ["lookup"],
             }],
             appBridge: { hooks: ["prepareLaunch"] },
-            routes: [{ method: "POST", path: "/built-source/route", public: true, name: "built-source-route", publicReason: "Remote adapter built source fixture public route." }],
+            routes: [{ method: "POST", path: "/built-source/route", public: true, name: "built-source-route", publicReason: "Remote adapter built source fixture public route.", publicWrite: "Remote capability POST authenticated by the endpoint's own bearer token, not the local gate." }],
             views: [{ id: "built-source.view", label: "Built Source View", bundlePath: "/assets/remote-view.js" }],
           },
         ],
@@ -4302,7 +4302,7 @@ const server = createServer(async (req, res) => {
           description: "Remote plugin served from a child process.",
           actions: [{ name: "PROCESS_ACTION", description: "Run process action." }],
           providers: [{ name: "PROCESS_CONTEXT", description: "Process provider." }],
-          routes: [{ method: "POST", path: "/process/route", public: true, name: "process-route", publicReason: "Remote adapter process fixture public route." }],
+          routes: [{ method: "POST", path: "/process/route", public: true, name: "process-route", publicReason: "Remote adapter process fixture public route.", publicWrite: "Remote capability POST authenticated by the endpoint's own bearer token, not the local gate." }],
           views: [{ id: "process.view", label: "Process View", bundlePath: "/assets/process-view.js" }],
         }] } });
       }
@@ -4547,7 +4547,7 @@ createServer(async (req, res) => {
             models: [{ modelType: "DOCKER_TEXT", priority: 10 }],
             services: [{ serviceType: "docker_service", capabilityDescription: "Docker service.", methods: ["lookup"] }],
             appBridge: { hooks: ["prepareLaunch"] },
-            routes: [{ method: "POST", path: "/docker/route", public: true, name: "docker-route", publicReason: "Remote adapter Docker fixture public route." }],
+            routes: [{ method: "POST", path: "/docker/route", public: true, name: "docker-route", publicReason: "Remote adapter Docker fixture public route.", publicWrite: "Remote capability POST authenticated by the endpoint's own bearer token, not the local gate." }],
             views: [{ id: "docker.view", label: "Docker View", bundlePath: "/assets/docker-view.js" }],
           },
           {
@@ -4564,7 +4564,7 @@ createServer(async (req, res) => {
             models: [{ modelType: "DOCKER_TOOLS_TEXT", priority: 11 }],
             services: [{ serviceType: "docker_tools_service", capabilityDescription: "Docker tools service.", methods: ["lookup"] }],
             appBridge: { hooks: ["prepareLaunch"] },
-            routes: [{ method: "POST", path: "/docker-tools/route", public: true, name: "docker-tools-route", publicReason: "Remote adapter Docker tools fixture public route." }],
+            routes: [{ method: "POST", path: "/docker-tools/route", public: true, name: "docker-tools-route", publicReason: "Remote adapter Docker tools fixture public route.", publicWrite: "Remote capability POST authenticated by the endpoint's own bearer token, not the local gate." }],
             views: [{ id: "docker.tools.view", label: "Docker Tools View", bundlePath: "/assets/docker-tools-view.js" }],
           },
         ] } });

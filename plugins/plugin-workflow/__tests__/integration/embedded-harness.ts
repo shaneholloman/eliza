@@ -57,7 +57,13 @@ export async function makeEmbeddedHarness(agentSeed: string): Promise<EmbeddedHa
       error: () => {},
     },
     services,
-    getSetting: () => null,
+    // Suppress the default health-check workflow seed: these harnesses verify
+    // run/dispatch mechanics against explicitly-created workflows, and the
+    // auto-seeded default (which also runs once and arms a schedule on start)
+    // is orthogonal pollution here — it would otherwise leave a stray execution
+    // row and trigger task. The seed path is covered by the embedded service's
+    // own unit suite.
+    getSetting: (key: string) => (key === 'WORKFLOW_SEED_DEFAULTS' ? 'false' : null),
     getService: (type: string) => {
       const entries = services.get(type);
       return entries && entries.length > 0 ? entries[0] : null;

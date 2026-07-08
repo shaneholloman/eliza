@@ -114,9 +114,14 @@ function convertPngToJpg(src, dest) {
     if (sips.status === 0 && isNonEmptyFile(dest)) return true;
   }
   if (shellAvailable("ffmpeg")) {
+    // `-update 1` is required to write a single still to a fixed (non-pattern)
+    // filename: without it the image2 muxer demands a `%d` sequence pattern and
+    // older ffmpeg builds treat the missing pattern as a fatal error (non-zero
+    // exit, no file). Newer builds only warn, so the flag keeps the conversion
+    // deterministic across ffmpeg versions on the CI runners.
     const ffmpeg = spawnSync(
       "ffmpeg",
-      ["-y", "-i", src, "-frames:v", "1", "-q:v", "2", dest],
+      ["-y", "-i", src, "-frames:v", "1", "-update", "1", "-q:v", "2", dest],
       { stdio: "ignore" },
     );
     if (ffmpeg.status === 0 && isNonEmptyFile(dest)) return true;
