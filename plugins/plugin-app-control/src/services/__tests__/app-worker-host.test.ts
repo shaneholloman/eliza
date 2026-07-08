@@ -52,8 +52,15 @@ describe("AppWorkerHostService worker bridge", () => {
 		expect(snapshot.slug).toBe("fixture-bridge");
 		expect(snapshot.pid).not.toBeNull();
 		expect(snapshot.readyMs).not.toBeNull();
-		expect(snapshot.readyMs).toBeLessThan(2_000);
-	});
+		// readyMs is spawn + worker module-load latency, dominated by the OS
+		// thread/process spawn cost — NOT the RPC round-trip (that budget is asserted
+		// separately by the p50/p95 echo bench). On a loaded, contended self-hosted
+		// CI host — Windows especially, where process spawn is heavy — worker startup
+		// routinely runs several seconds, so a tight budget flakes on the environment
+		// rather than catching a regression. This generous ceiling only trips on a
+		// genuine spawn hang; the per-test timeout backstops a true never-ready.
+		expect(snapshot.readyMs).toBeLessThan(15_000);
+	}, 30_000);
 
 	it("ping round-trip returns the worker's slug + isolation", async () => {
 		await service.spawn({ slug: "fixture-ping", isolation: "worker" });

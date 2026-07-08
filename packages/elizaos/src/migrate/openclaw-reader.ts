@@ -111,9 +111,25 @@ const ROOT_MEMORY_CANDIDATES = ["MEMORY.md", "memory.md"] as const;
  */
 const HOME_SUBROOTS = ["", "workspace", "workspace.default"] as const;
 
+/**
+ * Normalize CRLF (and lone CR) line endings to LF.
+ *
+ * An OpenClaw home authored on — or, on CI, git-checked-out onto — Windows
+ * carries CRLF markdown (no `.gitattributes eol=lf` pins these files, and
+ * `core.autocrlf=true` rewrites them on checkout). The persona mapper matches
+ * bullet lines with `$`-anchored, per-line regexes (`character-mapper.ts`); a
+ * trailing `\r` blocks `$` (JS `.` never matches `\r`, and `$` without `m` only
+ * matches the true end of string), so `style.chat` and bio bullets silently come
+ * back empty. Normalizing at the read boundary makes every downstream classifier
+ * and regex line-ending agnostic.
+ */
+function normalizeEol(text: string): string {
+  return text.replace(/\r\n?/g, "\n");
+}
+
 function readIfPresent(p: string): string | undefined {
   try {
-    return fs.readFileSync(p, "utf8");
+    return normalizeEol(fs.readFileSync(p, "utf8"));
   } catch {
     return undefined;
   }
@@ -303,7 +319,7 @@ function readSqliteMemory(store: OcSqliteStore): {
   let awareness: string | undefined;
   for (const [p, g] of byPath) {
     const base = path.basename(p);
-    const text = g.parts.join("\n");
+    const text = normalizeEol(g.parts.join("\n"));
     const m = DAILY_RE.exec(base);
     if (m) {
       const [, y, mo, d] = m;
@@ -358,7 +374,7 @@ export function readOcAgentHome(home: string, agentId: string): OcAgentSource {
     let text: string;
     try {
       if (!fs.statSync(full).isFile()) continue;
-      text = fs.readFileSync(full, "utf8");
+      text = normalizeEol(fs.readFileSync(full, "utf8"));
     } catch {
       continue;
     }
