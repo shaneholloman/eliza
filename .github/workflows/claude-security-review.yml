@@ -51,11 +51,13 @@ jobs:
           fetch-depth: 2
 
       - name: Run Claude Security Review
-        if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
         # Pinned to SHA for supply chain security.
         uses: anthropics/claude-code-security-review@0c6a49f1fa56a1d472575da86a94dbc1edb78eda
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
-          claude-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude-api-key: ${{ env.ANTHROPIC_API_KEY }}
           comment-pr: true
           upload-results: true
           claudecode-timeout: 30
