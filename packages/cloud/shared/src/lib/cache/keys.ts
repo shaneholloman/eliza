@@ -248,13 +248,19 @@ export const CacheTTL = {
     appMapping: 600, // 10 minutes - app-to-API-key mapping rarely changes
   },
   /**
-   * Inference hot-path TTLs (#9899). Deliberately short: the IAC entry caches a
-   * fully-authorized auth+moderation decision, so its TTL is the load-bearing
-   * bound on how long a revoked/banned credential is served if explicit
-   * invalidation is missed or lost to KV propagation lag.
+   * Inference hot-path TTLs (#9899). The IAC entry caches a fully-authorized
+   * auth+moderation decision. Its PRIMARY freshness mechanism is explicit
+   * confirmed-delete invalidation on every credential mutation — revoke/update
+   * (api-keys), ban (users), org deactivate (organizations) — all fail-closed
+   * (#13417), so the TTL is only the backstop for an invalidation that was
+   * never issued. At 60s every chat pause longer than a minute paid the full
+   * cold auth rebuild (~1.7s measured on prod, the dominant term of the
+   * 3-5.5s first-message-after-idle spike); 300s keeps active conversations
+   * warm across natural gaps while bounding a lost-invalidation window to the
+   * same 5 minutes org.data already accepts.
    */
   inference: {
-    authContext: 60, // 1 minute - worst-case revoked/banned exposure ~= TTL + KV lag
+    authContext: 300, // 5 min - backstop only; revoke paths invalidate explicitly (fail-closed)
     orgBalance: 15, // 15 seconds - optimistic-billing gate hint, kept tight to bound drift
     pendingCharge: 3600, // 60 min - sweep window = TTL - grace(20m) = 40m, survives cron hiccups
   },
