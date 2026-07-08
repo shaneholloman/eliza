@@ -497,7 +497,11 @@ async function finishLocal(
 export async function bindCloudAgent(
   sourceDraft: FirstRunProfileDraft,
   authToken: string,
-  opts: { preferAgentId?: string | null; forceCreate?: boolean },
+  opts: {
+    preferAgentId?: string | null;
+    forceCreate?: boolean;
+    knownAgents?: CloudCompatAgent[];
+  },
   ports: FirstRunFinishPorts,
 ): Promise<FirstRunFinishOutcome> {
   ports.onStatus?.("Setting up your cloud agent", "setup");
@@ -520,6 +524,7 @@ export async function bindCloudAgent(
     bio,
     ...(opts.preferAgentId ? { preferAgentId: opts.preferAgentId } : {}),
     ...(opts.forceCreate ? { forceCreate: true } : {}),
+    ...(opts.knownAgents ? { knownAgents: opts.knownAgents } : {}),
     ...(getBootConfig().preferSharedCloudTier
       ? { preferSharedTier: true }
       : {}),
@@ -737,6 +742,7 @@ export async function listOrAutoProvisionCloudAgent(
     {
       forceCreate: false,
       ...(agentId ? { preferAgentId: agentId } : {}),
+      knownAgents: list.data,
     },
     ports,
   );
