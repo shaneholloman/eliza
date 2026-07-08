@@ -516,8 +516,25 @@ jobs:
               echo "app-debug.apk not found at $APP_APK — build:android should have produced it"
               exit 1
             fi
+            ASSISTANT_ARTIFACT_DIR="$GITHUB_WORKSPACE/packages/app/test-results/android-assistant-verify"
+            mkdir -p "$ASSISTANT_ARTIFACT_DIR"
+            VERIFY_STATUS=0
             node "$GITHUB_WORKSPACE/packages/app/scripts/android-assistant-verify.mjs" \
-              --require-device --json
+              --require-device --json \
+              | tee "$ASSISTANT_ARTIFACT_DIR/verdict.json" || VERIFY_STATUS=$?
+            adb shell settings get secure voice_interaction_service \
+              > "$ASSISTANT_ARTIFACT_DIR/voice_interaction_service.txt" || true
+            adb shell settings get secure default_input_method \
+              > "$ASSISTANT_ARTIFACT_DIR/default_input_method.txt" || true
+            adb shell ime list -s \
+              > "$ASSISTANT_ARTIFACT_DIR/enabled_imes.txt" || true
+            adb shell cmd role holders android.app.role.ASSISTANT \
+              > "$ASSISTANT_ARTIFACT_DIR/assistant_role_holders.txt" || true
+            adb shell dumpsys activity activities \
+              > "$ASSISTANT_ARTIFACT_DIR/dumpsys-activity.txt" || true
+            adb logcat -d -v brief \
+              > "$ASSISTANT_ARTIFACT_DIR/logcat.txt" || true
+            exit "$VERIFY_STATUS"
 
       - uses: actions/upload-artifact@v7
         if: always()
@@ -526,4 +543,5 @@ jobs:
           path: |
             plugins/plugin-native-*/android/build/reports/androidTests/**
             plugins/plugin-native-*/android/build/outputs/androidTest-results/**
+            packages/app/test-results/android-assistant-verify/**
           if-no-files-found: ignore
