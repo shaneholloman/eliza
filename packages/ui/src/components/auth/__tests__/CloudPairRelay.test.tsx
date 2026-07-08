@@ -80,6 +80,9 @@ describe("CloudPairRelay", () => {
     expect(
       resolveCloudPairExchangeUrl("https://api.elizacloud.ai/api/v1"),
     ).toBe("https://api.elizacloud.ai/api/auth/pair");
+    expect(resolveCloudPairExchangeUrl("https://www.elizacloud.ai")).toBe(
+      "https://elizacloud.ai/api/auth/pair",
+    );
   });
 
   it("detects Eliza Cloud-hosted surfaces without matching localhost", () => {
