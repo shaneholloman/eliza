@@ -128,6 +128,13 @@ export interface OptionalStaticPluginOverride {
    * registry key stays the bare package name.
    */
   readonly importSubpath?: "./plugin";
+  /**
+   * Some optional imports are intentionally outside the typecheck task graph or
+   * resolve through package-export conditions not every sibling tsconfig
+   * enables. The runtime/bundler still needs the literal import, so the
+   * generated module locally suppresses that import's declaration resolution.
+   */
+  readonly suppressTypeResolutionReason?: string;
 }
 
 export const OPTIONAL_STATIC_PLUGIN_OVERRIDES: Readonly<
@@ -145,7 +152,18 @@ export const OPTIONAL_STATIC_PLUGIN_OVERRIDES: Readonly<
   // regular one: plugin-inbox depends on app-core which depends on agent, so
   // a regular dep closes a turbo build cycle; peers stay out of the task
   // graph while bun still links the workspace package for resolution.)
-  "@elizaos/plugin-inbox": { importSubpath: "./plugin" },
+  "@elizaos/plugin-inbox": {
+    importSubpath: "./plugin",
+    suppressTypeResolutionReason:
+      "runtime subpath export is intentional; not every package tsconfig resolves its declaration condition.",
+  },
+  // This plugin is optional and peer-linked for mobile bundleability. Sibling
+  // package source typechecks import @elizaos/agent without depending on this
+  // package's build task, so its dist declarations can be absent mid-turbo run.
+  "@elizaos/plugin-native-filesystem": {
+    suppressTypeResolutionReason:
+      "optional mobile bundle plugin is outside sibling typecheck build graph; runtime import is guarded.",
+  },
 };
 
 /**
@@ -171,7 +189,12 @@ export function renderOptionalPluginImportsModule(
   const entries = packages
     .map((pkg) => {
       const specifier = optionalPluginImportSpecifier(pkg);
-      return `  "${pkg}": () => import("${specifier}"),`;
+      const suppression =
+        OPTIONAL_STATIC_PLUGIN_OVERRIDES[pkg]?.suppressTypeResolutionReason;
+      const comments = suppression
+        ? `  // biome-ignore lint/suspicious/noTsIgnore: optional literal imports may be unbuilt in sibling source typechecks.\n  // @ts-ignore: ${suppression}\n`
+        : "";
+      return `${comments}  "${pkg}": () => import("${specifier}"),`;
     })
     .join("\n");
   return `// GENERATED FILE — DO NOT EDIT BY HAND.
