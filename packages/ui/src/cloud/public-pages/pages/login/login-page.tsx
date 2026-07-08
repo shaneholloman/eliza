@@ -50,8 +50,15 @@ function LoginBackground({ children }: { children: React.ReactNode }) {
           paddingBottom: "max(env(safe-area-inset-bottom, 0px), 1rem)",
         }}
       >
-        <div className="relative z-10 flex flex-1 items-center justify-center">
-          <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 text-txt md:p-8 motion-safe:animate-[shell-overlay-in_320ms_cubic-bezier(0.16,1,0.3,1)]">
+        {/* Center the card vertically, but SCROLL — never clip — when it is
+            taller than the viewport. `overflow-y-auto` on the scroll region plus
+            the card's own `my-auto` keeps the card's top reachable; a flex
+            `justify-center` instead pushes the overflow above scrollTop 0, where
+            it is unreachable. Regressed on short screens (Light Phone III,
+            1080×1240) where the OAuth / wallet rows fell below an unscrollable
+            fold — see login-page.safe-area.test.tsx. */}
+        <div className="relative z-10 flex flex-1 flex-col items-center overflow-y-auto">
+          <div className="my-auto w-full max-w-md rounded-xl border border-border bg-card p-6 text-txt md:p-8 motion-safe:animate-[shell-overlay-in_320ms_cubic-bezier(0.16,1,0.3,1)]">
             {children}
           </div>
         </div>

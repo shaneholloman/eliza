@@ -68,3 +68,29 @@ describe("login page safe-area (#15361)", () => {
     ).toBe(false);
   });
 });
+
+describe("login page short-viewport scroll", () => {
+  // Short screens (e.g. Light Phone III, 1080x1240) make the sign-in card
+  // taller than the viewport. A flex `justify-center` centers it but the top
+  // overflows above scrollTop 0 and is unreachable — the OAuth / wallet rows
+  // fell below an unscrollable fold. The card region must be `overflow-y-auto`
+  // with the card itself `my-auto`, so it centers when it fits and
+  // scrolls-from-top when it overflows.
+  it("makes the sign-in card region scrollable instead of clipping when it exceeds the viewport", () => {
+    expect(
+      /flex-1[^"]*overflow-y-auto/.test(LOGIN_SRC),
+      "the sign-in card region must be overflow-y-auto to scroll when taller than the viewport",
+    ).toBe(true);
+  });
+
+  it("centers the card with my-auto (not a parent justify-center that clips the top)", () => {
+    expect(
+      /\bmy-auto\b[^"]*\bmax-w-md\b/.test(LOGIN_SRC),
+      "the sign-in card must center via my-auto so its top stays reachable while scrolling",
+    ).toBe(true);
+    expect(
+      /flex-1 items-center justify-center/.test(LOGIN_SRC),
+      "the card region must not use the top-clipping `flex ... items-center justify-center` centering",
+    ).toBe(false);
+  });
+});
