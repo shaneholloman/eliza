@@ -169,8 +169,22 @@ export function usePullGesture(
 
   const onPointerDown = React.useCallback(
     (event: React.PointerEvent) => {
-      if (event.isPrimary === false && event.pointerType && event.pointerType !== "mouse") return;
-      if (start.current && start.current.pointerId !== event.pointerId) return;
+      if (
+        event.isPrimary === false &&
+        event.pointerType &&
+        event.pointerType !== "mouse"
+      )
+        return;
+      // A press that reaches here is the primary pointer (a secondary touch
+      // finger returned above), so it is the ONLY pointer down. Any `start` still
+      // held with a different id is therefore stale — the previous gesture's
+      // element unmounted before delivering the pointerup/cancel that clears it
+      // (the maximize restore strip unmounts the instant a restore un-maximizes,
+      // so its captured release never lands and `start` is stranded with the old
+      // id). Re-seed from this press instead of letting the dead id reject every
+      // future gesture on the remounted element; only a duplicate down for the
+      // pointer we already track is ignored.
+      if (start.current?.pointerId === event.pointerId) return;
       start.current = {
         x: event.clientX,
         y: event.clientY,
