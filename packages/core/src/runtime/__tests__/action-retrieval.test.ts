@@ -386,6 +386,41 @@ describe("action catalogue and retrieval", () => {
 		}
 	});
 
+	it("maps synthetic goal candidate hints to the owner goals parent", () => {
+		const catalog = buildActionCatalog([
+			{
+				name: "OWNER_GOALS",
+				description:
+					"Owner goals: create, update, delete, and review long-horizon goals.",
+				contexts: ["goals"],
+			},
+			{
+				name: "SCHEDULED_TASKS",
+				description: "Low-level scheduled item administration.",
+				contexts: ["tasks"],
+			},
+		]);
+
+		for (const candidateAction of ["GOAL_SAVE", "CREATE_SAVINGS_PLAN"]) {
+			const response = retrieveActions({
+				catalog,
+				messageText:
+					candidateAction === "GOAL_SAVE"
+						? "Yes, save it."
+						: "I want to save money for a trip.",
+				candidateActions: [candidateAction],
+				selectedContexts: ["goals"],
+			});
+
+			expect(response.query.parentActionHints).toEqual(["OWNER_GOALS"]);
+			expect(response.results[0]).toMatchObject({
+				name: "OWNER_GOALS",
+				score: 1,
+				matchedBy: expect.arrayContaining(["exact"]),
+			});
+		}
+	});
+
 	it("does not retrieve actions from context match alone", () => {
 		const catalog = buildActionCatalog([
 			{

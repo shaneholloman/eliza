@@ -10,7 +10,12 @@
  * assert the action wires `dueWindow` to that primitive and shapes the result.
  */
 
-import type { HandlerCallback, IAgentRuntime, Memory } from "@elizaos/core";
+import type {
+  HandlerCallback,
+  IAgentRuntime,
+  Memory,
+  State,
+} from "@elizaos/core";
 import type {
   ScheduledTask,
   ScheduledTaskFilter,
@@ -104,6 +109,16 @@ vi.mock("../lifeops/pending-prompts/store.js", () => ({
   })),
 }));
 
+vi.mock("./life.js", () => ({
+  OWNER_OPERATION_VALIDATE: vi.fn(async () => true),
+  runLifeOperationHandler: vi.fn(async () => ({
+    success: true,
+    text: "Saved goal.",
+    data: { delegated: true },
+  })),
+}));
+
+import { runLifeOperationHandler } from "./life.js";
 import { scheduledTaskAction } from "./scheduled-task.js";
 
 function makeRuntime(): IAgentRuntime {
@@ -116,6 +131,40 @@ function makeMessage(): Memory {
     roomId: "room-1",
     content: { text: "" },
   } as unknown as Memory;
+}
+
+function makeTextMessage(text: string): Memory {
+  return {
+    entityId: "owner-entity",
+    roomId: "room-1",
+    content: { text },
+  } as unknown as Memory;
+}
+
+function makeGoalDraftState(): State {
+  return {
+    data: {
+      actionResults: [
+        {
+          success: false,
+          data: {
+            lifeDraft: {
+              operation: "create_goal",
+              intent:
+                "walk around the block after lunch three times a week for six weeks",
+              createdAt: Date.now(),
+              request: {
+                title: "Walk around the block",
+                description:
+                  "Walk around the block after lunch three times a week.",
+                metadata: { source: "chat" },
+              },
+            },
+          },
+        },
+      ],
+    },
+  } as unknown as State;
 }
 
 interface ListResultData {
@@ -287,6 +336,38 @@ describe("SCHEDULED_TASKS list — dueWindow filter", () => {
     expect(scheduledInputs.at(-1)).toMatchObject({
       output: { destination: "channel", target: "in_app:room-1" },
     });
+  });
+
+  it("delegates create attempts to the LifeOps draft save path on explicit confirmation turns", async () => {
+    const result = await scheduledTaskAction.handler(
+      makeRuntime(),
+      makeTextMessage("ok save that one"),
+      makeGoalDraftState(),
+      {
+        parameters: {
+          action: "create",
+          kind: "reminder",
+          promptInstructions:
+            "Walk around the block after lunch three times a week.",
+          trigger: { kind: "cron", expression: "0 13 * * 1,3,5", tz: "UTC" },
+        },
+      },
+      undefined,
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      text: "Saved goal.",
+      data: { delegated: true },
+    });
+    expect(runLifeOperationHandler).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ content: { text: "ok save that one" } }),
+      expect.anything(),
+      { parameters: { action: "create", ownerSurface: "OWNER_GOALS" } },
+      undefined,
+    );
+    expect(scheduledInputs).toEqual([]);
   });
 
   afterEach(() => {

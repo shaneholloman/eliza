@@ -197,6 +197,63 @@ describe("inferDirectCurrentRequestCandidateActions shell routing", () => {
 	});
 });
 
+describe("inferDirectCurrentRequestCandidateActions owner-goal routing", () => {
+	const actions = [
+		{ name: "REPLY", similes: [], tags: [] },
+		{
+			name: "OWNER_GOALS",
+			similes: ["CREATE_SAVINGS_PLAN", "SAVINGS_GOAL"],
+			tags: [],
+		},
+	] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
+
+	it("routes concrete goal-write details to the registered owner goals action", () => {
+		expect(
+			inferDirectCurrentRequestCandidateActions(
+				actions,
+				"Make it $2,000 by March 31 for the Lisbon trip, with a $175 transfer after each paycheck and a check-in if I fall behind.",
+			),
+		).toEqual(["OWNER_GOALS"]);
+	});
+
+	it("routes learning-goal starts, detail follow-ups, and draft confirmations to owner goals", () => {
+		expect(
+			inferDirectCurrentRequestCandidateActions(
+				actions,
+				"I want to learn conversational Spanish.",
+			),
+		).toEqual(["OWNER_GOALS"]);
+		expect(
+			inferDirectCurrentRequestCandidateActions(
+				actions,
+				"Count it if I walk around the block after lunch three times a week for the next six weeks.",
+			),
+		).toEqual(["OWNER_GOALS"]);
+		expect(
+			inferDirectCurrentRequestCandidateActions(
+				actions,
+				"Let's define success as holding a 10-minute cafe-style conversation without switching to English by December 1, with four 20-minute practice blocks each week.",
+			),
+		).toEqual(["OWNER_GOALS"]);
+		expect(
+			inferDirectCurrentRequestCandidateActions(actions, "ok save that one"),
+		).toEqual(["OWNER_GOALS"]);
+	});
+
+	it("does not infer owner-goal routing when the runtime has no goals action", () => {
+		const actions = [
+			{ name: "REPLY", similes: [], tags: [] },
+		] as unknown as ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>;
+
+		expect(
+			inferDirectCurrentRequestCandidateActions(
+				actions,
+				"Make it $2,000 by March 31 for the Lisbon trip, with a $175 transfer after each paycheck and a check-in if I fall behind.",
+			),
+		).toEqual([]);
+	});
+});
+
 describe("shell-direct coupling grep guard (#12636)", () => {
 	it("message.ts no longer duck-types shell-direct routing off a hardcoded name Set", () => {
 		// The audit item's brittle literal was a `SHELL_DIRECT_ACTIONS = new Set([...])`

@@ -22,6 +22,7 @@ export const FIRST_PARTY_CONTEXT_IDS = [
 	"calendar",
 	"contacts",
 	"tasks",
+	"goals",
 	"todos",
 	"productivity",
 	"health",

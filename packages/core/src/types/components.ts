@@ -815,16 +815,17 @@ export interface ActionResult {
 	 * By default an explicit evaluator `messageToUser` outranks this.
 	 * Set `verifiedUserFacing: true` to mark this text as canonical
 	 * (do-not-paraphrase) — e.g. when it contains paths, ids, counts,
-	 * or numeric metrics the evaluator might otherwise hallucinate.
+	 * numeric metrics, or a saved-vs-preview state the evaluator might
+	 * otherwise hallucinate.
 	 */
 	userFacingText?: string;
 
 	/**
 	 * When `true` and `userFacingText` is set, the planner-loop prefers
 	 * the action's `userFacingText` over the evaluator's `messageToUser`
-	 * for the terminal-FINISH reply. Use for structured outputs
-	 * (paths, ids, counts, numeric metrics) where a paraphrase risk is
-	 * worse than echoing the action verbatim.
+	 * for the terminal-FINISH reply. Use for structured outputs and
+	 * explicit confirmation previews where a paraphrase risk is worse
+	 * than echoing the action verbatim.
 	 */
 	verifiedUserFacing?: boolean;
 

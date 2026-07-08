@@ -274,6 +274,7 @@ export function isShellDirectActionName(
  * callers weigh the EVIDENCE STRENGTH of an inferred (never model-emitted)
  * candidate:
  * - "shell" / "coding" / "web": explicit intent phrasing in the message.
+ * - "owner-goals": concrete owner goal create/save/confirm phrasing.
  * - "view-surface": an operation verb PLUS an explicit UI-surface noun
  *   (view/window/panel/app/screen/ui) — strong navigation evidence.
  * - "view-navigation": the message is nothing but a bare registered surface
@@ -287,6 +288,7 @@ export function isShellDirectActionName(
 export type DirectCurrentRequestCandidateKind =
 	| "shell"
 	| "coding"
+	| "owner-goals"
 	| "view-surface"
 	| "view-navigation"
 	| "view-capability"
@@ -299,6 +301,113 @@ export interface DirectCurrentRequestCandidateInference {
 
 const EMPTY_DIRECT_CANDIDATE_INFERENCE: DirectCurrentRequestCandidateInference =
 	{ names: [], kind: null };
+
+const OWNER_GOALS_ACTION_NAMES = [
+	"OWNER_GOALS",
+	"GOALS",
+	"GOAL",
+	"CREATE_GOAL",
+	"SAVE_GOAL",
+	"SET_GOAL",
+	"SAVINGS_GOAL",
+	"CREATE_SAVINGS_PLAN",
+	"SAVINGS_PLAN",
+	"TRIP_SAVINGS_PLAN",
+	"TRAVEL_SAVINGS_PLAN",
+] as const;
+
+function looksLikeLearningGoalStart(text: string): boolean {
+	return (
+		/\bi\s+(?:want|would\s+like|need|am\s+trying|hope)\s+to\s+learn\b/iu.test(
+			text,
+		) && !/\blearn\s+about\b/iu.test(text)
+	);
+}
+
+function looksLikeGoalDetailFollowup(text: string): boolean {
+	const mentionsFrequency =
+		/\b(?:\d+|one|two|three|four|five|six|seven)\s+times?\s+(?:a|per)\s+week\b/iu.test(
+			text,
+		);
+	return (
+		(/\bcount\s+it\s+if\b/iu.test(text) &&
+			(mentionsFrequency ||
+				/\bnext\s+\d+\s+weeks?\b/iu.test(text) ||
+				/\bwalk\s+around\s+the\s+block\b/iu.test(text))) ||
+		(/\b(?:let'?s\s+)?define\s+success\s+as\b/iu.test(text) &&
+			(mentionsFrequency ||
+				/\bby\s+(?:january|february|march|april|may|june|july|august|september|october|november|december|\d{1,2})\b/iu.test(
+					text,
+				) ||
+				/\bwithout\s+switching\s+to\s+english\b/iu.test(text)))
+	);
+}
+
+function looksLikeGoalDraftConfirmation(text: string): boolean {
+	return /\b(?:ok(?:ay)?|yes|yep|yeah|sure)?\s*(?:save|set|confirm|approve)\s+(?:that|this|it|that\s+one|this\s+one)(?:\s+goal)?\b/iu.test(
+		text,
+	);
+}
+
+function looksLikeOwnerGoalWriteRequest(text: string): boolean {
+	const normalized = text.toLowerCase();
+	if (!normalized.trim()) {
+		return false;
+	}
+	if (
+		looksLikeLearningGoalStart(normalized) ||
+		looksLikeGoalDetailFollowup(normalized) ||
+		looksLikeGoalDraftConfirmation(normalized)
+	) {
+		return true;
+	}
+	if (
+		/\b(?:what|how|why|when|where)\b[\s\S]{0,80}\b(?:goal|goals|saving|savings|trip|fitness|learn|learning|sleep)\b/iu.test(
+			normalized,
+		) &&
+		!/\b(?:set|create|add|save|track|make|turn|store)\b/iu.test(normalized)
+	) {
+		return false;
+	}
+
+	const explicitGoalWrite =
+		/\b(?:set|create|add|save|track|make|turn|store)\b[\s\S]{0,120}\b(?:goal|goals|savings?\s+plan|trip\s+savings|travel\s+savings)\b/iu.test(
+			normalized,
+		) ||
+		/\b(?:goal|goals|savings?\s+plan|trip\s+savings|travel\s+savings)\b[\s\S]{0,120}\b(?:set|create|add|save|track|make|store)\b/iu.test(
+			normalized,
+		);
+	if (explicitGoalWrite) {
+		return true;
+	}
+
+	const hasGoalDomain =
+		/\b(?:goal|goals|save\s+money|saving|savings|trip|travel|fitness|5k|learn|learning|spanish|sleep)\b/iu.test(
+			normalized,
+		);
+	const hasConcreteTarget =
+		/(?:[$€£]\s?\d|\b\d+(?:,\d{3})*(?:\.\d+)?\s?(?:dollars?|usd|eur|gbp|miles?|km|kilometers?|hours?|minutes?)\b)/iu.test(
+			normalized,
+		);
+	const hasDeadlineOrSupport =
+		/\b(?:by|before|deadline|march|april|may|june|july|august|september|october|november|december|january|february|check[- ]?in|transfer|paycheck|fall behind|falling behind|progress)\b/iu.test(
+			normalized,
+		);
+	const hasOwnerUpdateVerb =
+		/\b(?:make|set|save|create|track|add|turn|store)\b/iu.test(normalized);
+
+	return (
+		hasGoalDomain &&
+		hasOwnerUpdateVerb &&
+		(hasConcreteTarget || hasDeadlineOrSupport)
+	);
+}
+
+function findOwnerGoalsActionName(
+	actions: ReadonlyArray<Pick<Action, "name" | "similes">>,
+): string | undefined {
+	return findAvailableActionName(actions, OWNER_GOALS_ACTION_NAMES);
+}
 
 export function inferDirectCurrentRequestCandidateActions(
 	actions: ReadonlyArray<Pick<Action, "name" | "similes" | "tags">>,
@@ -373,6 +482,12 @@ export function inferDirectCurrentRequestCandidateInference(
 	if (looksLikeWebSearchRequest(messageText)) {
 		const lookupActions = findWebLookupActionNames(actions);
 		if (lookupActions.length > 0) return { names: lookupActions, kind: "web" };
+	}
+	if (looksLikeOwnerGoalWriteRequest(messageText)) {
+		const ownerGoalsAction = findOwnerGoalsActionName(actions);
+		if (ownerGoalsAction) {
+			return { names: [ownerGoalsAction], kind: "owner-goals" };
+		}
 	}
 	return EMPTY_DIRECT_CANDIDATE_INFERENCE;
 }
