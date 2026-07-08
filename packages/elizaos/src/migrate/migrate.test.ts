@@ -466,6 +466,23 @@ describe("oc home-format variants (cross-version)", () => {
     expect(ch.name).toBe("Quill");
   });
 
+  it("resolves curated root-memory by case, reporting the true on-disk name (Win/macOS portability)", () => {
+    // A mixed-case `Memory.md` is invisible to a fixed "MEMORY.md"/"memory.md"
+    // path probe on a case-SENSITIVE FS, and a lowercase memory.md is read but
+    // MIS-named "MEMORY.md" by that probe on a case-INSENSITIVE FS. Matching the
+    // real directory entry fixes both: found regardless of spelling, and
+    // `curatedMemoryFile` carries the actual (case-preserved) on-disk name.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "oc-memcase-"));
+    fs.writeFileSync(path.join(home, "SOUL.md"), "# Sable\nYou are Sable.\n");
+    fs.writeFileSync(
+      path.join(home, "Memory.md"),
+      "# Sable memory\n\n## One\nmixed-case curated memory must be read.\n",
+    );
+    const src = readOcAgentHome(home, "sable");
+    expect(src.curatedMemory).toContain("mixed-case curated memory");
+    expect(src.curatedMemoryFile).toBe("Memory.md");
+  });
+
   it("derives name + sane character from a LEANER hermes-style home (GAP B/C)", () => {
     // Lean home: SOUL + AGENTS only, NO IDENTITY/USER/TOOLS/MEMORY.
     const src = readOcAgentHome(fixDir("oc-home-lean"), "someslug");

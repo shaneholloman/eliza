@@ -112,10 +112,10 @@ export type LiveCiAuditFailure = {
 
 export const checks: Check[] = [
   {
-    name: "cloud live job is required by test-status",
+    name: "cloud live job is required by ci-ok",
     pattern:
-      /test-status:\s+name:[\s\S]*?needs:[\s\S]*?-\s*cloud-live-e2e[\s\S]*?-\s*provider-live-e2e/,
-    message: "test-status must depend on cloud-live-e2e and provider-live-e2e.",
+      /ci-ok:\s+name:[\s\S]*?needs:[\s\S]*?-\s*cloud-live-e2e[\s\S]*?-\s*provider-live-e2e/,
+    message: "ci-ok must depend on cloud-live-e2e and provider-live-e2e.",
   },
   {
     name: "live CI audit self-test is a CI gate",
@@ -467,11 +467,14 @@ export const checks: Check[] = [
       "live report validator self-test must cover missing-sha256 view asset integrity evidence.",
   },
   {
-    name: "provider live job is required by test-status",
+    name: "provider live job is required by ci-ok",
+    // strict_results may enumerate additional strict events (push, merge_group)
+    // ahead of workflow_dispatch/schedule; require both dispatch and schedule are
+    // present, and that the aggregate for-loop observes both live job results.
     pattern:
-      /strict_results="\$\{\{\s*github\.event_name == 'workflow_dispatch' \|\| github\.event_name == 'schedule'\s*\}\}"[\s\S]*for pair in\s*\\[\s\S]*"cloud-live-e2e:\$\{\{\s*needs\.cloud-live-e2e\.result\s*\}\}"\s*\\[\s\S]*"provider-live-e2e:\$\{\{\s*needs\.provider-live-e2e\.result\s*\}\}"/,
+      /strict_results="\$\{\{[\s\S]*?github\.event_name == 'workflow_dispatch'[\s\S]*?github\.event_name == 'schedule'[\s\S]*?\}\}"[\s\S]*for pair in\s*\\[\s\S]*"cloud-live-e2e:\$\{\{\s*needs\.cloud-live-e2e\.result\s*\}\}"\s*\\[\s\S]*"provider-live-e2e:\$\{\{\s*needs\.provider-live-e2e\.result\s*\}\}"/,
     message:
-      "test-status must fail when cloud-live-e2e or provider-live-e2e are not successful on workflow_dispatch or schedule.",
+      "ci-ok must fail when cloud-live-e2e or provider-live-e2e are not successful on workflow_dispatch or schedule.",
   },
   {
     name: "cloud live smoke is observed only on manual or scheduled runs",
@@ -482,8 +485,11 @@ export const checks: Check[] = [
   },
   {
     name: "cloud live credentials skip cleanly when absent",
+    // The skip warning composes a `message=` variable, so the "configured"
+    // phrase and the "skipping optional cloud live E2E" warning land on separate
+    // lines with the strict-context fail branch between them.
     pattern:
-      /No Eliza Cloud API key configured - skipping optional cloud live E2E[\s\S]{0,200}skip=true[\s\S]{0,200}capability_skip=true[\s\S]{0,200}exit 0/,
+      /No Eliza Cloud API key configured[\s\S]{0,400}skipping optional cloud live E2E[\s\S]{0,200}skip=true[\s\S]{0,200}capability_skip=true[\s\S]{0,200}exit 0/,
     message:
       "cloud live runs must skip cleanly when Cloud credentials are absent.",
   },
@@ -524,8 +530,11 @@ export const checks: Check[] = [
   },
   {
     name: "provider live endpoints skip cleanly when absent",
+    // Same `message=` composition as the cloud skip: the "configured" phrase and
+    // the "skipping optional provider live E2E" warning are separated by the
+    // strict-context fail branch.
     pattern:
-      /No remote capability provider endpoints configured - skipping optional provider live E2E[\s\S]{0,200}skip=true[\s\S]{0,200}exit 0/,
+      /No remote capability provider endpoints configured[\s\S]{0,400}skipping optional provider live E2E[\s\S]{0,200}skip=true[\s\S]{0,200}exit 0/,
     message:
       "provider live runs must skip cleanly when all endpoint secrets are absent.",
   },

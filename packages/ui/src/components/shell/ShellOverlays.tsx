@@ -122,7 +122,13 @@ export function ShellOverlays({
       <ShortcutsOverlay />
       {actionNotice && (
         <div
-          className={`fixed bottom-6 left-1/2 -translate-x-1/2 px-5 py-2.5 rounded-sm text-sm font-medium z-[10000] flex items-center gap-2.5 max-w-[min(92vw,28rem)] ${
+          // A `role="status"` toast is a passive announcement with no
+          // interactive controls (spinner + text only); at `z-[10000]` it sits
+          // above the whole shell, so without `pointer-events-none` it silently
+          // eats clicks on whatever it overlaps (e.g. the bottom-center chat
+          // pill) while it lingers. Let pointer events fall through to the UI
+          // beneath it.
+          className={`pointer-events-none fixed bottom-6 left-1/2 -translate-x-1/2 px-5 py-2.5 rounded-sm text-sm font-medium z-[10000] flex items-center gap-2.5 max-w-[min(92vw,28rem)] ${
             actionNotice.tone === "error"
               ? "bg-danger text-white"
               : actionNotice.tone === "success"

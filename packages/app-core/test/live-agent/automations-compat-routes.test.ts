@@ -370,6 +370,10 @@ describe("automations compat routes", () => {
     expect(body.nodes).toContainEqual(
       expect.objectContaining({
         id: "action:CODE_TASK",
+        // The stub tags CODE_TASK with domain:agent-orchestration +
+        // capability:delegate (mirroring tasksAction), so classifyRuntimeActionNode
+        // surfaces it as an "agent" node — see automation-action-classifier.ts and
+        // its unit test — not a plain "action".
         class: "agent",
         source: "runtime_action",
         availability: "enabled",

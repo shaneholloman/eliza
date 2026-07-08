@@ -33,9 +33,23 @@ function tempDir(prefix: string): string {
 	return dir;
 }
 
-/** A PATH dir containing a single executable fake coding CLI. */
+/**
+ * A PATH dir containing a single executable fake coding CLI. On Windows an
+ * executable is resolved on PATH by a PATHEXT extension (`.CMD`/`.EXE`/…), which
+ * is exactly what `findCodingCliOnPath` probes — a bare extensionless file (the
+ * POSIX exec-bit shape) is never found there. Mirror the real wire shape:
+ * write `<binary>.cmd` on Windows so the probe resolves it (and still returns
+ * the extensionless binary name), and the POSIX exec-bit file elsewhere.
+ */
 function fakeCliDir(binary: string): string {
 	const dir = tempDir("fake-cli-");
+	if (process.platform === "win32") {
+		writeFileSync(
+			path.join(dir, `${binary}.cmd`),
+			"@echo off\r\nexit /b 0\r\n",
+		);
+		return dir;
+	}
 	const file = path.join(dir, binary);
 	writeFileSync(file, "#!/bin/sh\nexit 0\n");
 	chmodSync(file, 0o755);

@@ -206,7 +206,7 @@ describe("ConsoleShell", () => {
     await waitFor(() => expect(screen.getByTestId("login-page")).toBeTruthy());
   });
 
-  it("keeps a visible keyboard focus treatment on the account menu trigger without ring utilities", () => {
+  it("keeps the account menu trigger on the shared focus reset, not a per-component ring", () => {
     render(
       <MemoryRouter initialEntries={["/dashboard"]}>
         <ConsoleShell>
@@ -219,6 +219,12 @@ describe("ConsoleShell", () => {
     fireEvent.focus(accountMenu);
     expect(accountMenu.className).toContain("bg-white/5");
     expect(accountMenu.className).toContain("text-white");
+    // Product policy (styles.css): focus rings are disabled globally with
+    // !important, so per-component focus-ring utilities are dead. The trigger
+    // carries only the shared `outline-none` reset and must never reintroduce
+    // a banned focus-ring utility — the tree-wide guarantee no-focus-ring-gate
+    // enforces.
+    expect(accountMenu.className).toContain("outline-none");
     expect(accountMenu.className).not.toContain("focus-visible:ring");
   });
 

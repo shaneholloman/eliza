@@ -49,6 +49,11 @@ export function registerViewServiceWorker(): void {
   navigator.serviceWorker
     .register("/sw.js", { scope: "/" })
     .then((registration) => {
+      // WebKit under automation (and some webviews) expose
+      // `navigator.serviceWorker` yet resolve register() to undefined rather
+      // than rejecting. That is SW-unavailable, not a failure — reading
+      // `.scope` off it would throw and masquerade as a registration error.
+      if (!registration) return;
       console.info("[SW] Registered, scope:", registration.scope);
     })
     // error-policy:J4 the service worker is a PWA enhancement — the app

@@ -42,7 +42,7 @@
     "@feed/db": "workspace:*",
     "@feed/engine": "workspace:*",
     "@feed/shared": "workspace:*",
-    "c12": "2.0.4",
+    "c12": "3.3.4",
     "chokidar": "^5.0.0",
     "citty": "^0.1.6",
     "consola": "^3.4.2",

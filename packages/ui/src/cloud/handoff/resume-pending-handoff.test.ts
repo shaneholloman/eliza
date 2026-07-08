@@ -64,7 +64,10 @@ vi.mock("../../api/client-cloud", () => ({
   isDirectCloudSharedAgentBase: mocks.isDirectCloudSharedAgentBase,
 }));
 
-vi.mock("../../state", () => ({
+// resume-pending-handoff imports loadPersistedActiveServer directly from the
+// persistence leaf (not the ../../state barrel) since #15411 broke the
+// state/index → AppContext → startup-poll → resume cycle; mock that exact path.
+vi.mock("../../state/persistence", () => ({
   loadPersistedActiveServer: mocks.loadPersistedActiveServer,
 }));
 

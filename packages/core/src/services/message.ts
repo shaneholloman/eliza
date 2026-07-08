@@ -1719,6 +1719,17 @@ function createV5ReplyStrategyResult(args: {
 	thought: string;
 	mode?: StrategyMode;
 	attachments?: Media[];
+	/**
+	 * Provenance for the humanness voice gate (#14873): `true` when `text` is
+	 * the model's own composed reply (Stage-1 `replyText`, the Stage-1 ack), so
+	 * gated transports (`sendMessageToTarget`) deliver it untouched instead of
+	 * spending a blocking TEXT_SMALL re-voice on text that is already genuine
+	 * model voice. Leave unset for anything with template or tool provenance —
+	 * hardcoded deferrals, captured action output, planner `finalMessage`
+	 * (which can relay tool text or canned fallbacks) — so the gate still
+	 * rephrases those before they reach a user.
+	 */
+	agentVoiced?: boolean;
 }): StrategyResult {
 	const responseContent: Content = {
 		thought: args.thought,
@@ -1726,6 +1737,7 @@ function createV5ReplyStrategyResult(args: {
 		text: restorePiiInUserReplyText(args.text),
 		simple: args.mode !== "actions",
 		responseId: args.responseId,
+		...(args.agentVoiced === true ? { agentVoiced: true } : {}),
 		...(args.attachments?.length ? { attachments: args.attachments } : {}),
 	};
 
@@ -2421,6 +2433,22 @@ function getMessageHandlerCandidateActions(
 	);
 }
 
+// The two stage-1 plan fields the escalation predicates read as plain values.
+// `candidateActions` stays per call site because the backstop path cleans it
+// through `getMessageHandlerCandidateActions` while the evaluator path forwards
+// the raw list. A stage-1 plan legitimately may carry no contexts and no reply,
+// so an absent optional field normalizes to the empty shape those pure
+// predicates already treat as "nothing there" — normalized here once instead of
+// at every call site.
+function messageHandlerStageOneReplyContexts(
+	messageHandler: MessageHandlerResult,
+): { stageOneContexts: readonly string[]; stageOneReplyText: string } {
+	return {
+		stageOneContexts: messageHandler.plan.contexts ?? [],
+		stageOneReplyText: String(messageHandler.plan.reply ?? ""),
+	};
+}
+
 function getMessageHandlerParentActionHints(
 	messageHandler: MessageHandlerResult,
 ): string[] {
@@ -3043,8 +3071,7 @@ export const BUILTIN_RESPONSE_HANDLER_EVALUATORS: readonly ResponseHandlerEvalua
 				// finished replyText with an "On it." ack that never delivers).
 				return !shouldSuppressInferredCandidateEscalation({
 					inference,
-					stageOneContexts: messageHandler.plan.contexts ?? [],
-					stageOneReplyText: String(messageHandler.plan.reply ?? ""),
+					...messageHandlerStageOneReplyContexts(messageHandler),
 					stageOneCandidateActions: messageHandler.plan.candidateActions ?? [],
 				});
 			},
@@ -3056,8 +3083,7 @@ export const BUILTIN_RESPONSE_HANDLER_EVALUATORS: readonly ResponseHandlerEvalua
 				);
 				const candidateActions = shouldSuppressInferredCandidateEscalation({
 					inference,
-					stageOneContexts: messageHandler.plan.contexts ?? [],
-					stageOneReplyText: String(messageHandler.plan.reply ?? ""),
+					...messageHandlerStageOneReplyContexts(messageHandler),
 					stageOneCandidateActions: messageHandler.plan.candidateActions ?? [],
 				})
 					? []
@@ -4263,8 +4289,7 @@ export function applyDirectCurrentCandidateBackstopToMessageHandler(
 	if (
 		shouldSuppressInferredCandidateEscalation({
 			inference: directCurrentInference,
-			stageOneContexts: messageHandler.plan.contexts ?? [],
-			stageOneReplyText: String(messageHandler.plan.reply ?? ""),
+			...messageHandlerStageOneReplyContexts(messageHandler),
 			stageOneCandidateActions:
 				getMessageHandlerCandidateActions(messageHandler),
 		})
@@ -4328,8 +4353,7 @@ export function applyDirectCurrentCandidateBackstopToMessageHandler(
 	// the identical escalation, so the answered-turn waste is identical too.
 	const viewOverlapMissBudget = viewOverlapRequiredToolMissBudget({
 		inference: directCurrentInference,
-		stageOneContexts: messageHandler.plan.contexts ?? [],
-		stageOneReplyText: String(messageHandler.plan.reply ?? ""),
+		...messageHandlerStageOneReplyContexts(messageHandler),
 		stageOneCandidateActions: getMessageHandlerCandidateActions(messageHandler),
 	});
 	return {
@@ -6828,6 +6852,12 @@ export async function runV5MessageRuntimeStage1(args: {
 			// instead of a blank/garbled bubble, but keep a valid-but-terse answer
 			// (e.g. "144" to a math question).
 			let reply = route.reply;
+			// Voice-gate provenance (#14873): `route.reply` is the Stage-1
+			// RESPONSE_HANDLER model's own composed reply — already genuine agent
+			// voice — so it must skip the last-mile re-voice pass. Only the
+			// hardcoded deferral substitutions below reset this to false; they are
+			// templates the gate still owns.
+			let replyIsModelVoice = true;
 			// Fail-closed guard (#11712): never ship the raw HANDLE_RESPONSE field
 			// transcript to a user channel. If the reply still carries the
 			// `shouldRespond:/replyText:/...` skeleton (a parse fell through
@@ -6862,6 +6892,7 @@ export async function runV5MessageRuntimeStage1(args: {
 				})
 			) {
 				reply = "I'm not sure how to answer that.";
+				replyIsModelVoice = false;
 			}
 			if (
 				shouldReplaceUnavailableLiveLookupAck({
@@ -6871,6 +6902,7 @@ export async function runV5MessageRuntimeStage1(args: {
 				})
 			) {
 				reply = LIVE_LOOKUP_UNAVAILABLE_REPLY;
+				replyIsModelVoice = false;
 			}
 			return {
 				kind: "direct_reply",
@@ -6879,6 +6911,7 @@ export async function runV5MessageRuntimeStage1(args: {
 					...args,
 					text: reply,
 					thought: messageHandler.thought,
+					agentVoiced: replyIsModelVoice,
 				}),
 			};
 		}
@@ -7345,6 +7378,19 @@ export async function runV5MessageRuntimeStage1(args: {
 			Boolean(effectiveReplyText) &&
 			!plannedTextRepeatsEarlyReply &&
 			!plannedTextRepeatsActionReply;
+		// Voice-gate provenance (#14873): only the Stage-1 ack has unambiguous
+		// model provenance here (`messageHandler.plan.reply` is the Stage-1
+		// model's own field). The planner's `finalMessage` is deliberately NOT
+		// marked: it is a mixed-provenance field (evaluator messageToUser, a
+		// verified tool's userFacingText, a deterministic tool-result relay, or a
+		// hardcoded fallback all flow through it), and exempting it wholesale
+		// would let canned tool strings skip the humanness gate — the exact text
+		// the gate exists to rephrase. The hardcoded "on it, working on that
+		// now." ack stays unmarked for the same reason.
+		const effectiveReplyIsModelVoice =
+			!plannedText &&
+			stageOneAck.length > 0 &&
+			effectiveReplyText === stageOneAck;
 
 		return {
 			kind: "planned_reply",
@@ -7358,6 +7404,7 @@ export async function runV5MessageRuntimeStage1(args: {
 							plannerResult.evaluator?.thought ??
 							plannerResult.trajectory.steps.at(-1)?.thought ??
 							messageHandler.thought,
+						agentVoiced: effectiveReplyIsModelVoice,
 					})
 				: {
 						responseContent: null,
@@ -9819,6 +9866,9 @@ export class DefaultMessageService implements IMessageService {
 						text,
 						responseId: earlyResponseId,
 						inReplyTo: createUniqueUuid(runtime, message.id),
+						// #14873: the early reply IS the Stage-1 model's replyText —
+						// genuine agent voice — so gated transports must not re-voice it.
+						agentVoiced: true,
 					};
 					await runtime.applyPipelineHooks(
 						"outgoing_before_deliver",

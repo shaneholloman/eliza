@@ -7,11 +7,16 @@
  * esbuild, serves it same-origin with an /api proxy, and drives headless
  * Chromium through:
  *
- *  1. every legacy `/dashboard/*` account-management deep link, asserting the
- *     CloudRouterShell compat redirect lands on `/settings#<section>` (query
- *     preserved before the hash) and that the app-side hash contract
- *     (`readSettingsHashSection`) resolves the registered section — including
- *     the legacy `#billing` / `#api-keys` aliases;
+ *  1. the /dashboard/* console routing contract — the account-management
+ *     surfaces are DUAL-mounted (register-all.ts header; register-all.test.ts +
+ *     CloudRouterShell.test.tsx), so this leg proves (a) each standalone
+ *     `/dashboard/<surface>` console page resolves to its own registered route
+ *     (never a `/settings` redirect), (b) only the genuinely-removed spellings
+ *     (earnings/affiliates, `/dashboard/settings?tab=<x>`) redirect — to their
+ *     canonical `/dashboard/*` page — and (c) the in-app `/settings#<section>`
+ *     hash surface resolves every registered cloud section via
+ *     `readSettingsHashSection`, including the legacy `#billing` / `#api-keys`
+ *     aliases;
  *  2. each canonical Settings section (billing incl. the relocated
  *     `?canceled=true` banner, monetization tabs, security incl. the
  *     hash-anchor links, api-keys, account) rendering real data from the mock
@@ -189,12 +194,15 @@ export const extname = anyfn;
 export const sep = "/";
 export const createHash = () => ({ update: () => ({ digest: () => "" }) });
 export const randomBytes = anyfn;
+export const randomUUID = () => "00000000-0000-0000-0000-000000000000";
 export const createHmac = () => ({ update: () => ({ digest: () => "" }) });
 export const timingSafeEqual = () => false;
 export const createCipheriv = anyfn;
 export const createDecipheriv = anyfn;
 export const pbkdf2Sync = anyfn;
 export const scryptSync = anyfn;
+export const realpathSync = anyfn;
+export const renameSync = anyfn;
 export const Buffer = {
   from: () => ({}),
   isBuffer: () => false,
@@ -383,64 +391,107 @@ async function snap(name, target = page) {
 
 const ORIGIN = `http://127.0.0.1:${PAGE_PORT}`;
 
-// --- leg 1: legacy deep links → canonical settings homes ---------------------
+// --- leg 1: the /dashboard/* console routing contract ------------------------
+//
+// The #11341 cloud-surface unification did NOT collapse the account-management
+// surfaces into one-way `/dashboard/* → /settings#<section>` redirects. The
+// apex-console migration DUAL-MOUNTS every such surface (register-all.ts header;
+// asserted by register-all.test.ts + CloudRouterShell.test.tsx):
+//   • a standalone `/dashboard/<surface>` console page — the only reachable home
+//     on an apex control-plane host (elizacloud.ai), where the agent app (and
+//     thus the in-app Settings view) never boots (see AppCatchAllRoute); AND
+//   • an in-app `/settings#cloud-<surface>` section (the agent app's own hub).
+// Only genuinely-removed spellings (earnings/affiliates, the legacy
+// `/dashboard/settings?tab=<x>` OAuth/Stripe return shape) still redirect — to
+// their canonical `/dashboard/*` page, never to `/settings`. This leg verifies
+// all three facets against the REAL registered routes + settings sections.
+//
+// The console-page facets assert the ConsoleShell chrome mounted (its
+// "Eliza Cloud overview" logo link — present iff a registered `dashboard/*`
+// route resolved) and that the path neither fell through to the agent-app
+// catch-all (no CatchAllProbe) nor 404'd (no CloudNotFound heading).
 
+const overviewLogo = () =>
+  page.getByRole("link", { name: "Eliza Cloud overview" }).first();
+
+async function assertConsolePage(from, expectedPath) {
+  await page.goto(`${ORIGIN}${from}`, { waitUntil: "load" });
+  await overviewLogo().waitFor({ timeout: 30_000 });
+  const loc = await page.evaluate(
+    () => `${location.pathname}${location.search}`,
+  );
+  assert(loc === expectedPath, `${from} → console route ${expectedPath} (got ${loc})`);
+  const probeCount = await page.getByTestId("probe-location").count();
+  assert(probeCount === 0, `${from} does not fall through to the agent app`);
+  const notFound = await page
+    .getByRole("heading", { name: "Not found", exact: true })
+    .count();
+  assert(notFound === 0, `${from} is a registered console route, not a 404`);
+  await snap(`console-${from.replace(/[/?#=]+/g, "-").replace(/^-|-$/g, "")}`);
+}
+
+// 1a. Standalone /dashboard/* console pages resolve to their own route (query
+//     preserved), never redirecting to /settings.
+console.log("== leg 1a: standalone console pages ==");
+const consolePages = [
+  ["/dashboard/billing", "/dashboard/billing"],
+  ["/dashboard/billing?canceled=true", "/dashboard/billing?canceled=true"],
+  ["/dashboard/api-keys", "/dashboard/api-keys"],
+  ["/dashboard/account", "/dashboard/account"],
+  ["/dashboard/security", "/dashboard/security"],
+  ["/dashboard/security/permissions", "/dashboard/security/permissions"],
+  ["/dashboard/monetization", "/dashboard/monetization"],
+  ["/dashboard/connectors", "/dashboard/connectors"],
+  ["/dashboard/organization", "/dashboard/organization"],
+];
+for (const [from, expectedPath] of consolePages) {
+  await assertConsolePage(from, expectedPath);
+}
+
+// 1b. The genuinely-removed legacy spellings redirect to their canonical
+//     /dashboard/* console page (the query string is carried through).
+console.log("== leg 1b: legacy → canonical console redirects ==");
 const redirectCases = [
-  ["/dashboard/billing", "/settings#cloud-billing", "cloud-billing"],
-  [
-    "/dashboard/billing?canceled=true",
-    "/settings?canceled=true#cloud-billing",
-    "cloud-billing",
-  ],
-  ["/dashboard/earnings", "/settings#cloud-monetization", "cloud-monetization"],
-  [
-    "/dashboard/monetization",
-    "/settings#cloud-monetization",
-    "cloud-monetization",
-  ],
-  [
-    "/dashboard/affiliates",
-    "/settings#cloud-monetization",
-    "cloud-monetization",
-  ],
-  ["/dashboard/account", "/settings#cloud-account", "cloud-account"],
-  ["/dashboard/security", "/settings#cloud-security", "cloud-security"],
-  [
-    "/dashboard/security/permissions",
-    "/settings#cloud-plugin-grants",
-    "cloud-plugin-grants",
-  ],
-  ["/dashboard/api-keys", "/settings#cloud-api-keys", "cloud-api-keys"],
+  ["/dashboard/earnings", "/dashboard/monetization"],
+  ["/dashboard/affiliates", "/dashboard/monetization"],
   [
     "/dashboard/settings?tab=connections",
-    "/settings?tab=connections#cloud-connectors",
-    "cloud-connectors",
+    "/dashboard/connectors?tab=connections",
   ],
-  [
-    "/dashboard/settings?tab=billing",
-    "/settings?tab=billing#cloud-billing",
-    "cloud-billing",
-  ],
-  // Legacy hash aliases carried by old links/bookmarks resolve too.
-  ["/settings#billing", "/settings#billing", "cloud-billing"],
-  ["/settings#api-keys", "/settings#api-keys", "cloud-api-keys"],
+  ["/dashboard/settings?tab=billing", "/dashboard/billing?tab=billing"],
 ];
+for (const [from, expectedPath] of redirectCases) {
+  await assertConsolePage(from, expectedPath);
+}
 
-console.log("== leg 1: compat redirects ==");
-for (const [from, expectedLoc, expectedSection] of redirectCases) {
+// 1c. The in-app /settings#<section> hash surface — the app-side half of the
+//     dual-mount. `/settings` falls through to the agent-app catch-all (it is an
+//     in-app view, not a registered cloud route), so the fixture's CatchAllProbe
+//     mounts and `readSettingsHashSection` resolves every registered cloud
+//     section, including the legacy `#billing` / `#api-keys` aliases.
+console.log("== leg 1c: in-app settings hash sections ==");
+const hashCases = [
+  ["/settings#cloud-billing", "cloud-billing"],
+  ["/settings#billing", "cloud-billing"],
+  ["/settings#cloud-api-keys", "cloud-api-keys"],
+  ["/settings#api-keys", "cloud-api-keys"],
+  ["/settings#cloud-monetization", "cloud-monetization"],
+  ["/settings#cloud-account", "cloud-account"],
+  ["/settings#cloud-security", "cloud-security"],
+  ["/settings#cloud-plugin-grants", "cloud-plugin-grants"],
+  ["/settings#cloud-organization", "cloud-organization"],
+];
+for (const [from, expectedSection] of hashCases) {
   await page.goto(`${ORIGIN}${from}`, { waitUntil: "load" });
   await page.getByTestId("probe-location").waitFor({ timeout: 30_000 });
   const loc = await page.getByTestId("probe-location").innerText();
   const section = await page.getByTestId("probe-section").innerText();
-  assert(
-    loc === expectedLoc,
-    `${from} lands on ${expectedLoc} (got ${loc})`,
-  );
+  assert(loc === from, `${from} stays on the in-app settings surface (got ${loc})`);
   assert(
     section === expectedSection,
     `${from} resolves settings section ${expectedSection} (got ${section})`,
   );
-  await snap(`redirect-${from.replace(/[/?#=]+/g, "-").replace(/^-|-$/g, "")}`);
+  await snap(`settings-hash-${from.replace(/[/?#=]+/g, "-").replace(/^-|-$/g, "")}`);
 }
 
 // --- leg 2: the canonical settings sections render real data -----------------
@@ -553,7 +604,12 @@ await writeFile(
       issue: 11341,
       failures,
       screenshots: shot,
+      consolePages: consolePages.map(([from, to]) => ({ from, to })),
       redirectCases: redirectCases.map(([from, to]) => ({ from, to })),
+      settingsHashSections: hashCases.map(([from, section]) => ({
+        from,
+        section,
+      })),
       ranAt: new Date().toISOString(),
     },
     null,

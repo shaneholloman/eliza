@@ -9,7 +9,10 @@
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
+
+const require = createRequire(import.meta.url);
 
 const INLINE_EXTENSIONS = new Set([".jpg", ".jpeg", ".mp4"]);
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg"]);
@@ -114,14 +117,44 @@ function convertPngToJpg(src, dest) {
     if (sips.status === 0 && isNonEmptyFile(dest)) return true;
   }
   if (shellAvailable("ffmpeg")) {
+    // `-update 1` is required to write a single still to a fixed (non-pattern)
+    // filename: without it the image2 muxer demands a `%d` sequence pattern and
+    // older ffmpeg builds treat the missing pattern as a fatal error (non-zero
+    // exit, no file). Newer builds only warn, so the flag keeps the conversion
+    // deterministic across ffmpeg versions on the CI runners.
     const ffmpeg = spawnSync(
       "ffmpeg",
-      ["-y", "-i", src, "-frames:v", "1", "-q:v", "2", dest],
+      ["-y", "-i", src, "-frames:v", "1", "-update", "1", "-q:v", "2", dest],
       { stdio: "ignore" },
     );
     if (ffmpeg.status === 0 && isNonEmptyFile(dest)) return true;
   }
-  return false;
+  return convertPngToJpgWithSharp(src, dest);
+}
+
+// Final PNG->JPG fallback for hosts without sips/ffmpeg — notably the Linux CI
+// runners, which ship neither. `sharp` is a declared packages/app dependency,
+// so it is always installed here; run it out-of-process to keep this converter
+// synchronous like the sips/ffmpeg spawns above (prepareInlineArtifacts and
+// every runner call site depend on the sync contract, and sharp's API is async
+// only). Returns false if sharp cannot be resolved or the encode fails.
+function convertPngToJpgWithSharp(src, dest) {
+  let sharpEntry;
+  try {
+    sharpEntry = require.resolve("sharp");
+  } catch {
+    return false;
+  }
+  const encode =
+    "const sharp=require(process.argv[3]);" +
+    "sharp(process.argv[1]).jpeg({quality:82}).toFile(process.argv[2])" +
+    ".then(()=>process.exit(0)).catch(()=>process.exit(1));";
+  const result = spawnSync(
+    process.execPath,
+    ["-e", encode, src, dest, sharpEntry],
+    { stdio: "ignore" },
+  );
+  return result.status === 0 && isNonEmptyFile(dest);
 }
 
 function remuxMovToMp4(src, dest) {

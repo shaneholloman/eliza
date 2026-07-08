@@ -365,7 +365,21 @@ export function useWeather(): WeatherState {
     return cached ? { ...cached, status: "ready" } : LOADING;
   });
 
+  // fetchWeather/promptForCoords settle after the effect fires; a state write
+  // once the component is gone is a no-op in the browser but throws under the
+  // jsdom test teardown (React's scheduler reads `window`). Skip every async
+  // continuation past unmount — the canonical guard used across the ui hooks
+  // (see useCachedResource.ts).
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const applyUnavailable = React.useCallback(() => {
+    if (!mountedRef.current) return;
     // Only fall to "unavailable" when we have nothing cached to show.
     setWeather((prev) =>
       prev.status === "ready" ? prev : { ...LOADING, status: "unavailable" },
@@ -380,11 +394,13 @@ export function useWeather(): WeatherState {
       return Promise.resolve();
     return fetchWeather()
       .then((next) => {
+        if (!mountedRef.current) return;
         setWeather(next);
         writeCache({ ...next, fetchedAt: Date.now() });
         if (next.approximate) noteApproximateLocationOnce();
       })
       .catch(() => {
+        if (!mountedRef.current) return;
         // error-policy:J4 stale/no-location/weather failure renders the
         // explicit unavailable tile instead of a healthy old reading.
         setWeather({ ...LOADING, status: "unavailable" });
@@ -406,6 +422,7 @@ export function useWeather(): WeatherState {
     void promptForCoords()
       .then((coords) => fetchWeatherAt(coords, false))
       .then((next) => {
+        if (!mountedRef.current) return;
         setWeather(next);
         writeCache({ ...next, fetchedAt: Date.now() });
       })

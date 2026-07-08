@@ -1674,7 +1674,7 @@ export async function stageColdPluginImportRoot(
       // tree. Every other code rethrows.
       const code = (error as NodeJS.ErrnoException).code;
       const raceCodes = new Set(["EEXIST", "ENOTEMPTY", "EPERM", "EACCES"]);
-      if (raceCodes.has(code ?? "")) {
+      if (code !== undefined && raceCodes.has(code)) {
         if (
           await isCompleteStagedCacheDir(cacheDir, params.packageRelativePath)
         ) {

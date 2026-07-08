@@ -715,7 +715,12 @@ test.describe("orchestrator GUI workbench", () => {
     await openAppPath(page, "/orchestrator");
 
     await expect(page.getByTestId("orchestrator-workbench")).toBeVisible();
-    await expect(page.getByText("Orchestrator")).toBeVisible();
+    // Scope to the workbench's own header: the shared shell chrome now wraps the
+    // view in a ViewHeader that also renders an "Orchestrator" <h1>, so an
+    // unscoped getByText is strict-mode ambiguous (two matches).
+    await expect(
+      page.getByTestId("orchestrator-workbench").getByText("Orchestrator"),
+    ).toBeVisible();
 
     // Single-pane landing: the rail lists the task card with its agent count.
     const railTaskCard = page
@@ -921,7 +926,12 @@ test.describe("orchestrator GUI workbench", () => {
     await openAppPath(page, "/orchestrator");
 
     await expect(page.getByTestId("orchestrator-workbench")).toBeVisible();
-    await expect(page.getByText("Orchestrator")).toBeVisible();
+    // Scope to the workbench's own header: the shared shell chrome now wraps the
+    // view in a ViewHeader that also renders an "Orchestrator" <h1>, so an
+    // unscoped getByText is strict-mode ambiguous (two matches).
+    await expect(
+      page.getByTestId("orchestrator-workbench").getByText("Orchestrator"),
+    ).toBeVisible();
 
     // A quiet orchestrator is read-only: pause-all / resume-all only surface
     // while there is something to act on, so neither control is rendered with
