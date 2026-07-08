@@ -1,7 +1,15 @@
 /** Guards the CI wiring by reading `.github/workflows/scenario-pr.yml` and `test.yml` from disk and asserting the keyless PR-deterministic scenario lane stays configured. */
-import { readFileSync } from "node:fs";
+import { readFileSync as readFileRaw } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+
+// These assertions verify source-file CONTENT, not byte-exact line endings, and
+// author the multi-line `.toContain` substrings with `\n`. A Windows checkout
+// with autocrlf rewrites tracked files to CRLF, so read every source through
+// this LF-normalizing helper — otherwise the `\n`-based substrings never match
+// the on-disk `\r\n` and the contract fails only on Windows.
+const readFileSync = (path: string, _encoding?: "utf8"): string =>
+  readFileRaw(path, "utf8").replace(/\r\n/g, "\n");
 
 const workflowPath = resolve(
   import.meta.dirname,
