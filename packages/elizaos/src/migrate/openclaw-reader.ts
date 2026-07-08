@@ -70,7 +70,7 @@ export interface OcAgentSource {
   tools?: string;
   /** MEMORY.md (or legacy memory.md): curated long-term memory. */
   curatedMemory?: string;
-  /** Which root-memory filename was found ("MEMORY.md" | "memory.md" | undefined). */
+  /** The curated root-memory file's actual on-disk name (e.g. "MEMORY.md" or legacy "memory.md"), or undefined if none. */
   curatedMemoryFile?: string;
   /** <agent>-awareness.md - live open-threads / relationship state. */
   awareness?: string;
@@ -154,15 +154,37 @@ function resolveAgentRoot(home: string): string {
 }
 
 /**
- * Resolve curated root-memory: canonical "MEMORY.md" first, then legacy
- * lowercase "memory.md". Returns the text + which filename matched.
+ * Resolve curated root-memory by matching a directory entry case-insensitively.
+ *
+ * A fixed-path probe (`readFileSync(root/MEMORY.md)` then `.../memory.md`) is not
+ * portable: on a case-INSENSITIVE filesystem (Windows/macOS) the canonical
+ * "MEMORY.md" probe resolves onto a lowercase `memory.md` on disk, so the file is
+ * read but its name is mis-reported as "MEMORY.md"; on case-SENSITIVE Linux a
+ * mixed-case `Memory.md` would be missed entirely. Matching against the actual
+ * directory entries fixes both: the curated memory is found regardless of case,
+ * and `curatedMemoryFile` carries the file's true (case-preserved) on-disk name.
+ * Canonical uppercase "MEMORY.md" wins when a home carries both spellings (only
+ * possible on a case-sensitive FS); otherwise the single match is used.
  */
 function readCuratedMemory(root: string): { text?: string; file?: string } {
-  for (const name of ROOT_MEMORY_CANDIDATES) {
-    const text = readIfPresent(path.join(root, name));
-    if (text !== undefined) return { text, file: name };
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(root);
+  } catch {
+    // Missing home is tolerated per the module's reader contract: empty, no throw.
+    return {};
   }
-  return {};
+  const matches = entries.filter((entry) =>
+    ROOT_MEMORY_CANDIDATES.some(
+      (candidate) => candidate.toLowerCase() === entry.toLowerCase(),
+    ),
+  );
+  if (matches.length === 0) return {};
+  const chosen =
+    matches.find((entry) => entry === ROOT_MEMORY_CANDIDATES[0]) ?? matches[0];
+  const text = readIfPresent(path.join(root, chosen));
+  if (text === undefined) return {};
+  return { text, file: chosen };
 }
 
 /** Resolve the awareness file: prefer "<agentId>-awareness.md", else any "*-awareness.md". */
