@@ -45,6 +45,7 @@ import * as billingDeferredActual from "@/lib/services/inference-billing-deferre
 import * as fastPathActual from "@/lib/services/inference-billing-fast-path";
 import * as billingLedgerActual from "@/lib/services/inference-billing-ledger";
 import * as modelCatalogActual from "@/lib/services/model-catalog";
+import * as teamPoolActual from "@/lib/services/team-credential-pool";
 import * as creditReservationActual from "@/lib/utils/credit-reservation";
 
 const aiActual = require("ai") as Record<string, unknown>;
@@ -124,6 +125,18 @@ mock.module("@/lib/services/model-catalog", () => ({
   getCachedGatewayModelById: async () => null,
 }));
 
+// Pooled-credential selection is not under test. Keep this route harness away
+// from the DB-backed team pool registry so billing-path assertions remain the
+// only observation point.
+mock.module("@/lib/services/team-credential-pool", () => ({
+  ...teamPoolActual,
+  getTeamPoolRegistry: () => ({
+    selectCredential: async () => null,
+    recordUse: async () => undefined,
+    recordProviderFailure: async () => undefined,
+  }),
+}));
+
 // Moderation: not under test.
 mock.module("@/lib/services/content-moderation", () => ({
   ...contentModerationActual,
@@ -200,6 +213,7 @@ afterAll(() => {
   mock.module("@/lib/providers/language-model", () => languageModelActual);
   mock.module("@/lib/pricing", () => pricingActual);
   mock.module("@/lib/services/model-catalog", () => modelCatalogActual);
+  mock.module("@/lib/services/team-credential-pool", () => teamPoolActual);
   mock.module(
     "@/lib/services/content-moderation",
     () => contentModerationActual,
