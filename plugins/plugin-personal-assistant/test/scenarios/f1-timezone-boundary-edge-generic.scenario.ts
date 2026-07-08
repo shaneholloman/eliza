@@ -18,13 +18,20 @@
  *
  * Tasks are created through the REAL REST surface; ticks are the REAL scheduler
  * entry. Delivery goes through a scenario-registered always-delivering channel.
- * Run keyless with `TZ=UTC`.
+ * Run keyless with `TZ=UTC`. Creation is pinned via `createdAtIso`
+ * (CREATED_AT_INSTANT) so the tested occurrence is deterministically the first
+ * one at/after creation — otherwise the 36h cron catch-up window would fire a
+ * just-missed prior-day occurrence at the naive tick on runs that happen to
+ * create the task shortly before that day's occurrence (a wall-clock flake, not
+ * a tz bug). The catch-up window itself is intentional and load-bearing for
+ * other scheduled items (e.g. traveler-reanchor), so it is left untouched.
  *
- * Fail-without-fix anchor: revert the cron `tz` handling in
- * `plugins/plugin-scheduling/src/scheduled-task/next-fire-at.ts` so the daily
- * cron is evaluated in the host zone instead of America/New_York, and the
- * zone-instant tick records no fire while a naive-UTC tick does — the
- * literal-instant fire turn and the single-delivery finalCheck fail.
+ * Fail-without-fix anchor: revert the cron `tz` resolution in `cronDue`
+ * (`plugins/plugin-scheduling/src/scheduled-task/due.ts`, via `resolveTriggerTz`
+ * + `computeNextCronRunAtMs`) so the daily cron is evaluated in the host zone
+ * instead of America/New_York: the occurrence collapses onto 07:30 UTC, the
+ * naive-UTC tick fires, and the literal-instant fire turn plus the
+ * single-delivery finalCheck fail.
  */
 
 import type { ScenarioContext } from "@elizaos/scenario-runner/schema";
@@ -94,6 +101,18 @@ const NAIVE_UTC_INSTANT = (() => {
   return naive;
 })();
 const ZONE_TICK = new Date(ZONE_INSTANT.getTime() + MINUTE_MS);
+// Pin the reminder's creation instant 12h before the tested occurrence so the
+// proof is deterministic rather than a function of the real wall-clock at run
+// time. It lands strictly between the PRIOR 07:30-NY occurrence (~24h earlier)
+// and the naive tick (~4h earlier than ZONE_INSTANT), so the ONLY occurrence at
+// or after creation is ZONE_INSTANT itself: the cron catch-up window has no
+// stale prior-day occurrence to pick up at the naive tick. Without it, a run
+// that happens to create the task in the ~3h before that day's occurrence would
+// see the catch-up window fire the just-missed occurrence at the naive tick —
+// a real-time-dependent flake, not a tz regression. The repository preserves a
+// caller-supplied `createdAtIso` (it only backfills from the row insert time
+// when absent), so this reaches `cronDue` verbatim.
+const CREATED_AT_INSTANT = new Date(ZONE_INSTANT.getTime() - 12 * HOUR_MS);
 const CRON_EXPRESSION = `${LOCAL_MINUTE} ${LOCAL_HOUR} * * *`;
 
 interface ChannelContributionLike {
@@ -301,7 +320,10 @@ export default scenario({
         createdBy: SCENARIO_ID,
         ownerVisible: true,
         idempotencyKey: `${SCENARIO_ID}-zoned`,
-        metadata: { scenario: SCENARIO_ID },
+        metadata: {
+          scenario: SCENARIO_ID,
+          createdAtIso: CREATED_AT_INSTANT.toISOString(),
+        },
       },
       expectedStatus: 201,
       assertResponse: assertCreated,
