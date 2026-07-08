@@ -366,32 +366,9 @@ app.post("/", async (c) => {
       );
     }
 
-    // The worker-health gate protects only FRESH provisions (a create that
-    // enqueues a job no worker will run). When the org already has a reusable
-    // non-terminal agent, `createAgent` below hands it back without touching
-    // the provisioning queue — so a worker outage must not 503 that caller
-    // (#15516: first-run onboarding dead-ended for a user whose one healthy
-    // agent needed no provisioning at all). The peek is advisory; if the
-    // candidate vanishes before `createAgent`'s locked re-check, the fresh
-    // create's job just waits in the queue for the worker to recover.
-    const reuseWouldServe =
-      !parsed.data.forceCreate &&
-      (await elizaSandboxService.hasReusableNonTerminalAgent(
-        user.organization_id,
-      ));
-    if (!reuseWouldServe) {
-      const workerHealth = await checkProvisioningWorkerHealth();
-      if (!workerHealth.ok) {
-        logger.warn("[agent-api] Agent creation blocked: worker unavailable", {
-          orgId: user.organization_id,
-          code: workerHealth.code,
-        });
-        return c.json(
-          provisioningWorkerFailureBody(workerHealth),
-          workerHealth.status,
-        );
-      }
-    }
+    // Worker health is checked at the enqueue boundary below. Earlier checks
+    // can block reuse, shared-tier, and warm-pool paths that do not need a
+    // provisioning worker.
   }
 
   let created: Awaited<ReturnType<typeof elizaSandboxService.createAgent>>;
@@ -626,6 +603,27 @@ app.post("/", async (c) => {
     }
 
     // ── Async path (default) ──────────────────────────────────────────────
+    // Only the cold provisioning job requires a live worker. Checking here
+    // keeps reuse, shared-tier creates, non-eager creates, and warm-pool claims
+    // available through heartbeat gaps, while still failing closed before a job
+    // is enqueued.
+    const workerHealth = await checkProvisioningWorkerHealth();
+    if (!workerHealth.ok) {
+      await agentSandboxesRepository.delete(agent.id, user.organization_id);
+      logger.warn(
+        "[agent-api] Agent provisioning blocked: worker unavailable; row rolled back",
+        {
+          agentId: agent.id,
+          orgId: user.organization_id,
+          code: workerHealth.code,
+        },
+      );
+      return c.json(
+        provisioningWorkerFailureBody(workerHealth),
+        workerHealth.status,
+      );
+    }
+
     // `expectedUpdatedAt` is intentionally omitted: the row was just created
     // (and possibly touched by the managed-env update above), so there is no
     // concurrent handle to guard against — passing the stale create timestamp
