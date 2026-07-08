@@ -242,7 +242,7 @@ describe("embeddings pass-through (#15512)", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("X-Eliza-Inference-Path")).toBe("passthrough");
     // Byte-for-byte: the client sees exactly what the provider sent.
-    expect(await res.json()).toEqual(UPSTREAM_BODY);
+    expect(await res.text()).toBe(JSON.stringify(UPSTREAM_BODY));
 
     expect(String(upstreamInput)).toBe(UPSTREAM_URL);
     const headers = new Headers(upstreamInit?.headers);
