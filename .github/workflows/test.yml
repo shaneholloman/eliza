@@ -392,13 +392,6 @@ jobs:
           skip-avatar-clone: "true"
           no-vision-deps: "true"
 
-      # @elizaos/tui first: the packages/ui spatial-view tests
-      # (src/spatial/__tests__/*) import @elizaos/ui/spatial/tui, whose terminal
-      # renderer externalizes @elizaos/tui — without its dist, vitest fails to
-      # resolve the package and the test files load "0 test".
-      - name: Build @elizaos/tui for spatial-view tests
-        run: bun run --cwd packages/tui build
-
       - name: Run client tests
         run: bun run test:client
 
@@ -424,54 +417,6 @@ jobs:
         with:
           name: perf-gate-e2e-artifacts
           path: packages/ui/src/components/shell/__e2e__/output-perf-gate-e2e/
-          if-no-files-found: ignore
-
-  xr-harness-e2e:
-    name: XR harness e2e
-    needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.plugins == 'true'
-    runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          submodules: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup workspace dependencies
-        uses: ./.github/actions/setup-bun-workspace
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-          install-command: bun install
-          install-native-deps: "false"
-          skip-avatar-clone: "true"
-          no-vision-deps: "true"
-
-      # app-xr is the surviving XR harness (facewear supersedes the retired
-      # plugin-xr — #9941). It is a nested, non-workspace package whose deps
-      # (@playwright/test, vite, @elizaos/core) resolve up to the root workspace
-      # install above — running `bun install` inside it would fail on its
-      # `workspace:*` core dep, so we only install Chromium here. `test:e2e`
-      # builds the nested emulator package (`build:emulator`), then drives
-      # Playwright against the real view-host route with the IWER emulator
-      # injected.
-      - name: Install Playwright Chromium
-        run: .github/scripts/install-playwright-browsers.sh chromium
-
-      - name: Run facewear app-xr e2e (real view-host route + IWER emulator)
-        run: bun run --cwd plugins/plugin-facewear/app-xr test:e2e
-
-      - name: Upload XR capture artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: xr-harness-artifacts
-          path: |
-            plugins/plugin-facewear/app-xr/test-results/
           if-no-files-found: ignore
 
   plugin-tests:
@@ -526,13 +471,8 @@ jobs:
 
       # The view-bundle coverage tests assert every view plugin has a built
       # dist/views/bundle.js; build them before running plugin tests.
-      # @elizaos/tui first: the spatial-view tests (45 plugins) import
-      # @elizaos/ui/spatial/tui, whose terminal renderer externalizes
-      # @elizaos/tui — without its dist, vitest fails to resolve the package.
       - name: Build view bundles
-        run: |
-          bun run --cwd packages/tui build
-          bun run build:views
+        run: bun run build:views
 
       - name: Run plugin tests
         # Cap step below the 95m job budget so a flaky plugin
@@ -1456,7 +1396,6 @@ jobs:
       - merge-quality-gate
       - server-tests
       - client-tests
-      - xr-harness-e2e
       - plugin-tests-status
       - integration-tests
       - desktop-contract
@@ -1481,7 +1420,6 @@ jobs:
           echo "merge-quality-gate:${{ needs.merge-quality-gate.result }}"
           echo "server-tests:     ${{ needs.server-tests.result }}"
           echo "client-tests:     ${{ needs.client-tests.result }}"
-          echo "xr-harness-e2e:   ${{ needs.xr-harness-e2e.result }}"
           echo "plugin-tests:     ${{ needs.plugin-tests-status.result }}"
           echo "integration-tests:${{ needs.integration-tests.result }}"
           echo "desktop-contract: ${{ needs.desktop-contract.result }}"
@@ -1499,7 +1437,6 @@ jobs:
             "merge-quality-gate:${{ needs.merge-quality-gate.result }}" \
             "server-tests:${{ needs.server-tests.result }}" \
             "client-tests:${{ needs.client-tests.result }}" \
-            "xr-harness-e2e:${{ needs.xr-harness-e2e.result }}" \
             "plugin-tests:${{ needs.plugin-tests-status.result }}" \
             "integration-tests:${{ needs.integration-tests.result }}" \
             "desktop-contract:${{ needs.desktop-contract.result }}" \

@@ -14,7 +14,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, "..");
 const monorepoRoot = resolve(packageRoot, "../..");
 const uiSrc = resolve(packageRoot, "src");
-const tuiSrc = resolve(monorepoRoot, "packages/tui/src");
 const sharedSrc = resolve(monorepoRoot, "packages/shared/src");
 const coreSrc = resolve(monorepoRoot, "packages/core/src");
 const hostExternalStub = resolve(packageRoot, "test/stubs/host-external.ts");
@@ -121,7 +120,6 @@ const config: StorybookConfig = {
       },
       { find: /^@elizaos\/ui$/, replacement: resolve(uiSrc, "index.ts") },
       { find: /^@elizaos\/ui\/(.+)$/, replacement: resolve(uiSrc, "$1") },
-      { find: /^@elizaos\/tui$/, replacement: resolve(tuiSrc, "index.ts") },
       {
         find: /^@elizaos\/shared$/,
         replacement: resolve(sharedSrc, "index.ts"),
