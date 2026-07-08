@@ -230,6 +230,20 @@ function runningCloudAgents(
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
 }
 
+function preferredRunningCloudAgentId(
+  running: readonly CloudCompatAgent[],
+): string | null {
+  const active = loadPersistedActiveServer();
+  if (active?.kind !== "cloud") return null;
+  const persistedAgentId = active.id?.startsWith("cloud:")
+    ? active.id.slice("cloud:".length).trim()
+    : "";
+  if (!persistedAgentId || persistedAgentId.includes("/")) return null;
+  return running.some((agent) => agent.agent_id === persistedAgentId)
+    ? persistedAgentId
+    : null;
+}
+
 async function getCloudStatusIfSupported() {
   if (!canProbeCloudStatus()) return null;
   // error-policy:J4 cloud-status probe — unreachable/unsupported means the
@@ -715,16 +729,14 @@ export async function listOrAutoProvisionCloudAgent(
     };
   }
   const running = runningCloudAgents(list.data);
-  if (running.length > 1) {
-    ports.onStatus?.(null);
-    return { kind: "pick-cloud-agent", agents: running };
-  }
+  const preferredAgentId = preferredRunningCloudAgentId(running);
+  const agentId = preferredAgentId ?? running[0]?.agent_id ?? null;
   return bindCloudAgent(
     sourceDraft,
     authToken,
     {
       forceCreate: false,
-      ...(running[0]?.agent_id ? { preferAgentId: running[0].agent_id } : {}),
+      ...(agentId ? { preferAgentId: agentId } : {}),
     },
     ports,
   );
