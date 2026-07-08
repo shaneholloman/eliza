@@ -50,7 +50,11 @@ export function resolveCloudPairExchangeUrl(cloudApiBase?: string): string {
   const base = (configured || "https://elizacloud.ai")
     .replace(/\/+$/, "")
     .replace(/\/api\/v1\/?$/, "");
-  return `${base}/api/auth/pair`;
+  const url = new URL(`${base}/api/auth/pair`);
+  if (url.hostname === "www.elizacloud.ai") {
+    url.hostname = "elizacloud.ai";
+  }
+  return url.toString();
 }
 
 export async function exchangeCloudPairToken(
