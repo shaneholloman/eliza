@@ -153,6 +153,44 @@ describe("character-mapper", () => {
     expect(JSON.stringify(ch.knowledge ?? [])).not.toContain("firewalled");
     expect(ch.style?.chat?.length ?? 0).toBeGreaterThan(0);
   });
+  it("maps CRLF persona homes (Windows checkout / authoring)", () => {
+    // Regression for a Windows-only empty `style.chat`/bio: an OC home whose
+    // markdown carries CRLF (git `core.autocrlf` on checkout, or authored on
+    // Windows) fed the mapper's `$`-anchored per-line bullet regexes lines with a
+    // trailing `\r`. JS `.` never matches `\r` and non-`m` `$` only matches the
+    // true string end, so every bullet failed to match and style.chat came back
+    // empty. The reader normalizes CRLF->LF, so mapping is line-ending agnostic.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "oc-crlf-"));
+    fs.mkdirSync(path.join(home, "memory"), { recursive: true });
+    const crlf = (s: string) => s.replace(/\n/g, "\r\n");
+    fs.writeFileSync(
+      path.join(home, "SOUL.md"),
+      crlf("# Wren\n\nYou are Wren, a plain-spoken guide.\n"),
+    );
+    fs.writeFileSync(
+      path.join(home, "IDENTITY.md"),
+      crlf(
+        "# Identity\n\n- calm, terse, and precise in every reply\n- Vibe: dry, exact\n",
+      ),
+    );
+    fs.writeFileSync(
+      path.join(home, "memory", "conversation-playbook.md"),
+      crlf(
+        "# Playbook\n- text like a person, not a bot, keep it tight and direct\n- never reuse the same opener twice in a row, rotate modes\n",
+      ),
+    );
+    const ch = mapToCharacter(readOcAgentHome(home, "wren"), {
+      firewall: true,
+    });
+    expect(ch.name).toBe("Wren");
+    // The IDENTITY bullets survive as bio (not just the synthetic fallback line).
+    expect(ch.bio?.some((b) => b.includes("calm, terse"))).toBe(true);
+    // The playbook bullets survive as style.chat despite the CRLF line endings.
+    expect(ch.style?.chat?.length ?? 0).toBeGreaterThan(0);
+    expect(ch.style?.chat?.some((s) => s.includes("keep it tight"))).toBe(true);
+    // Normalized text carries no stray carriage returns downstream.
+    expect(JSON.stringify(ch)).not.toContain("\r");
+  });
   it("includes USER only when firewall disabled", () => {
     const ch = mapToCharacter(readOcAgentHome(FIXTURE, "tess"), {
       firewall: false,
