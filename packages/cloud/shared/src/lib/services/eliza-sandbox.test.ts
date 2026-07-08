@@ -3153,6 +3153,93 @@ describe("ElizaSandboxService.provision dedup + port-collision retry (LARP H2)",
       getProviderSpy.mockRestore();
     }
   });
+
+  test("(10b) retry adoption refuses persisted docker container without node_id", async () => {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const row: AgentSandbox = {
+      ...provisioningReadyRow(),
+      status: "provisioning",
+      sandbox_id: "sandbox-blue-1",
+      bridge_url: "https://runtime-blue.example",
+      health_url: "https://runtime-blue.example/api/health",
+      node_id: null,
+      container_name: "agent-blue-1",
+      bridge_port: 3333,
+      web_ui_port: 4444,
+      headscale_ip: "100.64.0.42",
+    };
+    const findSpy = spyOn(agentSandboxesRepository, "findByIdAndOrg").mockResolvedValue(row);
+    const lockSpy = spyOn(agentSandboxesRepository, "trySetProvisioning").mockResolvedValue(row);
+    const findByIdSpy = spyOn(agentSandboxesRepository, "findById").mockResolvedValue(row);
+    const updateSpy = spyOn(agentSandboxesRepository, "update").mockImplementation(
+      async (_id, data) => ({ ...row, ...data }) as AgentSandbox,
+    );
+    const apiKeySpy = spyOn(apiKeysService, "createForAgent").mockResolvedValue({
+      id: "22222222-2222-4222-8222-222222222222",
+      plainKey: "eliza_test_agent_key",
+      prefix: "eliza_test",
+    });
+    const create = mock(async () => providerHandle());
+    const stop = mock(async () => {});
+    const healthInputs: Array<{ sandboxId: string; metadata?: Record<string, unknown> }> = [];
+    const svc = new ElizaSandboxService();
+    const ensureStartedSpy = spyOn(
+      svc as unknown as { ensureRuntimeAgentStarted: () => Promise<unknown> },
+      "ensureRuntimeAgentStarted",
+    ).mockResolvedValue(null);
+    const getProviderSpy = spyOn(
+      svc as unknown as { getProvider: () => Promise<SandboxProvider> },
+      "getProvider",
+    ).mockResolvedValue({
+      create,
+      stop,
+      checkHealth: async () => true,
+      checkHealthDetailed: async (handle) => {
+        healthInputs.push({ sandboxId: handle.sandboxId, metadata: handle.metadata });
+        return { ready: true, verdict: "ready" as const };
+      },
+    } as unknown as SandboxProvider);
+
+    try {
+      const res = await svc.provision(AGENT, ORG);
+
+      expect(res.success).toBe(false);
+      expect(create).not.toHaveBeenCalled();
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(healthInputs).toEqual([
+        {
+          sandboxId: "sandbox-blue-1",
+          metadata: {
+            provider: "docker",
+            nodeId: "",
+            hostname: "",
+            containerName: "agent-blue-1",
+            bridgePort: 3333,
+            webUiPort: 4444,
+            headscaleIp: "100.64.0.42",
+          },
+        },
+      ]);
+      expect(
+        updateSpy.mock.calls.some(([, data]) => (data as { status?: string }).status === "running"),
+      ).toBe(false);
+      const errorWrite = updateSpy.mock.calls.find(
+        ([, data]) => (data as { status?: string }).status === "error",
+      );
+      expect(errorWrite).toBeDefined();
+      expect(String((errorWrite?.[1] as { error_message?: string }).error_message)).toContain(
+        "provision attribution guard:",
+      );
+    } finally {
+      findSpy.mockRestore();
+      lockSpy.mockRestore();
+      findByIdSpy.mockRestore();
+      updateSpy.mockRestore();
+      apiKeySpy.mockRestore();
+      ensureStartedSpy.mockRestore();
+      getProviderSpy.mockRestore();
+    }
+  });
 });
 
 // Snapshot-degrade error classification (`isUnrecoverableSnapshotError`), proven

@@ -6042,11 +6042,26 @@ export class ElizaSandboxService {
    */
   private buildProvisioningRetryHandle(rec: AgentSandbox): SandboxHandle | null {
     if (!rec.sandbox_id || !rec.bridge_url || !rec.health_url) return null;
+    const hasDockerFleetColumns = Boolean(
+      rec.node_id || rec.container_name || rec.bridge_port || rec.web_ui_port,
+    );
     return {
       sandboxId: rec.sandbox_id,
       bridgeUrl: rec.bridge_url,
       healthUrl: rec.health_url,
-      metadata: rec.headscale_ip ? { headscaleIp: rec.headscale_ip } : undefined,
+      metadata: hasDockerFleetColumns
+        ? {
+            provider: "docker",
+            nodeId: rec.node_id ?? "",
+            hostname: rec.node_id ?? "",
+            containerName: rec.container_name ?? "",
+            bridgePort: rec.bridge_port ?? undefined,
+            webUiPort: rec.web_ui_port ?? undefined,
+            headscaleIp: rec.headscale_ip ?? undefined,
+          }
+        : rec.headscale_ip
+          ? { headscaleIp: rec.headscale_ip }
+          : undefined,
     };
   }
 
