@@ -183,8 +183,10 @@ describe("runDeploy", () => {
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining("Invalid project metadata JSON"),
       );
+      // Path is rendered with the OS separator (backslash on Windows), so match
+      // the joined form rather than a hardcoded POSIX substring.
       expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining(".elizaos/template.json"),
+        expect.stringContaining(path.join(".elizaos", "template.json")),
       );
     } finally {
       process.chdir(originalCwd);
@@ -215,8 +217,10 @@ describe("runDeploy", () => {
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining("Invalid Eliza Cloud credentials JSON"),
       );
+      // Path is rendered with the OS separator (backslash on Windows), so match
+      // the joined form rather than a hardcoded POSIX substring.
       expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining(".elizaos/credentials.json"),
+        expect.stringContaining(path.join(".elizaos", "credentials.json")),
       );
     } finally {
       rmSync(homeDir, { recursive: true, force: true });

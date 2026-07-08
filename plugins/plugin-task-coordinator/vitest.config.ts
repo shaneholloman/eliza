@@ -9,6 +9,10 @@ const pluginBrowserSrc = resolve(rootDir, "../plugin-browser/src");
 const pluginCommandsSrc = resolve(rootDir, "../plugin-commands/src");
 const pluginTrainingSrc = resolve(rootDir, "../plugin-training/src");
 const sharedSrc = resolve(rootDir, "../../packages/shared/src");
+const importConversationsSrc = resolve(
+  rootDir,
+  "../../packages/import-conversations/src",
+);
 
 export default defineConfig({
   resolve: {
@@ -37,6 +41,21 @@ export default defineConfig({
       {
         find: /^@elizaos\/ui\/(.+)$/,
         replacement: `${toVitePath(resolve(rootDir, "../../packages/ui/src"))}/$1`,
+      },
+      // `@elizaos/ui` (aliased to source above) pulls MemoryViewerView, which
+      // imports the `@elizaos/import-conversations/browser` subpath. That subpath
+      // only resolves to source through the package's `eliza-source` export
+      // condition, which vitest does not apply — bare resolution falls through to
+      // `./dist`, absent when this suite runs standalone (the Windows CI lane
+      // builds only core/shared). Anchor it to source; import-conversations/src
+      // has no external deps, so this is self-contained.
+      {
+        find: /^@elizaos\/import-conversations$/,
+        replacement: toVitePath(resolve(importConversationsSrc, "index.ts")),
+      },
+      {
+        find: /^@elizaos\/import-conversations\/(.+)$/,
+        replacement: `${toVitePath(importConversationsSrc)}/$1`,
       },
       {
         find: /^@elizaos\/plugin-health\/screen-time\/mobile-signal-setup$/,
