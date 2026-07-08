@@ -345,6 +345,11 @@ jobs:
             # never blanked.
             sudo sed -i "/^PROVISIONING_JOB_LANES=/d" "$ENV_FILE"
             printf 'PROVISIONING_JOB_LANES=%s\n' "agent" | sudo tee -a "$ENV_FILE" >/dev/null
+            # Headscale is the required dedicated-agent ingress. Bridge-host
+            # fallback was a legacy escape hatch; if it remains hand-set on the
+            # box, docker-sandbox-provider deliberately disables VPN injection
+            # and fresh staging agents never receive a headscale_ip (#15347).
+            sudo sed -i "/^AGENT_ROUTER_ALLOW_BRIDGE_HOST_FALLBACK=/d" "$ENV_FILE"
             for kv in \
               "HEADSCALE_API_URL=$HEADSCALE_API_URL" \
               "HEADSCALE_PUBLIC_URL=$HEADSCALE_PUBLIC_URL" \

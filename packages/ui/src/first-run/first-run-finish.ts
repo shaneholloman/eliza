@@ -525,7 +525,7 @@ export async function bindCloudAgent(
     ...(opts.preferAgentId ? { preferAgentId: opts.preferAgentId } : {}),
     ...(opts.forceCreate ? { forceCreate: true } : {}),
     ...(opts.knownAgents ? { knownAgents: opts.knownAgents } : {}),
-    preferStewardAgentAdapter: true,
+    preferStewardAgentAdapter: Boolean(getBootConfig().preferSharedCloudTier),
     ...(getBootConfig().preferSharedCloudTier
       ? { preferSharedTier: true }
       : {}),
@@ -653,11 +653,10 @@ export async function bindCloudAgent(
           cloudApiBase,
           authToken,
           onSwitch: async (containerBase) => {
-            await pairDedicatedCloudAgentInCurrentWindow({
-              cloudApiBase,
-              agentId: dedicatedAgentId,
-              cloudToken: authToken,
+            silentlyRepointToDedicated({
               containerBase,
+              dedicatedAgentId,
+              authToken,
             });
           },
         });

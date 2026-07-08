@@ -101,4 +101,33 @@ describe("ElizaClient.getStatus — dedicated agent shared-resolver 404 (#15310 
 
     await expect(client.getStatus()).rejects.toThrow();
   });
+
+  it("omits dedicated-CORS-blocked automatic headers while keeping Authorization", async () => {
+    const request = vi.fn<AgentRequestTransport["request"]>(async () => {
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const client = makeClient(DEDICATED_BASE, request);
+    client.setUiLanguage("en");
+
+    await client.fetch("/api/status", {
+      headers: {
+        "X-ElizaOS-Client-Id": "manual-client-id",
+        "X-ElizaOS-UI-Language": "es",
+      },
+    });
+
+    const headers = request.mock.calls[0]?.[1].headers as Record<
+      string,
+      string
+    >;
+    expect(headers.Authorization).toBe("Bearer token");
+    const lowerHeaderNames = Object.keys(headers).map((key) =>
+      key.toLowerCase(),
+    );
+    expect(lowerHeaderNames).not.toContain("x-elizaos-client-id");
+    expect(lowerHeaderNames).not.toContain("x-elizaos-ui-language");
+  });
 });
