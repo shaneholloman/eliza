@@ -99,6 +99,10 @@ jobs:
         if: steps.secret_config.outputs.configured == 'true'
         run: bun install --no-save --ignore-scripts
 
+      - name: Ensure generated shared i18n data
+        if: steps.secret_config.outputs.configured == 'true'
+        run: node packages/app-core/scripts/ensure-shared-i18n-data.mjs
+
       - name: Check cloud API auth
         id: cloud_auth
         if: steps.secret_config.outputs.configured == 'true'
@@ -386,6 +390,10 @@ jobs:
       - name: Install dependencies
         if: steps.secret_config.outputs.configured == 'true'
         run: bun install --no-save --ignore-scripts
+
+      - name: Ensure generated shared i18n data
+        if: steps.secret_config.outputs.configured == 'true'
+        run: node packages/app-core/scripts/ensure-shared-i18n-data.mjs
 
       - name: Download state artifact
         if: steps.secret_config.outputs.configured == 'true'

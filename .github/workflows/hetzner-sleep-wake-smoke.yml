@@ -48,6 +48,9 @@ jobs:
       - name: Install deps
         run: bun install --no-save --ignore-scripts
 
+      - name: Ensure generated shared i18n data
+        run: node packages/app-core/scripts/ensure-shared-i18n-data.mjs
+
       - name: Write SSH key
         run: |
           printf '%s\n' "$CI_SSH_PRIVATE_KEY" > /tmp/ci_ssh_key
