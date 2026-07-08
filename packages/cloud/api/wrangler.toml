@@ -277,6 +277,12 @@ TUNNEL_AUTH_KEY_COST_USD = "0.01"
 [env.staging]
 name = "eliza-cloud-api-staging"
 workers_dev = false
+# Smart Placement soak (#15513): run this Worker near the origins it fetches
+# (api.cerebras.ai / api.openai.com) instead of near the caller — the measured
+# Worker->origin hop is ~500ms of every inference call's TTFT. Staging-only
+# until the before/after ttfb comparison on api-staging holds; production
+# follows in its own change.
+placement = { mode = "smart" }
 routes = [
   { pattern = "staging.elizacloud.ai/*", zone_name = "elizacloud.ai" },
   { pattern = "app-staging.elizacloud.ai/*", zone_name = "elizacloud.ai" },
