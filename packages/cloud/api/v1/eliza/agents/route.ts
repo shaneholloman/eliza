@@ -366,16 +366,31 @@ app.post("/", async (c) => {
       );
     }
 
-    const workerHealth = await checkProvisioningWorkerHealth();
-    if (!workerHealth.ok) {
-      logger.warn("[agent-api] Agent creation blocked: worker unavailable", {
-        orgId: user.organization_id,
-        code: workerHealth.code,
-      });
-      return c.json(
-        provisioningWorkerFailureBody(workerHealth),
-        workerHealth.status,
-      );
+    // The worker-health gate protects only FRESH provisions (a create that
+    // enqueues a job no worker will run). When the org already has a reusable
+    // non-terminal agent, `createAgent` below hands it back without touching
+    // the provisioning queue — so a worker outage must not 503 that caller
+    // (#15516: first-run onboarding dead-ended for a user whose one healthy
+    // agent needed no provisioning at all). The peek is advisory; if the
+    // candidate vanishes before `createAgent`'s locked re-check, the fresh
+    // create's job just waits in the queue for the worker to recover.
+    const reuseWouldServe =
+      !parsed.data.forceCreate &&
+      (await elizaSandboxService.hasReusableNonTerminalAgent(
+        user.organization_id,
+      ));
+    if (!reuseWouldServe) {
+      const workerHealth = await checkProvisioningWorkerHealth();
+      if (!workerHealth.ok) {
+        logger.warn("[agent-api] Agent creation blocked: worker unavailable", {
+          orgId: user.organization_id,
+          code: workerHealth.code,
+        });
+        return c.json(
+          provisioningWorkerFailureBody(workerHealth),
+          workerHealth.status,
+        );
+      }
     }
   }
 

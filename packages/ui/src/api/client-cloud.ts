@@ -1504,6 +1504,13 @@ declare module "./client-base" {
        * the bind decision.
        */
       knownAgents?: CloudCompatAgent[];
+      /**
+       * Return the Cloud REST adapter base (`/api/v1/eliza/agents/:id`) even
+       * when the agent also exposes a dedicated subdomain. First-run uses this
+       * for the default Steward-token flow; explicit dedicated handoff paths
+       * leave it off so they can still run the `/pair` exchange.
+       */
+      preferStewardAgentAdapter?: boolean;
       onProgress?: (status: string, detail?: string) => void;
       /**
        * Cold-boot wait tuning for a reused dedicated agent that is not yet
@@ -3287,26 +3294,42 @@ export async function waitForCloudAgentRunning(
 }
 
 /**
- * Pick which running agent to reuse from a cloud agent list: a specific
- * requested id if it is running, else the most-recently-created running agent.
- * Non-running rows are not reusable for first-run binding because a stale
- * shared/dedicated pointer can otherwise be treated as healthy while chat 404s.
+ * Pick which agent to reuse from a cloud agent list: a specific requested id
+ * when it is running, else the most-recently-created running agent, else the
+ * newest NON-TERMINAL agent (pending/provisioning/stopped/…). A running-only
+ * pick (#15491) left any transiently-not-running account with zero reuse
+ * candidates, so first-run fell through to a fresh create — which the server
+ * 503-blocks during a provisioning-worker outage even though the user's
+ * existing agent was fine (#15516). Non-running picks are never bound
+ * directly: the reuse branch routes them through `waitForCloudAgentRunning`,
+ * which resolves with the FRESH post-wake record — that (not refusing reuse)
+ * is the guard against binding a stale pointer whose chat 404s. Only terminal
+ * `error`/`failed` rows are unreusable.
  */
 function pickPreferredCloudAgent(
   agents: CloudCompatAgent[],
   preferAgentId?: string | null,
 ): CloudCompatAgent | null {
   if (!agents.length) return null;
+  const byNewest = (rows: CloudCompatAgent[]) =>
+    [...rows].sort((a, b) =>
+      String(b.created_at).localeCompare(String(a.created_at)),
+    );
   if (preferAgentId) {
+    // Honor the remembered agent whenever it is not terminally failed —
+    // silently binding a DIFFERENT agent would swap the user's conversations
+    // and memories; a cold-boot wait on the remembered one is the honest cost.
     const exact = agents.find(
-      (a) => a.agent_id === preferAgentId && a.status === "running",
+      (a) => a.agent_id === preferAgentId && !isTerminalFailedCloudAgent(a),
     );
     if (exact) return exact;
   }
-  const byNewest = agents
-    .filter((a) => a.status === "running")
-    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
-  return byNewest[0] ?? null;
+  const running = byNewest(agents.filter((a) => a.status === "running"));
+  if (running[0]) return running[0];
+  const nonTerminal = byNewest(
+    agents.filter((a) => !isTerminalFailedCloudAgent(a)),
+  );
+  return nonTerminal[0] ?? null;
 }
 
 ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
@@ -3322,6 +3345,7 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
     forceCreate,
     preferSharedTier,
     knownAgents,
+    preferStewardAgentAdapter,
   } = options;
   const onProgress = options.onProgress;
   const resolvedCloudApiBase = resolveDirectCloudAuthApiBase(cloudApiBase);
@@ -3373,23 +3397,15 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
       list.data.every(isTerminalFailedCloudAgent);
     if (chosen) {
       let agent = chosen;
-      const initialBase = resolveCloudAgentApiBase({
-        bridgeUrl: chosen.bridge_url,
-        webUiUrl: chosen.web_ui_url ?? chosen.webUiUrl,
-        agentId: chosen.agent_id,
-        cloudApiBase: resolvedCloudApiBase,
-      });
-      // A DEDICATED agent (its record exposes the container subdomain / bridge
-      // base rather than the shared REST adapter) that is not `running` is a
-      // ~5-minute cold boot (#8621). Binding its base immediately makes the
-      // first chat call exhaust the ~60 s 202-retry budget and error out — so
-      // wait for `running` here, streaming progress through the connect flow's
-      // existing onProgress plumbing. Shared agents never wait (container-free,
-      // served instantly by the in-Worker runtime).
-      const isDedicated =
-        !isDirectCloudSharedAgentBase(initialBase) &&
-        Boolean(chosen.web_ui_url ?? chosen.webUiUrl ?? chosen.bridge_url);
-      if (isDedicated && agent.status !== "running") {
+      // A picked agent that is not `running` is a dedicated cold boot: shared
+      // rows are BORN `running` (they are container-free, served instantly by
+      // the in-Worker runtime), so a non-running pick always has a container
+      // to wake (~5 minutes — #8621). Binding its list-row base immediately
+      // would exhaust the ~60 s 202-retry budget on the first chat call AND
+      // risks a stale pointer (the list row's URLs predate the wake) — so wait
+      // for `running` here; `waitForCloudAgentRunning` kicks a resume and
+      // resolves with the FRESH post-wake record, whose URLs we bind below.
+      if (agent.status !== "running") {
         agent = await waitForCloudAgentRunning(this, {
           agentId: chosen.agent_id,
           ...(typeof options.wakePollIntervalMs === "number"
@@ -3401,12 +3417,14 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
           ...(onProgress ? { onProgress } : {}),
         });
       }
-      const apiBase = resolveCloudAgentApiBase({
-        bridgeUrl: agent.bridge_url,
-        webUiUrl: agent.web_ui_url ?? agent.webUiUrl,
-        agentId: agent.agent_id,
-        cloudApiBase: resolvedCloudApiBase,
-      });
+      const apiBase = preferStewardAgentAdapter
+        ? buildCloudSharedAgentApiBase(resolvedCloudApiBase, agent.agent_id)
+        : resolveCloudAgentApiBase({
+            bridgeUrl: agent.bridge_url,
+            webUiUrl: agent.web_ui_url ?? agent.webUiUrl,
+            agentId: agent.agent_id,
+            cloudApiBase: resolvedCloudApiBase,
+          });
       onProgress?.("ready", "Connected to your agent");
       return {
         agentId: agent.agent_id,
@@ -3414,7 +3432,8 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
         apiBase,
         bridgeUrl: agent.bridge_url,
         created: false,
-        requiresAgentPairing: isDedicatedCloudAgentBase(apiBase),
+        requiresAgentPairing:
+          !preferStewardAgentAdapter && isDedicatedCloudAgentBase(apiBase),
       };
     }
   }
@@ -3457,7 +3476,7 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
     detailAgent?.web_ui_url || detailAgent?.bridge_url,
   );
   const apiBase =
-    isRunning && hasDedicatedUrl
+    !preferStewardAgentAdapter && isRunning && hasDedicatedUrl
       ? resolveCloudAgentApiBase({
           bridgeUrl: detailAgent.bridge_url,
           webUiUrl: detailAgent.web_ui_url ?? detailAgent.webUiUrl,
@@ -3478,7 +3497,8 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
     // explicit `false` demotes to reuse; an absent flag (older worker) stays
     // `true` so the pre-existing create UX is unchanged.
     created: created.created !== false,
-    requiresAgentPairing: isDedicatedCloudAgentBase(apiBase),
+    requiresAgentPairing:
+      !preferStewardAgentAdapter && isDedicatedCloudAgentBase(apiBase),
   };
 };
 

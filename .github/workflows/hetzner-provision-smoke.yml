@@ -56,6 +56,9 @@ jobs:
       - name: Install dependencies
         run: bun install --no-save --ignore-scripts
 
+      - name: Ensure generated shared i18n data
+        run: node packages/app-core/scripts/ensure-shared-i18n-data.mjs
+
       - name: List Hetzner catalog (what's actually placeable)
         run: |
           echo "=== non-deprecated server types (id  name  arch  cores/mem) ==="

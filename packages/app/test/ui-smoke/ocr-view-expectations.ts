@@ -33,6 +33,8 @@ export const VIEW_EXPECTATIONS: Record<string, OcrExpectation> = {
     requireAny: [
       "Enter a URL",
       "Open a website",
+      "No browser tabs yet",
+      "Browser Bridge Available",
       "Summarize a page",
       "Search the web",
     ],

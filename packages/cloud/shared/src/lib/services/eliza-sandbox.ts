@@ -962,6 +962,20 @@ export class ElizaSandboxService {
     }
   }
 
+  /**
+   * Read-only peek at `createAgent`'s idempotent-reuse guard: would a
+   * `reuseExistingNonTerminal` create hand back an existing agent instead of
+   * inserting one? Routes use this to skip capacity gates (the
+   * provisioning-worker health 503) when no new provision would be enqueued:
+   * reuse needs no provisioning capacity, so a worker outage must not block a
+   * user who already has an agent (#15516). Advisory only — `createAgent`
+   * re-checks under its org advisory lock; a candidate deleted in the gap
+   * means a fresh create whose provision job simply waits in the queue.
+   */
+  async hasReusableNonTerminalAgent(organizationId: string): Promise<boolean> {
+    return agentSandboxesRepository.hasReusableNonTerminalByOrganization(organizationId);
+  }
+
   async createAgent(params: CreateAgentParams): Promise<{
     agent: AgentSandbox;
     idempotent: boolean;

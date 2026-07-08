@@ -319,7 +319,7 @@ describe("ChoiceWidget — pick an option", () => {
         id="runtime"
         scope="first-run"
         options={[
-          { value: "cloud", label: "Eliza Cloud (managed)" },
+          { value: "cloud", label: "Eliza Cloud (recommended)" },
           { value: "local", label: "On this device" },
         ]}
         onChoose={onChoose}
@@ -334,13 +334,17 @@ describe("ChoiceWidget — pick an option", () => {
 
     const cloudBeforePick = screen.getByTestId("choice-cloud");
     const localBeforePick = screen.getByTestId("choice-local");
-    for (const choice of [cloudBeforePick, localBeforePick]) {
-      const classes = choice.className.split(/\s+/);
-      expect(classes).toContain("bg-card");
-      expect(classes).toContain("text-txt-strong");
-      expect(classes).toContain("border-border-strong");
-      expect(classes).not.toContain("bg-bg-accent");
-    }
+    const recommendedClasses = cloudBeforePick.className.split(/\s+/);
+    expect(recommendedClasses).toContain("bg-accent");
+    expect(recommendedClasses).toContain("text-accent-fg");
+    expect(recommendedClasses).not.toContain("bg-card");
+    expect(recommendedClasses).not.toContain("text-txt-strong");
+
+    const neutralClasses = localBeforePick.className.split(/\s+/);
+    expect(neutralClasses).toContain("bg-card");
+    expect(neutralClasses).toContain("text-txt-strong");
+    expect(neutralClasses).toContain("border-border-strong");
+    expect(neutralClasses).not.toContain("bg-bg-accent");
 
     fireEvent.click(screen.getByTestId("choice-cloud"));
 
@@ -354,6 +358,32 @@ describe("ChoiceWidget — pick an option", () => {
     // …while the rows the user did NOT pick fade behind it.
     expect(other.className).toContain("disabled:opacity-40");
     expect(onChoose).toHaveBeenCalledWith("cloud");
+  });
+
+  it("multi-option first-run: selecting the non-recommended row demotes the recommended row after lock", () => {
+    const onChoose = vi.fn();
+    render(
+      <ChoiceWidget
+        id="runtime"
+        scope="first-run"
+        options={[
+          { value: "cloud", label: "Eliza Cloud (recommended)" },
+          { value: "local", label: "On this device" },
+        ]}
+        onChoose={onChoose}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("choice-local"));
+
+    const recommended = screen.getByTestId("choice-cloud");
+    const picked = screen.getByTestId("choice-local");
+    expect(picked.className.split(/\s+/)).toContain("bg-accent");
+    expect(picked.className).toContain("disabled:opacity-100");
+    expect(recommended.className.split(/\s+/)).toContain("bg-card");
+    expect(recommended.className).toContain("disabled:opacity-40");
+    expect(recommended.className).not.toContain("disabled:opacity-100");
+    expect(onChoose).toHaveBeenCalledWith("local");
   });
 
   it("multi-option first-run error choices use readable neutral rows (#15516)", () => {

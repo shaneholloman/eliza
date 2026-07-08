@@ -23,10 +23,12 @@ export const OPTIONAL_PLUGIN_IMPORTERS: Record<string, () => Promise<unknown>> =
     "@elizaos/plugin-vision": () => import("@elizaos/plugin-vision"),
     "@elizaos/plugin-background-runner": () =>
       import("@elizaos/plugin-background-runner"),
+    // biome-ignore lint/suspicious/noTsIgnore: optional literal imports may be unbuilt in sibling source typechecks.
+    // @ts-ignore: optional mobile bundle plugin is outside sibling typecheck build graph; runtime import is guarded.
     "@elizaos/plugin-native-filesystem": () =>
       import("@elizaos/plugin-native-filesystem"),
     "@elizaos/plugin-scheduling": () => import("@elizaos/plugin-scheduling"),
-    // biome-ignore lint/suspicious/noTsIgnore: mixed package tsconfigs make @ts-expect-error unstable here.
+    // biome-ignore lint/suspicious/noTsIgnore: optional literal imports may be unbuilt in sibling source typechecks.
     // @ts-ignore: runtime subpath export is intentional; not every package tsconfig resolves its declaration condition.
     "@elizaos/plugin-inbox": () => import("@elizaos/plugin-inbox/plugin"),
     "@elizaos/plugin-app-control": () => import("@elizaos/plugin-app-control"),

@@ -18,6 +18,7 @@ import {
   SUB_AGENT_CREDENTIAL_BRIDGE_SERVICE,
   type SubAgentCredentialBridge,
 } from "../services/credential-tunnel-service";
+import { _resetAuthRateLimiter } from "./auth";
 import type { CompatRuntimeState } from "./compat-route-shared";
 import { handleCredentialTunnelRoute } from "./credential-tunnel-routes";
 
@@ -29,6 +30,7 @@ const AUTH_ENV_KEYS = [
   "ELIZA_REQUIRE_LOCAL_AUTH",
   "NODE_ENV",
 ] as const;
+const OWNER_TOKEN = "credential-tunnel-owner-token";
 
 const savedAuthEnv: Record<(typeof AUTH_ENV_KEYS)[number], string | undefined> =
   {
@@ -81,12 +83,14 @@ function fakeReq(opts: {
   ip?: string;
   host?: string;
   headers?: http.IncomingHttpHeaders;
+  auth?: "owner" | "none";
 }): http.IncomingMessage {
   const req = new http.IncomingMessage(new Socket());
   req.method = opts.method;
   req.url = opts.pathname;
   req.headers = {
     host: opts.host ?? "localhost:2138",
+    ...(opts.auth === "none" ? {} : { authorization: `Bearer ${OWNER_TOKEN}` }),
     ...(opts.headers ?? {}),
   };
   Object.defineProperty(req.socket, "remoteAddress", {
@@ -139,9 +143,12 @@ describe("credential tunnel route", () => {
       savedAuthEnv[key] = process.env[key];
     }
     clearRouteAuthState();
+    _resetAuthRateLimiter();
+    process.env.ELIZA_API_TOKEN = OWNER_TOKEN;
   });
 
   afterEach(() => {
+    _resetAuthRateLimiter();
     Reflect.deleteProperty(globalThis, BOOT_CONFIG_STORE_KEY);
     for (const key of AUTH_ENV_KEYS) {
       if (savedAuthEnv[key] === undefined) delete process.env[key];
@@ -243,6 +250,7 @@ describe("credential tunnel route", () => {
         pathname: "/api/credential-tunnel",
         ip: "203.0.113.8",
         host: "agent.example.test",
+        auth: "none",
         body: validBody(),
       }),
       stateWithBridge({ tunnelCredential }),
