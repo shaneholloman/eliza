@@ -20,7 +20,6 @@ import type { ReactNode } from "react";
 import { CopyButton } from "../../../components/ui/copy-button";
 import { EmptyState } from "../../../components/ui/empty-state";
 import { Skeleton } from "../../../components/ui/skeleton";
-import { ListSkeleton } from "../../../components/ui/skeleton-layouts";
 import { cn } from "../../lib/utils";
 import { BrandButton } from "../brand/brand-button";
 import { DashboardTableSkeleton } from "../data-list/dashboard-table-skeleton";
@@ -217,7 +216,22 @@ export function AppsEmptyState({ description, action }: AppsEmptyStateProps) {
 }
 
 export function AppsSkeleton() {
-  return <ListSkeleton rows={3} />;
+  return (
+    <DashboardTableSkeleton
+      columns={[
+        { key: "app", label: "App", skeletonClassName: "w-32" },
+        { key: "status", label: "Status", skeletonClassName: "h-6 w-20" },
+        { key: "revenue", label: "Revenue", skeletonClassName: "w-20" },
+        { key: "updated", label: "Updated", skeletonClassName: "w-24" },
+        {
+          key: "actions",
+          label: "Actions",
+          cellClassName: "text-right",
+          skeletonClassName: "ml-auto h-8 w-20",
+        },
+      ]}
+    />
+  );
 }
 
 export function ContainersSkeleton() {

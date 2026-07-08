@@ -1063,7 +1063,12 @@ async function mutateAssistant(p, hook, text) {
 
 async function openSheetToFull(p, pointer) {
   await p.waitForSelector('[data-testid="chat-sheet"]');
-  await gesture(p, 160, { pointer, slow: false, steps: 2 });
+  await gesture(p, 160, {
+    pointer,
+    slow: false,
+    steps: 2,
+    target: (await detent(p)) === "pill" ? "chat-pill" : "chat-sheet-grabber",
+  });
   await p.waitForTimeout(SETTLE);
   if ((await detent(p)) !== "full") {
     await gesture(p, 220, { pointer, slow: false, steps: 2 });
