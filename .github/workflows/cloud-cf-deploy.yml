@@ -919,6 +919,19 @@ jobs:
             sleep $((attempt * 20))
           done
 
+      - name: Verify Pages frontend freshness
+        if: steps.cf.outputs.configured == 'true' && github.event_name != 'pull_request' && steps.freshness.outputs.should_deploy == 'true'
+        working-directory: ${{ env.CHECKOUT_DIR }}
+        env:
+          SERVED_URL: ${{ ((github.event_name == 'workflow_dispatch' && inputs.environment == 'production') || github.ref == 'refs/heads/main') && 'https://elizacloud.ai' || 'https://staging.elizacloud.ai' }}
+        run: |
+          node packages/scripts/cloud/verify-pages-frontend-cli.mjs \
+            --served-url "$SERVED_URL" \
+            --dist packages/app/dist \
+            --require-text "Signing in to your agent" \
+            --require-text "This tab will continue automatically" \
+            --require-text "Open this agent from Eliza Cloud"
+
       # Same-origin checks against the SITE_URL custom domains were removed: those
       # domains were served by Vercel, which has been decommissioned. We verify the
       # freshly-deployed Cloudflare API Worker directly instead.
@@ -1292,6 +1305,19 @@ jobs:
             echo "::warning::Cloudflare Pages deploy attempt ${attempt} failed; retrying"
             sleep $((attempt * 20))
           done
+
+      - name: Verify Pages frontend freshness
+        if: steps.cf.outputs.configured == 'true' && github.event_name != 'pull_request' && steps.freshness.outputs.should_deploy == 'true'
+        working-directory: ${{ env.CHECKOUT_DIR }}
+        env:
+          SERVED_URL: ${{ ((github.event_name == 'workflow_dispatch' && inputs.environment == 'production') || github.ref == 'refs/heads/main') && 'https://app.elizacloud.ai' || 'https://app-staging.elizacloud.ai' }}
+        run: |
+          node packages/scripts/cloud/verify-pages-frontend-cli.mjs \
+            --served-url "$SERVED_URL" \
+            --dist packages/app/dist \
+            --require-text "Signing in to your agent" \
+            --require-text "This tab will continue automatically" \
+            --require-text "Open this agent from Eliza Cloud"
 
       - name: Clean temp checkout
         if: always()
