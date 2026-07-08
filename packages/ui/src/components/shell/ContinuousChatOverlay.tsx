@@ -4146,11 +4146,12 @@ export function ContinuousChatOverlay({
       // DISCRETE full-bleed SHAPE. The finger NEVER sets `fullBleedT` directly —
       // the "awkward lerp" of border/radius/width easing with every pixel. Instead
       // the over-pull flips a state at the threshold and the shape SPRINGS to it
-      // once (border, radius, side inset, width, composer capsule, and the panel
-      // height CAP all ride `fullBleedT` together, so they transition as one).
-      // The height still tracked the finger 1:1 above (threadHeight); only the
-      // SHAPE is stateful. Reversible with hysteresis: pulling back down below
-      // the release threshold springs it home. Reduced-motion cuts instantly.
+      // once (border, radius, side inset, width, composer capsule). Only the SHAPE
+      // is stateful: the panel HEIGHT tracked the finger 1:1 the whole way up
+      // because `panelCapH` follows the finger's over-pull + `threadHeight`, not
+      // this spring, so there is no ceiling freeze. Reversible with hysteresis:
+      // pulling back down below the release threshold springs the shape home.
+      // Reduced-motion cuts instantly.
       // A real keyboard blocks maximize (the edge-to-edge panel would spill above
       // the keyboard-shrunk visual viewport); a pull-to-full with the keyboard up
       // settles at the inset FULL detent instead.
