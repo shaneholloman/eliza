@@ -632,6 +632,7 @@ function writeSpirvHeadersConfigShim(incRoot) {
       "if(NOT TARGET SPIRV-Headers::SPIRV-Headers)",
       "  add_library(SPIRV-Headers::SPIRV-Headers INTERFACE IMPORTED)",
       "  set_target_properties(SPIRV-Headers::SPIRV-Headers PROPERTIES",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: CMake expands this placeholder.
       '    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/../..")',
       "endif()",
       "set(SPIRV-Headers_FOUND TRUE)",
@@ -1474,6 +1475,7 @@ export function buildLibllamaForAbi({
   // empty so its behavior stays byte-for-byte identical.
   extraCmakeFlags = [],
   extraBuildTargets = [],
+  targetName = "",
 }) {
   const target = ABI_TARGETS.find((t) => t.androidAbi === abi);
   if (!target) {
@@ -1737,11 +1739,12 @@ export function buildLibllamaForAbi({
   // ElizaAgentService.java).
   // Static-fuse (BUILD_SHARED_LIBS=OFF — the `*-fused` targets): llama/ggml/
   // mtmd build as STATIC `.a` archives folded into a self-contained
-  // libelizainference.so (no DT_NEEDED on libllama.so/libggml*.so). So the
-  // legacy co-copy of the shared libllama.so + ggml family is both impossible
-  // (.so don't exist) and unnecessary (nothing dlopens them) — skip it. The
-  // non-fused (BUILD_SHARED_LIBS=ON) bulk `--abi` path keeps staging the shared
-  // family verbatim for its libllama.so-loading consumers.
+  // libelizainference.so (no DT_NEEDED on libllama.so/libggml*.so). The Android
+  // Vulkan backend is the exception: ggml-vulkan is a runtime backend .so, not a
+  // folded static archive, and must ship beside libelizainference.so so the GPU
+  // backend actually loads on device. The non-fused (BUILD_SHARED_LIBS=ON) bulk
+  // `--abi` path keeps staging the shared family verbatim for its
+  // libllama.so-loading consumers.
   const isStaticFused = extraCmakeFlags.some((f) =>
     /BUILD_SHARED_LIBS\s*=\s*OFF/i.test(String(f)),
   );
@@ -1803,6 +1806,15 @@ export function buildLibllamaForAbi({
       }
     }
   }
+
+  const staticFusedRuntimeBackendOuts = isStaticFused
+    ? stageStaticFusedRuntimeBackendLibs({
+        buildDir,
+        abiAssetDir,
+        target: targetName,
+        log,
+      })
+    : [];
 
   // Locate + stage the llama-server binary. cmake puts it under
   // `<build>/bin/llama-server` for upstream b8198 (and the apothic fork
@@ -1878,6 +1890,7 @@ export function buildLibllamaForAbi({
   const stripTargets = [
     ...ggmlOuts,
     ...runtimeSiblingOuts,
+    ...staticFusedRuntimeBackendOuts,
     llamaOut,
     ...sonameAliases,
   ].filter(Boolean); // llamaOut is null under static-fuse (no shared libllama.so)
@@ -1907,10 +1920,40 @@ export function buildLibllamaForAbi({
   return {
     llama: llamaOut,
     ggml: ggmlOuts,
+    runtimeBackends: staticFusedRuntimeBackendOuts,
     llamaServer: llamaServerOut,
     elizainference: fusedLibOut,
     omnivoiceServer: fusedServerOut,
   };
+}
+
+/**
+ * Stage runtime backend shared objects that still exist in static-fused builds.
+ * Most llama/ggml products are folded into libelizainference.so under
+ * BUILD_SHARED_LIBS=OFF, but ggml-vulkan remains a dynamic backend and the
+ * verifier requires it next to the fused library.
+ */
+export function stageStaticFusedRuntimeBackendLibs({
+  buildDir,
+  abiAssetDir,
+  target,
+  log = () => {},
+}) {
+  if (!String(target).includes("vulkan")) return [];
+  const vulkanBackend = locateBuiltLib(buildDir, "libggml-vulkan.so");
+  if (!vulkanBackend) {
+    throw new Error(
+      `[compile-libllama] static-fuse Vulkan target ${target} built no libggml-vulkan.so under ${buildDir}. ` +
+        `A Vulkan fused APK must ship the ggml-vulkan runtime backend beside libelizainference.so; otherwise it silently runs CPU-only.`,
+    );
+  }
+  fs.mkdirSync(abiAssetDir, { recursive: true });
+  const out = path.join(abiAssetDir, "libggml-vulkan.so");
+  fs.copyFileSync(vulkanBackend, out);
+  log(
+    `[compile-libllama] Copied libggml-vulkan.so for ${target} (${(fs.statSync(out).size / (1024 * 1024)).toFixed(2)} MB).`,
+  );
+  return [out];
 }
 
 /**
@@ -2428,18 +2471,24 @@ export function describeAndroidTargetDryRun({
     cmakeFlags.push(...fusedExtraCmakeFlags());
   }
   log(`  cmake ${cmakeFlags.join(" ")}`);
-  const buildTargets = parsed.fused
-    ? fusedCmakeBuildTargets()
-    : ["llama", "llama-server"];
+  const buildTargets = [
+    ...(parsed.fused ? fusedCmakeBuildTargets() : ["llama", "llama-server"]),
+    ...(parsed.backend === "vulkan" ? ["ggml-vulkan"] : []),
+  ];
   log(
     `  cmake --build ${buildDir} --target ${buildTargets.join(" ")} -j ${jobs}`,
   );
   log(`  expected output layout under ${abiAssetDir}:`);
-  log(`    libllama.so libggml*.so llama-server`);
   if (parsed.fused) {
-    log(
-      `    libelizainference.so omnivoice-tts omnivoice-codec (merged-tree artifacts)`,
-    );
+    log(`    libelizainference.so`);
+    if (parsed.backend === "vulkan") {
+      log(`    libggml-vulkan.so (runtime GPU backend)`);
+    }
+  } else {
+    log(`    libllama.so libggml*.so llama-server`);
+  }
+  if (parsed.fused) {
+    log(`    omnivoice-tts omnivoice-codec (merged-tree auxiliary artifacts)`);
     log(
       `  verifyFusedSymbols outDir=${abiAssetDir} target=${parsed.target} (post-build)`,
     );
@@ -2763,6 +2812,7 @@ export async function mainTargets(args) {
           : []),
         ...(parsed.backend === "vulkan" ? ["ggml-vulkan"] : []),
       ],
+      targetName: parsed.target,
     });
 
     // Post-build: for fused targets prove libelizainference.so exports both
