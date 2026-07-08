@@ -1419,6 +1419,47 @@ describe("cloud-only onboarding (runtime chooser off — the production default)
     unmount();
   });
 
+  it("a connected cloud-only session prefers the active Settings cloud agent without surfacing a picker", async () => {
+    localStorage.setItem(
+      "elizaos:active-server",
+      JSON.stringify({
+        kind: "cloud",
+        id: "cloud:agent-older-running",
+        label: "Preferred from Settings",
+        apiBase: "https://agent-older-running.elizacloud.ai",
+        accessToken: "cloud-token",
+      }),
+    );
+    mocks.client.getCloudCompatAgents.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          agent_id: "agent-newest-running",
+          agent_name: "Newest",
+          status: "running",
+          created_at: "2026-01-03T00:00:00.000Z",
+        },
+        {
+          agent_id: "agent-older-running",
+          agent_name: "Preferred from Settings",
+          status: "running",
+          created_at: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    });
+    const spies = seedAppStore({ elizaCloudConnected: true });
+    const { turn, unmount } = renderConductor();
+
+    await waitFor(() => {
+      expect(spies.completeFirstRun).toHaveBeenCalledTimes(1);
+    });
+    expect(turn("first-run:cloud-agent")).toBeUndefined();
+    expect(
+      mocks.client.selectOrProvisionCloudAgent.mock.calls[0][0],
+    ).toMatchObject({ preferAgentId: "agent-older-running" });
+    unmount();
+  });
+
   it("zero agents stay silent through the reuse lookup and narrate ONLY the real provisioning (#15133)", async () => {
     // No stored agents; selectOrProvisionCloudAgent emits the REAL client's
     // progress sequence for a create: the reuse lookup ("listing"), the actual
