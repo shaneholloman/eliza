@@ -574,6 +574,66 @@ describe("mock-cloud connect e2e — dedicated cold boot + shared chat bridge", 
     );
   });
 
+  it("honors a remembered non-running agent over a different running one (waking it instead of silently swapping conversations)", async () => {
+    // The remembered (persisted) agent is stopped; a NEWER running agent also
+    // exists. Binding the other agent would swap the user's conversations and
+    // memories — the remembered choice must win and be woken (#15516).
+    const remembered = seedDedicated({
+      id: "agent-remembered",
+      webUiUrl: `${base}/dedicated/agent-remembered-stale`,
+      runningWebUiUrl: `${base}/dedicated/agent-remembered`,
+      bootAfterPolls: 1,
+    });
+    const other: MockAgent = {
+      id: "agent-other",
+      agentName: "Other Eliza",
+      status: "running",
+      webUiUrl: `${base}/dedicated/agent-other`,
+      bridgeUrl: null,
+      bootAfterPolls: 0,
+      resumeRequested: false,
+      pollsSinceResume: 0,
+      proxy202sRemaining: 0,
+    };
+    state.agents.set(other.id, other);
+
+    const client = makeClient();
+    const result = await client.selectOrProvisionCloudAgent({
+      cloudApiBase: base,
+      authToken: AUTH_TOKEN,
+      name: "Eliza",
+      preferAgentId: "agent-remembered",
+      wakePollIntervalMs: 20,
+      wakeTimeoutMs: 5_000,
+    });
+
+    expect(result.agentId).toBe("agent-remembered");
+    expect(result.created).toBe(false);
+    expect(state.resumeCalls).toEqual(["agent-remembered"]);
+    expect(remembered.status).toBe("running");
+    expect(result.apiBase).toBe(`${base}/dedicated/agent-remembered`);
+  });
+
+  it("falls through to create only when every existing agent is terminally failed", async () => {
+    // A terminal `error` row is genuinely unreusable — the pick must NOT hand
+    // it back (nor wait on it); the flow proceeds to the create POST, which
+    // this mock does not implement (404) — proving create was attempted.
+    seedDedicated({
+      id: "agent-dead",
+      status: "error",
+      errorMessage: "container image pull failed",
+    });
+    const client = makeClient();
+    await expect(
+      client.selectOrProvisionCloudAgent({
+        cloudApiBase: base,
+        authToken: AUTH_TOKEN,
+        name: "Eliza",
+      }),
+    ).rejects.toThrow(/no mock route for POST \/api\/v1\/eliza\/agents/i);
+    expect(state.resumeCalls).toEqual([]);
+  });
+
   it("rejects (never provisions a duplicate) when the control plane refuses the list", async () => {
     seedDedicated();
     const client = makeClient();

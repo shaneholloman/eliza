@@ -175,6 +175,31 @@ export class AgentSandboxesRepository {
       .orderBy(desc(agentSandboxes.created_at));
   }
 
+  /**
+   * Read-only peek at whether `createAgent`'s idempotent-reuse guard would
+   * hand back an existing agent for this org. Mirrors that guard's predicate
+   * EXACTLY (org-scoped, `pool_status IS NULL`, status
+   * pending/provisioning/running — see eliza-sandbox.ts `createAgent`); keep
+   * the two in sync. Advisory: the guard re-checks under its org advisory
+   * lock, so this may only ever be used to soften capacity gates (#15516),
+   * never as the reuse decision itself.
+   */
+  async hasReusableNonTerminalByOrganization(orgId: string): Promise<boolean> {
+    await ensureAgentSandboxSchema();
+    const [existing] = await dbRead
+      .select({ id: agentSandboxes.id })
+      .from(agentSandboxes)
+      .where(
+        and(
+          eq(agentSandboxes.organization_id, orgId),
+          sql`${agentSandboxes.pool_status} IS NULL`,
+          sql`${agentSandboxes.status} IN ('pending', 'provisioning', 'running')`,
+        ),
+      )
+      .limit(1);
+    return Boolean(existing);
+  }
+
   async findBySandboxId(sandboxId: string): Promise<AgentSandbox | undefined> {
     await ensureAgentSandboxSchema();
     const [r] = await dbRead
