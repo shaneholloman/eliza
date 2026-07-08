@@ -448,9 +448,7 @@ describe("ContinuousChatOverlay first-run gating", () => {
     render(<ContinuousChatOverlay controller={controller} firstRunOpen />);
 
     expect(screen.getAllByText("Sign in to Eliza Cloud")).toHaveLength(1);
-    expect(
-      screen.queryAllByText("Hi — I'm Eliza.").length,
-    ).toBe(1);
+    expect(screen.queryAllByText("Hi — I'm Eliza.").length).toBe(1);
   });
 
   it("exposes the sr-only onboarding-state probe with the current step + choice ids while onboarding is open", () => {

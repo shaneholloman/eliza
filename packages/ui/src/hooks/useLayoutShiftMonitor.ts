@@ -242,7 +242,8 @@ export function useLayoutShiftMonitor(
   const clsBudget = options.clsBudget;
   const emitHealthy = options.emitHealthy;
   useEffect(
-    () => startLayoutShiftMonitor({ enabled, windowMs, clsBudget, emitHealthy }),
+    () =>
+      startLayoutShiftMonitor({ enabled, windowMs, clsBudget, emitHealthy }),
     [enabled, windowMs, clsBudget, emitHealthy],
   );
 }

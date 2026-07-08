@@ -2421,6 +2421,22 @@ function getMessageHandlerCandidateActions(
 	);
 }
 
+// The two stage-1 plan fields the escalation predicates read as plain values.
+// `candidateActions` stays per call site because the backstop path cleans it
+// through `getMessageHandlerCandidateActions` while the evaluator path forwards
+// the raw list. A stage-1 plan legitimately may carry no contexts and no reply,
+// so an absent optional field normalizes to the empty shape those pure
+// predicates already treat as "nothing there" — normalized here once instead of
+// at every call site.
+function messageHandlerStageOneReplyContexts(
+	messageHandler: MessageHandlerResult,
+): { stageOneContexts: readonly string[]; stageOneReplyText: string } {
+	return {
+		stageOneContexts: messageHandler.plan.contexts ?? [],
+		stageOneReplyText: String(messageHandler.plan.reply ?? ""),
+	};
+}
+
 function getMessageHandlerParentActionHints(
 	messageHandler: MessageHandlerResult,
 ): string[] {
@@ -3043,8 +3059,7 @@ export const BUILTIN_RESPONSE_HANDLER_EVALUATORS: readonly ResponseHandlerEvalua
 				// finished replyText with an "On it." ack that never delivers).
 				return !shouldSuppressInferredCandidateEscalation({
 					inference,
-					stageOneContexts: messageHandler.plan.contexts ?? [],
-					stageOneReplyText: String(messageHandler.plan.reply ?? ""),
+					...messageHandlerStageOneReplyContexts(messageHandler),
 					stageOneCandidateActions: messageHandler.plan.candidateActions ?? [],
 				});
 			},
@@ -3056,8 +3071,7 @@ export const BUILTIN_RESPONSE_HANDLER_EVALUATORS: readonly ResponseHandlerEvalua
 				);
 				const candidateActions = shouldSuppressInferredCandidateEscalation({
 					inference,
-					stageOneContexts: messageHandler.plan.contexts ?? [],
-					stageOneReplyText: String(messageHandler.plan.reply ?? ""),
+					...messageHandlerStageOneReplyContexts(messageHandler),
 					stageOneCandidateActions: messageHandler.plan.candidateActions ?? [],
 				})
 					? []
@@ -4263,8 +4277,7 @@ export function applyDirectCurrentCandidateBackstopToMessageHandler(
 	if (
 		shouldSuppressInferredCandidateEscalation({
 			inference: directCurrentInference,
-			stageOneContexts: messageHandler.plan.contexts ?? [],
-			stageOneReplyText: String(messageHandler.plan.reply ?? ""),
+			...messageHandlerStageOneReplyContexts(messageHandler),
 			stageOneCandidateActions:
 				getMessageHandlerCandidateActions(messageHandler),
 		})
@@ -4328,8 +4341,7 @@ export function applyDirectCurrentCandidateBackstopToMessageHandler(
 	// the identical escalation, so the answered-turn waste is identical too.
 	const viewOverlapMissBudget = viewOverlapRequiredToolMissBudget({
 		inference: directCurrentInference,
-		stageOneContexts: messageHandler.plan.contexts ?? [],
-		stageOneReplyText: String(messageHandler.plan.reply ?? ""),
+		...messageHandlerStageOneReplyContexts(messageHandler),
 		stageOneCandidateActions: getMessageHandlerCandidateActions(messageHandler),
 	});
 	return {
