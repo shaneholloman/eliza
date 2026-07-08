@@ -68,11 +68,106 @@ export function isVoiceCaptureDebugEnabled(): boolean {
   return voiceDebugEnabled();
 }
 
-/** One lifecycle-step breadcrumb. No secrets in `detail`. */
+// ── On-screen breadcrumb ring (device HUD) ───────────────────────────
+//
+// The console breadcrumbs above are invisible on an installed iPhone PWA (no
+// devtools). We won the viewport-geometry war with an on-screen diagnostics
+// chip (BuildBadge); do the same for voice: mirror every breadcrumb into a
+// tiny ring buffer that a bottom-anchored HUD renders, so the NEXT device
+// screenshot shows exactly where a "tapped the mic, then crickets" capture
+// dies — `mic:tap → gum:req → gum:ok → ctx:running → rec:start → …` or the
+// exact failing step (`gum:err`, `ctx:suspended!`, `wav:SILENT`, `post:403`)
+// or NOTHING AT ALL after `mic:tap` (= the click handler never reached
+// capture).
+//
+// The ring is ALWAYS populated (independent of the console-debug predicate)
+// so the HUD works on a stamped sol-dev build without the tester first
+// setting `localStorage['eliza:voice:debug']`. It's a fixed-size in-memory
+// buffer — zero network, zero storage, negligible cost.
+
+/** One recorded breadcrumb: step label, wall-clock ms, and sanitized detail. */
+export interface VoiceCaptureBreadcrumb {
+  /** Monotonic sequence id (for stable React keys + ordering). */
+  seq: number;
+  /** The lifecycle step, e.g. `mic:tap`, `gum:ok`, `post:200`. */
+  step: string;
+  /** `performance.now()` (ms) when recorded — HUD renders offsets from `mic:tap`. */
+  atMs: number;
+  /** Optional structured detail (no secrets), compacted for the HUD line. */
+  detail?: Record<string, unknown>;
+}
+
+/** How many breadcrumbs the HUD keeps. The mandate asks for "last ~8". */
+export const VOICE_HUD_RING_SIZE = 12;
+
+const breadcrumbRing: VoiceCaptureBreadcrumb[] = [];
+let breadcrumbSeq = 0;
+type BreadcrumbListener = (ring: readonly VoiceCaptureBreadcrumb[]) => void;
+const breadcrumbListeners = new Set<BreadcrumbListener>();
+
+function nowMs(): number {
+  return typeof performance !== "undefined" && performance.now
+    ? performance.now()
+    : Date.now();
+}
+
+/**
+ * Subscribe to breadcrumb-ring updates (the HUD's data source). The listener
+ * fires on every push with the current ring snapshot; returns an unsubscribe.
+ * Immediately invoked once so a late-mounting HUD paints the existing trace.
+ */
+export function subscribeVoiceCaptureBreadcrumbs(
+  listener: BreadcrumbListener,
+): () => void {
+  breadcrumbListeners.add(listener);
+  listener(breadcrumbRing.slice());
+  return () => {
+    breadcrumbListeners.delete(listener);
+  };
+}
+
+/** Current ring snapshot (oldest → newest). */
+export function getVoiceCaptureBreadcrumbs(): readonly VoiceCaptureBreadcrumb[] {
+  return breadcrumbRing.slice();
+}
+
+/** Clear the ring (e.g. a fresh `mic:tap` starts a clean trace). */
+export function resetVoiceCaptureBreadcrumbs(): void {
+  breadcrumbRing.length = 0;
+  const snapshot = breadcrumbRing.slice();
+  for (const l of breadcrumbListeners) l(snapshot);
+}
+
+function pushBreadcrumb(step: string, detail?: Record<string, unknown>): void {
+  breadcrumbSeq += 1;
+  breadcrumbRing.push({
+    seq: breadcrumbSeq,
+    step,
+    atMs: nowMs(),
+    detail: detail && Object.keys(detail).length > 0 ? detail : undefined,
+  });
+  // Trim to the ring size (drop oldest).
+  while (breadcrumbRing.length > VOICE_HUD_RING_SIZE) breadcrumbRing.shift();
+  const snapshot = breadcrumbRing.slice();
+  for (const l of breadcrumbListeners) l(snapshot);
+}
+
+/**
+ * One lifecycle-step breadcrumb. No secrets in `detail`.
+ *
+ * Dual sink: always mirrors into the on-screen HUD ring (device-visible), and
+ * ALSO logs to the console when the debug predicate is enabled (desktop /
+ * remote-inspector convenience). The HUD ring is unconditional so a stamped
+ * sol-dev build is diagnosable on-device with no console toggle.
+ */
 export function voiceCaptureDebug(
   step: string,
   detail?: Record<string, unknown>,
 ): void {
+  // A new tap begins a fresh trace so the HUD isn't cluttered with the previous
+  // (successful or dead) attempt — the last 8 events should describe THIS tap.
+  if (step === "mic:tap") resetVoiceCaptureBreadcrumbs();
+  pushBreadcrumb(step, detail);
   if (!voiceDebugEnabled()) return;
   if (detail && Object.keys(detail).length > 0) {
     console.info(`[eliza][voice-capture] ${step}`, detail);

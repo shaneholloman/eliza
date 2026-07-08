@@ -34,6 +34,7 @@ import {
   useComposerPaste,
 } from "../../../chat/composer-core";
 import { usePushToTalk } from "../../../hooks/usePushToTalk";
+import { voiceCaptureDebug } from "../../../utils/voice-capture-debug";
 import { isVoiceTargetResolvableForActiveAgent } from "../../../voice/shared-runtime-voice";
 import type { VoiceSessionMode } from "../../../voice/voice-chat-types";
 import { Button } from "../../ui/button";
@@ -317,20 +318,40 @@ export function ChatComposer({
   });
 
   const handleMicClick = useCallback(() => {
+    // Trace the composer mic tap BEFORE any branching so the on-screen HUD
+    // shows the tap even when the handler early-returns short of capture
+    // (the "nothing after mic:tap" case = handler never reached start).
+    voiceCaptureDebug("mic:tap", {
+      surface: "composer",
+      isListening: voice.isListening,
+      captureMode: voice.captureMode,
+    });
     // A held push-to-talk turn that is still live when clicked (no pointerup
     // reached us) is stopped-and-submitted here as the fallback.
     if (voice.isListening && voice.captureMode === "push-to-talk") {
+      voiceCaptureDebug("mic:branch", { action: "stop-submit-ptt" });
       void voice.stopListening({ submit: true });
       return;
     }
     // Swallow the trailing click of a completed hold so it doesn't also toggle.
-    if (shouldSuppressClick()) return;
-    if (isComposerLocked) return;
+    if (shouldSuppressClick()) {
+      voiceCaptureDebug("mic:noop", { reason: "suppress-click" });
+      return;
+    }
+    if (isComposerLocked) {
+      voiceCaptureDebug("mic:noop", { reason: "composer-locked" });
+      return;
+    }
     if (voice.isListening && voice.captureMode === "compose") {
+      voiceCaptureDebug("mic:branch", { action: "stop-compose" });
       void voice.stopListening();
       return;
     }
-    if (voice.isListening) return;
+    if (voice.isListening) {
+      voiceCaptureDebug("mic:noop", { reason: "already-listening" });
+      return;
+    }
+    voiceCaptureDebug("mic:branch", { action: "start-compose" });
     void voice.startListening("compose");
   }, [isComposerLocked, shouldSuppressClick, voice]);
 
