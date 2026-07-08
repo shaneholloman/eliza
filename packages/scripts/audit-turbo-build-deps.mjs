@@ -229,6 +229,10 @@ function findStronglyConnectedComponents(graph) {
 }
 
 function formatCyclePath(component, graph) {
+  if (component.length === 2) {
+    return [...component].sort().join(" <-> ");
+  }
+
   const allowed = new Set(component);
   for (const start of [...component].sort()) {
     const pending = [{ node: start, path: [start], seen: new Set([start]) }];
