@@ -73,6 +73,19 @@ function declaredDeps(pkg) {
   return names;
 }
 
+/** Workspace package names that participate in build order. */
+function buildGraphDeps(pkg) {
+  const names = new Set();
+  for (const field of [
+    "dependencies",
+    "devDependencies",
+    "optionalDependencies",
+  ]) {
+    for (const dep of Object.keys(pkg[field] ?? {})) names.add(dep);
+  }
+  return names;
+}
+
 const SRC_EXT = new Set([
   ".ts",
   ".tsx",
@@ -154,7 +167,7 @@ const phantomTaskOverrides = [];
 const phantoms = [];
 const undeclared = [];
 const redundant = [];
-const directWorkspaceCycles = [];
+const workspaceCycles = [];
 
 const workspaceDepsByPackage = new Map();
 for (const [name, dir] of WORKSPACE_DIRS.entries()) {
@@ -166,16 +179,85 @@ for (const [name, dir] of WORKSPACE_DIRS.entries()) {
   }
   workspaceDepsByPackage.set(
     name,
-    new Set([...declaredDeps(pkg)].filter((dep) => WORKSPACE_DIRS.has(dep))),
+    new Set([...buildGraphDeps(pkg)].filter((dep) => WORKSPACE_DIRS.has(dep))),
   );
 }
-for (const [name, deps] of workspaceDepsByPackage.entries()) {
-  for (const dep of deps) {
-    if (name >= dep) continue;
-    if (workspaceDepsByPackage.get(dep)?.has(name)) {
-      directWorkspaceCycles.push(`${name} <-> ${dep}`);
+
+function findStronglyConnectedComponents(graph) {
+  let index = 0;
+  const stack = [];
+  const onStack = new Set();
+  const indexes = new Map();
+  const lowLinks = new Map();
+  const components = [];
+
+  function visit(node) {
+    indexes.set(node, index);
+    lowLinks.set(node, index);
+    index += 1;
+    stack.push(node);
+    onStack.add(node);
+
+    const deps = [...(graph.get(node) ?? [])].sort();
+    for (const dep of deps) {
+      if (!graph.has(dep)) continue;
+      if (!indexes.has(dep)) {
+        visit(dep);
+        lowLinks.set(node, Math.min(lowLinks.get(node), lowLinks.get(dep)));
+      } else if (onStack.has(dep)) {
+        lowLinks.set(node, Math.min(lowLinks.get(node), indexes.get(dep)));
+      }
+    }
+
+    if (lowLinks.get(node) !== indexes.get(node)) return;
+
+    const component = [];
+    while (stack.length) {
+      const member = stack.pop();
+      onStack.delete(member);
+      component.push(member);
+      if (member === node) break;
+    }
+    components.push(component.sort());
+  }
+
+  for (const node of [...graph.keys()].sort()) {
+    if (!indexes.has(node)) visit(node);
+  }
+
+  return components;
+}
+
+function formatCyclePath(component, graph) {
+  const allowed = new Set(component);
+  for (const start of [...component].sort()) {
+    const pending = [{ node: start, path: [start], seen: new Set([start]) }];
+    while (pending.length) {
+      const { node, path: currentPath, seen } = pending.pop();
+      const deps = [...(graph.get(node) ?? [])]
+        .filter((dep) => allowed.has(dep))
+        .sort()
+        .reverse();
+      for (const dep of deps) {
+        if (dep === start) return [...currentPath, start].join(" -> ");
+        if (seen.has(dep)) continue;
+        pending.push({
+          node: dep,
+          path: [...currentPath, dep],
+          seen: new Set([...seen, dep]),
+        });
+      }
     }
   }
+  const sorted = [...component].sort();
+  return `${sorted.join(" -> ")} -> ${sorted[0]}`;
+}
+
+for (const component of findStronglyConnectedComponents(
+  workspaceDepsByPackage,
+)) {
+  if (component.length <= 1) continue;
+  workspaceCycles.push(formatCyclePath(component, workspaceDepsByPackage));
 }
 
 for (const [taskName, def] of Object.entries(tasks)) {
@@ -275,13 +357,13 @@ if (phantoms.length) {
   );
   process.exit(1);
 }
-if (directWorkspaceCycles.length) {
+if (workspaceCycles.length) {
   console.error(
-    `[audit-turbo-build-deps] ${directWorkspaceCycles.length} direct workspace package cycle(s):\n`,
+    `[audit-turbo-build-deps] ${workspaceCycles.length} workspace package cycle(s):\n`,
   );
-  for (const cycle of directWorkspaceCycles) console.error(`  ✗ ${cycle}`);
+  for (const cycle of workspaceCycles) console.error(`  ✗ ${cycle}`);
   console.error(
-    "\nA direct package.json cycle makes Turbo build-order inference unstable.\nMove one edge behind a runtime dynamic import or remove it if production source does not import it.",
+    "\nA package.json cycle makes Turbo build-order inference unstable.\nMove one build-order edge behind a host external, runtime dynamic import, or remove it if production source does not import it.",
   );
   process.exit(1);
 }
@@ -297,4 +379,4 @@ if (phantomTaskOverrides.length) {
 }
 console.log("[audit-turbo-build-deps] ✓ no phantom #build dependency edges");
 console.log("[audit-turbo-build-deps] ✓ no phantom pkg#task overrides");
-console.log("[audit-turbo-build-deps] ✓ no direct workspace package cycles");
+console.log("[audit-turbo-build-deps] ✓ no workspace package cycles");
