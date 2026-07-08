@@ -84,8 +84,8 @@ test.describe("in-chat onboarding → home → launcher", () => {
     await page.goto("/", { waitUntil: "domcontentloaded" });
 
     // Capture the chat-first onboarding landing before driving it. The helper
-    // also asserts the onboarding lock: composer disabled ("Choose an option
-    // to continue") and Escape NOT collapsing the pinned-open sheet.
+    // also asserts the onboarding lock: composer disabled ("Sign in to start
+    // chatting") and Escape NOT collapsing the pinned-open sheet.
     await expectChatFirstOnboarding(page);
     // NEGATIVE, restated at the spec level: mid-onboarding the sheet cannot be
     // dismissed — the old Escape-collapse-to-reach-the-launcher step is gone.

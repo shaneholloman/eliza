@@ -268,8 +268,9 @@ test.describe("confused-user onboarding", () => {
     });
     await page.reload({ waitUntil: "domcontentloaded" });
 
-    // Nothing was persisted (no POST yet) → the conductor re-seeds a fresh,
-    // fully interactive onboarding: unlocked composer + unlocked runtime CHOICE.
+    // Nothing was persisted (no POST yet) → the conductor re-seeds a fresh
+    // onboarding surface: the runtime CHOICE is unlocked (re-offered) while the
+    // composer stays sign-in-first locked, same contract as the first paint.
     await expectChatFirstOnboarding(page);
     await screenshot(page, "after-reload-fresh-onboarding");
 
