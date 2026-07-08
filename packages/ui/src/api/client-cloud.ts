@@ -1498,6 +1498,12 @@ declare module "./client-base" {
        * affects the create branch; reuse of an existing agent is unaffected.
        */
       preferSharedTier?: boolean;
+      /**
+       * Authoritative list already fetched by the caller. First-run uses this
+       * to avoid a second list/read race between "Finding your agents..." and
+       * the bind decision.
+       */
+      knownAgents?: CloudCompatAgent[];
       onProgress?: (status: string, detail?: string) => void;
       /**
        * Cold-boot wait tuning for a reused dedicated agent that is not yet
@@ -3315,6 +3321,7 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
     preferAgentId,
     forceCreate,
     preferSharedTier,
+    knownAgents,
   } = options;
   const onProgress = options.onProgress;
   const resolvedCloudApiBase = resolveDirectCloudAuthApiBase(cloudApiBase);
@@ -3331,23 +3338,28 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
   // is the fix for "a new cloud agent is created on every sign-in" — the create
   // path only runs when the user has no agent yet.
   if (!forceCreate) {
-    // "listing", not "creating": this is the reuse LOOKUP, and downstream
-    // consumers (the first-run silent cloud entry, #15133) distinguish real
-    // provisioning phases from bookkeeping by this code. Display consumers
-    // render the detail text, so the rename is invisible to them.
-    onProgress?.("listing", "Finding your agents...");
-    // A failed agent-list lookup must NOT fall through to provisioning. A
-    // transient error (expired token, network blip, or a success:false body)
-    // previously collapsed to an empty list and minted a brand-new billed agent
-    // even though the user already had one — the root of the "it creates
-    // multiple agents" report. Only an authoritative success list may conclude
-    // the user has no agent to reuse; otherwise surface the error so the caller
-    // can retry rather than duplicate.
-    const list = await this.getCloudCompatAgents().catch((cause) => ({
-      success: false as const,
-      data: [] as CloudCompatAgent[],
-      error: cause instanceof Error ? cause.message : undefined,
-    }));
+    const list = knownAgents
+      ? { success: true as const, data: knownAgents }
+      : await (async () => {
+          // "listing", not "creating": this is the reuse LOOKUP, and
+          // downstream consumers (the first-run silent cloud entry, #15133)
+          // distinguish real provisioning phases from bookkeeping by this code.
+          // Display consumers render the detail text, so the rename is
+          // invisible to them.
+          onProgress?.("listing", "Finding your agents...");
+          // A failed agent-list lookup must NOT fall through to provisioning. A
+          // transient error (expired token, network blip, or a success:false
+          // body) previously collapsed to an empty list and minted a brand-new
+          // billed agent even though the user already had one — the root of the
+          // "it creates multiple agents" report. Only an authoritative success
+          // list may conclude the user has no agent to reuse; otherwise surface
+          // the error so the caller can retry rather than duplicate.
+          return await this.getCloudCompatAgents().catch((cause) => ({
+            success: false as const,
+            data: [] as CloudCompatAgent[],
+            error: cause instanceof Error ? cause.message : undefined,
+          }));
+        })();
     if (!list.success) {
       throw new Error(
         list.error ||

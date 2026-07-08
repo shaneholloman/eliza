@@ -1416,6 +1416,12 @@ describe("cloud-only onboarding (runtime chooser off — the production default)
     expect(
       mocks.client.selectOrProvisionCloudAgent.mock.calls[0][0],
     ).toMatchObject({ preferAgentId: "agent-newest-running" });
+    expect(
+      mocks.client.selectOrProvisionCloudAgent.mock.calls[0][0],
+    ).toHaveProperty("knownAgents", [
+      expect.objectContaining({ agent_id: "agent-newest-running" }),
+      expect.objectContaining({ agent_id: "agent-older" }),
+    ]);
     unmount();
   });
 

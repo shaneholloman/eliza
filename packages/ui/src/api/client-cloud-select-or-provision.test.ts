@@ -83,6 +83,22 @@ describe("selectOrProvisionCloudAgent — never duplicate on a failed lookup", (
     expect(createCloudCompatAgent).not.toHaveBeenCalled();
   });
 
+  it("reuses a caller-provided successful list without a second lookup", async () => {
+    const { client, getCloudCompatAgents, createCloudCompatAgent } =
+      fakeClient();
+    getCloudCompatAgents.mockRejectedValue(new Error("second list forbidden"));
+
+    const result = await client.selectOrProvisionCloudAgent({
+      ...BASE_OPTS,
+      knownAgents: [makeAgent({ agent_id: "agent-from-first-run-list" })],
+    });
+
+    expect(result.created).toBe(false);
+    expect(result.agentId).toBe("agent-from-first-run-list");
+    expect(getCloudCompatAgents).not.toHaveBeenCalled();
+    expect(createCloudCompatAgent).not.toHaveBeenCalled();
+  });
+
   it("does not reuse a non-running existing agent; provisions from a confirmed no-running set", async () => {
     const { client, getCloudCompatAgents, createCloudCompatAgent } =
       fakeClient();
