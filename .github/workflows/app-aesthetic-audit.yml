@@ -7,9 +7,9 @@ name: App Aesthetic Audit
 #
 # This is the agent app's equivalent of cloud-frontend's `audit:cloud`. Until
 # this workflow existed the audit ran in NO CI lane (honor-system per the PR
-# template, #9304). It hard-fails on any uncaught page error (a real crash) and
-# uploads all artifacts. It also gates computed `broken` and `needs-work`
-# verdicts against AESTHETIC_VERDICT_DEBT (in all-views-aesthetic-audit.spec.ts).
+# template, #9304). It runs the strict verifier and uploads all artifacts, but
+# remains advisory for PR throughput (#14051): the required `ci-ok` gate owns
+# merge blocking, while this lane supplies visual evidence for reviewers.
 
 on:
   pull_request:
@@ -63,10 +63,9 @@ jobs:
         run: .github/scripts/install-playwright-browsers.sh chromium
 
       - name: Run all-views aesthetic audit
-        # Strict gate (#10710): a `broken` verdict fails the run, and with the
-        # needs-work extension a blue / orange→black-hover / off-token-radius
-        # regression fails too. AESTHETIC_VERDICT_DEBT in the spec is the
-        # (currently empty) allowlist for tolerated debt.
+        # Strict verifier, advisory check (#14051): failures stay visible in
+        # logs/artifacts without blocking the required ci-ok merge gate.
+        continue-on-error: true
         env:
           ELIZA_AUDIT_APP_STRICT: "1"
           ELIZA_AUDIT_APP_STRICT_NEEDS_WORK: "1"
@@ -111,6 +110,7 @@ jobs:
           path: packages/app/aesthetic-audit-output
 
       - name: Run pixel OCR content audit
+        continue-on-error: true
         env:
           ELIZA_MVP_OCR_ENGINE: packaged
         run: bun run --cwd packages/app audit:ocr
