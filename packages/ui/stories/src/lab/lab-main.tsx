@@ -19,7 +19,9 @@ try {
     localStorage.setItem("eliza:ui-language", "en");
   }
 } catch {
-  // localStorage unavailable — the geo-suggestion fetch just stays best-effort.
+  // error-policy:J4 design-lab-only degrade — storage-blocked browsers still
+  // render the lab, with the missing persisted language exposed for diagnostics.
+  document.documentElement.dataset.designLabStorage = "unavailable";
 }
 
 const container = document.getElementById("root");
