@@ -52,10 +52,22 @@ vi.mock("@elizaos/app-core/ui-compat", () => ({
   client: feedClient,
   selectLatestRunForApp: latestRunForApp,
 }));
-vi.mock("@elizaos/ui/state", () => ({
-  useAppSelector: <T,>(selector: (value: typeof appState) => T) =>
-    selector(appState),
-}));
+// FeedView imports the real `@elizaos/ui` barrel (for `EmbeddedAppViewer`),
+// which loads the whole App chain — including the first-run conductor that
+// reads `ACCENT_PRESETS` (and other constants/hooks) from `../state` at module
+// load. Spread the real `@elizaos/ui/state` so every such export is present,
+// and override only `useAppSelector` to inject this test's run list.
+vi.mock("@elizaos/ui/state", async () => {
+  const actual =
+    await vi.importActual<typeof import("@elizaos/ui/state")>(
+      "@elizaos/ui/state",
+    );
+  return {
+    ...actual,
+    useAppSelector: <T,>(selector: (value: typeof appState) => T) =>
+      selector(appState),
+  };
+});
 
 import { FeedView } from "./FeedView";
 

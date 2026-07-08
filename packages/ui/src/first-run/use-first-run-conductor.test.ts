@@ -596,7 +596,7 @@ describe("useFirstRunConductor", () => {
     ).toMatchObject({ authToken: "cloud-token" });
     expect(
       mocks.client.selectOrProvisionCloudAgent.mock.calls[0][0],
-    ).not.toHaveProperty("preferAgentId");
+    ).toMatchObject({ preferAgentId: "agent-1" });
     // The bound base owns app-shell routes → first-run persisted exactly once.
     expect(mocks.client.submitFirstRun).toHaveBeenCalledTimes(1);
 
@@ -1337,7 +1337,7 @@ describe("cloud-only onboarding (runtime chooser off — the production default)
     ).toMatchObject({ authToken: "cloud-token" });
     expect(
       mocks.client.selectOrProvisionCloudAgent.mock.calls[0][0],
-    ).not.toHaveProperty("preferAgentId");
+    ).toMatchObject({ preferAgentId: "agent-only" });
     expect(mocks.client.submitFirstRun).toHaveBeenCalledTimes(1);
     unmount();
   });
@@ -1415,7 +1415,7 @@ describe("cloud-only onboarding (runtime chooser off — the production default)
     ).toMatchObject({ authToken: "cloud-token" });
     expect(
       mocks.client.selectOrProvisionCloudAgent.mock.calls[0][0],
-    ).not.toHaveProperty("preferAgentId");
+    ).toMatchObject({ preferAgentId: "agent-newest-running" });
     unmount();
   });
 
@@ -1511,7 +1511,7 @@ describe("cloud-only onboarding (runtime chooser off — the production default)
     });
     expect(
       mocks.client.selectOrProvisionCloudAgent.mock.calls[0][0],
-    ).not.toHaveProperty("preferAgentId");
+    ).toMatchObject({ preferAgentId: "agent-console" });
     unmount();
   });
 
