@@ -1640,6 +1640,8 @@ export async function handleChatCompletionsPOST(
         `total=${Date.now() - startTime};auth=${tAuth - startTime};mid=${tBeforeReserve - tAuth};reserve=${tAfterReserve - tBeforeReserve}`,
       );
     } catch {
+      // error-policy:J6 debug-only header; immutable Response headers must not
+      // fail an otherwise valid provider response.
       // Some Response shapes have immutable headers — never fail a request for a debug header.
     }
     return preforwardResponse;
@@ -2543,8 +2545,18 @@ async function handleNonStreamingRequest(
         // keeps any later retry safe.
         try {
           await settleReservation(0);
-        } catch {
-          // best-effort release
+        } catch (releaseError) {
+          logger.error(
+            "[Chat Completions] failed to release reservation after deferred billing failure",
+            {
+              requestId,
+              organizationId: user.organization_id,
+              error:
+                releaseError instanceof Error
+                  ? releaseError.message
+                  : String(releaseError),
+            },
+          );
         }
         logger.error("[Chat Completions] deferred billing failed", {
           error:

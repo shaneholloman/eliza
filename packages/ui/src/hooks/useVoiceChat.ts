@@ -447,15 +447,51 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
   // a context that re-suspended after the initial unlock (tab switch, etc.).
   const unlockAudio = useCallback(() => {
     if (typeof window === "undefined") return;
-    if (!sharedAudioCtx) {
-      sharedAudioCtx = new AudioContext({ latencyHint: "interactive" });
+    const currentProvider = voiceConfigRef.current?.provider;
+    const errorEngine: VoiceTtsError["engine"] =
+      currentProvider === "elevenlabs"
+        ? "elevenlabs"
+        : currentProvider === "local-inference"
+          ? "local-inference"
+          : "eliza-cloud";
+    let ctx = sharedAudioCtx;
+    try {
+      if (!ctx) {
+        ctx = new AudioContext({ latencyHint: "interactive" });
+        sharedAudioCtx = ctx;
+      }
+    } catch (error) {
+      setNeedsAudioUnlock(true);
+      setTtsError({
+        engine: errorEngine,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Audio playback could not be initialized.",
+        atMs: performance.now(),
+      });
+      return;
     }
-    // error-policy:J5 unhandled-rejection guard; resume() may reject on a context
-    // that re-suspended, but the unlock generation bump below still re-arms audio
-    // and the real playback path surfaces any persistent failure.
-    void sharedAudioCtx.resume().catch(() => {});
-    setVoiceUnlockedGeneration((g) => g + 1);
-    setNeedsAudioUnlock(false);
+    void ctx
+      .resume()
+      .then(() => {
+        setVoiceUnlockedGeneration((g) => g + 1);
+        setNeedsAudioUnlock(false);
+        setTtsError(null);
+      })
+      .catch((error) => {
+        // error-policy:J4 user-facing degrade — explicit unlock failures keep
+        // the unlock affordance visible and surface through the voice error UI.
+        setNeedsAudioUnlock(true);
+        setTtsError({
+          engine: errorEngine,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Audio playback could not be unlocked.",
+          atMs: performance.now(),
+        });
+      });
   }, []);
 
   const rememberCachedSegment = useCallback(
