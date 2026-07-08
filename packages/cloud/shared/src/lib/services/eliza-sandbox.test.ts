@@ -570,6 +570,202 @@ describe("ElizaSandboxService wake", () => {
   );
 });
 
+// C1b attribution guard (audit §C1b/§C5): provision() must NOT flip a docker-
+// backed sandbox to `running` when the provider handle carries no durable
+// node_id (metadata shape drift, or an empty-string nodeId). Such a row would be
+// an unattributable orphan the node recount undercounts (#15378) and the orphan
+// reconciler provably cannot reap (allHaveNodeAndStamp skips live null-node
+// rows). The guard must fail LOUD + NON-retryable, and the container must be
+// torn down per the standard post-create-failure convention.
+describe("ElizaSandboxService provision — node attribution guard (C1b)", () => {
+  function dedicatedProvisionTarget(): AgentSandbox {
+    // A dedicated agent mid-provision: DB already ready (so provision() skips
+    // provisionAgentDatabase), no node yet. Non-shared tier so the guard applies.
+    return {
+      ...customSandbox(),
+      execution_tier: "dedicated-always",
+      status: "provisioning",
+      sandbox_id: null,
+      bridge_url: null,
+      health_url: null,
+      node_id: null,
+      container_name: null,
+      bridge_port: null,
+      web_ui_port: null,
+      headscale_ip: null,
+      environment_vars: {},
+    };
+  }
+
+  async function runProvisionWithMetadata(metadata: Record<string, unknown>) {
+    const { ElizaSandboxService } = await import("./eliza-sandbox.ts?actual");
+    const rec = dedicatedProvisionTarget();
+    const now = new Date("2026-07-07T12:00:00.000Z");
+
+    const create = mock(async () => ({
+      sandboxId: "agent-e06bb509",
+      bridgeUrl: "https://runtime.example",
+      healthUrl: "https://runtime.example/health",
+      metadata,
+    }));
+    const stop = mock(async () => {});
+    const provider: SandboxProvider = {
+      create,
+      stop,
+      checkHealth: mock(async () => true),
+    };
+
+    // A 404 on GET /api/agents makes listRuntimeAgents report the runtime as
+    // unsupported, so ensureRuntimeAgentStarted short-circuits (returns null)
+    // and the success path proceeds straight to the running-flip (same shape
+    // the wake suite uses to drive provision() offline).
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = fetchUrl(input);
+      if (url.endsWith("/api/agents")) {
+        return Response.json({ error: "Not found" }, { status: 404 });
+      }
+      return Response.json({ ok: true });
+    });
+
+    const originalFindByIdAndOrg = agentSandboxesRepository.findByIdAndOrg;
+    const originalTrySetProvisioning = agentSandboxesRepository.trySetProvisioning;
+    const originalFindById = agentSandboxesRepository.findById;
+    const originalGetLatestBackup = agentSandboxesRepository.getLatestBackup;
+    // No snapshot to restore — keeps the success path free of the backup-restore
+    // machinery (out of scope for the attribution guard).
+    agentSandboxesRepository.getLatestBackup = mock(async () => undefined);
+    agentSandboxesRepository.findByIdAndOrg = mock(async () => rec);
+    agentSandboxesRepository.trySetProvisioning = mock(async () => ({
+      ...rec,
+      status: "provisioning",
+    }));
+    // markError re-reads via findById for the returned record.
+    agentSandboxesRepository.findById = mock(async () => ({ ...rec, status: "error" }));
+    // Direct property override (not spyOn) so it lands on the SAME singleton the
+    // ?actual eliza-sandbox module holds — matching the other stubs above.
+    const originalUpdate = agentSandboxesRepository.update;
+    const updateSpy = mock(async (_id: string, data: Record<string, unknown>) => ({
+      ...rec,
+      ...data,
+      updated_at: now,
+    }));
+    agentSandboxesRepository.update = updateSpy as unknown as typeof agentSandboxesRepository.update;
+    // prepareManagedElizaEnvironment mints an agent API key via createForAgent,
+    // whose revoke path calls dbWrite.delete — unsupported by this file's
+    // transaction-only dbWrite swap. Stub it like the wake suite does so
+    // provision() reaches the guard without touching a real DB.
+    const createForAgentSpy = spyOn(apiKeysService, "createForAgent").mockResolvedValue({
+      id: "22222222-2222-4222-8222-222222222222",
+      plainKey: "eliza_test_agent_key",
+      prefix: "eliza_test",
+    });
+
+    try {
+      const result = await new ElizaSandboxService(provider).provision(
+        rec.id,
+        rec.organization_id,
+      );
+      return { result, create, stop, updateSpy };
+    } finally {
+      agentSandboxesRepository.findByIdAndOrg = originalFindByIdAndOrg;
+      agentSandboxesRepository.trySetProvisioning = originalTrySetProvisioning;
+      agentSandboxesRepository.findById = originalFindById;
+      agentSandboxesRepository.update = originalUpdate;
+      agentSandboxesRepository.getLatestBackup = originalGetLatestBackup;
+      createForAgentSpy.mockRestore();
+    }
+  }
+
+  test.skipIf(process.platform === "win32")(
+    "docker-backed handle with EMPTY nodeId: no running+null row, non-retryable, container stopped",
+    async () => {
+      const { result, create, stop, updateSpy } = await runProvisionWithMetadata({
+        // Docker-backed by provider tag, but the strict guard fails (empty
+        // nodeId) so dockerMeta is undefined — the exact C1b drift.
+        provider: "docker",
+        nodeId: "",
+        hostname: "host-1",
+        containerName: "agent-e06bb509",
+        bridgePort: 21060,
+        webUiPort: 3000,
+      });
+
+      // Provision fails (not a fabricated success).
+      expect(result.success).toBe(false);
+
+      // NEVER minted a running row.
+      for (const call of updateSpy.mock.calls) {
+        expect((call[1] as { status?: string }).status).not.toBe("running");
+      }
+
+      // markError ran with the distinguishable, non-retryable prefix.
+      const errorUpdate = updateSpy.mock.calls.find(
+        (c) => (c[1] as { status?: string }).status === "error",
+      );
+      expect(errorUpdate).toBeDefined();
+      expect((errorUpdate?.[1] as { error_message?: string }).error_message).toContain(
+        "provision attribution guard:",
+      );
+
+      // Non-retryable: the guard message matches none of the port-collision
+      // retry patterns, so create() ran exactly once (no retry loop).
+      expect(create).toHaveBeenCalledTimes(1);
+
+      // Container torn down per the post-create-failure convention (not leaked,
+      // not left invisible-but-alive).
+      expect(stop).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "docker-backed handle with MISSING fields (type-guard miss): same refusal",
+    async () => {
+      const { result, create, stop, updateSpy } = await runProvisionWithMetadata({
+        // Provider tag present but hostname/containerName absent => strict guard
+        // fails => dockerMeta undefined, yet it IS docker-backed.
+        provider: "docker",
+        nodeId: "node-1",
+      });
+
+      expect(result.success).toBe(false);
+      for (const call of updateSpy.mock.calls) {
+        expect((call[1] as { status?: string }).status).not.toBe("running");
+      }
+      const errorUpdate = updateSpy.mock.calls.find(
+        (c) => (c[1] as { status?: string }).status === "error",
+      );
+      expect((errorUpdate?.[1] as { error_message?: string }).error_message).toContain(
+        "provision attribution guard:",
+      );
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(stop).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "docker-backed handle WITH a real nodeId: flips running normally (guard does not misfire)",
+    async () => {
+      const { result, updateSpy } = await runProvisionWithMetadata({
+        provider: "docker",
+        nodeId: "node-1",
+        hostname: "host-1",
+        containerName: "agent-e06bb509",
+        bridgePort: 21060,
+        webUiPort: 3000,
+        dockerImage: "ghcr.io/example/bnancy:latest",
+        imageDigest: null,
+      });
+
+      expect(result.success).toBe(true);
+      const runningUpdate = updateSpy.mock.calls.find(
+        (c) => (c[1] as { status?: string }).status === "running",
+      );
+      expect(runningUpdate).toBeDefined();
+      expect((runningUpdate?.[1] as { node_id?: string }).node_id).toBe("node-1");
+    },
+  );
+});
+
 describe("ElizaSandboxService snapshot — endpoint capability", () => {
   test("a 404 from /api/snapshot (V2 image) returns the unsupported sentinel, not a hard failure", async () => {
     const { ElizaSandboxService, SNAPSHOT_ENDPOINT_UNSUPPORTED } = await import(

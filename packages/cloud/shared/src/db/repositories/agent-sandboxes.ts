@@ -13,6 +13,7 @@ import { AGENT_MANAGED_DISCORD_KEY } from "../../lib/services/eliza-agent-config
 import { ObjectNamespaces } from "../../lib/storage/object-namespace";
 import { getObjectText, offloadJsonField } from "../../lib/storage/object-store";
 import { decryptAgentBackupStateData, encryptAgentBackupStateData } from "../crypto/agent-backups";
+import { logger } from "../../lib/utils/logger";
 import { ensureAgentSandboxSchema } from "../ensure-agent-sandbox-schema";
 import { sqlRows } from "../execute-helpers";
 import { dbRead, dbWrite } from "../helpers";
@@ -734,6 +735,13 @@ export class AgentSandboxesRepository {
   /**
    * Count ready pool entries (status='running' AND pool_status='unclaimed').
    * Optionally filter by image so a stale image doesn't inflate the count.
+   *
+   * Attribution guard (audit §C1c): a pool row with a null/empty `node_id` is
+   * NOT usable capacity — `claimWarmContainer` refuses to claim it (claiming
+   * would mint an unattributable running/null-node orphan). Counting such rows
+   * as "ready" would let a poisoned pool report full while every claim skips
+   * them and falls through to cold provisioning — permanent starvation. So the
+   * ready count MUST match the claimable set: exclude null/empty node_id.
    */
   async countUnclaimedPool(filter: { image?: string } = {}): Promise<number> {
     await ensureAgentSandboxSchema();
@@ -741,6 +749,8 @@ export class AgentSandboxesRepository {
       eq(agentSandboxes.pool_status, "unclaimed"),
       eq(agentSandboxes.status, "running"),
       isNotNull(agentSandboxes.pool_ready_at),
+      isNotNull(agentSandboxes.node_id),
+      sql`${agentSandboxes.node_id} <> ''`,
     ];
     if (filter.image) conditions.push(eq(agentSandboxes.docker_image, filter.image));
     const [row] = await dbRead
@@ -760,7 +770,16 @@ export class AgentSandboxesRepository {
       .select({ count: sql<number>`count(*)::int` })
       .from(agentSandboxes)
       .where(
-        and(eq(agentSandboxes.pool_status, "unclaimed"), eq(agentSandboxes.status, "running")),
+        and(
+          eq(agentSandboxes.pool_status, "unclaimed"),
+          eq(agentSandboxes.status, "running"),
+          // Attribution guard (audit §C1c): only claimable rows are "ready".
+          // A null/empty-node_id pool row can't be claimed, so it must not
+          // count toward ready capacity or it masks a starving pool from the
+          // replenisher (see countUnclaimedPool).
+          isNotNull(agentSandboxes.node_id),
+          sql`${agentSandboxes.node_id} <> ''`,
+        ),
       );
     const [provisioning] = await dbRead
       .select({ count: sql<number>`count(*)::int` })
@@ -922,6 +941,20 @@ export class AgentSandboxesRepository {
   }): Promise<AgentSandbox | null> {
     await ensureAgentSandboxSchema();
     return dbWrite.transaction(async (tx) => {
+      // Attribution guard (audit §C1c): NEVER claim a pool row whose node_id is
+      // null/empty. createPoolContainer provisions via the same provision() path
+      // as dedicated agents and the pool creator explicitly tolerates a null
+      // node_id (agent-warm-pool-creator.ts:51: `?? null`), so unclaimed pool
+      // rows CAN carry a null node_id. Claiming one copies that null verbatim
+      // into a user-facing running row and DELETEs the pool row in the same
+      // transaction — minting an unattributable orphan with no remaining record
+      // to reconcile against (undercounts the node recount → #15378; the orphan
+      // reconciler provably cannot reap it → audit §C5). Filtering node_id IS NOT
+      // NULL (and non-empty) in the SELECT means we naturally skip such entries
+      // and claim the next valid candidate; a starved-because-only-null pool
+      // returns null cleanly and the caller falls through to the cold provision
+      // path (which itself enforces the C1b guard). The skipped null-node rows
+      // are left unclaimed for the drain/reap sweeps to clear.
       const poolRows = await sqlRows<AgentSandbox>(
         tx,
         sql`
@@ -931,13 +964,46 @@ export class AgentSandboxesRepository {
             AND ${agentSandboxes.status} = 'running'
             AND ${agentSandboxes.docker_image} = ${params.image}
             AND ${agentSandboxes.pool_ready_at} IS NOT NULL
+            AND ${agentSandboxes.node_id} IS NOT NULL
+            AND ${agentSandboxes.node_id} <> ''
           ORDER BY ${agentSandboxes.pool_ready_at} ASC
           FOR UPDATE SKIP LOCKED
           LIMIT 1
         `,
       );
       const pool = poolRows[0];
-      if (!pool) return null;
+      if (!pool) {
+        // Observability: distinguish "pool genuinely empty" from "pool had only
+        // null-node entries we refused to claim". The latter is a real defect
+        // signal (a poisoned pool created via the C1b path) that would otherwise
+        // be invisible — the caller just sees a cold-path fallthrough.
+        const skippedNullNode = await sqlRows<{ count: number }>(
+          tx,
+          sql`
+            SELECT COUNT(*)::int AS count
+            FROM ${agentSandboxes}
+            WHERE ${agentSandboxes.pool_status} = 'unclaimed'
+              AND ${agentSandboxes.status} = 'running'
+              AND ${agentSandboxes.docker_image} = ${params.image}
+              AND ${agentSandboxes.pool_ready_at} IS NOT NULL
+              AND (${agentSandboxes.node_id} IS NULL OR ${agentSandboxes.node_id} = '')
+          `,
+        );
+        const nullNodeCount = skippedNullNode[0]?.count ?? 0;
+        if (nullNodeCount > 0) {
+          logger.warn(
+            "[agent-sandbox] Warm-pool claim skipped null-node entries; falling through to cold path",
+            {
+              event: "warm_pool.null_node_skipped",
+              image: params.image,
+              userAgentId: params.userAgentId,
+              organizationId: params.organizationId,
+              skippedNullNodeCount: nullNodeCount,
+            },
+          );
+        }
+        return null;
+      }
 
       const [userRow] = await tx
         .select()

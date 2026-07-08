@@ -345,6 +345,39 @@ function isDockerSandboxMetadata(value: unknown): value is DockerSandboxMetadata
   );
 }
 
+/**
+ * True when a provider handle's metadata self-identifies as the real docker
+ * fleet provider (`provider: "docker"`) — REGARDLESS of whether the rest of the
+ * shape passes {@link isDockerSandboxMetadata}. This is deliberately laxer than
+ * the full type guard: a docker-fleet container whose metadata drifts (a missing
+ * field, an empty-string nodeId) still IS docker-backed and still occupies a
+ * real node slot, even though the strict guard would reject it.
+ *
+ * Used to detect the C1b failure class (audit §C1b): a handle that is docker-
+ * backed but for which we cannot recover a usable node_id. Such a row MUST NOT
+ * be flipped to `running` (it would be an unattributable orphan the recount
+ * undercounts and the orphan reconciler provably cannot reap — audit §C5).
+ *
+ * Non-docker providers (`local-docker`, `memory`) return false: they have no
+ * node concept, so the attribution guard does not apply to them.
+ */
+function isDockerBackedMetadata(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { provider?: unknown }).provider === "docker"
+  );
+}
+
+/**
+ * Distinguishable prefix for the C1b attribution-guard failure. Chosen so it can
+ * NEVER collide with the port-collision retry classifier in provision()'s catch
+ * (which matches "23505" / "unique" / "duplicate") — metadata drift is a
+ * permanent-ish condition, so this failure must classify as NON-retryable and
+ * fall through to markError, not spin the retry loop.
+ */
+const PROVISION_ATTRIBUTION_GUARD_PREFIX = "provision attribution guard:";
+
 type RuntimeAgentSummary = {
   id?: string;
   name?: string;
@@ -1541,6 +1574,44 @@ export class ElizaSandboxService {
         }
 
         const dockerMeta = isDockerSandboxMetadata(handle.metadata) ? handle.metadata : undefined;
+
+        // C1b attribution guard (audit §C1b/§C5): a docker-fleet container MUST
+        // carry a durable node_id before we flip the row to `running`. dockerMeta
+        // is undefined whenever the strict type guard fails (metadata shape
+        // drift: a missing field, or the empty-string nodeId that a partial
+        // provider handle can produce). In that case the row would be flipped to
+        // running + bridge_url set with node_id NULL — an unattributable orphan
+        // that (a) undercounts the node recount (over-scheduling, autoscaler
+        // spawns billable nodes — #15378), and (b) the orphan reconciler PROVABLY
+        // cannot reap (allHaveNodeAndStamp skips live null-node rows — §C5). So
+        // when the handle self-identifies as docker-backed but we have no usable
+        // nodeId, fail LOUD and NON-retryable instead of minting the orphan. The
+        // container already exists; the catch below stops it per the standard
+        // post-create-failure convention and this message (distinct from the
+        // unique/duplicate/23505 retry patterns) breaks straight to markError.
+        //
+        // Non-docker providers (local-docker, memory) have no node concept and
+        // are unaffected. This does NOT touch the shared-tier insert path
+        // (buildAgentInsertData), which is running-with-null-node BY DESIGN.
+        if (isDockerBackedMetadata(handle.metadata) && !dockerMeta?.nodeId) {
+          logger.warn(
+            "[agent-sandbox] Refusing to flip running: docker-backed handle has no durable node_id",
+            {
+              agentId: rec.id,
+              sandboxId: handle.sandboxId,
+              executionTier: rec.execution_tier,
+              hasDockerMeta: Boolean(dockerMeta),
+              metadataProvider:
+                typeof handle.metadata === "object" && handle.metadata !== null
+                  ? (handle.metadata as { provider?: unknown }).provider
+                  : undefined,
+            },
+          );
+          throw new Error(
+            `${PROVISION_ATTRIBUTION_GUARD_PREFIX} docker-backed sandbox ${handle.sandboxId} produced no durable node_id (metadata shape drift or empty nodeId); refusing to mark running with node_id NULL`,
+          );
+        }
+
         const runtimeRec = {
           ...rec,
           sandbox_id: handle.sandboxId,
