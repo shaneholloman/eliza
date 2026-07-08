@@ -37,7 +37,10 @@ const enqueueAgentProvision = mock(async () => ({
 }));
 const triggerImmediate = mock(async () => undefined);
 
-const checkAgentCreditGate = mock(async () => ({ allowed: true, balance: 100 }));
+const checkAgentCreditGate = mock(async () => ({
+  allowed: true,
+  balance: 100,
+}));
 const checkProvisioningWorkerHealth = mock(async () => ({ ok: true }));
 const prepareManagedElizaEnvironment = mock(async () => ({
   changed: false,

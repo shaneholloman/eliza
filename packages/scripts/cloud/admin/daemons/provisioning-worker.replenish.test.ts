@@ -28,7 +28,11 @@ function fakeDeps(replenishImpl: (image: string) => Promise<unknown>) {
     }
     // drainIdle exists so getWarmPoolManager's construction shape is satisfied.
     drainIdle() {
-      return Promise.resolve({ decision: { toDrain: [], reason: "" }, drained: [], failed: [] });
+      return Promise.resolve({
+        decision: { toDrain: [], reason: "" },
+        drained: [],
+        failed: [],
+      });
     }
   }
   const deps = {

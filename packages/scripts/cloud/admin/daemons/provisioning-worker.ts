@@ -1544,12 +1544,15 @@ async function runInfraMaintenanceCycle(
     () => processPoolReplenishCycle(),
     (result) => {
       if (result.created > 0 || result.failed > 0) {
-        logger.info("[provisioning-worker] warm pool replenish cycle complete", {
-          event: "warm_pool.replenished",
-          created: result.created,
-          failed: result.failed,
-          reason: result.reason,
-        });
+        logger.info(
+          "[provisioning-worker] warm pool replenish cycle complete",
+          {
+            event: "warm_pool.replenished",
+            created: result.created,
+            failed: result.failed,
+            reason: result.reason,
+          },
+        );
       }
     },
   );
