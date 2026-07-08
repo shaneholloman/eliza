@@ -110,6 +110,17 @@ jobs:
       # reconcile semantics below preserve hand-set values until the secret is
       # wired for an environment.
       SECRETS_MASTER_KEY: ${{ secrets.SECRETS_MASTER_KEY }}
+      # Operator pin for the canonical managed-agent image
+      # (containersEnv.defaultAgentImageOverride; falls back to
+      # ghcr.io/elizaos/eliza:stable when unset everywhere). This pin decides
+      # which image every NEW provision and warm-pool replenish boots — it is
+      # exactly the knob the #15228 crash-loop rollout needed. Before this it
+      # lived ONLY hand-set on the CP box (the same drift class as
+      # DATABASE_URL/#15160, tracked in the #15401 ledger): a CP re-arm lost
+      # it silently. Set the GitHub environment VARIABLE (not secret — an
+      # image ref is auditable config) to roll the fleet pin via deploy;
+      # leave it unset to preserve whatever is hand-set on the box.
+      ELIZA_AGENT_IMAGE: ${{ vars.ELIZA_AGENT_IMAGE }}
     steps:
       - name: Check deploy configuration
         id: deploy_config
@@ -187,7 +198,7 @@ jobs:
           username: deploy
           key: ${{ env.DEPLOY_SSH_KEY }}
           command_timeout: 10m
-          envs: DEPLOY_BRANCH,SYSTEMD_UNIT,HEADSCALE_API_URL,HEADSCALE_PUBLIC_URL,HEADSCALE_API_KEY,SANDBOX_REGISTRY_REDIS_URL,DATABASE_URL,SECRETS_MASTER_KEY
+          envs: DEPLOY_BRANCH,SYSTEMD_UNIT,HEADSCALE_API_URL,HEADSCALE_PUBLIC_URL,HEADSCALE_API_KEY,SANDBOX_REGISTRY_REDIS_URL,DATABASE_URL,SECRETS_MASTER_KEY,ELIZA_AGENT_IMAGE
           script: |
             set -euo pipefail
             echo "=== Deploying eliza-provisioning-worker (branch: $DEPLOY_BRANCH) ==="
@@ -356,7 +367,8 @@ jobs:
               "HEADSCALE_API_KEY=$HEADSCALE_API_KEY" \
               "SANDBOX_REGISTRY_REDIS_URL=$SANDBOX_REGISTRY_REDIS_URL" \
               "DATABASE_URL=$DATABASE_URL" \
-              "SECRETS_MASTER_KEY=$SECRETS_MASTER_KEY"; do
+              "SECRETS_MASTER_KEY=$SECRETS_MASTER_KEY" \
+              "ELIZA_AGENT_IMAGE=$ELIZA_AGENT_IMAGE"; do
               key="${kv%%=*}"
               val="${kv#*=}"
               [ -n "$val" ] || continue
