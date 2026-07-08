@@ -35,6 +35,72 @@ export const MAX_AGENT_ID_LENGTH =
 export type DockerNodeArchitecture = "amd64" | "arm64";
 
 // ---------------------------------------------------------------------------
+// Container labels (test-vs-user marking + safe cleanup targeting)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every provisioner-created container carries these labels so fleet tooling
+ * can distinguish REAL user agents from pool/test containers and from
+ * unmanaged debris (hand-run containers, CI leftovers) without consulting the
+ * DB. The disk-clean cycle's container prune excludes anything carrying
+ * `CONTAINER_LABEL_MANAGED_BY` — a stopped user agent container must never be
+ * reaped as a cleanup side effect (deleting it forces a full re-provision on
+ * next start, the churn class behind #15228/#15398).
+ */
+export const CONTAINER_LABEL_MANAGED_BY = "ai.elizaos.managed-by";
+export const CONTAINER_LABEL_MANAGED_BY_VALUE = "eliza-cloud";
+export const CONTAINER_LABEL_AGENT_ID = "ai.elizaos.agent-id";
+export const CONTAINER_LABEL_ORG_ID = "ai.elizaos.org-id";
+export const CONTAINER_LABEL_CLASS = "ai.elizaos.container-class";
+
+/**
+ * user — a real user's agent; must never be deleted by cleanup tooling.
+ * pool — a warm-pool entry owned by the sentinel pool org; reaped by the
+ *        pool manager only.
+ * test — created by a known test/QA org (containersEnv.testOrgIds()); CI and
+ *        fleet janitors may reap these freely.
+ */
+export type AgentContainerClass = "user" | "pool" | "test";
+
+export function resolveAgentContainerClass(
+  organizationId: string,
+  options: { warmPoolOrgId: string; testOrgIds: readonly string[] },
+): AgentContainerClass {
+  if (organizationId === options.warmPoolOrgId) return "pool";
+  if (options.testOrgIds.includes(organizationId)) return "test";
+  return "user";
+}
+
+/** Label key/value pairs shared by the remote and local docker providers. */
+export function buildAgentContainerLabelArgs(options: {
+  agentId: string;
+  organizationId: string;
+  containerClass: AgentContainerClass;
+}): Array<[string, string]> {
+  return [
+    [CONTAINER_LABEL_MANAGED_BY, CONTAINER_LABEL_MANAGED_BY_VALUE],
+    [CONTAINER_LABEL_AGENT_ID, options.agentId],
+    [CONTAINER_LABEL_ORG_ID, options.organizationId],
+    [CONTAINER_LABEL_CLASS, options.containerClass],
+  ];
+}
+
+/**
+ * `--label` flags for the remote `docker create` command string (pre-quoted).
+ * The arg-array variant for local docker spawns is
+ * `buildAgentContainerLabelArgs`.
+ */
+export function buildAgentContainerLabelFlags(options: {
+  agentId: string;
+  organizationId: string;
+  containerClass: AgentContainerClass;
+}): string[] {
+  return buildAgentContainerLabelArgs(options).map(
+    ([key, value]) => `--label ${shellQuote(`${key}=${value}`)}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Shell Quoting
 // ---------------------------------------------------------------------------
 

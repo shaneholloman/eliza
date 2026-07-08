@@ -2,6 +2,8 @@
 import { describe, expect, test } from "vitest";
 import {
   allocatePort,
+  buildAgentContainerLabelArgs,
+  buildAgentContainerLabelFlags,
   dockerPlatformFlag,
   extractDockerCreateContainerId,
   getContainerName,
@@ -12,6 +14,7 @@ import {
   readDockerHostPortFromMetadata,
   requiredArchitectureForPlatform,
   requiresDockerHostGateway,
+  resolveAgentContainerClass,
   resolveStewardContainerUrl,
   shellQuote,
   validateAgentId,
@@ -164,5 +167,55 @@ describe("port + metadata helpers", () => {
     expect(readDockerHostPortFromMetadata({ hostPort: -1 })).toBeNull();
     expect(readDockerHostPortFromMetadata({ hostPort: "80" })).toBeNull();
     expect(readDockerHostPortFromMetadata(null)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Container labels (test-vs-user marking)
+// ---------------------------------------------------------------------------
+
+describe("agent container labels", () => {
+  const POOL_ORG = "00000000-0000-4000-8000-000000077001";
+  const TEST_ORG = "11111111-1111-4111-8111-111111111111";
+  const USER_ORG = "22222222-2222-4222-8222-222222222222";
+
+  test("resolveAgentContainerClass distinguishes user / pool / test", () => {
+    const options = { warmPoolOrgId: POOL_ORG, testOrgIds: [TEST_ORG] };
+    expect(resolveAgentContainerClass(USER_ORG, options)).toBe("user");
+    expect(resolveAgentContainerClass(POOL_ORG, options)).toBe("pool");
+    expect(resolveAgentContainerClass(TEST_ORG, options)).toBe("test");
+  });
+
+  test("unknown orgs default to user — the safe direction for cleanup tooling", () => {
+    expect(
+      resolveAgentContainerClass("unknown-org", { warmPoolOrgId: POOL_ORG, testOrgIds: [] }),
+    ).toBe("user");
+  });
+
+  test("buildAgentContainerLabelArgs emits the full marking set", () => {
+    const args = buildAgentContainerLabelArgs({
+      agentId: "agent-123",
+      organizationId: USER_ORG,
+      containerClass: "user",
+    });
+    expect(args).toEqual([
+      ["ai.elizaos.managed-by", "eliza-cloud"],
+      ["ai.elizaos.agent-id", "agent-123"],
+      ["ai.elizaos.org-id", USER_ORG],
+      ["ai.elizaos.container-class", "user"],
+    ]);
+  });
+
+  test("buildAgentContainerLabelFlags shell-quotes each --label", () => {
+    const flags = buildAgentContainerLabelFlags({
+      agentId: "abc",
+      organizationId: "org'; rm -rf /",
+      containerClass: "test",
+    });
+    expect(flags).toHaveLength(4);
+    expect(flags[0]).toBe("--label 'ai.elizaos.managed-by=eliza-cloud'");
+    // Embedded single quote must be escaped, not break out of the quoting.
+    expect(flags[2]).toContain(`'"'"'`);
+    expect(flags[3]).toBe("--label 'ai.elizaos.container-class=test'");
   });
 });

@@ -17,6 +17,7 @@ import { containersEnv } from "../config/containers-env";
 import { logger } from "../utils/logger";
 import {
   allocatePort,
+  buildAgentContainerLabelArgs,
   getContainerName,
   getVolumePath,
   validateAgentId,
@@ -294,6 +295,13 @@ export class LocalDockerSandboxProvider implements SandboxProvider {
       "-d",
       "--name",
       containerName,
+      // Same marking as the remote provider — local mode is single-tenant, so
+      // everything it creates is the user's own agent.
+      ...buildAgentContainerLabelArgs({
+        agentId,
+        organizationId: config.organizationId ?? "",
+        containerClass: "user",
+      }).flatMap(([key, value]) => ["--label", `${key}=${value}`]),
       "--restart",
       "unless-stopped",
       // Make host.docker.internal resolvable on Linux Docker too; on Docker
