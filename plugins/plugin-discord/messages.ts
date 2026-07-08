@@ -246,6 +246,122 @@ export function shouldSuppressTimeoutForInFlightDispatchForTests({
 	return generationTimedOut && responseDispatchInFlight;
 }
 
+/**
+ * Outcome of {@link runGenerationWithAbortableTimeout}.
+ *
+ * - `timedOut`   — the timeout won the race; the abort signal was fired.
+ * - `settled`    — the generation promise fulfilled or rejected before the
+ *                  timeout. When `timedOut` is true, `settled` reflects
+ *                  whether the orphaned generation had ALREADY completed at
+ *                  the moment the timeout fired (almost always `false`).
+ * - `error`      — the rejection value when generation rejected on its own
+ *                  (not a timeout). `undefined` on success or timeout.
+ */
+export interface AbortableTimeoutResult {
+	timedOut: boolean;
+	settled: boolean;
+	error?: unknown;
+}
+
+/**
+ * Runs a single generation attempt against a wall-clock timeout, wiring an
+ * {@link AbortController} so that a timeout ACTUALLY CANCELS the underlying
+ * work instead of leaving it running as an orphan.
+ *
+ * Why this exists (the bug):
+ * The previous Discord dispatch did `Promise.race([generationPromise,
+ * timeoutPromise])` where `generationPromise` called
+ * `messageService.handleMessage(runtime, message, callback)` with NO abort
+ * signal. When the timeout won the race we set a `generationTimedOut` flag
+ * and sent the "I timed out" reply — but the model call kept running,
+ * burning tokens and (worse) racing to emit a late response into the same
+ * room. The alternating "timeout / then instant" pattern is the classic
+ * signature of an orphaned run that resolves late and poisons the next slot.
+ *
+ * The core message service ALREADY threads
+ * `MessageProcessingOptions.abortSignal` → `StreamingContext.abortSignal` →
+ * `runtime.useModel` (`params.signal ??= abortSignal`) → provider fetch
+ * (see packages/core/src/services/message.ts and
+ * message-handler-abort.test.ts). The only missing link was the connector
+ * never CREATING a controller and never PASSING the signal down. This helper
+ * closes that gap.
+ *
+ * Contract:
+ * - `generate(signal)` MUST forward `signal` into the generation call so the
+ *   abort actually propagates. The helper cannot enforce this — the call
+ *   site is responsible for plumbing `{ abortSignal: signal }` through.
+ * - On timeout: `controller.abort()` fires, `timedOut` is `true`, and the
+ *   orphaned promise's eventual rejection is swallowed so it never surfaces
+ *   as an unhandled rejection.
+ * - `timeoutMs === null` disables the timeout entirely (media / long jobs);
+ *   the generation is awaited to completion and no controller races it.
+ *
+ * @param generate  Callback receiving the abort signal; returns the
+ *                  generation promise. Must forward the signal downstream.
+ * @param timeoutMs Wall-clock budget in ms, or `null` to disable the timeout.
+ * @returns         {@link AbortableTimeoutResult} describing how the race
+ *                  resolved.
+ */
+export async function runGenerationWithAbortableTimeout(
+	generate: (signal: AbortSignal) => Promise<unknown>,
+	timeoutMs: number | null,
+): Promise<AbortableTimeoutResult> {
+	const controller = new AbortController();
+	let settled = false;
+
+	const generationPromise = Promise.resolve()
+		.then(() => generate(controller.signal))
+		.then(
+			() => {
+				settled = true;
+				return { kind: "ok" as const };
+			},
+			(error: unknown) => {
+				settled = true;
+				return { kind: "error" as const, error };
+			},
+		);
+
+	// Never let the orphaned generation surface as an unhandled rejection.
+	// The `.then(onRejected)` above already converts rejection into a value,
+	// but attach a defensive catch in case `generate` throws synchronously
+	// off the microtask edge.
+	void generationPromise.catch(() => {});
+
+	if (timeoutMs === null) {
+		const outcome = await generationPromise;
+		return {
+			timedOut: false,
+			settled: true,
+			...(outcome.kind === "error" ? { error: outcome.error } : {}),
+		};
+	}
+
+	let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+	const timeoutPromise = new Promise<"timeout">((resolve) => {
+		timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
+	});
+
+	try {
+		const winner = await Promise.race([generationPromise, timeoutPromise]);
+		if (winner === "timeout") {
+			// Timeout won: abort the underlying work so the orphaned run stops
+			// burning tokens and cannot race a late response into the room.
+			controller.abort();
+			return { timedOut: true, settled };
+		}
+		return {
+			timedOut: false,
+			settled: true,
+			...(winner.kind === "error" ? { error: winner.error } : {}),
+		};
+	} finally {
+		if (timeoutHandle) {
+			clearTimeout(timeoutHandle);
+		}
+	}
+}
+
 export async function createDiscordMessageMemoryOnce(
 	runtime: Pick<
 		IAgentRuntime,
@@ -1310,6 +1426,14 @@ export class MessageManager {
 
 			const messagingAPI = getMessagingAPI(this.runtime);
 			const messageService = getMessageService(this.runtime);
+			// AbortController for the whole generation attempt. On timeout we fire
+			// this so the underlying model call ACTUALLY cancels instead of running
+			// on as an orphan (the root cause of the alternating timeout / instant
+			// pattern). The signal threads into `messageService.handleMessage`
+			// options → StreamingContext → runtime.useModel → provider fetch. See
+			// runGenerationWithAbortableTimeout above and __tests__/generation-abort.
+			const generationAbortController = new AbortController();
+			const generationSignal = generationAbortController.signal;
 			let generationTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
 			try {
 				const generationPromise = (async () => {
@@ -1322,6 +1446,7 @@ export class MessageManager {
 							this.runtime,
 							newMessage,
 							callback,
+							{ abortSignal: generationSignal },
 						);
 					} else if (messagingAPI?.handleMessage) {
 						this.runtime.logger.debug(
@@ -1365,6 +1490,8 @@ export class MessageManager {
 					}
 				})();
 
+				// Never let the orphaned generation surface as an unhandled
+				// rejection once we stop awaiting it on timeout.
 				generationPromise.catch(() => {});
 				if (generationTimeoutMs === null) {
 					await generationPromise;
@@ -1372,6 +1499,11 @@ export class MessageManager {
 					const timeoutPromise = new Promise<never>((_, reject) => {
 						generationTimeoutHandle = setTimeout(() => {
 							generationTimedOut = true;
+							// Abort the underlying generation BEFORE rejecting so the
+							// orphaned model call stops burning tokens and cannot race a
+							// late response into this room. Without this the run stayed
+							// live and poisoned the next message slot.
+							generationAbortController.abort();
 							reject(
 								new Error(
 									`Discord generation timeout after ${generationTimeoutMs}ms`,
