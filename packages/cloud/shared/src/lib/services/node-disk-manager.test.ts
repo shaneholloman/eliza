@@ -127,9 +127,21 @@ describe("diskHealthVerdict", () => {
 describe("buildReclaimCommand", () => {
   const cmd = buildReclaimCommand();
 
-  test("prunes the docker system WITHOUT --volumes (agent volumes preserved)", () => {
-    expect(cmd).toContain("docker system prune -af");
+  test("never prunes volumes (agent workspaces preserved)", () => {
     expect(cmd).not.toContain("--volumes");
+    expect(cmd).not.toContain("volume prune");
+  });
+
+  test("container prune excludes provisioner-managed containers (stopped user agents survive)", () => {
+    expect(cmd).toContain("docker container prune -f --filter 'label!=ai.elizaos.managed-by'");
+    // The unfiltered bulk command must be gone — it reaped stopped managed
+    // agent containers, forcing full re-provisions on next start.
+    expect(cmd).not.toContain("docker system prune");
+  });
+
+  test("prunes unreferenced images and unused networks", () => {
+    expect(cmd).toContain("docker image prune -af");
+    expect(cmd).toContain("docker network prune -f");
   });
 
   test("clears stuck containerd ingest (the actual failed-pull junk)", () => {
