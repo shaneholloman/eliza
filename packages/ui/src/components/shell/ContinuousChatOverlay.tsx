@@ -2607,6 +2607,25 @@ export function ContinuousChatOverlay({
   // Start at the committed shape so pinned first paint does not flash the inset
   // panel before the full-screen morph effect catches up.
   const fullBleedT = useMotionValue(fullBleed ? 1 : 0);
+  // Live over-pull fraction the FINGER drives every drag frame (0 = at/below the
+  // inset ceiling, 1 = full over-pull). It supplements the height cap through the
+  // inset-ceiling DEAD ZONE: the FULL-detent thread flex-basis deliberately
+  // OVERSHOOTS the visible thread by the composer/header chrome (~48px), so the
+  // panel content reaches `insetPanelMaxH` — and the panel visually PINS at the
+  // inset ceiling — while `cont` is still ~chrome px BELOW `insetPanelMaxH`.
+  // `threadHeight` alone can't lift the cap there (it's < insetPanelMaxH), so the
+  // panel froze under a still-rising finger. This value carries the measured pin
+  // over-pull (`onDragOffset`'s `overpullT`), lifting the cap 1:1 through that gap
+  // — and because the pin height ≈ `maxOverPull` (both are the dropped top
+  // margin), `insetPanelMaxH + maxOverPull * overpullT == cont + chrome`, i.e. the
+  // panel edge tracks the finger exactly. It is SET-only (never `animate()`d) so
+  // it can never linger a spring that reflows the panel mid-pointer and cancels a
+  // live drag; off-drag it stays 0 and `threadHeight`/`fullBleedT` own the cap.
+  // Rests at 0 even when maximized (the maximized detent settles `threadHeight`
+  // to `fullPanelMaxH`, which owns the cap) so a PROGRAMMATIC maximize animates
+  // the height with `fullBleedT`/`threadHeight` instead of a `pin=1` forcing the
+  // cap to full instantly.
+  const overpullCapT = useMotionValue(0);
   // Mirror the settled full-bleed flag so release handlers can settle the morph
   // toward the committed shape without waiting for a re-render.
   const fullBleedRef = React.useRef(fullBleed);
@@ -2664,15 +2683,29 @@ export function ContinuousChatOverlay({
     (t) =>
       `${wrapperBaseMaxW + Math.max(0, viewport.innerWidth - wrapperBaseMaxW) * t}px`,
   );
-  // The panel's height CAP rides the morph too: the inset ceiling at t=0
-  // growing to the full-bleed ceiling exactly as the shape squares off — so an
-  // over-pull grows past the inset height 1:1 with the finger, while the
-  // resting inset detents stay clamped (the FULL detent's flex-basis
-  // deliberately overshoots and relies on this cap; a discrete drag-time cap
-  // swap would let it balloon mid-spring).
+  // The panel's height CAP is the HIGHER of two ceilings: the over-pull ceiling
+  // (inset at 0 growing to full-bleed) and the LIVE finger height (`threadHeight`).
+  // Taking the max lets an upward over-pull grow past the inset ceiling 1:1 UNDER
+  // THE FINGER: while the SHAPE (`fullBleedT`) still snaps discretely at the
+  // commit threshold (`Maximize is a DISCRETE STATE`), the cap follows the finger
+  // every frame with no freeze. Two finger-tracked inputs feed the over-pull
+  // ceiling: `threadHeight` (== cont, so once `cont > insetPanelMaxH` the cap is
+  // cont) and `overpullCapT` (the live pin fraction, which lifts the cap through
+  // the inset-ceiling flex-overshoot dead zone BELOW `insetPanelMaxH` — see its
+  // declaration). Both are SET each frame (no separate spring to desync, reflow,
+  // or cancel a live pointer); off-drag they rest at the committed 0/1 and
+  // `threadHeight`/the settle spring own the cap. Resting inset detents stay
+  // clamped: at the FULL detent `overpullCapT` is 0 and `threadHeight` settles to
+  // `insetPanelMaxH`, so the max is exactly `insetPanelMaxH` and the deliberately
+  // overshooting flex-basis is still capped. Clamped to `fullPanelMaxH` so a
+  // spring overshoot can never balloon the panel past the screen.
   const panelCapH = useTransform(
-    fullBleedT,
-    (t) => insetPanelMaxH + maxOverPull * t,
+    [threadHeight, fullBleedT, overpullCapT] as MotionValue<number>[],
+    ([h, t, pin]: number[]) =>
+      Math.min(
+        fullPanelMaxH,
+        Math.max(insetPanelMaxH + maxOverPull * Math.max(t, pin), h),
+      ),
   );
   // Corner radius is CONSTANT at every sheet height (no swim while the panel
   // grows); only the maximize shape morph squares it toward edge-to-edge.
@@ -2790,6 +2823,9 @@ export function ContinuousChatOverlay({
     // Return the shape morph to its committed end (inset unless still maximized):
     // a released over-pull that did not commit maximize must un-morph the edges.
     settleFullBleed();
+    // Hand the height cap back to `threadHeight`/`fullBleedT` (the settle springs):
+    // the live pin fraction is finger-only and must rest at 0 off-drag.
+    overpullCapT.set(0);
   }, [
     threadHeight,
     openProgress,
@@ -2801,6 +2837,7 @@ export function ContinuousChatOverlay({
     animateThreadHeight,
     animateOpenProgress,
     settleFullBleed,
+    overpullCapT,
     setDragPreviewMounted,
   ]);
   // Keep the ref the (earlier-declared) viewport-resize effect calls pointing at
@@ -2929,12 +2966,16 @@ export function ContinuousChatOverlay({
     // fullBleedT partway (≥0.5) and the state effect is gated during the release
     // frame, so drive it home rather than waiting for the `fullBleed` flip.
     animateFullBleedTo(1);
+    // Hand the cap to the maximized detent spring (`threadHeight` → fullPanelMaxH);
+    // the finger-only pin fraction rests at 0.
+    overpullCapT.set(0);
     detentHaptic();
   }, [
     openProgress,
     stopThreadAnimation,
     stopOpenProgressAnimation,
     animateFullBleedTo,
+    overpullCapT,
   ]);
 
   // Restore OUT of full-bleed back to the inset FULL-detent overlay (#13531).
@@ -2957,6 +2998,10 @@ export function ContinuousChatOverlay({
   // per-frame React state, so the live drag stays buttery.
   React.useEffect(() => {
     if (draggingRef.current) return;
+    // Off-drag the cap belongs to `threadHeight`/`fullBleedT`; force the
+    // finger-only pin fraction to 0 so no gesture that ended off the settle path
+    // (flick, keyboard resize) can leave the resting cap inflated above the detent.
+    overpullCapT.set(0);
     if (reduce) {
       stopThreadAnimation();
       threadHeight.set(baseH);
@@ -2964,7 +3009,14 @@ export function ContinuousChatOverlay({
     }
     animateThreadHeight(baseH);
     return stopThreadAnimation;
-  }, [baseH, reduce, threadHeight, animateThreadHeight, stopThreadAnimation]);
+  }, [
+    baseH,
+    reduce,
+    threadHeight,
+    overpullCapT,
+    animateThreadHeight,
+    stopThreadAnimation,
+  ]);
 
   // Snap to one of the three iOS-style detents and settle the live drag. A
   // detent change fires a light haptic so the snap feels physical on device.
@@ -2998,6 +3050,9 @@ export function ContinuousChatOverlay({
       // Settle the shape morph: any detent but a still-maximized FULL is the
       // inset shape, so un-morph a partial over-pull that landed on a detent.
       animateFullBleedTo(to === "full" && fullBleedRef.current ? 1 : 0);
+      // A flick-to-detent ends the gesture: drop the finger-only pin fraction so
+      // it can't leave the resting cap inflated above the detent's own height.
+      overpullCapT.set(0);
       // Stepping all the way down closes the keyboard (the chat is dismissed).
       if (to === "collapsed") inputRef.current?.blur();
       detentHaptic();
@@ -3013,6 +3068,7 @@ export function ContinuousChatOverlay({
       animateThreadHeight,
       animateOpenProgress,
       animateFullBleedTo,
+      overpullCapT,
     ],
   );
 
@@ -3970,6 +4026,9 @@ export function ContinuousChatOverlay({
         dragPinnedRef.current = false;
         dragOffAtPinRef.current = 0;
         dragPinTopRef.current = 0;
+        // Clear any stale pin fraction from a prior gesture; this frame re-sets it
+        // from the fresh over-pull below.
+        overpullCapT.set(0);
       }
       draggingRef.current = true;
       // Promote the panel + thread to their own GPU layer for the duration of
@@ -4069,14 +4128,20 @@ export function ContinuousChatOverlay({
         }
       }
       const overpullT = Math.max(rawOverpullT, measuredOverpullT);
-      // DISCRETE full-bleed. The finger NEVER sets `fullBleedT` directly — the
-      // "awkward lerp" of border/radius/width easing with every pixel. Instead
+      // Feed the finger's over-pull to the height cap so it lifts through the
+      // inset-ceiling flex-overshoot dead zone (where `cont < insetPanelMaxH` yet
+      // the panel is already pinned at the ceiling) — the panel edge keeps
+      // tracking the finger instead of freezing until `cont` clears the ceiling.
+      overpullCapT.set(overpullT);
+      // DISCRETE full-bleed SHAPE. The finger NEVER sets `fullBleedT` directly —
+      // the "awkward lerp" of border/radius/width easing with every pixel. Instead
       // the over-pull flips a state at the threshold and the shape SPRINGS to it
-      // once (border, radius, side inset, width, composer capsule, and the panel
-      // height CAP all ride `fullBleedT` together, so they transition as one).
-      // The height still tracked the finger 1:1 above (threadHeight); only the
-      // SHAPE is stateful. Reversible with hysteresis: pulling back down below
-      // the release threshold springs it home. Reduced-motion cuts instantly.
+      // once (border, radius, side inset, width, composer capsule). Only the SHAPE
+      // is stateful: the panel HEIGHT tracked the finger 1:1 the whole way up
+      // because `panelCapH` follows the finger's over-pull + `threadHeight`, not
+      // this spring, so there is no ceiling freeze. Reversible with hysteresis:
+      // pulling back down below the release threshold springs the shape home.
+      // Reduced-motion cuts instantly.
       if (overpullT >= MAXIMIZE_COMMIT_T && !maximized) {
         setFreeH(null);
         setMode("full");
@@ -4106,6 +4171,7 @@ export function ContinuousChatOverlay({
       threadHeight,
       openProgress,
       fullBleedT,
+      overpullCapT,
       reduce,
       setDraggingState,
       stopThreadAnimation,
@@ -4418,6 +4484,8 @@ export function ContinuousChatOverlay({
     // A restore that un-maximized always lands on the inset shape; drive the
     // morph home (0) so a release mid-return finishes un-morphing the edges.
     animateFullBleedTo(0);
+    // The live pin fraction is finger-only; hand the cap back to the settle springs.
+    overpullCapT.set(0);
     const h = Math.max(0, Math.min(threadHeight.get(), panelMaxH));
     if (h <= SHEET_DETENT_MAGNET) {
       // The restore drag started full-height, so a run to the bottom lands on
@@ -4444,6 +4512,7 @@ export function ContinuousChatOverlay({
     collapseFromRelease,
     goToDetent,
     animateFullBleedTo,
+    overpullCapT,
     setDragPreviewMounted,
   ]);
   // Cancel/tap on the strip: drop the drag flag and spring back to the current
