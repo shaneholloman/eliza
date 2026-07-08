@@ -11,6 +11,7 @@
 import { buildDefaultElizaCloudServiceRouting } from "@elizaos/shared/contracts/service-routing";
 import { agentSandboxesRepository } from "../../db/repositories/agent-sandboxes";
 import { dockerNodesRepository } from "../../db/repositories/docker-nodes";
+import { WARM_POOL_ORG_ID } from "../../db/schemas/agent-sandboxes";
 import type { DockerNode } from "../../db/schemas/docker-nodes";
 import { isAgentTokenSigningConfigured, mintAgentToken } from "../auth/agent-token";
 import { containersEnv } from "../config/containers-env";
@@ -31,6 +32,7 @@ import {
   allocatePort,
   BRIDGE_PORT_MAX,
   BRIDGE_PORT_MIN,
+  buildAgentContainerLabelFlags,
   buildEnsureNetworkCmd,
   dockerPlatformFlag,
   extractDockerCreateContainerId,
@@ -38,6 +40,7 @@ import {
   getVolumePath,
   parseDockerNodes,
   requiresDockerHostGateway,
+  resolveAgentContainerClass,
   resolveStewardContainerUrl,
   shellQuote,
   validateAgentId,
@@ -1279,6 +1282,16 @@ export class DockerSandboxProvider implements SandboxProvider {
         "docker create",
         ...platformFlags,
         `--name ${shellQuote(containerName)}`,
+        // Marking (user vs pool vs test) + managed-by, so fleet cleanup can
+        // target debris without ever touching a real user's agent container.
+        ...buildAgentContainerLabelFlags({
+          agentId,
+          organizationId,
+          containerClass: resolveAgentContainerClass(organizationId, {
+            warmPoolOrgId: WARM_POOL_ORG_ID,
+            testOrgIds: containersEnv.testOrgIds(),
+          }),
+        }),
         "--restart unless-stopped",
         `--network ${shellQuote(DOCKER_NETWORK)}`,
         ...(requiresDockerHostGateway(stewardContainerUrl) || Object.keys(proxyEnv).length > 0

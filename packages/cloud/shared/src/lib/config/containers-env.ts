@@ -261,6 +261,24 @@ export const containersEnv = {
   },
 
   /**
+   * Org ids whose agent containers are TEST containers (QA accounts, e2e
+   * harness orgs). Containers provisioned for these orgs get the docker label
+   * `ai.elizaos.container-class=test` so fleet janitors and CI teardown can
+   * reap them without ever touching a real user's agent. Comma-separated
+   * UUIDs via `CONTAINERS_TEST_ORG_IDS` (with `ELIZA_` fallback); empty by
+   * default — unlisted orgs are always classed `user`, the safe direction.
+   */
+  testOrgIds(): string[] {
+    const env = getCloudAwareEnv();
+    const raw = pick(env.CONTAINERS_TEST_ORG_IDS, env.ELIZA_TEST_ORG_IDS);
+    if (raw === undefined) return [];
+    return raw
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  },
+
+  /**
    * First-party TEMPLATE image stamped onto a template app (one created WITHOUT a
    * user repo) at create time, so create -> deploy resolves to a prebuilt,
    * allowlisted image instead of failing with "no image to deploy".

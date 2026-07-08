@@ -13,9 +13,10 @@
  *
  * This module adds the missing self-management, in two parts:
  *   1. A prune cycle: per HEALTHY node, read `df` for the docker data root; when
- *      usage crosses the high-water mark, reclaim space (`docker system prune`
- *      WITHOUT `--volumes` + clear stuck containerd ingest + buildkit prune),
- *      with a cooldown so it doesn't prune every tick. Logs before/after `df`.
+ *      usage crosses the high-water mark, reclaim space (label-filtered
+ *      container/image/network/buildkit prunes, never volumes, never managed
+ *      agent containers + clear stuck containerd ingest), with a cooldown so it
+ *      doesn't prune every tick. Logs before/after `df`.
  *   2. A disk-aware health verdict (`diskHealthVerdict`): a node whose disk is
  *      critically full is `unhealthy` so the autoscaler drains/replaces it
  *      instead of believing a `docker info` that still answers on a full disk.
@@ -30,8 +31,11 @@
  * SAFETY INVARIANTS:
  *   1. Only `status === "healthy"` nodes are pruned (the caller runs this AFTER
  *      the node health-check, so a node failing its probe is excluded).
- *   2. `docker system prune` is run WITHOUT `--volumes` — agent host volumes
- *      (persisted workspaces) are never touched.
+ *   2. No volume prune anywhere — agent host volumes (persisted workspaces)
+ *      are never touched. Container prune excludes anything labeled
+ *      `ai.elizaos.managed-by`, so a stopped USER agent container is never
+ *      reaped either (deleting it would force a full re-provision on next
+ *      start).
  *   3. Stuck-ingest clearing only removes the containerd INGEST staging dir
  *      (half-written, not-yet-committed pull blobs); committed content blobs and
  *      running containers are never touched. It uses `find ... -mindepth 1
@@ -46,6 +50,7 @@
 import { imageRepo } from "../../db/utils/docker-image-ref";
 import { containersEnv } from "../config/containers-env";
 import { logger } from "../utils/logger";
+import { CONTAINER_LABEL_MANAGED_BY } from "./docker-sandbox-utils";
 import { DockerSSHClient } from "./docker-ssh";
 
 // ---------------------------------------------------------------------------
@@ -235,26 +240,42 @@ const RECLAIM_TIMEOUT_MS = 5 * 60_000;
  * The reclamation command run on a node when it crosses the prune threshold.
  *
  * Order matters:
- *   1. `docker system prune -af` (NO `--volumes`) — reap stopped containers,
- *      dangling + unreferenced images, build cache, unused networks. This is the
- *      bulk reclaim and is safe: agent host volumes (persisted workspaces) are
- *      preserved because we omit `--volumes`.
- *   2. `docker builder prune -af` — drop the buildkit cache `system prune`'s
- *      `-a` does not always fully clear (separate GC root on some daemons).
- *   3. Clear stuck containerd INGEST — the actual junk from failed pulls.
- *      `docker system prune` does NOT touch containerd's ingest staging dir, so
- *      half-written blobs from a `no space left on device` pull persist and
- *      re-accumulate. We remove ONLY the ingest subtree (not committed content),
- *      across both the moby and k8s.io namespaces, guarded so a missing dir is a
- *      no-op. `find ... -delete` is used (not `rm -rf <glob>`) so it is bounded
- *      to the ingest dir and never errors on an empty match.
+ *   1. `docker container prune` filtered to EXCLUDE provisioner-managed
+ *      containers (label `ai.elizaos.managed-by`, see docker-sandbox-utils) —
+ *      reap stopped unmanaged debris (CI leftovers, hand-run containers) while
+ *      never deleting a stopped user agent container. Deleting one forces a
+ *      full re-provision on its next start — the churn class behind
+ *      #15228/#15398. (Containers created before labeling shipped are not
+ *      protected by the filter; they age out as the fleet re-provisions.)
+ *   2. `docker image prune -af` — dangling + unreferenced images. Images used
+ *      by ANY container (running or stopped, including the managed containers
+ *      step 1 preserved) are never removed by docker.
+ *   3. `docker network prune -f` — unused networks (docker refuses to remove
+ *      networks with attached containers, so the shared agent bridge network
+ *      is safe while in use; the provisioner also self-heals it on create).
+ *   4. `docker builder prune -af` — drop the buildkit cache.
+ *   5. Clear stuck containerd INGEST — the actual junk from failed pulls.
+ *      Nothing above touches containerd's ingest staging dir, so half-written
+ *      blobs from a `no space left on device` pull persist and re-accumulate.
+ *      We remove ONLY the ingest subtree (not committed content), across both
+ *      the moby and k8s.io namespaces, guarded so a missing dir is a no-op.
+ *      `find ... -delete` is used (not `rm -rf <glob>`) so it is bounded to
+ *      the ingest dir and never errors on an empty match.
+ *
+ * Steps 1–4 replace the previous single `docker system prune -af`, which had
+ * no per-object filtering and would reap a stopped MANAGED agent container.
+ * Volumes are still never touched (no volume prune anywhere).
  *
  * Every step is `|| true`-guarded so one failing step (e.g. buildkit not
  * present) does not abort the rest — best-effort reclamation.
  */
 export function buildReclaimCommand(): string {
   return [
-    "docker system prune -af || true",
+    // label!=<key> matches objects NOT carrying the key at all — i.e. only
+    // unmanaged containers are pruned.
+    `docker container prune -f --filter 'label!=${CONTAINER_LABEL_MANAGED_BY}' || true`,
+    "docker image prune -af || true",
+    "docker network prune -f || true",
     "docker builder prune -af || true",
     // Clear stuck containerd ingest (half-written pull blobs) in every namespace
     // dir, ONLY the ingest subtree. -mindepth 1 keeps the ingest dir itself.
