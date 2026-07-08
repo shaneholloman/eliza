@@ -39,5 +39,8 @@ jobs:
       - name: Install dependencies
         run: bun install --ignore-scripts
 
+      - name: Ensure generated shared i18n data
+        run: node packages/app-core/scripts/ensure-shared-i18n-data.mjs
+
       - name: Reap
         run: bun run packages/scripts/cloud/admin/hetzner-e2e/hetzner-e2e-reaper.ts
