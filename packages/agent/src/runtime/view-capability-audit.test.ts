@@ -55,9 +55,15 @@ const repoRoot = path.resolve(here, "../../../..");
 
 /**
  * Map each audited view id → the plugin directory that owns its view source.
- * Only views whose `.tsx` actually live in a `plugins/<dir>/src` tree are listed
- * — host/built-in views (`lifeops`, `training`, `settings`) have no plugin
- * source to scan and are exercised through `validateViewCoverage` below instead.
+ * Only views whose `.tsx` actually live in a `plugins/<dir>/src` tree AND are
+ * declared as a dashboard `views:` entry by their plugin are listed — host/
+ * built-in views (`lifeops`, `training`, `settings`) have no plugin source to
+ * scan and are exercised through `validateViewCoverage` below instead. Facewear
+ * belongs to that settings-category set too: its smartglasses UI is not a
+ * standalone dashboard view but a Settings → Wearables section (`register.ts`
+ * registers a settings section; `SmartglassesView` renders lazily inside it),
+ * so the plugin declares no `views:`/`relatedActions` and its registry entry
+ * asserts no `launch` (see plugin-facewear/registry-entry.json + its test).
  * Every key here must declare relatedActions in its plugin entry (asserted in
  * the suite) so this stays a meaningful subset of the registered surface, not a
  * parallel list.
@@ -74,7 +80,6 @@ const VIEW_SOURCE_DIRS: Readonly<Record<string, string>> = {
   relationships: "plugin-relationships",
   documents: "plugin-documents",
   orchestrator: "plugin-task-coordinator",
-  facewear: "plugin-facewear",
   polymarket: "plugin-polymarket",
   hyperliquid: "plugin-hyperliquid",
 };
