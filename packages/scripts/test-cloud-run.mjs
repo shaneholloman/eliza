@@ -92,44 +92,22 @@ const cloudInfraTests = path.join(
 // no lane. Exclude `test/` (the e2e harness: its own `test:e2e` lane + a live
 // server) and build output.
 const cloudApiRoot = path.join(repoRoot, "packages", "cloud", "api");
+// `test/` is the api e2e harness (own `test:e2e` lane + a live server); the
+// rest is build output / vendored deps that carry no unit lane.
 const EXCLUDED_API_DIRS = new Set(["test", "node_modules", "dist", ".turbo"]);
-function walkApiUnitTests(dir) {
+// Vendored deps and build output under any non-api root: never a unit target.
+const EXCLUDED_DIRS = new Set(["node_modules", "dist", ".turbo"]);
+function walkTests(dir, excluded) {
   const out = [];
   for (const entry of readdirSync(dir)) {
-    if (EXCLUDED_API_DIRS.has(entry)) continue;
+    if (excluded.has(entry)) continue;
     const full = path.join(dir, entry);
-    if (statSync(full).isDirectory()) out.push(...walkApiUnitTests(full));
+    if (statSync(full).isDirectory()) out.push(...walkTests(full, excluded));
     else if (/\.(test|spec)\.tsx?$/.test(entry)) out.push(full);
   }
   return out;
 }
-const cloudApiUnitTests = existsSync(cloudApiRoot)
-  ? walkApiUnitTests(cloudApiRoot).sort()
-  : [];
-
-// Pass DIRECTORY targets (plus root-level test files), not the 150+ individual
-// files: on Windows the spawn goes through cmd.exe (`shell: true` below, needed
-// to resolve bun's .cmd shim), whose ~8 KiB command-line ceiling the file list
-// outgrew ("The command line is too long."). The exclusion semantics are
-// identical — the excluded dirs exist only at the api root (asserted by the
-// walk above staying the source of truth for the fail-loud non-empty check),
-// and `bun test <dir>` recurses the rest.
-function apiUnitTestTargets(root) {
-  const targets = [];
-  for (const entry of readdirSync(root)) {
-    if (EXCLUDED_API_DIRS.has(entry)) continue;
-    const full = path.join(root, entry);
-    if (statSync(full).isDirectory()) {
-      if (walkApiUnitTests(full).length > 0) targets.push(full);
-    } else if (/\.(test|spec)\.tsx?$/.test(entry)) {
-      targets.push(full);
-    }
-  }
-  return targets.sort();
-}
-const cloudApiTestTargets = existsSync(cloudApiRoot)
-  ? apiUnitTestTargets(cloudApiRoot)
-  : [];
+const walkApiUnitTests = (dir) => walkTests(dir, EXCLUDED_API_DIRS);
 
 const testRoots = {
   cloudSharedSrc,
@@ -149,11 +127,12 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-// The directory-target list is what `bun test` actually receives; the explicit
-// file walk stays the source of truth for coverage. If the api root exists but
-// holds no colocated unit tests, the directory targets would silently run
-// nothing — fail loud instead so a layout change can't quietly drop the lane.
-if (existsSync(cloudApiRoot) && cloudApiUnitTests.length === 0) {
+const cloudApiUnitTests = walkApiUnitTests(cloudApiRoot).sort();
+
+// If the api root exists but holds no colocated unit tests, the gate would
+// silently run zero api tests — fail loud so a layout change can't quietly
+// drop the lane.
+if (cloudApiUnitTests.length === 0) {
   console.error(
     `[test:cloud] no colocated cloud/api unit tests found under ${cloudApiRoot} — ` +
       "the gate would silently run zero api tests. Update packages/scripts/test-cloud-run.mjs " +
@@ -162,30 +141,82 @@ if (existsSync(cloudApiRoot) && cloudApiUnitTests.length === 0) {
   process.exit(1);
 }
 
-const result = spawnSync(
-  "bun",
-  [
-    "test",
-    cloudSharedSrc,
-    ...cloudApiTestTargets,
-    cloudScriptsTests,
-    cloudRoutingTests,
-    cloudInfraTests,
-    "--timeout",
-    "120000",
-    "--isolate",
-  ],
-  {
-    cwd: stagingDir,
-    env,
-    stdio: "inherit",
-    shell: process.platform === "win32",
-  },
-);
-
-if (result.error) {
-  console.error(result.error);
+// The full unit set is ~700 files. bun's `--isolate` gives each file a fresh
+// global but keeps ONE process, so JS heap plus external (pglite/WASM) memory
+// accumulates monotonically across the whole run — RSS climbs past 7 GB. On the
+// memory-bounded self-hosted runner that tips into GC-thrash/OOM, and because
+// the drizzle-kit `pushSchema` introspect ("Pulling schema from database…")
+// builds large full-schema JSON snapshots, the run consistently wedged there
+// and the runner reclaimed the job (SIGTERM → exit 143). Splitting the file set
+// into sequential fresh `bun test` processes bounds peak memory to one batch:
+// each process starts cold, runs its slice, and frees everything on exit before
+// the next starts.
+const allTestFiles = [
+  ...walkTests(cloudSharedSrc, EXCLUDED_DIRS),
+  ...cloudApiUnitTests,
+  ...walkTests(cloudScriptsTests, EXCLUDED_DIRS),
+  ...walkTests(cloudRoutingTests, EXCLUDED_DIRS),
+  ...walkTests(cloudInfraTests, EXCLUDED_DIRS),
+];
+if (allTestFiles.length === 0) {
+  console.error(
+    "[test:cloud] enumerated zero test files across all roots — the gate would " +
+      "silently pass. Update packages/scripts/test-cloud-run.mjs to match the layout.",
+  );
   process.exit(1);
 }
 
-process.exit(result.status ?? 1);
+// Batch size bounds per-process memory; the char cap keeps each argv under
+// Windows' ~8 KiB cmd.exe command-line ceiling (the spawn goes through cmd.exe
+// there — `shell: true` below — to resolve bun's `.cmd` shim). Whichever limit
+// a file hits first closes the current batch.
+const MAX_FILES_PER_BATCH = 80;
+const MAX_ARGS_CHARS = process.platform === "win32" ? 6000 : 100000;
+function chunkByBudget(files) {
+  const batches = [];
+  let current = [];
+  let chars = 0;
+  for (const file of files) {
+    const cost = file.length + 1;
+    if (
+      current.length > 0 &&
+      (current.length >= MAX_FILES_PER_BATCH || chars + cost > MAX_ARGS_CHARS)
+    ) {
+      batches.push(current);
+      current = [];
+      chars = 0;
+    }
+    current.push(file);
+    chars += cost;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+const batches = chunkByBudget(allTestFiles);
+
+let anyFailed = false;
+for (let i = 0; i < batches.length; i++) {
+  const batch = batches[i];
+  console.log(
+    `[test:cloud] batch ${i + 1}/${batches.length} — ${batch.length} files`,
+  );
+  const result = spawnSync(
+    "bun",
+    ["test", ...batch, "--timeout", "120000", "--isolate"],
+    {
+      cwd: stagingDir,
+      env,
+      stdio: "inherit",
+      shell: process.platform === "win32",
+    },
+  );
+  if (result.error) {
+    console.error(result.error);
+    process.exit(1);
+  }
+  // Run every batch even after a failure so one broken suite doesn't mask the
+  // rest; aggregate into a single non-zero exit for the gate.
+  if ((result.status ?? 1) !== 0) anyFailed = true;
+}
+
+process.exit(anyFailed ? 1 : 0);
