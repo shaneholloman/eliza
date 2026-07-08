@@ -775,6 +775,31 @@ export class AgentSandboxesRepository {
   }
 
   /**
+   * Count ready (claimable) unclaimed pool entries for a specific image.
+   * Used ONLY on the claim-null path to distinguish an EMPTY pool (starvation
+   * — the C4 steady state when replenish is broken) from a user-row that was
+   * merely ineligible for a claim (already running / already has a DB). A
+   * `warm_pool.empty_on_claim` observability event fires only when this returns
+   * 0, so a re-provision falling through doesn't pollute the starvation signal.
+   * Best-effort read (mirrors the claim query's readiness predicate).
+   */
+  async countReadyPoolEntriesForImage(image: string): Promise<number> {
+    await ensureAgentSandboxSchema();
+    const [row] = await dbRead
+      .select({ count: sql<number>`count(*)::int` })
+      .from(agentSandboxes)
+      .where(
+        and(
+          eq(agentSandboxes.pool_status, "unclaimed"),
+          eq(agentSandboxes.status, "running"),
+          eq(agentSandboxes.docker_image, image),
+          isNotNull(agentSandboxes.pool_ready_at),
+        ),
+      );
+    return row?.count ?? 0;
+  }
+
+  /**
    * Count user-facing provisions created in the given window.
    * Used by the forecast to predict next-period demand.
    * Excludes pool sentinel org rows.

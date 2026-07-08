@@ -5,13 +5,23 @@ import type { AppContext, AppEnv } from "@/types/cloud-worker-env";
 import { cronSupersededByDaemon } from "../../_container-control-plane-forward";
 
 /**
- * Warm pool replenisher cron. Work has been folded into the
- * eliza-provisioning-worker daemon's own maintenance cycle.
+ * Warm pool replenisher cron. Work now runs in the eliza-provisioning-worker
+ * daemon's `runInfraMaintenanceCycle` as the "warm pool replenish cycle" phase
+ * (`processPoolReplenishCycle` -> `WarmPoolManager.replenish`), fired after the
+ * node-health/autoscale/drain phases so it refills against fresh capacity.
+ *
+ * NOTE: this stub previously named the phase but no such phase existed — the
+ * daemon only wired `drainIdle`, so the pool never refilled and every create
+ * degraded to the cold path once the pool drained. The phase is now real; this
+ * label is accurate.
  */
 async function handle(c: AppContext, env?: AppEnv["Bindings"]) {
   const authError = verifyCronSecret(c.req.raw, "[Pool Replenish]", env);
   if (authError) return authError;
-  return cronSupersededByDaemon(c, "runInfraMaintenanceCycle (warm pool)");
+  return cronSupersededByDaemon(
+    c,
+    "runInfraMaintenanceCycle (warm pool replenish cycle)",
+  );
 }
 
 const __hono_app = new Hono<AppEnv>();

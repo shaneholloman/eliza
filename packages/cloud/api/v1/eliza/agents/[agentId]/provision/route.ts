@@ -203,6 +203,29 @@ async function __hono_POST(
             CORS_METHODS,
           );
         }
+        // Claim returned null: distinguish an EMPTY pool (starvation — the
+        // steady state when replenish is broken, this provision now degrades to
+        // the cold path) from an ineligible user row (re-provision that already
+        // has a DB). `warm_pool.empty_on_claim` makes the starvation visible;
+        // `warm_pool.claim_failed` below only covers THROWs.
+        try {
+          const ready =
+            await agentSandboxesRepository.countReadyPoolEntriesForImage(
+              containersEnv.defaultAgentImage(),
+            );
+          if (ready === 0) {
+            logger.warn(
+              "[agent-api] Warm pool empty on provision; degrading to cold path",
+              {
+                event: "warm_pool.empty_on_claim",
+                agentId,
+                orgId: user.organization_id,
+              },
+            );
+          }
+        } catch {
+          // Observability probe is best-effort; never block the provision path.
+        }
       } catch (err) {
         // Don't block on claim errors — fall through to the normal path.
         logger.warn("[agent-api] Warm pool claim threw; falling back", {
