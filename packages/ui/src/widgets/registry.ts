@@ -70,6 +70,9 @@ registerWidgetComponent(
   MODEL_DOWNLOAD_HOME_WIDGET.id,
   MODEL_DOWNLOAD_HOME_WIDGET.Component,
 );
+// Cloud-agent provisioning is no longer a host/home widget — it renders in the
+// chat (ContinuousChatOverlay, above the composer), so it is neither registered
+// as a widget component here nor given a home slot below.
 // Per-plugin frontpage widgets: each surfaces a compact, attention-ranked slice
 // of its plugin's own state on the home grid, self-hides when empty, and
 // self-publishes a home-attention signal so it floats up on its own data
@@ -220,11 +223,11 @@ export const BUILTIN_WIDGET_DECLARATIONS: PluginWidgetDeclaration[] = [
     // whole row with a real progress bar (it self-hides once ready).
     size: { cols: 4, rows: 2 },
   },
-  // The cloud-agent provisioning tile is NO LONGER a home resident (owner
-  // call, 2026-07-07): for shared-tier users it rendered a permanent
-  // "Setting up…" card against a healthy running agent. Provisioning state
-  // still surfaces via CloudHandoffBanner and the chat provisioning tile;
-  // the widget component stays in the tree for those surfaces and stories.
+  // Cloud-agent provisioning is no longer a home resident: shared-tier users
+  // saw a permanent "Setting up..." card against a healthy running agent, and
+  // dedicated boot status belongs in chat above the composer. The component
+  // stays exported for CloudHandoffBanner, the chat provisioning tile, stories,
+  // and tests.
   // The wallet, sleep, and standalone goals residents are NO LONGER home
   // residents (spec §B "Explicitly NOT residents" / §E items 3-5):
   //  - wallet: a balance is state, not change. It fails the two-second "what

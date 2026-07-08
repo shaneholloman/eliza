@@ -85,6 +85,7 @@ import { SystemWarningBanner } from "./components/shell/SystemWarningBanner";
 import { TrayLauncher } from "./components/shell/TrayLauncher";
 import { useBarSurfaceWindows } from "./components/shell/useBarSurfaceWindows";
 import { useKioskViewSurfaces } from "./components/shell/useKioskViewSurfaces";
+import { VoiceCaptureHud } from "./components/shell/VoiceCaptureHud";
 import { Button } from "./components/ui/button";
 import { KeepAliveViewHost } from "./components/views/KeepAliveViewHost";
 import { ViewErrorBoundary } from "./components/views/ViewErrorBoundary";
@@ -2969,6 +2970,11 @@ export function App() {
             /build-info.json is absent (production builds without the
             build-time stamp render nothing). */}
         <BuildBadge />
+        {/* On-screen voice-capture trace (stamped builds only) so a
+            "tapped the mic, then crickets" report is diagnosable from a phone
+            screenshot instead of the devtools console the installed PWA lacks.
+            Sibling of BuildBadge; renders nothing without /build-info.json. */}
+        <VoiceCaptureHud />
         <ShellOverlays actionNotice={actionNotice} />
         <SaveCommandModal
           open={contextMenu.saveCommandModalOpen}

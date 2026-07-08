@@ -2,6 +2,7 @@
  * Mic-capture recorder for local ASR: records mono PCM16, exposes a live analyser
  * for amplitude visualization, and stops/cancels the audio context cleanly.
  */
+import { voiceCaptureDebug } from "../utils/voice-capture-debug";
 import {
   DEFAULT_POST_TTS_COOLDOWN_MS,
   isTtsEchoGateActive as sharedTtsEchoGateActive,
@@ -386,33 +387,100 @@ export async function startLocalAsrRecorder(
     throw new Error("Microphone capture is not available for local ASR");
   }
 
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1,
-      // Gemma ASR ingests 16 kHz mono; request it at capture so the
-      // browser resamples once instead of us downsampling a 48 kHz buffer.
-      sampleRate: 16000,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
+  // getUserMedia round-trip: on iOS PWA this pops the native permission dialog.
+  // Trace the request/resolve/reject so the on-screen HUD shows whether the
+  // grant was denied (`gum:err(NotAllowedError)`) or resolved but the graph
+  // then died (a later `ctx:suspended!`) — the two crickets modes look
+  // identical without this split.
+  voiceCaptureDebug("gum:req", {});
+  const gumStartMs = nowMs();
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        // Gemma ASR ingests 16 kHz mono; request it at capture so the
+        // browser resamples once instead of us downsampling a 48 kHz buffer.
+        sampleRate: 16000,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+  } catch (err) {
+    voiceCaptureDebug("gum:err", {
+      name: err instanceof Error ? err.name : "Error",
+      reason:
+        err instanceof Error
+          ? err.message.slice(0, 80)
+          : String(err).slice(0, 80),
+    });
+    throw err;
+  }
+  voiceCaptureDebug("gum:ok", {
+    ms: Math.round(nowMs() - gumStartMs),
+    // Defensive: some capture stubs expose only `getTracks`; never let a HUD
+    // breadcrumb throw and break the capture it's meant to observe.
+    tracks:
+      typeof stream.getAudioTracks === "function"
+        ? stream.getAudioTracks().length
+        : typeof stream.getTracks === "function"
+          ? stream.getTracks().length
+          : undefined,
   });
   const context = new AudioContextCtor();
+  voiceCaptureDebug(
+    context.state === "running" ? "ctx:running" : `ctx:${context.state}`,
+    { state: context.state },
+  );
   if (context.state === "suspended") {
-    // A context that cannot resume produces silence — surface the failure to
-    // the caller (voice-capture-factory setState("error")) instead of
-    // recording a dead stream. Release the mic + context first so the failed
+    // A context that cannot resume produces silence (all-zero PCM → the WAV
+    // reads as silent → a quiet no-op → the user sees crickets). Surface the
+    // failure to the caller (voice-capture-factory setState("error")) instead
+    // of recording a dead stream. Release the mic + context first so the failed
     // start does not leave the capture indicator on.
-    try {
-      await context.resume();
-    } catch (err) {
+    //
+    // iOS/WebKit quirk (#voice-crickets): `context.resume()` can RESOLVE while
+    // `state` is still "suspended" — the resume is queued behind a user gesture
+    // that the getUserMedia permission dialog interrupted. A single await
+    // therefore isn't proof the graph is live; re-check the state and retry a
+    // couple of times before giving up, so a context that just needed a beat to
+    // actually resume after the dialog dismissed isn't misread as dead.
+    const failResume = async (cause: unknown): Promise<never> => {
       // error-policy:J2 release the hot mic, then rethrow with context
       for (const track of stream.getTracks()) track.stop();
       // error-policy:J6 teardown — the context may already be closed
       await context.close().catch(() => undefined);
       throw new Error("AudioContext could not resume for local ASR capture", {
-        cause: err,
+        cause,
       });
+    };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await context.resume();
+      } catch (err) {
+        await failResume(err);
+      }
+      // resume() resolved — but on iOS it may not have actually taken effect.
+      // Re-read the LIVE state: the `if (context.state === "suspended")` guard
+      // above narrows the literal, but resume() can have flipped it to
+      // "running". The cast widens the read back to the full union so the
+      // comparison reflects the mutated value instead of the stale narrow.
+      const liveState = context.state as AudioContextState;
+      if (liveState !== "suspended") {
+        voiceCaptureDebug("ctx:resumed", { state: liveState, attempt });
+        break;
+      }
+      if (attempt === 2) {
+        // The graph never resumed after the permission dialog — it will record
+        // all-zero PCM → SILENT WAV → crickets. Mark it terminally (`!`).
+        voiceCaptureDebug("ctx:suspended!", { state: liveState, attempt });
+        await failResume(
+          new Error("AudioContext stayed suspended after resume"),
+        );
+      }
+      // Yield a frame so a gesture-queued resume can land before the re-check.
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
 
@@ -425,11 +493,18 @@ export async function startLocalAsrRecorder(
   const chunks: Float32Array[] = [];
   let stopped = false;
   let autoStopRequested = false;
+  let firstChunkTraced = false;
   const autoStopDetector = createLocalAsrAutoStopDetector(options.autoStop);
 
   processor.onaudioprocess = (event) => {
     if (stopped) return;
     const input = event.inputBuffer;
+    // First real audio callback: proof the graph is actually delivering frames
+    // (not a dead/suspended context that silently never fires onaudioprocess).
+    if (!firstChunkTraced) {
+      firstChunkTraced = true;
+      voiceCaptureDebug("rec:data", { chunk: String(input.length) });
+    }
     const frameCount = input.length;
     const channelCount = Math.max(1, input.numberOfChannels);
     const mono = new Float32Array(frameCount);

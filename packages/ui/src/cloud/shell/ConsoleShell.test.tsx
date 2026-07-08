@@ -216,6 +216,9 @@ describe("ConsoleShell", () => {
     );
 
     const accountMenu = screen.getByRole("button", { name: /qa@e\.test/i });
+    fireEvent.focus(accountMenu);
+    expect(accountMenu.className).toContain("bg-white/5");
+    expect(accountMenu.className).toContain("text-white");
     // Product policy (styles.css): focus rings are disabled globally with
     // !important, so per-component focus-ring utilities are dead. The trigger
     // carries only the shared `outline-none` reset and must never reintroduce

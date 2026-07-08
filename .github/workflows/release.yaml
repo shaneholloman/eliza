@@ -488,8 +488,7 @@ jobs:
             # in favor of our release commit (the "theirs" in rebase semantics
             # is the patch being applied). Concurrent unrelated commits to
             # develop that also touched version files would otherwise abort the
-            # rebase with a conflict (see run 26082989616 — packages/tui
-            # conflict on a concurrent push during a 28-min queued release).
+            # rebase with a conflict during a queued release.
             # Non-version edits in the same file still merge cleanly via the
             # 3-way recursive strategy.
             if ! git rebase -X theirs "origin/${TARGET_BRANCH}"; then

@@ -40,6 +40,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!--
+                Declares MainActivity as a home-screen candidate so Eliza can be
+                selected as the device default launcher (ROLE_HOME). Required for
+                AOSP / sideload full-device takeovers (e.g. Light Phone 3) where
+                Eliza replaces the stock launcher; on Play/retail builds the user
+                still explicitly grants the Home role.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -67,50 +80,7 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
-<service
-            android:name="ai.elizaos.app.GatewayConnectionService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
-    
-        <service
-            android:name="ai.elizaos.app.ElizaAgentService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="local-agent-runtime" />
-        </service>
-    
-        <activity
-            android:name="ai.elizaos.app.ElizaDialActivity"
-            android:exported="true"
-            android:theme="@style/AppTheme.NoActionBar">
-            <intent-filter>
-                <action android:name="android.intent.action.DIAL" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.DIAL" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:scheme="tel" />
-            </intent-filter>
-        </activity>
-    
-        <activity
-            android:name="ai.elizaos.app.ElizaAssistActivity"
-            android:exported="true"
-            android:theme="@style/AppTheme.NoActionBar">
-            <intent-filter>
-                <action android:name="android.intent.action.ASSIST" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VOICE_COMMAND" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
-
-        <!--
+<!--
             Digital-assistant (ROLE_ASSISTANT) integration. Declaring a
             VoiceInteractionService is what surfaces Eliza under Settings ->
             Apps -> Default apps -> Digital assistant app on retail devices and
@@ -182,7 +152,49 @@
                 android:name="android.view.im"
                 android:resource="@xml/method" />
         </service>
-
+<service
+            android:name="ai.elizaos.app.GatewayConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+    
+        <service
+            android:name="ai.elizaos.app.ElizaAgentService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="local-agent-runtime" />
+        </service>
+    
+        <activity
+            android:name="ai.elizaos.app.ElizaDialActivity"
+            android:exported="true"
+            android:theme="@style/AppTheme.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.DIAL" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.DIAL" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="tel" />
+            </intent-filter>
+        </activity>
+    
+        <activity
+            android:name="ai.elizaos.app.ElizaAssistActivity"
+            android:exported="true"
+            android:theme="@style/AppTheme.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+    
         <activity
             android:name="ai.elizaos.app.ElizaShareActivity"
             android:exported="true"

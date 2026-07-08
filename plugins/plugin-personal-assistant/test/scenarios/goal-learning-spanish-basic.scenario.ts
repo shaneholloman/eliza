@@ -34,6 +34,7 @@ export default scenario({
       kind: "message",
       name: "learning-goal grounded preview",
       text: "Let's define success as holding a 10-minute cafe-style conversation without switching to English by December 1, with four 20-minute practice blocks each week.",
+      responseExcludes: ["details you mentioned"],
       responseJudge: {
         rubric:
           "The assistant should now preview the grounded learning goal for confirmation. A passing reply reflects the 10-minute conversation evidence signal, December 1 horizon, and weekly practice cadence, makes clear this is still a preview/confirmation step, and does not ask another vague generic question.",

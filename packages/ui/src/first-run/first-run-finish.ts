@@ -23,10 +23,16 @@ import { getDesktopRuntimeMode, invokeDesktopBridgeRequest } from "../bridge";
 import { type AgentPluginLike, getAgentPlugin } from "../bridge/native-plugins";
 import { savePendingCloudHandoff } from "../cloud/handoff/pending-handoff-store";
 import { runCloudAgentHandoff } from "../cloud/handoff/run-cloud-agent-handoff";
+import { silentlyRepointToDedicated } from "../cloud/handoff/silent-repoint";
 import { getBootConfig } from "../config/boot-config";
 import type { UiLanguage } from "../i18n";
 import { clearForceFreshFirstRun } from "../platform/first-run-reset";
-import { isAndroid, isDesktopPlatform, isIOS } from "../platform/init";
+import {
+  isAndroid,
+  isDesktopPlatform,
+  isIOS,
+  isNative,
+} from "../platform/init";
 import {
   addAgentProfile,
   createPersistedActiveServer,
@@ -59,6 +65,7 @@ import {
 import { resolveFirstRunLocalAgentApiBase } from "./runtime-target";
 
 const FIRST_RUN_AGENT_WAIT_MS = 180_000;
+const RUNNING_CLOUD_AGENT_STATUS = "running";
 
 // ── Injected ports — the store seams the finish logic needs ──────────────────
 
@@ -215,6 +222,28 @@ function canProbeCloudStatus(): boolean {
   return true;
 }
 
+function runningCloudAgents(
+  agents: readonly CloudCompatAgent[],
+): CloudCompatAgent[] {
+  return agents
+    .filter((agent) => agent.status === RUNNING_CLOUD_AGENT_STATUS)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+}
+
+function preferredRunningCloudAgentId(
+  running: readonly CloudCompatAgent[],
+): string | null {
+  const active = loadPersistedActiveServer();
+  if (active?.kind !== "cloud") return null;
+  const persistedAgentId = active.id?.startsWith("cloud:")
+    ? active.id.slice("cloud:".length).trim()
+    : "";
+  if (!persistedAgentId || persistedAgentId.includes("/")) return null;
+  return running.some((agent) => agent.agent_id === persistedAgentId)
+    ? persistedAgentId
+    : null;
+}
+
 async function getCloudStatusIfSupported() {
   if (!canProbeCloudStatus()) return null;
   // error-policy:J4 cloud-status probe — unreachable/unsupported means the
@@ -226,7 +255,8 @@ async function pairDedicatedCloudAgentInCurrentWindow(opts: {
   cloudApiBase: string;
   agentId: string;
   cloudToken: string;
-}): Promise<void> {
+  containerBase?: string;
+}): Promise<"navigate" | "in-process"> {
   if (typeof window === "undefined") {
     throw new Error("Cloud agent sign-in requires a browser window.");
   }
@@ -234,6 +264,18 @@ async function pairDedicatedCloudAgentInCurrentWindow(opts: {
     cloudApiBase: opts.cloudApiBase,
     agentId: opts.agentId,
     cloudToken: opts.cloudToken,
+    consumeRedirectInProcess: isNative && !isDesktopPlatform(),
+    onPairedInProcess: (apiToken) => {
+      if (opts.containerBase) {
+        silentlyRepointToDedicated({
+          containerBase: opts.containerBase,
+          dedicatedAgentId: opts.agentId,
+          authToken: apiToken,
+        });
+      } else {
+        client.setToken(apiToken);
+      }
+    },
     navigate: (url) => {
       window.location.replace(url);
     },
@@ -241,6 +283,7 @@ async function pairDedicatedCloudAgentInCurrentWindow(opts: {
   if (!result.ok) {
     throw new Error(result.message);
   }
+  return result.mode;
 }
 
 function readSyncOnDeviceAgentBearer(): string | null {
@@ -454,7 +497,11 @@ async function finishLocal(
 export async function bindCloudAgent(
   sourceDraft: FirstRunProfileDraft,
   authToken: string,
-  opts: { preferAgentId?: string | null; forceCreate?: boolean },
+  opts: {
+    preferAgentId?: string | null;
+    forceCreate?: boolean;
+    knownAgents?: CloudCompatAgent[];
+  },
   ports: FirstRunFinishPorts,
 ): Promise<FirstRunFinishOutcome> {
   ports.onStatus?.("Setting up your cloud agent", "setup");
@@ -477,6 +524,7 @@ export async function bindCloudAgent(
     bio,
     ...(opts.preferAgentId ? { preferAgentId: opts.preferAgentId } : {}),
     ...(opts.forceCreate ? { forceCreate: true } : {}),
+    ...(opts.knownAgents ? { knownAgents: opts.knownAgents } : {}),
     ...(getBootConfig().preferSharedCloudTier
       ? { preferSharedTier: true }
       : {}),
@@ -486,11 +534,20 @@ export async function bindCloudAgent(
   if (selectedAgent.requiresAgentPairing) {
     ports.onStatus?.("Signing in to your cloud agent", "pairing");
     try {
-      await pairDedicatedCloudAgentInCurrentWindow({
+      const pairMode = await pairDedicatedCloudAgentInCurrentWindow({
         cloudApiBase,
         agentId: selectedAgent.agentId,
         cloudToken: authToken,
+        containerBase: cloudAgentApiBase,
       });
+      if (pairMode === "in-process") {
+        persistMobileRuntimeModeForServerTarget("elizacloud");
+        clearForceFreshFirstRun();
+        clearPersistedFirstRunState();
+        ports.onStatus?.(null);
+        ports.completeFirstRun("chat");
+        return { kind: "done" };
+      }
       return { kind: "handoff-started" };
     } catch (err) {
       return {
@@ -594,12 +651,14 @@ export async function bindCloudAgent(
           dedicatedAgentId,
           cloudApiBase,
           authToken,
-          onSwitch: async () =>
-            pairDedicatedCloudAgentInCurrentWindow({
+          onSwitch: async (containerBase) => {
+            await pairDedicatedCloudAgentInCurrentWindow({
               cloudApiBase,
               agentId: dedicatedAgentId,
               cloudToken: authToken,
-            }),
+              containerBase,
+            });
+          },
         });
       },
       () => {
@@ -664,7 +723,29 @@ export async function listOrAutoProvisionCloudAgent(
   if (!authToken) {
     return { kind: "error", message: "Eliza Cloud authentication required." };
   }
-  return bindCloudAgent(sourceDraft, authToken, { forceCreate: false }, ports);
+  ports.onStatus?.("Finding your agents...", "listing");
+  const list = await client.getCloudCompatAgents();
+  if (!list.success) {
+    return {
+      kind: "error",
+      message:
+        list.error ||
+        "Couldn't reach Eliza Cloud to find your agents. Check your connection and try again.",
+    };
+  }
+  const running = runningCloudAgents(list.data);
+  const preferredAgentId = preferredRunningCloudAgentId(running);
+  const agentId = preferredAgentId ?? running[0]?.agent_id ?? null;
+  return bindCloudAgent(
+    sourceDraft,
+    authToken,
+    {
+      forceCreate: false,
+      ...(agentId ? { preferAgentId: agentId } : {}),
+      knownAgents: list.data,
+    },
+    ports,
+  );
 }
 
 // ── Router entry — validate + route by runtime ───────────────────────────────

@@ -161,6 +161,7 @@ const DEFAULT_WATCHDOG_CONSECUTIVE_TICKS = 2;
  * instead of the 3 weeks it took to notice #15160.
  */
 const DEFAULT_DB_LIVENESS_MAX_AGE_HOURS = 24;
+const workerStartedAt = new Date();
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
@@ -211,6 +212,16 @@ export function readWorkerConfig(
 }
 
 let depsPromise: Promise<WorkerDeps> | null = null;
+
+/**
+ * Test-only seam: inject a pre-resolved deps bag so cycle functions can be
+ * exercised without the real dynamic imports (DB/SSH/Docker). Never called in
+ * production. Pass `null` to reset back to lazy real loading.
+ */
+export function __setDepsForTests(deps: WorkerDeps | null): void {
+  depsPromise = deps ? Promise.resolve(deps) : null;
+  if (!deps) cachedWarmPoolManagerInstance = null;
+}
 
 async function loadDeps(): Promise<WorkerDeps> {
   if (!depsPromise) {
@@ -563,6 +574,16 @@ async function processRecoveryCycle(concurrency = 5): Promise<RecoveryResult> {
   return provisioningJobService.processDisconnectedRecovery(concurrency);
 }
 
+async function processStartupInterruptedJobsRecoveryCycle(
+  config: ProvisioningWorkerConfig,
+): Promise<number> {
+  const { provisioningJobService } = await loadDeps();
+  return provisioningJobService.recoverInterruptedJobsOnStartup(
+    workerStartedAt,
+    config.jobTypes,
+  );
+}
+
 /**
  * Self-heal rows WEDGED in `provisioning` whose container is actually healthy
  * — the readiness-probe false-negative split-brain (#15310 failure mode #6).
@@ -603,6 +624,12 @@ interface NodeAutoscaleSummary {
 
 interface PoolDrainSummary {
   drained: number;
+}
+
+interface PoolReplenishSummary {
+  created: number;
+  failed: number;
+  reason: string;
 }
 
 /**
@@ -856,6 +883,34 @@ async function processPoolDrainIdleCycle(): Promise<PoolDrainSummary> {
   const pool = await getWarmPoolManager();
   const result = await pool.drainIdle(image);
   return { drained: result.drained.length };
+}
+
+/**
+ * Refill the warm pool up to its forecast target. THIS IS THE MISSING CALLER:
+ * `WarmPoolManager.replenish()` had no live invocation anywhere in the tree —
+ * the only historical caller was the deprecated (undeployed) container-control-
+ * plane service, and the `/api/v1/cron/pool-replenish` CF stub only *claimed*
+ * the daemon owned it via `cronSupersededByDaemon` while the daemon wired
+ * `drainIdle` ONLY. Net effect: the pool got claimed + idle-drained but NEVER
+ * refilled, so after depletion every create silently fell through to the
+ * 30-120s cold path (Nubs' "warm pool -> provision taking long" report).
+ *
+ * `replenish` is itself gated by `WARM_POOL_ENABLED` (returns a no-op decision
+ * when off) and self-bounds each burst to `WarmPoolPolicy.replenishBurstLimit`
+ * (default 3) capped by headroom to `maxPoolSize`, so it cannot stampede. It
+ * runs AFTER the node-health / autoscale phases below so it sees fresh node
+ * capacity when it decides how many to create.
+ */
+export async function processPoolReplenishCycle(): Promise<PoolReplenishSummary> {
+  const { containersEnv } = await loadDeps();
+  const image = containersEnv.defaultAgentImage();
+  const pool = await getWarmPoolManager();
+  const result = await pool.replenish(image);
+  return {
+    created: result.created.length,
+    failed: result.failed.length,
+    reason: result.decision.reason,
+  };
 }
 
 /**
@@ -1362,6 +1417,9 @@ async function pollCycle(
   //   - pre-pull warm image (was: agent-hot-pool — prePullAgentImageOnAvailableNodes)
   //   - node autoscale     (was: /api/v1/cron/node-autoscale)
   //   - warm pool drain    (was: /api/v1/cron/pool-drain-idle)
+  //   - warm pool replenish (was: /api/v1/cron/pool-replenish — the CF stub
+  //       claimed the daemon owned it but no phase actually called replenish;
+  //       now wired for real below, after node-health so it sees fresh capacity)
   //   - orphan reconcile   (FIX 3, gated by ORPHAN_RECONCILER_ENABLED)
   // Folding them together avoids 3 parallel writers fighting over the same
   // docker_nodes rows and means there's exactly one host that owns the
@@ -1480,6 +1538,32 @@ async function runInfraMaintenanceCycle(
         logger.info("[provisioning-worker] warm pool drain cycle complete", {
           drained: result.drained,
         });
+      }
+    },
+  );
+
+  // Refill the warm pool up to its forecast target. Runs AFTER node-health,
+  // autoscale, and idle-drain so it decides how many containers to create
+  // against fresh node capacity and post-drain pool depth. Error-isolated by
+  // runBoundedPhase like every other phase: a replenish failure logs and the
+  // rest of the cycle (and the next poll) continues. Self-gated by
+  // WARM_POOL_ENABLED (no-op decision when off) and bounded per burst by the
+  // policy's replenishBurstLimit, so it cannot stampede.
+  await runBoundedPhase(
+    logger,
+    "warm pool replenish cycle",
+    () => processPoolReplenishCycle(),
+    (result) => {
+      if (result.created > 0 || result.failed > 0) {
+        logger.info(
+          "[provisioning-worker] warm pool replenish cycle complete",
+          {
+            event: "warm_pool.replenished",
+            created: result.created,
+            failed: result.failed,
+            reason: result.reason,
+          },
+        );
       }
     },
   );
@@ -1618,6 +1702,28 @@ async function main(): Promise<void> {
     "db liveness preflight",
     () => processDbLivenessCheckCycle(config),
     (assessment) => logJobsTableLiveness(logger, assessment),
+  );
+
+  // A systemd restart kills the previous singleton daemon, but any job it had
+  // already claimed remains `in_progress` until stale recovery sees the full
+  // cold-boot threshold. Recover only rows claimed before THIS process existed:
+  // normal in-cycle stale recovery keeps protecting legitimate slow cold boots,
+  // while deploy restarts immediately expose interrupted provisions to retry.
+  await runBoundedPhase(
+    logger,
+    "startup interrupted-job recovery",
+    () => processStartupInterruptedJobsRecoveryCycle(config),
+    (recovered) => {
+      if (recovered > 0) {
+        logger.info(
+          "[provisioning-worker] startup interrupted-job recovery complete",
+          {
+            recovered,
+            startedBefore: workerStartedAt.toISOString(),
+          },
+        );
+      }
+    },
   );
 
   // Apps (Product 2): arm the deploy backend when enabled (gated; no-op by default).

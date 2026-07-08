@@ -3,7 +3,9 @@
  *
  * OpenAI-compatible embeddings endpoint. Routes through the AI SDK + AI
  * Gateway with credit reservation/bill-and-record on the SDK's reported
- * usage.
+ * usage. When INFERENCE_PASSTHROUGH_EMBEDDINGS is on and OpenAI serves the
+ * model directly, the upstream JSON is returned verbatim (#15512) — the same
+ * admission/settle chain runs either way, only the middle hop changes.
  */
 
 import { APICallError, embed, embedMany, RetryError } from "ai";
@@ -26,6 +28,7 @@ import {
   getTextEmbeddingModel,
   hasTextEmbeddingProviderConfigured,
   resolveEmbeddingProviderSource,
+  resolvePassthroughEmbeddingsUpstream,
 } from "@/lib/providers/language-model";
 import {
   billUsage,
@@ -47,6 +50,7 @@ import {
   createLedgerDebitSettler,
   resolveInferenceBillingLedger,
 } from "@/lib/services/inference-billing-ledger";
+import { isPassthroughEmbeddingsEnabled } from "@/lib/services/inference-passthrough";
 import { usageService } from "@/lib/services/usage";
 import { createCreditReservationSettler } from "@/lib/utils/credit-reservation";
 import { logger } from "@/lib/utils/logger";
@@ -447,10 +451,53 @@ app.post("/", async (c) => {
       estimatedTokens: estimatedInputTokens,
     });
 
-    let embeddings: number[][];
+    let embeddings: number[][] = [];
     let actualTokens = 0;
 
-    if (Array.isArray(request.input)) {
+    // #15512 pass-through fast path: when OpenAI serves the model directly,
+    // forward the validated request verbatim and return the upstream bytes
+    // untouched — no AI-SDK decode/validate/re-encode of the float arrays.
+    // Usage is parsed once from the same buffer so the settle chain below
+    // bills exactly what the provider reported, identical to the SDK path.
+    // The Vercel AI Gateway fallback keeps the SDK path (resolver returns it
+    // only for the direct-OpenAI source).
+    let passthroughBody: ArrayBuffer | null = null;
+    const passthroughUpstream =
+      isPassthroughEmbeddingsEnabled() &&
+      resolveEmbeddingProviderSource() === "openai"
+        ? resolvePassthroughEmbeddingsUpstream(model)
+        : null;
+
+    if (passthroughUpstream) {
+      const upstreamResponse = await fetch(passthroughUpstream.url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${passthroughUpstream.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...request,
+          model: passthroughUpstream.modelId,
+        }),
+      });
+      if (!upstreamResponse.ok) {
+        // Throw the same error shape the SDK path produces so the route catch
+        // maps it (429/402/503) and releases the credit hold — one failure path.
+        throw new APICallError({
+          message: `Upstream embeddings request failed with status ${upstreamResponse.status}`,
+          url: passthroughUpstream.url,
+          requestBodyValues: { model: passthroughUpstream.modelId },
+          statusCode: upstreamResponse.status,
+          responseHeaders: {},
+          responseBody: await upstreamResponse.text(),
+        });
+      }
+      passthroughBody = await upstreamResponse.arrayBuffer();
+      const parsed = JSON.parse(new TextDecoder().decode(passthroughBody)) as {
+        usage?: { prompt_tokens?: number };
+      };
+      actualTokens = parsed.usage?.prompt_tokens || estimatedInputTokens;
+    } else if (Array.isArray(request.input)) {
       const result = await embedMany({
         model: getTextEmbeddingModel(model),
         values: request.input,
@@ -551,6 +598,20 @@ app.post("/", async (c) => {
 
     if (typeof c.executionCtx?.waitUntil === "function") {
       c.executionCtx.waitUntil(billedPromise);
+    }
+
+    // Verbatim upstream bytes for the pass-through path — billing above ran
+    // identically, only the response encoding hop is skipped. The header lets
+    // probes distinguish the paths without log access (same convention as
+    // /v1/chat/completions).
+    if (passthroughBody) {
+      return new Response(passthroughBody, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Eliza-Inference-Path": "passthrough",
+        },
+      });
     }
 
     return c.json({

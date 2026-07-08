@@ -97,6 +97,7 @@ let appCreditsService: typeof import("../app-credits").appCreditsService;
 let redeemableEarningsService: typeof import("../redeemable-earnings").redeemableEarningsService;
 let InsufficientCreditsError: typeof import("../credits").InsufficientCreditsError;
 let MIN_RESERVATION: typeof import("../credits").MIN_RESERVATION;
+let APP_CHAT_RESERVATION_SETTLEMENT_MARKER: typeof import("../credits").APP_CHAT_RESERVATION_SETTLEMENT_MARKER;
 
 let seq = 0;
 function uniq(p: string): string {
@@ -184,7 +185,8 @@ beforeAll(async () => {
     ({ closeDatabaseConnectionsForTests: closeDb, dbWrite } = await import("../../../db/client"));
     ({ appCreditsService } = await import("../app-credits"));
     ({ redeemableEarningsService } = await import("../redeemable-earnings"));
-    ({ InsufficientCreditsError, MIN_RESERVATION } = await import("../credits"));
+    ({ InsufficientCreditsError, MIN_RESERVATION, APP_CHAT_RESERVATION_SETTLEMENT_MARKER } =
+      await import("../credits"));
 
     const schema = {
       organizations,
@@ -219,6 +221,59 @@ afterAll(async () => {
 });
 
 describe("reserveInferenceCredits — real row-locked upfront hold (#10857)", () => {
+  test(
+    "stamps app-chat reservations with the marker and base-cost facts the stale sweeper consumes (#15472)",
+    async () => {
+      if (!pgliteReady) return;
+
+      const payerOrgId = await seedOrg("2.000000");
+      const consumerId = await seedUser(payerOrgId);
+      const creatorOrgId = await seedOrg("0.000000");
+      const creatorId = await seedUser(creatorOrgId);
+      const app = await seedApp({
+        organizationId: creatorOrgId,
+        createdByUserId: creatorId,
+        inferenceMarkupPercentage: 25,
+      });
+      await dbWrite.insert(appUsers).values({ app_id: app.id, user_id: consumerId });
+
+      const reservation = await appCreditsService.reserveInferenceCredits({
+        appId: app.id,
+        userId: consumerId,
+        estimatedBaseCost: 0,
+        description: "sweepable app-chat hold",
+        idempotencyKey: "req-sweepable-hold",
+        metadata: {
+          model: "free-model",
+          type: "caller-value-must-not-win",
+          settlement_marker: "caller-value-must-not-win",
+        },
+        app,
+      });
+
+      const row = await dbWrite.query.creditTransactions.findFirst({
+        where: eq(creditTransactions.id, reservation.reservationTransactionId ?? ""),
+      });
+      expect(row).toBeDefined();
+      const metadata =
+        typeof row?.metadata === "string"
+          ? (JSON.parse(row.metadata) as Record<string, unknown>)
+          : (row?.metadata as Record<string, unknown>);
+
+      expect(row?.type).toBe("debit");
+      expect(metadata.type).toBe("app_chat_reservation");
+      expect(metadata.settlement_marker).toBe(APP_CHAT_RESERVATION_SETTLEMENT_MARKER);
+      expect(metadata.appId).toBe(app.id);
+      expect(metadata.userId).toBe(consumerId);
+      expect(metadata.reserved_amount).toBe(MIN_RESERVATION);
+      expect(metadata.estimated_cost).toBe(0);
+      expect(metadata.baseCost).toBe(MIN_RESERVATION);
+      expect(metadata.model).toBe("free-model");
+      expect(metadata.idempotencyKey).toBe("req-sweepable-hold");
+    },
+    PGLITE_TIMEOUT,
+  );
+
   test(
     "(ported from #10909) 8 concurrent $0.30 holds on a $1.00 balance: exactly 3 win, 5 throw InsufficientCreditsError, balance never negative",
     async () => {

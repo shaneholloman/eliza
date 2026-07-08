@@ -54,6 +54,7 @@ import {
   billUsage,
   estimateInputTokens,
   InsufficientCreditsError,
+  normalizeUsage,
   recordUsageAnalytics,
   reserveCredits,
 } from "@/lib/services/ai-billing";
@@ -69,6 +70,7 @@ import { resolveInferenceAuthContext } from "@/lib/services/inference-auth-conte
 import { createCreditReservationSettler } from "@/lib/utils/credit-reservation";
 import { logger } from "@/lib/utils/logger";
 import { getRouteTimeoutMs } from "@/lib/utils/request-timeout";
+import { settleOffResponsePath } from "@/lib/utils/settle-off-response-path";
 import type { AppContext, AppEnv } from "@/types/cloud-worker-env";
 
 const ROUTE_MAX_DURATION = 800;
@@ -524,6 +526,15 @@ app.use("*", rateLimit(RateLimitPresets.RELAXED));
 app.post("/", async (c) => {
   const startTime = Date.now();
   const routeTimeoutMs = getRouteTimeoutMs(ROUTE_MAX_DURATION);
+  // Workers ExecutionContext for off-response-path billing (#8759 / #15414).
+  // Hono's `executionCtx` getter THROWS outside a Worker (tests, node) — fall
+  // back to undefined so settleOffResponsePath runs the chain inline there.
+  let executionCtx: { waitUntil(promise: Promise<unknown>): void } | undefined;
+  try {
+    executionCtx = c.executionCtx;
+  } catch {
+    executionCtx = undefined;
+  }
   let settleReservation:
     | ((actualCost: number) => Promise<CreditReconciliationResult | null>)
     | null = null;
@@ -566,6 +577,7 @@ app.post("/", async (c) => {
     const message = error instanceof Error ? error.message : String(error);
     return anthropicError("authentication_error", message, 401);
   }
+  const tAuth = Date.now();
 
   const requestedAppId = c.req.header("X-App-Id");
   let appId: string | null = null;
@@ -656,6 +668,7 @@ app.post("/", async (c) => {
   const affiliateCode = c.req.header("X-Affiliate-Code") ?? null;
   const billingSource: PricingBillingSource =
     resolveAiProviderSource(model) ?? "bitrouter";
+  const tBeforeReserve = Date.now();
 
   let reservation: CreditReservation;
 
@@ -728,6 +741,21 @@ app.post("/", async (c) => {
   }
 
   settleReservation = createCreditReservationSettler(reservation);
+  const tAfterReserve = Date.now();
+
+  // Pre-forward latency breakdown — same instrumentation as
+  // [Chat Completions][preforward] (#9899) so the two inference routes are
+  // comparable. authMs = auth/org resolution; midReadsMs = app lookup + body
+  // parse + moderation + token estimate; reserveMs = the credit-reservation
+  // write; totalMs = everything before the model forward.
+  logger.info("[Messages API][preforward]", {
+    model,
+    authMs: tAuth - startTime,
+    midReadsMs: tBeforeReserve - tAuth,
+    reserveMs: tAfterReserve - tBeforeReserve,
+    totalMs: Date.now() - startTime,
+    stream: Boolean(request.stream),
+  });
 
   try {
     // Payload conversion is throwable (convertTools rejects a malformed-but-
@@ -756,46 +784,59 @@ app.post("/", async (c) => {
       stopSequences: request.stop_sequences,
     });
 
-    if (request.stream) {
-      return await handleStream(
-        model,
-        systemPrompt,
-        messages,
-        request,
-        user,
-        apiKey,
-        affiliateCode,
-        startTime,
-        estimatedInputTokens,
-        safeParams,
-        tools,
-        toolChoice,
-        c.req.raw.signal,
-        routeTimeoutMs,
-        settleReservation,
-        billingSource,
-        requestId,
+    const preforwardResponse = request.stream
+      ? await handleStream(
+          model,
+          systemPrompt,
+          messages,
+          request,
+          user,
+          apiKey,
+          affiliateCode,
+          startTime,
+          estimatedInputTokens,
+          safeParams,
+          tools,
+          toolChoice,
+          c.req.raw.signal,
+          routeTimeoutMs,
+          settleReservation,
+          billingSource,
+          requestId,
+          executionCtx,
+        )
+      : await handleNonStream(
+          model,
+          systemPrompt,
+          messages,
+          request,
+          user,
+          apiKey,
+          affiliateCode,
+          startTime,
+          safeParams,
+          tools,
+          toolChoice,
+          c.req.raw.signal,
+          routeTimeoutMs,
+          settleReservation,
+          billingSource,
+          requestId,
+          executionCtx,
+        );
+    // Same debug header as chat/completions (#9899): per-step pre-forward
+    // timing, no behavior change.
+    try {
+      preforwardResponse.headers.set(
+        "X-Eliza-Preforward-Ms",
+        `total=${Date.now() - startTime};auth=${tAuth - startTime};mid=${tBeforeReserve - tAuth};reserve=${tAfterReserve - tBeforeReserve}`,
       );
+    } catch {
+      // error-policy:J6 debug-only header; immutable Response headers must not
+      // fail an otherwise valid provider response.
+      // Some Response shapes have immutable headers — never fail a request for a debug header.
     }
-
-    return await handleNonStream(
-      model,
-      systemPrompt,
-      messages,
-      request,
-      user,
-      apiKey,
-      affiliateCode,
-      startTime,
-      safeParams,
-      tools,
-      toolChoice,
-      c.req.raw.signal,
-      routeTimeoutMs,
-      settleReservation,
-      billingSource,
-      requestId,
-    );
+    return preforwardResponse;
   } catch (error) {
     await settleReservation?.(0);
     const message = error instanceof Error ? error.message : String(error);
@@ -863,6 +904,7 @@ async function handleNonStream(
   // it billUsage falls back to legacy_<uuid> and a retry double-accrues cashable
   // affiliate earnings. Mirrors chat/completions (#11588).
   requestId: string,
+  executionCtx: { waitUntil(promise: Promise<unknown>): void } | undefined,
 ) {
   const provider = getProviderFromModel(model);
 
@@ -891,38 +933,78 @@ async function handleNonStream(
       ...cotOptions,
     });
 
-    const billing = await billUsage(
-      {
-        organizationId: user.organization_id,
-        userId: user.id,
-        apiKeyId: apiKey?.id,
-        model,
-        provider,
-        billingSource,
-        affiliateCode,
-        requestId,
-      },
-      result.usage,
-    );
-    await settleReservation(billing.totalCost);
+    // Token counts for the Anthropic-compatible response come straight from the
+    // model's reported usage, so the entire billing/settlement chain below can
+    // run off the response path without changing the bytes the client receives.
+    const responseTokens = normalizeUsage(result.usage);
 
-    await recordUsageAnalytics(
-      {
-        organizationId: user.organization_id,
-        userId: user.id,
-        apiKeyId: apiKey?.id,
-        model,
-        provider,
-        billingSource,
-      },
-      billing,
-      { type: "chat", content: result.text },
-    );
+    // Bill using actual usage from the SDK response. Deferred via waitUntil so
+    // the billUsage → settleReservation → analytics DB writes never block the
+    // response (#15414, non-stream sibling). Same code, same amounts, same
+    // reservation — only the timing moves. Mirrors chat/completions
+    // handleNonStreamingRequest (#15412 / #8759); without an executionCtx
+    // (tests, non-Worker callers) the chain runs inline exactly as before.
+    await settleOffResponsePath(executionCtx, async () => {
+      try {
+        const billing = await billUsage(
+          {
+            organizationId: user.organization_id,
+            userId: user.id,
+            apiKeyId: apiKey?.id,
+            model,
+            provider,
+            billingSource,
+            affiliateCode,
+            requestId,
+          },
+          result.usage,
+        );
+        await settleReservation(billing.totalCost);
 
-    logger.info("[Messages API] Non-streaming complete", {
-      durationMs: Date.now() - startTime,
-      inputTokens: billing.inputTokens,
-      outputTokens: billing.outputTokens,
+        await recordUsageAnalytics(
+          {
+            organizationId: user.organization_id,
+            userId: user.id,
+            apiKeyId: apiKey?.id,
+            model,
+            provider,
+            billingSource,
+          },
+          billing,
+          { type: "chat", content: result.text },
+        );
+
+        logger.info("[Messages API] Non-streaming complete", {
+          durationMs: Date.now() - startTime,
+          inputTokens: billing.inputTokens,
+          outputTokens: billing.outputTokens,
+        });
+      } catch (billingError) {
+        // Deferred billing failed after the response was already sent: release
+        // the held reservation so credit isn't stuck, and log. The settler is
+        // first-call-wins idempotent, so this can never double-refund.
+        try {
+          await settleReservation(0);
+        } catch (releaseError) {
+          logger.error(
+            "[Messages API] failed to release reservation after deferred billing failure",
+            {
+              requestId,
+              organizationId: user.organization_id,
+              error:
+                releaseError instanceof Error
+                  ? releaseError.message
+                  : String(releaseError),
+            },
+          );
+        }
+        logger.error("[Messages API] deferred billing failed", {
+          error:
+            billingError instanceof Error
+              ? billingError.message
+              : String(billingError),
+        });
+      }
     });
 
     const responseContent: AnthropicResponseBlock[] = [];
@@ -966,8 +1048,8 @@ async function handleNonStream(
       stop_reason: stopReason,
       stop_sequence: stopSequence,
       usage: {
-        input_tokens: billing.inputTokens,
-        output_tokens: billing.outputTokens,
+        input_tokens: responseTokens.inputTokens,
+        output_tokens: responseTokens.outputTokens,
       },
     });
   } catch (error) {
@@ -1187,6 +1269,7 @@ async function handleStream(
   // it billUsage falls back to legacy_<uuid> and a retry double-accrues cashable
   // affiliate earnings. Mirrors chat/completions (#11588).
   requestId: string,
+  executionCtx?: { waitUntil(promise: Promise<unknown>): void },
 ) {
   const provider = getProviderFromModel(model);
   const messageId = `msg_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
@@ -1258,8 +1341,20 @@ async function handleStream(
     ...(tools ? { tools } : {}),
     ...(toolChoice ? { toolChoice } : {}),
     ...cotOptions,
+    // Parity with chat/completions (#15412 / #8759): the settlement chain below
+    // (billUsage → settleReservation → analytics) is serial cross-provider DB
+    // round-trips, and the AI SDK awaits onFinish before it ends fullStream —
+    // so awaiting the chain inline held the final SSE frames (message_delta +
+    // message_stop) hostage for the full write latency (~8s measured on the
+    // completions route, #15414 here). Nothing the client receives depends on
+    // these writes (the terminal usage frame is built from the stream's own
+    // finish part), so defer them via waitUntil. settleStreamingOnce is still
+    // invoked synchronously — the settlement promise is cached before onFinish
+    // returns, so the idempotent first-call-wins guarantee against a racing
+    // onAbort/onError is unchanged — and without an executionCtx (tests,
+    // non-Worker callers) the chain is awaited inline exactly as before.
     onFinish: async ({ text, totalUsage }) => {
-      await settleStreamingOnce(async () => {
+      const settlement = settleStreamingOnce(async () => {
         try {
           const billing = await billUsage(
             {
@@ -1303,6 +1398,9 @@ async function handleStream(
           });
           return reconciliation;
         }
+      });
+      await settleOffResponsePath(executionCtx, async () => {
+        await settlement;
       });
     },
     // A client abort mid-stream must NOT release the whole hold: the upstream
@@ -1630,6 +1728,7 @@ async function handleStream(
  */
 export const __messagesStreamingCreditTestHooks = {
   handleStream,
+  handleNonStream,
 } as const;
 
 export default app;

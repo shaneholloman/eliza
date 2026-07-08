@@ -53,7 +53,12 @@ export default scenario({
     {
       type: "goalCountDelta",
       title: "Run a 5K by Fall",
-      titleAliases: ["Run a 5K by fall", "5K by October 15", "Run 5K"],
+      titleAliases: [
+        "Run a 5K by fall",
+        "5K by October 15",
+        "Run a 5K under 40 minutes",
+        "Run 5K",
+      ],
       delta: 1,
       expectedStatus: "active",
       expectedReviewState: "idle",

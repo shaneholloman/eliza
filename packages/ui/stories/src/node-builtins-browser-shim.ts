@@ -33,6 +33,22 @@ export const extname = (p: string): string => {
 // ── node:os ───────────────────────────────────────────────────────────────
 export const tmpdir = (): string => "/tmp";
 
+// ── node:net ────────────────────────────────────────────────────────────────
+// The @elizaos/shared loopback-trust / sandbox / host-capability guards call
+// net.isIP at module load. The catalog never validates real addresses, so a
+// lightweight literal check is enough (0 = not an IP, matching node's contract).
+export const isIP = (input: string): 0 | 4 | 6 => {
+  if (typeof input !== "string") return 0;
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(input)) return 4;
+  if (input.includes(":") && /^[0-9a-fA-F:.]+$/.test(input)) return 6;
+  return 0;
+};
+export const isIPv4 = (input: string): boolean => isIP(input) === 4;
+export const isIPv6 = (input: string): boolean => isIP(input) === 6;
+
+// ── node:crypto (named bits some guards touch at load) ───────────────────────
+export const randomUUID = (): string => "00000000-0000-4000-8000-000000000000";
+
 // ── node:fs ─────────────────────────────────────────────────────────────────
 const unavailable = (): never => {
   throw new Error("node:fs is not available in the browser catalog");

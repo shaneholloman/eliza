@@ -66,6 +66,7 @@
     "build:dist": "node ../scripts/with-package-build-lock.mjs packages/ui -- bun run build:dist:unlocked",
     "pack:dry-run": "cd dist && npm pack --dry-run",
     "stories:dev": "vite --config stories/vite.config.ts",
+    "design:lab": "vite --config stories/vite.config.ts --open /lab.html",
     "stories:build": "vite build --config stories/vite.config.ts",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",

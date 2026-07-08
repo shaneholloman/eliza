@@ -26,7 +26,7 @@ function StewardLoginSectionFallback() {
 
 function LoginBackground({ children }: { children: React.ReactNode }) {
   return (
-    <div className="theme-cloud relative min-h-[100dvh] text-txt">
+    <div className="theme-cloud relative h-[100dvh] min-h-0 overflow-hidden text-txt">
       {/* SAFE-AREA FILL (installed iOS PWA): the `bg-bg` fill is a `fixed
           inset-0` underlay, NOT a `min-h-[100dvh]` slab. On the installed
           standalone PWA the body is non-fixed (base.css / styles.css lockdown),
@@ -44,14 +44,22 @@ function LoginBackground({ children }: { children: React.ReactNode }) {
         className="pointer-events-none fixed inset-0 z-[-1] bg-bg"
       />
       <div
-        className="flex min-h-[100dvh] w-full flex-col px-4"
+        className="flex h-full min-h-0 w-full flex-col px-4"
         style={{
           paddingTop: "max(env(safe-area-inset-top, 0px), 1rem)",
           paddingBottom: "max(env(safe-area-inset-bottom, 0px), 1rem)",
         }}
       >
-        <div className="relative z-10 flex flex-1 items-center justify-center">
-          <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 text-txt md:p-8 motion-safe:animate-[shell-overlay-in_320ms_cubic-bezier(0.16,1,0.3,1)]">
+        {/* Center the card vertically, but SCROLL — never clip — when it is
+            taller than the viewport. A bounded `h-full min-h-0` owner plus
+            `overflow-y-auto` on the scroll region and
+            the card's own `my-auto` keeps the card's top reachable; a flex
+            `justify-center` instead pushes the overflow above scrollTop 0, where
+            it is unreachable. Regressed on short screens (Light Phone III,
+            1080×1240) where the OAuth / wallet rows fell below an unscrollable
+            fold — see login-page.safe-area.test.tsx. */}
+        <div className="relative z-10 flex min-h-0 flex-1 flex-col items-center overflow-y-auto">
+          <div className="my-auto w-full max-w-md shrink-0 rounded-xl border border-border bg-card p-6 text-txt md:p-8 motion-safe:animate-[shell-overlay-in_320ms_cubic-bezier(0.16,1,0.3,1)]">
             {children}
           </div>
         </div>

@@ -61,8 +61,10 @@ const ENV_KEYS = [
   "ELIZAOS_CLOUD_API_KEY",
   "NODE_ENV",
 ] as const;
+const BOOT_CONFIG_STORE_KEY = Symbol.for("elizaos.app.boot-config");
 
 function clearEnv() {
+  Reflect.deleteProperty(globalThis, BOOT_CONFIG_STORE_KEY);
   for (const key of ENV_KEYS) delete process.env[key];
 }
 

@@ -346,6 +346,13 @@ interface OrgRateLimitLease {
   /** Local allowance: min(remaining, pro-rated share of the window per TTL). */
   localBudget: number;
   expiresAt: number;
+  /**
+   * Single-flight owner for flushing `localUsed` into Redis. A request claims
+   * this synchronously before any await; concurrent authoritative checks may
+   * still ask Redis for their own request, but cannot double-carry the same
+   * local usage or publish a stale replacement lease.
+   */
+  flushToken?: symbol;
 }
 
 // A plain Map (not the TTL LRU): expiry must NOT delete an entry, because its
@@ -384,6 +391,9 @@ export async function enforceOrgRateLimit(
   // Read the lease even when the flag is off: a flag flip must still flush any
   // pending carry into the window instead of orphaning it.
   const lease = orgRateLimitLeases.get(leaseKey);
+  const flushToken = Symbol(leaseKey);
+  let ownsLeaseFlush = false;
+  let carriedCount = 0;
 
   if (leaseEnabled && lease && lease.expiresAt > now) {
     if (!lease.result.allowed) {
@@ -394,7 +404,7 @@ export async function enforceOrgRateLimit(
         "redis",
       );
     }
-    if (lease.localUsed < lease.localBudget) {
+    if (!lease.flushToken && lease.localUsed < lease.localBudget) {
       lease.localUsed++;
       return null;
     }
@@ -402,24 +412,33 @@ export async function enforceOrgRateLimit(
     // flushes localUsed into the window before deciding.
   }
 
+  if (lease && !lease.flushToken) {
+    carriedCount = lease.localUsed;
+    lease.localUsed = 0;
+    lease.flushToken = flushToken;
+    ownsLeaseFlush = true;
+  }
+
   const config = await getOrgRpmForEndpoint(organizationId, endpointType);
   const { windowMs, maxRequests } = config;
   const key = `org:${organizationId}:${endpointType}`;
-  const carriedCount = lease?.localUsed ?? 0;
   const result = await checkRateLimitRedis(key, windowMs, maxRequests, { carriedCount });
   if (leaseEnabled) {
     evictSettledLeases(now);
-    orgRateLimitLeases.set(leaseKey, {
-      config,
-      result,
-      localUsed: 0,
-      localBudget: Math.min(
-        result.remaining,
-        Math.ceil((maxRequests * ORG_RATE_LIMIT_LEASE_TTL_MS) / windowMs),
-      ),
-      expiresAt: now + ORG_RATE_LIMIT_LEASE_TTL_MS,
-    });
-  } else if (lease) {
+    const currentLease = orgRateLimitLeases.get(leaseKey);
+    if (!lease || (ownsLeaseFlush && currentLease === lease && lease.flushToken === flushToken)) {
+      orgRateLimitLeases.set(leaseKey, {
+        config,
+        result,
+        localUsed: lease && currentLease === lease ? lease.localUsed : 0,
+        localBudget: Math.min(
+          result.remaining,
+          Math.ceil((maxRequests * ORG_RATE_LIMIT_LEASE_TTL_MS) / windowMs),
+        ),
+        expiresAt: now + ORG_RATE_LIMIT_LEASE_TTL_MS,
+      });
+    }
+  } else if (lease && ownsLeaseFlush) {
     // Flag flipped off: the carry above was just flushed — drop the entry.
     orgRateLimitLeases.delete(leaseKey);
   }

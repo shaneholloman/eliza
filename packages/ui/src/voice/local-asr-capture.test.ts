@@ -150,6 +150,82 @@ describe("startLocalAsrRecorder resume failure", () => {
     expect(trackStop).toHaveBeenCalledTimes(1);
     expect(contextClose).toHaveBeenCalledTimes(1);
   });
+
+  it("rejects when resume() RESOLVES but state stays suspended (#voice-crickets iOS quirk)", async () => {
+    // WebKit quirk: after the getUserMedia permission dialog interrupts the
+    // gesture, `resume()` can resolve while `state` is still "suspended" — the
+    // graph never actually runs, so PCM is all zeros and the WAV reads silent
+    // (crickets). A single await isn't proof; the retry loop re-checks state and
+    // must reject (surface error → not silent crickets) if it never flips.
+    const trackStop = vi.fn();
+    const stream = {
+      getTracks: () => [{ stop: trackStop }],
+    } as unknown as MediaStream;
+    const getUserMedia = vi.fn().mockResolvedValue(stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+
+    const contextClose = vi.fn().mockResolvedValue(undefined);
+    const resume = vi.fn().mockResolvedValue(undefined);
+    class StuckSuspendedContext {
+      state = "suspended"; // never flips to "running"
+      resume = resume;
+      close = contextClose;
+    }
+    vi.stubGlobal("window", { AudioContext: StuckSuspendedContext });
+
+    await expect(startLocalAsrRecorder()).rejects.toThrow(
+      "AudioContext could not resume for local ASR capture",
+    );
+    // Retried before giving up (more than one resume attempt).
+    expect(resume.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // Mic + context released on the failed start (no lingering capture indicator).
+    expect(trackStop).toHaveBeenCalledTimes(1);
+    expect(contextClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("succeeds when a suspended context flips to running on a retry (#voice-crickets recovery)", async () => {
+    // The dialog dismissed and the queued resume lands a beat later: the second
+    // state read is "running", so capture proceeds instead of falsely rejecting.
+    const trackStop = vi.fn();
+    const stream = {
+      getTracks: () => [{ stop: trackStop }],
+    } as unknown as MediaStream;
+    const getUserMedia = vi.fn().mockResolvedValue(stream);
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+
+    let resumeCalls = 0;
+    const fakeNode = {
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      fftSize: 0,
+      smoothingTimeConstant: 0,
+    };
+    class RecoveringContext {
+      state = "suspended";
+      sampleRate = 16000;
+      resume = vi.fn().mockImplementation(async () => {
+        resumeCalls += 1;
+        // Flip to running only on the SECOND resume — the first resolves while
+        // still suspended (the iOS quirk), the retry lands it.
+        if (resumeCalls >= 2) this.state = "running";
+      });
+      close = vi.fn().mockResolvedValue(undefined);
+      createMediaStreamSource = vi.fn().mockReturnValue(fakeNode);
+      createScriptProcessor = vi.fn().mockReturnValue({
+        ...fakeNode,
+        onaudioprocess: null,
+      });
+      createAnalyser = vi.fn().mockReturnValue({ ...fakeNode });
+      destination = {};
+    }
+    vi.stubGlobal("window", { AudioContext: RecoveringContext });
+
+    const recorder = await startLocalAsrRecorder();
+    expect(recorder).toBeTruthy();
+    expect(resumeCalls).toBeGreaterThanOrEqual(2);
+    // Mic NOT released — the capture is live.
+    expect(trackStop).not.toHaveBeenCalled();
+  });
 });
 
 describe("decodeMonoPcm16Wav / isSilentWav (#voice-V5 silence guard)", () => {

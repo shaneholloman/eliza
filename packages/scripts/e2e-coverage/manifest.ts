@@ -71,7 +71,7 @@ export const LARP_TEST_ARTIFACTS: ReadonlySet<string> = new Set([
 export const VIEW_COVERAGE_GATES: readonly string[] = [
   "packages/app/test/route-coverage.test.ts",
   "packages/app/test/view-interaction-coverage.test.ts",
-  "packages/agent/src/__tests__/plugin-tui-view-coverage.test.ts",
+  "packages/agent/src/__tests__/plugin-view-inventory-ratchet.test.ts",
 ];
 
 /**

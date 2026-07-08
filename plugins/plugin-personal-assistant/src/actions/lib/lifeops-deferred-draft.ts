@@ -20,11 +20,13 @@ import type {
   CreateLifeOpsGoalRequest,
   LifeOpsCadence,
 } from "../../contracts/index.js";
+import { asCacheRuntime } from "../../lifeops/runtime-cache.js";
 
 /** Maximum age (ms) for a deferred draft before it expires. */
 export const DRAFT_EXPIRY_MS = 5 * 60 * 1000;
 /** Maximum conversation turns before a deferred draft expires. */
 export const DRAFT_MAX_TURNS = 3;
+const DEFERRED_LIFE_DRAFT_CACHE_PREFIX = "lifeops:deferred-draft";
 
 export type DeferredLifeDefinitionDraft = {
   intent: string;
@@ -71,6 +73,48 @@ export type DeferredLifeDraftFollowupMode =
   | DeferredLifeDraftReuseMode
   | "cancel"
   | null;
+
+function deferredLifeDraftCacheKey(
+  runtime: IAgentRuntime,
+  message: Memory,
+): string {
+  return [
+    DEFERRED_LIFE_DRAFT_CACHE_PREFIX,
+    runtime.agentId,
+    message.roomId,
+    message.entityId,
+  ].join(":");
+}
+
+export async function readDeferredLifeDraftCache(
+  runtime: IAgentRuntime,
+  message: Memory,
+): Promise<DeferredLifeDraft | null> {
+  const stored = await asCacheRuntime(runtime).getCache<unknown>(
+    deferredLifeDraftCacheKey(runtime, message),
+  );
+  return coerceDeferredLifeDraft(stored);
+}
+
+export async function writeDeferredLifeDraftCache(
+  runtime: IAgentRuntime,
+  message: Memory,
+  draft: DeferredLifeDraft,
+): Promise<void> {
+  await asCacheRuntime(runtime).setCache(
+    deferredLifeDraftCacheKey(runtime, message),
+    draft,
+  );
+}
+
+export async function clearDeferredLifeDraftCache(
+  runtime: IAgentRuntime,
+  message: Memory,
+): Promise<void> {
+  await asCacheRuntime(runtime).deleteCache(
+    deferredLifeDraftCacheKey(runtime, message),
+  );
+}
 
 export function coerceDeferredLifeDraft(
   value: unknown,

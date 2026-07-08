@@ -35,6 +35,29 @@ export const facewearPlugin: Plugin = {
 	],
 	providers: [facewearContextProvider, smartglassesStatusProvider],
 	routes: [facewearDevicesRoute, facewearDeviceRoute, facewearStatusRoute],
+	views: [
+		{
+			id: "facewear",
+			label: "Facewear",
+			description:
+				"Even Realities smartglasses pairing, display, microphone, Wi-Fi setup, and diagnostics.",
+			icon: "Glasses",
+			path: "/settings",
+			viewType: "gui",
+			modalities: ["gui"],
+			tags: ["facewear", "smartglasses", "wearables", "even-realities"],
+			relatedActions: [
+				"FACEWEAR_CONNECT",
+				"FACEWEAR_DEBUG",
+				"SMARTGLASSES_CONTROL",
+				"SMARTGLASSES_STATUS",
+				"SMARTGLASSES_DISPLAY_TEXT",
+				"SMARTGLASSES_MICROPHONE",
+			],
+			visibleInManager: false,
+			desktopTabEnabled: false,
+		},
+	],
 
 	async dispose(runtime: IAgentRuntime) {
 		await runtime

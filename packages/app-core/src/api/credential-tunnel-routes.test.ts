@@ -10,7 +10,7 @@
 import * as http from "node:http";
 import { Socket } from "node:net";
 import { createSensitiveRequestDispatchRegistry } from "@elizaos/core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CredentialScopeError,
   createCredentialTunnelService,
@@ -20,6 +20,31 @@ import {
 } from "../services/credential-tunnel-service";
 import type { CompatRuntimeState } from "./compat-route-shared";
 import { handleCredentialTunnelRoute } from "./credential-tunnel-routes";
+
+const BOOT_CONFIG_STORE_KEY = Symbol.for("elizaos.app.boot-config");
+const AUTH_ENV_KEYS = [
+  "ELIZA_API_TOKEN",
+  "ELIZA_CLOUD_PROVISIONED",
+  "ELIZA_DEV_AUTH_BYPASS",
+  "ELIZA_REQUIRE_LOCAL_AUTH",
+  "NODE_ENV",
+] as const;
+
+const savedAuthEnv: Record<(typeof AUTH_ENV_KEYS)[number], string | undefined> =
+  {
+    ELIZA_API_TOKEN: undefined,
+    ELIZA_CLOUD_PROVISIONED: undefined,
+    ELIZA_DEV_AUTH_BYPASS: undefined,
+    ELIZA_REQUIRE_LOCAL_AUTH: undefined,
+    NODE_ENV: undefined,
+  };
+
+function clearRouteAuthState(): void {
+  Reflect.deleteProperty(globalThis, BOOT_CONFIG_STORE_KEY);
+  for (const key of AUTH_ENV_KEYS) {
+    delete process.env[key];
+  }
+}
 
 interface FakeRes {
   res: http.ServerResponse;
@@ -109,6 +134,21 @@ async function callRoute(
 }
 
 describe("credential tunnel route", () => {
+  beforeEach(() => {
+    for (const key of AUTH_ENV_KEYS) {
+      savedAuthEnv[key] = process.env[key];
+    }
+    clearRouteAuthState();
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(globalThis, BOOT_CONFIG_STORE_KEY);
+    for (const key of AUTH_ENV_KEYS) {
+      if (savedAuthEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedAuthEnv[key];
+    }
+  });
+
   it("tunnels a credential through the registered owner-runtime bridge", async () => {
     const tunnelCredential = vi.fn(async () => {});
     const bridge = { tunnelCredential };

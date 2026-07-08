@@ -207,6 +207,18 @@ export function assertAgentImageAllowed(dockerImage: string | undefined): void {
   }
 }
 
+function resolveManagedProvisionDockerImage(
+  storedImage: string | null | undefined,
+): string | undefined {
+  const configuredImage = containersEnv.defaultAgentImageOverride();
+  if (!configuredImage) return storedImage ?? undefined;
+  // Same-repo managed pins are fleet image selections, not custom images; on
+  // reprovision they must follow the operator's current image so recovery does
+  // not replay an old broken sha tag forever.
+  if (!storedImage) return configuredImage;
+  return imageRepo(storedImage) === imageRepo(configuredImage) ? configuredImage : storedImage;
+}
+
 /**
  * Thrown when the post-create readiness probe could not REACH the container
  * (SSH transport unresolved), as distinct from the container being genuinely
@@ -373,6 +385,39 @@ function isDockerSandboxMetadata(value: unknown): value is DockerSandboxMetadata
     typeof (value as { containerName?: unknown }).containerName === "string"
   );
 }
+
+/**
+ * True when a provider handle's metadata self-identifies as the real docker
+ * fleet provider (`provider: "docker"`) — REGARDLESS of whether the rest of the
+ * shape passes {@link isDockerSandboxMetadata}. This is deliberately laxer than
+ * the full type guard: a docker-fleet container whose metadata drifts (a missing
+ * field, an empty-string nodeId) still IS docker-backed and still occupies a
+ * real node slot, even though the strict guard would reject it.
+ *
+ * Used to detect the C1b failure class (audit §C1b): a handle that is docker-
+ * backed but for which we cannot recover a usable node_id. Such a row MUST NOT
+ * be flipped to `running` (it would be an unattributable orphan the recount
+ * undercounts and the orphan reconciler provably cannot reap — audit §C5).
+ *
+ * Non-docker providers (`local-docker`, `memory`) return false: they have no
+ * node concept, so the attribution guard does not apply to them.
+ */
+function isDockerBackedMetadata(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { provider?: unknown }).provider === "docker"
+  );
+}
+
+/**
+ * Distinguishable prefix for the C1b attribution-guard failure. Chosen so it can
+ * NEVER collide with the port-collision retry classifier in provision()'s catch
+ * (which matches "23505" / "unique" / "duplicate") — metadata drift is a
+ * permanent-ish condition, so this failure must classify as NON-retryable and
+ * fall through to markError, not spin the retry loop.
+ */
+const PROVISION_ATTRIBUTION_GUARD_PREFIX = "provision attribution guard:";
 
 type RuntimeAgentSummary = {
   id?: string;
@@ -1494,6 +1539,7 @@ export class ElizaSandboxService {
     // Solution: Retry loop catches unique constraint errors, cleans up ghost container, and retries.
     const MAX_PROVISION_ATTEMPTS = 3;
     let lastError: string = "Unknown error";
+    const provisionDockerImage = resolveManagedProvisionDockerImage(rec.docker_image);
 
     // Materialize the stored env for the container: BYO secrets are encrypted
     // at rest (#11332); compatibility plaintext values pass through unchanged. A
@@ -1563,7 +1609,7 @@ export class ElizaSandboxService {
             // SANDBOX_ROUTE_AGENT_ID injection).
             routeAgentId: rec.character_id ?? undefined,
             snapshotId: rec.snapshot_id ?? undefined,
-            dockerImage: rec.docker_image ?? undefined,
+            dockerImage: provisionDockerImage,
             container: containerLaunch,
           });
         }
@@ -1617,6 +1663,43 @@ export class ElizaSandboxService {
             );
           }
           throw new Error("Sandbox health check timed out");
+        }
+
+        // C1b attribution guard (audit §C1b/§C5): a docker-fleet container MUST
+        // carry a durable node_id before we flip the row to `running`. dockerMeta
+        // is undefined whenever the strict type guard fails (metadata shape
+        // drift: a missing field, or the empty-string nodeId that a partial
+        // provider handle can produce). In that case the row would be flipped to
+        // running + bridge_url set with node_id NULL — an unattributable orphan
+        // that (a) undercounts the node recount (over-scheduling, autoscaler
+        // spawns billable nodes — #15378), and (b) the orphan reconciler PROVABLY
+        // cannot reap (allHaveNodeAndStamp skips live null-node rows — §C5). So
+        // when the handle self-identifies as docker-backed but we have no usable
+        // nodeId, fail LOUD and NON-retryable instead of minting the orphan. The
+        // container already exists; the catch below stops it per the standard
+        // post-create-failure convention and this message (distinct from the
+        // unique/duplicate/23505 retry patterns) breaks straight to markError.
+        //
+        // Non-docker providers (local-docker, memory) have no node concept and
+        // are unaffected. This does NOT touch the shared-tier insert path
+        // (buildAgentInsertData), which is running-with-null-node BY DESIGN.
+        if (isDockerBackedMetadata(handle.metadata) && !dockerMeta?.nodeId) {
+          logger.warn(
+            "[agent-sandbox] Refusing to flip running: docker-backed handle has no durable node_id",
+            {
+              agentId: rec.id,
+              sandboxId: handle.sandboxId,
+              executionTier: rec.execution_tier,
+              hasDockerMeta: Boolean(dockerMeta),
+              metadataProvider:
+                typeof handle.metadata === "object" && handle.metadata !== null
+                  ? (handle.metadata as { provider?: unknown }).provider
+                  : undefined,
+            },
+          );
+          throw new Error(
+            `${PROVISION_ATTRIBUTION_GUARD_PREFIX} docker-backed sandbox ${handle.sandboxId} produced no durable node_id (metadata shape drift or empty nodeId); refusing to mark running with node_id NULL`,
+          );
         }
 
         const runtimeRec = {
@@ -5972,11 +6055,26 @@ export class ElizaSandboxService {
    */
   private buildProvisioningRetryHandle(rec: AgentSandbox): SandboxHandle | null {
     if (!rec.sandbox_id || !rec.bridge_url || !rec.health_url) return null;
+    const hasDockerFleetColumns = Boolean(
+      rec.node_id || rec.container_name || rec.bridge_port || rec.web_ui_port,
+    );
     return {
       sandboxId: rec.sandbox_id,
       bridgeUrl: rec.bridge_url,
       healthUrl: rec.health_url,
-      metadata: rec.headscale_ip ? { headscaleIp: rec.headscale_ip } : undefined,
+      metadata: hasDockerFleetColumns
+        ? {
+            provider: "docker",
+            nodeId: rec.node_id ?? "",
+            hostname: rec.node_id ?? "",
+            containerName: rec.container_name ?? "",
+            bridgePort: rec.bridge_port ?? undefined,
+            webUiPort: rec.web_ui_port ?? undefined,
+            headscaleIp: rec.headscale_ip ?? undefined,
+          }
+        : rec.headscale_ip
+          ? { headscaleIp: rec.headscale_ip }
+          : undefined,
     };
   }
 
@@ -5997,6 +6095,20 @@ export class ElizaSandboxService {
     handle: SandboxHandle,
     dockerMeta: DockerSandboxMetadata | undefined,
   ): Promise<void> {
+    if (isDockerBackedMetadata(handle.metadata) && !dockerMeta?.nodeId) {
+      logger.error(
+        "[agent-sandbox] Refusing to persist retry handle: docker-backed handle has no durable node_id",
+        {
+          agentId,
+          sandboxId: handle.sandboxId,
+          hasDockerMeta: Boolean(dockerMeta),
+        },
+      );
+      throw new Error(
+        `${PROVISION_ATTRIBUTION_GUARD_PREFIX} docker-backed sandbox ${handle.sandboxId} produced no durable node_id during transport-unresolved retry; refusing to preserve an unattributable container handle`,
+      );
+    }
+
     try {
       const updateData: Parameters<typeof agentSandboxesRepository.update>[1] = {
         sandbox_id: handle.sandboxId,

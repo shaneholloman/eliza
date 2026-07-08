@@ -12,6 +12,7 @@ import {
 import { AGENT_MANAGED_DISCORD_KEY } from "../../lib/services/eliza-agent-config";
 import { ObjectNamespaces } from "../../lib/storage/object-namespace";
 import { getObjectText, offloadJsonField } from "../../lib/storage/object-store";
+import { logger } from "../../lib/utils/logger";
 import { decryptAgentBackupStateData, encryptAgentBackupStateData } from "../crypto/agent-backups";
 import { ensureAgentSandboxSchema } from "../ensure-agent-sandbox-schema";
 import { sqlRows } from "../execute-helpers";
@@ -708,15 +709,30 @@ export class AgentSandboxesRepository {
    * agent: the moment a container is created the provision path stamps
    * `container_name`/`sandbox_id`, so a live agent can NEVER satisfy this branch
    * and can NEVER have its lock taken from under it.
+   *
+   * Terminal provision failures are different from transport-unresolved
+   * `provisioning` retries: the old handle already failed every job attempt and
+   * must not be re-probed as the next wake/restart target. Clear only that
+   * permanent-failure handle while acquiring the new lock so a retry starts from
+   * provider.create with a fresh container record.
    */
   async trySetProvisioning(id: string): Promise<AgentSandbox | undefined> {
     await ensureAgentSandboxSchema();
+    const permanentProvisionFailure = sql`${agentSandboxes.status} = 'error' AND ${agentSandboxes.error_message} LIKE 'Provisioning permanently failed%'`;
     const [r] = await dbWrite
       .update(agentSandboxes)
       .set({
         status: "provisioning",
         updated_at: new Date(),
         error_message: null,
+        sandbox_id: sql`CASE WHEN ${permanentProvisionFailure} THEN NULL ELSE ${agentSandboxes.sandbox_id} END`,
+        bridge_url: sql`CASE WHEN ${permanentProvisionFailure} THEN NULL ELSE ${agentSandboxes.bridge_url} END`,
+        health_url: sql`CASE WHEN ${permanentProvisionFailure} THEN NULL ELSE ${agentSandboxes.health_url} END`,
+        node_id: sql`CASE WHEN ${permanentProvisionFailure} THEN NULL ELSE ${agentSandboxes.node_id} END`,
+        container_name: sql`CASE WHEN ${permanentProvisionFailure} THEN NULL ELSE ${agentSandboxes.container_name} END`,
+        bridge_port: sql`CASE WHEN ${permanentProvisionFailure} THEN NULL ELSE ${agentSandboxes.bridge_port} END`,
+        web_ui_port: sql`CASE WHEN ${permanentProvisionFailure} THEN NULL ELSE ${agentSandboxes.web_ui_port} END`,
+        headscale_ip: sql`CASE WHEN ${permanentProvisionFailure} THEN NULL ELSE ${agentSandboxes.headscale_ip} END`,
       })
       .where(
         and(
@@ -778,9 +794,10 @@ export class AgentSandboxesRepository {
    * Guarded CAS that flips a WEDGED `provisioning` row to `running` after the
    * daemon reconciler re-probed its container and found it healthy (#15310 #6).
    * Only fires when the row is STILL `provisioning` with a live container
-   * (`sandbox_id` set) and NO active `agent_provision` job racing it — so a
-   * concurrent job flip, delete, or stop during the multi-second re-probe is
-   * never clobbered. Returns undefined when the CAS matched nothing.
+   * (`sandbox_id` plus durable `node_id` set) and NO active `agent_provision`
+   * job racing it — so a concurrent job flip, delete, or stop during the
+   * multi-second re-probe is never clobbered. Returns undefined when the CAS
+   * matched nothing.
    */
   async markRunningFromProvisioning(id: string): Promise<AgentSandbox | undefined> {
     await ensureAgentSandboxSchema();
@@ -797,6 +814,8 @@ export class AgentSandboxesRepository {
           eq(agentSandboxes.id, id),
           eq(agentSandboxes.status, "provisioning"),
           sql`${agentSandboxes.sandbox_id} IS NOT NULL`,
+          sql`${agentSandboxes.node_id} IS NOT NULL`,
+          sql`${agentSandboxes.node_id} <> ''`,
           sql`${agentSandboxes.deleted_at} IS NULL`,
           sql`NOT EXISTS (
             SELECT 1 FROM ${jobs}
@@ -825,6 +844,13 @@ export class AgentSandboxesRepository {
   /**
    * Count ready pool entries (status='running' AND pool_status='unclaimed').
    * Optionally filter by image so a stale image doesn't inflate the count.
+   *
+   * Attribution guard (audit §C1c): a pool row with a null/empty `node_id` is
+   * NOT usable capacity — `claimWarmContainer` refuses to claim it (claiming
+   * would mint an unattributable running/null-node orphan). Counting such rows
+   * as "ready" would let a poisoned pool report full while every claim skips
+   * them and falls through to cold provisioning — permanent starvation. So the
+   * ready count MUST match the claimable set: exclude null/empty node_id.
    */
   async countUnclaimedPool(filter: { image?: string } = {}): Promise<number> {
     await ensureAgentSandboxSchema();
@@ -832,6 +858,8 @@ export class AgentSandboxesRepository {
       eq(agentSandboxes.pool_status, "unclaimed"),
       eq(agentSandboxes.status, "running"),
       isNotNull(agentSandboxes.pool_ready_at),
+      isNotNull(agentSandboxes.node_id),
+      sql`${agentSandboxes.node_id} <> ''`,
     ];
     if (filter.image) conditions.push(eq(agentSandboxes.docker_image, filter.image));
     const [row] = await dbRead
@@ -851,7 +879,16 @@ export class AgentSandboxesRepository {
       .select({ count: sql<number>`count(*)::int` })
       .from(agentSandboxes)
       .where(
-        and(eq(agentSandboxes.pool_status, "unclaimed"), eq(agentSandboxes.status, "running")),
+        and(
+          eq(agentSandboxes.pool_status, "unclaimed"),
+          eq(agentSandboxes.status, "running"),
+          // Attribution guard (audit §C1c): only claimable rows are "ready".
+          // A null/empty-node_id pool row can't be claimed, so it must not
+          // count toward ready capacity or it masks a starving pool from the
+          // replenisher (see countUnclaimedPool).
+          isNotNull(agentSandboxes.node_id),
+          sql`${agentSandboxes.node_id} <> ''`,
+        ),
       );
     const [provisioning] = await dbRead
       .select({ count: sql<number>`count(*)::int` })
@@ -863,6 +900,31 @@ export class AgentSandboxesRepository {
         ),
       );
     return { ready: ready?.count ?? 0, provisioning: provisioning?.count ?? 0 };
+  }
+
+  /**
+   * Count ready (claimable) unclaimed pool entries for a specific image.
+   * Used ONLY on the claim-null path to distinguish an EMPTY pool (starvation
+   * — the C4 steady state when replenish is broken) from a user-row that was
+   * merely ineligible for a claim (already running / already has a DB). A
+   * `warm_pool.empty_on_claim` observability event fires only when this returns
+   * 0, so a re-provision falling through doesn't pollute the starvation signal.
+   * Best-effort read (mirrors the claim query's readiness predicate).
+   */
+  async countReadyPoolEntriesForImage(image: string): Promise<number> {
+    await ensureAgentSandboxSchema();
+    const [row] = await dbRead
+      .select({ count: sql<number>`count(*)::int` })
+      .from(agentSandboxes)
+      .where(
+        and(
+          eq(agentSandboxes.pool_status, "unclaimed"),
+          eq(agentSandboxes.status, "running"),
+          eq(agentSandboxes.docker_image, image),
+          isNotNull(agentSandboxes.pool_ready_at),
+        ),
+      );
+    return row?.count ?? 0;
   }
 
   /**
@@ -1013,6 +1075,20 @@ export class AgentSandboxesRepository {
   }): Promise<AgentSandbox | null> {
     await ensureAgentSandboxSchema();
     return dbWrite.transaction(async (tx) => {
+      // Attribution guard (audit §C1c): NEVER claim a pool row whose node_id is
+      // null/empty. createPoolContainer provisions via the same provision() path
+      // as dedicated agents and the pool creator explicitly tolerates a null
+      // node_id (agent-warm-pool-creator.ts:51: `?? null`), so unclaimed pool
+      // rows CAN carry a null node_id. Claiming one copies that null verbatim
+      // into a user-facing running row and DELETEs the pool row in the same
+      // transaction — minting an unattributable orphan with no remaining record
+      // to reconcile against (undercounts the node recount → #15378; the orphan
+      // reconciler provably cannot reap it → audit §C5). Filtering node_id IS NOT
+      // NULL (and non-empty) in the SELECT means we naturally skip such entries
+      // and claim the next valid candidate; a starved-because-only-null pool
+      // returns null cleanly and the caller falls through to the cold provision
+      // path (which itself enforces the C1b guard). The skipped null-node rows
+      // are left unclaimed for the drain/reap sweeps to clear.
       const poolRows = await sqlRows<AgentSandbox>(
         tx,
         sql`
@@ -1022,13 +1098,46 @@ export class AgentSandboxesRepository {
             AND ${agentSandboxes.status} = 'running'
             AND ${agentSandboxes.docker_image} = ${params.image}
             AND ${agentSandboxes.pool_ready_at} IS NOT NULL
+            AND ${agentSandboxes.node_id} IS NOT NULL
+            AND ${agentSandboxes.node_id} <> ''
           ORDER BY ${agentSandboxes.pool_ready_at} ASC
           FOR UPDATE SKIP LOCKED
           LIMIT 1
         `,
       );
       const pool = poolRows[0];
-      if (!pool) return null;
+      if (!pool) {
+        // Observability: distinguish "pool genuinely empty" from "pool had only
+        // null-node entries we refused to claim". The latter is a real defect
+        // signal (a poisoned pool created via the C1b path) that would otherwise
+        // be invisible — the caller just sees a cold-path fallthrough.
+        const skippedNullNode = await sqlRows<{ count: number }>(
+          tx,
+          sql`
+            SELECT COUNT(*)::int AS count
+            FROM ${agentSandboxes}
+            WHERE ${agentSandboxes.pool_status} = 'unclaimed'
+              AND ${agentSandboxes.status} = 'running'
+              AND ${agentSandboxes.docker_image} = ${params.image}
+              AND ${agentSandboxes.pool_ready_at} IS NOT NULL
+              AND (${agentSandboxes.node_id} IS NULL OR ${agentSandboxes.node_id} = '')
+          `,
+        );
+        const nullNodeCount = skippedNullNode[0]?.count ?? 0;
+        if (nullNodeCount > 0) {
+          logger.warn(
+            "[agent-sandbox] Warm-pool claim skipped null-node entries; falling through to cold path",
+            {
+              event: "warm_pool.null_node_skipped",
+              image: params.image,
+              userAgentId: params.userAgentId,
+              organizationId: params.organizationId,
+              skippedNullNodeCount: nullNodeCount,
+            },
+          );
+        }
+        return null;
+      }
 
       const [userRow] = await tx
         .select()

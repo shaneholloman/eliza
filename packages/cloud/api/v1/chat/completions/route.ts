@@ -1038,38 +1038,33 @@ export async function handleChatCompletionsPOST(
     // fix targets the real cross-region-Railway hotspot instead of guessing.
     const tAuth = Date.now();
 
-    // 1b. Per-org tier rate limit
-    if (user.organization_id && !options.skipOrgRateLimit) {
-      const orgRateLimited = await enforceOrgRateLimit(
-        user.organization_id,
-        "completions",
-      );
-      if (orgRateLimited) return orgRateLimited;
-    }
+    // 1b. Per-org tier rate limit. Start it beside body parsing: rate-limit
+    // still wins over malformed bodies, matching the pre-existing gate order.
+    const orgRateLimitPromise =
+      user.organization_id && !options.skipOrgRateLimit
+        ? enforceOrgRateLimit(user.organization_id, "completions")
+        : Promise.resolve(null);
+    const requestPromise = req
+      .json()
+      // error-policy:J3 malformed JSON becomes the same typed invalid request path as a missing body.
+      .catch(() => null) as Promise<ChatRequest | null>;
 
-    // 2. Check for app monetization
+    const orgRateLimited = await orgRateLimitPromise;
+    if (orgRateLimited) return orgRateLimited;
+
+    // 2. Prepare app monetization lookup
     const requestedAppId = req.headers.get("X-App-Id");
     let appId: string | null = null;
     let useAppCredits = false;
     let monetizedApp: Awaited<ReturnType<typeof appsService.getById>> | null =
       null;
 
-    if (requestedAppId) {
-      monetizedApp =
-        (await appsService.getAuthorizedMonetizedAppForUser(
-          requestedAppId,
-          user,
-        )) ?? null;
-      appId = monetizedApp?.id ?? null;
-      useAppCredits = Boolean(monetizedApp);
-    }
-
     // 3. Parse request — guard a malformed/empty body to a 400 instead of a 500.
     // An unguarded parse throws a SyntaxError that the outer catch maps to 500
     // (and echoes the raw parse text); the sibling agents routes already guard
     // this. Also require `messages` to be an ARRAY so a non-array value can't
     // slip past the length check and TypeError later in `messages.filter(...)`.
-    const request = (await req.json().catch(() => null)) as ChatRequest | null;
+    const request = await requestPromise;
 
     // 4. Validate
     if (
@@ -1095,11 +1090,66 @@ export async function handleChatCompletionsPOST(
     // by dedicated agents) to the bare Cerebras id so pricing, routing, and
     // billing all agree and route to cerebras-direct instead of OpenRouter.
     model = canonicalizeCerebrasModelId(request.model);
-    const pooledCredential = await selectPooledInferenceCredential({
+    const provider = getProviderFromModel(model);
+    const normalizedModel = normalizeModelName(model);
+    const cotBudget = resolveAnthropicThinkingBudgetTokens(model, process.env);
+    const cotOptions =
+      cotBudget != null
+        ? mergeAnthropicCotProviderOptions(model, process.env, cotBudget)
+        : {};
+    // Authoritative reasoning detection: many reasoning models (kimi-k2.6,
+    // glm-5.1, deepseek-v4-pro, ...) do not carry a "think"/"reasoning" id but
+    // do advertise a reasoning parameter in the catalog. Best-effort lookup;
+    // on any failure we fall back to id name-pattern detection.
+    // #9899: skip the reasoning-detection catalog read when id name-pattern
+    // detection ALREADY classifies this as a reasoning model. The catalog can
+    // only ADD reasoning, never remove it (modelUsesReasoningTokens ORs the two
+    // signals), so for a name-pattern match the catalog cannot change
+    // computeEffectiveMaxTokens — the read is pure latency. Default now (the
+    // hot-path cache is no longer flag-gated); pinned to the name-pattern set.
+    const skipCatalogLookup = modelUsesReasoningTokens(model);
+    const monetizedAppPromise = requestedAppId
+      ? appsService.getAuthorizedMonetizedAppForUser(requestedAppId, user)
+      : Promise.resolve(null);
+    const pooledCredentialPromise = selectPooledInferenceCredential({
       model,
       organizationId: user.organization_id,
       sessionKey: apiKey?.id ?? user.id,
     });
+    const modelSupportedParametersPromise: Promise<string[] | undefined> =
+      skipCatalogLookup
+        ? Promise.resolve(undefined)
+        : getCachedGatewayModelById(model)
+            .then((catalogModel) => catalogModel?.supported_parameters)
+            // error-policy:J4 reasoning metadata is additive; name-pattern detection remains explicit fallback.
+            .catch((error) => {
+              logger.warn(
+                "[Chat Completions] reasoning-detection catalog lookup failed; using name patterns",
+                {
+                  model,
+                  error: error instanceof Error ? error.message : String(error),
+                },
+              );
+              return undefined;
+            });
+    const shouldBlockUserPromise = moderationAlreadyChecked
+      ? Promise.resolve(false)
+      : contentModerationService.shouldBlockUser(user.id);
+
+    const [
+      authorizedMonetizedApp,
+      pooledCredential,
+      modelSupportedParameters,
+      shouldBlockUser,
+    ] = await Promise.all([
+      monetizedAppPromise,
+      pooledCredentialPromise,
+      modelSupportedParametersPromise,
+      shouldBlockUserPromise,
+    ]);
+    monetizedApp = authorizedMonetizedApp ?? null;
+    appId = monetizedApp?.id ?? null;
+    useAppCredits = Boolean(monetizedApp);
 
     if (!pooledCredential && !hasLanguageModelProviderConfigured(model)) {
       return addCorsHeaders(
@@ -1116,42 +1166,9 @@ export async function handleChatCompletionsPOST(
       );
     }
 
-    const provider = getProviderFromModel(model);
-    const normalizedModel = normalizeModelName(model);
     const billingSource = pooledCredential
       ? "gateway"
       : (resolveAiProviderSource(model) ?? "gateway");
-    const cotBudget = resolveAnthropicThinkingBudgetTokens(model, process.env);
-    const cotOptions =
-      cotBudget != null
-        ? mergeAnthropicCotProviderOptions(model, process.env, cotBudget)
-        : {};
-    // Authoritative reasoning detection: many reasoning models (kimi-k2.6,
-    // glm-5.1, deepseek-v4-pro, ...) do not carry a "think"/"reasoning" id but
-    // do advertise a reasoning parameter in the catalog. Best-effort lookup;
-    // on any failure we fall back to id name-pattern detection.
-    let modelSupportedParameters: string[] | undefined;
-    // #9899: skip the reasoning-detection catalog read when id name-pattern
-    // detection ALREADY classifies this as a reasoning model. The catalog can
-    // only ADD reasoning, never remove it (modelUsesReasoningTokens ORs the two
-    // signals), so for a name-pattern match the catalog cannot change
-    // computeEffectiveMaxTokens — the read is pure latency. Default now (the
-    // hot-path cache is no longer flag-gated); pinned to the name-pattern set.
-    const skipCatalogLookup = modelUsesReasoningTokens(model);
-    if (!skipCatalogLookup) {
-      try {
-        const catalogModel = await getCachedGatewayModelById(model);
-        modelSupportedParameters = catalogModel?.supported_parameters;
-      } catch (error) {
-        logger.warn(
-          "[Chat Completions] reasoning-detection catalog lookup failed; using name patterns",
-          {
-            model,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        );
-      }
-    }
     const effectiveMaxTokens = computeEffectiveMaxTokens(
       request.max_tokens,
       cotBudget,
@@ -1174,22 +1191,20 @@ export async function handleChatCompletionsPOST(
     // 5. Check content moderation. Skipped when the hot-path resolver already
     // verified the suspension status in this request (#9899) — never skipped on
     // the slow path.
-    if (!moderationAlreadyChecked) {
-      if (await contentModerationService.shouldBlockUser(user.id)) {
-        return addCorsHeaders(
-          Response.json(
-            {
-              error: {
-                message:
-                  "Your account has been suspended due to policy violations.",
-                type: "account_suspended",
-                code: "moderation_violation",
-              },
+    if (shouldBlockUser) {
+      return addCorsHeaders(
+        Response.json(
+          {
+            error: {
+              message:
+                "Your account has been suspended due to policy violations.",
+              type: "account_suspended",
+              code: "moderation_violation",
             },
-            { status: 403 },
-          ),
-        );
-      }
+          },
+          { status: 403 },
+        ),
+      );
     }
 
     // Start async moderation in background. ALWAYS runs (it is off the hot path)
@@ -1645,6 +1660,8 @@ export async function handleChatCompletionsPOST(
         `total=${Date.now() - startTime};auth=${tAuth - startTime};mid=${tBeforeReserve - tAuth};reserve=${tAfterReserve - tBeforeReserve}`,
       );
     } catch {
+      // error-policy:J6 debug-only header; immutable Response headers must not
+      // fail an otherwise valid provider response.
       // Some Response shapes have immutable headers — never fail a request for a debug header.
     }
     return preforwardResponse;
@@ -2935,8 +2952,18 @@ async function handleNonStreamingRequest(
         // keeps any later retry safe.
         try {
           await settleReservation(0);
-        } catch {
-          // best-effort release
+        } catch (releaseError) {
+          logger.error(
+            "[Chat Completions] failed to release reservation after deferred billing failure",
+            {
+              requestId,
+              organizationId: user.organization_id,
+              error:
+                releaseError instanceof Error
+                  ? releaseError.message
+                  : String(releaseError),
+            },
+          );
         }
         logger.error("[Chat Completions] deferred billing failed", {
           error:

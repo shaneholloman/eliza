@@ -23,6 +23,7 @@ export type FirstPartyAgentContext =
 	| "calendar"
 	| "contacts"
 	| "tasks"
+	| "goals"
 	| "todos"
 	| "productivity"
 	| "health"

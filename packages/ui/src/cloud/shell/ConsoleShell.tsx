@@ -124,6 +124,7 @@ function ConsoleUserMenu({
 }): React.JSX.Element {
   const navigate = useNavigate();
   const credits = useCreditsBalance();
+  const [accountFocused, setAccountFocused] = useState(false);
   const balance =
     typeof credits.data?.balance === "number" ? credits.data.balance : null;
 
@@ -137,7 +138,11 @@ function ConsoleUserMenu({
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label={email ? `Account menu for ${email}` : "Account menu"}
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-white/70 outline-none hover:bg-white/5 hover:text-white"
+          onFocus={() => setAccountFocused(true)}
+          onBlur={() => setAccountFocused(false)}
+          className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs outline-none hover:bg-white/5 hover:text-white ${
+            accountFocused ? "bg-white/5 text-white" : "text-white/70"
+          }`}
         >
           <UserRound className="h-3.5 w-3.5 md:hidden" aria-hidden />
           <span className="hidden max-w-[160px] truncate md:inline">

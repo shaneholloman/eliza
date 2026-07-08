@@ -126,8 +126,14 @@ function CliLoginPanel({
 }) {
   const toneClasses = PANEL_TONE_CLASSES[tone];
   return (
-    <div className="theme-cloud relative flex min-h-[100dvh] items-center justify-center bg-bg p-4">
-      <div className="relative w-full max-w-md bg-card border border-border p-8">
+    // Scroll — never clip — when the panel is taller than the viewport. A flex
+    // `justify-center` pins the card's center and pushes its top above
+    // scrollTop 0 where it can't be reached; `overflow-y-auto` + the card's
+    // `my-auto` centers when it fits and scrolls-from-top when it overflows.
+    // Regressed on short screens (Light Phone III, 1080×1240) where the action
+    // buttons fell below an unscrollable fold — see cli-login-page.test.tsx.
+    <div className="theme-cloud relative flex min-h-[100dvh] flex-col items-center overflow-y-auto bg-bg p-4">
+      <div className="relative my-auto w-full max-w-md bg-card border border-border p-8">
         <div className="flex flex-col items-center gap-6 text-center">
           <div
             className={`flex h-14 w-14 items-center justify-center ${toneClasses.container}`}
