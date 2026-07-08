@@ -180,6 +180,64 @@ describe("Cloud active server persistence", () => {
     ).toBe(true);
   });
 
+  it("keeps a dedicated Eliza Cloud active server dedicated on restore", async () => {
+    const server = createPersistedActiveServer({
+      kind: "cloud",
+      id: "cloud:agent-dedicated",
+      label: "Demo Agent",
+      apiBase: "https://agent-dedicated.elizacloud.ai/",
+      accessToken: "cloud-token",
+    });
+    savePersistedActiveServer(server);
+    const setBaseUrl = vi.fn();
+    const setToken = vi.fn();
+
+    await applyRestoredConnection({
+      restoredActiveServer: server,
+      clientRef: { setBaseUrl, setToken },
+    });
+
+    const expectedApiBase = "https://agent-dedicated.elizacloud.ai";
+    expect(setBaseUrl).toHaveBeenCalledWith(expectedApiBase);
+    expect(setToken).toHaveBeenCalledWith("cloud-token");
+    expect(loadPersistedActiveServer()).toEqual(
+      expect.objectContaining({
+        id: "cloud:agent-dedicated",
+        kind: "cloud",
+        apiBase: expectedApiBase,
+      }),
+    );
+  });
+
+  it("repairs a stale shared-adapter cloud active server back to the dedicated runtime on restore", async () => {
+    const server = createPersistedActiveServer({
+      kind: "cloud",
+      id: "cloud:agent-dedicated",
+      label: "Demo Agent",
+      apiBase: "https://api.elizacloud.ai/api/v1/eliza/agents/agent-dedicated",
+      accessToken: "cloud-token",
+    });
+    savePersistedActiveServer(server);
+    const setBaseUrl = vi.fn();
+    const setToken = vi.fn();
+
+    await applyRestoredConnection({
+      restoredActiveServer: server,
+      clientRef: { setBaseUrl, setToken },
+    });
+
+    const expectedApiBase = "https://agent-dedicated.elizacloud.ai";
+    expect(setBaseUrl).toHaveBeenCalledWith(expectedApiBase);
+    expect(setToken).toHaveBeenCalledWith("cloud-token");
+    expect(loadPersistedActiveServer()).toEqual(
+      expect.objectContaining({
+        id: "cloud:agent-dedicated",
+        kind: "cloud",
+        apiBase: expectedApiBase,
+      }),
+    );
+  });
+
   it("preserves the injected desktop API base when restoring a local session", async () => {
     setBootConfig({
       ...DEFAULT_BOOT_CONFIG,

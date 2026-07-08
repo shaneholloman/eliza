@@ -100,4 +100,18 @@ describe("silentlyRepointToDedicated", () => {
       }),
     );
   });
+
+  it("never rewrites the dedicated target to a shared REST adapter", () => {
+    silentlyRepointToDedicated(ARGS);
+
+    for (const fn of [
+      mocks.repointBaseUrl,
+      mocks.createPersistedActiveServer,
+      mocks.addAgentProfile,
+    ]) {
+      expect(JSON.stringify(fn.mock.calls)).not.toContain(
+        "/api/v1/eliza/agents/",
+      );
+    }
+  });
 });
