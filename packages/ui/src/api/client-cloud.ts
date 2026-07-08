@@ -3435,7 +3435,9 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
         });
       }
       const useSharedAdapter = Boolean(
-        preferSharedTier || preferStewardAgentAdapter,
+        preferSharedTier ||
+          preferStewardAgentAdapter ||
+          !(agent.bridge_url || agent.web_ui_url || agent.webUiUrl),
       );
       const apiBase = useSharedAdapter
         ? buildCloudSharedAgentApiBase(resolvedCloudApiBase, agent.agent_id)

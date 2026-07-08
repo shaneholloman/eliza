@@ -107,39 +107,37 @@ describe("selectOrProvisionCloudAgent — never duplicate on a failed lookup", (
     expect(createCloudCompatAgent).not.toHaveBeenCalled();
   });
 
-  it("does not reuse a non-running existing agent; provisions from a confirmed no-running set", async () => {
-    const { client, getCloudCompatAgents, createCloudCompatAgent } =
-      fakeClient();
+  it("resumes and reuses a non-running existing agent instead of provisioning a duplicate", async () => {
+    const {
+      client,
+      getCloudCompatAgents,
+      createCloudCompatAgent,
+      getCloudCompatAgent,
+      resumeCloudCompatAgent,
+    } = fakeClient();
     getCloudCompatAgents.mockResolvedValue({
       success: true,
       data: [makeAgent({ status: "stopped" })],
     });
-    createCloudCompatAgent.mockResolvedValue({
-      success: true,
-      data: {
-        agentId: "agent-new",
-        agentName: "Eliza",
-        jobId: "job-1",
-        status: "provisioning",
-        nodeId: null,
-        message: "",
-      },
-    });
-    (client.getCloudCompatAgent as ReturnType<typeof vi.fn>).mockResolvedValue({
+    getCloudCompatAgent.mockResolvedValue({
       success: true,
       data: makeAgent({
-        agent_id: "agent-new",
-        status: "provisioning",
-        web_ui_url: "https://agent-new.example.test",
-        webUiUrl: "https://agent-new.example.test",
+        status: "running",
+        web_ui_url: "https://agent-existing.example.test",
+        webUiUrl: "https://agent-existing.example.test",
       }),
     });
 
-    const result = await client.selectOrProvisionCloudAgent(BASE_OPTS);
+    const result = await client.selectOrProvisionCloudAgent({
+      ...BASE_OPTS,
+      wakePollIntervalMs: 1,
+      wakeTimeoutMs: 50,
+    });
 
-    expect(result.created).toBe(true);
-    expect(result.agentId).toBe("agent-new");
-    expect(createCloudCompatAgent).toHaveBeenCalledTimes(1);
+    expect(result.created).toBe(false);
+    expect(result.agentId).toBe("agent-existing");
+    expect(resumeCloudCompatAgent).toHaveBeenCalledWith("agent-existing");
+    expect(createCloudCompatAgent).not.toHaveBeenCalled();
   });
 
   it("reuses real dedicated Eliza Cloud agent subdomains without pairing", async () => {
