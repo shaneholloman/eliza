@@ -221,9 +221,9 @@ jobs:
           # Note: elizaos-launcher and elizaos-chat-overlay are user-scope
           # services (WantedBy=graphical-session.target) and will not start
           # in this headless QEMU run (-display none). The system-scope
-          # services (agent, first-boot, terminal-tui-smoke) are the
+          # services (agent, first-boot) are the
           # meaningful signals in this headless smoke test.
-          if grep -qE '(Starting|Started) elizaOS [A-Za-z]|elizaos-(agent|launcher|first-boot|chat-overlay|terminal-tui-smoke)\.service' "$SERIAL_LOG" 2>/dev/null; then
+          if grep -qE '(Starting|Started) elizaOS [A-Za-z]|elizaos-(agent|launcher|first-boot|chat-overlay)\.service' "$SERIAL_LOG" 2>/dev/null; then
             echo "ISO smoke test: elizaOS service markers detected"
           elif grep -qi 'elizaOS\|eliza\|login:' "$SERIAL_LOG" 2>/dev/null; then
             echo "::warning::Boot reached generic strings but no elizaos-*.service marker detected — verify the agent stack started."

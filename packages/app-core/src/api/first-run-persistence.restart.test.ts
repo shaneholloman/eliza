@@ -40,25 +40,38 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { hasCompatPersistedFirstRunState } from "./compat-route-shared";
 
 let stateDir: string;
+let configPath: string;
 let priorStateDir: string | undefined;
+let priorConfigPath: string | undefined;
 let priorPersistPath: string | undefined;
 
 beforeEach(() => {
   priorStateDir = process.env.ELIZA_STATE_DIR;
+  priorConfigPath = process.env.ELIZA_CONFIG_PATH;
   priorPersistPath = process.env.ELIZA_PERSIST_CONFIG_PATH;
-  delete process.env.ELIZA_PERSIST_CONFIG_PATH;
   stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "eliza-firstrun-persist-"));
+  configPath = path.join(stateDir, "eliza.json");
   process.env.ELIZA_STATE_DIR = stateDir;
+  process.env.ELIZA_CONFIG_PATH = configPath;
+  process.env.ELIZA_PERSIST_CONFIG_PATH = configPath;
 });
 
 afterEach(() => {
   if (priorStateDir === undefined) delete process.env.ELIZA_STATE_DIR;
   else process.env.ELIZA_STATE_DIR = priorStateDir;
+  if (priorConfigPath === undefined) delete process.env.ELIZA_CONFIG_PATH;
+  else process.env.ELIZA_CONFIG_PATH = priorConfigPath;
   if (priorPersistPath === undefined)
     delete process.env.ELIZA_PERSIST_CONFIG_PATH;
   else process.env.ELIZA_PERSIST_CONFIG_PATH = priorPersistPath;
   fs.rmSync(stateDir, { recursive: true, force: true });
 });
+
+function pinFirstRunConfigEnv(): void {
+  process.env.ELIZA_STATE_DIR = stateDir;
+  process.env.ELIZA_CONFIG_PATH = configPath;
+  process.env.ELIZA_PERSIST_CONFIG_PATH = configPath;
+}
 
 /**
  * Reproduce exactly what `handleFirstRunRoute` writes to disk on completion:
@@ -69,6 +82,7 @@ function completeOnboarding(args: {
   deploymentTarget?: unknown;
   serviceRouting?: unknown;
 }): void {
+  pinFirstRunConfigEnv();
   const config = loadElizaConfig();
   if (!config.meta) {
     (config as Record<string, unknown>).meta = {};
@@ -83,6 +97,7 @@ function completeOnboarding(args: {
 
 /** A fresh process boot: re-read on-disk config, answer the status predicate. */
 function bootAndProbeComplete(): boolean {
+  pinFirstRunConfigEnv();
   return hasCompatPersistedFirstRunState(loadElizaConfig());
 }
 
@@ -141,8 +156,10 @@ describe("first-run persistence survives a process restart (#11506)", () => {
     // reload is a fresh-process read; each save is a settings write that must
     // not drop the completion flag.
     for (let restart = 0; restart < 6; restart += 1) {
+      pinFirstRunConfigEnv();
       const config = loadElizaConfig();
       expect(hasCompatPersistedFirstRunState(config)).toBe(true);
+      pinFirstRunConfigEnv();
       saveElizaConfig(config);
     }
     expect(bootAndProbeComplete()).toBe(true);
@@ -153,6 +170,7 @@ describe("first-run persistence survives a process restart (#11506)", () => {
       deploymentTarget: { runtime: "local" },
       serviceRouting: { llmText: { backend: "ollama", transport: "direct" } },
     });
+    pinFirstRunConfigEnv();
     const reloaded = loadElizaConfig();
     expect((reloaded.meta as Record<string, unknown>)?.firstRunComplete).toBe(
       true,
@@ -167,10 +185,13 @@ describe("first-run persistence survives a process restart (#11506)", () => {
       deploymentTarget: { runtime: "local" },
       serviceRouting: { llmText: { backend: "ollama", transport: "direct" } },
     });
+    pinFirstRunConfigEnv();
     const config = loadElizaConfig();
     delete (config.meta as Record<string, unknown>).firstRunComplete;
+    pinFirstRunConfigEnv();
     saveElizaConfig(config);
 
+    pinFirstRunConfigEnv();
     const rebooted = loadElizaConfig();
     expect(
       (rebooted.meta as Record<string, unknown>)?.firstRunComplete,

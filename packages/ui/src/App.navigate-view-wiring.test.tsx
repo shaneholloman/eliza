@@ -19,13 +19,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_BOOT_CONFIG, setBootConfig } from "./config/boot-config";
 import type { ViewRegistryEntry } from "./hooks/useAvailableViews";
 
-// Controls the mocked `useMediaQuery` (desktop vs mobile) so the docked-chat
-// tests can flip to the desktop breakpoint. Hoisted because the vi.mock
-// factories below reference it.
-const mediaQueryState = vi.hoisted(() => ({
-  matches: false,
-}));
-
 const appState = vi.hoisted(() => ({
   setTab: vi.fn(),
   tab: "chat",
@@ -246,7 +239,7 @@ vi.mock("./hooks/useAuthStatus", () => ({
 }));
 
 vi.mock("./hooks/useMediaQuery", () => ({
-  useMediaQuery: () => mediaQueryState.matches,
+  useMediaQuery: () => false,
 }));
 
 vi.mock("./hooks/useActivityEvents", () => ({
@@ -264,7 +257,7 @@ vi.mock("./hooks", () => ({
     saveCommandModalOpen: false,
     saveCommandText: "",
   }),
-  useMediaQuery: () => mediaQueryState.matches,
+  useMediaQuery: () => false,
   useRenderGuard: vi.fn(),
 }));
 

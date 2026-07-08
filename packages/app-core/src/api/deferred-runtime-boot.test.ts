@@ -19,17 +19,32 @@ import {
 } from "./deferred-runtime-boot";
 
 let stateDir: string;
+let configPath: string;
 const savedEnv: Record<string, string | undefined> = {};
 const ENV_KEYS = [
+  "AIGATEWAY_API_KEY",
+  "AI_GATEWAY_API_KEY",
+  "ELIZA_CONFIG_PATH",
   "ELIZA_STATE_DIR",
   "ELIZA_PERSIST_CONFIG_PATH",
   "ELIZA_CLOUD_PROVISIONED",
-  "ELIZAOS_CLOUD_ENABLED",
+  "ELIZA_CHAT_VIA_CLI",
   "ELIZAOS_CLOUD_API_KEY",
+  "ELIZAOS_CLOUD_ENABLED",
   "STEWARD_AGENT_TOKEN",
   "ANTHROPIC_API_KEY",
+  "CEREBRAS_API_KEY",
+  "GEMINI_API_KEY",
+  "GOOGLE_API_KEY",
+  "GOOGLE_GENERATIVE_AI_API_KEY",
+  "GROQ_API_KEY",
+  "NEARAI_API_KEY",
   "OPENAI_API_KEY",
+  "OPENROUTER_API_KEY",
   "OLLAMA_BASE_URL",
+  "XAI_API_KEY",
+  "ZAI_API_KEY",
+  "Z_AI_API_KEY",
 ] as const;
 
 beforeEach(() => {
@@ -38,7 +53,10 @@ beforeEach(() => {
     delete process.env[key];
   }
   stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "eliza-deferred-boot-"));
+  configPath = path.join(stateDir, "eliza.json");
   process.env.ELIZA_STATE_DIR = stateDir;
+  process.env.ELIZA_CONFIG_PATH = configPath;
+  process.env.ELIZA_PERSIST_CONFIG_PATH = configPath;
   resetDeferredRuntimeBootForTests();
 });
 
@@ -51,8 +69,15 @@ afterEach(() => {
   resetDeferredRuntimeBootForTests();
 });
 
+function pinDeferredBootConfigEnv(): void {
+  process.env.ELIZA_STATE_DIR = stateDir;
+  process.env.ELIZA_CONFIG_PATH = configPath;
+  process.env.ELIZA_PERSIST_CONFIG_PATH = configPath;
+}
+
 /** Persist a completed local-target onboarding, exactly as the handler does. */
 function completeLocalOnboarding(): void {
+  pinDeferredBootConfigEnv();
   saveElizaConfig({
     meta: { firstRunComplete: true },
     deploymentTarget: { runtime: "local" },
@@ -62,26 +87,31 @@ function completeLocalOnboarding(): void {
 
 describe("shouldDeferRuntimeBootUntilOnboarding (fresh-install gate)", () => {
   it("defers on a genuinely fresh install (no config on disk)", () => {
+    pinDeferredBootConfigEnv();
     expect(shouldDeferRuntimeBootUntilOnboarding()).toBe(true);
   });
 
   it("does NOT defer once onboarding has persisted (returning user)", () => {
     completeLocalOnboarding();
+    pinDeferredBootConfigEnv();
     expect(shouldDeferRuntimeBootUntilOnboarding()).toBe(false);
   });
 
   it("does NOT defer when a provider env key is set (CI / env-configured)", () => {
+    pinDeferredBootConfigEnv();
     process.env.ANTHROPIC_API_KEY = "sk-ant-test";
     expect(shouldDeferRuntimeBootUntilOnboarding()).toBe(false);
   });
 
   it("does NOT defer for a cloud-provisioned container", () => {
+    pinDeferredBootConfigEnv();
     process.env.ELIZA_CLOUD_PROVISIONED = "1";
     process.env.STEWARD_AGENT_TOKEN = "steward-token";
     expect(shouldDeferRuntimeBootUntilOnboarding()).toBe(false);
   });
 
   it("does NOT defer when OLLAMA_BASE_URL is set (local dev provider)", () => {
+    pinDeferredBootConfigEnv();
     process.env.OLLAMA_BASE_URL = "http://localhost:11434";
     expect(shouldDeferRuntimeBootUntilOnboarding()).toBe(false);
   });

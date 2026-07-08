@@ -50,6 +50,9 @@ project(':elizaos-capacitor-agent').projectDir = new File('../../../../plugins/p
 include ':elizaos-capacitor-appblocker'
 project(':elizaos-capacitor-appblocker').projectDir = new File('../../../../plugins/plugin-native-appblocker/android')
 
+include ':elizaos-capacitor-browser-surface'
+project(':elizaos-capacitor-browser-surface').projectDir = new File('../../../../plugins/plugin-native-browser-surface/android')
+
 include ':elizaos-capacitor-camera'
 project(':elizaos-capacitor-camera').projectDir = new File('../../../../plugins/plugin-native-camera/android')
 

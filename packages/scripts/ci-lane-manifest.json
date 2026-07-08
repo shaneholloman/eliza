@@ -6,17 +6,12 @@
     {
       "job": "server-tests",
       "name": "Server Tests",
-      "description": "Core/agent/app-core/shared server suite plus PTY/TUI smoke."
+      "description": "Core/agent/app-core/shared server suite."
     },
     {
       "job": "client-tests",
       "name": "Client Tests",
-      "description": "packages/ui + app client suite and XR/tutorial/immersive e2e."
-    },
-    {
-      "job": "xr-harness-e2e",
-      "name": "XR harness e2e",
-      "description": "WebXR emulator scene → ray → hit → press → drag capture."
+      "description": "packages/ui + app client suite and browser e2e coverage."
     },
     {
       "job": "plugin-tests",

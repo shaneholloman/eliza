@@ -21,6 +21,8 @@ const buildVariantState = vi.hoisted(() => ({
   isStore: false,
 }));
 
+const BOOT_CONFIG_STORE_KEY = Symbol.for("elizaos.app.boot-config");
+
 const kernelMock = vi.hoisted(() => ({
   handleIosLocalAgentRequest: vi.fn(async (request: Request) => {
     const { pathname } = new URL(request.url);
@@ -116,6 +118,7 @@ vi.mock("@elizaos/ui/api/ios-local-agent-kernel", () => kernelMock);
 describe("iOS local agent transport bridge", () => {
   beforeEach(() => {
     vi.resetModules();
+    Reflect.deleteProperty(globalThis, BOOT_CONFIG_STORE_KEY);
     kernelMock.handleIosLocalAgentRequest.mockClear();
     kernelMock.startIosLocalAgentKernel.mockClear();
     capacitorState.isNative = true;
@@ -136,6 +139,7 @@ describe("iOS local agent transport bridge", () => {
     vi.doUnmock("@elizaos/capacitor-bun-runtime");
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+    Reflect.deleteProperty(globalThis, BOOT_CONFIG_STORE_KEY);
   });
 
   it("installs a native-callable path-only request handler", async () => {

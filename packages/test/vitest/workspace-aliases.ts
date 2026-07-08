@@ -395,7 +395,6 @@ export function getUiSourceAliases(
   const packageRoot = path.dirname(sourceRoot);
 
   return [
-    ...getWorkspacePackageExportAliases("ui", packageRoot),
     {
       find: /^@elizaos\/ui\/api$/,
       replacement: toPosix(path.join(sourceRoot, "api", "index.ts")),
@@ -404,6 +403,7 @@ export function getUiSourceAliases(
       find: /^@elizaos\/ui\/(.+)$/,
       replacement: toPosix(path.join(sourceRoot, "$1")),
     },
+    ...getWorkspacePackageExportAliases("ui", packageRoot),
     ...getPackageSourceAliases("ui", sourceRoot, {
       includeElizaAlias: true,
       rootReplacement: resolveModuleEntry(path.join(sourceRoot, "index")),

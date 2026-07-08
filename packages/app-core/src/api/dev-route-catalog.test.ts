@@ -69,6 +69,14 @@ const STATE: CompatRuntimeState = {
   pendingAgentName: null,
   pendingRestartReasons: [],
 };
+const BOOT_CONFIG_STORE_KEY = Symbol.for("elizaos.app.boot-config");
+const AUTH_ENV_KEYS = [
+  "ELIZA_API_TOKEN",
+  "ELIZA_CLOUD_PROVISIONED",
+  "ELIZA_DEV_AUTH_BYPASS",
+  "ELIZA_REQUIRE_LOCAL_AUTH",
+  "NODE_ENV",
+] as const;
 
 // ── test helpers ───────────────────────────────────────────────────────
 
@@ -183,17 +191,36 @@ describe("buildRouteCatalog", () => {
 });
 
 describe("GET /api/dev/route-catalog", () => {
+  const savedAuthEnv: Record<
+    (typeof AUTH_ENV_KEYS)[number],
+    string | undefined
+  > = {
+    ELIZA_API_TOKEN: undefined,
+    ELIZA_CLOUD_PROVISIONED: undefined,
+    ELIZA_DEV_AUTH_BYPASS: undefined,
+    ELIZA_REQUIRE_LOCAL_AUTH: undefined,
+    NODE_ENV: undefined,
+  };
+
   beforeAll(async () => {
     handleDevCompatRoutes = (await import("./dev-compat-routes"))
       .handleDevCompatRoutes;
   });
 
   beforeEach(() => {
-    delete process.env.NODE_ENV;
+    for (const key of AUTH_ENV_KEYS) {
+      savedAuthEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+    Reflect.deleteProperty(globalThis, BOOT_CONFIG_STORE_KEY);
   });
 
   afterEach(() => {
-    delete process.env.NODE_ENV;
+    Reflect.deleteProperty(globalThis, BOOT_CONFIG_STORE_KEY);
+    for (const key of AUTH_ENV_KEYS) {
+      if (savedAuthEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedAuthEnv[key];
+    }
   });
 
   it("returns 200 with JSON payload on loopback", async () => {

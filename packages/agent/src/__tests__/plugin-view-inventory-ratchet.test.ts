@@ -1,16 +1,16 @@
 /**
- * View-inventory ratchet + viewType infrastructure coverage (#15269).
+ * Plugin view inventory ratchet + viewType infrastructure coverage (#15269).
  *
  * The shipped plugin-view inventory is GUI-only: every plugin manifest's
  * `views:` declarations are statically parsed from source and asserted to
- * declare no tui/xr surface. The viewType routing CONTRACT is preserved
+ * declare no non-GUI surface. The viewType routing CONTRACT is preserved
  * infrastructure — the views-registry and `handleViewsRoutes` still accept
- * `viewType=tui|xr` requests — so this file also registers the real gui
- * inventory through the real views-registry, drives navigate / interact
- * dispatch in gui mode, and proves the designed degrade for tui/xr requests
- * against a gui-only inventory: `getView` falls back to the gui declaration
- * (the broadcast + response carry viewType "gui"), and unknown ids 404. No
- * crash, no fabricated tui/xr success.
+ * non-GUI requests — so this file also registers the real gui inventory through
+ * the real views-registry, drives navigate / interact dispatch in gui mode, and
+ * proves the designed degrade for non-GUI requests against a gui-only inventory:
+ * `getView` falls back to the gui declaration (the broadcast + response carry
+ * viewType "gui"), and unknown ids 404. No crash, no fabricated non-GUI
+ * success.
  *
  * Harness realism: manifests are read off disk and the registry + route
  * dispatch are the real modules; a fake `IncomingMessage` and a
@@ -145,9 +145,9 @@ function stringField(source: string, field: string): string | null {
 function viewObjectModalities(object: string): RoutedViewType[] {
   const modalitiesMatch = object.match(/modalities:\s*\[([^\]]*)\]/);
   if (modalitiesMatch) {
-    const mods = [
-      ...modalitiesMatch[1].matchAll(/["'](gui|tui|xr)["']/g),
-    ].map((m) => m[1] as RoutedViewType);
+    const mods = [...modalitiesMatch[1].matchAll(/["'](gui|tui|xr)["']/g)].map(
+      (m) => m[1] as RoutedViewType,
+    );
     if (mods.length > 0) return mods;
   }
   return [(stringField(object, "viewType") ?? "gui") as RoutedViewType];
@@ -195,7 +195,7 @@ function makeCtx(
   const url = new URL(`http://localhost${pathname}`);
   const req = new EventEmitter() as http.IncomingMessage;
   req.headers = {
-    "x-elizaos-client-id": "plugin-tui-view-coverage-client",
+    "x-elizaos-client-id": "plugin-view-inventory-ratchet-client",
   };
   if (body !== undefined) {
     const chunk = Buffer.from(JSON.stringify(body));

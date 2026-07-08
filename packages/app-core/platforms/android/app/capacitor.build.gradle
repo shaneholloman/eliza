@@ -26,6 +26,7 @@ dependencies {
     implementation project(':capacitor-status-bar')
     implementation project(':elizaos-capacitor-agent')
     implementation project(':elizaos-capacitor-appblocker')
+    implementation project(':elizaos-capacitor-browser-surface')
     implementation project(':elizaos-capacitor-camera')
     implementation project(':elizaos-capacitor-canvas')
     implementation project(':elizaos-capacitor-contacts')

@@ -117,12 +117,19 @@ describe("story-gate log-capture wiring (#13624)", () => {
     expect(cap.failedResponses).toHaveLength(0);
   });
 
-  it("deriveNetworkFailureIssues escalates a rendered story to broken on a net failure", () => {
+  it("deriveNetworkFailureIssues escalates a rendered story to broken on a catalog resource failure", () => {
+    const origin = "http://x";
     const cap = {
-      failedResponses: [{ status: 502, url: "http://x/api/a" }],
-      requestFailures: [{ failure: "net::ERR_FAILED", url: "http://x/api/b" }],
+      failedResponses: [{ status: 502, url: `${origin}/assets/a.js` }],
+      requestFailures: [
+        { failure: "net::ERR_FAILED", url: `${origin}/assets/b.js` },
+      ],
     };
-    const { escalate, issues } = deriveNetworkFailureIssues(cap, "good");
+    const { escalate, issues } = deriveNetworkFailureIssues(
+      cap,
+      "good",
+      origin,
+    );
     expect(escalate).toBe(true);
     expect(issues).toHaveLength(2);
     expect(issues[0]).toContain("network-failure: net-response 502");
