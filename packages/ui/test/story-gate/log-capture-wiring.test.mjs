@@ -118,11 +118,25 @@ describe("story-gate log-capture wiring (#13624)", () => {
   });
 
   it("deriveNetworkFailureIssues escalates a rendered story to broken on a net failure", () => {
+    // Only a REAL catalog-bundle fault escalates (#15370): a same-origin code
+    // chunk / stylesheet the static server should serve but that 502s or fails.
+    // `/api/*` and public-asset failures are expected-absent in the backend-less
+    // catalog and stay soft — covered by story-gate-classify.test.mjs.
+    const origin = "http://x";
     const cap = {
-      failedResponses: [{ status: 502, url: "http://x/api/a" }],
-      requestFailures: [{ failure: "net::ERR_FAILED", url: "http://x/api/b" }],
+      failedResponses: [{ status: 502, url: `${origin}/assets/app.chunk.js` }],
+      requestFailures: [
+        { failure: "net::ERR_FAILED", url: `${origin}/assets/app.css` },
+      ],
     };
-    const { escalate, issues } = deriveNetworkFailureIssues(cap, "good");
+    // Pass the catalog origin exactly as the runner does (run-story-gate.mjs
+    // derives it from baseUrl); the origin gates same-origin bundle faults from
+    // external hosts.
+    const { escalate, issues } = deriveNetworkFailureIssues(
+      cap,
+      "good",
+      origin,
+    );
     expect(escalate).toBe(true);
     expect(issues).toHaveLength(2);
     expect(issues[0]).toContain("network-failure: net-response 502");

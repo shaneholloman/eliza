@@ -132,7 +132,12 @@ async function makeHarness(): Promise<Harness> {
       error: () => {},
     },
     services,
-    getSetting: () => null,
+    // Suppress the default health-check workflow seed: this suite verifies the
+    // trigger/dispatch/tick mechanics against explicitly-created workflows. The
+    // auto-seeded default (which runs once and arms its own trigger task on
+    // start) would otherwise add a second TRIGGER_DISPATCH task and a stray
+    // execution row, skewing the exact task/execution counts asserted below.
+    getSetting: (key: string) => (key === 'WORKFLOW_SEED_DEFAULTS' ? 'false' : null),
     getService: (type: string) => {
       const entries = services.get(type);
       return entries && entries.length > 0 ? entries[0] : null;
