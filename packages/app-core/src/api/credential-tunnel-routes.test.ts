@@ -145,7 +145,6 @@ describe("credential tunnel route", () => {
     clearRouteAuthState();
     _resetAuthRateLimiter();
     process.env.ELIZA_API_TOKEN = OWNER_TOKEN;
-    process.env.ELIZA_REQUIRE_LOCAL_AUTH = "1";
   });
 
   afterEach(() => {
