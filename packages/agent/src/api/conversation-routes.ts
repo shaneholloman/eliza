@@ -2670,7 +2670,13 @@ export async function handleConversationRoutes(
             ) {
               return;
             }
-            const signature = `${status.kind}:${status.actionName ?? ""}:${status.toolName ?? ""}`;
+            // Array.join renders absent optional fields as empty segments, so
+            // the dedup key is stable without nullish-coalescing each field.
+            const signature = [
+              status.kind,
+              status.actionName,
+              status.toolName,
+            ].join(":");
             if (signature === lastStatusSignature) {
               return;
             }
