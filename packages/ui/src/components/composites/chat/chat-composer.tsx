@@ -34,14 +34,11 @@ import {
   useComposerPaste,
 } from "../../../chat/composer-core";
 import { usePushToTalk } from "../../../hooks/usePushToTalk";
-import type { MicLevel } from "../../../hooks/useVoiceChat";
 import { isVoiceTargetResolvableForActiveAgent } from "../../../voice/shared-runtime-voice";
 import type { VoiceSessionMode } from "../../../voice/voice-chat-types";
 import { Button } from "../../ui/button";
 import { Textarea } from "../../ui/textarea";
-import { AutoSendToggle } from "./AutoSendToggle";
 import type { ChatVariant } from "./chat-types";
-import { MicWaveform } from "./MicWaveform";
 
 const INLINE_TEXTAREA_MIN_HEIGHT_PX = 32;
 const INLINE_TEXTAREA_MAX_HEIGHT_PX = 128;
@@ -116,12 +113,6 @@ export interface ChatComposerVoiceState {
   ) => void | Promise<void>;
   stopListening: (options?: { submit?: boolean }) => void | Promise<void>;
   supported: boolean;
-  /**
-   * Subscribe to live mic amplitude for the composer's mic-surface waveform.
-   * From {@link useVoiceChat}. Optional so surfaces without the live-level hook
-   * (or with a non-PCM backend) simply render no waveform.
-   */
-  subscribeMicLevel?: (listener: (level: MicLevel) => void) => () => void;
 }
 
 export interface ChatComposerProps {
@@ -146,15 +137,6 @@ export interface ChatComposerProps {
   onStopSpeaking: () => void;
   onToggleAgentVoice: () => void;
   showAgentVoiceToggle?: boolean;
-  /**
-   * Hands-free voice auto-send state (voice auto-send lane). When set, an in-flow
-   * toggle renders on the mic surface letting the user flip between "review"
-   * (finalized transcript fills the draft) and "auto-send" (sent immediately).
-   * Omit `onToggleAutoSend` to hide the toggle (surfaces without a voice-send
-   * loop, e.g. game modal).
-   */
-  autoSend?: boolean;
-  onToggleAutoSend?: (next: boolean) => void;
   t: (key: string, options?: Record<string, unknown>) => string;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   variant: ChatVariant;
@@ -185,8 +167,6 @@ export function ChatComposer({
   onStop,
   onStopSpeaking,
   onToggleAgentVoice,
-  autoSend = false,
-  onToggleAutoSend,
   hideAttachButton = false,
   placeholder,
 }: ChatComposerProps) {
@@ -429,36 +409,6 @@ export function ChatComposer({
       </Button>
     );
 
-    // Live mic waveform on the mic surface: the instant-feedback layer under the
-    // streaming transcript. Rendered only WHILE listening (both compose + PTT)
-    // and only when the voice hook exposes a level subscription (PCM-capturing
-    // backend). Sits immediately before the mic (release) button so the amplitude
-    // reads right where the user is speaking; sized to the composer line so it
-    // never shifts layout. Silent no-op for browser SpeechRecognition / TalkMode
-    // backends (no `subscribeMicLevel`).
-    const inlineMicWaveform =
-      voice.isListening && voice.subscribeMicLevel ? (
-        <MicWaveform
-          active={voice.isListening}
-          subscribeMicLevel={voice.subscribeMicLevel}
-          className="shrink-0"
-        />
-      ) : null;
-
-    // In-flow auto-send toggle on the mic surface. Rendered only when the parent
-    // wired a handler (a surface with a voice-send loop) AND voice is supported,
-    // and only while NOT mid-capture (keeps the held-PTT trailing area to the
-    // release button alone). Sits immediately before the mic so the user flips
-    // review↔auto-send exactly where they speak.
-    const inlineAutoSendToggle =
-      onToggleAutoSend && voice.supported && !voice.isListening ? (
-        <AutoSendToggle
-          value={autoSend}
-          onChange={onToggleAutoSend}
-          disabled={isComposerLocked}
-        />
-      ) : null;
-
     const inlineSendButton = (
       <Button
         variant="ghost"
@@ -512,8 +462,6 @@ export function ChatComposer({
       inlineStopSpeakingButton
     ) : isInlineMultiline ? (
       <>
-        {inlineMicWaveform}
-        {inlineAutoSendToggle}
         {inlineMicButton}
         {inlineSendButton}
       </>
@@ -521,18 +469,11 @@ export function ChatComposer({
       // Keep the mic (release) button mounted while a push-to-talk turn is held,
       // even after live STT text fills the draft — otherwise the composer swaps
       // to the send button mid-hold and pointer-release can no longer submit.
-      // The live waveform rides immediately before it on the mic surface.
-      <>
-        {inlineMicWaveform}
-        {inlineMicButton}
-      </>
+      inlineMicButton
     ) : hasDraft ? (
       inlineSendButton
     ) : (
-      <>
-        {inlineAutoSendToggle}
-        {inlineMicButton}
-      </>
+      inlineMicButton
     );
 
     return (
