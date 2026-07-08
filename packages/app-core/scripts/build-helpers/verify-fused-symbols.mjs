@@ -333,12 +333,12 @@ export const REQUIRED_ELIZA_INFERENCE_SYMBOLS = Object.freeze([
   "eliza_inference_kokoro_load",
   "eliza_inference_kokoro_synthesize",
   "eliza_inference_kokoro_sample_rate",
-  // ABI v14 — Kokoro IPA input + G2P-kind query (#11776). Always exported by the
-  // v14 FFI surface; requiring them asserts the espeak-less intelligibility fix
-  // is present (the TS runtime feeds espeak-ng IPA through synthesize_ipa when
-  // g2p_kind reports ASCII — the mobile/desktop garbled-TTS fix).
-  "eliza_inference_kokoro_g2p_kind",
-  "eliza_inference_kokoro_synthesize_ipa",
+  // ABI v14 — Kokoro IPA input + G2P-kind query (#11776) intentionally remains
+  // optional until the pinned llama.cpp submodule declares and exports it. The
+  // current develop gitlink is ABI v12: runtime bindings probe these symbols and
+  // fall back to `"unknown"` G2P when absent. Requiring the future v14 exports
+  // here made every Android fused build fail after producing a valid v12
+  // libelizainference.so, leaving mobile builds with stale prebuilt artifacts.
   // ABI v11 — end-of-turn scoring folded in-process. A single causal forward
   // pass over the tokenized partial transcript reads P(end-of-turn token),
   // replacing the retired node-llama-cpp controlledEvaluate() the EOT
