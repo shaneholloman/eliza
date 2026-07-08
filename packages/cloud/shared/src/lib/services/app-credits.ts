@@ -21,6 +21,7 @@ import {
   parseAppMonetizationNumber,
 } from "./app-credit-math";
 import {
+  APP_CHAT_RESERVATION_SETTLEMENT_MARKER,
   type CreditReconciliationResult,
   type CreditReservation,
   creditsService,
@@ -477,13 +478,20 @@ export class AppCreditsService {
     // applies — and reconcile trues it up to actual cost (refunding the floor
     // when actual stays $0).
     const flooredEstimate = Math.max(estimatedBaseCost, MIN_RESERVATION);
+    const reservationMetadata = {
+      ...metadata,
+      type: "app_chat_reservation",
+      settlement_marker: APP_CHAT_RESERVATION_SETTLEMENT_MARKER,
+      reserved_amount: flooredEstimate,
+      estimated_cost: estimatedBaseCost,
+    };
 
     const deduction = await this.deductCredits({
       appId,
       userId,
       baseCost: flooredEstimate,
       description,
-      metadata: withChargeIdempotencyKey(metadata, idempotencyKey),
+      metadata: withChargeIdempotencyKey(reservationMetadata, idempotencyKey),
       app,
     });
 
@@ -509,7 +517,7 @@ export class AppCreditsService {
           estimatedBaseCost: flooredEstimate,
           actualBaseCost,
           description,
-          metadata: withChargeIdempotencyKey(metadata, idempotencyKey),
+          metadata: withChargeIdempotencyKey(reservationMetadata, idempotencyKey),
           app,
           // Server-generated key for the reconcile legs' idempotent ledger
           // writes (#11512) — the deduct row's own transaction id, never the
