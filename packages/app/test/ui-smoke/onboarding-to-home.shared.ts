@@ -800,24 +800,6 @@ export async function expectOnboardingSettleToHalf(page: Page): Promise<void> {
 }
 
 /**
- * Cloud-only onboarding lands on the home surface with chat available as the
- * collapsed input, not as the half-open first-run sheet. That keeps the first
- * post-auth paint focused on home while still proving the composer unlocked.
- */
-export async function expectOnboardingSettleToCollapsedInput(
-  page: Page,
-): Promise<void> {
-  await expect(page.getByTestId("chat-sheet")).toHaveAttribute(
-    "data-detent",
-    "collapsed",
-    { timeout: 30_000 },
-  );
-  await expect(page.getByTestId("chat-composer-textarea")).toBeEnabled({
-    timeout: 15_000,
-  });
-}
-
-/**
  * Dismiss the post-onboarding permission-priming modal (#12331) if it appears.
  * It arms on the completion edge and sits over the home, so it must be skipped
  * (the real "Skip for now" path a user takes) before asserting or swiping the
@@ -969,12 +951,18 @@ export async function completeOnboardingToHome(
 }
 
 /**
- * Drive first-run to completion via the CLOUD runtime: pick Cloud → the OAuth
- * card appears while the conductor connects Eliza Cloud (mocked at the network
- * boundary, no popup needed) → the cloud-agent CHOICE → bind →
- * tutorial-or-skip → home. The bound agent base is this page origin (an
- * app-shell base), so the cloud finish persists first-run exactly once — same
- * contract as Local. Requires `installCloudRoutes` + `injectCloudAuthToken`.
+ * Drive first-run to completion via the CLOUD runtime. #15339 made the Cloud
+ * pick a single sign-in: picking Cloud runs the headless connect+provision flow
+ * (`startCloudProvisionFlow` → `listOrAutoProvisionCloudAgent` → `bindCloudAgent`
+ * with `forceCreate:false`), which AUTO-BINDS the best healthy agent — the
+ * in-transcript Eliza Cloud OAuth card (`sensitive_request_form`) and the
+ * cloud-agent picker CHOICE were both removed with the old flow. The pre-seeded
+ * steward token (`injectCloudAuthToken`) makes `handleCloudLogin` short-circuit
+ * (no external OAuth window resolves), and the account's one running agent
+ * (`installCloudRoutes`) whose bridge is this page origin is bound directly. The
+ * bound base is an app-shell base, so the cloud finish persists first-run exactly
+ * once — same contract as Local — and then offers the tutorial. Requires
+ * `installCloudRoutes` + `injectCloudAuthToken`.
  */
 export async function completeCloudOnboardingToHome(
   page: Page,
@@ -985,23 +973,16 @@ export async function completeCloudOnboardingToHome(
 
   await expectChatFirstOnboarding(page);
 
-  // 1) Pick the Cloud runtime.
+  // 1) Pick the Cloud runtime — the single sign-in gesture. No in-transcript
+  // OAuth card and no agent picker render; the conductor connects + auto-binds
+  // the best healthy agent at the network boundary, then offers the tutorial.
   const cloud = page.getByTestId(RUNTIME_CHOICE("cloud"));
   await expect(cloud).toBeEnabled({ timeout: 15_000 });
   await click(cloud);
 
-  // 2) The conductor seeds the Eliza Cloud OAuth card (a `secretRequest` block)
-  // while it connects + lists the account's cloud agents at the network boundary.
-  await expect(page.getByTestId("sensitive-request").first()).toBeVisible({
-    timeout: 20_000,
-  });
-
-  // 3) ≥1 cloud agent → the conductor seeds a cloud-agent CHOICE. Pick it.
-  const agentChoice = page.getByTestId(CLOUD_AGENT_CHOICE(CLOUD_AGENT_ID));
-  await expect(agentChoice).toBeVisible({ timeout: 30_000 });
-  await click(agentChoice);
-
-  // 4) Binding done → tutorial offered → land on the home (sheet settles to half).
+  // 2) Binding completed → the tutorial CHOICE is the deterministic waypoint
+  // (its arrival proves connect + provision + bind succeeded). Pick it → land on
+  // the home (sheet settles to half).
   await pickTutorial(page, click, tutorial);
 
   const chatOverlay = page.getByTestId("continuous-chat-overlay");
@@ -1036,10 +1017,13 @@ export async function expectCloudOnlySignInOnboarding(
 ): Promise<void> {
   const chatOverlay = page.getByTestId("continuous-chat-overlay");
   await expect(chatOverlay).toBeVisible({ timeout: 30_000 });
+  // Cloud-only greeting (#13377): the conductor seeds CLOUD_SIGN_IN_GREETING
+  // ("Hi — I'm Eliza.") with the single "Sign in to Eliza Cloud" CTA
+  // (`runtime:cloud`); the same-text fallback (ContinuousChatOverlay's
+  // FIRST_RUN_SIGN_IN_FALLBACK_MESSAGE) covers the pre-seed race. There is no
+  // "First, where should your agent run?" chooser question in this mode.
   await expect(
-    page.getByText("Sign in to Eliza Cloud and I'll get you set up", {
-      exact: false,
-    }),
+    page.getByText("Hi — I'm Eliza.", { exact: false }).first(),
   ).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId(RUNTIME_CHOICE("cloud"))).toBeVisible({
     timeout: 15_000,
@@ -1068,17 +1052,21 @@ export async function expectCloudOnlySignInOnboarding(
 
 /** Post-completion contract shared by every cloud-only path: the real gate
  *  flipped at provisioning success (no tutorial/accent gate), the wrap-up turn
- *  is informational, chat is available as the collapsed input, and first-run
+ *  is informational, the sheet settles to the half detent, and first-run
  *  persisted once. */
 async function expectCloudOnlyCompletion(
   page: Page,
   state: OnboardingRouteState,
 ): Promise<{ surface: Locator }> {
   // Completion fires at provisioning success and returns the user to the home
-  // surface with chat collapsed and ready. The durable contract is asserted on
-  // that settle, the onboarded home, the absent tutorial gate, and the
-  // exactly-once POST. The wrap-up copy is covered by the conductor unit suite.
-  await expectOnboardingSettleToCollapsedInput(page);
+  // surface. Cloud-only completion rides the SAME full→half falling-edge settle
+  // as chooser mode (ContinuousChatOverlay's wasFirstRunOpenRef effect →
+  // goToDetent("half"); ContinuousChatOverlay.firstrun.test), so the sheet rests
+  // at the half detent with the home revealed behind it and the composer
+  // unlocked. The durable contract is asserted on that settle, the onboarded
+  // home, the absent tutorial gate, and the exactly-once POST. The wrap-up copy
+  // is covered by the conductor unit suite.
+  await expectOnboardingSettleToHalf(page);
   await dismissPermissionPrimingIfShown(page);
   await expect(page.getByTestId(TUTORIAL_CHOICE("start"))).toHaveCount(0);
   await expect(page.getByTestId(TUTORIAL_CHOICE("skip"))).toHaveCount(0);
@@ -1125,20 +1113,19 @@ export async function completeCloudOnlyOnboardingToHome(
 
 /**
  * Session injection: a usable stored session at boot skips the sign-in ask
- * entirely — zero interactions from fresh boot to the onboarded home. With
- * existing cloud agents the first is auto-adopted (#13377): the agent picker
- * must never appear in cloud-only onboarding.
+ * entirely — zero interactions from fresh boot to the onboarded home. #15133
+ * made this a SILENT entry: a usable token present at mount
+ * (`hasUsableStoredStewardToken()` is true for the seeded opaque token) enters
+ * without seeding ANY onboarding turn — no sign-in greeting AND no welcome-back
+ * (the "Welcome back" turn is the token-poll UPGRADE path, only reached when a
+ * greeting was shown first and a token lands later). With existing cloud agents
+ * the first is auto-adopted (#13377): the agent picker must never appear.
  */
 export async function completeCloudOnlySessionInjectionToHome(
   page: Page,
   opts: { state: OnboardingRouteState },
 ): Promise<{ surface: Locator }> {
-  await expect(
-    page.getByText("Welcome back — you're already signed in", {
-      exact: false,
-    }),
-  ).toBeVisible({ timeout: 30_000 });
-  // The sign-in ask never rendered.
+  // The sign-in ask never rendered — silent entry seeds no runtime CTA.
   await expect(page.getByTestId(RUNTIME_CHOICE("cloud"))).toHaveCount(0);
 
   const result = await expectCloudOnlyCompletion(page, opts.state);
@@ -1208,20 +1195,24 @@ export async function completeOtherProviderSettingsHandoff(
 
   await pickTutorial(page, click, tutorial);
 
-  // The Other/configure-later path ships no floating "choose a provider"
-  // banner (removed with ActionBanner): the honest surfaces are in-chat — the
-  // composer placeholder points at Settings while the agent has no provider,
-  // and the transcript's no-provider gate answers a send. Assert the banner
-  // never renders and the placeholder hint does.
+  // The Other/configure-later path ships no floating "choose a provider" banner
+  // (removed with ActionBanner). At the onboarding-completion moment the composer
+  // is simply unlocked and ready ("Ask …") — the "connect a provider in Settings"
+  // placeholder is a SEND-TIME state (noProviderConfigured =
+  // latestAssistantNoProvider && canRespond===false; see useShellController),
+  // reached only after a send hits the in-transcript no-provider gate, which the
+  // shell unit suite covers. Assert the removed banner never renders and the
+  // composer has unlocked out of the sign-in-first lock.
   await expect(
     page.getByText("Choose a model provider in Settings before sending", {
       exact: false,
     }),
   ).toHaveCount(0);
-  await expect(page.getByTestId("chat-composer-textarea")).toHaveAttribute(
+  const composer = page.getByTestId("chat-composer-textarea");
+  await expect(composer).toBeEnabled({ timeout: 30_000 });
+  await expect(composer).not.toHaveAttribute(
     "placeholder",
-    /Settings/,
-    { timeout: 30_000 },
+    "Sign in to start chatting",
   );
 
   const chatOverlay = page.getByTestId("continuous-chat-overlay");
@@ -1343,7 +1334,19 @@ export async function swipeLeftToLauncher(
   const box = await homePage.boundingBox();
   if (!box) throw new Error("home-launcher-home-page has no bounding box");
   const startX = box.x + box.width * 0.72;
-  const midY = box.y + box.height * 0.5;
+  // Flick from the time/weather HEADER band, ABOVE the inline notification
+  // center. That center is flex-1 (it fills the home middle) and its rows own a
+  // horizontal swipe-to-dismiss (#15039) that eats a mid-screen launcher flick
+  // on the narrow mobile viewport; the header bubbles pointer moves straight to
+  // the rail pager. Fall back to a fixed top band when no notification is seeded.
+  const notifBox = await page
+    .getByTestId("home-notification-center")
+    .boundingBox()
+    .catch(() => null);
+  const midY =
+    notifBox && notifBox.y > box.y
+      ? (box.y + notifBox.y) / 2
+      : box.y + box.height * 0.14;
   const touchCapable = await page.evaluate(
     () =>
       navigator.maxTouchPoints > 0 ||
@@ -1404,17 +1407,30 @@ export async function swipeLeftToLauncher(
     timeout: 15_000,
   });
 
-  // The rail slides over 300ms; wait until nothing in the rail subtree is still
-  // animating so a shot shows the settled launcher.
-  await page.waitForFunction(
-    () => {
-      const rail = document.querySelector('[data-testid="home-launcher-rail"]');
-      if (!rail) return false;
-      return !(rail as HTMLElement)
-        .getAnimations({ subtree: true })
-        .some((a) => a.playState === "running");
-    },
-    undefined,
-    { timeout: 5_000 },
-  );
+  // The rail slides ~300ms into place. Give that finite slide a moment to settle
+  // for a clean screenshot — but BEST-EFFORT only, never a test failure: the
+  // launcher-open contract is already asserted above (data-page="launcher" + a
+  // visible launcher tile). The rail subtree still holds the off-screen home
+  // page, whose seeded attention cards carry perpetual decorative animations
+  // that never fully "settle", so gate on finite animations and swallow a
+  // timeout rather than fail a passing swipe on a cosmetic wait.
+  await page
+    .waitForFunction(
+      () => {
+        const rail = document.querySelector(
+          '[data-testid="home-launcher-rail"]',
+        );
+        if (!rail) return false;
+        return !(rail as HTMLElement)
+          .getAnimations({ subtree: true })
+          .some((a) => {
+            if (a.playState !== "running") return false;
+            const iterations = a.effect?.getComputedTiming().iterations;
+            return iterations !== Infinity;
+          });
+      },
+      undefined,
+      { timeout: 3_000 },
+    )
+    .catch(() => undefined);
 }
