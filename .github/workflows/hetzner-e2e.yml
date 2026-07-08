@@ -43,6 +43,8 @@ jobs:
     runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     environment: ci-hetzner-e2e
     timeout-minutes: 25
+    outputs:
+      provisioned: ${{ steps.provision.outputs.provisioned }}
     env:
       HCLOUD_TOKEN_CI: ${{ secrets.HCLOUD_TOKEN_CI }}
       CLOUD_E2E_API_KEY: ${{ secrets.CLOUD_E2E_API_KEY || secrets.ELIZACLOUD_API_KEY }}
@@ -416,4 +418,9 @@ jobs:
 
       - name: Teardown
         if: steps.secret_config.outputs.configured == 'true'
+        env:
+          # Lets the teardown script distinguish "dead token, nothing was
+          # provisioned, nothing can leak" (soft-skip) from "dead token but a
+          # server exists" (hard fail so the leak is never silent).
+          DEPLOY_PROVISIONED: ${{ needs.deploy.outputs.provisioned }}
         run: bun run packages/scripts/cloud/admin/hetzner-e2e/hetzner-e2e-teardown.ts
