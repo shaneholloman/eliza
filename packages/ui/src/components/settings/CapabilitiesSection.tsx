@@ -20,7 +20,13 @@ import {
   PlugZap,
   Wallet,
 } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { client } from "../../api/client";
 import { isApiError } from "../../api/client-types-core";
 import { invalidateWeatherCache } from "../../hooks/useWeather";
@@ -161,6 +167,18 @@ export function CapabilitiesSection() {
   const [capabilityConnectResult, setCapabilityConnectResult] =
     useState<CapabilityRouterConnectResponse | null>(null);
 
+  // The auto-training fetch resolves after the mount effect fires; writing state
+  // once the section is gone is a browser no-op but throws under the jsdom test
+  // teardown (React's scheduler reads `window`). Guard every async write past
+  // unmount — the canonical ui-hook pattern (see useCachedResource.ts).
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const refreshAutoTraining = useCallback(async () => {
     setAutoTrainingLoading(true);
     try {
@@ -168,10 +186,12 @@ export function CapabilitiesSection() {
         client.fetch<AutoTrainingConfigResponse>("/api/training/auto/config"),
         client.fetch<AutoTrainingStatusResponse>("/api/training/auto/status"),
       ]);
+      if (!mountedRef.current) return;
       setAutoTrainingConfig(configResponse.config);
       setAutoTrainingAvailable(statusResponse.serviceRegistered !== false);
       setAutoTrainingError(false);
     } catch (err) {
+      if (!mountedRef.current) return;
       // error-policy:J4 404 = training plugin not hosted on this runtime — the
       // designed "unavailable" degrade. Any other failure (5xx, transport,
       // parse) renders the explicit error icon instead of silently disabling
@@ -180,7 +200,7 @@ export function CapabilitiesSection() {
       setAutoTrainingAvailable(false);
       setAutoTrainingError(!(isApiError(err) && err.status === 404));
     } finally {
-      setAutoTrainingLoading(false);
+      if (mountedRef.current) setAutoTrainingLoading(false);
     }
   }, []);
 
