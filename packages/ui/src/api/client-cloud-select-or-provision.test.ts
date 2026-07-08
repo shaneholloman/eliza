@@ -52,13 +52,21 @@ function fakeClient() {
   const getCloudCompatAgents = vi.fn();
   const createCloudCompatAgent = vi.fn();
   const getCloudCompatAgent = vi.fn();
+  const resumeCloudCompatAgent = vi.fn(async () => ({ success: true }));
   const client = Object.create(ElizaClient.prototype) as ElizaClient;
   Object.assign(client, {
     getCloudCompatAgents,
     createCloudCompatAgent,
     getCloudCompatAgent,
+    resumeCloudCompatAgent,
   });
-  return { client, getCloudCompatAgents, createCloudCompatAgent };
+  return {
+    client,
+    getCloudCompatAgents,
+    createCloudCompatAgent,
+    getCloudCompatAgent,
+    resumeCloudCompatAgent,
+  };
 }
 
 const BASE_OPTS = {
@@ -134,7 +142,7 @@ describe("selectOrProvisionCloudAgent — never duplicate on a failed lookup", (
     expect(createCloudCompatAgent).toHaveBeenCalledTimes(1);
   });
 
-  it("marks real dedicated Eliza Cloud agent subdomains as requiring pairing", async () => {
+  it("reuses real dedicated Eliza Cloud agent subdomains without pairing", async () => {
     const { client, getCloudCompatAgents } = fakeClient();
     getCloudCompatAgents.mockResolvedValue({
       success: true,
@@ -150,7 +158,7 @@ describe("selectOrProvisionCloudAgent — never duplicate on a failed lookup", (
     const result = await client.selectOrProvisionCloudAgent(BASE_OPTS);
 
     expect(result.apiBase).toBe("https://agent-dedicated.elizacloud.ai");
-    expect(result.requiresAgentPairing).toBe(true);
+    expect(result.requiresAgentPairing).toBe(false);
   });
 
   it("can reuse a dedicated agent through the Steward-token REST adapter without pairing", async () => {
@@ -451,16 +459,18 @@ describe("selectOrProvisionCloudAgent — never duplicate on a failed lookup", (
     expect(result.agentId).toBe("agent-legacy");
   });
 
-  // First-run handoff: a freshly-created dedicated agent whose container is still
-  // provisioning must start on the SHARED REST adapter base (the always-on
-  // in-Worker runtime serves the first turn instantly) — NOT on the dedicated
-  // subdomain, which 202s "starting" until the container boots and made the first
-  // message time out. finishCloud's handoff supervisor switches to the subdomain
-  // once it reports running. The shared base is what `isDirectCloudSharedAgentBase`
-  // matches, which is what gates that supervisor.
-  it("starts a still-provisioning new agent on the shared adapter base (handoff fires)", async () => {
-    const { client, getCloudCompatAgents, createCloudCompatAgent } =
-      fakeClient();
+  // Default first-run: a freshly-created dedicated agent whose container is
+  // still provisioning waits for the dedicated runtime instead of binding chat
+  // to the shared adapter, which returns "Not a shared-runtime agent" for
+  // dedicated ids.
+  it("waits for a still-provisioning new dedicated agent and returns its dedicated subdomain", async () => {
+    const {
+      client,
+      getCloudCompatAgents,
+      createCloudCompatAgent,
+      getCloudCompatAgent,
+      resumeCloudCompatAgent,
+    } = fakeClient();
     getCloudCompatAgents.mockResolvedValue({ success: true, data: [] });
     createCloudCompatAgent.mockResolvedValue({
       success: true,
@@ -473,24 +483,40 @@ describe("selectOrProvisionCloudAgent — never duplicate on a failed lookup", (
         message: "",
       },
     });
-    (client.getCloudCompatAgent as ReturnType<typeof vi.fn>).mockResolvedValue({
-      success: true,
-      data: makeAgent({
-        agent_id: "agent-new",
-        status: "provisioning",
-        bridge_url: null,
-        web_ui_url: "https://agent-new.example.test",
-        webUiUrl: "https://agent-new.example.test",
-      }),
-    });
+    getCloudCompatAgent
+      .mockResolvedValueOnce({
+        success: true,
+        data: makeAgent({
+          agent_id: "agent-new",
+          status: "provisioning",
+          bridge_url: null,
+          web_ui_url: "https://agent-new.elizacloud.ai",
+          webUiUrl: "https://agent-new.elizacloud.ai",
+        }),
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: makeAgent({
+          agent_id: "agent-new",
+          status: "running",
+          bridge_url: null,
+          web_ui_url: "https://agent-new.elizacloud.ai",
+          webUiUrl: "https://agent-new.elizacloud.ai",
+        }),
+      });
+    resumeCloudCompatAgent.mockResolvedValue({ success: true });
 
-    const result = await client.selectOrProvisionCloudAgent(BASE_OPTS);
+    const result = await client.selectOrProvisionCloudAgent({
+      ...BASE_OPTS,
+      wakePollIntervalMs: 1,
+      wakeTimeoutMs: 50,
+    });
 
     expect(result.created).toBe(true);
     expect(result.agentId).toBe("agent-new");
-    // Shared REST adapter base, not the dedicated subdomain.
-    expect(result.apiBase).toMatch(/\/api\/v1\/eliza\/agents\/agent-new$/);
-    expect(result.apiBase).not.toContain("agent-new.example.test");
+    expect(result.apiBase).toBe("https://agent-new.elizacloud.ai");
+    expect(result.requiresAgentPairing).toBe(false);
+    expect(resumeCloudCompatAgent).toHaveBeenCalledWith("agent-new");
   });
 
   // The warm-pool path returns a brand-new agent already `running` with a
@@ -524,7 +550,7 @@ describe("selectOrProvisionCloudAgent — never duplicate on a failed lookup", (
 
     expect(result.created).toBe(true);
     expect(result.apiBase).toContain("agent-warm.elizacloud.ai");
-    expect(result.requiresAgentPairing).toBe(true);
+    expect(result.requiresAgentPairing).toBe(false);
   });
 
   it("keeps a warm newly-created agent on the Steward-token REST adapter when requested", async () => {
