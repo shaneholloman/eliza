@@ -25,6 +25,16 @@ let carriedCounts: number[] = [];
  */
 let simulateWindow = false;
 let windowCount = 0;
+let pauseRedisChecks = false;
+const redisCheckWaiters: Array<() => void> = [];
+
+async function waitForRedisWaiters(count: number): Promise<void> {
+  for (let i = 0; i < 100; i++) {
+    if (redisCheckWaiters.length >= count) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error(`Timed out waiting for ${count} paused Redis checks`);
+}
 
 mock.module("./rate-limit-redis", () => ({
   ...rateLimitRedisActual,
@@ -37,6 +47,9 @@ mock.module("./rate-limit-redis", () => ({
     redisChecks++;
     const carried = options?.carriedCount ?? 0;
     carriedCounts.push(carried);
+    if (pauseRedisChecks) {
+      await new Promise<void>((resolve) => redisCheckWaiters.push(resolve));
+    }
     if (!simulateWindow) return redisResult;
     windowCount += carried;
     const allowed = windowCount < maxRequests;
@@ -87,6 +100,8 @@ describe("enforceOrgRateLimit lease (#9899 Tier-3)", () => {
     redisChecks = 0;
     tierReads = 0;
     carriedCounts = [];
+    pauseRedisChecks = false;
+    redisCheckWaiters.length = 0;
     simulateWindow = false;
     windowCount = 0;
     tierConfig = { windowMs: 60_000, maxRequests: 120 };
@@ -149,6 +164,42 @@ describe("enforceOrgRateLimit lease (#9899 Tier-3)", () => {
     expect(redisChecks).toBe(2);
     // The 3 leased requests were flushed into the sliding window.
     expect(carriedCounts).toEqual([0, 3]);
+  });
+
+  test("concurrent authoritative checks claim the carry once and cannot publish a stale replacement lease (#15415)", async () => {
+    const org = uid();
+    // remaining=1 < pro-rated share → one leased serve, then every concurrent
+    // request after it falls through to Redis.
+    redisResult = { allowed: true, remaining: 1, resetAt: Date.now() + 60_000 };
+    await enforceOrgRateLimit(org, "completions"); // authoritative (carried 0)
+    await enforceOrgRateLimit(org, "completions"); // lease 1/1
+    expect(redisChecks).toBe(1);
+
+    pauseRedisChecks = true;
+    const owner = enforceOrgRateLimit(org, "completions");
+    const nonOwner = enforceOrgRateLimit(org, "completions");
+    await waitForRedisWaiters(2);
+
+    // The first fallthrough claims and resets the carry synchronously. The
+    // second fallthrough still performs its own authoritative check, but it
+    // must not append the same leased request again.
+    expect(carriedCounts).toEqual([0, 1, 0]);
+
+    // Let the non-owner return first. If it publishes a replacement lease, the
+    // next request below would serve from that stale lease and skip Redis.
+    redisCheckWaiters[1]();
+    expect(await nonOwner).toBeNull();
+    expect(redisChecks).toBe(3);
+
+    const whileOwnerInFlight = enforceOrgRateLimit(org, "completions");
+    await waitForRedisWaiters(3);
+    expect(redisChecks).toBe(4);
+    expect(carriedCounts).toEqual([0, 1, 0, 0]);
+
+    redisCheckWaiters[0]();
+    redisCheckWaiters[2]();
+    expect(await owner).toBeNull();
+    expect(await whileOwnerInFlight).toBeNull();
   });
 
   test("a denial is leased: repeats within the TTL 429 without another Redis round-trip", async () => {
