@@ -7,7 +7,15 @@ import {
   isLocalAsrCaptureSupported,
   startLocalAsrRecorder,
 } from "../voice/local-asr-capture";
-import { useVoiceChat } from "./useVoiceChat";
+import { __voiceChatInternals, useVoiceChat } from "./useVoiceChat";
+
+// #voice-crickets: the composer discard is gated by a permission-prompt grace
+// window (the iOS getUserMedia dialog fires visibilitychange → APP_PAUSE the
+// instant capture starts; cancelling there kills the mic the user is about to
+// grant). A capture younger than the grace is KEPT; only a pause past the
+// window (a genuine background) cancels — so advance past the grace before
+// asserting the real-suspend teardown.
+const PAST_GRACE_MS = __voiceChatInternals.CAPTURE_PAUSE_GRACE_MS + 100;
 
 vi.mock("../api/csrf-client", () => ({
   fetchWithCsrf: vi.fn(),
@@ -34,6 +42,7 @@ const startLocalAsrRecorderMock = vi.mocked(startLocalAsrRecorder);
  */
 describe("useVoiceChat — app-suspend capture teardown (#voice-V1)", () => {
   beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     isLocalAsrCaptureSupportedMock.mockReturnValue(true);
     fetchWithCsrfMock.mockImplementation(async (input) => {
       const url = typeof input === "string" ? input : String(input);
@@ -79,6 +88,11 @@ describe("useVoiceChat — app-suspend capture teardown (#voice-V1)", () => {
     expect(startLocalAsrRecorderMock).toHaveBeenCalledTimes(1);
     expect(result.current.isListening).toBe(true);
 
+    // Age the capture past the permission-prompt grace so the pause reads as a
+    // genuine background-suspend, not the getUserMedia dialog focus-steal.
+    await act(async () => {
+      vi.advanceTimersByTime(PAST_GRACE_MS);
+    });
     // Background the app mid-capture.
     await act(async () => {
       document.dispatchEvent(new Event("eliza:app-pause"));

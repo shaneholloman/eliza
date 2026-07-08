@@ -41,13 +41,16 @@ import {
   ttsDebug,
   ttsDebugTextPreview,
 } from "../utils/tts-debug";
+import { voiceCaptureDebug } from "../utils/voice-capture-debug";
 import { hasConfiguredApiKey } from "../voice";
 import {
   isLocalAsrCaptureSupported,
+  isSilentWav,
   type LocalAsrRecorder,
   startLocalAsrRecorder,
 } from "../voice/local-asr-capture";
 import {
+  CloudSttError,
   isLocalInferenceAsrReady,
   transcribeCloudWav,
   transcribeLocalInferenceWav,
@@ -147,6 +150,17 @@ const CLOUD_TTS_TIMEOUT_MS = 60_000;
 const LOCAL_INFERENCE_TTS_TIMEOUT_MS = 60_000;
 /** How long the transient `micReconnected` pulse stays set after an auto-restart. */
 const MIC_RECONNECT_PULSE_MS = 1500;
+/**
+ * Grace window (ms) after a capture starts during which an APP_PAUSE is treated
+ * as the iOS permission-dialog focus-steal (a transient visibilitychange the
+ * native getUserMedia prompt fires) rather than a real background-suspend, so
+ * the just-started capture is NOT cancelled out from under the grant
+ * (#voice-crickets). A genuine background that actually stalls the WebAudio
+ * graph is still caught at stop() by the empty-WAV guard, so keeping a young
+ * capture alive here is safe. 1500ms comfortably covers the tap→dialog→grant
+ * round-trip without lingering long enough to strand a real suspend.
+ */
+const CAPTURE_PAUSE_GRACE_MS = 1500;
 
 // ── Internal helpers ─────────────────────────────────────────────────
 
@@ -212,6 +226,31 @@ function shouldUseCloudAsr(config: VoiceConfig | null): boolean {
   return provider === "eliza-cloud" || provider === "openai";
 }
 
+/**
+ * The resolved cloud-STT POST target (`/api/asr/cloud`) for the on-screen
+ * voice HUD's `post:req` breadcrumb. Best-effort: `resolveApiUrl` can throw in
+ * a non-DOM context, in which case the raw path is a good-enough witness.
+ */
+function cloudAsrPostUrl(): string {
+  try {
+    return resolveApiUrl("/api/asr/cloud");
+  } catch {
+    return "/api/asr/cloud";
+  }
+}
+
+/**
+ * The HTTP status carried by a {@link CloudSttError}, when the cloud STT
+ * failure was an HTTP response (403/413/5xx). `null` for a transport/timeout
+ * failure or a non-cloud error — the HUD then attributes it to the capture leg
+ * instead of the POST.
+ */
+function cloudSttErrorStatus(error: unknown): number | null {
+  return error instanceof CloudSttError && typeof error.status === "number"
+    ? error.status
+    : null;
+}
+
 const ACTIVE_VOICE_SESSION_MODES = new Set<Exclude<VoiceSessionMode, "idle">>([
   "compose",
   "push-to-talk",
@@ -240,6 +279,7 @@ interface VoiceTranscriptUpdateMetadata {
 // ── Test-visible internals ───────────────────────────────────────────
 
 export const __voiceChatInternals = {
+  CAPTURE_PAUSE_GRACE_MS,
   isWindowsElectrobunRenderer,
   shouldPreferNativeTalkMode,
   shouldAutoRestartBrowserRecognition,
@@ -312,6 +352,13 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
   const speechTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const enabledRef = useRef(false);
   const listeningModeRef = useRef<VoiceCaptureMode>("idle");
+  // Wall-clock (ms) the current capture recorder began. Used by the APP_PAUSE
+  // handler to distinguish a genuine background-suspend from the transient
+  // visibilitychange the iOS permission dialog fires the instant getUserMedia
+  // pops its native prompt (#voice-crickets). A capture younger than
+  // CAPTURE_PAUSE_GRACE_MS is almost certainly mid-permission-prompt, not
+  // backgrounded — cancelling it there kills the mic the user is about to grant.
+  const captureStartedAtRef = useRef<number>(0);
   const transcriptBufferRef = useRef("");
   const latestTranscriptTurnRef = useRef<VoiceTurn | null>(null);
   const emitTranscript = useEffectEvent(
@@ -811,8 +858,28 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
     if (listeningModeRef.current === "idle" && !localAsrRecorderRef.current) {
       return;
     }
-    enabledRef.current = false;
+    // Permission-prompt grace (#voice-crickets): on the installed iOS PWA the
+    // native getUserMedia dialog steals focus the instant capture starts, which
+    // fires `visibilitychange → hidden` → APP_PAUSE. If we cancel here we kill
+    // the mic the user is about to grant — tap, prompt, grant, then crickets.
+    // A capture younger than the grace window is treated as "mid-permission
+    // prompt, not backgrounded" and KEPT. A genuine background that actually
+    // stalls the WebAudio graph is still caught at stop() by the empty-WAV
+    // guard, so keeping a young capture alive here is safe.
     const recorder = localAsrRecorderRef.current;
+    if (recorder && captureStartedAtRef.current > 0) {
+      const captureAgeMs = Date.now() - captureStartedAtRef.current;
+      if (captureAgeMs < CAPTURE_PAUSE_GRACE_MS) {
+        voiceCaptureDebug("pause:kept", {
+          captureAgeMs,
+          graceMs: CAPTURE_PAUSE_GRACE_MS,
+          mode: listeningModeRef.current,
+        });
+        return;
+      }
+    }
+    voiceCaptureDebug("pause:cancel", { mode: listeningModeRef.current });
+    enabledRef.current = false;
     localAsrRecorderRef.current = null;
     if (recorder) {
       // cancel() releases the mic tracks + closes the context, no throw, no POST.
@@ -950,14 +1017,27 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
       try {
         const recorder = await startLocalAsrRecorder();
         localAsrRecorderRef.current = recorder;
+        captureStartedAtRef.current = Date.now();
         sttBackendRef.current = "local-inference";
         enabledRef.current = true;
         listeningModeRef.current = mode;
         setSupported(true);
         setCaptureMode(mode);
         setIsListening(true);
+        voiceCaptureDebug("rec:start", { backend: "local-inference", mode });
         return true;
-      } catch {
+      } catch (error) {
+        // The recorder throws on getUserMedia reject or a dead AudioContext
+        // (see local-asr-capture); surface which so the HUD shows why capture
+        // never armed instead of silent crickets.
+        voiceCaptureDebug("rec:start-err", {
+          backend: "local-inference",
+          name: error instanceof Error ? error.name : "Error",
+          reason:
+            error instanceof Error
+              ? error.message.slice(0, 80)
+              : String(error).slice(0, 80),
+        });
         localAsrRecorderRef.current = null;
         return false;
       }
@@ -984,14 +1064,26 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
       try {
         const recorder = await startLocalAsrRecorder();
         localAsrRecorderRef.current = recorder;
+        captureStartedAtRef.current = Date.now();
         sttBackendRef.current = "cloud";
         enabledRef.current = true;
         listeningModeRef.current = mode;
         setSupported(true);
         setCaptureMode(mode);
         setIsListening(true);
+        voiceCaptureDebug("rec:start", { backend: "cloud", mode });
         return true;
-      } catch {
+      } catch (error) {
+        // Recorder throws on getUserMedia reject or a suspended AudioContext
+        // that never resumed — the exact iOS-PWA crickets modes. Trace it.
+        voiceCaptureDebug("rec:start-err", {
+          backend: "cloud",
+          name: error instanceof Error ? error.name : "Error",
+          reason:
+            error instanceof Error
+              ? error.message.slice(0, 80)
+              : String(error).slice(0, 80),
+        });
         localAsrRecorderRef.current = null;
         return false;
       }
@@ -1175,7 +1267,10 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
 
   const startListening = useCallback(
     async (mode: Exclude<VoiceCaptureMode, "idle"> = "compose") => {
-      if (enabledRef.current) return;
+      if (enabledRef.current) {
+        voiceCaptureDebug("start:noop", { reason: "already-enabled", mode });
+        return;
+      }
 
       transcriptBufferRef.current = "";
       setInterimTranscript("");
@@ -1183,8 +1278,20 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
         interruptSpeechRef.current();
       }
 
+      // Which STT backend does the config resolve to, and why? This is the
+      // first fork the on-screen HUD needs: a cloud-STT config that silently
+      // fell through to the browser recognizer (absent on iOS PWA) is a classic
+      // crickets cause. `asrProvider` is the resolved value that decides it.
+      voiceCaptureDebug("start:enter", {
+        mode,
+        asrProvider: voiceConfigRef.current?.asr?.provider ?? null,
+        captureSupported: isLocalAsrCaptureSupported(),
+        preferNative: shouldPreferNativeTalkMode(),
+      });
+
       const localStarted = await startLocalInferenceRecognition(mode);
       if (localStarted) {
+        voiceCaptureDebug("provider:local-inference", { mode });
         return;
       }
 
@@ -1194,17 +1301,28 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
       // through to the engine-dependent browser recognizer.
       const cloudStarted = await startCloudRecognition(mode);
       if (cloudStarted) {
+        voiceCaptureDebug("provider:cloud", { mode });
         return;
       }
 
       if (shouldPreferNativeTalkMode()) {
         const started = await startTalkModeRecognition(mode);
         if (started) {
+          voiceCaptureDebug("provider:talkmode", { mode });
           return;
         }
       }
 
-      startBrowserRecognition(mode);
+      // Last resort: browser SpeechRecognition. On iOS PWA this engine is
+      // absent, so landing here after a cloud config is the silent-crickets
+      // regression the cloud path was added to avoid — mark it loudly.
+      const browserStarted = startBrowserRecognition(mode);
+      voiceCaptureDebug(browserStarted ? "provider:browser" : "provider:none", {
+        mode,
+        note: browserStarted
+          ? undefined
+          : "no backend started — capture will not run",
+      });
     },
     [
       startBrowserRecognition,
@@ -1259,10 +1377,36 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
         // just doesn't submit rather than being transcribed by the wrong engine.
         const recorder = localAsrRecorderRef.current;
         localAsrRecorderRef.current = null;
+        voiceCaptureDebug("rec:stop", { backend: "cloud", submit });
         if (recorder) {
           try {
             const audio = await recorder.stop();
+            // WAV byte size + silence classification: a SILENT WAV explains the
+            // "tapped, then crickets" no-op (the recorder captured all-zero
+            // PCM — dead AudioContext / muted mic); a healthy byte count means
+            // capture worked and the failure is downstream at the POST. The
+            // silence check is a HUD breadcrumb only — wrap it so a classifier
+            // hiccup never breaks the capture it is meant to observe.
+            let silentLabel = "?";
+            try {
+              silentLabel = isSilentWav(audio) ? "SILENT" : "ok";
+            } catch {
+              /* breadcrumb best-effort */
+            }
+            voiceCaptureDebug("wav", {
+              bytes: audio.byteLength,
+              silent: silentLabel,
+            });
+            voiceCaptureDebug("post:req", {
+              url: cloudAsrPostUrl(),
+              bytes: audio.byteLength,
+            });
             const transcript = await transcribeCloudAudio(audio);
+            voiceCaptureDebug("post:200", {
+              status: "200",
+              chars: transcript.length,
+            });
+            voiceCaptureDebug("txt", { chars: transcript.length });
             applyTranscriptUpdate(transcript, true, {
               mode:
                 normalizeActiveVoiceSessionMode(mode) ??
@@ -1272,6 +1416,22 @@ export function useVoiceChat(options: VoiceChatOptions): VoiceChatState {
               metadata: { source: "cloud" },
             });
           } catch (error) {
+            // Distinguish the failing leg for the HUD: a `post:<status>` when the
+            // cloud STT rejected (403/413/5xx), else a generic capture/parse
+            // failure (e.g. "No microphone audio was captured" = empty WAV).
+            const status = cloudSttErrorStatus(error);
+            if (status != null) {
+              voiceCaptureDebug("post:err", { status: String(status) });
+            } else {
+              voiceCaptureDebug("rec:stop-err", {
+                backend: "cloud",
+                name: error instanceof Error ? error.name : "Error",
+                reason:
+                  error instanceof Error
+                    ? error.message.slice(0, 80)
+                    : String(error).slice(0, 80),
+              });
+            }
             ttsDebug("asr:cloud:error", {
               message: error instanceof Error ? error.message : String(error),
             });

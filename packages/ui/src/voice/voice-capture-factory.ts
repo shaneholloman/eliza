@@ -32,6 +32,7 @@ import {
   type TalkModeErrorEvent,
   type TalkModeTranscriptEvent,
 } from "../bridge/native-plugins";
+import { voiceCaptureDebug } from "../utils/voice-capture-debug";
 import {
   isLocalAsrCaptureSupported,
   isSilentWav,
@@ -107,6 +108,15 @@ export interface VoiceCaptureFactoryOptions {
   onTranscript: (segment: VoiceCaptureTranscriptSegment) => void;
   /** Called when capture state changes. Optional. */
   onStateChange?: (state: VoiceCaptureState, error?: Error) => void;
+  /**
+   * Called when the pre-POST silence guard (#voice-V5) no-ops a near-silent
+   * capture instead of POSTing it to cloud STT. The guard is CORRECT (a silent
+   * WAV isn't worth a round-trip), but a pure silent no-op reads as "crickets"
+   * on-device — the user tapped, spoke (or thought they did), and got nothing,
+   * no transcript AND no feedback (#voice-crickets). This lets the surface emit
+   * a subtle "didn't catch that" hint so the dead-air is legible. Optional.
+   */
+  onSilentDrop?: () => void;
   /**
    * Which ASR backend to prefer. Default: `local-inference` when supported,
    * with browser SpeechRecognition as automatic fallback.
@@ -219,6 +229,7 @@ export function createVoiceCapture(
   const {
     onTranscript,
     onStateChange,
+    onSilentDrop,
     asrProvider,
     lang = "en-US",
     localAsrAutoStop,
@@ -257,6 +268,7 @@ export function createVoiceCapture(
     });
     recorder = next;
     active = true;
+    voiceCaptureDebug("start", { backend: backendKind ?? "wav" });
     setState("listening");
   }
 
@@ -453,6 +465,11 @@ export function createVoiceCapture(
         // is free/offline, so it stays unguarded to avoid clipping quiet-mic
         // users whose real speech reads near the silence floor on-device.)
         if (kind === "cloud" && isSilentWav(wav)) {
+          voiceCaptureDebug("silent:drop", { backend: kind });
+          // Subtle "didn't catch that" hint instead of pure silence: the guard
+          // is right (no cloud round-trip for a silent WAV), but crickets with
+          // zero feedback is a UX bug even when the guard fires correctly.
+          onSilentDrop?.();
           setState("stopped");
           setState("idle");
           return;
@@ -462,7 +479,12 @@ export function createVoiceCapture(
           // attached so the transcript recorder can retain the audio. A ~15s
           // per-attempt timeout + one auto-retry (#voice-V4) rides inside
           // transcribeCloudWav so flaky cellular doesn't hard-fail the turn.
+          voiceCaptureDebug("posted", { backend: kind, wavBytes: wav.length });
           const text = await transcribeCloudWav(wav);
+          voiceCaptureDebug("transcript", {
+            backend: kind,
+            chars: text.length,
+          });
           onTranscript({
             text,
             final: true,

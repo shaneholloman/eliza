@@ -389,10 +389,12 @@ describe("createVoiceCapture", () => {
     isSilentWavMock.mockReturnValue(true);
     const onTranscript = vi.fn();
     const onStateChange = vi.fn();
+    const onSilentDrop = vi.fn();
     const capture = createVoiceCapture({
       asrProvider: "eliza-cloud",
       onTranscript,
       onStateChange,
+      onSilentDrop,
     });
 
     await capture.start();
@@ -402,6 +404,9 @@ describe("createVoiceCapture", () => {
     expect(isSilentWavMock).toHaveBeenCalledWith(wav);
     expect(transcribeCloudWavMock).not.toHaveBeenCalled();
     expect(onTranscript).not.toHaveBeenCalled();
+    // #voice-crickets: the guard fired, but the surface is notified so it can
+    // show a subtle "didn't catch that" hint instead of pure silence.
+    expect(onSilentDrop).toHaveBeenCalledTimes(1);
     // Not an error state — a clean settle back to idle.
     const states = onStateChange.mock.calls.map(([s]) => s);
     expect(states).not.toContain("error");

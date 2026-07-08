@@ -95,6 +95,7 @@ import {
   MAX_CHAT_IMAGES,
   summarizeDroppedAttachments,
 } from "../../utils/image-attachment";
+import { voiceCaptureDebug } from "../../utils/voice-capture-debug";
 import { InlineWidgetText } from "../chat/InlineWidgetText";
 import { MessageAttachments } from "../chat/MessageAttachments";
 import {
@@ -2180,8 +2181,19 @@ export function ContinuousChatOverlay({
   });
 
   const handleMicClick = React.useCallback(() => {
+    // Trace the home-overlay mic tap BEFORE any branching so the on-screen HUD
+    // captures the tap even when this handler early-returns short of capture.
+    voiceCaptureDebug("mic:tap", {
+      surface: "overlay",
+      transcriptionMode,
+      responding,
+      handsFree,
+    });
     // Swallow exactly the one click that follows a held PTT release.
-    if (shouldSuppressClick()) return;
+    if (shouldSuppressClick()) {
+      voiceCaptureDebug("mic:noop", { reason: "suppress-click" });
+      return;
+    }
     // While transcribing, the mic is the master voice control: a tap turns the
     // mic OFF, which also ends transcription (mic = parent — turning off the mic
     // turns off transcript). This is distinct from the transcript button, which
@@ -2192,14 +2204,19 @@ export function ContinuousChatOverlay({
     // gating it left a lit, dead "stop transcription" mic until the reply
     // finished.
     if (transcriptionMode) {
+      voiceCaptureDebug("mic:branch", { action: "stop-transcription" });
       stopTranscriptionAndMic();
       return;
     }
     // Voice can't be turned ON while a reply is in flight (it's gated until the
     // turn finishes), but an active hands-free session can always be turned OFF.
-    if (responding && !handsFree) return;
+    if (responding && !handsFree) {
+      voiceCaptureDebug("mic:noop", { reason: "responding-not-handsfree" });
+      return;
+    }
     // Quick tap = hands-free conversation: the agent speaks its replies back and
     // the mic re-opens after each one. Tap again to end.
+    voiceCaptureDebug("mic:branch", { action: "toggle-handsfree" });
     toggleHandsFree();
   }, [
     responding,
