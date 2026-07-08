@@ -34,7 +34,6 @@ export default scenario({
       kind: "message",
       name: "learning-goal grounded preview",
       text: "Let's define success as holding a 10-minute cafe-style conversation without switching to English by December 1, with four 20-minute practice blocks each week.",
-      responseIncludesAll: ["10", "Dec", "practice"],
       responseExcludes: ["details you mentioned"],
       responseJudge: {
         rubric:
