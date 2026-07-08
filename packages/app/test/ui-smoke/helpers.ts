@@ -1754,6 +1754,14 @@ function smokeDatabaseQuery(sql: string) {
 
 /** Installs baseline API routes for smoke tests before flow-specific overrides. */
 export async function installDefaultAppRoutes(page: Page): Promise<void> {
+  // Answer with a stamp that carries NO commit/label/builtAt, so the BuildBadge
+  // (#14174) — whose toLabel() needs one of those to produce a label — renders
+  // nothing. A 200 keeps the browser from logging a build-info.json 404 (which
+  // plugin-views-visual's console-error guard would flag), while the badge stays
+  // hidden: it is a tap-for-diagnostics DEV instrument, not a view control, and
+  // serving a commit made its interactive pill render over the shell where the
+  // generic "exercise every control" pass clicks it and gets trapped behind its
+  // full-viewport diagnostics scrim.
   await page.route("**/build-info.json", async (route) => {
     if (route.request().method() !== "GET") {
       await route.fallback();
@@ -1764,7 +1772,6 @@ export async function installDefaultAppRoutes(page: Page): Promise<void> {
       contentType: "application/json",
       body: JSON.stringify({
         generatedAt: SMOKE_GENERATED_AT,
-        commit: "ui-smoke",
         branch: "ui-smoke",
       }),
     });

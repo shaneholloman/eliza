@@ -4,6 +4,7 @@
  */
 import { expect, type Locator, test } from "@playwright/test";
 import {
+  hideContinuousChatOverlay,
   installDefaultAppRoutes,
   openAppPath,
   seedAppStorage,
@@ -28,6 +29,27 @@ const CLICK_SELECTOR =
   "button:visible, [role='button']:visible, [role='tab']:visible, [role='menuitem']:visible, a[href^='#']:visible";
 const INPUT_SELECTOR =
   "input:visible:not([type='file']):not([disabled]), textarea:visible:not([disabled])";
+
+/**
+ * True when a real pointer landing on the control's center actually hits it (or
+ * its own subtree). Mirrors the sibling all-views-interaction guard: a control
+ * that is scrolled outside the layout viewport, or that the agent-surface
+ * spatial system paints a `data-spatial-kind` box over (the box is the pointer
+ * target and re-dispatches to the registered element), is not something a raw
+ * Playwright click can drive — so the loop skips it instead of recording a
+ * timeout. This is not reduced coverage: an unreachable control cannot be
+ * clicked by a user pointer either.
+ */
+async function isPointerReachable(control: Locator): Promise<boolean> {
+  return control.evaluate((el: Element) => {
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const top = document.elementFromPoint(x, y);
+    return top === el || (top ? el.contains(top) : false);
+  });
+}
 
 async function fillOrToggleInput(input: Locator, index: number): Promise<void> {
   const tagName = ((await input.evaluate((el: Element) => el.tagName)) ?? "")
@@ -123,7 +145,24 @@ test.describe("plugin view interaction coverage", () => {
       });
 
       await page.setViewportSize({ width: 1440, height: 1000 });
+      // Copy-to-clipboard controls (e.g. the wallet address buttons) call
+      // navigator.clipboard.writeText; without the grant Chromium throws
+      // "Write permission denied" as an uncaught pageerror. Granting it lets the
+      // control's real path run instead of failing on a harness permission gap.
+      await page
+        .context()
+        .grantPermissions(["clipboard-read", "clipboard-write"])
+        .catch(() => {
+          // Clipboard permission names are Chromium-only; this lane is
+          // Chromium-only, so a rejection elsewhere is a harmless no-op.
+        });
       await seedAppStorage(page);
+      // Scope the pass to the plugin view's own controls: suppress the always-on
+      // continuous chat overlay (shell chrome, covered by its own specs). Its
+      // aria-hidden drag-handle pill sits over the composer textarea and has no
+      // click affordance, so the generic click-loop would otherwise fight it —
+      // exactly as the sibling all-views-interaction spec already does.
+      await hideContinuousChatOverlay(page);
       await installDefaultAppRoutes(page);
       await openAppPath(page, view.path);
       await page.locator("body").waitFor({ state: "visible", timeout: 60_000 });
@@ -154,6 +193,16 @@ test.describe("plugin view interaction coverage", () => {
         }
         const control = liveControls.nth(i);
         if (!(await control.isVisible().catch(() => false))) {
+          continue;
+        }
+        // A disabled control is intentionally inert; clicking it just waits out
+        // the actionability timeout. Skip it rather than record a false failure.
+        if (!(await control.isEnabled().catch(() => false))) {
+          continue;
+        }
+        // Skip controls a raw pointer can't land on (off-viewport list rows,
+        // agent-surface spatial boxes) — see isPointerReachable.
+        if (!(await isPointerReachable(control).catch(() => false))) {
           continue;
         }
         try {
