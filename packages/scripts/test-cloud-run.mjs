@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { shouldNormalizeBunStatus99 } from "./test-cloud-run-helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
@@ -210,10 +211,15 @@ for (let i = 0; i < batches.length; i++) {
     {
       cwd: stagingDir,
       env,
-      stdio: "inherit",
+      encoding: "utf8",
+      maxBuffer: 128 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
       shell: process.platform === "win32",
     },
   );
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
   if (result.error) {
     console.error(result.error);
     process.exit(1);
@@ -223,6 +229,13 @@ for (let i = 0; i < batches.length; i++) {
   const status = result.status;
   const signal = result.signal;
   if ((status ?? 1) !== 0 || signal) {
+    if (shouldNormalizeBunStatus99({ status, signal, output })) {
+      console.warn(
+        `[test:cloud] batch ${i + 1}/${batches.length} exited with Bun status 99 ` +
+          "after reporting 0 failed tests; treating as pass (known PGlite/Emscripten exitCode pollution).",
+      );
+      continue;
+    }
     anyFailed = true;
     console.error(
       `[test:cloud] batch ${i + 1}/${batches.length} exited non-zero ` +
