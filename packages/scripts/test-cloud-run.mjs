@@ -194,6 +194,10 @@ function chunkByBudget(files) {
 }
 const batches = chunkByBudget(allTestFiles);
 
+function formatBatchFiles(batch) {
+  return batch.map((file) => `  - ${path.relative(repoRoot, file)}`).join("\n");
+}
+
 let anyFailed = false;
 for (let i = 0; i < batches.length; i++) {
   const batch = batches[i];
@@ -216,7 +220,16 @@ for (let i = 0; i < batches.length; i++) {
   }
   // Run every batch even after a failure so one broken suite doesn't mask the
   // rest; aggregate into a single non-zero exit for the gate.
-  if ((result.status ?? 1) !== 0) anyFailed = true;
+  const status = result.status;
+  const signal = result.signal;
+  if ((status ?? 1) !== 0 || signal) {
+    anyFailed = true;
+    console.error(
+      `[test:cloud] batch ${i + 1}/${batches.length} exited non-zero ` +
+        `(status=${status ?? "null"}, signal=${signal ?? "none"})\n` +
+        `[test:cloud] files in failed batch:\n${formatBatchFiles(batch)}`,
+    );
+  }
 }
 
 process.exit(anyFailed ? 1 : 0);
