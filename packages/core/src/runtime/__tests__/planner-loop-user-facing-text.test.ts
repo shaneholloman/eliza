@@ -1,9 +1,10 @@
 /**
  * Covers the planner's user-facing-text isolation: only a tool's explicit
- * `userFacingText` (never its log-shaped `text`) reaches the reply, the
- * single-verified-result filter ignores failed steps, and the spawn-arg-leak
- * detector suppresses leaked TASKS envelopes. Deterministic — vitest-mocked
- * `useModel` plus pure helper assertions; no live model.
+ * `userFacingText` (never its log-shaped `text`) reaches the reply,
+ * confirmation previews can claim the canonical reply without pretending to be
+ * persisted saves, and the spawn-arg-leak detector suppresses leaked TASKS
+ * envelopes. Deterministic — vitest-mocked `useModel` plus pure helper
+ * assertions; no live model.
  */
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -194,13 +195,9 @@ describe("planner-loop — user-facing tool text isolation", () => {
 	});
 });
 
-describe("singleVerifiedUserFacingToolResultText — failed-step filter", () => {
-	// Greptile flagged that the previous implementation counted ALL steps
-	// with `toolCall + result` toward its uniqueness check — failed steps
-	// included — so a 2-tool plan whose first tool errored and whose
-	// second tool set `verifiedUserFacing: true` would silently fall
-	// through to the evaluator's reply. These tests pin the corrected
-	// filter (`step.result?.success === true`).
+describe("singleVerifiedUserFacingToolResultText — canonical tool filter", () => {
+	// A failed step that is neither a user-complete preview nor a successful
+	// action should not make a later verified tool ambiguous.
 	const trajectoryWith = (
 		steps: PlannerTrajectory["steps"],
 	): PlannerTrajectory => ({
@@ -266,6 +263,245 @@ describe("singleVerifiedUserFacingToolResultText — failed-step filter", () => 
 	it("returns undefined when there are no successful tools", () => {
 		const trajectory = trajectoryWith([failedStep]);
 		expect(singleVerifiedUserFacingToolResultText(trajectory)).toBeUndefined();
+	});
+
+	it("returns a verified confirmation preview even though the action is not a persisted success", () => {
+		const preview =
+			"I can save this as a goal. Success looks like holding a 10-minute Spanish conversation by December 1. Confirm and I'll save it.";
+		const trajectory = trajectoryWith([
+			{
+				iteration: 0,
+				toolCall: { id: "call-1", name: "OWNER_GOALS", arguments: {} },
+				result: {
+					success: false as const,
+					text: preview,
+					userFacingText: preview,
+					verifiedUserFacing: true,
+					data: {
+						requiresConfirmation: true,
+						lifeDraft: {
+							operation: "create_goal",
+							request: { title: "Conversational Spanish" },
+						},
+					},
+				},
+			},
+		]);
+
+		expect(singleVerifiedUserFacingToolResultText(trajectory)).toBe(preview);
+	});
+
+	it("returns the latest verified confirmation preview when a turn drafted more than once", () => {
+		const firstPreview =
+			"I can save this as a goal. Success looks like learning Spanish. Confirm and I'll save it.";
+		const refinedPreview =
+			"I can save this as a goal. Success looks like holding a 10-minute Spanish conversation by December 1. Confirm and I'll save it.";
+		const draftStep = (text: string, iteration: number) => ({
+			iteration,
+			toolCall: { id: `call-${iteration}`, name: "OWNER_GOALS", arguments: {} },
+			result: {
+				success: false as const,
+				text,
+				userFacingText: text,
+				verifiedUserFacing: true,
+				data: {
+					requiresConfirmation: true,
+					lifeDraft: {
+						operation: "create_goal",
+						request: { title: "Conversational Spanish" },
+					},
+				},
+			},
+		});
+		const trajectory = trajectoryWith([
+			draftStep(firstPreview, 0),
+			draftStep(refinedPreview, 1),
+		]);
+
+		expect(singleVerifiedUserFacingToolResultText(trajectory)).toBe(
+			refinedPreview,
+		);
+	});
+
+	it("lets a verified confirmation preview outrank a later motivational terminal reply", async () => {
+		const preview =
+			"I can save this as a goal. Success looks like holding a 10-minute Spanish conversation by December 1. Confirm and I'll save it.";
+		const runtime = {
+			useModel: vi
+				.fn()
+				.mockResolvedValueOnce({
+					text: "",
+					toolCalls: [
+						{
+							id: "call-1",
+							name: "OWNER_GOALS",
+							arguments: { action: "create", kind: "goal" },
+						},
+					],
+					usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 },
+				})
+				.mockResolvedValueOnce({
+					text: "What is motivating you to focus on cafe-style conversations?",
+					usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 },
+				}),
+		};
+		const executeToolCall = vi.fn(async () => ({
+			success: false as const,
+			text: preview,
+			userFacingText: preview,
+			verifiedUserFacing: true,
+			data: {
+				requiresConfirmation: true,
+				lifeDraft: {
+					operation: "create_goal",
+					request: { title: "Conversational Spanish" },
+				},
+			},
+		}));
+		const evaluate = vi
+			.fn()
+			.mockResolvedValueOnce({
+				success: false,
+				decision: "CONTINUE" as const,
+				thought: "Preview needs a terminal user reply.",
+			})
+			.mockResolvedValueOnce({
+				success: true,
+				decision: "FINISH" as const,
+				messageToUser:
+					"I can save that; what is motivating you to focus on cafe-style conversations?",
+				thought: "Done.",
+			});
+
+		const result = await runPlannerLoop({
+			runtime,
+			context: { id: "ctx" },
+			executeToolCall,
+			evaluate,
+		});
+
+		expect(result.finalMessage).toBe(preview);
+		expect(runtime.useModel).toHaveBeenCalledTimes(2);
+		expect(evaluate).toHaveBeenCalledTimes(2);
+	});
+
+	it("relays confirmation-required action text even when the adapter omitted userFacingText", async () => {
+		const preview =
+			"I can save this as a goal. Success looks like four weekly 20-minute practice sessions leading to a 10-minute Spanish conversation by December 1. Confirm and I'll save it.";
+		const runtime = {
+			useModel: vi
+				.fn()
+				.mockResolvedValueOnce({
+					text: "",
+					toolCalls: [
+						{
+							id: "call-1",
+							name: "OWNER_GOALS",
+							arguments: { action: "create", kind: "goal" },
+						},
+					],
+					usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 },
+				})
+				.mockResolvedValueOnce({
+					text: "I drafted the goal based on your description. Want me to save it?",
+					usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 },
+				}),
+		};
+		const executeToolCall = vi.fn(async () => ({
+			success: false as const,
+			text: preview,
+			data: {
+				requiresConfirmation: true,
+				lifeDraft: {
+					operation: "create_goal",
+					request: { title: "Conversational Spanish" },
+				},
+			},
+		}));
+		const evaluate = vi
+			.fn()
+			.mockResolvedValueOnce({
+				success: false,
+				decision: "CONTINUE" as const,
+				thought: "Preview needs a terminal user reply.",
+			})
+			.mockResolvedValueOnce({
+				success: true,
+				decision: "FINISH" as const,
+				messageToUser:
+					"I drafted the goal based on your description. Want me to save it?",
+				thought: "Done.",
+			});
+
+		const result = await runPlannerLoop({
+			runtime,
+			context: { id: "ctx" },
+			executeToolCall,
+			evaluate,
+		});
+
+		expect(result.finalMessage).toBe(preview);
+	});
+
+	it("lets a confirmation-required preview outrank a later terminal REPLY tool call", async () => {
+		const preview =
+			"I can save this as a goal. Success looks like four weekly 20-minute practice sessions leading to a 10-minute Spanish conversation by December 1. Confirm and I'll save it.";
+		const runtime = {
+			useModel: vi
+				.fn()
+				.mockResolvedValueOnce({
+					text: "",
+					toolCalls: [
+						{
+							id: "call-1",
+							name: "OWNER_GOALS",
+							arguments: { action: "create", kind: "goal" },
+						},
+					],
+					usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 },
+				})
+				.mockResolvedValueOnce({
+					text: "",
+					toolCalls: [
+						{
+							id: "reply-1",
+							name: "REPLY",
+							arguments: {
+								text: "Sounds great. Should I create it with the details you mentioned?",
+							},
+						},
+					],
+					usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 },
+				}),
+		};
+		const executeToolCall = vi.fn(async () => ({
+			success: false as const,
+			text: preview,
+			userFacingText: preview,
+			verifiedUserFacing: true,
+			data: {
+				requiresConfirmation: true,
+				lifeDraft: {
+					operation: "create_goal",
+					request: { title: "Conversational Spanish" },
+				},
+			},
+		}));
+		const evaluate = vi.fn(async () => ({
+			success: false,
+			decision: "CONTINUE" as const,
+			thought: "Preview needs a terminal user reply.",
+		}));
+
+		const result = await runPlannerLoop({
+			runtime,
+			context: { id: "ctx" },
+			executeToolCall,
+			evaluate,
+		});
+
+		expect(result.finalMessage).toBe(preview);
+		expect(evaluate).toHaveBeenCalledTimes(1);
 	});
 });
 

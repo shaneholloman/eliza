@@ -113,22 +113,23 @@ export interface PlannerToolResult {
 	 * the evaluator has seen the full trajectory and chose what the
 	 * user should read. To mark `userFacingText` as canonical
 	 * (do-not-paraphrase) and have it outrank the evaluator's reply
-	 * when there is exactly one successful tool, set
+	 * when there is exactly one completed tool result, set
 	 * `verifiedUserFacing: true`.
 	 */
 	userFacingText?: string;
 	/**
 	 * Marks `userFacingText` as the canonical answer for this turn —
 	 * the evaluator's `messageToUser` MUST NOT paraphrase it. When set
-	 * AND there is exactly one successful tool with `userFacingText`,
-	 * the planner-loop prefers the tool's text over the evaluator's
-	 * reply for the terminal-FINISH `finalMessage`.
+	 * AND there is exactly one completed tool result with
+	 * `userFacingText`, the planner-loop prefers the tool's text over
+	 * the evaluator's reply for the terminal-FINISH `finalMessage`.
 	 *
-	 * Use when the tool's output is structured data the evaluator can
-	 * easily hallucinate (paths, ids, counts, numeric metrics) and any
-	 * paraphrase risk is worse than echoing the tool verbatim. Leave
-	 * unset for natural-language answers where the evaluator may
-	 * legitimately rephrase or add framing.
+	 * Use when the tool's output is structured data or a confirmation
+	 * preview the evaluator can easily hallucinate (paths, ids, counts,
+	 * numeric metrics, saved-vs-preview state) and any paraphrase risk is
+	 * worse than echoing the tool verbatim. Leave unset for
+	 * natural-language answers where the evaluator may legitimately
+	 * rephrase or add framing.
 	 */
 	verifiedUserFacing?: boolean;
 	/**

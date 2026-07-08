@@ -444,6 +444,18 @@ function makeMessage(text: string): Memory {
   } as unknown as Memory;
 }
 
+function externalSourceMessageText(text: string): string {
+  return [
+    "SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source.",
+    "",
+    "<<<EXTERNAL_UNTRUSTED_CONTENT>>>",
+    "Source: API",
+    "---",
+    text,
+    "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>",
+  ].join("\n");
+}
+
 function taskPlanJson(overrides: Record<string, unknown>): string {
   return JSON.stringify({
     mode: "create",
@@ -567,6 +579,307 @@ describe("runLifeOperationHandler snooze durations", () => {
     expect(serviceState.deleteDefinitionCalls).toHaveLength(0);
     expect(serviceState.deleteGoalCalls).toHaveLength(0);
     expect(result.text).toContain("won't delete everything");
+  });
+
+  it("preserves concrete goal deadline details in the confirmation preview", async () => {
+    const runtime = makeRuntime((prompt) => {
+      if (prompt.includes("Ground the user's goal")) {
+        return JSON.stringify({
+          mode: "create",
+          response: null,
+          title: "Conversational Spanish",
+          description:
+            "Practice conversational Spanish until a cafe-style conversation is possible.",
+          cadence: { kind: "weekly", reviewWindowDays: 7 },
+          successCriteria: {
+            summary:
+              "Hold a 10-minute cafe-style conversation without switching to English by the deadline.",
+            metric: "Spanish-only conversation duration",
+            evidenceSignals: ["manual_checkin"],
+          },
+          supportStrategy: {
+            summary: "Use four weekly practice blocks.",
+            firstStep: "Schedule the first 20-minute practice block.",
+            suggestedSupport: ["weekly check-in"],
+          },
+          groundingState: "grounded",
+          missingCriticalFields: [],
+          confidence: 0.9,
+          evaluationSummary:
+            "Progress is measured by four weekly practice sessions and a 10-minute Spanish-only conversation by the deadline.",
+          targetDomain: "learning",
+        });
+      }
+      return "";
+    });
+
+    const result = await runLifeOperationHandler(
+      runtime,
+      makeMessage(
+        externalSourceMessageText(
+          "Let's define success as holding a 10-minute cafe-style conversation without switching to English by December 1, with four 20-minute practice blocks each week.",
+        ),
+      ),
+      undefined,
+      {
+        parameters: {
+          subaction: "create",
+          kind: "goal",
+          confirmed: false,
+          title: "Conversational Spanish",
+          intent: "Learn conversational Spanish",
+        },
+      } as HandlerOptions,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.text).toContain("December 1");
+    expect(result.text).toContain("four 20-minute practice blocks");
+    expect(result.values).toMatchObject({
+      saved: false,
+      requiresConfirmation: true,
+    });
+    expect(serviceState.goalCreateCalls).toHaveLength(0);
+  });
+
+  it("reuses a cached goal draft when confirm state has no action results", async () => {
+    const runtime = makeRuntime((prompt) => {
+      if (prompt.includes("Ground the user's goal")) {
+        return JSON.stringify({
+          mode: "create",
+          response: null,
+          title: "Stabilize sleep schedule",
+          description:
+            "Maintain a consistent weekday sleep window for the next month.",
+          cadence: { kind: "weekly", reviewWindowDays: 7 },
+          successCriteria: {
+            summary:
+              "Be asleep by 11:30 PM and awake by 7:30 AM on weekdays, within a 45-minute margin.",
+            metric: "weekday schedule adherence",
+            evidenceSignals: ["health.sleep", "manual_checkin"],
+          },
+          supportStrategy: {
+            summary: "Use a consistent wind-down and wake routine.",
+            firstStep: "Start wind-down at 10:30 PM on weekdays.",
+            suggestedSupport: ["weekly sleep check-in"],
+          },
+          groundingState: "grounded",
+          missingCriticalFields: [],
+          confidence: 0.95,
+          evaluationSummary:
+            "Progress is measured by weekday sleep and wake adherence.",
+          targetDomain: "sleep",
+        });
+      }
+      return "";
+    });
+
+    const preview = await runLifeOperationHandler(
+      runtime,
+      makeMessage(
+        externalSourceMessageText(
+          "I want that to mean being asleep by 11:30 pm and awake around 7:30 am on weekdays, within 45 minutes, for the next month.",
+        ),
+      ),
+      undefined,
+      {
+        parameters: {
+          action: "create",
+          kind: "goal",
+          confirmed: false,
+          title: "Stabilize sleep schedule",
+          intent:
+            "Stabilize sleep schedule with target bedtime 11:30pm and wake time 7:30am on weekdays, within 45 minutes, for the next month",
+        },
+      } as HandlerOptions,
+    );
+    expect(preview.success).toBe(false);
+    expect(preview.values).toMatchObject({
+      saved: false,
+      requiresConfirmation: true,
+    });
+
+    const confirm = await runLifeOperationHandler(
+      runtime,
+      makeMessage(externalSourceMessageText("Yes, save that goal.")),
+      undefined,
+      {
+        parameters: {
+          action: "create",
+          kind: "goal",
+          title: "Stabilize sleep schedule",
+          intent: "Stabilize sleep schedule",
+        },
+      } as HandlerOptions,
+    );
+
+    expect(confirm.success).toBe(true);
+    expect(serviceState.goalCreateCalls).toHaveLength(1);
+    expect(serviceState.goalCreateCalls[0]).toMatchObject({
+      title: "Stabilize sleep schedule",
+      successCriteria: {
+        metric: "weekday schedule adherence",
+      },
+      supportStrategy: {
+        firstStep: "Start wind-down at 10:30 PM on weekdays.",
+      },
+    });
+  });
+
+  it("reuses a previewed goal draft when the confirmation turn is misrouted to routines", async () => {
+    const runtime = makeRuntime(() => {
+      throw new Error(
+        "explicit draft confirmations should not need LLM reuse classification",
+      );
+    });
+    const deferredGoalDraft = {
+      intent:
+        "Count it if I walk around the block after lunch three times a week for the next six weeks.",
+      operation: "create_goal",
+      createdAt: Date.now(),
+      request: {
+        title: "Walk around the block",
+        description:
+          "Walk around the block after lunch three times a week for six weeks.",
+        successCriteria: {
+          metric: "weekly post-lunch walks",
+          summary: "Complete three post-lunch walks around the block per week.",
+        },
+        supportStrategy: {
+          firstStep: "Pick the next lunch where a short walk is possible.",
+          summary: "Keep the walk small and low-pressure.",
+        },
+        metadata: {
+          goalGrounding: { groundingState: "grounded" },
+          source: "chat",
+        },
+      },
+    };
+    const state = {
+      data: {
+        actionResults: [
+          {
+            success: false,
+            data: { lifeDraft: deferredGoalDraft },
+          },
+        ],
+      },
+    } as unknown as State;
+
+    const result = await runLifeOperationHandler(
+      runtime,
+      makeMessage(externalSourceMessageText("ok save that one")),
+      state,
+      {
+        parameters: {
+          action: "create",
+          kind: "definition",
+          intent:
+            "Walk around the block after lunch three times a week for the next six weeks",
+          title: "Walk around the block after lunch",
+          confirmed: false,
+          details: {
+            frequency: "3 times per week",
+            durationWeeks: 6,
+            timeOfDay: "after lunch",
+          },
+          ownerSurface: "OWNER_ROUTINES",
+        },
+      } as HandlerOptions,
+    );
+
+    expect(result.success).toBe(true);
+    expect(serviceState.createCalls).toHaveLength(0);
+    expect(serviceState.goalCreateCalls).toHaveLength(1);
+    expect(serviceState.goalCreateCalls[0]).toMatchObject({
+      title: "Walk around the block",
+      description:
+        "Walk around the block after lunch three times a week for six weeks.",
+      successCriteria: {
+        metric: "weekly post-lunch walks",
+      },
+      supportStrategy: {
+        firstStep: "Pick the next lunch where a short walk is possible.",
+      },
+    });
+  });
+
+  it("keeps goal-tracking follow-up details on the goal path even when planner selects routines", async () => {
+    const runtime = makeRuntime((prompt) => {
+      if (prompt.includes("Ground the user's goal")) {
+        return JSON.stringify({
+          mode: "create",
+          response: null,
+          title: "Walk around the block after lunch",
+          description:
+            "Leave the apartment by walking around the block after lunch three times a week.",
+          cadence: { kind: "weekly", reviewWindowDays: 7 },
+          successCriteria: {
+            summary:
+              "Walk around the block after lunch at least 3 times per week for 6 weeks.",
+            metric: "weekly post-lunch walks",
+            evidenceSignals: ["manual_checkin"],
+          },
+          supportStrategy: {
+            summary: "Use a low-pressure after-lunch walking routine.",
+            firstStep: "Pick the next lunch where a short walk is possible.",
+            suggestedSupport: ["weekly check-in"],
+          },
+          groundingState: "grounded",
+          missingCriticalFields: [],
+          confidence: 0.9,
+          evaluationSummary:
+            "Progress is three post-lunch block walks per week for six weeks.",
+          targetDomain: "health",
+        });
+      }
+      return "";
+    });
+
+    const result = await runLifeOperationHandler(
+      runtime,
+      makeMessage(
+        "Count it if I walk around the block after lunch three times a week for the next six weeks. Even if it is slow.",
+      ),
+      undefined,
+      {
+        parameters: {
+          ownerSurface: "OWNER_ROUTINES",
+          action: "create",
+          kind: "definition",
+          confirmed: true,
+          title: "Block Walks",
+          intent:
+            "walk around the block after lunch three times a week for the next six weeks, counting each walk even if slow",
+          details: {
+            frequency: "3/week",
+            durationWeeks: 6,
+            timeOfDay: "after lunch",
+          },
+        },
+      } as HandlerOptions,
+    );
+
+    expect(result.success).toBe(false);
+    expect(serviceState.createCalls).toHaveLength(0);
+    expect(serviceState.goalCreateCalls).toHaveLength(0);
+    expect(result.data).toMatchObject({
+      deferred: true,
+      saved: false,
+      requiresConfirmation: true,
+      lifeDraft: {
+        operation: "create_goal",
+        request: {
+          title: "Block Walks",
+          successCriteria: {
+            metric: "weekly post-lunch walks",
+          },
+          supportStrategy: {
+            firstStep: "Pick the next lunch where a short walk is possible.",
+          },
+        },
+      },
+    });
   });
 
   it("grounds a confirmed titled goal before saving", async () => {
@@ -851,6 +1164,7 @@ describe("runLifeOperationHandler one-off reminder scheduling", () => {
   beforeEach(() => {
     serviceState.snoozeCalls.length = 0;
     serviceState.createCalls.length = 0;
+    serviceState.goalCreateCalls.length = 0;
   });
 
   it('schedules "remind me friday at 5pm" on Friday 17:00, not now', async () => {

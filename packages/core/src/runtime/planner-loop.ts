@@ -644,7 +644,7 @@ export async function runPlannerLoop(
 					finalMessage: userSafeFinalMessage(
 						codingDrainQueue
 							? codingFinalMessage(trajectory, finalMessage)
-							: finalMessage,
+							: preferredFinalMessageFromToolOrModel(trajectory, finalMessage),
 						trajectory,
 					),
 				};
@@ -2957,8 +2957,26 @@ function deterministicTerminalContinuationLimitRelay(
 ): string | undefined {
 	return (
 		deterministicSuccessfulToolRelay(trajectory) ??
+		deterministicRequiresConfirmationRelay(trajectory) ??
 		deterministicNoopClarificationRelay(trajectory)
 	);
+}
+
+function deterministicRequiresConfirmationRelay(
+	trajectory: PlannerTrajectory,
+): string | undefined {
+	for (const step of [...trajectory.steps].reverse()) {
+		if (!step.toolCall || isTerminalToolCall(step.toolCall)) continue;
+		const result = step.result;
+		if (!result) continue;
+		if (!hasRequiresConfirmationMarker(result)) continue;
+
+		const candidate = sanitizePlannerMessage(
+			result.userFacingText ?? result.text,
+		);
+		if (candidate && !isUnsafeUserVisibleText(candidate)) return candidate;
+	}
+	return undefined;
 }
 
 function deterministicNoopClarificationRelay(
@@ -2990,18 +3008,37 @@ function hasNoopMarker(result: PlannerToolResult): boolean {
 	);
 }
 
+function hasRequiresConfirmationMarker(result: PlannerToolResult | undefined) {
+	const data = result?.data;
+	if (!data) return false;
+	if (
+		data.requiresConfirmation === true ||
+		data.awaitingUserInput === true ||
+		data.lifeDraft !== undefined
+	) {
+		return true;
+	}
+	const values = data.values;
+	return (
+		values !== null &&
+		typeof values === "object" &&
+		!Array.isArray(values) &&
+		((values as Record<string, unknown>).requiresConfirmation === true ||
+			(values as Record<string, unknown>).awaitingUserInput === true)
+	);
+}
+
 /**
  * Returns the canonical user-facing text from a trajectory whose
- * `verifiedUserFacing` opt-in is unambiguous: exactly one *successful*
- * tool step set `verifiedUserFacing: true` with a non-empty
- * `userFacingText`.
+ * `verifiedUserFacing` opt-in is unambiguous: exactly one completed tool step
+ * set `verifiedUserFacing: true` with a non-empty `userFacingText`.
  *
- * Failed steps are intentionally ignored when counting toward the
- * uniqueness check — a plan whose first tool errored and whose second
- * tool emitted a verified canonical reply must still echo the verified
- * reply. (Counting failed steps would silently fall through to the
- * evaluator's `messageToUser`, defeating the whole point of the flag
- * for any tool that runs after a recoverable error.)
+ * Failed steps are intentionally ignored unless they are explicit
+ * confirmation-required previews. A plan whose first tool errored and whose
+ * second tool emitted a verified canonical reply must still echo the verified
+ * reply. LifeOps can draft more than once while refining a request; the latest
+ * verified preview is the user-complete state even though `success:false`
+ * correctly records that nothing was persisted yet.
  *
  * Tools that emit structured data the evaluator could paraphrase
  * incorrectly (paths, ids, counts, numeric metrics) set the flag so the
@@ -3013,6 +3050,21 @@ function hasNoopMarker(result: PlannerToolResult): boolean {
 export function singleVerifiedUserFacingToolResultText(
 	trajectory: PlannerTrajectory,
 ): string | undefined {
+	for (const step of [...trajectory.steps].reverse()) {
+		const result = step.result;
+		if (
+			result?.verifiedUserFacing === true &&
+			hasRequiresConfirmationMarker(result)
+		) {
+			const verifiedConfirmationPreviewText = getNonEmptyString(
+				result.userFacingText,
+			);
+			if (verifiedConfirmationPreviewText) {
+				return verifiedConfirmationPreviewText;
+			}
+		}
+	}
+
 	const successfulToolSteps = trajectory.steps.filter(
 		(step) => step.toolCall && step.result?.success === true,
 	);
@@ -3127,12 +3179,14 @@ function preferredFinalMessageFromToolOrModel(
 	//      `verifiedUserFacing: true` — used for structured outputs
 	//      (paths, ids, counts) where evaluator paraphrase risks
 	//      hallucinating a value.
-	//   2. The model/evaluator's explicit `messageToUser` — authoritative
+	//   2. A confirmation-required tool preview — action-owned copy must not be
+	//      paraphrased into a vague extra question or a false save.
+	//   3. The model/evaluator's explicit `messageToUser` — authoritative
 	//      by default; the evaluator has seen the full trajectory and
 	//      chose what the user should read.
-	//   3. The most recent tool's `userFacingText` — fallback when neither
+	//   4. The most recent tool's `userFacingText` — fallback when neither
 	//      the model nor any verified tool provided a clean reply.
-	//   4. An explicit caller-provided fallback (e.g. failed-tool message).
+	//   5. An explicit caller-provided fallback (e.g. failed-tool message).
 	//
 	// Regression coverage:
 	//   - `planner-loop-user-facing-text.test.ts` → "does not regress
@@ -3143,6 +3197,7 @@ function preferredFinalMessageFromToolOrModel(
 	//     opts in via `verifiedUserFacing: true`.
 	return (
 		singleVerifiedUserFacingToolResultText(trajectory) ??
+		deterministicRequiresConfirmationRelay(trajectory) ??
 		usableModelText ??
 		latestToolResultText(trajectory) ??
 		getNonEmptyString(fallback)

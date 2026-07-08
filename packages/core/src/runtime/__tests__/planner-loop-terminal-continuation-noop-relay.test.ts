@@ -126,4 +126,39 @@ describe("planner-loop - terminal continuation noop clarification relay", () => 
 		expect(result.status).toBe("finished");
 		expect(result.finalMessage).toBe(clarification);
 	});
+
+	it("relays a confirmation-required preview instead of exhausting terminal continuations", async () => {
+		const preview =
+			"I can save this as a goal. Success looks like walking around the block three times a week. Confirm and I'll save it.";
+		const runtime = plannerEmitsNoopThenTerminalText(
+			"Does this look right before I save it?",
+		);
+		const executeToolCall = vi.fn(async () => ({
+			success: false,
+			text: preview,
+			data: {
+				deferred: true,
+				saved: false,
+				requiresConfirmation: true,
+				lifeDraft: {
+					operation: "create_goal",
+					request: { title: "Leave the apartment more" },
+				},
+			},
+		}));
+		const evaluate = evaluatorRequestsAnotherIteration();
+
+		const result = await runPlannerLoop({
+			runtime,
+			context: { id: "ctx" },
+			config: { maxTerminalOnlyContinuations: 0 },
+			executeToolCall,
+			evaluate,
+		});
+
+		expect(result.status).toBe("finished");
+		expect(result.finalMessage).toBe(preview);
+		expect(executeToolCall).toHaveBeenCalledTimes(1);
+		expect(evaluate).toHaveBeenCalledTimes(2);
+	});
 });

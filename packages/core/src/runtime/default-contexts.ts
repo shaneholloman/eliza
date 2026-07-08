@@ -185,7 +185,19 @@ export const DEFAULT_CONTEXT_DEFINITIONS: readonly ContextDefinition[] =
 				"Reminders/habits/routines/todos/goals/schedules — user asks assistant to do/schedule/track/save something",
 			sensitivity: "personal",
 			cacheScope: "agent",
-			subcontexts: ["todos", "productivity"],
+			subcontexts: ["goals", "todos", "productivity"],
+			roleGate: { minRole: "ADMIN" },
+		},
+		{
+			id: "goals",
+			label: "Goals",
+			description:
+				"Long-horizon owner outcomes and aspirations: create, ground, review, update, or delete life goals, success criteria, support strategies, and progress check-ins. Use for goal-setting requests even when the support plan mentions reminders, habits, routines, savings, travel, trips, learning, health, or fitness.",
+			descriptionCompressed:
+				"Life goals: create/ground/review outcomes, success criteria, support plans",
+			parent: "tasks",
+			sensitivity: "personal",
+			cacheScope: "agent",
 			roleGate: { minRole: "ADMIN" },
 		},
 		{

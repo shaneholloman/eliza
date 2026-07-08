@@ -24,6 +24,7 @@ mock.module("@/lib/pricing", () => ({
   estimateTokens: (text: string) => Math.ceil(text.length / 4),
   getProviderFromModel: () => "anthropic",
   getSafeModelParams: () => ({}),
+  modelUsesReasoningTokens: () => false,
   normalizeModelName: (model: string) => model,
 }));
 
@@ -68,6 +69,7 @@ mock.module("@/lib/middleware/rate-limit-hono-cloudflare", () => ({
 mock.module("@/lib/providers/language-model", () => ({
   canonicalizeCerebrasModelId: (model: string) => model,
   getLanguageModel: () => ({}) as never,
+  isProviderConfigurationError: () => false,
   resolveAiProviderSource: () => "bitrouter",
 }));
 
@@ -88,6 +90,34 @@ mock.module("@/lib/services/ai-billing", () => ({
   InsufficientCreditsError: TestInsufficientCreditsError,
   billUsage,
   estimateInputTokens,
+  normalizeUsage: (
+    usage:
+      | {
+          inputTokens?: number;
+          outputTokens?: number;
+          totalTokens?: number;
+          promptTokens?: number;
+          completionTokens?: number;
+          cacheReadInputTokens?: number;
+          cacheWriteInputTokens?: number;
+          cachedInputTokens?: number;
+          cacheCreationInputTokens?: number;
+        }
+      | null
+      | undefined,
+  ) => {
+    const inputTokens = usage?.inputTokens ?? usage?.promptTokens ?? 0;
+    const outputTokens = usage?.outputTokens ?? usage?.completionTokens ?? 0;
+    return {
+      cacheReadInputTokens:
+        usage?.cacheReadInputTokens ?? usage?.cachedInputTokens ?? 0,
+      cacheWriteInputTokens:
+        usage?.cacheWriteInputTokens ?? usage?.cacheCreationInputTokens ?? 0,
+      inputTokens,
+      outputTokens,
+      totalTokens: usage?.totalTokens ?? inputTokens + outputTokens,
+    };
+  },
   recordUsageAnalytics,
   reserveCredits,
 }));

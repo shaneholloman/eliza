@@ -35,8 +35,10 @@ import type {
   HandlerOptions,
   IAgentRuntime,
   Memory,
+  State,
 } from "@elizaos/core";
 import { hasLifeOpsAccess } from "../lifeops/access.js";
+import { messageText } from "../lifeops/google/format-helpers.js";
 import { resolvePendingPromptsStore } from "../lifeops/pending-prompts/store.js";
 import { LifeOpsRepository } from "../lifeops/repository.js";
 import type {
@@ -56,7 +58,10 @@ import {
   ScheduledTaskValidationError,
 } from "../lifeops/scheduled-task/index.js";
 import { getScheduledTaskRunner } from "../lifeops/scheduled-task/service.js";
-import { OWNER_OPERATION_VALIDATE } from "./life.js";
+import {
+  latestDeferredLifeDraft,
+} from "./lib/lifeops-deferred-draft.js";
+import { OWNER_OPERATION_VALIDATE, runLifeOperationHandler } from "./life.js";
 
 const SUBACTIONS = [
   "list",
@@ -277,6 +282,37 @@ function getParams(options: HandlerOptions | undefined): ScheduledTaskParams {
   return {};
 }
 
+function isExplicitLifeDraftConfirmation(message: Memory): boolean {
+  const normalized = messageText(message)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    /\b(?:no|not|don t|do not|cancel|hold off|wait|later|change)\b/u.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  return /\b(?:yes|yep|yeah|confirm|confirmed|approve|approved|save it|save that|set it|do it|go ahead)\b/u.test(
+    normalized,
+  );
+}
+
+function shouldDelegateLifeDraftConfirmation(
+  message: Memory,
+  state: State | undefined,
+): boolean {
+  const draft = latestDeferredLifeDraft(state);
+  return (
+    draft?.operation === "create_goal" &&
+    isExplicitLifeDraftConfirmation(message)
+  );
+}
+
 const TRIGGER_KINDS =
   "once | cron | interval | relative_to_anchor | during_window | event | manual | after_task";
 
@@ -289,7 +325,7 @@ const TRIGGER_KINDS =
  * correct surface explicitly.
  */
 const HABIT_REDIRECT_HINT =
-  'If the owner asked to create a new personal reminder in chat — one-off, dated/deadline ("by the 20th"), recurring, habit, or routine — do not retry here. Call OWNER_REMINDERS action=create for reminders or OWNER_ROUTINES action=create for habits/routines; those flows build the definition and reminder plan without a raw trigger.';
+  'If the owner asked to create a new personal reminder or goal in chat — one-off, dated/deadline ("by the 20th"), recurring, habit, routine, savings/trip goal, fitness goal, learning goal, or goal check-in — do not retry here. Call OWNER_REMINDERS action=create for reminders, OWNER_ROUTINES action=create for habits/routines, or OWNER_GOALS action=create for goals; those flows build the owner item and support plan without a raw trigger.';
 
 const PLAIN_TIMING_MISSING_TEXT =
   "I could not save that yet because I need a clear time or recurrence. Please tell me when it should happen.";
@@ -1170,11 +1206,11 @@ export const scheduledTaskAction: Action & {
     "surface:internal",
   ],
   description:
-    'Low-level admin surface over LifeOps ScheduledTask records. Kinds: reminder, checkin, followup, approval, recap, watcher, output, custom. Ops: list|get|create|update|snooze|skip|complete|acknowledge|dismiss|cancel|reopen|history. create schedules a raw task and requires an explicit structural trigger — it is NOT the flow for saving a new owner reminder the user asks for in chat, including one-off date/deadline reminders like "by the 20th"; OWNER_REMINDERS action=create owns that definition + reminder plan. OWNER_ROUTINES owns habits/routines.',
+    'Low-level admin surface over LifeOps ScheduledTask records. Kinds: reminder, checkin, followup, approval, recap, watcher, output, custom. Ops: list|get|create|update|snooze|skip|complete|acknowledge|dismiss|cancel|reopen|history. create schedules a raw task and requires an explicit structural trigger — it is NOT the flow for saving a new owner reminder, habit/routine, or goal the user asks for in chat, including one-off date/deadline reminders like "by the 20th" or savings/trip goals with check-ins; OWNER_REMINDERS action=create owns reminder definitions + reminder plans, OWNER_ROUTINES owns habits/routines, and OWNER_GOALS owns life goals.',
   descriptionCompressed:
-    "low-level scheduled-item admin list|get|create|update|snooze|skip|complete|ack|dismiss|cancel|history; NOT new owner reminders/deadlines/habits (-> OWNER_REMINDERS/OWNER_ROUTINES create)",
+    "low-level scheduled-item admin; NOT new owner reminders/deadlines/habits/goals (-> OWNER_REMINDERS/OWNER_ROUTINES/OWNER_GOALS create)",
   routingHint:
-    'manage EXISTING scheduled items ("snooze that reminder", "show me only overdue tasks" -> action=list dueWindow=overdue, "what\'s due today" -> action=list dueWindow=today, "complete check-in", "scheduled-item history") -> SCHEDULED_TASKS; NEW owner reminders/deadlines ("remind me to renew registration by the 20th", "call mom tomorrow") -> OWNER_REMINDERS action=create; NEW habit/routine/recurring personal reminder ("brush my teeth at 8 am and 9 pm every day", "remind me daily at 9pm") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES',
+    'manage EXISTING scheduled items ("snooze that reminder", "show me only overdue tasks" -> action=list dueWindow=overdue, "what\'s due today" -> action=list dueWindow=today, "complete check-in", "scheduled-item history") -> SCHEDULED_TASKS; NEW owner reminders/deadlines ("remind me to renew registration by the 20th", "call mom tomorrow") -> OWNER_REMINDERS action=create; NEW habit/routine/recurring personal reminder ("brush my teeth at 8 am and 9 pm every day", "remind me daily at 9pm") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; NEW owner goals, savings/trip goals, fitness goals, learning goals, or goal support/check-in plans -> OWNER_GOALS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES',
   contexts: [
     "tasks",
     "automation",
@@ -1357,7 +1393,7 @@ export const scheduledTaskAction: Action & {
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
-    _state,
+    state,
     options,
     callback,
   ): Promise<ActionResult> => {
@@ -1375,6 +1411,19 @@ export const scheduledTaskAction: Action & {
         text: "Tell me which task operation you want: list, get, create, update, snooze, skip, complete, acknowledge, dismiss, cancel, reopen, or history.",
         data: { error: "MISSING_SUBACTION" },
       };
+    }
+
+    if (
+      subaction === "create" &&
+      shouldDelegateLifeDraftConfirmation(message, state)
+    ) {
+      return runLifeOperationHandler(
+        runtime,
+        message,
+        state,
+        { parameters: { action: "create", ownerSurface: "OWNER_GOALS" } },
+        callback,
+      );
     }
 
     const scope = makeRunnerScope(runtime, message);

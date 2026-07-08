@@ -89,6 +89,7 @@ import {
 } from "./lib/extract-update-fields.js";
 import {
   countTurnsSinceLatestDeferredLifeDraft,
+  clearDeferredLifeDraftCache,
   type DeferredLifeDefinitionDraft,
   type DeferredLifeDraft,
   type DeferredLifeDraftFollowupMode,
@@ -97,6 +98,8 @@ import {
   deferredLifeDraftExpiryReason,
   extractDeferredLifeDraftFollowupWithLlm,
   latestDeferredLifeDraft,
+  readDeferredLifeDraftCache,
+  writeDeferredLifeDraftCache,
 } from "./lib/lifeops-deferred-draft.js";
 import {
   applyOwnerPolicyConfigureEscalation,
@@ -268,6 +271,20 @@ function inferLifeKindFromIntent(intent: string): LifeKind {
     return "goal";
   }
   return "definition";
+}
+
+function looksLikeGoalTrackingFollowup(intent: string): boolean {
+  const normalized = intent.toLowerCase();
+  const mentionsFrequency =
+    /\b(?:\d+|one|two|three|four|five|six|seven)\s+times?\s+(?:a|per)\s+week\b/i.test(
+      normalized,
+    ) || /\b\d+\s*\/\s*week\b/i.test(normalized);
+  return (
+    /\bcount\s+it\s+if\b/i.test(normalized) &&
+    (mentionsFrequency ||
+      /\bnext\s+\d+\s+weeks?\b/i.test(normalized) ||
+      /\bwalk\s+around\s+the\s+block\b/i.test(normalized))
+  );
 }
 
 const GENERIC_DERIVED_TITLE_RE =
@@ -463,6 +480,7 @@ async function routeLifeSubaction(args: {
 function resolveDeferredLifeDraftReuseMode(args: {
   details: Record<string, unknown> | undefined;
   draft: DeferredLifeDraft | null;
+  explicitConfirmation?: boolean;
   explicitOperation: LifeOperation | undefined;
   llmMode?: DeferredLifeDraftFollowupMode;
   /** Number of messages since the draft was stored. */
@@ -484,14 +502,155 @@ function resolveDeferredLifeDraftReuseMode(args: {
     ? String(args.explicitOperation)
     : undefined;
   const draftOperation = String(args.draft.operation);
-  if (explicitOperation && explicitOperation !== draftOperation) {
+  const explicitOperationMatchesDraft =
+    explicitOperation === draftOperation ||
+    (explicitOperation === "create" && draftOperation.startsWith("create_"));
+  if (explicitOperation && !explicitOperationMatchesDraft) {
     return null;
+  }
+
+  if (args.explicitConfirmation === true) {
+    return "confirm";
   }
 
   if (args.llmMode === "confirm" || args.llmMode === "edit") {
     return args.llmMode;
   }
   return null;
+}
+
+function isExplicitLifeCreateConfirmation(text: string): boolean {
+  const normalized = text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    /\b(?:no|not|don t|do not|cancel|hold off|wait|later|change)\b/u.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  return /\b(?:ok|okay|yes|yep|yeah|sure|confirm|confirmed|approve|approved|save it|save that|save this|save the goal|set it|lock it in|do it|looks good|that works|go ahead)\b/u.test(
+    normalized,
+  );
+}
+
+function stringifyLifeDetailForPrompt(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    const entries = value
+      .map((entry) => stringifyLifeDetailForPrompt(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    return entries.length > 0 ? entries.join(", ") : null;
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .map(([key, entry]) => {
+        const rendered = stringifyLifeDetailForPrompt(entry);
+        return rendered ? `${key}: ${rendered}` : null;
+      })
+      .filter((entry): entry is string => Boolean(entry));
+    return entries.length > 0 ? entries.join("; ") : null;
+  }
+  return null;
+}
+
+function summarizeGoalSupportStrategyForPreview(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const key of ["summary", "firstStep"] as const) {
+    const rendered = stringifyLifeDetailForPrompt(record[key]);
+    if (rendered) {
+      parts.push(rendered);
+    }
+  }
+  const suggestedSupport = record.suggestedSupport;
+  if (Array.isArray(suggestedSupport)) {
+    const supportItems = suggestedSupport
+      .map((entry) => stringifyLifeDetailForPrompt(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    if (supportItems.length > 0) {
+      parts.push(`Support includes ${supportItems.join(", ")}.`);
+    }
+  }
+  return parts.length > 0 ? `Support plan: ${parts.join(" ")}` : null;
+}
+
+function textIncludesGoalDateDetail(text: string): boolean {
+  return /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|\d{4}-\d{2}-\d{2})\b/i.test(
+    text,
+  );
+}
+
+function textIncludesGoalCadenceDetail(text: string): boolean {
+  return /\b(?:daily|weekly|monthly|weekday|weekends?|per\s+(?:day|week|month)|times?\s+(?:a|per)\s+(?:day|week|month)|blocks?|sessions?|practice)\b/i.test(
+    text,
+  );
+}
+
+function cleanGoalPreviewDetailText(text: string): string {
+  return text
+    .replace(
+      /^(?:let'?s\s+define\s+success\s+as|define\s+success\s+as|make\s+it\s+mean|count\s+it\s+if)\s+/i,
+      "",
+    )
+    .trim();
+}
+
+function summarizeGoalInputDetailsForPreview(
+  inputText: string,
+  previewText: string,
+): string | null {
+  const detailText = cleanGoalPreviewDetailText(inputText);
+  if (!detailText) {
+    return null;
+  }
+  const inputHasDate = textIncludesGoalDateDetail(detailText);
+  const previewHasConcreteDate =
+    textIncludesGoalDateDetail(previewText) &&
+    !/\b(?:the\s+)?deadline\b/i.test(previewText);
+  const inputHasCadence = textIncludesGoalCadenceDetail(detailText);
+  const previewHasCadence = textIncludesGoalCadenceDetail(previewText);
+  if (
+    (inputHasDate && !previewHasConcreteDate) ||
+    (inputHasCadence && !previewHasCadence)
+  ) {
+    return `Details: ${detailText}`;
+  }
+  return null;
+}
+
+function buildGoalGroundingIntent(
+  intent: string,
+  details: Record<string, unknown> | undefined,
+): string {
+  if (!details) {
+    return intent;
+  }
+  const detailLines = Object.entries(details)
+    .filter(([key]) => key !== "confirmed" && key !== "metadata")
+    .map(([key, value]) => {
+      const rendered = stringifyLifeDetailForPrompt(value);
+      return rendered ? `${key}: ${rendered}` : null;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+  if (detailLines.length === 0) {
+    return intent;
+  }
+  return `${intent}\nDetails:\n${detailLines.join("\n")}`;
 }
 
 function shouldForceLifeCreateExecution(args: {
@@ -577,6 +736,22 @@ function normalizeLifeInputText(value: string): string {
     .trim();
 }
 
+function extractPrimaryLifeInputText(value: string): string {
+  const startMarker = "<<<EXTERNAL_UNTRUSTED_CONTENT>>>";
+  const endMarker = "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>";
+  const start = value.lastIndexOf(startMarker);
+  if (start < 0) {
+    return value;
+  }
+
+  const afterStart = value.slice(start + startMarker.length);
+  const end = afterStart.indexOf(endMarker);
+  const block = end >= 0 ? afterStart.slice(0, end) : afterStart;
+  const delimiter = block.lastIndexOf("\n---");
+  const payload = (delimiter >= 0 ? block.slice(delimiter + 4) : block).trim();
+  return payload.length > 0 ? payload : value;
+}
+
 function normalizeTitle(value: string): string {
   return normalizeIntentText(value);
 }
@@ -646,13 +821,6 @@ function buildSavedGoalReply(goal: {
     parts.push(`Plan: ${supportSummary}`);
   }
   return parts.join(" ");
-}
-
-function isExplicitLifeCreateConfirmation(value: string): boolean {
-  const text = normalizeIntentText(value);
-  return /\b(ok|okay|yes|yep|yeah|sure|confirmed?|save it|save that|save this|save the goal|lock it in|do it|looks good|that works|go ahead)\b/.test(
-    text,
-  );
 }
 
 function matchByTitle<
@@ -2507,6 +2675,7 @@ export const OWNER_OPERATION_TAGS: string[] = [
 export const OWNER_OPERATION_CONTEXTS: AgentContext[] = [
   "general",
   "tasks",
+  "goals",
   "todos",
   "productivity",
   "calendar",
@@ -2563,27 +2732,38 @@ export async function runLifeOperationHandler(
     | LifeParams
     | undefined;
   const params = rawParams ?? ({} as LifeParams);
-  const currentText = normalizeLifeInputText(messageText(message));
+  const currentText = normalizeLifeInputText(
+    extractPrimaryLifeInputText(messageText(message)),
+  );
   const details = params.details;
-  const deferredDraft = latestDeferredLifeDraft(state);
+  const stateDeferredDraft = latestDeferredLifeDraft(state);
+  const cachedDeferredDraft = stateDeferredDraft
+    ? null
+    : await readDeferredLifeDraftCache(runtime, message);
+  const deferredDraft = stateDeferredDraft ?? cachedDeferredDraft;
+  const explicitCreateConfirmation =
+    isExplicitLifeCreateConfirmation(currentText);
   const turnsSinceDraft =
     deferredDraft != null
       ? (countTurnsSinceLatestDeferredLifeDraft(state) ?? 0) + 1
       : undefined;
   const deferredDraftFollowupMode = deferredDraft
-    ? await extractDeferredLifeDraftFollowupWithLlm({
-        runtime,
-        message,
-        state,
-        currentText,
-        draft: deferredDraft,
-      })
+    ? explicitCreateConfirmation
+      ? "confirm"
+      : await extractDeferredLifeDraftFollowupWithLlm({
+          runtime,
+          message,
+          state,
+          currentText,
+          draft: deferredDraft,
+        })
     : null;
   const draftExpiryReason = deferredLifeDraftExpiryReason({
     draft: deferredDraft,
     turnsSinceDraft,
   });
   if (draftExpiryReason && deferredDraftFollowupMode === "confirm") {
+    await clearDeferredLifeDraftCache(runtime, message);
     const fallback =
       "That LifeOps draft expired. Please restate it and I'll preview it again.";
     return {
@@ -2602,6 +2782,7 @@ export async function runLifeOperationHandler(
     };
   }
   if (deferredDraftFollowupMode === "cancel") {
+    await clearDeferredLifeDraftCache(runtime, message);
     const fallback = "Okay, I won't save it yet.";
     return {
       success: true,
@@ -2647,6 +2828,7 @@ export async function runLifeOperationHandler(
   const deferredDraftReuseMode = resolveDeferredLifeDraftReuseMode({
     details,
     draft: deferredDraft,
+    explicitConfirmation: explicitCreateConfirmation,
     explicitOperation: explicitSubaction,
     llmMode: deferredDraftFollowupMode,
     turnsSinceDraft,
@@ -2710,7 +2892,12 @@ export async function runLifeOperationHandler(
     params.kind === "definition" || params.kind === "goal"
       ? params.kind
       : undefined;
-  const resolvedKind: LifeKind | undefined = operationPlan.kind ?? explicitKind;
+  const forceGoalKind =
+    looksLikeGoalTrackingFollowup(currentText) ||
+    looksLikeGoalTrackingFollowup(intent);
+  const resolvedKind: LifeKind | undefined = forceGoalKind
+    ? "goal"
+    : (operationPlan.kind ?? explicitKind);
   const forceCreateExecution = shouldForceLifeCreateExecution({
     intent,
     missing: operationPlan.missing,
@@ -2849,7 +3036,8 @@ export async function runLifeOperationHandler(
   const createConfirmed =
     deferredDraftReuseMode === "confirm" ||
     params.confirmed === true ||
-    detailBoolean(details, "confirmed") === true;
+    detailBoolean(details, "confirmed") === true ||
+    explicitCreateConfirmation;
 
   try {
     const createDefinition = async () => {
@@ -3162,26 +3350,30 @@ export async function runLifeOperationHandler(
         })
       ) {
         const fallback = `I can save this as a ${definitionDraft.request.kind} named "${definitionDraft.request.title}" that happens ${summarizeCadence(definitionDraft.request.cadence)}. Confirm and I'll save it, or tell me what to change.`;
+        const previewText = await renderLifeActionReply({
+          runtime,
+          message,
+          state,
+          intent,
+          scenario: "preview_definition",
+          fallback,
+          context: {
+            draft: definitionDraft.request,
+            requestKind: timedRequestKind,
+          },
+        });
         // A preview is NOT a save: nothing is persisted here, only a draft is
         // parked for the confirm turn. Reporting success:true made the model
         // render "I've set it" for a recurring create that never persisted
         // (task_611a9f0b — a no-fabricate violation). success:false +
         // requiresConfirmation makes the deferred state honest; the draft still
         // survives on `data.lifeDraft` for the next-turn confirmation.
+        await writeDeferredLifeDraftCache(runtime, message, definitionDraft);
         return {
           success: false as const,
-          text: await renderLifeActionReply({
-            runtime,
-            message,
-            state,
-            intent,
-            scenario: "preview_definition",
-            fallback,
-            context: {
-              draft: definitionDraft.request,
-              requestKind: timedRequestKind,
-            },
-          }),
+          text: previewText,
+          userFacingText: previewText,
+          verifiedUserFacing: true,
           data: {
             actionName: ownerSurfaceActionName,
             deferred: true,
@@ -3219,6 +3411,7 @@ export async function runLifeOperationHandler(
         goalId: resolvedGoal?.goal.id ?? null,
         source: "chat",
       });
+      await clearDeferredLifeDraftCache(runtime, message);
       const fallback = `Saved "${created.definition.title}" as ${summarizeCadence(created.definition.cadence)}.`;
       return {
         success: true as const,
@@ -3330,9 +3523,10 @@ export async function runLifeOperationHandler(
         (!deferredGoalDraft || editingDeferredGoalDraft) &&
         !hasExplicitGroundedGoal
       ) {
+        const groundingIntent = buildGoalGroundingIntent(intent, details);
         const llmPlan = await extractGoalCreatePlanWithLlm({
           runtime,
-          intent,
+          intent: groundingIntent,
           state: state ?? undefined,
           message: message,
         });
@@ -3477,31 +3671,41 @@ export async function runLifeOperationHandler(
             ? `I can save "${goalDraft.request.title}" as a goal. Success looks like this: ${evaluationSummary} Confirm and I'll save it, or tell me what to change.`
             : `I can save this goal as "${goalDraft.request.title}". Confirm and I'll save it, or tell me what to change.`,
         ];
+        const supportSummary = summarizeGoalSupportStrategyForPreview(
+          goalDraft.request.supportStrategy,
+        );
+        if (supportSummary) {
+          fallbackParts.push(supportSummary);
+        }
+        const detailSummary = summarizeGoalInputDetailsForPreview(
+          currentText,
+          fallbackParts.join(" "),
+        );
+        if (detailSummary) {
+          fallbackParts.push(detailSummary);
+        }
         const experienceSummary =
           formatGoalExperienceLoopSummary(experienceLoop);
         if (experienceSummary) {
           fallbackParts.push(experienceSummary);
         }
+        const previewText = fallbackParts.join(" ");
         // Preview only — the goal is not persisted until the confirm turn.
         // success:false keeps the "not saved yet" state honest (no-fabricate,
-        // task_611a9f0b); the draft survives on `data.lifeDraft` for confirm.
-        const text = await renderLifeActionReply({
-          runtime,
-          message,
-          state,
-          intent,
-          scenario: "preview_goal",
-          fallback: fallbackParts.join(" "),
-          context: {
-            draft: goalDraft.request,
-            groundingSummary: evaluationSummary,
-            experienceLoop,
-          },
-        });
+        // task_611a9f0b); `verifiedUserFacing` prevents a later evaluator pass
+        // from adding a second generic question after the concrete confirmation
+        // prompt. The draft survives on `data.lifeDraft` for confirm.
+        await writeDeferredLifeDraftCache(runtime, message, goalDraft);
         return {
           success: false,
-          text,
-          userFacingText: text,
+          text: previewText,
+          userFacingText: previewText,
+          verifiedUserFacing: true,
+          values: {
+            success: false,
+            saved: false,
+            requiresConfirmation: true,
+          },
           data: {
             actionName: ownerSurfaceActionName,
             deferred: true,
@@ -3528,6 +3732,7 @@ export async function runLifeOperationHandler(
           originalIntent: goalDraft.intent || goalDraft.request.title,
         },
       });
+      await clearDeferredLifeDraftCache(runtime, message);
       const createdExperienceLoop = await service.buildGoalExperienceLoop({
         goalId: created.goal.id,
         title: created.goal.title,
