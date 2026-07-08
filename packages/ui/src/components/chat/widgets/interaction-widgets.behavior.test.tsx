@@ -312,7 +312,7 @@ describe("ChoiceWidget — pick an option", () => {
     expect(onChoose).toHaveBeenCalledTimes(1);
   });
 
-  it("multi-option first-run: the SELECTED row keeps full-opacity accent tokens; only the non-selected locked rows fade (#15144)", () => {
+  it("multi-option first-run: the SELECTED row keeps full-opacity accent tokens; only the non-selected locked rows fade (#15144, #15516)", () => {
     const onChoose = vi.fn();
     render(
       <ChoiceWidget
@@ -332,6 +332,16 @@ describe("ChoiceWidget — pick an option", () => {
     const chip = screen.getByText("2 options");
     expect(chip.className).toContain("bg-surface");
 
+    const cloudBeforePick = screen.getByTestId("choice-cloud");
+    const localBeforePick = screen.getByTestId("choice-local");
+    for (const choice of [cloudBeforePick, localBeforePick]) {
+      const classes = choice.className.split(/\s+/);
+      expect(classes).toContain("bg-card");
+      expect(classes).toContain("text-txt-strong");
+      expect(classes).toContain("border-border-strong");
+      expect(classes).not.toContain("bg-bg-accent");
+    }
+
     fireEvent.click(screen.getByTestId("choice-cloud"));
 
     const picked = screen.getByTestId("choice-cloud");
@@ -344,6 +354,32 @@ describe("ChoiceWidget — pick an option", () => {
     // …while the rows the user did NOT pick fade behind it.
     expect(other.className).toContain("disabled:opacity-40");
     expect(onChoose).toHaveBeenCalledWith("cloud");
+  });
+
+  it("multi-option first-run error choices use readable neutral rows (#15516)", () => {
+    render(
+      <ChoiceWidget
+        id="recovery"
+        scope="first-run"
+        options={[
+          { value: "retry", label: "Try again" },
+          {
+            value: "different",
+            label: "Choose a different way to run",
+          },
+          { value: "settings", label: "Configure in Settings" },
+        ]}
+        onChoose={vi.fn()}
+      />,
+    );
+
+    for (const id of ["retry", "different", "settings"]) {
+      const classes = screen.getByTestId(`choice-${id}`).className.split(/\s+/);
+      expect(classes).toContain("bg-card");
+      expect(classes).toContain("text-txt-strong");
+      expect(classes).toContain("border-border-strong");
+      expect(classes).not.toContain("bg-bg-accent");
+    }
   });
 });
 

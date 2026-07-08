@@ -163,15 +163,16 @@ export const ChoiceWidget = memo(function ChoiceWidget({
           const isSelected = selected?.value === option.value;
           if (firstRun) {
             // Prominent, obviously-tappable next-step rows. The recommended
-            // option gets the accent; the rest are prominent neutral
-            // (secondary), so exactly one orange accent appears (brand rule).
+            // option gets the accent; the rest use paired surface/text tokens
+            // instead of the generic secondary token, which can become
+            // light-on-light in native dark onboarding themes (#15516).
             // Once a pick locks the fieldset, ONLY the non-selected rows fade:
             // the selected row is promoted to the accent tokens at full
             // opacity — the blanket 40% wash on a low-alpha secondary chip
             // rendered the user's own pick white-on-white on the dark cloud
             // surface (#15144).
             const recommended = isRecommended(option.label);
-            const variant = isSelected || recommended ? "default" : "secondary";
+            const variant = isSelected || recommended ? "default" : "surface";
             return (
               <Button
                 key={option.value}
@@ -185,7 +186,7 @@ export const ChoiceWidget = memo(function ChoiceWidget({
                 className={
                   isSelected
                     ? "h-11 w-full justify-between px-4 text-sm font-medium disabled:opacity-100 aria-disabled:opacity-100"
-                    : "h-11 w-full justify-between px-4 text-sm font-medium disabled:opacity-40 aria-disabled:opacity-40"
+                    : "h-11 w-full justify-between border border-border-strong bg-card px-4 text-sm font-medium text-txt-strong hover:bg-surface disabled:opacity-40 aria-disabled:opacity-40"
                 }
                 onClick={() => handleChoose(option)}
               >
