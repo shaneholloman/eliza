@@ -1,5 +1,13 @@
-// Defines cloud API platform cloud helpers shared across worker routes.
+/**
+ * Cloud API platform agent helpers shared across A2A worker routes.
+ *
+ * The dispatcher translates platform skills into the same service and
+ * repository calls used by REST surfaces, then wraps successful results as A2A
+ * tasks. Failures are allowed to reach the JSON-RPC boundary so broken billing
+ * or account reads become observable errors instead of fabricated task data.
+ */
 import { organizationsRepository } from "../../../db/repositories";
+import { parseOrganizationCreditBalance } from "../../../db/repositories/organizations-credit-balance-numeric";
 import type { AppContext } from "../../../types/cloud-worker-env";
 import { requireAdmin, requireUserOrApiKeyWithOrg } from "../../auth/workers-hono-auth";
 import { executeCloudCapabilityRest, getCloudCapabilities } from "../../cloud-capabilities";
@@ -134,9 +142,12 @@ async function executePlatformSkill(c: AppContext, skill: string, args: Record<s
         organizationsRepository.findById(user.organization_id),
         creditsService.listTransactionsByOrganization(user.organization_id, 10),
       ]);
+      if (!org) {
+        throw new Error(`Organization not found for credits summary: ${user.organization_id}`);
+      }
       return {
         organizationId: user.organization_id,
-        balance: Number(org?.credit_balance ?? 0),
+        balance: parseOrganizationCreditBalance(org.credit_balance, "credit_balance"),
         recentTransactions: transactions,
       };
     }
