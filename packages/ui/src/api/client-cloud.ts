@@ -3211,7 +3211,12 @@ ElizaClient.prototype.provisionCloudSandbox = async (options) => {
 // instead of letting the first chat call exhaust that budget and error.
 const CLOUD_AGENT_WAKE_POLL_INTERVAL_MS = 5_000;
 const CLOUD_AGENT_WAKE_TIMEOUT_MS = 6 * 60_000;
-const CLOUD_AGENT_FAILED_STATUSES = new Set(["error", "failed"]);
+const CLOUD_AGENT_FAILED_STATUSES = new Set([
+  "error",
+  "failed",
+  "deletion_pending",
+  "deletion_failed",
+]);
 
 function isTerminalFailedCloudAgent(agent: CloudCompatAgent): boolean {
   return CLOUD_AGENT_FAILED_STATUSES.has(
@@ -3230,7 +3235,7 @@ function isTerminalFailedCloudAgent(agent: CloudCompatAgent): boolean {
  *
  * Resolves with the FRESH agent record (post-wake URLs), so callers bind the
  * base the running container actually reports, not the stale list entry.
- * Throws on a terminal `error`/`failed` status and on timeout.
+ * Throws on failed/deletion statuses and on timeout.
  */
 export async function waitForCloudAgentRunning(
   client: ElizaClient,
@@ -3303,8 +3308,8 @@ export async function waitForCloudAgentRunning(
  * existing agent was fine (#15516). Non-running picks are never bound
  * directly: the reuse branch routes them through `waitForCloudAgentRunning`,
  * which resolves with the FRESH post-wake record — that (not refusing reuse)
- * is the guard against binding a stale pointer whose chat 404s. Only terminal
- * `error`/`failed` rows are unreusable.
+ * is the guard against binding a stale pointer whose chat 404s. Failed and
+ * deletion rows are unreusable.
  */
 function pickPreferredCloudAgent(
   agents: CloudCompatAgent[],

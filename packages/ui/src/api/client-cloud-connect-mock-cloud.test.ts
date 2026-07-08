@@ -634,6 +634,25 @@ describe("mock-cloud connect e2e — dedicated cold boot + shared chat bridge", 
     expect(state.resumeCalls).toEqual([]);
   });
 
+  it("does not wake or bind a deletion-pending agent", async () => {
+    // Deletion rows are terminal from the user's perspective. Treating them as
+    // wakeable would wait on a container that is intentionally being removed.
+    seedDedicated({
+      id: "agent-deleting",
+      status: "deletion_pending",
+    });
+    const client = makeClient();
+    await expect(
+      client.selectOrProvisionCloudAgent({
+        cloudApiBase: base,
+        authToken: AUTH_TOKEN,
+        name: "Eliza",
+        preferAgentId: "agent-deleting",
+      }),
+    ).rejects.toThrow(/no mock route for POST \/api\/v1\/eliza\/agents/i);
+    expect(state.resumeCalls).toEqual([]);
+  });
+
   it("rejects (never provisions a duplicate) when the control plane refuses the list", async () => {
     seedDedicated();
     const client = makeClient();
