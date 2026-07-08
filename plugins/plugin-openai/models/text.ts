@@ -1717,10 +1717,46 @@ async function generateTextByModelType(
       textStream: (async function* textStreamWithCallback() {
         let streamIterationError: unknown;
         try {
-          for await (const chunk of result.textStream) {
-            responseChunks.push(chunk);
-            params.onStreamChunk?.(chunk);
-            yield chunk;
+          if (params.streamStructured === true) {
+            // Structured Stage-1 calls force the envelope out as a native tool
+            // call, and the AI SDK's textStream carries only text-delta parts —
+            // tool-input (argument) deltas are silently dropped, so nothing
+            // streams while the model writes the envelope. Consume fullStream
+            // instead and forward BOTH shapes: the runtime's unordered skeleton
+            // extractor filters the merged stream down to `replyText`, and the
+            // authoritative parse still comes from the completed toolCalls.
+            // Gated on streamStructured so planner/coding tool-call JSON never
+            // leaks into a visible stream.
+            for await (const part of result.fullStream) {
+              // The AI SDK renamed these delta fields across v6 minors
+              // (`text-delta`: text→delta; `tool-input-delta`:
+              // delta→inputTextDelta), and the workspace's declared (^6.0.30)
+              // and hoisted (6.0.174) copies disagree — read both spellings so
+              // the forwarding survives either resolution. A part carrying
+              // neither is a non-delta frame and is skipped.
+              const record = part as {
+                type: string;
+                delta?: string;
+                text?: string;
+                inputTextDelta?: string;
+              };
+              const chunk =
+                record.type === "text-delta"
+                  ? (record.delta ?? record.text ?? null)
+                  : record.type === "tool-input-delta"
+                    ? (record.inputTextDelta ?? record.delta ?? null)
+                    : null;
+              if (!chunk) continue;
+              responseChunks.push(chunk);
+              params.onStreamChunk?.(chunk);
+              yield chunk;
+            }
+          } else {
+            for await (const chunk of result.textStream) {
+              responseChunks.push(chunk);
+              params.onStreamChunk?.(chunk);
+              yield chunk;
+            }
           }
         } catch (error) {
           // error-policy:J2 context-adding rethrow — capture the stream-iteration
