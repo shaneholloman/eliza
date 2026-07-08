@@ -175,10 +175,9 @@ export const ChoiceWidget = memo(function ChoiceWidget({
             const highlighted =
               isSelected || (recommended && selected === null);
             const variant = highlighted ? "default" : "surface";
-            const choiceClass =
-              highlighted
-                ? "h-11 w-full justify-between px-4 text-sm font-medium disabled:opacity-100 aria-disabled:opacity-100"
-                : "h-11 w-full justify-between border border-border-strong bg-card px-4 text-sm font-medium text-txt-strong hover:bg-surface disabled:opacity-40 aria-disabled:opacity-40";
+            const choiceClass = highlighted
+              ? "h-11 w-full justify-between px-4 text-sm font-medium disabled:opacity-100 aria-disabled:opacity-100"
+              : "h-11 w-full justify-between border border-border-strong bg-card px-4 text-sm font-medium text-txt-strong hover:bg-surface disabled:opacity-40 aria-disabled:opacity-40";
             return (
               <Button
                 key={option.value}
