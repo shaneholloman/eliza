@@ -871,7 +871,7 @@ jobs:
 
       - name: E2E coverage matrix report
         if: always()
-        run: bun packages/scripts/e2e-coverage/write-coverage-matrix-report.ts --report-dir reports/coverage
+        run: bun --conditions=eliza-source packages/scripts/e2e-coverage/write-coverage-matrix-report.ts --report-dir reports/coverage
 
       - name: Build workspace packages for scenario resolution
         run: bun run build:core && bunx turbo run build --filter=@elizaos/plugin-github
