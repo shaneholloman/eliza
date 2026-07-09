@@ -17,13 +17,14 @@ import {
   Download,
   FileAudio,
   Headphones,
+  Loader2,
   LockKeyhole,
   Pencil,
   Share2,
   ShieldCheck,
   Trash2,
   Undo2,
-  UserPlus,
+  UserRoundMinus,
   X,
 } from "lucide-react";
 import * as React from "react";
@@ -89,24 +90,16 @@ type LoadState =
  */
 type CopyStatus = "idle" | "copied" | "failed";
 type ShareMode = "redacted" | "full";
-type ShareRequestKind = "grant" | "revoke";
+type ShareStatus =
+  | { kind: "idle" }
+  | { kind: "submitting" }
+  | { kind: "success"; message: string; entityId: string }
+  | { kind: "error"; message: string };
 
 function copyButtonLabel(status: CopyStatus): string {
   if (status === "copied") return "Copied";
   if (status === "failed") return "Copy failed";
   return "Copy";
-}
-
-function shareRequestText(input: {
-  kind: ShareRequestKind;
-  transcriptId: string;
-  entityId: string;
-  mode: ShareMode;
-}): string {
-  if (input.kind === "revoke") {
-    return `Revoke transcript access for transcriptId=${input.transcriptId} entityId=${input.entityId}.`;
-  }
-  return `Share transcriptId=${input.transcriptId} with entityId=${input.entityId} mode=${input.mode}.`;
 }
 
 /**
@@ -210,8 +203,9 @@ export function TranscriptViewerOverlay({
   const [shareOpen, setShareOpen] = React.useState(false);
   const [shareMode, setShareMode] = React.useState<ShareMode>("redacted");
   const [shareTarget, setShareTarget] = React.useState("");
-  const [shareKind, setShareKind] = React.useState<ShareRequestKind>("grant");
-  const [shareNotice, setShareNotice] = React.useState<string | null>(null);
+  const [shareStatus, setShareStatus] = React.useState<ShareStatus>({
+    kind: "idle",
+  });
   const [saving, setSaving] = React.useState(false);
   const [copyStatus, setCopyStatus] = React.useState<CopyStatus>("idle");
   const [confirmDelete, setConfirmDelete] = React.useState(false);
@@ -314,45 +308,61 @@ export function TranscriptViewerOverlay({
     if (!isAdmin && shareMode === "full") setShareMode("redacted");
   }, [isAdmin, shareMode]);
 
-  const handlePrepareShareRequest = React.useCallback(async () => {
+  const handleGrantShare = React.useCallback(async () => {
     if (load.status !== "ready" || !load.transcriptId) return;
     const entityId = shareTarget.trim();
     if (!entityId) {
-      setShareNotice("Add a recipient entity ID.");
+      setShareStatus({ kind: "error", message: "Add a recipient entity ID." });
       return;
     }
-    const request = shareRequestText({
-      kind: shareKind,
-      transcriptId: load.transcriptId,
-      entityId,
-      mode: shareMode,
-    });
-    const nav = navigator as Navigator & {
-      share?: (data: { title?: string; text?: string }) => Promise<void>;
-    };
-    if (nav.share) {
-      try {
-        await nav.share({ title: "Transcript access request", text: request });
-        setShareNotice("Request shared. The agent still has to confirm it.");
-        return;
-      } catch (err) {
-        // error-policy:J4 user-cancelled share is not an error; anything else
-        // falls through to the copy path below.
-        if (err instanceof DOMException && err.name === "AbortError") return;
-      }
-    }
+    setShareStatus({ kind: "submitting" });
     try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error("Clipboard unavailable");
-      }
-      await navigator.clipboard.writeText(request);
-      setShareNotice("Request copied. Send it in chat to apply it.");
-    } catch {
-      // error-policy:J4 clipboard/share unavailable — render a visible request
-      // instead of pretending access changed.
-      setShareNotice(request);
+      const result = await client.shareTranscript(load.transcriptId, {
+        entityId,
+        mode: shareMode,
+      });
+      setShareStatus({
+        kind: "success",
+        entityId: result.entityId,
+        message:
+          result.mode === "full"
+            ? "Full transcript access granted."
+            : "Redacted transcript access granted.",
+      });
+    } catch (err) {
+      setShareStatus({
+        kind: "error",
+        message:
+          err instanceof Error ? err.message : "Couldn't share transcript.",
+      });
     }
-  }, [load, shareKind, shareMode, shareTarget]);
+  }, [load, shareMode, shareTarget]);
+
+  const handleRevokeShare = React.useCallback(async () => {
+    if (load.status !== "ready" || !load.transcriptId) return;
+    const entityId =
+      shareStatus.kind === "success"
+        ? shareStatus.entityId
+        : shareTarget.trim();
+    if (!entityId) {
+      setShareStatus({ kind: "error", message: "Add a recipient entity ID." });
+      return;
+    }
+    setShareStatus({ kind: "submitting" });
+    try {
+      await client.revokeTranscriptShare(load.transcriptId, entityId);
+      setShareStatus({
+        kind: "success",
+        entityId,
+        message: "Transcript access revoked for that recipient.",
+      });
+    } catch (err) {
+      setShareStatus({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Couldn't revoke access.",
+      });
+    }
+  }, [load, shareStatus, shareTarget]);
 
   const handleSaveToFiles = React.useCallback(() => {
     const safe = title.replace(/[^\w.-]+/g, "_").slice(0, 80) || "transcript";
@@ -546,37 +556,13 @@ export function TranscriptViewerOverlay({
           {shareOpen ? (
             <div
               className="mt-4 rounded-sm border border-border bg-bg/45 p-3"
-              data-testid="transcript-share-panel"
+              data-testid="transcript-share-sheet"
             >
               <div className="flex flex-wrap items-center gap-2">
-                <UserPlus className="h-4 w-4 text-muted" aria-hidden />
+                <Share2 className="h-4 w-4 text-muted" aria-hidden />
                 <p className="min-w-0 flex-1 text-xs font-medium text-txt">
                   Share access
                 </p>
-                <Button
-                  variant={shareKind === "grant" ? "default" : "ghost"}
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => {
-                    setShareKind("grant");
-                    setShareNotice(null);
-                  }}
-                  data-testid="transcript-share-kind-grant"
-                >
-                  Grant
-                </Button>
-                <Button
-                  variant={shareKind === "revoke" ? "default" : "ghost"}
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => {
-                    setShareKind("revoke");
-                    setShareNotice(null);
-                  }}
-                  data-testid="transcript-share-kind-revoke"
-                >
-                  Revoke
-                </Button>
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto]">
                 <label
@@ -589,11 +575,12 @@ export function TranscriptViewerOverlay({
                     value={shareTarget}
                     onChange={(event) => {
                       setShareTarget(event.target.value);
-                      setShareNotice(null);
+                      setShareStatus({ kind: "idle" });
                     }}
                     placeholder="Entity ID"
                     density="compact"
                     data-testid="transcript-share-target"
+                    className="font-mono text-[11px]"
                   />
                 </label>
                 <div className="grid content-end gap-1">
@@ -607,7 +594,7 @@ export function TranscriptViewerOverlay({
                       className="h-8 rounded-sm px-3 text-xs"
                       onClick={() => {
                         setShareMode("redacted");
-                        setShareNotice(null);
+                        setShareStatus({ kind: "idle" });
                       }}
                       data-testid="transcript-share-mode-redacted"
                     >
@@ -633,7 +620,7 @@ export function TranscriptViewerOverlay({
                         className="h-8 rounded-sm px-3 text-xs"
                         onClick={() => {
                           setShareMode("full");
-                          setShareNotice(null);
+                          setShareStatus({ kind: "idle" });
                         }}
                         data-testid="transcript-share-mode-full"
                       >
@@ -647,36 +634,56 @@ export function TranscriptViewerOverlay({
                 <Button
                   variant="default"
                   size="sm"
-                  onClick={() => void handlePrepareShareRequest()}
+                  onClick={() => void handleGrantShare()}
                   disabled={
+                    shareStatus.kind === "submitting" ||
                     load.status !== "ready" ||
                     !load.transcriptId ||
                     !shareTarget.trim()
                   }
-                  data-testid="transcript-share-prepare"
+                  data-testid="transcript-grant-share"
                 >
-                  Prepare request
+                  {shareStatus.kind === "submitting" ? (
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Share2 className="mr-1.5 h-4 w-4" />
+                  )}
+                  Grant
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setShareOpen(false)}
-                  data-testid="transcript-share-close"
+                  onClick={() => void handleRevokeShare()}
+                  disabled={
+                    shareStatus.kind === "submitting" ||
+                    load.status !== "ready" ||
+                    !load.transcriptId ||
+                    !shareTarget.trim()
+                  }
+                  data-testid="transcript-revoke-share"
                 >
-                  Close
+                  <UserRoundMinus className="mr-1.5 h-4 w-4" />
+                  Revoke
                 </Button>
                 <p className="min-w-[12rem] flex-1 text-xs text-muted">
-                  {shareKind === "revoke"
-                    ? "People who already opened it may have kept a copy. Delete-for-everyone removes the file for all."
-                    : "Room roster and connector contacts are unavailable here; use an entity ID."}
+                  Room roster and connector contacts are unavailable here; use
+                  an entity ID. People who already opened it may have kept a
+                  copy.
                 </p>
               </div>
-              {shareNotice ? (
+              {shareStatus.kind === "error" ? (
                 <p
-                  className="mt-2 break-words text-xs text-muted"
-                  data-testid="transcript-share-notice"
+                  className="mt-2 break-words text-xs text-danger"
+                  data-testid="transcript-share-error"
                 >
-                  {shareNotice}
+                  {shareStatus.message}
+                </p>
+              ) : shareStatus.kind === "success" ? (
+                <p
+                  className="mt-2 break-words text-xs text-status-success"
+                  data-testid="transcript-share-success"
+                >
+                  {shareStatus.message}
                 </p>
               ) : null}
             </div>
@@ -732,7 +739,7 @@ export function TranscriptViewerOverlay({
             size="sm"
             onClick={() => {
               setShareOpen((open) => !open);
-              setShareNotice(null);
+              setShareStatus({ kind: "idle" });
             }}
             data-testid="transcript-share"
           >
