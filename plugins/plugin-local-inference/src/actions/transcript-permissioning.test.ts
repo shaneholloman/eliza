@@ -222,6 +222,17 @@ describe("transcript permission actions", () => {
 		});
 		expect(variant?.audioUrl).toBeUndefined();
 		expect(variant?.segments[0]?.text).toContain("[EMAIL]");
+
+		const nested = await redactTranscriptAction.handler(
+			runtime,
+			message(OWNER),
+			undefined,
+			{ parameters: { transcriptId: variantId } },
+		);
+		expect(nested).toMatchObject({
+			success: false,
+			error: "REDACT_TRANSCRIPT_DENIED",
+		});
 	});
 
 	it("requires admin access for full transcript grants", async () => {
