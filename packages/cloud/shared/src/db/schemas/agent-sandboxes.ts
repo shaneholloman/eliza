@@ -345,6 +345,10 @@ export const agentSandboxBackups = pgTable(
   (table) => ({
     sandbox_record_idx: index("agent_sandbox_backups_sandbox_idx").on(table.sandbox_record_id),
     created_at_idx: index("agent_sandbox_backups_created_at_idx").on(table.created_at),
+    sandbox_latest_idx: index("agent_sandbox_backups_sandbox_latest_idx").on(
+      table.sandbox_record_id,
+      table.created_at.desc(),
+    ),
     parent_backup_idx: index("agent_sandbox_backups_parent_idx").on(table.parent_backup_id),
   }),
 );
