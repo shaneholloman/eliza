@@ -1813,7 +1813,11 @@ try {
     await desktop.waitForTimeout(700);
     assert((await variant(desktop)) === "closed", "[webkit mouse] starts closed");
     await snap(desktop, "safari-desktop-collapsed");
-    await gesture(desktop, 140, { pointer: "mouse", slow: false, steps: 3 });
+    await gesture(desktop, Math.round((await viewportH(desktop)) * 0.46), {
+      pointer: "mouse",
+      slow: false,
+      steps: 3,
+    });
     await desktop.waitForTimeout(SETTLE);
     assert((await variant(desktop)) === "open", "[webkit mouse] flick opens the sheet");
     assert(await headerShown(desktop), "[webkit mouse] open sheet exposes the header strip");
