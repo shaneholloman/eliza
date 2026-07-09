@@ -53,23 +53,23 @@ const STUB_MARKERS = Object.freeze([
   "unsupported in ABI-only build",
 ]);
 
-// #9508: the presence of this env-var name in libggml-vulkan.so proves the Mali
-// scalar-flash-attn subgroup-race mitigation is compiled in — it is only emitted
-// by source carrying the `VK_VENDOR_ID_ARM` `disable_subgroups` branch (the
-// override knob for it). A Vulkan backend WITHOUT this marker is the stale
-// pre-#9508 prebuilt that SIGABRTs mid-decode on Mali GPUs.
+// #9508: the presence of this env-var name in the Vulkan backend proves the Mali
+// scalar-flash-attn subgroup-race mitigation is compiled in. Dynamic-backend
+// builds carry it in libggml-vulkan.so; static-fused builds carry it in
+// libelizainference.so after ggml-vulkan is linked into the fused library.
 const MALI_FA_MITIGATION_MARKER = "GGML_VK_FA_ALLOW_SUBGROUPS";
 
 // Mali flash-attn mitigation gate (#9508/#9528), extracted so the fail-closed
 // behavior is unit-testable headless (it is pure fs marker-scanning, no nm/otool).
-// A Vulkan fused build MUST ship a libggml-vulkan.so carrying the ARM
-// subgroup-race mitigation marker, or it SIGABRTs mid-decode on Mali GPUs.
+// A Vulkan fused build MUST carry the ARM subgroup-race mitigation marker in
+// either the separate Vulkan backend or the statically fused libelizainference.
 export function assertVulkanMaliMitigation({ lib, target }) {
   if (!target.includes("vulkan")) return;
   const vulkanBackend = path.join(path.dirname(lib), "libggml-vulkan.so");
   if (!fs.existsSync(vulkanBackend)) {
+    if (binaryContainsAnyMarker(lib, [MALI_FA_MITIGATION_MARKER])) return;
     throw new Error(
-      `[omnivoice-verify] symbol-verify: target=${target} is a Vulkan build but libggml-vulkan.so is missing next to ${lib} — the GPU backend did not build, so the fused lib would silently run CPU-only on device.`,
+      `[omnivoice-verify] symbol-verify: target=${target} is a Vulkan build but neither libggml-vulkan.so next to ${lib} nor the fused library itself carries the '${MALI_FA_MITIGATION_MARKER}' marker — the GPU backend did not build, so the fused lib would silently run CPU-only on device.`,
     );
   }
   if (!binaryContainsAnyMarker(vulkanBackend, [MALI_FA_MITIGATION_MARKER])) {
