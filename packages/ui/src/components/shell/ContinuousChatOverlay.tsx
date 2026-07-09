@@ -5286,15 +5286,15 @@ export function ContinuousChatOverlay({
                   {/* `mt-auto` keeps the latest line at the bottom (nearest the
                   input) until the thread overflows, then it scrolls. During
                   onboarding only the current first-run turn is displayed, so
-                  center that setup card in the available full-screen chat space
-                  and bias it above the locked composer. */}
+                  keep short setup cards centered while letting tall cards grow
+                  past the viewport so the scrollport owns the overflow. */}
                   <div
                     ref={threadContentRef}
                     className={cn(
                       "flex flex-col pb-3 pt-1",
                       !firstRunOpen && "mt-auto",
                       firstRunOpen &&
-                        "min-h-full justify-center pb-[18vh] pt-0",
+                        "min-h-full shrink-0 justify-center pb-[18vh] pt-0",
                     )}
                   >
                     {/* Top sentinel for infinite upward scroll (#13532, #14279):

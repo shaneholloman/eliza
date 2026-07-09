@@ -71,6 +71,7 @@ import {
   getCloudAuthToken,
   refreshCloudStewardSession,
 } from "../api/client-cloud";
+import { APP_RESUME_EVENT } from "../events";
 import { ACCENT_PRESETS, useAppSelectorShallow } from "../state";
 import { useConversationMessages } from "../state/ConversationMessagesContext.hooks";
 import { preOpenCloudLoginWindow } from "../state/cloud-login-launch";
@@ -1342,6 +1343,25 @@ export function useFirstRunConductor(): void {
       pendingCloudResumeRef.current = "cloud";
       let tokenPoll: ReturnType<typeof setInterval> | null = null;
       let cancelled = false;
+      const stopTokenPoll = () => {
+        if (tokenPoll) clearInterval(tokenPoll);
+        tokenPoll = null;
+      };
+      const resumeStoredToken = () => {
+        if (provisionedRef.current) {
+          stopTokenPoll();
+          return;
+        }
+        if (busyRef.current || bindInFlightRef.current) return;
+        if (!hasUsableStoredStewardToken()) return;
+        stopTokenPoll();
+        seedTurn(makeTurn("first-run:cloud-signin", CLOUD_WELCOME_BACK));
+        runCloudResumeRef.current("cloud");
+      };
+      const startTokenPoll = () => {
+        if (tokenPoll) return;
+        tokenPoll = setInterval(resumeStoredToken, 500);
+      };
       // Degrade target shared by the no-session path and a failed cookie
       // recovery: the sign-in greeting plus a cheap localStorage poll. A
       // usable session can LAND after mount without any elizaCloudConnected
@@ -1359,21 +1379,19 @@ export function useFirstRunConductor(): void {
             `${CLOUD_SIGN_IN_GREETING}\n\n${CLOUD_SIGN_IN_CHOICE}`,
           ),
         );
-        tokenPoll = setInterval(() => {
-          if (
-            busyRef.current ||
-            bindInFlightRef.current ||
-            provisionedRef.current
-          ) {
-            if (tokenPoll) clearInterval(tokenPoll);
-            return;
-          }
-          if (!hasUsableStoredStewardToken()) return;
-          if (tokenPoll) clearInterval(tokenPoll);
-          seedTurn(makeTurn("first-run:cloud-signin", CLOUD_WELCOME_BACK));
-          runCloudResumeRef.current("cloud");
-        }, 500);
+        startTokenPoll();
       };
+      const onNativeResume = () => {
+        if (cancelled) return;
+        startTokenPoll();
+        resumeStoredToken();
+      };
+      const onVisibilityChange = () => {
+        if (typeof document !== "undefined" && document.hidden) return;
+        onNativeResume();
+      };
+      document.addEventListener(APP_RESUME_EVENT, onNativeResume);
+      document.addEventListener("visibilitychange", onVisibilityChange);
       if (elizaCloudConnectedRef.current || hasUsableStoredStewardToken()) {
         silentCloudEntryRef.current = true;
         runCloudResumeRef.current("cloud");
@@ -1427,7 +1445,9 @@ export function useFirstRunConductor(): void {
       }
       return () => {
         cancelled = true;
-        if (tokenPoll) clearInterval(tokenPoll);
+        stopTokenPoll();
+        document.removeEventListener(APP_RESUME_EVENT, onNativeResume);
+        document.removeEventListener("visibilitychange", onVisibilityChange);
         setFirstRunActionHandler(null);
         setFirstRunTextHandler(null);
       };

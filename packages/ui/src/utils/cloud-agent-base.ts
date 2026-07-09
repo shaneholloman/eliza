@@ -60,12 +60,14 @@ export const ELIZA_CLOUD_CONTROL_PLANE_HOSTS = new Set([
   "elizacloud.ai",
   "www.elizacloud.ai",
   "dev.elizacloud.ai",
+  "app.elizacloud.ai",
   // Staging apex + API. Without these, `staging.elizacloud.ai` ends with
   // `.elizacloud.ai` but isn't in the set, so isDedicatedCloudAgentBase
   // mis-classifies the staging console as a per-agent subdomain (and the apex
   // login redirect never fires on staging — so staging can't validate it).
   "staging.elizacloud.ai",
   "api-staging.elizacloud.ai",
+  "app-staging.elizacloud.ai",
 ]);
 
 /**
@@ -80,6 +82,22 @@ export function buildCloudSharedAgentApiBase(
 ): string {
   const base = stripTrailingSlash(cloudApiBase.trim());
   return `${base}/api/v1/eliza/agents/${encodeURIComponent(agentId.trim())}`;
+}
+
+/**
+ * Build the dedicated Cloud agent REST base for the standard
+ * `<agentId>.elizacloud.ai` ingress. Returns null when the id cannot be a
+ * single DNS label; callers should then fall back to a server-reported URL
+ * instead of producing a malformed host.
+ */
+export function buildDedicatedCloudAgentApiBase(
+  agentId: string | null | undefined,
+): string | null {
+  const label = agentId?.trim().toLowerCase() ?? "";
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) {
+    return null;
+  }
+  return `https://${label}.elizacloud.ai`;
 }
 
 /**

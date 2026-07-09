@@ -91,6 +91,7 @@ const startEmpty = params.has("empty");
 // behavior (few messages sit near the composer, first fades into the top edge)
 // is visible instead of a long scrolling transcript.
 const firstRun = params.has("firstrun");
+const tallFirstRun = firstRun && params.has("tall");
 const fewMessages = params.has("few") || firstRun;
 // `?many` seeds a LONG transcript (far taller than any detent) so the scroll
 // container's overflow can be reproduced/measured in a real browser: at the FULL
@@ -123,6 +124,23 @@ const FEW_SEED: ShellMessage[] = [
     role: "user",
     content: "let's do the tour",
     createdAt: 2,
+    source: "first_run",
+  },
+];
+const TALL_FIRST_RUN_SEED: ShellMessage[] = [
+  {
+    id: "first-run-tall",
+    role: "assistant",
+    content: [
+      "Welcome back. Before sign-in, this setup message needs enough room to explain what changed and why the next choice matters.",
+      "",
+      ...Array.from(
+        { length: 18 },
+        (_, i) =>
+          `Setup detail ${i + 1}: this line deliberately makes the onboarding bubble taller than a short mobile viewport so the transcript must expose native vertical scrolling instead of clipping the top of the message.`,
+      ),
+    ].join("\n\n"),
+    createdAt: 1,
     source: "first_run",
   },
 ];
@@ -182,7 +200,9 @@ function Harness(): React.JSX.Element {
               },
             ]
           : MANY_SEED
-        : fewMessages
+        : tallFirstRun
+          ? TALL_FIRST_RUN_SEED
+          : fewMessages
           ? FEW_SEED
           : streaming
             ? [

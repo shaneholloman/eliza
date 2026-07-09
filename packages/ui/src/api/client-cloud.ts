@@ -18,6 +18,7 @@ import {
 import { getBootConfig } from "../config/boot-config";
 import {
   buildCloudSharedAgentApiBase,
+  buildDedicatedCloudAgentApiBase,
   isDedicatedCloudAgentBase,
   isElizaCloudControlPlaneAgentlessBase,
   normalizeDirectCloudSharedAgentApiBase,
@@ -3027,6 +3028,17 @@ function resolveDirectCloudAgentBridgeUrl(
   return `${cloudApiBase.replace(/\/+$/, "")}/api/v1/eliza/agents/${encodeURIComponent(agentId)}/bridge`;
 }
 
+function resolveDedicatedCloudAgentApiBase(args: {
+  bridgeUrl: string | null;
+  webUiUrl?: string | null;
+  agentId: string;
+  cloudApiBase: string;
+}): string {
+  const resolved = resolveCloudAgentApiBase(args);
+  if (!isDirectCloudSharedAgentBase(resolved)) return resolved;
+  return buildDedicatedCloudAgentApiBase(args.agentId) ?? resolved;
+}
+
 /**
  * True when `url` is a direct cloud shared-runtime agent base — either the REST
  * adapter base `<cloudApiBase>/api/v1/eliza/agents/<agentId>` (where #8527's
@@ -3211,7 +3223,12 @@ ElizaClient.prototype.provisionCloudSandbox = async (options) => {
 // instead of letting the first chat call exhaust that budget and error.
 const CLOUD_AGENT_WAKE_POLL_INTERVAL_MS = 5_000;
 const CLOUD_AGENT_WAKE_TIMEOUT_MS = 6 * 60_000;
-const CLOUD_AGENT_FAILED_STATUSES = new Set(["error", "failed"]);
+const CLOUD_AGENT_FAILED_STATUSES = new Set([
+  "error",
+  "failed",
+  "deletion_pending",
+  "deletion_failed",
+]);
 
 function isTerminalFailedCloudAgent(agent: CloudCompatAgent): boolean {
   return CLOUD_AGENT_FAILED_STATUSES.has(
@@ -3230,7 +3247,7 @@ function isTerminalFailedCloudAgent(agent: CloudCompatAgent): boolean {
  *
  * Resolves with the FRESH agent record (post-wake URLs), so callers bind the
  * base the running container actually reports, not the stale list entry.
- * Throws on a terminal `error`/`failed` status and on timeout.
+ * Throws on failed/deletion statuses and on timeout.
  */
 export async function waitForCloudAgentRunning(
   client: ElizaClient,
@@ -3303,8 +3320,8 @@ export async function waitForCloudAgentRunning(
  * existing agent was fine (#15516). Non-running picks are never bound
  * directly: the reuse branch routes them through `waitForCloudAgentRunning`,
  * which resolves with the FRESH post-wake record — that (not refusing reuse)
- * is the guard against binding a stale pointer whose chat 404s. Only terminal
- * `error`/`failed` rows are unreusable.
+ * is the guard against binding a stale pointer whose chat 404s. Failed and
+ * deletion rows are unreusable.
  */
 function pickPreferredCloudAgent(
   agents: CloudCompatAgent[],
@@ -3417,9 +3434,14 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
           ...(onProgress ? { onProgress } : {}),
         });
       }
-      const apiBase = preferStewardAgentAdapter
+      const useSharedAdapter = Boolean(
+        preferSharedTier ||
+          preferStewardAgentAdapter ||
+          !(agent.bridge_url || agent.web_ui_url || agent.webUiUrl),
+      );
+      const apiBase = useSharedAdapter
         ? buildCloudSharedAgentApiBase(resolvedCloudApiBase, agent.agent_id)
-        : resolveCloudAgentApiBase({
+        : resolveDedicatedCloudAgentApiBase({
             bridgeUrl: agent.bridge_url,
             webUiUrl: agent.web_ui_url ?? agent.webUiUrl,
             agentId: agent.agent_id,
@@ -3432,8 +3454,7 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
         apiBase,
         bridgeUrl: agent.bridge_url,
         created: false,
-        requiresAgentPairing:
-          !preferStewardAgentAdapter && isDedicatedCloudAgentBase(apiBase),
+        requiresAgentPairing: false,
       };
     }
   }
@@ -3446,7 +3467,8 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
   // the base from the agent's web_ui_url exactly like the reuse branch above.
   // The subdomain is returned as soon as the agent record exists (before the
   // container finishes booting), so re-read the created agent to pick it up;
-  // if that lookup fails or has no URL yet, fall back to the shared-adapter base.
+  // if that lookup fails or has no URL yet, fall back to the standard dedicated
+  // subdomain for the known agent id.
   onProgress?.("creating", `Creating ${name}...`);
   const created = await this.createCloudCompatAgent({
     agentName: name,
@@ -3461,29 +3483,47 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
   }
   const agentId = created.data.agentId;
   // error-policy:J4 detail is an optimization probe (warm-pool fast path);
-  // on failure the shared REST adapter base below is always usable.
+  // on failure the standard dedicated subdomain is still the desired default.
   const detail = await this.getCloudCompatAgent(agentId).catch(() => null);
-  const detailAgent = detail?.success ? detail.data : null;
-  // A freshly-created dedicated agent's subdomain is populated immediately, but
-  // its container takes ~30-120s to boot — chatting against it during that window
-  // 202s "starting" and the first message times out (the reported first-run bug).
-  // So start on the shared REST adapter base (the always-on in-Worker shared
-  // runtime serves the user instantly); finishCloud's handoff supervisor switches
-  // to the dedicated subdomain once it reports `running`. Only use the subdomain
-  // up-front when the agent is ALREADY running (warm-pool claim) — no boot gap.
-  const isRunning = detailAgent?.status === "running";
-  const hasDedicatedUrl = Boolean(
-    detailAgent?.web_ui_url || detailAgent?.bridge_url,
+  let detailAgent = detail?.success ? detail.data : null;
+  const useSharedAdapter = Boolean(
+    preferSharedTier || preferStewardAgentAdapter,
   );
-  const apiBase =
-    !preferStewardAgentAdapter && isRunning && hasDedicatedUrl
-      ? resolveCloudAgentApiBase({
-          bridgeUrl: detailAgent.bridge_url,
-          webUiUrl: detailAgent.web_ui_url ?? detailAgent.webUiUrl,
-          agentId,
-          cloudApiBase: resolvedCloudApiBase,
-        })
-      : buildCloudSharedAgentApiBase(resolvedCloudApiBase, agentId);
+  // A freshly-created dedicated agent's subdomain is populated immediately, but
+  // its container takes ~30-120s to boot. When the caller wants a dedicated
+  // runtime, wait here so the first chat request does not land on the shared
+  // adapter for a non-shared agent or race the container cold boot.
+  const initialDedicatedApiBase = resolveDedicatedCloudAgentApiBase({
+    bridgeUrl: detailAgent?.bridge_url ?? null,
+    webUiUrl: detailAgent?.web_ui_url ?? detailAgent?.webUiUrl,
+    agentId,
+    cloudApiBase: resolvedCloudApiBase,
+  });
+  if (
+    !useSharedAdapter &&
+    detailAgent &&
+    detailAgent.status !== "running" &&
+    isDedicatedCloudAgentBase(initialDedicatedApiBase)
+  ) {
+    detailAgent = await waitForCloudAgentRunning(this, {
+      agentId,
+      ...(typeof options.wakePollIntervalMs === "number"
+        ? { pollIntervalMs: options.wakePollIntervalMs }
+        : {}),
+      ...(typeof options.wakeTimeoutMs === "number"
+        ? { timeoutMs: options.wakeTimeoutMs }
+        : {}),
+      ...(onProgress ? { onProgress } : {}),
+    });
+  }
+  const apiBase = useSharedAdapter
+    ? buildCloudSharedAgentApiBase(resolvedCloudApiBase, agentId)
+    : resolveDedicatedCloudAgentApiBase({
+        bridgeUrl: detailAgent?.bridge_url ?? null,
+        webUiUrl: detailAgent?.web_ui_url ?? detailAgent?.webUiUrl,
+        agentId,
+        cloudApiBase: resolvedCloudApiBase,
+      });
   onProgress?.("ready", "Cloud agent ready!");
   return {
     agentId,
@@ -3497,8 +3537,7 @@ ElizaClient.prototype.selectOrProvisionCloudAgent = async function (
     // explicit `false` demotes to reuse; an absent flag (older worker) stays
     // `true` so the pre-existing create UX is unchanged.
     created: created.created !== false,
-    requiresAgentPairing:
-      !preferStewardAgentAdapter && isDedicatedCloudAgentBase(apiBase),
+    requiresAgentPairing: false,
   };
 };
 

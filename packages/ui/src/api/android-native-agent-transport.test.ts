@@ -108,6 +108,7 @@ describe("androidNativeAgentTransportForUrl", { timeout: 15_000 }, () => {
     globalThis.localStorage?.removeItem("eliza:mobile-runtime-mode");
     setBootConfig(DEFAULT_BOOT_CONFIG);
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("routes Android local-agent requests through the native Agent plugin", async () => {
@@ -249,6 +250,74 @@ describe("androidNativeAgentTransportForUrl", { timeout: 15_000 }, () => {
     });
     expect(fetchMock).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toEqual({ ready: true });
+  });
+
+  it("does not bridge /api fetches to local when a cloud Steward token exists and no runtime mode is persisted", async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ cloud: true })),
+    );
+    const storage = new Map<string, string>();
+    const localStorage = {
+      getItem: (key: string) => storage.get(key) ?? null,
+      removeItem: (key: string) => {
+        storage.delete(key);
+      },
+      setItem: (key: string, value: string) => {
+        storage.set(key, value);
+      },
+    };
+    vi.stubEnv("VITE_ELIZA_ANDROID_RUNTIME_MODE", "local");
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", {
+      location: {
+        href: "https://app.elizacloud.ai/",
+        origin: "https://app.elizacloud.ai",
+      },
+      localStorage,
+    });
+    localStorage.setItem("steward_session_token", "cloud-token");
+
+    installAndroidNativeAgentFetchBridge();
+
+    const response = await fetch("/api/status?source=direct", {
+      method: "GET",
+    });
+
+    expect(agentRequestMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await expect(response.json()).resolves.toEqual({ cloud: true });
+  });
+
+  it("does not bridge absolute cloud-origin /api fetches in Android local mode", async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ cloud: true })),
+    );
+    const storage = new Map<string, string>();
+    const localStorage = {
+      getItem: (key: string) => storage.get(key) ?? null,
+      removeItem: (key: string) => {
+        storage.delete(key);
+      },
+      setItem: (key: string, value: string) => {
+        storage.set(key, value);
+      },
+    };
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", {
+      location: { href: "http://localhost/", origin: "http://localhost" },
+      localStorage,
+    });
+    localStorage.setItem("eliza:mobile-runtime-mode", "local");
+
+    installAndroidNativeAgentFetchBridge();
+
+    const response = await fetch("https://api.elizacloud.ai/api/v1/agents", {
+      method: "GET",
+    });
+
+    expect(agentRequestMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await expect(response.json()).resolves.toEqual({ cloud: true });
   });
 
   it("bridges direct /api fetches when the configured Android base is IPC", async () => {

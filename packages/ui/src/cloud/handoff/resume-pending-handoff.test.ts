@@ -28,6 +28,9 @@ const mocks = vi.hoisted(() => ({
   isDirectCloudSharedAgentBase: vi.fn((base: string) =>
     base.includes("/api/v1/eliza/agents/"),
   ),
+  resolveDirectCloudAuthApiBase: vi.fn((base: string) =>
+    base === "https://elizacloud.ai" ? "https://api.elizacloud.ai" : base,
+  ),
   loadPersistedActiveServer: vi.fn((): Record<string, unknown> | null => null),
   runAgentSessionRecovery: vi.fn<
     (_opts?: unknown) => Promise<{
@@ -70,6 +73,7 @@ vi.mock("../../api", () => ({
 vi.mock("../../api/client-cloud", () => ({
   getCloudAuthToken: mocks.getCloudAuthToken,
   isDirectCloudSharedAgentBase: mocks.isDirectCloudSharedAgentBase,
+  resolveDirectCloudAuthApiBase: mocks.resolveDirectCloudAuthApiBase,
 }));
 
 // resume-pending-handoff imports loadPersistedActiveServer directly from the
@@ -197,14 +201,12 @@ describe("resumePendingCloudHandoff", () => {
       cloudApiBase: "https://elizacloud.ai",
       authToken: "cloud-token",
     });
-    expect(mocks.runAgentSessionRecovery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cloudApiBase: "https://elizacloud.ai",
-        agentId: "dedicated-1",
-        cloudToken: "cloud-token",
-        navigate: expect.any(Function),
-      }),
-    );
+    expect(mocks.runAgentSessionRecovery).not.toHaveBeenCalled();
+    expect(mocks.silentlyRepointToDedicated).toHaveBeenCalledWith({
+      containerBase: "https://dedicated-1.elizacloud.ai",
+      dedicatedAgentId: "dedicated-1",
+      authToken: "cloud-token",
+    });
     // Success terminal → the shared bridge row is deleted.
     expect(mocks.deleteSharedBridgeAgent).toHaveBeenCalledWith("shared-1", {
       cloudApiBase: "https://elizacloud.ai",
@@ -212,22 +214,12 @@ describe("resumePendingCloudHandoff", () => {
     });
   });
 
-  it("native resume consumes the pair redirect in-process and repoints with the exchanged agent key", async () => {
+  it("native resume also keeps the live app on the dedicated runtime after switch", async () => {
     (globalThis as { Capacitor?: unknown }).Capacitor = {
       isNativePlatform: () => true,
     };
     savePendingCloudHandoff(pending());
     mocks.loadPersistedActiveServer.mockReturnValue(activeSharedServer());
-    mocks.runAgentSessionRecovery.mockImplementationOnce(async (opts) => {
-      (
-        opts as { onPairedInProcess?: (apiToken: string) => void }
-      ).onPairedInProcess?.("agent-api-key");
-      return {
-        ok: true as const,
-        redirectUrl: "https://dedicated-1.elizacloud.ai/pair?token=pairing",
-        mode: "in-process" as const,
-      };
-    });
     mocks.startCloudAgentHandoff.mockImplementation(async (opts) => {
       await (opts as { onSwitch?: (base: string) => Promise<void> }).onSwitch?.(
         "https://dedicated-1.elizacloud.ai",
@@ -238,16 +230,11 @@ describe("resumePendingCloudHandoff", () => {
     expect(resumePendingCloudHandoff()).toBe(true);
     await settle();
 
-    expect(mocks.runAgentSessionRecovery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        consumeRedirectInProcess: true,
-        onPairedInProcess: expect.any(Function),
-      }),
-    );
+    expect(mocks.runAgentSessionRecovery).not.toHaveBeenCalled();
     expect(mocks.silentlyRepointToDedicated).toHaveBeenCalledWith({
       containerBase: "https://dedicated-1.elizacloud.ai",
       dedicatedAgentId: "dedicated-1",
-      authToken: "agent-api-key",
+      authToken: "cloud-token",
     });
   });
 

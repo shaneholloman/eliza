@@ -21,7 +21,10 @@ import {
 import type { CloudCompatAgent } from "../api/client-types-cloud";
 import { getDesktopRuntimeMode, invokeDesktopBridgeRequest } from "../bridge";
 import { type AgentPluginLike, getAgentPlugin } from "../bridge/native-plugins";
-import { savePendingCloudHandoff } from "../cloud/handoff/pending-handoff-store";
+import {
+  loadPendingCloudHandoff,
+  savePendingCloudHandoff,
+} from "../cloud/handoff/pending-handoff-store";
 import { runCloudAgentHandoff } from "../cloud/handoff/run-cloud-agent-handoff";
 import { silentlyRepointToDedicated } from "../cloud/handoff/silent-repoint";
 import { getBootConfig } from "../config/boot-config";
@@ -525,7 +528,7 @@ export async function bindCloudAgent(
     ...(opts.preferAgentId ? { preferAgentId: opts.preferAgentId } : {}),
     ...(opts.forceCreate ? { forceCreate: true } : {}),
     ...(opts.knownAgents ? { knownAgents: opts.knownAgents } : {}),
-    preferStewardAgentAdapter: true,
+    preferStewardAgentAdapter: Boolean(getBootConfig().preferSharedCloudTier),
     ...(getBootConfig().preferSharedCloudTier
       ? { preferSharedTier: true }
       : {}),
@@ -603,9 +606,19 @@ export async function bindCloudAgent(
 
   // Seamless shared→dedicated cloud-agent handoff (background). Flag OFF →
   // `selectedAgent` is the dedicated agent itself and this branch is skipped.
+  //
+  // Fires for a NEWLY created shared agent AND for a REUSED one
+  // (`created:false`, e.g. re-login after a failed first run) — #15310 #3: the
+  // old `created`-only gate meant a reused shared agent never re-entered the
+  // upgrade path, stranding the user on the shared adapter with the
+  // provisioning tile forever. The one reuse case that must NOT start a fresh
+  // handoff is an interrupted-but-live one: a persisted pending marker means
+  // resumePendingCloudHandoff owns it (it verifies the target and re-arms a
+  // fresh create itself when the target is dead), and double-firing here would
+  // provision a second dedicated agent.
   if (
     getBootConfig().preferSharedCloudTier &&
-    selectedAgent.created &&
+    (selectedAgent.created || loadPendingCloudHandoff() === null) &&
     isDirectCloudSharedAgentBase(cloudAgentApiBase)
   ) {
     const sharedAgentId = selectedAgent.agentId;
@@ -653,11 +666,10 @@ export async function bindCloudAgent(
           cloudApiBase,
           authToken,
           onSwitch: async (containerBase) => {
-            await pairDedicatedCloudAgentInCurrentWindow({
-              cloudApiBase,
-              agentId: dedicatedAgentId,
-              cloudToken: authToken,
+            silentlyRepointToDedicated({
               containerBase,
+              dedicatedAgentId,
+              authToken,
             });
           },
         });

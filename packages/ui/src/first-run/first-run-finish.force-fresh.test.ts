@@ -128,7 +128,7 @@ describe("bindCloudAgent clears the durable force-fresh flag on completion", () 
     // The shared-agent path must NOT POST /api/first-run.
     expect(clientMock.submitFirstRun).not.toHaveBeenCalled();
     expect(clientMock.selectOrProvisionCloudAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ preferStewardAgentAdapter: true }),
+      expect.objectContaining({ preferStewardAgentAdapter: false }),
     );
   });
 

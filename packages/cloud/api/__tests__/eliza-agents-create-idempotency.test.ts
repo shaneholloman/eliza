@@ -174,6 +174,7 @@ describe("POST /api/v1/eliza/agents — reuse idempotency", () => {
     sandboxDelete.mockClear();
     prepareManagedElizaEnvironment.mockClear();
     loggerInfo.mockClear();
+    loggerError.mockClear();
   });
 
   test("(d) reuse → 200 with the existing agent, no second provision job", async () => {
@@ -378,11 +379,11 @@ describe("POST /api/v1/eliza/agents — reuse idempotency", () => {
     expect(passed.reuseExistingNonTerminal).toBe(true);
   });
 
-  test("#15516: a provisioning-worker outage does NOT block reuse — reusable agent exists → gate skipped, 200 with the existing agent", async () => {
+  test("#15516: a provisioning-worker outage does NOT block idempotent reuse", async () => {
     // Reuse enqueues nothing, so worker capacity is irrelevant to it. The
-    // route must return before the enqueue boundary; otherwise a heartbeat gap
-    // 503s first-run onboarding for a user whose one healthy agent needed no
-    // provisioning at all (the #15516 dead-end).
+    // route must let createAgent's locked idempotency guard run before the
+    // enqueue-boundary worker gate; otherwise a heartbeat gap 503s first-run
+    // onboarding for a user whose agent needs no provisioning (#15516).
     checkProvisioningWorkerHealth.mockResolvedValue({
       ok: false,
       status: 503,
@@ -399,12 +400,12 @@ describe("POST /api/v1/eliza/agents — reuse idempotency", () => {
     expect(res.status).toBe(200);
     const json = (await res.json()) as { created: boolean };
     expect(json.created).toBe(false);
-    // The gate was skipped entirely — not just tolerated.
     expect(checkProvisioningWorkerHealth).not.toHaveBeenCalled();
     expect(enqueueAgentProvision).not.toHaveBeenCalled();
+    expect(sandboxDelete).not.toHaveBeenCalled();
   });
 
-  test("#15516: worker outage with NO reusable agent still fails closed → 503, pending row rolled back", async () => {
+  test("#15516: worker outage on a fresh async create fails closed and rolls back the pending row", async () => {
     checkProvisioningWorkerHealth.mockResolvedValue({
       ok: false,
       status: 503,
@@ -428,9 +429,40 @@ describe("POST /api/v1/eliza/agents — reuse idempotency", () => {
     expect(sandboxDelete).toHaveBeenCalledWith(agent.id, "org-1");
   });
 
-  test("#15516: forceCreate never skips the enqueue gate during a worker outage even when a reusable agent exists", async () => {
+  test("#15516: worker-outage cleanup failure still returns the canonical 503", async () => {
+    checkProvisioningWorkerHealth.mockResolvedValue({
+      ok: false,
+      status: 503,
+      code: "PROVISIONING_WORKER_UNHEALTHY",
+    });
+    sandboxDelete.mockRejectedValueOnce(new Error("delete unavailable"));
+    const agent = pendingAgent();
+    createAgent.mockResolvedValue({ agent, idempotent: false });
+
+    const res = await postCreate({
+      agentName: "alpha",
+      dockerImage: "ghcr.io/example/agent:latest",
+    });
+
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { success: boolean; code: string };
+    expect(body.success).toBe(false);
+    expect(body.code).toBe("PROVISIONING_WORKER_UNHEALTHY");
+    expect(enqueueAgentProvision).not.toHaveBeenCalled();
+    expect(loggerError).toHaveBeenCalledWith(
+      "[agent-api] Failed to roll back agent after worker-health gate",
+      expect.objectContaining({
+        agentId: agent.id,
+        orgId: "org-1",
+        error: "delete unavailable",
+      }),
+    );
+  });
+
+  test("#15516: forceCreate never bypasses the enqueue-boundary worker gate", async () => {
     // forceCreate explicitly opts out of reuse, so its create WILL enqueue —
-    // the worker gate must keep protecting it regardless of reuse candidacy.
+    // the worker gate must keep protecting it even if the org has another
+    // reusable agent.
     checkProvisioningWorkerHealth.mockResolvedValue({
       ok: false,
       status: 503,

@@ -6,14 +6,15 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { resolveElizaWorkspaceRootFromImportMeta } from "../lib/repo-root.mjs";
 import {
+  describeAndroidTargetDryRun,
+  ensureZigDrivers,
+  stageStaticFusedRuntimeBackendLibs,
+} from "./compile-libllama.mjs";
+import {
   resolveAndroidNdkHostDir,
   resolveDefaultAndroidAssetsDir,
   resolveHomebrewFormulaIncludeDirs,
 } from "./compile-libllama-paths.mjs";
-import {
-  describeAndroidTargetDryRun,
-  ensureZigDrivers,
-} from "./compile-libllama.mjs";
 
 const repoRoot = resolveElizaWorkspaceRootFromImportMeta(import.meta.url);
 const cleanupHelperScript = path.join(
@@ -188,7 +189,7 @@ describe("compile-libllama Zig driver generation", () => {
     const logs = [];
 
     describeAndroidTargetDryRun({
-      target: "android-arm64-vulkan",
+      target: "android-arm64-vulkan-fused",
       srcDir,
       cacheDir,
       abiAssetDir,
@@ -202,5 +203,72 @@ describe("compile-libllama Zig driver generation", () => {
     expect(output).toContain(
       `-DCMAKE_RANLIB=${path.join(driverDir, "zig-ranlib")}`,
     );
+    expect(output).toContain("ggml-vulkan");
+    expect(output).toContain("static marker in libelizainference.so");
+  });
+});
+
+describe("compile-libllama static-fused runtime backend staging", () => {
+  test("copies libggml-vulkan beside libelizainference for Android Vulkan fused builds", () => {
+    const buildDir = makeTmpDir();
+    const abiAssetDir = makeTmpDir();
+    const nestedBackendDir = path.join(buildDir, "ggml", "src");
+    fs.mkdirSync(nestedBackendDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(nestedBackendDir, "libggml-vulkan.so"),
+      "vulkan-backend",
+    );
+    const logs = [];
+
+    const staged = stageStaticFusedRuntimeBackendLibs({
+      buildDir,
+      abiAssetDir,
+      target: "android-arm64-vulkan-fused",
+      log: (line) => logs.push(line),
+    });
+
+    expect(staged).toEqual([path.join(abiAssetDir, "libggml-vulkan.so")]);
+    expect(fs.readFileSync(staged[0], "utf8")).toBe("vulkan-backend");
+    expect(logs.join("\n")).toContain("Copied libggml-vulkan.so");
+  });
+
+  test("accepts static-linked Vulkan evidence when no separate backend is emitted", () => {
+    const buildDir = makeTmpDir();
+    const abiAssetDir = makeTmpDir();
+    const fusedLibPath = path.join(abiAssetDir, "libelizainference.so");
+    fs.writeFileSync(fusedLibPath, "GGML_VK_FA_ALLOW_SUBGROUPS");
+    const logs = [];
+
+    const staged = stageStaticFusedRuntimeBackendLibs({
+      buildDir,
+      abiAssetDir,
+      target: "android-arm64-vulkan-fused",
+      fusedLibPath,
+      log: (line) => logs.push(line),
+    });
+
+    expect(staged).toEqual([]);
+    expect(logs.join("\n")).toContain("statically inside libelizainference.so");
+  });
+
+  test("does not stage a Vulkan backend for CPU fused builds", () => {
+    const staged = stageStaticFusedRuntimeBackendLibs({
+      buildDir: makeTmpDir(),
+      abiAssetDir: makeTmpDir(),
+      target: "android-x86_64-cpu-fused",
+    });
+
+    expect(staged).toEqual([]);
+  });
+
+  test("fails closed when a Vulkan fused build has no backend evidence", () => {
+    expect(() =>
+      stageStaticFusedRuntimeBackendLibs({
+        buildDir: makeTmpDir(),
+        abiAssetDir: makeTmpDir(),
+        target: "android-arm64-vulkan-fused",
+        fusedLibPath: null,
+      }),
+    ).toThrow(/libggml-vulkan\.so/);
   });
 });

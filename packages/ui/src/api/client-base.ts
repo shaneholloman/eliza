@@ -66,6 +66,14 @@ const ELIZA_CLOUD_CONTROL_PLANE_HOSTS = new Set([
   "elizacloud.ai",
   "www.elizacloud.ai",
   "dev.elizacloud.ai",
+  "app.elizacloud.ai",
+  "staging.elizacloud.ai",
+  "api-staging.elizacloud.ai",
+  "app-staging.elizacloud.ai",
+]);
+const DEDICATED_CLOUD_CORS_BLOCKED_HEADERS = new Set([
+  "x-elizaos-client-id",
+  "x-elizaos-ui-language",
 ]);
 const REPLAYABLE_WS_EVENT_TYPES: ReadonlySet<string> = new Set([
   SHELL_NAVIGATE_VIEW_WS_EVENT,
@@ -232,6 +240,25 @@ function isElizaCloudControlPlaneBase(
     // error-policy:J3 malformed base URL reads as "not the control plane".
     return false;
   }
+}
+
+function requestHeadersToRecord(
+  headers: HeadersInit | undefined,
+): Record<string, string> {
+  if (!headers) return {};
+  if (typeof Headers !== "undefined" && headers instanceof Headers) {
+    const out: Record<string, string> = {};
+    headers.forEach((value, key) => {
+      out[key] = value;
+    });
+    return out;
+  }
+  if (Array.isArray(headers)) {
+    const out: Record<string, string> = {};
+    for (const [key, value] of headers) out[key] = value;
+    return out;
+  }
+  return { ...(headers as Record<string, string>) };
 }
 
 function findSseEventBreak(
@@ -1045,7 +1072,12 @@ export class ElizaClient {
     }
 
     try {
-      const requestInit = this.rawRequestInit(init, abortController, token);
+      const requestInit = this.rawRequestInit(
+        init,
+        abortController,
+        token,
+        requestUrl,
+      );
       const transport = await this.rawRequestTransport(requestUrl);
       return await transport.request(requestUrl, requestInit, { timeoutMs });
     } catch (err) {
@@ -1070,18 +1102,30 @@ export class ElizaClient {
     init: RequestInit | undefined,
     abortController: AbortController,
     token: string | null,
+    requestUrl: string,
   ): RequestInit {
+    const isDedicatedCloudRequest = isDedicatedCloudAgentBase(requestUrl);
+    const headers: Record<string, string> = {
+      ...(!isDedicatedCloudRequest
+        ? { "X-ElizaOS-Client-Id": this.clientId }
+        : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(!isDedicatedCloudRequest && this._uiLanguage
+        ? { "X-ElizaOS-UI-Language": this._uiLanguage }
+        : {}),
+      ...requestHeadersToRecord(init?.headers),
+    };
+    if (isDedicatedCloudRequest) {
+      for (const key of Object.keys(headers)) {
+        if (DEDICATED_CLOUD_CORS_BLOCKED_HEADERS.has(key.toLowerCase())) {
+          delete headers[key];
+        }
+      }
+    }
     return {
       ...init,
       signal: abortController.signal,
-      headers: {
-        "X-ElizaOS-Client-Id": this.clientId,
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(this._uiLanguage
-          ? { "X-ElizaOS-UI-Language": this._uiLanguage }
-          : {}),
-        ...init?.headers,
-      },
+      headers,
     };
   }
 

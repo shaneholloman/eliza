@@ -15,6 +15,7 @@ import {
 import { client, type FirstRunOptions } from "../api";
 import {
   cloudTokenSecsRemaining,
+  isDirectCloudSharedAgentBase,
   refreshCloudStewardSession,
 } from "../api/client-cloud";
 import {
@@ -22,6 +23,7 @@ import {
   invokeDesktopBridgeRequestWithTimeout,
   isElectrobunRuntime,
 } from "../bridge";
+import { loadPendingCloudHandoff } from "../cloud/handoff/pending-handoff-store";
 import { getBootConfig } from "../config/boot-config";
 import {
   ANDROID_LOCAL_AGENT_IPC_BASE,
@@ -44,10 +46,10 @@ import {
   isOnboardingReplayRequested,
 } from "../platform";
 import {
-  buildCloudSharedAgentApiBase,
+  buildDedicatedCloudAgentApiBase,
+  dedicatedCloudAgentIdFromBase,
   isDedicatedCloudAgentBase,
   isElizaCloudControlPlaneAgentlessBase,
-  normalizeDirectCloudSharedAgentApiBase,
 } from "../utils/cloud-agent-base";
 import { getElizaApiBase } from "../utils/eliza-globals";
 import { detectExistingFirstRunConnection } from "./first-run-bootstrap";
@@ -64,10 +66,6 @@ import { isTrustedRestoreApiBaseUrl } from "./runtime-url-trust";
 import type { StartupEvent } from "./startup-coordinator";
 import { buildStaticFirstRunOptions } from "./startup-first-run-options";
 
-// Direct elizaCloud API base used to backfill a missing apiBase on a
-// persisted cloud active-server. Mirrors DEFAULT_DIRECT_CLOUD_API_BASE_URL
-// in api/client-cloud.ts; kept inline because that constant is module-private.
-const DIRECT_CLOUD_API_BASE = "https://api.elizacloud.ai";
 const DESKTOP_RESTORE_RPC_TIMEOUT_MS = 5_000;
 
 /**
@@ -90,81 +88,47 @@ const STEWARD_REFRESH_PATH = "/api/auth/steward-refresh";
 /** Default direct Cloud site base used to derive the native refresh endpoint. */
 const RESTORE_DEFAULT_DIRECT_CLOUD_BASE_URL = "https://elizacloud.ai";
 
+function recoverCloudAgentId(active: PersistedActiveServer): string | null {
+  const rawId = active.id?.startsWith("cloud:")
+    ? active.id.slice("cloud:".length).trim()
+    : "";
+  if (rawId && !rawId.includes("/")) return rawId;
+  return dedicatedCloudAgentIdFromBase(active.apiBase);
+}
+
 function isDevUiPort(): boolean {
   return typeof window !== "undefined" && window.location.port === "2138";
 }
 
 /**
- * Repair a restored cloud active-server whose apiBase is missing OR is the
- * unusable agent-id-less collection URL (`.../api/v1/eliza/agents`, a broken
- * state from earlier builds that completed firstRun without a per-agent base).
- * Re-derive the per-agent REST adapter base from the persisted `cloud:<agentId>`
- * id — preferring the server-reported url, falling back to deriving it directly
- * from the id. Returns the up-to-date active server, or the input unchanged when
- * no real agent id can be recovered (the startup gate then routes to agent
- * selection instead of dead-ending on "Backend Unreachable").
+ * Repair a restored cloud active-server whose apiBase is missing or is the
+ * unusable agent-id-less collection URL (`.../api/v1/eliza/agents`). Dedicated
+ * Cloud agents must restore to their own subdomain; the shared runtime adapter
+ * answers "Not a shared-runtime agent" for those ids.
  */
 async function backfillCloudApiBase(
   active: PersistedActiveServer,
 ): Promise<PersistedActiveServer> {
   if (active.kind !== "cloud") return active;
-  // A concrete per-agent base is fine — only act on a missing or id-less base.
-  if (
-    active.apiBase &&
-    !isElizaCloudControlPlaneAgentlessBase(active.apiBase)
-  ) {
-    return active;
-  }
-  const rawId = active.id?.startsWith("cloud:")
-    ? active.id.slice("cloud:".length).trim()
-    : "";
-  // A real agent id has no path separators. Older builds mistakenly stored the
-  // collection URL itself as the id (`cloud:https://.../agents`) — that can't be
-  // recovered here; leave it for the startup gate's agent-selection fallback.
-  const agentId = rawId && !rawId.includes("/") ? rawId : null;
-  if (!agentId) return active;
+  const agentId = recoverCloudAgentId(active);
+  const pending = loadPendingCloudHandoff();
+  const isPendingSharedRuntime =
+    Boolean(pending && agentId === pending.sharedAgentId) &&
+    active.apiBase === pending?.sharedApiBase;
+  const shouldRepair =
+    !active.apiBase ||
+    isElizaCloudControlPlaneAgentlessBase(active.apiBase) ||
+    (isDirectCloudSharedAgentBase(active.apiBase) && !isPendingSharedRuntime);
+  // A concrete per-agent base is fine, including a dedicated subdomain.
+  if (!shouldRepair) return active;
 
-  const priorBaseUrl = client.getBaseUrl();
-  const priorToken = client.hasToken();
-  const derivedApiBase = buildCloudSharedAgentApiBase(
-    DIRECT_CLOUD_API_BASE,
-    agentId,
-  );
-  client.setBaseUrl(DIRECT_CLOUD_API_BASE);
-  try {
-    if (active.accessToken) client.setToken(active.accessToken);
-    // error-policy:J4 lookup probe — on failure the restore falls back to the
-    // id-derived api base below rather than blocking session restore
-    const res = await client.getCloudCompatAgent(agentId).catch(() => null);
-    const data = res?.success ? res.data : null;
-    const rawApiBase = data
-      ? (data.web_ui_url ?? data.webUiUrl ?? data.bridge_url)
-      : null;
-    const serverApiBase = rawApiBase
-      ? normalizeDirectCloudSharedAgentApiBase(rawApiBase)
-      : "";
-    // Prefer a concrete server-reported base; otherwise derive from the id.
-    const apiBase =
-      serverApiBase && !isElizaCloudControlPlaneAgentlessBase(serverApiBase)
-        ? serverApiBase
-        : derivedApiBase;
-    const updated: PersistedActiveServer = { ...active, apiBase };
-    savePersistedActiveServer(updated);
-    return updated;
-  } catch {
-    // Even if the lookup fails, never restore the broken base — derive from id.
-    const updated: PersistedActiveServer = {
-      ...active,
-      apiBase: derivedApiBase,
-    };
-    savePersistedActiveServer(updated);
-    return updated;
-  } finally {
-    // Restore prior client state — applyRestoredConnection sets the final
-    // baseUrl below based on the (possibly backfilled) active server.
-    client.setBaseUrl(priorBaseUrl || null);
-    if (!priorToken) client.setToken(null);
-  }
+  if (!agentId) return active;
+  const apiBase = buildDedicatedCloudAgentApiBase(agentId);
+  if (!apiBase) return active;
+
+  const updated: PersistedActiveServer = { ...active, apiBase };
+  savePersistedActiveServer(updated);
+  return updated;
 }
 
 export interface RestoringSessionDeps {

@@ -313,6 +313,59 @@ describe("useCloudState — handleCloudLogin same-tab fallback on hosted web", (
     }
   });
 
+  it("does one final direct cloud poll at the timeout boundary before timing out", async () => {
+    vi.useFakeTimers();
+    const popup = {
+      closed: false,
+      close: vi.fn(() => {
+        (popup as { closed: boolean }).closed = true;
+      }),
+      location: { href: "" },
+      opener: {},
+    } as unknown as Window;
+    vi.spyOn(window, "open").mockReturnValue(popup);
+    cloudLoginDirectSpy.mockResolvedValue({
+      ok: true,
+      apiBase: "https://api.elizacloud.ai",
+      browserUrl: "https://elizacloud.ai/auth/cli-login?session=sess-last",
+      sessionId: "sess-last",
+    });
+    cloudLoginPollDirectSpy.mockResolvedValue({
+      status: "authenticated",
+      token: "last-poll-token",
+      userId: "user-1",
+    });
+
+    try {
+      const { result, unmount } = renderHook(() => useCloudState(makeParams()));
+      let login: Promise<void> = Promise.resolve();
+      await act(async () => {
+        login = result.current.handleCloudLogin(popup);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300_000);
+        await login;
+      });
+
+      expect(cloudLoginPollDirectSpy).toHaveBeenCalledWith(
+        "https://api.elizacloud.ai",
+        "sess-last",
+      );
+      expect(localStorage.getItem("steward_session_token")).toBe(
+        "last-poll-token",
+      );
+      expect(result.current.elizaCloudLoginError).toBeNull();
+
+      unmount();
+      vi.clearAllTimers();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses a closeable named popup for localhost direct cloud login without a pre-opened handle", async () => {
     vi.useFakeTimers();
     Object.defineProperty(window, "location", {

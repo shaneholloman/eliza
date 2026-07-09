@@ -366,9 +366,9 @@ app.post("/", async (c) => {
       );
     }
 
-    // Worker health is checked at the enqueue boundary below. Earlier checks
-    // can block reuse, shared-tier, and warm-pool paths that do not need a
-    // provisioning worker.
+    // Worker health is checked at the enqueue boundary below. Earlier gates
+    // blocked reuse, warm-pool, shared-tier, and non-eager paths that do not
+    // need a provisioning worker.
   }
 
   let created: Awaited<ReturnType<typeof elizaSandboxService.createAgent>>;
@@ -609,9 +609,23 @@ app.post("/", async (c) => {
     // is enqueued.
     const workerHealth = await checkProvisioningWorkerHealth();
     if (!workerHealth.ok) {
-      await agentSandboxesRepository.delete(agent.id, user.organization_id);
+      try {
+        await agentSandboxesRepository.delete(agent.id, user.organization_id);
+      } catch (cleanupErr) {
+        logger.error(
+          "[agent-api] Failed to roll back agent after worker-health gate",
+          {
+            agentId: agent.id,
+            orgId: user.organization_id,
+            error:
+              cleanupErr instanceof Error
+                ? cleanupErr.message
+                : String(cleanupErr),
+          },
+        );
+      }
       logger.warn(
-        "[agent-api] Agent provisioning blocked: worker unavailable; row rolled back",
+        "[agent-api] Agent provisioning blocked: worker unavailable",
         {
           agentId: agent.id,
           orgId: user.organization_id,
