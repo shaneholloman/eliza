@@ -13,7 +13,8 @@
         "packages/app-core/src/services/account-pool.ts"
       ],
       "@elizaos/core": ["packages/core/src/index.ts"],
-      "@elizaos/shared": ["packages/shared/src/index.ts"]
+      "@elizaos/shared": ["packages/shared/src/index.ts"],
+      "@elizaos/shared/*": ["packages/shared/src/*"]
     }
   }
 }

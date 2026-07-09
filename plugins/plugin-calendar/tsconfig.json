@@ -40,6 +40,8 @@
       "@elizaos/auth/*": ["../../packages/auth/src/*"],
       "@elizaos/cloud-routing": ["../../packages/cloud/routing/src/index.ts"],
       "@elizaos/cloud-routing/*": ["../../packages/cloud/routing/src/*"],
+      "@elizaos/cloud-sdk": ["../../packages/cloud/sdk/src/index.ts"],
+      "@elizaos/cloud-sdk/*": ["../../packages/cloud/sdk/src/*"],
       "@elizaos/contracts": ["../../packages/contracts/src/index.ts"],
       "@elizaos/contracts/*": ["../../packages/contracts/src/*"],
       "@elizaos/plugin-app-control": ["../plugin-app-control/src/index.ts"],
@@ -67,12 +69,18 @@
       "@elizaos/plugin-coding-tools": ["../plugin-coding-tools/src/index.ts"],
       "@elizaos/plugin-coding-tools/*": ["../plugin-coding-tools/src/*"],
       "@elizaos/plugin-commands": ["../plugin-commands/src/index.ts"],
+      "@elizaos/plugin-computeruse": ["../plugin-computeruse/src/index.ts"],
+      "@elizaos/plugin-computeruse/*": ["../plugin-computeruse/src/*"],
+      "@elizaos/plugin-discord": ["../plugin-discord/index.ts"],
+      "@elizaos/plugin-discord/*": ["../plugin-discord/*"],
       "@elizaos/plugin-discord/service": ["../plugin-discord/service.ts"],
       "@elizaos/plugin-elizacloud/host-routes": [
         "../plugin-elizacloud/src/host-routes.ts"
       ],
       "@elizaos/plugin-google": ["../plugin-google/src/index.ts"],
       "@elizaos/plugin-google/*": ["../plugin-google/src/*"],
+      "@elizaos/plugin-meetings": ["../plugin-meetings/src/index.ts"],
+      "@elizaos/plugin-meetings/*": ["../plugin-meetings/src/*"],
       "@elizaos/plugin-native-filesystem": [
         "../plugin-native-filesystem/src/index.ts"
       ],
