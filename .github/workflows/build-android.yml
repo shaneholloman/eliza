@@ -65,6 +65,45 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      # Gradle's copyForkLlamaLib hard-requires the fused inference lib for
+      # arm64-v8a (libelizainference.so + its backend .so siblings) and fails
+      # the whole APK build without it (#15540). CI has no ~/.eliza staging
+      # and no NDK cross-compile here — the fused libs are built by the
+      # build-llama-ffi-android workflow — so stage its latest green artifacts
+      # and point ELIZA_MTP_ANDROID_LIBDIR{,_X86_64} at them.
+      - name: Stage fused inference libs (from build-llama-ffi-android)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id=$(gh api "repos/${{ github.repository }}/actions/workflows/build-llama-ffi-android.yml/runs?status=success&per_page=1" \
+            --jq '.workflow_runs[0].id // empty')
+          if [ -z "$run_id" ]; then
+            echo "::error::no successful build-llama-ffi-android run found — fix that workflow first (its fused artifacts feed this build)" >&2
+            exit 1
+          fi
+          echo "staging fused libs from build-llama-ffi-android run $run_id"
+          stage="$RUNNER_TEMP/elizainference"
+          mkdir -p "$stage/arm64" "$stage/x86_64"
+          gh run download "$run_id" -R "${{ github.repository }}" \
+            -n libelizainference-android-arm64-vulkan-fused -D "$stage/arm64"
+          # x86_64 is optional: gradle skips absent non-arm64 ABIs.
+          gh run download "$run_id" -R "${{ github.repository }}" \
+            -n libelizainference-android-x86_64-cpu-fused -D "$stage/x86_64" || true
+          arm64_so=$(find "$stage/arm64" -name libelizainference.so | head -1)
+          if [ -z "$arm64_so" ]; then
+            echo "::error::arm64 artifact downloaded but contains no libelizainference.so" >&2
+            find "$stage/arm64" -type f | head -20 >&2
+            exit 1
+          fi
+          echo "ELIZA_MTP_ANDROID_LIBDIR=$(dirname "$arm64_so")" >> "$GITHUB_ENV"
+          x86_so=$(find "$stage/x86_64" -name libelizainference.so 2>/dev/null | head -1 || true)
+          if [ -n "$x86_so" ]; then
+            echo "ELIZA_MTP_ANDROID_LIBDIR_X86_64=$(dirname "$x86_so")" >> "$GITHUB_ENV"
+          fi
+          echo "arm64 libdir contents:"
+          ls -la "$(dirname "$arm64_so")"
+
       - name: Prepare Android platform
         working-directory: ${{ env.APP_DIR }}
         run: bun run build:android
