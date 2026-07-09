@@ -453,6 +453,9 @@ describe("AgentSandboxesRepository", () => {
         backup_kind: "full",
         parent_backup_id: null,
         content_hash: "hash",
+        verification_status: null,
+        verified_at: null,
+        verification_error: null,
         created_at: createdAt,
       });
 
@@ -490,6 +493,9 @@ describe("AgentSandboxesRepository", () => {
         backup_kind: "full",
         parent_backup_id: null,
         content_hash: "hash",
+        verification_status: null,
+        verified_at: null,
+        verification_error: null,
         created_at: new Date("2026-06-20T00:00:00.000Z"),
       },
     ];
