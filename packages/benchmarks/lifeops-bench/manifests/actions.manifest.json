@@ -24,17 +24,12 @@
         "description": "BLOCK apps+websites only; NOT calendar/focus; block|unblock|status|permission|release",
         "parameters": {
           "type": "object",
-          "required": [
-            "action"
-          ],
+          "required": ["action"],
           "properties": {
             "target": {
               "type": "string",
               "description": "app phone apps | website desktop hosts-file/SelfControl. Omit ok: infer request_permission|release|list_active -> website, params, user text.",
-              "enum": [
-                "app",
-                "website"
-              ]
+              "enum": ["app", "website"]
             },
             "action": {
               "type": "string",
@@ -130,9 +125,7 @@
         "capability:read",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device"
-      ],
+      "_surfaces": ["surface:device"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -148,17 +141,12 @@
             "target": {
               "type": "string",
               "description": "app phone apps | website desktop hosts-file/SelfControl. Omit ok: infer request_permission|release|list_active -> website, params, user text.",
-              "enum": [
-                "app",
-                "website"
-              ]
+              "enum": ["app", "website"]
             },
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"block\" for this virtual; do not change).",
-              "enum": [
-                "block"
-              ],
+              "enum": ["block"],
               "default": "block"
             },
             "intent": {
@@ -260,9 +248,7 @@
         "capability:read",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device"
-      ],
+      "_surfaces": ["surface:device"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -278,17 +264,12 @@
             "target": {
               "type": "string",
               "description": "app phone apps | website desktop hosts-file/SelfControl. Omit ok: infer request_permission|release|list_active -> website, params, user text.",
-              "enum": [
-                "app",
-                "website"
-              ]
+              "enum": ["app", "website"]
             },
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"list_active\" for this virtual; do not change).",
-              "enum": [
-                "list_active"
-              ],
+              "enum": ["list_active"],
               "default": "list_active"
             },
             "intent": {
@@ -376,9 +357,7 @@
         "capability:read",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device"
-      ],
+      "_surfaces": ["surface:device"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -394,17 +373,12 @@
             "target": {
               "type": "string",
               "description": "app phone apps | website desktop hosts-file/SelfControl. Omit ok: infer request_permission|release|list_active -> website, params, user text.",
-              "enum": [
-                "app",
-                "website"
-              ]
+              "enum": ["app", "website"]
             },
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"release\" for this virtual; do not change).",
-              "enum": [
-                "release"
-              ],
+              "enum": ["release"],
               "default": "release"
             },
             "intent": {
@@ -489,9 +463,7 @@
         "capability:read",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device"
-      ],
+      "_surfaces": ["surface:device"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -507,17 +479,12 @@
             "target": {
               "type": "string",
               "description": "app phone apps | website desktop hosts-file/SelfControl. Omit ok: infer request_permission|release|list_active -> website, params, user text.",
-              "enum": [
-                "app",
-                "website"
-              ]
+              "enum": ["app", "website"]
             },
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"request_permission\" for this virtual; do not change).",
-              "enum": [
-                "request_permission"
-              ],
+              "enum": ["request_permission"],
               "default": "request_permission"
             },
             "intent": {
@@ -611,9 +578,7 @@
         "capability:read",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device"
-      ],
+      "_surfaces": ["surface:device"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -629,17 +594,12 @@
             "target": {
               "type": "string",
               "description": "app phone apps | website desktop hosts-file/SelfControl. Omit ok: infer request_permission|release|list_active -> website, params, user text.",
-              "enum": [
-                "app",
-                "website"
-              ]
+              "enum": ["app", "website"]
             },
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"status\" for this virtual; do not change).",
-              "enum": [
-                "status"
-              ],
+              "enum": ["status"],
               "default": "status"
             },
             "intent": {
@@ -727,9 +687,7 @@
         "capability:read",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device"
-      ],
+      "_surfaces": ["surface:device"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -745,17 +703,12 @@
             "target": {
               "type": "string",
               "description": "app phone apps | website desktop hosts-file/SelfControl. Omit ok: infer request_permission|release|list_active -> website, params, user text.",
-              "enum": [
-                "app",
-                "website"
-              ]
+              "enum": ["app", "website"]
             },
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"unblock\" for this virtual; do not change).",
-              "enum": [
-                "unblock"
-              ],
+              "enum": ["unblock"],
               "default": "unblock"
             },
             "intent": {
@@ -840,9 +793,7 @@
         "capability:read",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device"
-      ],
+      "_surfaces": ["surface:device"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -885,17 +836,10 @@
                       },
                       "seat_class": {
                         "type": "string",
-                        "enum": [
-                          "economy",
-                          "business",
-                          "first"
-                        ]
+                        "enum": ["economy", "business", "first"]
                       }
                     },
-                    "required": [
-                      "name",
-                      "seat_class"
-                    ]
+                    "required": ["name", "seat_class"]
                   }
                 }
               ]
@@ -920,23 +864,13 @@
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:travel",
-        "capability:read",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:travel", "capability:read", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:travel",
-      "_capabilities": [
-        "capability:read"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -952,20 +886,12 @@
             "action": {
               "type": "string",
               "description": "Brief op: compose_morning | compose_evening | compose_weekly.",
-              "enum": [
-                "compose_morning",
-                "compose_evening",
-                "compose_weekly"
-              ]
+              "enum": ["compose_morning", "compose_evening", "compose_weekly"]
             },
             "period": {
               "type": "string",
               "description": "Brief window: today | tomorrow | this_week. Default subaction period.",
-              "enum": [
-                "today",
-                "tomorrow",
-                "this_week"
-              ]
+              "enum": ["today", "tomorrow", "this_week"]
             },
             "include": {
               "type": "object",
@@ -977,10 +903,7 @@
             "format": {
               "type": "string",
               "description": "Format: narrative = LLM compose; json = LifeOpsBriefing only. Default narrative.",
-              "enum": [
-                "narrative",
-                "json"
-              ]
+              "enum": ["narrative", "json"]
             }
           },
           "additionalProperties": false
@@ -994,23 +917,12 @@
         "capability:compose",
         "surface:internal"
       ],
-      "_contexts": [
-        "briefing",
-        "calendar",
-        "inbox",
-        "tasks",
-        "finance"
-      ],
+      "_contexts": ["briefing", "calendar", "inbox", "tasks", "finance"],
       "_priority": 100,
       "_examples_count": 2,
       "_domain": "domain:briefing",
-      "_capabilities": [
-        "capability:read",
-        "capability:compose"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read", "capability:compose"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -1026,19 +938,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"compose_evening\" for this virtual; do not change).",
-              "enum": [
-                "compose_evening"
-              ],
+              "enum": ["compose_evening"],
               "default": "compose_evening"
             },
             "period": {
               "type": "string",
               "description": "Brief window: today | tomorrow | this_week. Default subaction period.",
-              "enum": [
-                "today",
-                "tomorrow",
-                "this_week"
-              ]
+              "enum": ["today", "tomorrow", "this_week"]
             },
             "include": {
               "type": "object",
@@ -1050,10 +956,7 @@
             "format": {
               "type": "string",
               "description": "Format: narrative = LLM compose; json = LifeOpsBriefing only. Default narrative.",
-              "enum": [
-                "narrative",
-                "json"
-              ]
+              "enum": ["narrative", "json"]
             }
           },
           "additionalProperties": false
@@ -1067,23 +970,12 @@
         "capability:compose",
         "surface:internal"
       ],
-      "_contexts": [
-        "briefing",
-        "calendar",
-        "inbox",
-        "tasks",
-        "finance"
-      ],
+      "_contexts": ["briefing", "calendar", "inbox", "tasks", "finance"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:briefing",
-      "_capabilities": [
-        "capability:read",
-        "capability:compose"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read", "capability:compose"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -1099,19 +991,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"compose_morning\" for this virtual; do not change).",
-              "enum": [
-                "compose_morning"
-              ],
+              "enum": ["compose_morning"],
               "default": "compose_morning"
             },
             "period": {
               "type": "string",
               "description": "Brief window: today | tomorrow | this_week. Default subaction period.",
-              "enum": [
-                "today",
-                "tomorrow",
-                "this_week"
-              ]
+              "enum": ["today", "tomorrow", "this_week"]
             },
             "include": {
               "type": "object",
@@ -1123,10 +1009,7 @@
             "format": {
               "type": "string",
               "description": "Format: narrative = LLM compose; json = LifeOpsBriefing only. Default narrative.",
-              "enum": [
-                "narrative",
-                "json"
-              ]
+              "enum": ["narrative", "json"]
             }
           },
           "additionalProperties": false
@@ -1140,23 +1023,12 @@
         "capability:compose",
         "surface:internal"
       ],
-      "_contexts": [
-        "briefing",
-        "calendar",
-        "inbox",
-        "tasks",
-        "finance"
-      ],
+      "_contexts": ["briefing", "calendar", "inbox", "tasks", "finance"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:briefing",
-      "_capabilities": [
-        "capability:read",
-        "capability:compose"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read", "capability:compose"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -1172,19 +1044,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"compose_weekly\" for this virtual; do not change).",
-              "enum": [
-                "compose_weekly"
-              ],
+              "enum": ["compose_weekly"],
               "default": "compose_weekly"
             },
             "period": {
               "type": "string",
               "description": "Brief window: today | tomorrow | this_week. Default subaction period.",
-              "enum": [
-                "today",
-                "tomorrow",
-                "this_week"
-              ]
+              "enum": ["today", "tomorrow", "this_week"]
             },
             "include": {
               "type": "object",
@@ -1196,10 +1062,7 @@
             "format": {
               "type": "string",
               "description": "Format: narrative = LLM compose; json = LifeOpsBriefing only. Default narrative.",
-              "enum": [
-                "narrative",
-                "json"
-              ]
+              "enum": ["narrative", "json"]
             }
           },
           "additionalProperties": false
@@ -1213,23 +1076,12 @@
         "capability:compose",
         "surface:internal"
       ],
-      "_contexts": [
-        "briefing",
-        "calendar",
-        "inbox",
-        "tasks",
-        "finance"
-      ],
+      "_contexts": ["briefing", "calendar", "inbox", "tasks", "finance"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:briefing",
-      "_capabilities": [
-        "capability:read",
-        "capability:compose"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read", "capability:compose"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -1396,11 +1248,7 @@
               "description": "blackoutWindows[]: label startLocal HH:MM endLocal HH:MM daysOfWeek?[0..6]",
               "items": {
                 "type": "object",
-                "required": [
-                  "label",
-                  "startLocal",
-                  "endLocal"
-                ],
+                "required": ["label", "startLocal", "endLocal"],
                 "properties": {
                   "label": {
                     "type": "string"
@@ -1457,10 +1305,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -1476,9 +1321,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"bulk_reschedule\" for this virtual; do not change).",
-              "enum": [
-                "bulk_reschedule"
-              ],
+              "enum": ["bulk_reschedule"],
               "default": "bulk_reschedule"
             },
             "intent": {
@@ -1618,11 +1461,7 @@
               "description": "blackoutWindows[]: label startLocal HH:MM endLocal HH:MM daysOfWeek?[0..6]",
               "items": {
                 "type": "object",
-                "required": [
-                  "label",
-                  "startLocal",
-                  "endLocal"
-                ],
+                "required": ["label", "startLocal", "endLocal"],
                 "properties": {
                   "label": {
                     "type": "string"
@@ -1679,10 +1518,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -1698,9 +1534,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"check_availability\" for this virtual; do not change).",
-              "enum": [
-                "check_availability"
-              ],
+              "enum": ["check_availability"],
               "default": "check_availability"
             },
             "intent": {
@@ -1840,11 +1674,7 @@
               "description": "blackoutWindows[]: label startLocal HH:MM endLocal HH:MM daysOfWeek?[0..6]",
               "items": {
                 "type": "object",
-                "required": [
-                  "label",
-                  "startLocal",
-                  "endLocal"
-                ],
+                "required": ["label", "startLocal", "endLocal"],
                 "properties": {
                   "label": {
                     "type": "string"
@@ -1901,10 +1731,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -1920,9 +1747,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"create_event\" for this virtual; do not change).",
-              "enum": [
-                "create_event"
-              ],
+              "enum": ["create_event"],
               "default": "create_event"
             },
             "intent": {
@@ -2062,11 +1887,7 @@
               "description": "blackoutWindows[]: label startLocal HH:MM endLocal HH:MM daysOfWeek?[0..6]",
               "items": {
                 "type": "object",
-                "required": [
-                  "label",
-                  "startLocal",
-                  "endLocal"
-                ],
+                "required": ["label", "startLocal", "endLocal"],
                 "properties": {
                   "label": {
                     "type": "string"
@@ -2123,10 +1944,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -2142,9 +1960,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"delete_event\" for this virtual; do not change).",
-              "enum": [
-                "delete_event"
-              ],
+              "enum": ["delete_event"],
               "default": "delete_event"
             },
             "intent": {
@@ -2284,11 +2100,7 @@
               "description": "blackoutWindows[]: label startLocal HH:MM endLocal HH:MM daysOfWeek?[0..6]",
               "items": {
                 "type": "object",
-                "required": [
-                  "label",
-                  "startLocal",
-                  "endLocal"
-                ],
+                "required": ["label", "startLocal", "endLocal"],
                 "properties": {
                   "label": {
                     "type": "string"
@@ -2345,10 +2157,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -2364,9 +2173,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"feed\" for this virtual; do not change).",
-              "enum": [
-                "feed"
-              ],
+              "enum": ["feed"],
               "default": "feed"
             },
             "intent": {
@@ -2506,11 +2313,7 @@
               "description": "blackoutWindows[]: label startLocal HH:MM endLocal HH:MM daysOfWeek?[0..6]",
               "items": {
                 "type": "object",
-                "required": [
-                  "label",
-                  "startLocal",
-                  "endLocal"
-                ],
+                "required": ["label", "startLocal", "endLocal"],
                 "properties": {
                   "label": {
                     "type": "string"
@@ -2567,10 +2370,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -2586,9 +2386,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"next_event\" for this virtual; do not change).",
-              "enum": [
-                "next_event"
-              ],
+              "enum": ["next_event"],
               "default": "next_event"
             },
             "intent": {
@@ -2728,11 +2526,7 @@
               "description": "blackoutWindows[]: label startLocal HH:MM endLocal HH:MM daysOfWeek?[0..6]",
               "items": {
                 "type": "object",
-                "required": [
-                  "label",
-                  "startLocal",
-                  "endLocal"
-                ],
+                "required": ["label", "startLocal", "endLocal"],
                 "properties": {
                   "label": {
                     "type": "string"
@@ -2789,10 +2583,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -2808,9 +2599,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"propose_times\" for this virtual; do not change).",
-              "enum": [
-                "propose_times"
-              ],
+              "enum": ["propose_times"],
               "default": "propose_times"
             },
             "intent": {
@@ -2950,11 +2739,7 @@
               "description": "blackoutWindows[]: label startLocal HH:MM endLocal HH:MM daysOfWeek?[0..6]",
               "items": {
                 "type": "object",
-                "required": [
-                  "label",
-                  "startLocal",
-                  "endLocal"
-                ],
+                "required": ["label", "startLocal", "endLocal"],
                 "properties": {
                   "label": {
                     "type": "string"
@@ -3011,10 +2796,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -3030,9 +2812,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"search_events\" for this virtual; do not change).",
-              "enum": [
-                "search_events"
-              ],
+              "enum": ["search_events"],
               "default": "search_events"
             },
             "intent": {
@@ -3172,11 +2952,7 @@
               "description": "blackoutWindows[]: label startLocal HH:MM endLocal HH:MM daysOfWeek?[0..6]",
               "items": {
                 "type": "object",
-                "required": [
-                  "label",
-                  "startLocal",
-                  "endLocal"
-                ],
+                "required": ["label", "startLocal", "endLocal"],
                 "properties": {
                   "label": {
                     "type": "string"
@@ -3233,10 +3009,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -3252,9 +3025,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"trip_window\" for this virtual; do not change).",
-              "enum": [
-                "trip_window"
-              ],
+              "enum": ["trip_window"],
               "default": "trip_window"
             },
             "intent": {
@@ -3394,11 +3165,7 @@
               "description": "blackoutWindows[]: label startLocal HH:MM endLocal HH:MM daysOfWeek?[0..6]",
               "items": {
                 "type": "object",
-                "required": [
-                  "label",
-                  "startLocal",
-                  "endLocal"
-                ],
+                "required": ["label", "startLocal", "endLocal"],
                 "properties": {
                   "label": {
                     "type": "string"
@@ -3455,10 +3222,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -3474,9 +3238,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"update_event\" for this virtual; do not change).",
-              "enum": [
-                "update_event"
-              ],
+              "enum": ["update_event"],
               "default": "update_event"
             },
             "intent": {
@@ -3616,11 +3378,7 @@
               "description": "blackoutWindows[]: label startLocal HH:MM endLocal HH:MM daysOfWeek?[0..6]",
               "items": {
                 "type": "object",
-                "required": [
-                  "label",
-                  "startLocal",
-                  "endLocal"
-                ],
+                "required": ["label", "startLocal", "endLocal"],
                 "properties": {
                   "label": {
                     "type": "string"
@@ -3677,10 +3435,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -3696,9 +3451,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"update_preferences\" for this virtual; do not change).",
-              "enum": [
-                "update_preferences"
-              ],
+              "enum": ["update_preferences"],
               "default": "update_preferences"
             },
             "intent": {
@@ -3838,11 +3591,7 @@
               "description": "blackoutWindows[]: label startLocal HH:MM endLocal HH:MM daysOfWeek?[0..6]",
               "items": {
                 "type": "object",
-                "required": [
-                  "label",
-                  "startLocal",
-                  "endLocal"
-                ],
+                "required": ["label", "startLocal", "endLocal"],
                 "properties": {
                   "label": {
                     "type": "string"
@@ -3899,10 +3648,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -3918,11 +3664,7 @@
             "action": {
               "type": "string",
               "description": "Conflict op: scan_today | scan_week | scan_event_proposal.",
-              "enum": [
-                "scan_today",
-                "scan_week",
-                "scan_event_proposal"
-              ]
+              "enum": ["scan_today", "scan_week", "scan_event_proposal"]
             },
             "range": {
               "type": "object",
@@ -3950,21 +3692,12 @@
         "capability:scan",
         "surface:internal"
       ],
-      "_contexts": [
-        "calendar",
-        "scheduling",
-        "conflicts"
-      ],
+      "_contexts": ["calendar", "scheduling", "conflicts"],
       "_priority": 100,
       "_examples_count": 2,
       "_domain": "domain:calendar",
-      "_capabilities": [
-        "capability:read",
-        "capability:scan"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read", "capability:scan"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -3980,9 +3713,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"scan_event_proposal\" for this virtual; do not change).",
-              "enum": [
-                "scan_event_proposal"
-              ],
+              "enum": ["scan_event_proposal"],
               "default": "scan_event_proposal"
             },
             "range": {
@@ -4011,21 +3742,12 @@
         "capability:scan",
         "surface:internal"
       ],
-      "_contexts": [
-        "calendar",
-        "scheduling",
-        "conflicts"
-      ],
+      "_contexts": ["calendar", "scheduling", "conflicts"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:calendar",
-      "_capabilities": [
-        "capability:read",
-        "capability:scan"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read", "capability:scan"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -4041,9 +3763,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"scan_today\" for this virtual; do not change).",
-              "enum": [
-                "scan_today"
-              ],
+              "enum": ["scan_today"],
               "default": "scan_today"
             },
             "range": {
@@ -4072,21 +3792,12 @@
         "capability:scan",
         "surface:internal"
       ],
-      "_contexts": [
-        "calendar",
-        "scheduling",
-        "conflicts"
-      ],
+      "_contexts": ["calendar", "scheduling", "conflicts"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:calendar",
-      "_capabilities": [
-        "capability:read",
-        "capability:scan"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read", "capability:scan"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -4102,9 +3813,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"scan_week\" for this virtual; do not change).",
-              "enum": [
-                "scan_week"
-              ],
+              "enum": ["scan_week"],
               "default": "scan_week"
             },
             "range": {
@@ -4133,21 +3842,12 @@
         "capability:scan",
         "surface:internal"
       ],
-      "_contexts": [
-        "calendar",
-        "scheduling",
-        "conflicts"
-      ],
+      "_contexts": ["calendar", "scheduling", "conflicts"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:calendar",
-      "_capabilities": [
-        "capability:read",
-        "capability:scan"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read", "capability:scan"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -4167,30 +3867,17 @@
             "action": {
               "type": "string",
               "description": "connect auth/pairing; disconnect revoke+clear grant; verify active read/send probe; status/list read-only diagnostics. Omit ok: handler LLM-extracts.",
-              "enum": [
-                "connect",
-                "disconnect",
-                "verify",
-                "status",
-                "list"
-              ]
+              "enum": ["connect", "disconnect", "verify", "status", "list"]
             },
             "side": {
               "type": "string",
               "description": "owner | agent. Defaults to owner.",
-              "enum": [
-                "owner",
-                "agent"
-              ]
+              "enum": ["owner", "agent"]
             },
             "mode": {
               "type": "string",
               "description": "local | cloud_managed | remote. Default connector-specific.",
-              "enum": [
-                "local",
-                "cloud_managed",
-                "remote"
-              ]
+              "enum": ["local", "cloud_managed", "remote"]
             },
             "recentLimit": {
               "type": "number",
@@ -4211,10 +3898,7 @@
             "browser": {
               "type": "string",
               "description": "browser_bridge connect only: chrome | safari.",
-              "enum": [
-                "chrome",
-                "safari"
-              ]
+              "enum": ["chrome", "safari"]
             },
             "profileId": {
               "type": "string",
@@ -4262,10 +3946,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -4285,27 +3966,18 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"connect\" for this virtual; do not change).",
-              "enum": [
-                "connect"
-              ],
+              "enum": ["connect"],
               "default": "connect"
             },
             "side": {
               "type": "string",
               "description": "owner | agent. Defaults to owner.",
-              "enum": [
-                "owner",
-                "agent"
-              ]
+              "enum": ["owner", "agent"]
             },
             "mode": {
               "type": "string",
               "description": "local | cloud_managed | remote. Default connector-specific.",
-              "enum": [
-                "local",
-                "cloud_managed",
-                "remote"
-              ]
+              "enum": ["local", "cloud_managed", "remote"]
             },
             "recentLimit": {
               "type": "number",
@@ -4326,10 +3998,7 @@
             "browser": {
               "type": "string",
               "description": "browser_bridge connect only: chrome | safari.",
-              "enum": [
-                "chrome",
-                "safari"
-              ]
+              "enum": ["chrome", "safari"]
             },
             "profileId": {
               "type": "string",
@@ -4377,10 +4046,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -4400,27 +4066,18 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"disconnect\" for this virtual; do not change).",
-              "enum": [
-                "disconnect"
-              ],
+              "enum": ["disconnect"],
               "default": "disconnect"
             },
             "side": {
               "type": "string",
               "description": "owner | agent. Defaults to owner.",
-              "enum": [
-                "owner",
-                "agent"
-              ]
+              "enum": ["owner", "agent"]
             },
             "mode": {
               "type": "string",
               "description": "local | cloud_managed | remote. Default connector-specific.",
-              "enum": [
-                "local",
-                "cloud_managed",
-                "remote"
-              ]
+              "enum": ["local", "cloud_managed", "remote"]
             },
             "recentLimit": {
               "type": "number",
@@ -4441,10 +4098,7 @@
             "browser": {
               "type": "string",
               "description": "browser_bridge connect only: chrome | safari.",
-              "enum": [
-                "chrome",
-                "safari"
-              ]
+              "enum": ["chrome", "safari"]
             },
             "profileId": {
               "type": "string",
@@ -4492,10 +4146,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -4515,27 +4166,18 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"list\" for this virtual; do not change).",
-              "enum": [
-                "list"
-              ],
+              "enum": ["list"],
               "default": "list"
             },
             "side": {
               "type": "string",
               "description": "owner | agent. Defaults to owner.",
-              "enum": [
-                "owner",
-                "agent"
-              ]
+              "enum": ["owner", "agent"]
             },
             "mode": {
               "type": "string",
               "description": "local | cloud_managed | remote. Default connector-specific.",
-              "enum": [
-                "local",
-                "cloud_managed",
-                "remote"
-              ]
+              "enum": ["local", "cloud_managed", "remote"]
             },
             "recentLimit": {
               "type": "number",
@@ -4556,10 +4198,7 @@
             "browser": {
               "type": "string",
               "description": "browser_bridge connect only: chrome | safari.",
-              "enum": [
-                "chrome",
-                "safari"
-              ]
+              "enum": ["chrome", "safari"]
             },
             "profileId": {
               "type": "string",
@@ -4607,10 +4246,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -4630,27 +4266,18 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"status\" for this virtual; do not change).",
-              "enum": [
-                "status"
-              ],
+              "enum": ["status"],
               "default": "status"
             },
             "side": {
               "type": "string",
               "description": "owner | agent. Defaults to owner.",
-              "enum": [
-                "owner",
-                "agent"
-              ]
+              "enum": ["owner", "agent"]
             },
             "mode": {
               "type": "string",
               "description": "local | cloud_managed | remote. Default connector-specific.",
-              "enum": [
-                "local",
-                "cloud_managed",
-                "remote"
-              ]
+              "enum": ["local", "cloud_managed", "remote"]
             },
             "recentLimit": {
               "type": "number",
@@ -4671,10 +4298,7 @@
             "browser": {
               "type": "string",
               "description": "browser_bridge connect only: chrome | safari.",
-              "enum": [
-                "chrome",
-                "safari"
-              ]
+              "enum": ["chrome", "safari"]
             },
             "profileId": {
               "type": "string",
@@ -4722,10 +4346,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -4745,27 +4366,18 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"verify\" for this virtual; do not change).",
-              "enum": [
-                "verify"
-              ],
+              "enum": ["verify"],
               "default": "verify"
             },
             "side": {
               "type": "string",
               "description": "owner | agent. Defaults to owner.",
-              "enum": [
-                "owner",
-                "agent"
-              ]
+              "enum": ["owner", "agent"]
             },
             "mode": {
               "type": "string",
               "description": "local | cloud_managed | remote. Default connector-specific.",
-              "enum": [
-                "local",
-                "cloud_managed",
-                "remote"
-              ]
+              "enum": ["local", "cloud_managed", "remote"]
             },
             "recentLimit": {
               "type": "number",
@@ -4786,10 +4398,7 @@
             "browser": {
               "type": "string",
               "description": "browser_bridge connect only: chrome | safari.",
-              "enum": [
-                "chrome",
-                "safari"
-              ]
+              "enum": ["chrome", "safari"]
             },
             "profileId": {
               "type": "string",
@@ -4837,10 +4446,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:remote-api",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:remote-api", "surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -4856,10 +4462,7 @@
             "action": {
               "type": "string",
               "description": "Draft op: compose | revise.",
-              "enum": [
-                "compose",
-                "revise"
-              ]
+              "enum": ["compose", "revise"]
             },
             "request": {
               "type": "object",
@@ -4914,21 +4517,12 @@
         "capability:write",
         "surface:internal"
       ],
-      "_contexts": [
-        "creative",
-        "documents",
-        "voice"
-      ],
+      "_contexts": ["creative", "documents", "voice"],
       "_priority": 100,
       "_examples_count": 2,
       "_domain": "domain:creative",
-      "_capabilities": [
-        "capability:compose",
-        "capability:write"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:compose", "capability:write"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -4944,9 +4538,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"compose\" for this virtual; do not change).",
-              "enum": [
-                "compose"
-              ],
+              "enum": ["compose"],
               "default": "compose"
             },
             "request": {
@@ -5002,21 +4594,12 @@
         "capability:write",
         "surface:internal"
       ],
-      "_contexts": [
-        "creative",
-        "documents",
-        "voice"
-      ],
+      "_contexts": ["creative", "documents", "voice"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:creative",
-      "_capabilities": [
-        "capability:compose",
-        "capability:write"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:compose", "capability:write"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -5032,9 +4615,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"revise\" for this virtual; do not change).",
-              "enum": [
-                "revise"
-              ],
+              "enum": ["revise"],
               "default": "revise"
             },
             "request": {
@@ -5090,21 +4671,12 @@
         "capability:write",
         "surface:internal"
       ],
-      "_contexts": [
-        "creative",
-        "documents",
-        "voice"
-      ],
+      "_contexts": ["creative", "documents", "voice"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:creative",
-      "_capabilities": [
-        "capability:compose",
-        "capability:write"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:compose", "capability:write"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -5115,9 +4687,7 @@
         "description": "credentials search/list/copy/inject -> CREDENTIALS action=search|list|inject_*; on-page form fill -> action=fill\nCREDENTIALS fill|whitelist_add|list|search|inject_username|inject_password; clipboard-only",
         "parameters": {
           "type": "object",
-          "required": [
-            "action"
-          ],
+          "required": ["action"],
           "properties": {
             "action": {
               "type": "string",
@@ -5180,12 +4750,7 @@
         "surface:internal",
         "risk:irreversible"
       ],
-      "_contexts": [
-        "browser",
-        "secrets",
-        "settings",
-        "automation"
-      ],
+      "_contexts": ["browser", "secrets", "settings", "automation"],
       "_priority": 100,
       "_examples_count": 4,
       "_domain": "domain:meta",
@@ -5195,10 +4760,7 @@
         "capability:update",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:device", "surface:internal"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -5214,9 +4776,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"fill\" for this virtual; do not change).",
-              "enum": [
-                "fill"
-              ],
+              "enum": ["fill"],
               "default": "fill"
             },
             "field": {
@@ -5267,12 +4827,7 @@
         "surface:internal",
         "risk:irreversible"
       ],
-      "_contexts": [
-        "browser",
-        "secrets",
-        "settings",
-        "automation"
-      ],
+      "_contexts": ["browser", "secrets", "settings", "automation"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:meta",
@@ -5282,10 +4837,7 @@
         "capability:update",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:device", "surface:internal"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -5301,9 +4853,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"inject_password\" for this virtual; do not change).",
-              "enum": [
-                "inject_password"
-              ],
+              "enum": ["inject_password"],
               "default": "inject_password"
             },
             "field": {
@@ -5354,12 +4904,7 @@
         "surface:internal",
         "risk:irreversible"
       ],
-      "_contexts": [
-        "browser",
-        "secrets",
-        "settings",
-        "automation"
-      ],
+      "_contexts": ["browser", "secrets", "settings", "automation"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:meta",
@@ -5369,10 +4914,7 @@
         "capability:update",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:device", "surface:internal"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -5388,9 +4930,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"inject_username\" for this virtual; do not change).",
-              "enum": [
-                "inject_username"
-              ],
+              "enum": ["inject_username"],
               "default": "inject_username"
             },
             "field": {
@@ -5441,12 +4981,7 @@
         "surface:internal",
         "risk:irreversible"
       ],
-      "_contexts": [
-        "browser",
-        "secrets",
-        "settings",
-        "automation"
-      ],
+      "_contexts": ["browser", "secrets", "settings", "automation"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:meta",
@@ -5456,10 +4991,7 @@
         "capability:update",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:device", "surface:internal"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -5475,9 +5007,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"list\" for this virtual; do not change).",
-              "enum": [
-                "list"
-              ],
+              "enum": ["list"],
               "default": "list"
             },
             "field": {
@@ -5528,12 +5058,7 @@
         "surface:internal",
         "risk:irreversible"
       ],
-      "_contexts": [
-        "browser",
-        "secrets",
-        "settings",
-        "automation"
-      ],
+      "_contexts": ["browser", "secrets", "settings", "automation"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:meta",
@@ -5543,10 +5068,7 @@
         "capability:update",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:device", "surface:internal"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -5562,9 +5084,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"search\" for this virtual; do not change).",
-              "enum": [
-                "search"
-              ],
+              "enum": ["search"],
               "default": "search"
             },
             "field": {
@@ -5615,12 +5135,7 @@
         "surface:internal",
         "risk:irreversible"
       ],
-      "_contexts": [
-        "browser",
-        "secrets",
-        "settings",
-        "automation"
-      ],
+      "_contexts": ["browser", "secrets", "settings", "automation"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:meta",
@@ -5630,10 +5145,7 @@
         "capability:update",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:device", "surface:internal"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -5649,9 +5161,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"whitelist_add\" for this virtual; do not change).",
-              "enum": [
-                "whitelist_add"
-              ],
+              "enum": ["whitelist_add"],
               "default": "whitelist_add"
             },
             "field": {
@@ -5702,12 +5212,7 @@
         "surface:internal",
         "risk:irreversible"
       ],
-      "_contexts": [
-        "browser",
-        "secrets",
-        "settings",
-        "automation"
-      ],
+      "_contexts": ["browser", "secrets", "settings", "automation"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:meta",
@@ -5717,10 +5222,7 @@
         "capability:update",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:device", "surface:internal"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -5736,9 +5238,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"whitelist_list\" for this virtual; do not change).",
-              "enum": [
-                "whitelist_list"
-              ],
+              "enum": ["whitelist_list"],
               "default": "whitelist_list"
             },
             "field": {
@@ -5789,12 +5289,7 @@
         "surface:internal",
         "risk:irreversible"
       ],
-      "_contexts": [
-        "browser",
-        "secrets",
-        "settings",
-        "automation"
-      ],
+      "_contexts": ["browser", "secrets", "settings", "automation"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:meta",
@@ -5804,10 +5299,7 @@
         "capability:update",
         "capability:execute"
       ],
-      "_surfaces": [
-        "surface:device",
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:device", "surface:internal"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -5935,13 +5427,7 @@
         "capability:delete",
         "surface:internal"
       ],
-      "_contexts": [
-        "contacts",
-        "tasks",
-        "calendar",
-        "messaging",
-        "memory"
-      ],
+      "_contexts": ["contacts", "tasks", "calendar", "messaging", "memory"],
       "_priority": 100,
       "_examples_count": 4,
       "_domain": "domain:contacts",
@@ -5951,9 +5437,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -5990,31 +5474,19 @@
               "type": "number"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:health",
-        "capability:read",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:health", "capability:read", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:health",
-      "_capabilities": [
-        "capability:read"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -6049,31 +5521,19 @@
               "type": "string"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:reminders",
-        "capability:read",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:reminders", "capability:read", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:reminders",
-      "_capabilities": [
-        "capability:read"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -6088,9 +5548,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps LIFE_COMPLETE discriminator.",
-              "enum": [
-                "complete"
-              ]
+              "enum": ["complete"]
             },
             "intent": {
               "type": "string"
@@ -6102,31 +5560,19 @@
               "type": "string"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:reminders",
-        "capability:update",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:reminders", "capability:update", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:reminders",
-      "_capabilities": [
-        "capability:update"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:update"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -6141,9 +5587,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps LIFE_CREATE discriminator.",
-              "enum": [
-                "create"
-              ]
+              "enum": ["create"]
             },
             "intent": {
               "type": "string"
@@ -6159,9 +5603,7 @@
               "additionalProperties": true
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
@@ -6173,19 +5615,12 @@
         "capability:schedule",
         "surface:internal"
       ],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:reminders",
-      "_capabilities": [
-        "capability:write",
-        "capability:schedule"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:write", "capability:schedule"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -6200,9 +5635,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps LIFE_DELETE discriminator.",
-              "enum": [
-                "delete"
-              ]
+              "enum": ["delete"]
             },
             "intent": {
               "type": "string"
@@ -6221,31 +5654,19 @@
               "additionalProperties": true
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:reminders",
-        "capability:delete",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:reminders", "capability:delete", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:reminders",
-      "_capabilities": [
-        "capability:delete"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:delete"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -6260,39 +5681,25 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps LIFE_REVIEW discriminator.",
-              "enum": [
-                "review"
-              ]
+              "enum": ["review"]
             },
             "intent": {
               "type": "string"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:reminders",
-        "capability:read",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:reminders", "capability:read", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:reminders",
-      "_capabilities": [
-        "capability:read"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -6307,9 +5714,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps LIFE_SKIP discriminator.",
-              "enum": [
-                "skip"
-              ]
+              "enum": ["skip"]
             },
             "intent": {
               "type": "string"
@@ -6331,31 +5736,19 @@
               "type": "string"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:reminders",
-        "capability:update",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:reminders", "capability:update", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:reminders",
-      "_capabilities": [
-        "capability:update"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:update"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -6370,9 +5763,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps LIFE_SNOOZE discriminator.",
-              "enum": [
-                "snooze"
-              ]
+              "enum": ["snooze"]
             },
             "intent": {
               "type": "string"
@@ -6387,31 +5778,19 @@
               "type": "number"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:reminders",
-        "capability:update",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:reminders", "capability:update", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:reminders",
-      "_capabilities": [
-        "capability:update"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:update"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -6426,9 +5805,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps LIFE_UPDATE discriminator.",
-              "enum": [
-                "update"
-              ]
+              "enum": ["update"]
             },
             "intent": {
               "type": "string"
@@ -6451,31 +5828,19 @@
               "additionalProperties": true
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:reminders",
-        "capability:update",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:reminders", "capability:update", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:reminders",
-      "_capabilities": [
-        "capability:update"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:update"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -6750,11 +6115,7 @@
             "urgency": {
               "type": "string",
               "description": "Urgency for op=send: normal, important, urgent.",
-              "enum": [
-                "normal",
-                "important",
-                "urgent"
-              ]
+              "enum": ["normal", "important", "urgent"]
             },
             "persist": {
               "type": "boolean",
@@ -6767,10 +6128,7 @@
             "range": {
               "type": "string",
               "description": "For op=read_channel: \"recent\" (default) or \"dates\".",
-              "enum": [
-                "recent",
-                "dates"
-              ]
+              "enum": ["recent", "dates"]
             },
             "from": {
               "type": "string",
@@ -6831,12 +6189,7 @@
         "surface:remote-api",
         "risk:irreversible"
       ],
-      "_contexts": [
-        "messaging",
-        "email",
-        "contacts",
-        "connectors"
-      ],
+      "_contexts": ["messaging", "email", "contacts", "connectors"],
       "_priority": 100,
       "_examples_count": 1,
       "_domain": "domain:messages",
@@ -6848,9 +6201,7 @@
         "capability:send",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:remote-api"
-      ],
+      "_surfaces": ["surface:remote-api"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -6865,9 +6216,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps MONEY_DASHBOARD discriminator.",
-              "enum": [
-                "dashboard"
-              ]
+              "enum": ["dashboard"]
             },
             "intent": {
               "type": "string"
@@ -6876,31 +6225,19 @@
               "type": "number"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:finance",
-        "capability:read",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:finance", "capability:read", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:finance",
-      "_capabilities": [
-        "capability:read"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -6915,9 +6252,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps MONEY_LIST_TRANSACTIONS discriminator.",
-              "enum": [
-                "list_transactions"
-              ]
+              "enum": ["list_transactions"]
             },
             "intent": {
               "type": "string"
@@ -6932,31 +6267,19 @@
               "type": "boolean"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:finance",
-        "capability:read",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:finance", "capability:read", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:finance",
-      "_capabilities": [
-        "capability:read"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -6971,9 +6294,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps MONEY_RECURRING_CHARGES discriminator.",
-              "enum": [
-                "recurring_charges"
-              ]
+              "enum": ["recurring_charges"]
             },
             "intent": {
               "type": "string"
@@ -6982,31 +6303,19 @@
               "type": "number"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:finance",
-        "capability:read",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:finance", "capability:read", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:finance",
-      "_capabilities": [
-        "capability:read"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -7021,9 +6330,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps MONEY_SPENDING_SUMMARY discriminator.",
-              "enum": [
-                "spending_summary"
-              ]
+              "enum": ["spending_summary"]
             },
             "intent": {
               "type": "string"
@@ -7035,31 +6342,19 @@
               "type": "string"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:finance",
-        "capability:read",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:finance", "capability:read", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:finance",
-      "_capabilities": [
-        "capability:read"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -7074,9 +6369,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps MONEY_SUBSCRIPTION_AUDIT discriminator.",
-              "enum": [
-                "subscription_audit"
-              ]
+              "enum": ["subscription_audit"]
             },
             "intent": {
               "type": "string"
@@ -7088,31 +6381,19 @@
               "type": "string"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:finance",
-        "capability:read",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:finance", "capability:read", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:finance",
-      "_capabilities": [
-        "capability:read"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -7127,9 +6408,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps MONEY_SUBSCRIPTION_CANCEL discriminator.",
-              "enum": [
-                "subscription_cancel"
-              ]
+              "enum": ["subscription_cancel"]
             },
             "intent": {
               "type": "string"
@@ -7147,31 +6426,19 @@
               "type": "string"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:finance",
-        "capability:delete",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:finance", "capability:delete", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:finance",
-      "_capabilities": [
-        "capability:delete"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:delete"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -7186,9 +6453,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps MONEY_SUBSCRIPTION_STATUS discriminator.",
-              "enum": [
-                "subscription_status"
-              ]
+              "enum": ["subscription_status"]
             },
             "intent": {
               "type": "string"
@@ -7200,31 +6465,19 @@
               "type": "string"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
       },
       "_plugin": "@elizaos/lifeops-bench",
-      "_tags": [
-        "domain:finance",
-        "capability:read",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "general"
-      ],
+      "_tags": ["domain:finance", "capability:read", "surface:internal"],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:finance",
-      "_capabilities": [
-        "capability:read"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -7253,9 +6506,7 @@
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -7319,9 +6570,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -7337,17 +6586,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"complete\" for this virtual; do not change).",
-              "enum": [
-                "complete"
-              ],
+              "enum": ["complete"],
               "default": "complete"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -7411,9 +6656,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -7429,17 +6672,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"create\" for this virtual; do not change).",
-              "enum": [
-                "create"
-              ],
+              "enum": ["create"],
               "default": "create"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -7503,9 +6742,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -7521,17 +6758,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"delete\" for this virtual; do not change).",
-              "enum": [
-                "delete"
-              ],
+              "enum": ["delete"],
               "default": "delete"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -7595,9 +6828,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -7613,17 +6844,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"review\" for this virtual; do not change).",
-              "enum": [
-                "review"
-              ],
+              "enum": ["review"],
               "default": "review"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -7687,9 +6914,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -7705,17 +6930,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"skip\" for this virtual; do not change).",
-              "enum": [
-                "skip"
-              ],
+              "enum": ["skip"],
               "default": "skip"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -7779,9 +7000,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -7797,17 +7016,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"snooze\" for this virtual; do not change).",
-              "enum": [
-                "snooze"
-              ],
+              "enum": ["snooze"],
               "default": "snooze"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -7871,9 +7086,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -7889,17 +7102,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"update\" for this virtual; do not change).",
-              "enum": [
-                "update"
-              ],
+              "enum": ["update"],
               "default": "update"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -7963,9 +7172,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -8033,11 +7240,7 @@
             "resolution": {
               "type": "string",
               "description": "close_request only: completed|expired|cancelled; default completed.",
-              "enum": [
-                "completed",
-                "expired",
-                "cancelled"
-              ]
+              "enum": ["completed", "expired", "cancelled"]
             }
           },
           "additionalProperties": false
@@ -8053,12 +7256,7 @@
         "capability:schedule",
         "surface:internal"
       ],
-      "_contexts": [
-        "docs",
-        "tasks",
-        "calendar",
-        "contacts"
-      ],
+      "_contexts": ["docs", "tasks", "calendar", "contacts"],
       "_priority": 100,
       "_examples_count": 3,
       "_domain": "domain:docs",
@@ -8068,9 +7266,7 @@
         "capability:update",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -8086,9 +7282,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"close_request\" for this virtual; do not change).",
-              "enum": [
-                "close_request"
-              ],
+              "enum": ["close_request"],
               "default": "close_request"
             },
             "documentRequestId": {
@@ -8134,11 +7328,7 @@
             "resolution": {
               "type": "string",
               "description": "close_request only: completed|expired|cancelled; default completed.",
-              "enum": [
-                "completed",
-                "expired",
-                "cancelled"
-              ]
+              "enum": ["completed", "expired", "cancelled"]
             }
           },
           "additionalProperties": false
@@ -8154,12 +7344,7 @@
         "capability:schedule",
         "surface:internal"
       ],
-      "_contexts": [
-        "docs",
-        "tasks",
-        "calendar",
-        "contacts"
-      ],
+      "_contexts": ["docs", "tasks", "calendar", "contacts"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:docs",
@@ -8169,9 +7354,7 @@
         "capability:update",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -8187,9 +7370,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"collect_id\" for this virtual; do not change).",
-              "enum": [
-                "collect_id"
-              ],
+              "enum": ["collect_id"],
               "default": "collect_id"
             },
             "documentRequestId": {
@@ -8235,11 +7416,7 @@
             "resolution": {
               "type": "string",
               "description": "close_request only: completed|expired|cancelled; default completed.",
-              "enum": [
-                "completed",
-                "expired",
-                "cancelled"
-              ]
+              "enum": ["completed", "expired", "cancelled"]
             }
           },
           "additionalProperties": false
@@ -8255,12 +7432,7 @@
         "capability:schedule",
         "surface:internal"
       ],
-      "_contexts": [
-        "docs",
-        "tasks",
-        "calendar",
-        "contacts"
-      ],
+      "_contexts": ["docs", "tasks", "calendar", "contacts"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:docs",
@@ -8270,9 +7442,7 @@
         "capability:update",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -8288,9 +7458,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"request_approval\" for this virtual; do not change).",
-              "enum": [
-                "request_approval"
-              ],
+              "enum": ["request_approval"],
               "default": "request_approval"
             },
             "documentRequestId": {
@@ -8336,11 +7504,7 @@
             "resolution": {
               "type": "string",
               "description": "close_request only: completed|expired|cancelled; default completed.",
-              "enum": [
-                "completed",
-                "expired",
-                "cancelled"
-              ]
+              "enum": ["completed", "expired", "cancelled"]
             }
           },
           "additionalProperties": false
@@ -8356,12 +7520,7 @@
         "capability:schedule",
         "surface:internal"
       ],
-      "_contexts": [
-        "docs",
-        "tasks",
-        "calendar",
-        "contacts"
-      ],
+      "_contexts": ["docs", "tasks", "calendar", "contacts"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:docs",
@@ -8371,9 +7530,7 @@
         "capability:update",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -8389,9 +7546,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"request_signature\" for this virtual; do not change).",
-              "enum": [
-                "request_signature"
-              ],
+              "enum": ["request_signature"],
               "default": "request_signature"
             },
             "documentRequestId": {
@@ -8437,11 +7592,7 @@
             "resolution": {
               "type": "string",
               "description": "close_request only: completed|expired|cancelled; default completed.",
-              "enum": [
-                "completed",
-                "expired",
-                "cancelled"
-              ]
+              "enum": ["completed", "expired", "cancelled"]
             }
           },
           "additionalProperties": false
@@ -8457,12 +7608,7 @@
         "capability:schedule",
         "surface:internal"
       ],
-      "_contexts": [
-        "docs",
-        "tasks",
-        "calendar",
-        "contacts"
-      ],
+      "_contexts": ["docs", "tasks", "calendar", "contacts"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:docs",
@@ -8472,9 +7618,7 @@
         "capability:update",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -8490,9 +7634,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"track_deadline\" for this virtual; do not change).",
-              "enum": [
-                "track_deadline"
-              ],
+              "enum": ["track_deadline"],
               "default": "track_deadline"
             },
             "documentRequestId": {
@@ -8538,11 +7680,7 @@
             "resolution": {
               "type": "string",
               "description": "close_request only: completed|expired|cancelled; default completed.",
-              "enum": [
-                "completed",
-                "expired",
-                "cancelled"
-              ]
+              "enum": ["completed", "expired", "cancelled"]
             }
           },
           "additionalProperties": false
@@ -8558,12 +7696,7 @@
         "capability:schedule",
         "surface:internal"
       ],
-      "_contexts": [
-        "docs",
-        "tasks",
-        "calendar",
-        "contacts"
-      ],
+      "_contexts": ["docs", "tasks", "calendar", "contacts"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:docs",
@@ -8573,9 +7706,7 @@
         "capability:update",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -8591,9 +7722,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"upload_asset\" for this virtual; do not change).",
-              "enum": [
-                "upload_asset"
-              ],
+              "enum": ["upload_asset"],
               "default": "upload_asset"
             },
             "documentRequestId": {
@@ -8639,11 +7768,7 @@
             "resolution": {
               "type": "string",
               "description": "close_request only: completed|expired|cancelled; default completed.",
-              "enum": [
-                "completed",
-                "expired",
-                "cancelled"
-              ]
+              "enum": ["completed", "expired", "cancelled"]
             }
           },
           "additionalProperties": false
@@ -8659,12 +7784,7 @@
         "capability:schedule",
         "surface:internal"
       ],
-      "_contexts": [
-        "docs",
-        "tasks",
-        "calendar",
-        "contacts"
-      ],
+      "_contexts": ["docs", "tasks", "calendar", "contacts"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:docs",
@@ -8674,9 +7794,7 @@
         "capability:update",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -8805,9 +7923,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -8828,9 +7944,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"add_source\" for this virtual; do not change).",
-              "enum": [
-                "add_source"
-              ],
+              "enum": ["add_source"],
               "default": "add_source"
             },
             "sourceId": {
@@ -8932,9 +8046,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -8955,9 +8067,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"dashboard\" for this virtual; do not change).",
-              "enum": [
-                "dashboard"
-              ],
+              "enum": ["dashboard"],
               "default": "dashboard"
             },
             "sourceId": {
@@ -9059,9 +8169,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -9082,9 +8190,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"import_csv\" for this virtual; do not change).",
-              "enum": [
-                "import_csv"
-              ],
+              "enum": ["import_csv"],
               "default": "import_csv"
             },
             "sourceId": {
@@ -9186,9 +8292,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -9209,9 +8313,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"list_sources\" for this virtual; do not change).",
-              "enum": [
-                "list_sources"
-              ],
+              "enum": ["list_sources"],
               "default": "list_sources"
             },
             "sourceId": {
@@ -9313,9 +8415,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -9336,9 +8436,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"list_transactions\" for this virtual; do not change).",
-              "enum": [
-                "list_transactions"
-              ],
+              "enum": ["list_transactions"],
               "default": "list_transactions"
             },
             "sourceId": {
@@ -9440,9 +8538,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -9463,9 +8559,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"recurring_charges\" for this virtual; do not change).",
-              "enum": [
-                "recurring_charges"
-              ],
+              "enum": ["recurring_charges"],
               "default": "recurring_charges"
             },
             "sourceId": {
@@ -9567,9 +8661,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -9590,9 +8682,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"remove_source\" for this virtual; do not change).",
-              "enum": [
-                "remove_source"
-              ],
+              "enum": ["remove_source"],
               "default": "remove_source"
             },
             "sourceId": {
@@ -9694,9 +8784,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -9717,9 +8805,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"spending_summary\" for this virtual; do not change).",
-              "enum": [
-                "spending_summary"
-              ],
+              "enum": ["spending_summary"],
               "default": "spending_summary"
             },
             "sourceId": {
@@ -9821,9 +8907,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -9844,9 +8928,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"subscription_audit\" for this virtual; do not change).",
-              "enum": [
-                "subscription_audit"
-              ],
+              "enum": ["subscription_audit"],
               "default": "subscription_audit"
             },
             "sourceId": {
@@ -9948,9 +9030,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -9971,9 +9051,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"subscription_cancel\" for this virtual; do not change).",
-              "enum": [
-                "subscription_cancel"
-              ],
+              "enum": ["subscription_cancel"],
               "default": "subscription_cancel"
             },
             "sourceId": {
@@ -10075,9 +9153,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -10098,9 +9174,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"subscription_status\" for this virtual; do not change).",
-              "enum": [
-                "subscription_status"
-              ],
+              "enum": ["subscription_status"],
               "default": "subscription_status"
             },
             "sourceId": {
@@ -10202,9 +9276,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -10225,19 +9297,12 @@
             "action": {
               "type": "string",
               "description": "Owner item op: create|update|delete|review.",
-              "enum": [
-                "create",
-                "update",
-                "delete",
-                "review"
-              ]
+              "enum": ["create", "update", "delete", "review"]
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"goal\" for this surface; do not change).",
-              "enum": [
-                "goal"
-              ],
+              "enum": ["goal"],
               "default": "goal"
             },
             "intent": {
@@ -10301,9 +9366,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -10319,17 +9382,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"create\" for this virtual; do not change).",
-              "enum": [
-                "create"
-              ],
+              "enum": ["create"],
               "default": "create"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"goal\" for this surface; do not change).",
-              "enum": [
-                "goal"
-              ],
+              "enum": ["goal"],
               "default": "goal"
             },
             "intent": {
@@ -10393,9 +9452,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -10411,17 +9468,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"delete\" for this virtual; do not change).",
-              "enum": [
-                "delete"
-              ],
+              "enum": ["delete"],
               "default": "delete"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"goal\" for this surface; do not change).",
-              "enum": [
-                "goal"
-              ],
+              "enum": ["goal"],
               "default": "goal"
             },
             "intent": {
@@ -10485,9 +9538,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -10503,17 +9554,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"review\" for this virtual; do not change).",
-              "enum": [
-                "review"
-              ],
+              "enum": ["review"],
               "default": "review"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"goal\" for this surface; do not change).",
-              "enum": [
-                "goal"
-              ],
+              "enum": ["goal"],
               "default": "goal"
             },
             "intent": {
@@ -10577,9 +9624,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -10595,17 +9640,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"update\" for this virtual; do not change).",
-              "enum": [
-                "update"
-              ],
+              "enum": ["update"],
               "default": "update"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"goal\" for this surface; do not change).",
-              "enum": [
-                "goal"
-              ],
+              "enum": ["goal"],
               "default": "goal"
             },
             "intent": {
@@ -10669,9 +9710,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -10687,12 +9726,7 @@
             "action": {
               "type": "string",
               "description": "Owner health read op: today|trend|by_metric|status.",
-              "enum": [
-                "today",
-                "trend",
-                "by_metric",
-                "status"
-              ]
+              "enum": ["today", "trend", "by_metric", "status"]
             },
             "intent": {
               "type": "string",
@@ -10727,9 +9761,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -10750,9 +9782,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"by_metric\" for this virtual; do not change).",
-              "enum": [
-                "by_metric"
-              ],
+              "enum": ["by_metric"],
               "default": "by_metric"
             },
             "intent": {
@@ -10788,9 +9818,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -10811,9 +9839,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"status\" for this virtual; do not change).",
-              "enum": [
-                "status"
-              ],
+              "enum": ["status"],
               "default": "status"
             },
             "intent": {
@@ -10849,9 +9875,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -10872,9 +9896,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"today\" for this virtual; do not change).",
-              "enum": [
-                "today"
-              ],
+              "enum": ["today"],
               "default": "today"
             },
             "intent": {
@@ -10910,9 +9932,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -10933,9 +9953,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"trend\" for this virtual; do not change).",
-              "enum": [
-                "trend"
-              ],
+              "enum": ["trend"],
               "default": "trend"
             },
             "intent": {
@@ -10971,9 +9989,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -11007,9 +10023,7 @@
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -11074,9 +10088,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -11092,17 +10104,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"complete\" for this virtual; do not change).",
-              "enum": [
-                "complete"
-              ],
+              "enum": ["complete"],
               "default": "complete"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -11167,9 +10175,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -11185,17 +10191,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"create\" for this virtual; do not change).",
-              "enum": [
-                "create"
-              ],
+              "enum": ["create"],
               "default": "create"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -11260,9 +10262,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -11278,17 +10278,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"delete\" for this virtual; do not change).",
-              "enum": [
-                "delete"
-              ],
+              "enum": ["delete"],
               "default": "delete"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -11353,9 +10349,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -11371,17 +10365,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"review\" for this virtual; do not change).",
-              "enum": [
-                "review"
-              ],
+              "enum": ["review"],
               "default": "review"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -11446,9 +10436,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -11464,17 +10452,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"skip\" for this virtual; do not change).",
-              "enum": [
-                "skip"
-              ],
+              "enum": ["skip"],
               "default": "skip"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -11539,9 +10523,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -11557,17 +10539,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"snooze\" for this virtual; do not change).",
-              "enum": [
-                "snooze"
-              ],
+              "enum": ["snooze"],
               "default": "snooze"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -11632,9 +10610,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -11650,17 +10626,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"update\" for this virtual; do not change).",
-              "enum": [
-                "update"
-              ],
+              "enum": ["update"],
               "default": "update"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -11725,9 +10697,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -11758,9 +10728,7 @@
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -11824,9 +10792,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -11842,17 +10808,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"complete\" for this virtual; do not change).",
-              "enum": [
-                "complete"
-              ],
+              "enum": ["complete"],
               "default": "complete"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -11916,9 +10878,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -11934,17 +10894,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"create\" for this virtual; do not change).",
-              "enum": [
-                "create"
-              ],
+              "enum": ["create"],
               "default": "create"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -12008,9 +10964,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -12026,17 +10980,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"delete\" for this virtual; do not change).",
-              "enum": [
-                "delete"
-              ],
+              "enum": ["delete"],
               "default": "delete"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -12100,9 +11050,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -12118,17 +11066,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"review\" for this virtual; do not change).",
-              "enum": [
-                "review"
-              ],
+              "enum": ["review"],
               "default": "review"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -12192,9 +11136,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -12210,17 +11152,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"schedule_inspect\" for this virtual; do not change).",
-              "enum": [
-                "schedule_inspect"
-              ],
+              "enum": ["schedule_inspect"],
               "default": "schedule_inspect"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -12284,9 +11222,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -12302,17 +11238,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"schedule_summary\" for this virtual; do not change).",
-              "enum": [
-                "schedule_summary"
-              ],
+              "enum": ["schedule_summary"],
               "default": "schedule_summary"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -12376,9 +11308,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -12394,17 +11324,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"skip\" for this virtual; do not change).",
-              "enum": [
-                "skip"
-              ],
+              "enum": ["skip"],
               "default": "skip"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -12468,9 +11394,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -12486,17 +11410,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"snooze\" for this virtual; do not change).",
-              "enum": [
-                "snooze"
-              ],
+              "enum": ["snooze"],
               "default": "snooze"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -12560,9 +11480,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -12578,17 +11496,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"update\" for this virtual; do not change).",
-              "enum": [
-                "update"
-              ],
+              "enum": ["update"],
               "default": "update"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -12652,9 +11566,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -12683,9 +11595,7 @@
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -12749,9 +11659,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -12767,17 +11675,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"complete\" for this virtual; do not change).",
-              "enum": [
-                "complete"
-              ],
+              "enum": ["complete"],
               "default": "complete"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -12841,9 +11745,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -12859,17 +11761,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"create\" for this virtual; do not change).",
-              "enum": [
-                "create"
-              ],
+              "enum": ["create"],
               "default": "create"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -12933,9 +11831,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -12951,17 +11847,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"delete\" for this virtual; do not change).",
-              "enum": [
-                "delete"
-              ],
+              "enum": ["delete"],
               "default": "delete"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -13025,9 +11917,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -13043,17 +11933,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"review\" for this virtual; do not change).",
-              "enum": [
-                "review"
-              ],
+              "enum": ["review"],
               "default": "review"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -13117,9 +12003,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -13135,17 +12019,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"skip\" for this virtual; do not change).",
-              "enum": [
-                "skip"
-              ],
+              "enum": ["skip"],
               "default": "skip"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -13209,9 +12089,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -13227,17 +12105,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"snooze\" for this virtual; do not change).",
-              "enum": [
-                "snooze"
-              ],
+              "enum": ["snooze"],
               "default": "snooze"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -13301,9 +12175,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -13319,17 +12191,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"update\" for this virtual; do not change).",
-              "enum": [
-                "update"
-              ],
+              "enum": ["update"],
               "default": "update"
             },
             "kind": {
               "type": "string",
               "description": "Backing kind (fixed to \"definition\" for this surface; do not change).",
-              "enum": [
-                "definition"
-              ],
+              "enum": ["definition"],
               "default": "definition"
             },
             "intent": {
@@ -13393,9 +12261,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -13406,18 +12272,12 @@
         "description": "personal assistant workflows: action=book_travel|scheduling|sign_document",
         "parameters": {
           "type": "object",
-          "required": [
-            "action"
-          ],
+          "required": ["action"],
           "properties": {
             "action": {
               "type": "string",
               "description": "Assistant op: book_travel|scheduling|sign_document.",
-              "enum": [
-                "book_travel",
-                "scheduling",
-                "sign_document"
-              ]
+              "enum": ["book_travel", "scheduling", "sign_document"]
             }
           },
           "additionalProperties": false
@@ -13426,12 +12286,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general",
-        "calendar",
-        "travel",
-        "tasks"
-      ],
+      "_contexts": ["general", "calendar", "travel", "tasks"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -13452,9 +12307,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"book_travel\" for this virtual; do not change).",
-              "enum": [
-                "book_travel"
-              ],
+              "enum": ["book_travel"],
               "default": "book_travel"
             }
           },
@@ -13464,12 +12317,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general",
-        "calendar",
-        "travel",
-        "tasks"
-      ],
+      "_contexts": ["general", "calendar", "travel", "tasks"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -13490,9 +12338,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"scheduling\" for this virtual; do not change).",
-              "enum": [
-                "scheduling"
-              ],
+              "enum": ["scheduling"],
               "default": "scheduling"
             }
           },
@@ -13502,12 +12348,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general",
-        "calendar",
-        "travel",
-        "tasks"
-      ],
+      "_contexts": ["general", "calendar", "travel", "tasks"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -13528,9 +12369,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"sign_document\" for this virtual; do not change).",
-              "enum": [
-                "sign_document"
-              ],
+              "enum": ["sign_document"],
               "default": "sign_document"
             }
           },
@@ -13540,12 +12379,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "general",
-        "calendar",
-        "travel",
-        "tasks"
-      ],
+      "_contexts": ["general", "calendar", "travel", "tasks"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
@@ -13566,20 +12400,12 @@
             "action": {
               "type": "string",
               "description": "Prioritize op: rank_todos | rank_threads | rank_decisions.",
-              "enum": [
-                "rank_todos",
-                "rank_threads",
-                "rank_decisions"
-              ]
+              "enum": ["rank_todos", "rank_threads", "rank_decisions"]
             },
             "subject": {
               "type": "string",
               "description": "Alt selector: todos | threads | decisions. Maps to subaction.",
-              "enum": [
-                "todos",
-                "threads",
-                "decisions"
-              ]
+              "enum": ["todos", "threads", "decisions"]
             },
             "topN": {
               "type": "number",
@@ -13601,22 +12427,12 @@
         "capability:rank",
         "surface:internal"
       ],
-      "_contexts": [
-        "focus",
-        "tasks",
-        "inbox",
-        "approvals"
-      ],
+      "_contexts": ["focus", "tasks", "inbox", "approvals"],
       "_priority": 100,
       "_examples_count": 2,
       "_domain": "domain:focus",
-      "_capabilities": [
-        "capability:read",
-        "capability:rank"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read", "capability:rank"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -13632,19 +12448,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"rank_decisions\" for this virtual; do not change).",
-              "enum": [
-                "rank_decisions"
-              ],
+              "enum": ["rank_decisions"],
               "default": "rank_decisions"
             },
             "subject": {
               "type": "string",
               "description": "Alt selector: todos | threads | decisions. Maps to subaction.",
-              "enum": [
-                "todos",
-                "threads",
-                "decisions"
-              ]
+              "enum": ["todos", "threads", "decisions"]
             },
             "topN": {
               "type": "number",
@@ -13666,22 +12476,12 @@
         "capability:rank",
         "surface:internal"
       ],
-      "_contexts": [
-        "focus",
-        "tasks",
-        "inbox",
-        "approvals"
-      ],
+      "_contexts": ["focus", "tasks", "inbox", "approvals"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:focus",
-      "_capabilities": [
-        "capability:read",
-        "capability:rank"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read", "capability:rank"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -13697,19 +12497,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"rank_threads\" for this virtual; do not change).",
-              "enum": [
-                "rank_threads"
-              ],
+              "enum": ["rank_threads"],
               "default": "rank_threads"
             },
             "subject": {
               "type": "string",
               "description": "Alt selector: todos | threads | decisions. Maps to subaction.",
-              "enum": [
-                "todos",
-                "threads",
-                "decisions"
-              ]
+              "enum": ["todos", "threads", "decisions"]
             },
             "topN": {
               "type": "number",
@@ -13731,22 +12525,12 @@
         "capability:rank",
         "surface:internal"
       ],
-      "_contexts": [
-        "focus",
-        "tasks",
-        "inbox",
-        "approvals"
-      ],
+      "_contexts": ["focus", "tasks", "inbox", "approvals"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:focus",
-      "_capabilities": [
-        "capability:read",
-        "capability:rank"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read", "capability:rank"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -13762,19 +12546,13 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"rank_todos\" for this virtual; do not change).",
-              "enum": [
-                "rank_todos"
-              ],
+              "enum": ["rank_todos"],
               "default": "rank_todos"
             },
             "subject": {
               "type": "string",
               "description": "Alt selector: todos | threads | decisions. Maps to subaction.",
-              "enum": [
-                "todos",
-                "threads",
-                "decisions"
-              ]
+              "enum": ["todos", "threads", "decisions"]
             },
             "topN": {
               "type": "number",
@@ -13796,22 +12574,12 @@
         "capability:rank",
         "surface:internal"
       ],
-      "_contexts": [
-        "focus",
-        "tasks",
-        "inbox",
-        "approvals"
-      ],
+      "_contexts": ["focus", "tasks", "inbox", "approvals"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:focus",
-      "_capabilities": [
-        "capability:read",
-        "capability:rank"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read", "capability:rank"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -13829,26 +12597,13 @@
         "strict": true
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [
-        "domain:assistant",
-        "capability:read",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "memory",
-        "tasks",
-        "calendar",
-        "messaging"
-      ],
+      "_tags": ["domain:assistant", "capability:read", "surface:internal"],
+      "_contexts": ["memory", "tasks", "calendar", "messaging"],
       "_priority": 100,
       "_examples_count": 2,
       "_domain": "domain:assistant",
-      "_capabilities": [
-        "capability:read"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:read"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -13864,10 +12619,7 @@
             "action": {
               "type": "string",
               "description": "approve | reject.",
-              "enum": [
-                "approve",
-                "reject"
-              ]
+              "enum": ["approve", "reject"]
             },
             "requestId": {
               "type": "string",
@@ -13904,13 +12656,8 @@
       "_priority": 100,
       "_examples_count": 2,
       "_domain": "domain:meta",
-      "_capabilities": [
-        "capability:execute",
-        "capability:update"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:execute", "capability:update"],
+      "_surfaces": ["surface:internal"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -13926,9 +12673,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"approve\" for this virtual; do not change).",
-              "enum": [
-                "approve"
-              ],
+              "enum": ["approve"],
               "default": "approve"
             },
             "requestId": {
@@ -13966,13 +12711,8 @@
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:meta",
-      "_capabilities": [
-        "capability:execute",
-        "capability:update"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:execute", "capability:update"],
+      "_surfaces": ["surface:internal"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -13988,9 +12728,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"reject\" for this virtual; do not change).",
-              "enum": [
-                "reject"
-              ],
+              "enum": ["reject"],
               "default": "reject"
             },
             "requestId": {
@@ -14028,13 +12766,8 @@
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:meta",
-      "_capabilities": [
-        "capability:execute",
-        "capability:update"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:execute", "capability:update"],
+      "_surfaces": ["surface:internal"],
       "_risk": "risk:irreversible",
       "_cost": null
     },
@@ -14092,10 +12825,7 @@
             "dueWindow": {
               "type": "string",
               "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
-              "enum": [
-                "overdue",
-                "today"
-              ]
+              "enum": ["overdue", "today"]
             },
             "promptInstructions": {
               "type": "string",
@@ -14164,11 +12894,7 @@
             "priority": {
               "type": "string",
               "description": "create-only: low|medium|high; default medium.",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
+              "enum": ["low", "medium", "high"]
             },
             "respectsGlobalPause": {
               "type": "boolean",
@@ -14253,9 +12979,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -14271,9 +12995,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"acknowledge\" for this virtual; do not change).",
-              "enum": [
-                "acknowledge"
-              ],
+              "enum": ["acknowledge"],
               "default": "acknowledge"
             },
             "taskId": {
@@ -14303,10 +13025,7 @@
             "dueWindow": {
               "type": "string",
               "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
-              "enum": [
-                "overdue",
-                "today"
-              ]
+              "enum": ["overdue", "today"]
             },
             "promptInstructions": {
               "type": "string",
@@ -14375,11 +13094,7 @@
             "priority": {
               "type": "string",
               "description": "create-only: low|medium|high; default medium.",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
+              "enum": ["low", "medium", "high"]
             },
             "respectsGlobalPause": {
               "type": "boolean",
@@ -14464,9 +13179,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -14482,9 +13195,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"cancel\" for this virtual; do not change).",
-              "enum": [
-                "cancel"
-              ],
+              "enum": ["cancel"],
               "default": "cancel"
             },
             "taskId": {
@@ -14514,10 +13225,7 @@
             "dueWindow": {
               "type": "string",
               "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
-              "enum": [
-                "overdue",
-                "today"
-              ]
+              "enum": ["overdue", "today"]
             },
             "promptInstructions": {
               "type": "string",
@@ -14586,11 +13294,7 @@
             "priority": {
               "type": "string",
               "description": "create-only: low|medium|high; default medium.",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
+              "enum": ["low", "medium", "high"]
             },
             "respectsGlobalPause": {
               "type": "boolean",
@@ -14675,9 +13379,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -14693,9 +13395,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"complete\" for this virtual; do not change).",
-              "enum": [
-                "complete"
-              ],
+              "enum": ["complete"],
               "default": "complete"
             },
             "taskId": {
@@ -14725,10 +13425,7 @@
             "dueWindow": {
               "type": "string",
               "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
-              "enum": [
-                "overdue",
-                "today"
-              ]
+              "enum": ["overdue", "today"]
             },
             "promptInstructions": {
               "type": "string",
@@ -14797,11 +13494,7 @@
             "priority": {
               "type": "string",
               "description": "create-only: low|medium|high; default medium.",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
+              "enum": ["low", "medium", "high"]
             },
             "respectsGlobalPause": {
               "type": "boolean",
@@ -14886,9 +13579,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -14904,9 +13595,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"create\" for this virtual; do not change).",
-              "enum": [
-                "create"
-              ],
+              "enum": ["create"],
               "default": "create"
             },
             "taskId": {
@@ -14936,10 +13625,7 @@
             "dueWindow": {
               "type": "string",
               "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
-              "enum": [
-                "overdue",
-                "today"
-              ]
+              "enum": ["overdue", "today"]
             },
             "promptInstructions": {
               "type": "string",
@@ -15008,11 +13694,7 @@
             "priority": {
               "type": "string",
               "description": "create-only: low|medium|high; default medium.",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
+              "enum": ["low", "medium", "high"]
             },
             "respectsGlobalPause": {
               "type": "boolean",
@@ -15097,9 +13779,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -15115,9 +13795,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"dismiss\" for this virtual; do not change).",
-              "enum": [
-                "dismiss"
-              ],
+              "enum": ["dismiss"],
               "default": "dismiss"
             },
             "taskId": {
@@ -15147,10 +13825,7 @@
             "dueWindow": {
               "type": "string",
               "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
-              "enum": [
-                "overdue",
-                "today"
-              ]
+              "enum": ["overdue", "today"]
             },
             "promptInstructions": {
               "type": "string",
@@ -15219,11 +13894,7 @@
             "priority": {
               "type": "string",
               "description": "create-only: low|medium|high; default medium.",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
+              "enum": ["low", "medium", "high"]
             },
             "respectsGlobalPause": {
               "type": "boolean",
@@ -15308,9 +13979,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -15326,9 +13995,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"get\" for this virtual; do not change).",
-              "enum": [
-                "get"
-              ],
+              "enum": ["get"],
               "default": "get"
             },
             "taskId": {
@@ -15358,10 +14025,7 @@
             "dueWindow": {
               "type": "string",
               "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
-              "enum": [
-                "overdue",
-                "today"
-              ]
+              "enum": ["overdue", "today"]
             },
             "promptInstructions": {
               "type": "string",
@@ -15430,11 +14094,7 @@
             "priority": {
               "type": "string",
               "description": "create-only: low|medium|high; default medium.",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
+              "enum": ["low", "medium", "high"]
             },
             "respectsGlobalPause": {
               "type": "boolean",
@@ -15519,9 +14179,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -15537,9 +14195,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"history\" for this virtual; do not change).",
-              "enum": [
-                "history"
-              ],
+              "enum": ["history"],
               "default": "history"
             },
             "taskId": {
@@ -15569,10 +14225,7 @@
             "dueWindow": {
               "type": "string",
               "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
-              "enum": [
-                "overdue",
-                "today"
-              ]
+              "enum": ["overdue", "today"]
             },
             "promptInstructions": {
               "type": "string",
@@ -15641,11 +14294,7 @@
             "priority": {
               "type": "string",
               "description": "create-only: low|medium|high; default medium.",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
+              "enum": ["low", "medium", "high"]
             },
             "respectsGlobalPause": {
               "type": "boolean",
@@ -15730,9 +14379,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -15748,9 +14395,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"list\" for this virtual; do not change).",
-              "enum": [
-                "list"
-              ],
+              "enum": ["list"],
               "default": "list"
             },
             "taskId": {
@@ -15780,10 +14425,7 @@
             "dueWindow": {
               "type": "string",
               "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
-              "enum": [
-                "overdue",
-                "today"
-              ]
+              "enum": ["overdue", "today"]
             },
             "promptInstructions": {
               "type": "string",
@@ -15852,11 +14494,7 @@
             "priority": {
               "type": "string",
               "description": "create-only: low|medium|high; default medium.",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
+              "enum": ["low", "medium", "high"]
             },
             "respectsGlobalPause": {
               "type": "boolean",
@@ -15941,9 +14579,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -15959,9 +14595,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"reopen\" for this virtual; do not change).",
-              "enum": [
-                "reopen"
-              ],
+              "enum": ["reopen"],
               "default": "reopen"
             },
             "taskId": {
@@ -15991,10 +14625,7 @@
             "dueWindow": {
               "type": "string",
               "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
-              "enum": [
-                "overdue",
-                "today"
-              ]
+              "enum": ["overdue", "today"]
             },
             "promptInstructions": {
               "type": "string",
@@ -16063,11 +14694,7 @@
             "priority": {
               "type": "string",
               "description": "create-only: low|medium|high; default medium.",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
+              "enum": ["low", "medium", "high"]
             },
             "respectsGlobalPause": {
               "type": "boolean",
@@ -16152,9 +14779,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -16170,9 +14795,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"skip\" for this virtual; do not change).",
-              "enum": [
-                "skip"
-              ],
+              "enum": ["skip"],
               "default": "skip"
             },
             "taskId": {
@@ -16202,10 +14825,7 @@
             "dueWindow": {
               "type": "string",
               "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
-              "enum": [
-                "overdue",
-                "today"
-              ]
+              "enum": ["overdue", "today"]
             },
             "promptInstructions": {
               "type": "string",
@@ -16274,11 +14894,7 @@
             "priority": {
               "type": "string",
               "description": "create-only: low|medium|high; default medium.",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
+              "enum": ["low", "medium", "high"]
             },
             "respectsGlobalPause": {
               "type": "boolean",
@@ -16363,9 +14979,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -16381,9 +14995,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"snooze\" for this virtual; do not change).",
-              "enum": [
-                "snooze"
-              ],
+              "enum": ["snooze"],
               "default": "snooze"
             },
             "taskId": {
@@ -16413,10 +15025,7 @@
             "dueWindow": {
               "type": "string",
               "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
-              "enum": [
-                "overdue",
-                "today"
-              ]
+              "enum": ["overdue", "today"]
             },
             "promptInstructions": {
               "type": "string",
@@ -16485,11 +15094,7 @@
             "priority": {
               "type": "string",
               "description": "create-only: low|medium|high; default medium.",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
+              "enum": ["low", "medium", "high"]
             },
             "respectsGlobalPause": {
               "type": "boolean",
@@ -16574,9 +15179,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -16592,9 +15195,7 @@
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"update\" for this virtual; do not change).",
-              "enum": [
-                "update"
-              ],
+              "enum": ["update"],
               "default": "update"
             },
             "taskId": {
@@ -16624,10 +15225,7 @@
             "dueWindow": {
               "type": "string",
               "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
-              "enum": [
-                "overdue",
-                "today"
-              ]
+              "enum": ["overdue", "today"]
             },
             "promptInstructions": {
               "type": "string",
@@ -16696,11 +15294,7 @@
             "priority": {
               "type": "string",
               "description": "create-only: low|medium|high; default medium.",
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
+              "enum": ["low", "medium", "high"]
             },
             "respectsGlobalPause": {
               "type": "boolean",
@@ -16785,9 +15379,7 @@
         "capability:delete",
         "capability:schedule"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -16802,9 +15394,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps SCHEDULED_TASK_CREATE discriminator.",
-              "enum": [
-                "create"
-              ]
+              "enum": ["create"]
             },
             "intent": {
               "type": "string"
@@ -16852,9 +15442,7 @@
               "additionalProperties": true
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
@@ -16866,19 +15454,12 @@
         "capability:write",
         "surface:internal"
       ],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:meta",
-      "_capabilities": [
-        "capability:schedule",
-        "capability:write"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:schedule", "capability:write"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -16893,9 +15474,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps SCHEDULED_TASK_SNOOZE discriminator.",
-              "enum": [
-                "snooze"
-              ]
+              "enum": ["snooze"]
             },
             "intent": {
               "type": "string"
@@ -16910,9 +15489,7 @@
               "type": "string"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
@@ -16924,19 +15501,12 @@
         "capability:update",
         "surface:internal"
       ],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:meta",
-      "_capabilities": [
-        "capability:schedule",
-        "capability:update"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:schedule", "capability:update"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -16951,9 +15521,7 @@
             "subaction": {
               "type": "string",
               "description": "LifeOps SCHEDULED_TASK_UPDATE discriminator.",
-              "enum": [
-                "update"
-              ]
+              "enum": ["update"]
             },
             "intent": {
               "type": "string"
@@ -16973,9 +15541,7 @@
               "type": "string"
             }
           },
-          "required": [
-            "subaction"
-          ],
+          "required": ["subaction"],
           "additionalProperties": false
         },
         "strict": true
@@ -16987,19 +15553,12 @@
         "capability:update",
         "surface:internal"
       ],
-      "_contexts": [
-        "general"
-      ],
+      "_contexts": ["general"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:meta",
-      "_capabilities": [
-        "capability:schedule",
-        "capability:update"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_capabilities": ["capability:schedule", "capability:update"],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -17010,9 +15569,7 @@
         "description": "todos: write|create|update|complete|cancel|delete|list|clear; user-scoped (entityId)",
         "parameters": {
           "type": "object",
-          "required": [
-            "action"
-          ],
+          "required": ["action"],
           "properties": {
             "action": {
               "type": "string",
@@ -17043,12 +15600,7 @@
             "status": {
               "type": "string",
               "description": "pending | in_progress | completed | cancelled.",
-              "enum": [
-                "pending",
-                "in_progress",
-                "completed",
-                "cancelled"
-              ]
+              "enum": ["pending", "in_progress", "completed", "cancelled"]
             },
             "parentTodoId": {
               "type": "string",
@@ -17059,10 +15611,7 @@
               "description": "Array of {id?, content, status, activeForm?} for action=write. Replaces the user's list for this conversation.",
               "items": {
                 "type": "object",
-                "required": [
-                  "content",
-                  "status"
-                ],
+                "required": ["content", "status"],
                 "properties": {
                   "id": {
                     "type": "string"
@@ -17072,12 +15621,7 @@
                   },
                   "status": {
                     "type": "string",
-                    "enum": [
-                      "pending",
-                      "in_progress",
-                      "completed",
-                      "cancelled"
-                    ]
+                    "enum": ["pending", "in_progress", "completed", "cancelled"]
                   },
                   "activeForm": {
                     "type": "string"
@@ -17108,11 +15652,7 @@
         "capability:delete",
         "surface:internal"
       ],
-      "_contexts": [
-        "tasks",
-        "todos",
-        "automation"
-      ],
+      "_contexts": ["tasks", "todos", "automation"],
       "_priority": 100,
       "_examples_count": 4,
       "_domain": "domain:reminders",
@@ -17122,9 +15662,7 @@
         "capability:update",
         "capability:delete"
       ],
-      "_surfaces": [
-        "surface:internal"
-      ],
+      "_surfaces": ["surface:internal"],
       "_risk": null,
       "_cost": null
     },
@@ -17135,25 +15673,17 @@
         "description": "Twilio voice dial: recipientKind=owner|external|e164; draft-confirm; approval-queue",
         "parameters": {
           "type": "object",
-          "required": [
-            "recipientKind"
-          ],
+          "required": ["recipientKind"],
           "properties": {
             "action": {
               "type": "string",
               "description": "dial.",
-              "enum": [
-                "dial"
-              ]
+              "enum": ["dial"]
             },
             "recipientKind": {
               "type": "string",
               "description": "owner escalation env number | external RelationshipStore lookup + allow-list | e164 raw E.164 phoneNumber.",
-              "enum": [
-                "owner",
-                "external",
-                "e164"
-              ]
+              "enum": ["owner", "external", "e164"]
             },
             "phoneNumber": {
               "type": "string",
@@ -17188,23 +15718,12 @@
         "surface:remote-api",
         "risk:user-visible"
       ],
-      "_contexts": [
-        "contacts",
-        "messaging",
-        "phone",
-        "tasks",
-        "automation"
-      ],
+      "_contexts": ["contacts", "messaging", "phone", "tasks", "automation"],
       "_priority": 100,
       "_examples_count": 3,
       "_domain": "domain:meta",
-      "_capabilities": [
-        "capability:execute",
-        "capability:send"
-      ],
-      "_surfaces": [
-        "surface:remote-api"
-      ],
+      "_capabilities": ["capability:execute", "capability:send"],
+      "_surfaces": ["surface:remote-api"],
       "_risk": "risk:user-visible",
       "_cost": null
     },
@@ -17215,26 +15734,18 @@
         "description": "Owner-only outbound voice call via registered provider. Action dial; recipientKind=owner|external|e164. Provider Twilio; Android/app-phone implementation-only until VOICE_CALL provider wired. owner env owner number + standing escalation policy; external RelationshipStore contact + allow-list; e164 raw phoneNumber. All paths draft first; confirmed:true required; approval queue. — subaction = dial",
         "parameters": {
           "type": "object",
-          "required": [
-            "recipientKind"
-          ],
+          "required": ["recipientKind"],
           "properties": {
             "action": {
               "type": "string",
               "description": "Subaction discriminator (auto-set to \"dial\" for this virtual; do not change).",
-              "enum": [
-                "dial"
-              ],
+              "enum": ["dial"],
               "default": "dial"
             },
             "recipientKind": {
               "type": "string",
               "description": "owner escalation env number | external RelationshipStore lookup + allow-list | e164 raw E.164 phoneNumber.",
-              "enum": [
-                "owner",
-                "external",
-                "e164"
-              ]
+              "enum": ["owner", "external", "e164"]
             },
             "phoneNumber": {
               "type": "string",
@@ -17269,23 +15780,12 @@
         "surface:remote-api",
         "risk:user-visible"
       ],
-      "_contexts": [
-        "contacts",
-        "messaging",
-        "phone",
-        "tasks",
-        "automation"
-      ],
+      "_contexts": ["contacts", "messaging", "phone", "tasks", "automation"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": "domain:meta",
-      "_capabilities": [
-        "capability:execute",
-        "capability:send"
-      ],
-      "_surfaces": [
-        "surface:remote-api"
-      ],
+      "_capabilities": ["capability:execute", "capability:send"],
+      "_surfaces": ["surface:remote-api"],
       "_risk": "risk:user-visible",
       "_cost": null
     },
@@ -17296,9 +15796,7 @@
         "description": "work-thread lifecycle: create|steer|stop|waiting|completed|merge|attach_source|followup",
         "parameters": {
           "type": "object",
-          "required": [
-            "operations"
-          ],
+          "required": ["operations"],
           "properties": {
             "operations": {
               "type": "array",
@@ -17317,11 +15815,7 @@
       },
       "_plugin": "@elizaos/plugin-personal-assistant",
       "_tags": [],
-      "_contexts": [
-        "tasks",
-        "messaging",
-        "automation"
-      ],
+      "_contexts": ["tasks", "messaging", "automation"],
       "_priority": 100,
       "_examples_count": 0,
       "_domain": null,
