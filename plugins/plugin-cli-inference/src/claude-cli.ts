@@ -20,7 +20,7 @@ import { filterEnv, redactStderr, resolveSafeBinary, resolveSafeCwd } from "./sa
  * and stays on a never-commit branch.
  */
 
-const DEFAULT_MODEL = "claude-opus-4-7";
+const DEFAULT_MODEL = "claude-opus-4-8";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const CLAUDE_BINARY = "claude";
 

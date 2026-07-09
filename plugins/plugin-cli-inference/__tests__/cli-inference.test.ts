@@ -7,11 +7,13 @@
  * allowlist on this box.
  */
 import type { ChatMessage, PluginAutoEnableContext } from "@elizaos/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { shouldEnable } from "../auto-enable";
 import {
   buildModels,
   ClaudeCli,
+  ClaudeSdkSession,
+  CodexSdkSession,
   cliInferencePlugin,
   LARGE_TIER_MODEL_TYPES,
   resolveCliBackend,
@@ -78,6 +80,9 @@ function recordingSpawn(result: Partial<SpawnResult>) {
 
 afterEach(() => {
   delete process.env.ELIZA_CHAT_VIA_CLI;
+  delete process.env.ELIZA_PLANNER_NATIVE_TOOLS;
+  delete process.env.ELIZA_ENABLE_CLAUDE_STEALTH;
+  vi.restoreAllMocks();
 });
 
 describe("flattenPrompt", () => {
@@ -117,7 +122,7 @@ describe("claude CLI variant", () => {
     const restore = __setClaudeSpawn(fn);
     try {
       const cli = new ClaudeCli({
-        model: "claude-opus-4-7",
+        model: "claude-opus-4-8",
         env: { PATH: process.env.PATH },
         binaryPath: FAKE_CLAUDE,
       });
@@ -144,7 +149,7 @@ describe("claude CLI variant", () => {
       expect(argv[ofIdx + 1]).toBe("text");
       expect(argv).toContain("--exclude-dynamic-system-prompt-sections");
       const mIdx = argv.indexOf("--model");
-      expect(argv[mIdx + 1]).toBe("claude-opus-4-7");
+      expect(argv[mIdx + 1]).toBe("claude-opus-4-8");
 
       // stdin from /dev/null, isolated tmpdir cwd
       expect(opts.stdinPath).toBe("/dev/null");
@@ -426,6 +431,128 @@ describe("models map gating (large-tier only)", () => {
       buildModels({ ELIZA_CHAT_VIA_CLI: "claude-sdk" }) as Record<string, unknown>
     );
     expect(keys.sort()).toEqual([...LARGE_TIER_MODEL_TYPES].sort());
+  });
+
+  it("routes cold Claude model handlers through the configured backend", async () => {
+    const { calls, fn } = recordingSpawn({ stdout: "from claude" });
+    const restore = __setClaudeSpawn(fn);
+    try {
+      const models = buildModels({ ELIZA_CHAT_VIA_CLI: "claude" }) as Record<
+        string,
+        (
+          runtime: { getSetting: (key: string) => string | undefined },
+          params: unknown
+        ) => Promise<string>
+      >;
+      const runtime = {
+        getSetting: (key: string) => (key === "ELIZA_CHAT_VIA_CLI" ? "claude" : undefined),
+      };
+
+      await expect(models.TEXT_LARGE(runtime, { prompt: "hello" })).resolves.toBe("from claude");
+
+      const argv = calls[0].argv;
+      expect(argv[argv.indexOf("--model") + 1]).toBe("claude-opus-4-8");
+    } finally {
+      restore();
+    }
+  });
+
+  it("routes warm Claude SDK handlers through the current default Opus model", async () => {
+    let captured: { model?: string; body?: string } = {};
+    vi.spyOn(ClaudeSdkSession.prototype, "generate").mockImplementation(function (
+      this: ClaudeSdkSession,
+      body: string
+    ) {
+      captured = {
+        model: (this as unknown as { model?: string }).model,
+        body,
+      };
+      return Promise.resolve("from sdk");
+    });
+    const models = buildModels({ ELIZA_CHAT_VIA_CLI: "claude-sdk" }) as Record<
+      string,
+      (
+        runtime: { getSetting: (key: string) => string | undefined },
+        params: unknown
+      ) => Promise<string>
+    >;
+    const runtime = {
+      getSetting: (key: string) =>
+        key === "ELIZA_CHAT_VIA_CLI"
+          ? "claude-sdk"
+          : key === "ELIZA_CLI_CLAUDE_MODEL"
+            ? ""
+            : undefined,
+    };
+
+    await expect(models.TEXT_LARGE(runtime, { prompt: "hello" })).resolves.toBe("from sdk");
+
+    expect(captured.model).toBe("claude-opus-4-8");
+    expect(captured.body).toContain("hello");
+  });
+
+  it("registers and routes ACTION_PLANNER only in text-planner mode", async () => {
+    process.env.ELIZA_PLANNER_NATIVE_TOOLS = "0";
+    const { calls, fn } = recordingSpawn({ stdout: '{"action":"NONE","params":{}}' });
+    const restore = __setClaudeSpawn(fn);
+    try {
+      const models = buildModels({ ELIZA_CHAT_VIA_CLI: "claude" }) as Record<
+        string,
+        (
+          runtime: { getSetting: (key: string) => string | undefined },
+          params: unknown
+        ) => Promise<string>
+      >;
+      const runtime = {
+        getSetting: (key: string) => (key === "ELIZA_CHAT_VIA_CLI" ? "claude" : undefined),
+      };
+
+      expect(models.ACTION_PLANNER).toBeTypeOf("function");
+      await expect(models.ACTION_PLANNER(runtime, { prompt: "pick an action" })).resolves.toContain(
+        "NONE"
+      );
+      expect(calls).toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("routes warm Codex SDK handlers through the default Codex model", async () => {
+    let captured: { model?: string; body?: string } = {};
+    vi.spyOn(CodexSdkSession.prototype, "generate").mockImplementation(function (
+      this: CodexSdkSession,
+      body: string
+    ) {
+      captured = {
+        model: (this as unknown as { model?: string }).model,
+        body,
+      };
+      return Promise.resolve("from codex sdk");
+    });
+    const models = buildModels({ ELIZA_CHAT_VIA_CLI: "codex-sdk" }) as Record<
+      string,
+      (
+        runtime: { getSetting: (key: string) => string | undefined },
+        params: unknown
+      ) => Promise<string>
+    >;
+    const runtime = {
+      getSetting: (key: string) => (key === "ELIZA_CHAT_VIA_CLI" ? "codex-sdk" : undefined),
+    };
+
+    await expect(models.TEXT_LARGE(runtime, { prompt: "hello" })).resolves.toBe("from codex sdk");
+
+    expect(captured.model).toBe("gpt-5.5");
+    expect(captured.body).toContain("hello");
+  });
+
+  it("keeps init inert when disabled and rejects colliding Claude routes", async () => {
+    delete process.env.ELIZA_CHAT_VIA_CLI;
+    await expect(cliInferencePlugin.init?.({} as never)).resolves.toBeUndefined();
+
+    process.env.ELIZA_CHAT_VIA_CLI = "claude-sdk";
+    process.env.ELIZA_ENABLE_CLAUDE_STEALTH = "1";
+    await expect(cliInferencePlugin.init?.({} as never)).rejects.toThrow(/collides/);
   });
 
   it("resolveCliBackend accepts claude|codex|claude-sdk (case-insensitive)", () => {

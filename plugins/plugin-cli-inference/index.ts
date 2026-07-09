@@ -130,7 +130,7 @@ function resolveSdkModel(runtime: IAgentRuntime, modelType: string): string {
   const large = getSetting(runtime, "ELIZA_CLI_CLAUDE_MODEL");
   const small = getSetting(runtime, "ELIZA_CLI_CLAUDE_PLANNER_MODEL");
   const isSmallTier = modelType === ModelType.ACTION_PLANNER || modelType === ModelType.TEXT_SMALL;
-  return ((isSmallTier ? small : large) || large || "claude-opus-4-7").trim();
+  return ((isSmallTier ? small : large) || large || "claude-opus-4-8").trim();
 }
 
 function shortHash(value: string): string {
