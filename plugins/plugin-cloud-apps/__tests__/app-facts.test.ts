@@ -1,9 +1,17 @@
 /**
  * Tests for record/removeAppDeployFact — the durable "app is live at <url>" memory facts. Runs against the runtime's in-memory memory store; no SDK involved.
  */
-import { describe, expect, it } from "bun:test";
-import { recordAppDeployFact, removeAppDeployFact } from "../src/app-facts.ts";
+import { describe, expect, it, mock } from "bun:test";
 import { makeApp, makeRoomMessage, memoryRuntime } from "./helpers";
+
+mock.module("@elizaos/core", () => ({
+  logger: { warn: () => undefined },
+  MemoryType: { CUSTOM: "custom" },
+}));
+
+const { recordAppDeployFact, removeAppDeployFact } = await import(
+  "../src/app-facts.ts"
+);
 
 const appIdOf = (m: { metadata?: unknown }) =>
   (m.metadata as { appId?: string } | undefined)?.appId;
