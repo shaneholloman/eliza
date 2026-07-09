@@ -17,7 +17,13 @@ export {
 	type ReportedError,
 	toElizaError,
 } from "./errors";
-
 // Re-export everything from the Node.js entry point
 // This ensures that imports from "@elizaos/core" resolve correctly during builds
 export * from "./index.node";
+export {
+	isSensitiveKeyName,
+	redactLogArgs,
+	redactObjectSecrets,
+	redactSecrets,
+	redactSensitiveText,
+} from "./security/redact";
