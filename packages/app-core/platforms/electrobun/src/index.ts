@@ -178,6 +178,36 @@ function resolveDesktopAppIconPath(): string {
   );
 }
 
+/**
+ * Menu-bar/tray icon. On macOS this is a dedicated template asset (alpha-only
+ * glyph, tinted by the system to match light/dark menu bars) — reusing the
+ * full-color app icon there renders as a solid black box under NSImage
+ * template mode. Other platforms keep the color app icon.
+ */
+function resolveDesktopTrayIconOptions(): {
+  icon: string;
+  template: boolean;
+  width?: number;
+  height?: number;
+  title?: string;
+} {
+  if (process.platform === "darwin") {
+    const templateIconPath = path.join(
+      import.meta.dir,
+      "../assets/trayIconTemplate.png",
+    );
+    if (fs.existsSync(templateIconPath)) {
+      return { icon: templateIconPath, template: true, width: 18, height: 18 };
+    }
+    return { icon: resolveDesktopAppIconPath(), template: false };
+  }
+  return {
+    icon: resolveDesktopAppIconPath(),
+    template: false,
+    title: BRAND.appName,
+  };
+}
+
 function shouldUseBrowserDevtoolsFallback(): boolean {
   return false;
 }
@@ -2746,10 +2776,13 @@ async function main(): Promise<void> {
       // Tray is created here so the icon appears at startup, but the menu is
       // owned by the renderer (DesktopTrayRuntime + main.tsx → Desktop.setTrayMenu).
       // That keeps a single source of truth for tray items and their handlers.
+      // macOS: icon-only template glyph at menu-bar size (18pt; the asset is
+      // 36px for retina) with no text label when the template asset is present.
+      // Other platforms keep the color icon and title text their tray
+      // implementations expect.
       await desktop.createTray({
-        icon: resolveDesktopAppIconPath(),
         tooltip: BRAND.appName,
-        title: BRAND.appName,
+        ...resolveDesktopTrayIconOptions(),
       });
     } catch (err) {
       logger.warn(

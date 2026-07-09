@@ -72,6 +72,49 @@ export const TRAY_POPOVER_SUPPORTED_PLATFORMS: ReadonlySet<NodeJS.Platform> =
   new Set<NodeJS.Platform>(["darwin"]);
 
 /**
+ * Whether the tray should attach a native context menu.
+ *
+ * On macOS a set `NSStatusItem.menu` takes over BOTH left and right click:
+ * AppKit opens the menu and the status-item button action never fires, so the
+ * `tray-clicked` event (and with it click-to-chat) is unreachable. The
+ * production macOS behavior is therefore NO attached menu: the icon click
+ * toggles the chat window directly. Legacy menu behavior can be restored with
+ * ELIZA_DESKTOP_TRAY_MENU=1. Windows/Linux keep their context menus (their
+ * native tray implementations deliver icon clicks independently of the menu).
+ */
+export function shouldAttachTrayMenu(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform !== "darwin") {
+    return true;
+  }
+  return parseTruthy(env.ELIZA_DESKTOP_TRAY_MENU);
+}
+
+export type TrayClickAction = "toggle-popover" | "hide-window" | "show-window";
+
+/**
+ * Decide what a tray icon click does. Mirrors the chat-overlay summon hotkey
+ * semantics (#12184): a configured popover always wins; otherwise a focused,
+ * visible window is dismissed and anything else is summoned + focused, so a
+ * tray click always has a visible effect.
+ */
+export function resolveTrayClickAction(state: {
+  popoverConfigured: boolean;
+  windowVisible: boolean;
+  windowFocused: boolean;
+}): TrayClickAction {
+  if (state.popoverConfigured) {
+    return "toggle-popover";
+  }
+  if (state.windowVisible && state.windowFocused) {
+    return "hide-window";
+  }
+  return "show-window";
+}
+
+/**
  * Whether a tray click should open the widget popover instead of (just) showing
  * the main window. Opt-in (default OFF) via ELIZA_DESKTOP_TRAY_POPOVER=1;
  * requires the tray to be enabled, a platform with a popover implementation, and

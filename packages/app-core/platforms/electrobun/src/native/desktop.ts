@@ -50,6 +50,10 @@ import {
   shouldReanchorBottomBar,
 } from "../desktop-bottom-bar-config";
 import {
+  resolveTrayClickAction,
+  shouldAttachTrayMenu,
+} from "../desktop-tray-config";
+import {
   createElectrobunBrowserWindow,
   type ElectrobunBrowserWindowOptions,
 } from "../electrobun-window-options";
@@ -78,6 +82,10 @@ import type {
   WindowBounds,
   WindowOptions,
 } from "../rpc-schema";
+import {
+  resolveTrayClickAction,
+  shouldAttachTrayMenu,
+} from "../desktop-tray-config";
 import { computeTrayPopoverFrame, type Rect } from "../tray-popover-position";
 import type { SendToWebview } from "../types.js";
 import { resolveDesktopUpdateAvailability } from "../update-availability";
@@ -725,14 +733,18 @@ export class DesktopManager {
 
     const iconPath = this.resolveIconPath(options.icon);
 
+    // Electrobun renders `title` as visible status-item text: only pass an
+    // explicit title, never the tooltip (a text label next to the icon reads
+    // as clutter in the macOS menu bar). `template`/`width`/`height` map to
+    // NSImage isTemplate + setSize: a template image must be alpha-only art
+    // (an opaque color icon renders as a solid black box).
     this.tray = new Tray({
-      title: options.tooltip ?? options.title ?? "",
+      title: options.title ?? "",
       image: iconPath,
+      template: options.template ?? true,
+      width: options.width ?? 16,
+      height: options.height ?? 16,
     });
-
-    if (options.title && process.platform === "darwin") {
-      this.tray.setTitle(options.title);
-    }
 
     this.setTrayMenu({ menu: options.menu ?? FALLBACK_TRAY_MENU_ITEMS });
 
@@ -774,6 +786,13 @@ export class DesktopManager {
     // Store menu items for action matching
     this.trayMenuItems.clear();
     this.indexMenuItems(menu);
+
+    // macOS click-to-chat (see shouldAttachTrayMenu): a set NSStatusItem.menu
+    // swallows icon clicks entirely, so the menu is indexed (popover/launcher
+    // catalogs still read it) but never attached to the status item.
+    if (!shouldAttachTrayMenu()) {
+      return;
+    }
 
     const template = this.buildMenuTemplate(menu);
     this.tray.setMenu(template);
@@ -829,20 +848,38 @@ export class DesktopManager {
 
     // Electrobun tray click is simpler — no bounds/modifiers
     this.trayClickHandler = () => {
-      // When a tray popover is configured (#9953 Phase 4), a click toggles the
-      // widget popover instead of restoring the full window.
-      if (this.trayPopoverConfig) {
+      const win = this.mainWindow;
+      const windowVisible =
+        Boolean(win) && !this._windowHidden && !(win?.isMinimized() ?? true);
+      const action = resolveTrayClickAction({
+        popoverConfigured: Boolean(this.trayPopoverConfig),
+        windowVisible,
+        windowFocused: this._windowFocused,
+      });
+      if (action === "toggle-popover") {
+        // When a tray popover is configured (#9953 Phase 4), a click toggles
+        // the widget popover instead of restoring the full window.
         void this.toggleTrayPopover().catch((err: unknown) => {
           logger.warn(
             `[Desktop] Failed to toggle tray popover: ${err instanceof Error ? err.message : String(err)}`,
           );
         });
-      } else {
-        void this.showWindow().catch((err: unknown) => {
+      } else if (action === "hide-window") {
+        // Focused + visible chat is dismissed: same toggle semantics as the
+        // chat-overlay summon hotkey, so a tray click always visibly responds.
+        void this.hideWindow().catch((err: unknown) => {
           logger.warn(
-            `[Desktop] Failed to show window from tray click: ${err instanceof Error ? err.message : String(err)}`,
+            `[Desktop] Failed to hide window from tray click: ${err instanceof Error ? err.message : String(err)}`,
           );
         });
+      } else {
+        void this.showWindow()
+          .then(() => this.focusWindow())
+          .catch((err: unknown) => {
+            logger.warn(
+              `[Desktop] Failed to show window from tray click: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
       }
       this.send("desktopTrayClick", {
         x: 0,
