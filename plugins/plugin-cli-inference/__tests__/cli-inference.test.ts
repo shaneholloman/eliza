@@ -117,7 +117,7 @@ describe("claude CLI variant", () => {
     const restore = __setClaudeSpawn(fn);
     try {
       const cli = new ClaudeCli({
-        model: "claude-opus-4-7",
+        model: "claude-opus-4-8",
         env: { PATH: process.env.PATH },
         binaryPath: FAKE_CLAUDE,
       });
@@ -144,7 +144,7 @@ describe("claude CLI variant", () => {
       expect(argv[ofIdx + 1]).toBe("text");
       expect(argv).toContain("--exclude-dynamic-system-prompt-sections");
       const mIdx = argv.indexOf("--model");
-      expect(argv[mIdx + 1]).toBe("claude-opus-4-7");
+      expect(argv[mIdx + 1]).toBe("claude-opus-4-8");
 
       // stdin from /dev/null, isolated tmpdir cwd
       expect(opts.stdinPath).toBe("/dev/null");
