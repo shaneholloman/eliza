@@ -19,6 +19,7 @@
  *   node scripts/mvp-visual-verify.mjs [--input <dir>] [--baseline <dir>]
  *                                      [--update-baseline] [--viewport <name>]...
  *                                      [--require-state <slug[@viewport]>]...
+ *                                      [--require-baseline-states]
  *                                      [--strict]
  * Env: ELIZA_AUDIT_APP_DIR overrides the input dir (matches the audit spec);
  * ELIZA_MVP_VISUAL_BASELINE_DIR overrides the committed baseline directory.
@@ -50,6 +51,7 @@ export function parseArgs(argv) {
   const args = {
     viewports: [],
     requiredStates: [],
+    requireBaselineStates: false,
     updateBaseline: false,
     strict: false,
   };
@@ -59,6 +61,8 @@ export function parseArgs(argv) {
     else if (a === "--baseline") args.baseline = argv[++i];
     else if (a === "--viewport") args.viewports.push(argv[++i]);
     else if (a === "--require-state") args.requiredStates.push(argv[++i]);
+    else if (a === "--require-baseline-states")
+      args.requireBaselineStates = true;
     else if (a === "--update-baseline") args.updateBaseline = true;
     else if (a === "--strict") args.strict = true;
     else if (a === "--help" || a === "-h") args.help = true;
@@ -94,6 +98,24 @@ async function discoverViewportDirs(inputDir, only) {
     if (pngs.length) dirs.push({ name: e.name, pngs });
   }
   return dirs.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function discoverBaselineRequiredStates(baselineRoot, only) {
+  const entries = await readdir(baselineRoot, { withFileTypes: true }).catch(
+    () => [],
+  );
+  const states = [];
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    if (only.length && !only.includes(e.name)) continue;
+    const pngs = (await readdir(path.join(baselineRoot, e.name))).filter((f) =>
+      f.endsWith(".png"),
+    );
+    for (const png of pngs) {
+      states.push(`${png.replace(/\.png$/, "")}@${e.name}`);
+    }
+  }
+  return states.sort();
 }
 
 async function loadReportIndex(inputDir) {
@@ -260,8 +282,15 @@ async function main() {
       : a.slug.localeCompare(b.slug),
   );
 
+  const baselineRequiredStates = args.requireBaselineStates
+    ? await discoverBaselineRequiredStates(baselineRoot, args.viewports)
+    : [];
+  const requiredStates = uniqueRequiredStates([
+    ...args.requiredStates,
+    ...baselineRequiredStates,
+  ]);
   const missingRequiredStates = computeMissingRequiredStates(
-    args.requiredStates,
+    requiredStates,
     results,
   );
   const expectationSkips = countExpectationChecks(results, "skip");
@@ -286,7 +315,8 @@ async function main() {
     auditReportPresent: reportPresent,
     expectationFailures,
     expectationSkips,
-    requiredStates: args.requiredStates,
+    requireBaselineStates: args.requireBaselineStates,
+    requiredStates,
     missingRequiredStates,
     newBaselines,
     overflowStates: results.filter((r) => (r.horizontalOverflowPx ?? 0) > 2)
@@ -349,12 +379,16 @@ async function main() {
 
 export function parseRequiredState(value) {
   const [slug, viewport, extra] = String(value).split("@");
-  if (!slug || extra !== undefined) {
+  if (!slug || extra !== undefined || String(value).endsWith("@")) {
     throw new Error(
       `invalid --require-state value "${value}"; expected slug or slug@viewport`,
     );
   }
   return { slug, viewport: viewport || null };
+}
+
+export function uniqueRequiredStates(states) {
+  return [...new Set(states)];
 }
 
 export function computeMissingRequiredStates(requiredStates, results) {
