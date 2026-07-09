@@ -25,9 +25,7 @@ const CAPTURE_TIMEOUT_MS = 12_000;
 
 function bridgeDir(): string {
   const root =
-    process.env.AGENT_ROOT ||
-    process.env.ELIZA_STATE_DIR ||
-    process.cwd();
+    process.env.AGENT_ROOT || process.env.ELIZA_STATE_DIR || process.cwd();
   return join(root, "vision-bridge");
 }
 
