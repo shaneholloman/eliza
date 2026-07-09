@@ -423,6 +423,7 @@ export function resolveElectrobunCopyMap({
     "src/launch/views": "bun/launch/views",
     "assets/appIcon.png": "assets/appIcon.png",
     "assets/appIcon.ico": "assets/appIcon.ico",
+    "assets/trayIconTemplate.png": "assets/trayIconTemplate.png",
   };
 
   if (buildVariant !== "store" && embedRuntime) {

@@ -82,10 +82,6 @@ import type {
   WindowBounds,
   WindowOptions,
 } from "../rpc-schema";
-import {
-  resolveTrayClickAction,
-  shouldAttachTrayMenu,
-} from "../desktop-tray-config";
 import { computeTrayPopoverFrame, type Rect } from "../tray-popover-position";
 import type { SendToWebview } from "../types.js";
 import { resolveDesktopUpdateAvailability } from "../update-availability";

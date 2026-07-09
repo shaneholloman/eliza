@@ -134,9 +134,9 @@ describe("shouldAttachTrayMenu", () => {
 
   it("leaves macOS menu attachment off unless explicitly requested", () => {
     expect(shouldAttachTrayMenu({}, "darwin")).toBe(false);
-    expect(shouldAttachTrayMenu({ ELIZA_DESKTOP_TRAY_MENU: "1" }, "darwin")).toBe(
-      true,
-    );
+    expect(
+      shouldAttachTrayMenu({ ELIZA_DESKTOP_TRAY_MENU: "1" }, "darwin"),
+    ).toBe(true);
   });
 });
 
