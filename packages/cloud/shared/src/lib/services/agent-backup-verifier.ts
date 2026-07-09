@@ -89,6 +89,7 @@ export interface BackupVerifierConfig {
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_REVERIFY_HOURS = 24;
 const DEFAULT_ESCALATION_PCT = 50;
+const MIN_SYSTEMIC_ESCALATION_SAMPLE = 5;
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
@@ -164,8 +165,31 @@ export function classifyCryptoError(error: unknown): BackupVerificationFailure |
   if (error.name === "KeyNotFoundError" || /key not found/i.test(error.message)) {
     return { kind: "key-unavailable", message: error.message };
   }
+  const maybeStatus = (error as { status?: unknown; $metadata?: { httpStatusCode?: unknown } })
+    .$metadata?.httpStatusCode;
+  if (
+    error.name === "KmsError" &&
+    (maybeStatus === 404 || /\b404\b|not found/i.test(error.message))
+  ) {
+    return { kind: "key-unavailable", message: error.message };
+  }
   if (error.name === "AeadError" || /AEAD decrypt failed/i.test(error.message)) {
     return { kind: "decrypt-failed", message: error.message };
+  }
+  return null;
+}
+
+function classifyMissingObjectPayload(error: unknown): BackupVerificationFailure | null {
+  if (!(error instanceof Error)) return null;
+  const maybeStatus = (error as { $metadata?: { httpStatusCode?: unknown }; status?: unknown })
+    .$metadata?.httpStatusCode;
+  if (
+    error.name === "NoSuchKey" ||
+    error.name === "NotFound" ||
+    maybeStatus === 404 ||
+    /no such key|not found/i.test(error.message)
+  ) {
+    return { kind: "payload-missing", message: error.message };
   }
   return null;
 }
@@ -174,6 +198,8 @@ export function classifyCryptoError(error: unknown): BackupVerificationFailure |
 function classifyChainError(error: unknown): BackupVerificationFailure | null {
   const crypto = classifyCryptoError(error);
   if (crypto) return crypto;
+  const missingPayload = classifyMissingObjectPayload(error);
+  if (missingPayload) return missingPayload;
   if (!(error instanceof Error)) return null;
   if (/payload not found|missing state_data_key/i.test(error.message)) {
     return { kind: "payload-missing", message: error.message };
@@ -370,7 +396,14 @@ async function resolveStoredPayload(
       "backup payload is in object storage but no object storage is configured on this host",
     );
   }
-  const raw = await getObjectText(row.state_data_key);
+  let raw: string | null;
+  try {
+    raw = await getObjectText(row.state_data_key);
+  } catch (error) {
+    const missingPayload = classifyMissingObjectPayload(error);
+    if (missingPayload) return { failure: missingPayload };
+    throw error;
+  }
   if (raw === null) {
     return {
       failure: {
@@ -505,6 +538,7 @@ export interface BackupVerificationCycleSummary {
 }
 
 const FAILURE_ALERT_DEDUP_KEY = "agent-backup-verification-failure";
+const ERROR_ALERT_DEDUP_KEY = "agent-backup-verification-error";
 const SYSTEMIC_ALERT_DEDUP_KEY = "agent-backup-verification-systemic";
 
 /**
@@ -565,11 +599,20 @@ export async function runBackupVerificationCycle(
       // breakage (DB/object-storage unreachable) is logged loudly but must not
       // stamp a healthy backup as failed nor abort the rest of the batch.
       summary.errored += 1;
-      logger.error("[AgentBackupVerifier] verification errored (infrastructure, not stamped)", {
+      logger.error("[AgentBackupVerifier] verification errored (infrastructure)", {
         backupId: row.id,
         sandboxRecordId: row.sandbox_record_id,
         error: error instanceof Error ? error.message : String(error),
       });
+      await dbWrite
+        .update(agentSandboxBackups)
+        .set({
+          verified_at: now,
+          verification_error: `infra-error: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        })
+        .where(eq(agentSandboxBackups.id, row.id));
       continue;
     }
 
@@ -624,7 +667,10 @@ export async function runBackupVerificationCycle(
     });
 
     const failurePct = (summary.failed / summary.sampled) * 100;
-    if (failurePct >= config.escalationThresholdPct) {
+    if (
+      summary.sampled >= MIN_SYSTEMIC_ESCALATION_SAMPLE &&
+      failurePct >= config.escalationThresholdPct
+    ) {
       summary.escalated = true;
       const keyUnavailable = summary.failures.filter((f) => f.kind === "key-unavailable").length;
       await alert({
@@ -645,6 +691,21 @@ export async function runBackupVerificationCycle(
         dedupKey: SYSTEMIC_ALERT_DEDUP_KEY,
       });
     }
+  }
+
+  if (summary.errored > 0) {
+    await alert({
+      title: `${summary.errored}/${summary.sampled} sampled agent backups could not be verified`,
+      message:
+        "Backup verification hit infrastructure errors. Rows were stamped with " +
+        "verified_at so they do not permanently wedge the sampler head; inspect " +
+        "verification_error for the exact infra failure and fix the verifier host.",
+      details: {
+        sampled: summary.sampled,
+        errored: summary.errored,
+      },
+      dedupKey: ERROR_ALERT_DEDUP_KEY,
+    });
   }
 
   return summary;

@@ -40,6 +40,7 @@ import {
 import { organizations } from "../../db/schemas/organizations";
 import { userCharacters } from "../../db/schemas/user-characters";
 import { users } from "../../db/schemas/users";
+import { type RuntimeR2Bucket, setRuntimeR2Bucket } from "../storage/r2-runtime-binding";
 import { computeStateHash, diffBackupState } from "./agent-backup-diff";
 import {
   type BackupVerifierConfig,
@@ -226,11 +227,13 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   expect(pgliteReady).toBe(true);
+  setRuntimeR2Bucket(null);
   await dbWrite.delete(agentSandboxBackups);
   await dbWrite.delete(agentSandboxes);
 });
 
 afterAll(async () => {
+  setRuntimeR2Bucket(null);
   await closeDatabaseConnectionsForTests();
 });
 
@@ -272,6 +275,15 @@ describe("classifyCryptoError", () => {
   test("KeyNotFoundError → key-unavailable (the #15310 signature)", () => {
     const error = new Error("key not found: org:abc/dek v1");
     error.name = "KeyNotFoundError";
+    expect(classifyCryptoError(error)?.kind).toBe("key-unavailable");
+  });
+
+  test("steward KMS 404 → key-unavailable", () => {
+    const error = new Error("steward KMS returned 404 for org key");
+    error.name = "KmsError";
+    (error as { $metadata?: { httpStatusCode: number } }).$metadata = {
+      httpStatusCode: 404,
+    };
     expect(classifyCryptoError(error)?.kind).toBe("key-unavailable");
   });
 
@@ -372,16 +384,11 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
     expect(row.verification_status).toBe("failed");
     expect(row.verification_error).toStartWith("decrypt-failed:");
     expect(row.verification_error).toContain("AEAD decrypt failed");
-    // 1/1 failed ≥ 50% threshold → both the failure alert and the systemic
-    // escalation fire, on distinct dedup keys.
-    expect(summary.escalated).toBe(true);
-    expect(alerts.map((a) => a.dedupKey)).toEqual([
-      "agent-backup-verification-failure",
-      "agent-backup-verification-systemic",
-    ]);
+    expect(summary.escalated).toBe(false);
+    expect(alerts.map((a) => a.dedupKey)).toEqual(["agent-backup-verification-failure"]);
   });
 
-  test("wrong KMS key (fresh memory backend, #15310): key-unavailable + systemic escalation", async () => {
+  test("wrong KMS key (fresh memory backend, #15310): key-unavailable below escalation floor", async () => {
     expect(pgliteReady).toBe(true);
     const sandboxA = await seedSandbox();
     const sandboxB = await seedSandbox();
@@ -402,11 +409,111 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
       expect(row.verification_status).toBe("failed");
       expect(row.verification_error).toStartWith("key-unavailable:");
     }
-    expect(summary.escalated).toBe(true);
+    expect(summary.escalated).toBe(false);
+    expect(alerts.map((a) => a.dedupKey)).toEqual(["agent-backup-verification-failure"]);
+  });
+
+  test("systemic escalation waits for a minimum sample floor", async () => {
+    expect(pgliteReady).toBe(true);
+    const backupIds: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const sandboxId = await seedSandbox();
+      backupIds.push(await seedFullBackup(sandboxId, sampleState(`kms-floor-${i}`)));
+    }
+    resetKmsClientForTests();
+
+    const { alerts, alert } = makeAlertSpy();
+    const summary = await runBackupVerificationCycle({ config: CONFIG, alert });
+
+    expect(summary).toMatchObject({ sampled: 5, verified: 0, failed: 5, escalated: true });
+    expect(summary.failures.map((f) => f.kind)).toEqual([
+      "key-unavailable",
+      "key-unavailable",
+      "key-unavailable",
+      "key-unavailable",
+      "key-unavailable",
+    ]);
+    for (const backupId of backupIds) {
+      expect((await readBackupRow(backupId)).verification_error).toStartWith("key-unavailable:");
+    }
     const systemic = alerts.find((a) => a.dedupKey === "agent-backup-verification-systemic");
     expect(systemic).toBeDefined();
     expect(systemic?.message).toContain("KMS misconfiguration");
-    expect(systemic?.details.keyUnavailable).toBe(2);
+    expect(systemic?.details.keyUnavailable).toBe(5);
+  });
+
+  test("missing R2 payload thrown as NoSuchKey is stamped payload-missing and cannot wedge sampling", async () => {
+    expect(pgliteReady).toBe(true);
+    const sandboxId = await seedSandbox();
+    const missingKey = "agent-backups/missing/state_data.json";
+    const missingError = new Error("NoSuchKey: object does not exist");
+    missingError.name = "NoSuchKey";
+    setRuntimeR2Bucket({
+      async get() {
+        throw missingError;
+      },
+      async put() {},
+      async delete() {},
+    } satisfies RuntimeR2Bucket);
+    const [backup] = await dbWrite
+      .insert(agentSandboxBackups)
+      .values({
+        sandbox_record_id: sandboxId,
+        snapshot_type: "auto",
+        state_data: sampleState("r2-preview"),
+        state_data_storage: "r2",
+        state_data_key: missingKey,
+        size_bytes: 1024,
+        backup_kind: "full",
+        content_hash: computeStateHash(sampleState("r2-preview")),
+      })
+      .returning();
+    expect(backup).toBeDefined();
+    const now = new Date("2026-07-09T00:00:00Z");
+    const { alerts, alert } = makeAlertSpy();
+
+    const summary = await runBackupVerificationCycle({ config: CONFIG, alert, now: () => now });
+
+    expect(summary).toMatchObject({ sampled: 1, verified: 0, failed: 1, errored: 0 });
+    expect(summary.failures[0]).toMatchObject({
+      backupId: backup.id,
+      kind: "payload-missing",
+    });
+    const row = await readBackupRow(backup.id);
+    expect(row.verification_status).toBe("failed");
+    expect(row.verified_at?.getTime()).toBe(now.getTime());
+    expect(row.verification_error).toStartWith("payload-missing:");
+    expect(alerts.map((a) => a.dedupKey)).toEqual(["agent-backup-verification-failure"]);
+  });
+
+  test("verifier infrastructure errors stamp verified_at and alert without marking backup failed", async () => {
+    expect(pgliteReady).toBe(true);
+    const sandboxId = await seedSandbox();
+    const [backup] = await dbWrite
+      .insert(agentSandboxBackups)
+      .values({
+        sandbox_record_id: sandboxId,
+        snapshot_type: "auto",
+        state_data: sampleState("r2-preview"),
+        state_data_storage: "r2",
+        state_data_key: "agent-backups/configured-nowhere/state_data.json",
+        size_bytes: 1024,
+        backup_kind: "full",
+        content_hash: computeStateHash(sampleState("r2-preview")),
+      })
+      .returning();
+    expect(backup).toBeDefined();
+    const now = new Date("2026-07-09T01:00:00Z");
+    const { alerts, alert } = makeAlertSpy();
+
+    const summary = await runBackupVerificationCycle({ config: CONFIG, alert, now: () => now });
+
+    expect(summary).toMatchObject({ sampled: 1, verified: 0, failed: 0, errored: 1 });
+    const row = await readBackupRow(backup.id);
+    expect(row.verification_status).toBeNull();
+    expect(row.verified_at?.getTime()).toBe(now.getTime());
+    expect(row.verification_error).toStartWith("infra-error:");
+    expect(alerts.map((a) => a.dedupKey)).toEqual(["agent-backup-verification-error"]);
   });
 
   test("content_hash drift on an otherwise-decryptable backup is stamped hash-mismatch", async () => {
