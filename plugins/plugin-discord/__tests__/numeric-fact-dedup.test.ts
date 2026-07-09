@@ -5,10 +5,7 @@
  * one point every delivery converges. Pure functions, no Discord client.
  */
 import { describe, expect, it } from "vitest";
-import {
-	isSubsetOrEqual,
-	numericFactSignatureTokens,
-} from "../messages.ts";
+import { isSubsetOrEqual, numericFactSignatureTokens } from "../messages.ts";
 
 describe("numericFactSignatureTokens (#15585)", () => {
 	it("gives a sentence and its bare-value restatement overlapping signatures", () => {

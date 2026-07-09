@@ -139,7 +139,8 @@ const NUMERIC_FACT_MAX_LEN = 160;
  */
 export function numericFactSignatureTokens(text: string): Set<string> | null {
 	const trimmed = text.trim();
-	if (trimmed.length === 0 || trimmed.length > NUMERIC_FACT_MAX_LEN) return null;
+	if (trimmed.length === 0 || trimmed.length > NUMERIC_FACT_MAX_LEN)
+		return null;
 	const tokens = trimmed
 		.toLowerCase()
 		.replace(/[^a-z0-9., ]+/g, " ")
@@ -1420,13 +1421,18 @@ export class MessageManager {
 							callbackDedup._elizaSentFactSignatures.some((prior) =>
 								isSubsetOrEqual(factSignature, prior),
 							);
-						if (callbackDedup._elizaSentReplyKeys.has(dedupKey) || repeatsPriorFact) {
+						if (
+							callbackDedup._elizaSentReplyKeys.has(dedupKey) ||
+							repeatsPriorFact
+						) {
 							this.runtime.logger.debug(
 								{
 									src: "plugin:discord",
 									agentId: this.runtime.agentId,
 									messageId: message.id,
-									reason: repeatsPriorFact ? "fact-signature" : "identical-text",
+									reason: repeatsPriorFact
+										? "fact-signature"
+										: "identical-text",
 									textPreview: textContent
 										.replace(/\s+/g, " ")
 										.trim()

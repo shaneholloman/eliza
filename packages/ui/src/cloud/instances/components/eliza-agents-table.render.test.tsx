@@ -107,9 +107,9 @@ describe("ElizaAgentsTable per-row view model", () => {
     ).toBe("notProvisioned");
     // Deactivation releases the container (sandbox_id cleared) but the agent
     // remains an established sandbox — never "Not provisioned".
-    expect(
-      derive({ status: "sleeping", sandbox_id: null }).runtimeKind,
-    ).toBe("sandbox");
+    expect(derive({ status: "sleeping", sandbox_id: null }).runtimeKind).toBe(
+      "sandbox",
+    );
   });
 
   it("hides standalone Web UI for shared rows even when the API returns a URL", () => {
