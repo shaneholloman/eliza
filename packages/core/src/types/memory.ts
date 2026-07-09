@@ -491,6 +491,7 @@ interface MemoryMetadataBase {
 	scope?: MemoryScope;
 	timestamp?: number;
 	platformMessageId?: string;
+	share?: ArtifactShareMetadata;
 }
 
 export type MemoryMetadata = (
