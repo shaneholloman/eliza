@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // The maximized, editable transcript viewer: it loads the stored record, lets
-// the user edit + undo, copies/shares/saves-to-files, and persists on save.
+// the user edit + undo, copies, grants/revokes access, and persists on save.
 
 import {
   cleanup,
@@ -13,25 +13,37 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageAttachment } from "../../api/client-types-chat";
 
-const { getTranscript, updateTranscript, deleteTranscript } = vi.hoisted(
-  () => ({
-    getTranscript: vi.fn(),
-    updateTranscript: vi.fn(),
-    deleteTranscript: vi.fn(),
-  }),
-);
+const {
+  getTranscript,
+  updateTranscript,
+  deleteTranscript,
+  shareTranscript,
+  revokeTranscriptShare,
+} = vi.hoisted(() => ({
+  getTranscript: vi.fn(),
+  updateTranscript: vi.fn(),
+  deleteTranscript: vi.fn(),
+  shareTranscript: vi.fn(),
+  revokeTranscriptShare: vi.fn(),
+}));
 vi.mock("../../api", () => ({
-  client: { getTranscript, updateTranscript, deleteTranscript },
+  client: {
+    getTranscript,
+    updateTranscript,
+    deleteTranscript,
+    shareTranscript,
+    revokeTranscriptShare,
+  },
 }));
 const { navigateBrowserPath } = vi.hoisted(() => ({
   navigateBrowserPath: vi.fn(),
 }));
 vi.mock("../../app-navigate-view", () => ({ navigateBrowserPath }));
 
+import { RoleProvider } from "../../hooks/useRole";
 import {
   segmentsFromEditedText,
   TranscriptViewerOverlay,
-  withTranscriptMarker,
 } from "./TranscriptViewerOverlay";
 
 const SEG = (text: string, speakerLabel?: string) => ({
@@ -77,18 +89,13 @@ describe("segmentsFromEditedText", () => {
   });
 });
 
-describe("withTranscriptMarker", () => {
-  it("embeds a durable, round-trippable id marker", () => {
-    const marked = withTranscriptMarker("abc-123", "the text");
-    expect(marked).toBe("<!-- eliza:transcript:abc-123 -->\nthe text");
-  });
-});
-
 describe("TranscriptViewerOverlay", () => {
   beforeEach(() => {
     getTranscript.mockReset();
     updateTranscript.mockReset();
     deleteTranscript.mockReset();
+    shareTranscript.mockReset();
+    revokeTranscriptShare.mockReset();
     navigateBrowserPath.mockReset();
     getTranscript.mockResolvedValue({
       transcript: {
@@ -100,6 +107,17 @@ describe("TranscriptViewerOverlay", () => {
     });
     updateTranscript.mockResolvedValue({ transcript: {} });
     deleteTranscript.mockResolvedValue({ ok: true });
+    shareTranscript.mockResolvedValue({
+      ok: true,
+      transcriptId: "00000000-0000-0000-0000-000000000abc",
+      entityId: "99999999-9999-9999-9999-999999999999",
+      mode: "redacted",
+    });
+    revokeTranscriptShare.mockResolvedValue({
+      ok: true,
+      transcriptId: "00000000-0000-0000-0000-000000000abc",
+      entityId: "99999999-9999-9999-9999-999999999999",
+    });
     Object.assign(navigator, {
       clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
     });
@@ -200,25 +218,124 @@ describe("TranscriptViewerOverlay", () => {
     );
   });
 
-  it("does NOT report 'Copied' when the clipboard is unavailable and the Share fallback also fails", async () => {
-    // No Clipboard API and no Web Share API — Share falls back to copy, which
-    // then has nothing to write to.
-    Object.assign(navigator, { clipboard: undefined, share: undefined });
+  it("opens the permission sheet and grants redacted transcript access", async () => {
+    const userRole = { role: "USER" as const };
     render(
-      <TranscriptViewerOverlay
-        attachment={transcriptAttachment()}
-        onClose={() => {}}
-      />,
+      <RoleProvider {...userRole}>
+        <TranscriptViewerOverlay
+          attachment={transcriptAttachment()}
+          onClose={() => {}}
+        />
+      </RoleProvider>,
     );
     await waitFor(() => screen.getByTestId("transcript-text"));
     fireEvent.click(screen.getByTestId("transcript-share"));
+    expect(screen.getByTestId("transcript-share-sheet")).toBeTruthy();
+    expect(
+      screen.getByTestId("transcript-share-mode-full-disabled"),
+    ).toBeTruthy();
+
+    fireEvent.change(screen.getByTestId("transcript-share-target"), {
+      target: { value: "99999999-9999-9999-9999-999999999999" },
+    });
+    fireEvent.click(screen.getByTestId("transcript-grant-share"));
     await waitFor(() =>
-      expect(screen.getByTestId("transcript-copy").textContent).toMatch(
-        /failed/i,
+      expect(shareTranscript).toHaveBeenCalledWith(
+        "00000000-0000-0000-0000-000000000abc",
+        {
+          entityId: "99999999-9999-9999-9999-999999999999",
+          mode: "redacted",
+        },
       ),
     );
-    expect(screen.getByTestId("transcript-copy").textContent).not.toContain(
-      "Copied",
+    expect(screen.getByTestId("transcript-share-success").textContent).toMatch(
+      /redacted/i,
+    );
+  });
+
+  it("surfaces route failures without claiming access changed", async () => {
+    shareTranscript.mockRejectedValueOnce(new Error("denied"));
+    const userRole = { role: "USER" as const };
+    render(
+      <RoleProvider {...userRole}>
+        <TranscriptViewerOverlay
+          attachment={transcriptAttachment()}
+          onClose={() => {}}
+        />
+      </RoleProvider>,
+    );
+    await waitFor(() => screen.getByTestId("transcript-text"));
+    fireEvent.click(screen.getByTestId("transcript-share"));
+    fireEvent.change(screen.getByTestId("transcript-share-target"), {
+      target: { value: "99999999-9999-9999-9999-999999999999" },
+    });
+    fireEvent.click(screen.getByTestId("transcript-grant-share"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("transcript-share-error").textContent,
+      ).toContain("denied"),
+    );
+    expect(screen.queryByTestId("transcript-share-success")).toBeNull();
+  });
+
+  it("lets admins grant full transcript access", async () => {
+    shareTranscript.mockResolvedValueOnce({
+      ok: true,
+      transcriptId: "00000000-0000-0000-0000-000000000abc",
+      entityId: "99999999-9999-9999-9999-999999999999",
+      mode: "full",
+    });
+    const adminRole = { role: "ADMIN" as const };
+    render(
+      <RoleProvider {...adminRole}>
+        <TranscriptViewerOverlay
+          attachment={transcriptAttachment()}
+          onClose={() => {}}
+        />
+      </RoleProvider>,
+    );
+    await waitFor(() => screen.getByTestId("transcript-text"));
+    fireEvent.click(screen.getByTestId("transcript-share"));
+    fireEvent.click(screen.getByTestId("transcript-share-mode-full"));
+    fireEvent.change(screen.getByTestId("transcript-share-target"), {
+      target: { value: "99999999-9999-9999-9999-999999999999" },
+    });
+    fireEvent.click(screen.getByTestId("transcript-grant-share"));
+    await waitFor(() =>
+      expect(shareTranscript).toHaveBeenCalledWith(
+        "00000000-0000-0000-0000-000000000abc",
+        {
+          entityId: "99999999-9999-9999-9999-999999999999",
+          mode: "full",
+        },
+      ),
+    );
+  });
+
+  it("revokes transcript access for the entered recipient", async () => {
+    const userRole = { role: "USER" as const };
+    render(
+      <RoleProvider {...userRole}>
+        <TranscriptViewerOverlay
+          attachment={transcriptAttachment()}
+          onClose={() => {}}
+        />
+      </RoleProvider>,
+    );
+    await waitFor(() => screen.getByTestId("transcript-text"));
+    fireEvent.click(screen.getByTestId("transcript-share"));
+    fireEvent.change(screen.getByTestId("transcript-share-target"), {
+      target: { value: "99999999-9999-9999-9999-999999999999" },
+    });
+    fireEvent.click(screen.getByTestId("transcript-revoke-share"));
+    await waitFor(() =>
+      expect(revokeTranscriptShare).toHaveBeenCalledWith(
+        "00000000-0000-0000-0000-000000000abc",
+        "99999999-9999-9999-9999-999999999999",
+      ),
+    );
+    expect(screen.getByTestId("transcript-share-success").textContent).toMatch(
+      /revoked/i,
     );
   });
 
@@ -236,29 +353,21 @@ describe("TranscriptViewerOverlay", () => {
     expect(updateTranscript).not.toHaveBeenCalled();
   });
 
-  it("resolves the record id from the durable marker when the field is gone", async () => {
-    // Simulate the post-turn reload: no transcriptId field, marker in text.
+  it("does not recover ids from inline marker text after marker retirement", async () => {
     const att: MessageAttachment = {
       ...transcriptAttachment(),
       transcriptId: undefined,
-      text: withTranscriptMarker(
-        "00000000-0000-0000-0000-000000000abc",
-        "hello world",
-      ),
+      text: "<!-- eliza:transcript:00000000-0000-0000-0000-000000000abc -->\nhello world",
     };
     render(<TranscriptViewerOverlay attachment={att} onClose={() => {}} />);
-    await waitFor(() =>
-      expect(getTranscript).toHaveBeenCalledWith(
-        "00000000-0000-0000-0000-000000000abc",
-      ),
-    );
-    // Marker is stripped from the displayed text.
-    expect(screen.getByTestId("transcript-text").textContent).not.toContain(
+    await waitFor(() => screen.getByTestId("transcript-text"));
+    expect(getTranscript).not.toHaveBeenCalled();
+    expect(screen.getByTestId("transcript-text").textContent).toContain(
       "eliza:transcript",
     );
   });
 
-  it("plays the recorded audio and offers save/share-audio when the record has audio", async () => {
+  it("plays the recorded audio without duplicate audio share controls", async () => {
     render(
       <TranscriptViewerOverlay
         attachment={transcriptAttachment()}
@@ -268,8 +377,8 @@ describe("TranscriptViewerOverlay", () => {
     await waitFor(() => screen.getByTestId("transcript-audio"));
     const audio = screen.getByTestId("transcript-audio") as HTMLAudioElement;
     expect(audio.getAttribute("src")).toContain("/api/media/abc123.wav");
-    expect(screen.getByTestId("transcript-save-audio")).toBeTruthy();
-    expect(screen.getByTestId("transcript-share-audio")).toBeTruthy();
+    expect(screen.queryByTestId("transcript-save-audio")).toBeNull();
+    expect(screen.queryByTestId("transcript-share-audio")).toBeNull();
   });
 
   it("hides the audio controls when the transcript has no audio", async () => {

@@ -199,6 +199,18 @@ export type AgentSandboxPoolStatus = "unclaimed";
 export type AgentBackupSnapshotType = "auto" | "manual" | "pre-shutdown" | "pre-upgrade";
 
 /**
+ * Outcome of the last restorability verification pass over a backup row
+ * (`agent-backup-verifier.ts`). `null`/unset means the row has never been
+ * sampled. Verification decrypts the stored payload with the CURRENT KMS keys
+ * and checks content/manifest hashes — it exists because staging silently ran
+ * an ephemeral KMS for weeks and every backup was undecryptable (#15310).
+ * `errored` means the verifier itself hit infrastructure breakage (object
+ * storage / KMS transport / oversize payload) and could not judge the backup;
+ * the row is re-attempted on the normal re-verify cadence (#15626).
+ */
+export type AgentBackupVerificationStatus = "verified" | "failed" | "errored";
+
+/**
  * Whether a backup row stores the agent's complete state (`full`) or only the
  * delta against `parent_backup_id` (`incremental`). Restoring an incremental
  * backup replays its parent chain back to the nearest `full` backup. See
@@ -321,11 +333,32 @@ export const agentSandboxBackups = pgTable(
     parent_backup_id: uuid("parent_backup_id"),
     /** sha256 of the reconstructed full state, for integrity verification. */
     content_hash: text("content_hash"),
+    /**
+     * Restorability-verification stamp (see `AgentBackupVerificationStatus`).
+     * `verified_at` records the last verification ATTEMPT (success, failure,
+     * or verifier infra error) and drives the re-verify sampling interval;
+     * `verification_error` carries the classified failure
+     * (`key-unavailable: …`, `decrypt-failed: …`) so an operator can tell a
+     * KMS misconfig from bit-rot without re-running it. For `errored` rows it
+     * is `infra-error[N]: …`, where N is the row's consecutive-attempt error
+     * streak (persisted here so it survives daemon restarts).
+     */
+    verification_status: text("verification_status").$type<AgentBackupVerificationStatus>(),
+    verified_at: timestamp("verified_at", { withTimezone: true }),
+    verification_error: text("verification_error"),
     created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     sandbox_record_idx: index("agent_sandbox_backups_sandbox_idx").on(table.sandbox_record_id),
     created_at_idx: index("agent_sandbox_backups_created_at_idx").on(table.created_at),
+    // Serves the newest-backup-per-sandbox access pattern: the verifier's
+    // `DISTINCT ON (sandbox_record_id) … ORDER BY sandbox_record_id,
+    // created_at DESC` sampler plus listBackups/getLatestBackup (#15626,
+    // migration 0174).
+    sandbox_latest_idx: index("agent_sandbox_backups_sandbox_latest_idx").on(
+      table.sandbox_record_id,
+      table.created_at.desc(),
+    ),
     parent_backup_idx: index("agent_sandbox_backups_parent_idx").on(table.parent_backup_id),
   }),
 );

@@ -15,16 +15,25 @@
     "types": ["node"],
     "paths": {
       "@elizaos/core": ["../core/src/index.node.ts"],
+      "@elizaos/core/node": ["../core/src/index.node.ts"],
       "@elizaos/core/testing": ["../core/src/testing/index.ts"],
       "@elizaos/agent": ["../agent/src/index.ts"],
+      "@elizaos/agent/*": ["../agent/src/*"],
       "@elizaos/auth": ["../auth/src/index.ts"],
       "@elizaos/auth/*": ["../auth/src/*"],
       "@elizaos/shared": ["../shared/src/index.ts"],
+      "@elizaos/shared/local-inference": [
+        "../shared/src/local-inference/index.ts"
+      ],
+      "@elizaos/shared/*": ["../shared/src/*"],
       "@elizaos/logger": ["../logger/src/index.ts"],
+      "@elizaos/logger/*": ["../logger/src/*"],
       "@elizaos/security": ["../security/src/index.ts"],
       "@elizaos/security/*": ["../security/src/*"],
       "@elizaos/contracts": ["../contracts/src/index.ts"],
+      "@elizaos/contracts/*": ["../contracts/src/*"],
       "@elizaos/vault": ["../vault/src/index.ts"],
+      "@elizaos/vault/*": ["../vault/src/*"],
       "@elizaos/cloud-routing": ["../cloud/routing/src/index.ts"],
       "@elizaos/cloud-routing/*": ["../cloud/routing/src/*"],
       "@elizaos/app-core": ["../app-core/src/index.ts"],
@@ -33,7 +42,9 @@
       "@elizaos/ui/*": ["../ui/src/*"],
       "@elizaos/import-conversations": ["../import-conversations/src/index.ts"],
       "@elizaos/import-conversations/*": ["../import-conversations/src/*"],
-      "@elizaos/import-conversations/browser": ["../import-conversations/src/browser.ts"],
+      "@elizaos/import-conversations/browser": [
+        "../import-conversations/src/browser.ts"
+      ],
       "@elizaos/skills": ["../skills/src/index.ts"],
       "@elizaos/skills/*": ["../skills/src/*"],
       "@elizaos/plugin-browser": ["../../plugins/plugin-browser/src/index.ts"],
@@ -68,6 +79,9 @@
       "@elizaos/plugin-app-manager": [
         "../../plugins/plugin-app-manager/src/index.ts"
       ],
+      "@elizaos/plugin-app-manager/*": [
+        "../../plugins/plugin-app-manager/src/*"
+      ],
       "@elizaos/plugin-remote-manifest": [
         "../plugin-remote-manifest/src/index.ts"
       ],
@@ -87,7 +101,14 @@
       "@elizaos/plugin-local-inference": [
         "../../plugins/plugin-local-inference/src/index.ts"
       ],
+      "@elizaos/plugin-local-inference/*": [
+        "../../plugins/plugin-local-inference/src/*"
+      ],
       "@elizaos/plugin-shell": ["../../plugins/plugin-shell/src/index.ts"],
+      "@elizaos/plugin-scheduling": [
+        "../../plugins/plugin-scheduling/src/index.ts"
+      ],
+      "@elizaos/plugin-scheduling/*": ["../../plugins/plugin-scheduling/src/*"],
       "@elizaos/plugin-sql": ["../../plugins/plugin-sql/src/index.ts"],
       "@elizaos/plugin-telegram": [
         "../../plugins/plugin-telegram/src/index.ts"
@@ -101,6 +122,7 @@
       "@elizaos/plugin-todos": ["../../plugins/plugin-todos/src/index.ts"],
       "@elizaos/plugin-todos/*": ["../../plugins/plugin-todos/src/*"],
       "@elizaos/plugin-video": ["../../plugins/plugin-video/src/index.ts"],
+      "@elizaos/plugin-vision": ["../../plugins/plugin-vision/src/index.ts"],
       "@elizaos/plugin-workflow": [
         "../../plugins/plugin-workflow/src/index.ts"
       ],
@@ -112,6 +134,9 @@
       ],
       "@elizaos/capacitor-contacts": [
         "../../plugins/plugin-native-contacts/src/index.ts"
+      ],
+      "@elizaos/capacitor-calendar": [
+        "../../plugins/plugin-native-calendar/src/index.ts"
       ],
       "@elizaos/capacitor-messages": [
         "../../plugins/plugin-native-messages/src/index.ts"

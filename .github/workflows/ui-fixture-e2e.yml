@@ -97,6 +97,10 @@ jobs:
       - name: Background view e2e
         run: bun run --cwd packages/ui test:background-e2e
 
+      # Settings page sections and persisted local state.
+      - name: Settings page e2e
+        run: bun run --cwd packages/ui test:settings-e2e
+
       # Infinite upward scroll (#13532): the REAL useLoadOlderOnScroll +
       # loadOlderConversationMessages — scroll-to-top fires a ?before= fetch,
       # older rows prepend, the viewport anchor stays put, plus the empty-history
@@ -124,6 +128,10 @@ jobs:
       - name: Orchestrator accounts widget e2e
         run: bun run --cwd packages/ui test:orchestrator-accounts-e2e
 
+      # Wallet widget default + held-balance display states.
+      - name: Wallet widget e2e
+        run: bun run --cwd packages/ui test:wallet-widget-e2e
+
       # Agent-activity surfaces (#13535): the REAL TurnStatus working indicator +
       # ToolCallEventLog inline row across thinking / tool-running / settled, after
       # the 900ms grace, desktop + mobile.
@@ -141,6 +149,18 @@ jobs:
       # Continue, final grant → primed), desktop + mobile.
       - name: Permission priming e2e
         run: bun run --cwd packages/ui test:permission-priming-e2e
+
+      # Divider drag interaction stays within the perf budget under real layout.
+      - name: Divider drag perf gate
+        run: bun run --cwd packages/ui test:divider-drag-perf-gate
+
+      # Locale-sensitive home shell labels render without falling back to keys.
+      - name: Home locale e2e
+        run: bun run --cwd packages/ui test:home-locale-e2e
+
+      # Real-browser widget certification evidence layer.
+      - name: Widget certification e2e
+        run: bun run --cwd packages/ui test:widget-cert-e2e
 
       # Full-chain fused wake (#10351): self-skips with ::notice:: unless
       # libwakeword + hey-eliza models are staged on the runner.
@@ -160,10 +180,15 @@ jobs:
             packages/ui/src/components/pages/__e2e__/output-infinite-scroll
             packages/ui/src/components/pages/__e2e__/output-launcher
             packages/ui/src/components/pages/__e2e__/output-connectors
+            packages/ui/src/components/pages/__e2e__/output-settings
             packages/ui/src/components/views/__e2e__/output-view-lifecycle
             packages/ui/src/components/chat/widgets/__e2e__/output
             packages/ui/src/components/chat/widgets/__e2e__/output-ftu
+            packages/ui/src/components/chat/widgets/__e2e__/output-wallet
             packages/ui/src/components/chat/__e2e__/output-activity-feedback
             packages/ui/src/components/permissions/__e2e__/output-permission-priming
+            packages/ui/src/components/composites/__e2e__/output-divider-perf
+            packages/ui/src/components/shell/__e2e__/output-home-locale
+            packages/ui/src/testing/__e2e__/output-widget-cert
           retention-days: 14
           if-no-files-found: ignore

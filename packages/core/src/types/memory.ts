@@ -41,6 +41,36 @@ export type MemoryScope =
 	| "user-private"
 	| "agent-private";
 
+/** Per-viewer artifact grant mode stored on a referencing record. */
+export type ArtifactShareGrantMode = "full" | "redacted";
+
+/** One per-entity artifact share grant. */
+export interface ArtifactShareGrant {
+	entityId: UUID;
+	mode: ArtifactShareGrantMode;
+	grantedBy?: UUID;
+	grantedAtMs?: number;
+}
+
+/** Participant set captured at share time for room-scoped grants. */
+export interface ArtifactRoomSnapshot {
+	roomId: UUID;
+	entityIds: UUID[];
+	atMs: number;
+}
+
+/**
+ * Reference-layer sharing metadata for artifacts linked from this record.
+ *
+ * Grants live on the referencing memory/document/transcript row rather than a
+ * sha256-keyed file table, preserving the content-addressed attachment
+ * doctrine while giving disclosure surfaces one auditable place to evaluate.
+ */
+export interface ArtifactShareMetadata {
+	grants?: ArtifactShareGrant[];
+	roomSnapshot?: ArtifactRoomSnapshot;
+}
+
 /**
  * Base interface for all memory metadata types.
  */
@@ -51,6 +81,7 @@ export interface BaseMetadata {
 	scope?: MemoryScope;
 	timestamp?: number;
 	tags?: string[];
+	share?: ArtifactShareMetadata;
 }
 
 export interface DocumentMetadata {
@@ -460,6 +491,7 @@ interface MemoryMetadataBase {
 	scope?: MemoryScope;
 	timestamp?: number;
 	platformMessageId?: string;
+	share?: ArtifactShareMetadata;
 }
 
 export type MemoryMetadata = (

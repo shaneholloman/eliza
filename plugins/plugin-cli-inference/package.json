@@ -90,9 +90,9 @@
       },
       "ELIZA_CLI_CLAUDE_MODEL": {
         "type": "string",
-        "description": "Model id passed to `claude --model`. Defaults to claude-opus-4-7.",
+        "description": "Model id passed to `claude --model`. Defaults to claude-opus-4-8.",
         "required": false,
-        "default": "claude-opus-4-7",
+        "default": "claude-opus-4-8",
         "sensitive": false
       },
       "ELIZA_CLI_CLAUDE_PLANNER_MODEL": {

@@ -43,7 +43,10 @@ async function runEnsureAgentSandboxSchema(): Promise<void> {
       ADD COLUMN IF NOT EXISTS "size_bytes" bigint,
       ADD COLUMN IF NOT EXISTS "backup_kind" text NOT NULL DEFAULT 'full',
       ADD COLUMN IF NOT EXISTS "parent_backup_id" uuid,
-      ADD COLUMN IF NOT EXISTS "content_hash" text
+      ADD COLUMN IF NOT EXISTS "content_hash" text,
+      ADD COLUMN IF NOT EXISTS "verification_status" text,
+      ADD COLUMN IF NOT EXISTS "verified_at" timestamptz,
+      ADD COLUMN IF NOT EXISTS "verification_error" text
   `);
 
   await dbWrite.execute(sql`
@@ -64,6 +67,11 @@ async function runEnsureAgentSandboxSchema(): Promise<void> {
   await dbWrite.execute(sql`
     CREATE INDEX IF NOT EXISTS "agent_sandbox_backups_created_at_idx"
       ON "agent_sandbox_backups" ("created_at")
+  `);
+
+  await dbWrite.execute(sql`
+    CREATE INDEX IF NOT EXISTS "agent_sandbox_backups_sandbox_latest_idx"
+      ON "agent_sandbox_backups" ("sandbox_record_id", "created_at" DESC)
   `);
 
   await dbWrite.execute(sql`

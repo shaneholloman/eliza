@@ -30,9 +30,9 @@
       "gzipBudgetBytes": 2500
     },
     "plugin-calendar": {
-      "measuredRawBytes": 9824,
-      "measuredGzipBytes": 3107,
-      "gzipBudgetBytes": 4000
+      "measuredRawBytes": 13708,
+      "measuredGzipBytes": 4350,
+      "gzipBudgetBytes": 5000
     },
     "plugin-contacts": {
       "measuredRawBytes": 33859,

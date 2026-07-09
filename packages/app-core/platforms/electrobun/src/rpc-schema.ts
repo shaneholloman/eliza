@@ -156,6 +156,11 @@ export interface TrayOptions {
   tooltip?: string;
   title?: string;
   menu?: TrayMenuItem[];
+  /** macOS template rendering: alpha-only art tinted to match the menu bar. */
+  template?: boolean;
+  /** On-screen icon size in points (applied via NSImage setSize). */
+  width?: number;
+  height?: number;
 }
 
 export interface ShortcutOptions {

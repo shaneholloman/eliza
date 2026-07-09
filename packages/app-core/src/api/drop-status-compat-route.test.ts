@@ -6,7 +6,7 @@
  */
 import http from "node:http";
 import { Socket } from "node:net";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   ensureCompatSensitiveRouteAuthorized: vi.fn(),
@@ -64,6 +64,14 @@ async function loadRoute() {
   const mod = await import("./drop-status-compat-route");
   return mod.handleDropStatusCompatRoute;
 }
+
+// Under `isolate: false` all app-core suites share one module registry. This
+// file's `./auth` / `./auth.ts` mocks are re-imported into that shared registry
+// by `loadRoute`; clear it on teardown so the mocked auth gate cannot leak into
+// a later real-module suite that imports the genuine `./auth`.
+afterAll(() => {
+  vi.resetModules();
+});
 
 describe("handleDropStatusCompatRoute", () => {
   beforeEach(() => {

@@ -116,6 +116,19 @@ function makeSession(
 }
 
 describe("ClaudeSdkSession — TEXT mode", () => {
+  it("defaults to the current Opus model when no model is configured", async () => {
+    const { sdk, queryOptions } = makeFakeSdk([{ text: "hello world", subtype: "success" }]);
+    const session = new ClaudeSdkSession({
+      systemPrompt: "test system",
+      sdkModule: sdk,
+      zodModule: fakeZod,
+    });
+
+    expect(await session.generate("hi")).toBe("hello world");
+    expect(queryOptions()[0].model).toBe("claude-opus-4-8");
+    await session.dispose();
+  });
+
   it("returns streamed assistant text", async () => {
     const { session } = makeSession([{ text: "hello world", subtype: "success" }]);
     expect(await session.generate("hi")).toBe("hello world");

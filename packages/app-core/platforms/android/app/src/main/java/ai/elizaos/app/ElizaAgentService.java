@@ -2014,6 +2014,25 @@ public class ElizaAgentService extends Service {
             agentEnv.put("ELIZA_RUNTIME_MODE", "local-yolo");
             agentEnv.put("AGENT_COMMAND", "android-bridge");
             agentEnv.put("ELIZA_DISABLE_DIRECT_RUN", "1");
+            // Hybrid (local runtime + CLOUD inference): the on-device agent has
+            // no local text model on a sub-12 GB device (DeviceRamTierPolicy),
+            // so its @elizaos/plugin-elizacloud must reach Eliza Cloud (→ Cerebras)
+            // for TEXT_LARGE/TEXT_EMBEDDING. The agent is a separate process, so
+            // the credential rides in via env. The app writes the account's Eliza
+            // Cloud API key into the CapacitorStorage pref during the hybrid
+            // onboarding; absent (pure-local / not-yet-onboarded) this is a no-op
+            // and the agent boots without a cloud provider, exactly as before.
+            String cloudInferenceKey = readCloudInferenceApiKey(this);
+            if (cloudInferenceKey != null && !cloudInferenceKey.isEmpty()) {
+                agentEnv.put("ELIZAOS_CLOUD_API_KEY", cloudInferenceKey);
+                agentEnv.put("ELIZAOS_CLOUD_ENABLED", "1");
+                String cloudInferenceBase = readCloudInferenceBaseUrl(this);
+                if (cloudInferenceBase != null && !cloudInferenceBase.isEmpty()) {
+                    agentEnv.put("ELIZAOS_CLOUD_BASE_URL", cloudInferenceBase);
+                }
+                Log.i(TAG, "Hybrid cloud inference enabled: ELIZAOS_CLOUD_API_KEY"
+                    + " injected from prefs (len=" + cloudInferenceKey.length() + ")");
+            }
             // Local passwordless mode: the on-device agent trusts its own sealed
             // request socket so the single device owner never hits a login/pairing
             // gate. The per-boot bearer-token guard (ELIZA_REQUIRE_LOCAL_AUTH=1)
@@ -3767,6 +3786,37 @@ public class ElizaAgentService extends Service {
     private static final String RUNTIME_MODE_KEY = "eliza:mobile-runtime-mode";
 
     /**
+     * Storage keys for the hybrid cloud-inference credential the app hands the
+     * on-device agent (so plugin-elizacloud can reach Eliza Cloud → Cerebras for
+     * TEXT_LARGE on a device with no local text model). Written by the renderer
+     * during hybrid onboarding; read here into the agent process env.
+     */
+    private static final String CLOUD_INFERENCE_API_KEY_KEY =
+        "eliza:cloud-inference-api-key";
+    private static final String CLOUD_INFERENCE_BASE_URL_KEY =
+        "eliza:cloud-inference-base-url";
+
+    private static String readCloudInferenceApiKey(Context context) {
+        return readCapacitorPref(context, CLOUD_INFERENCE_API_KEY_KEY);
+    }
+
+    private static String readCloudInferenceBaseUrl(Context context) {
+        return readCapacitorPref(context, CLOUD_INFERENCE_BASE_URL_KEY);
+    }
+
+    private static String readCapacitorPref(Context context, String key) {
+        try {
+            String value = context
+                .getSharedPreferences(CAPACITOR_PREFS_GROUP, Context.MODE_PRIVATE)
+                .getString(key, null);
+            return value == null ? null : value.trim();
+        } catch (Exception e) {
+            Log.w(TAG, "Unable to read Capacitor pref " + key, e);
+            return null;
+        }
+    }
+
+    /**
      * Whether the on-device agent should auto-start at app boot.
      *
      * - On AOSP / ElizaOS-branded devices (`ro.elizaos.product` set or any
@@ -3851,6 +3901,33 @@ public class ElizaAgentService extends Service {
         return !readSystemProperty("ro.elizaos.product").isEmpty();
     }
 
+    /**
+     * Curated stock-Android devices proven to sustain the on-device agent
+     * below the generic {@link DeviceRamTierPolicy} marketed-RAM floor.
+     *
+     * <p>This is deliberately NARROWER than {@link #isBrandedDevice}: it lifts
+     * the RAM floor for {@link #start} only, and does NOT imply the device "is
+     * the agent". A floor-exempt device still honours the user's runtime choice
+     * — a cloud-only pick is respected and the agent does not auto-start (see
+     * {@link #shouldAutoStartForRuntimeMode}, which gates on branding, not this).
+     *
+     * <p>The Light Phone III (manufacturer {@code "Light"}) is a curated,
+     * single-purpose minimalist phone where Eliza is the intended agent. Its
+     * stock LightOS ROM leaves {@code ro.elizaos.product} unset and it ships
+     * ~6 GB RAM. The 8 GB floor exists to stop a 4 GB device wedging boot AND to
+     * keep local MODELS from OOMing; hybrid (cloud-inference) mode mmaps no
+     * local model, and 6 GB is verified sufficient for the agent runtime, so the
+     * LP3 is exempted here rather than forced cloud-only (elizaOS/eliza#14390).
+     *
+     * <p>Package-visible so {@link ElizaNativeBridge} can mirror it to the
+     * renderer's sync RAM gate ({@code device-ram-tier.ts}) — one allowlist,
+     * read on both sides.
+     */
+    static boolean isLocalAgentRamFloorExemptDevice() {
+        String manufacturer = android.os.Build.MANUFACTURER;
+        return manufacturer != null && manufacturer.equalsIgnoreCase("Light");
+    }
+
     private static String readRuntimeMode(Context context) {
         try {
             return context
@@ -3882,11 +3959,15 @@ public class ElizaAgentService extends Service {
      * poll's revive request, the boot receiver — funnels here, so this is the
      * one fail-loud backstop against a disallowed mode wedging boot. The
      * renderer surfaces the rejection as the onboarding/startup error it
-     * already renders; branded devices ARE the agent and are exempt.
+     * already renders; branded devices ARE the agent and are exempt, as are
+     * curated floor-exempt devices (the LP3 — see
+     * {@link #isLocalAgentRamFloorExemptDevice}).
      */
     public static void start(Context context) {
         long totalMemBytes = readDeviceTotalMemBytes(context);
-        if (!isBrandedDevice() && !DeviceRamTierPolicy.allowsLocalAgent(totalMemBytes)) {
+        if (!isBrandedDevice()
+                && !isLocalAgentRamFloorExemptDevice()
+                && !DeviceRamTierPolicy.allowsLocalAgent(totalMemBytes)) {
             throw new IllegalStateException(
                 "This device (~" + DeviceRamTierPolicy.marketedRamGb(totalMemBytes)
                 + " GB RAM) is below the "

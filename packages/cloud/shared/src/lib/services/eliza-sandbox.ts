@@ -135,9 +135,16 @@ export interface CreateAgentParams {
  * must not mint fresh agents (and fresh managed DBs) past the ceiling
  * (#11023 residual). Terminal/deletion states (`error`, `disconnected`,
  * `deletion_pending`, `deletion_failed`) hold no reusable resources and stay
- * excluded. Intentionally BROADER than the reuse-guard SELECTs, which must
- * keep returning only a LIVE agent — handing back a stopped/sleeping row
- * would silently turn an idempotent create into an implicit resume.
+ * excluded. `deletion_failed` in particular must not count (#15603): the
+ * delete exhausted its retries — usually a node fault, not the user's — and
+ * counting it would lock the org out of a replacement until ops intervene. A
+ * container that survived the failed teardown is reclaimed independently of
+ * this count (`reEnqueueFailedDeletions` re-arms the delete; the orphan
+ * reconciler treats `deletion_failed` as reapable), and a user cannot drive a
+ * row into that state on demand, so the freed slot stays bounded. Intentionally
+ * BROADER than the reuse-guard SELECTs, which must keep returning only a LIVE
+ * agent — handing back a stopped/sleeping row would silently turn an
+ * idempotent create into an implicit resume.
  */
 const QUOTA_COUNTED_STATUSES: AgentSandboxStatus[] = [
   "pending",
@@ -2452,6 +2459,7 @@ export class ElizaSandboxService {
           model: turn.model,
           degraded: turn.degraded,
           runtime: "shared",
+          transport: "shared-runtime",
         },
       };
     } catch (settleError) {
@@ -2722,6 +2730,7 @@ export class ElizaSandboxService {
           text: fallbackText,
           fallback: true,
           reason: "agent_no_reply",
+          transport: "fallback",
         },
       };
     }
@@ -2735,8 +2744,28 @@ export class ElizaSandboxService {
     };
   }
 
+  // Deliberately text-only: a runtime-side canned failure reply (result carries
+  // `failureKind`, e.g. "provider issue" / credits-depleted text from
+  // packages/agent chat routes) still short-circuits the ladder. Production
+  // consumers (agent-gateway connectors, provisioning jobs, the REST adapters)
+  // surface that designed failure text to end users; falling through would
+  // replace it with the fabricated generic fallback and add up to ~50s of
+  // central-channel polling per failed turn. Strict callers (the e2e chat
+  // scripts) reject on the propagated `failureKind` instead (#15616).
   private bridgeResponseHasText(response: BridgeResponse): boolean {
     return typeof response.result?.text === "string" && response.result.text.trim().length > 0;
+  }
+
+  /**
+   * The agent runtime's conversation route answers HTTP 200 with canned text
+   * plus a `failureKind` discriminator when the model path is dead (provider
+   * issue, rate limit, credit exhaustion, no provider). Surface it so callers
+   * can tell a genuine model reply from a canned failure (#15616).
+   */
+  private extractBridgeFailureKind(body: Record<string, unknown>): string | undefined {
+    return typeof body.failureKind === "string" && body.failureKind.trim()
+      ? body.failureKind.trim()
+      : undefined;
   }
 
   /**
@@ -2790,7 +2819,14 @@ export class ElizaSandboxService {
     return {
       jsonrpc: "2.0",
       id: rpc.id,
-      ...(body.result ? { result: body.result as BridgeResponse["result"] } : {}),
+      ...(body.result
+        ? {
+            result: {
+              ...(body.result as Record<string, unknown>),
+              transport: "native-jsonrpc",
+            } as BridgeResponse["result"],
+          }
+        : {}),
       ...(body.error ? { error: body.error as BridgeResponse["error"] } : {}),
     };
   }
@@ -2820,6 +2856,7 @@ export class ElizaSandboxService {
     }
 
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    const failureKind = this.extractBridgeFailureKind(body);
     return {
       jsonrpc: "2.0",
       id: rpc.id,
@@ -2827,6 +2864,8 @@ export class ElizaSandboxService {
         text: this.extractBridgeMessageText(body) ?? "",
         agentName: typeof body.agentName === "string" ? body.agentName : undefined,
         conversationId,
+        transport: "conversation-rest",
+        ...(failureKind ? { failureKind } : {}),
       },
     };
   }
@@ -2935,6 +2974,7 @@ export class ElizaSandboxService {
         runtimeAgentId: runtimeAgent.id,
         agentName: runtimeAgent.name,
         channelId,
+        transport: "central-channel",
         messageId:
           typeof data.id === "string" ? data.id : typeof body.id === "string" ? body.id : undefined,
       },
@@ -2968,6 +3008,7 @@ export class ElizaSandboxService {
         text: this.extractOpenAiChatCompletionText(body) ?? "",
         model: typeof body.model === "string" ? body.model : undefined,
         completionId: typeof body.id === "string" ? body.id : undefined,
+        transport: "openai-compat",
       },
     };
   }
@@ -4892,9 +4933,8 @@ export class ElizaSandboxService {
    * `agent_suspend` (which keeps the row's `sandbox_id` + managed DB for an
    * in-place resume), sleep frees the compute identity entirely:
    *   1. Capture a durable backup. A live `/api/snapshot` pull when the agent
-   *      is reachable, otherwise the agent's persisted config, otherwise the
-   *      latest existing backup — a restore point ALWAYS exists before we
-   *      destroy compute, so sleep never loses recoverable state.
+   *      is reachable, otherwise the latest existing backup. If neither exists,
+   *      sleep fails and leaves compute running so missing state is observable.
    *   2. Stop + drop the container (the provider `stop` removes it from the
    *      node).
    *   3. Clear the compute identity (`sandbox_id`, `node_id`, `container_name`,
@@ -4940,7 +4980,7 @@ export class ElizaSandboxService {
         });
         backupId = backup.id;
       } catch (error) {
-        logger.warn("[agent-sandbox] Sleep snapshot fetch failed; using fallback", {
+        logger.warn("[agent-sandbox] Sleep snapshot fetch failed; checking latest durable backup", {
           agentId,
           error: error instanceof Error ? error.message : String(error),
         });
@@ -4951,16 +4991,16 @@ export class ElizaSandboxService {
       if (existing) {
         backupId = existing.id;
       } else {
-        const fallback: AgentBackupStateData = {
-          memories: [],
-          config: (rec.agent_config as Record<string, unknown> | null) ?? {},
-          workspaceFiles: {},
+        logger.error("[agent-sandbox] Sleep aborted: no durable backup available", {
+          agentId,
+          sandboxRecordId: rec.id,
+        });
+        return {
+          success: false,
+          containerRemoved: false,
+          error:
+            "Unable to create or find a durable backup before deactivation; agent was left running.",
         };
-        const sizeBytes = Buffer.byteLength(JSON.stringify(fallback), "utf-8");
-        const backup = await agentSandboxesRepository.createBackup(
-          await this.buildBackupInput(rec.id, "pre-shutdown", fallback, sizeBytes),
-        );
-        backupId = backup.id;
       }
     }
 

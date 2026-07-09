@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  resolveTrayClickAction,
+  shouldAttachTrayMenu,
   shouldCreateDesktopTray,
   shouldEnableTrayPopover,
   shouldStartTrayFirst,
@@ -121,5 +123,58 @@ describe("shouldEnableTrayPopover", () => {
         "--shell-mode=kiosk",
       ]),
     ).toBe(false);
+  });
+});
+
+describe("shouldAttachTrayMenu", () => {
+  it("keeps native tray menus attached on non-macOS platforms", () => {
+    expect(shouldAttachTrayMenu({}, "win32")).toBe(true);
+    expect(shouldAttachTrayMenu({}, "linux")).toBe(true);
+  });
+
+  it("leaves macOS menu attachment off unless explicitly requested", () => {
+    expect(shouldAttachTrayMenu({}, "darwin")).toBe(false);
+    expect(
+      shouldAttachTrayMenu({ ELIZA_DESKTOP_TRAY_MENU: "1" }, "darwin"),
+    ).toBe(true);
+  });
+});
+
+describe("resolveTrayClickAction", () => {
+  it("prioritizes the popover when configured", () => {
+    expect(
+      resolveTrayClickAction({
+        popoverConfigured: true,
+        windowVisible: true,
+        windowFocused: true,
+      }),
+    ).toBe("toggle-popover");
+  });
+
+  it("hides a visible focused window", () => {
+    expect(
+      resolveTrayClickAction({
+        popoverConfigured: false,
+        windowVisible: true,
+        windowFocused: true,
+      }),
+    ).toBe("hide-window");
+  });
+
+  it("summons the window when it is hidden or unfocused", () => {
+    expect(
+      resolveTrayClickAction({
+        popoverConfigured: false,
+        windowVisible: false,
+        windowFocused: false,
+      }),
+    ).toBe("show-window");
+    expect(
+      resolveTrayClickAction({
+        popoverConfigured: false,
+        windowVisible: true,
+        windowFocused: false,
+      }),
+    ).toBe("show-window");
   });
 });

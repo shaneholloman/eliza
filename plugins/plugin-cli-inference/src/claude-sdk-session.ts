@@ -46,7 +46,7 @@ import { logger } from "@elizaos/core";
 import type { RotationSubprocessEnv } from "./account-rotation";
 import { ProviderApiError, parseProviderApiErrorText } from "./provider-errors";
 
-const DEFAULT_MODEL = "claude-opus-4-7";
+const DEFAULT_MODEL = "claude-opus-4-8";
 const DEFAULT_RESTART_AFTER_TURNS = 20;
 const DEFAULT_TURN_TIMEOUT_MS = 90_000;
 /** Fully-qualified name the SDK assigns our in-process MCP tool. */

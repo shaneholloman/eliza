@@ -6,7 +6,7 @@
  * All deterministic — no image decode, no tesseract, no browser.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import sharp from "sharp";
@@ -26,6 +26,8 @@ import {
   resolveSpec,
 } from "../../scripts/mvp-visual-verify/expectation-eval.mjs";
 import { bucket as auditBucket } from "../ui-smoke/aesthetic-audit-rules";
+
+const visualVerify = await import("../../scripts/mvp-visual-verify.mjs");
 
 const appPackageJson = JSON.parse(
   readFileSync(path.resolve(__dirname, "../../package.json"), "utf8"),
@@ -425,6 +427,66 @@ describe("sparse-home OCR regression guard (#14343)", () => {
 });
 
 describe("mvp-visual-verify CLI", () => {
+  it("computes missing required states by slug or viewport-specific key", () => {
+    const results = [
+      { slug: "builtin-chat", viewport: "desktop" },
+      { slug: "builtin-settings", viewport: "mobile-portrait" },
+    ];
+
+    expect(
+      visualVerify.computeMissingRequiredStates(
+        [
+          "builtin-chat",
+          "builtin-chat@mobile-portrait",
+          "builtin-settings@mobile-portrait",
+          "plugin-goals@desktop",
+        ],
+        results,
+      ),
+    ).toEqual([
+      { slug: "builtin-chat", viewport: "mobile-portrait" },
+      { slug: "plugin-goals", viewport: "desktop" },
+    ]);
+  });
+
+  it("discovers required states from the committed baseline layout", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "eliza-mvp-baseline-states-"));
+    mkdirSync(path.join(dir, "desktop-landscape"), { recursive: true });
+    mkdirSync(path.join(dir, "mobile-portrait"), { recursive: true });
+    for (const target of [
+      path.join(dir, "desktop-landscape", "builtin-chat.png"),
+      path.join(dir, "mobile-portrait", "builtin-chat.png"),
+      path.join(dir, "mobile-portrait", "plugin-goals-gui.png"),
+    ]) {
+      await sharp({
+        create: {
+          width: 2,
+          height: 2,
+          channels: 4,
+          background: { r: 255, g: 88, b: 0, alpha: 1 },
+        },
+      })
+        .png()
+        .toFile(target);
+    }
+
+    writeFileSync(path.join(dir, "mobile-portrait", "notes.txt"), "skip");
+
+    await expect(
+      visualVerify.discoverBaselineRequiredStates(dir, []),
+    ).resolves.toEqual([
+      "builtin-chat@desktop-landscape",
+      "builtin-chat@mobile-portrait",
+      "plugin-goals-gui@mobile-portrait",
+    ]);
+    await expect(
+      visualVerify.discoverBaselineRequiredStates(dir, ["mobile-portrait"]),
+    ).resolves.toEqual([
+      "builtin-chat@mobile-portrait",
+      "plugin-goals-gui@mobile-portrait",
+    ]);
+  });
+
   it("strict mode fails when the run has skipped checks or first-run baselines", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "eliza-mvp-visual-verify-"));
     const baselineDir = path.join(dir, "empty-baseline");
@@ -472,6 +534,124 @@ describe("mvp-visual-verify CLI", () => {
     expect(report.summary.newBaselines).toBe(1);
     expect(report.summary.expectationSkips).toBeGreaterThan(0);
   });
+
+  it("strict mode reports missing required screenshot states", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "eliza-mvp-visual-required-"));
+    const baselineDir = path.join(dir, "baseline");
+    const viewportDir = path.join(dir, "mobile-portrait");
+    mkdirSync(path.join(baselineDir, "mobile-portrait"), { recursive: true });
+    mkdirSync(viewportDir);
+    for (const target of [
+      path.join(viewportDir, "builtin-chat.png"),
+      path.join(baselineDir, "mobile-portrait", "builtin-chat.png"),
+    ]) {
+      await sharp({
+        create: {
+          width: 2,
+          height: 2,
+          channels: 4,
+          background: { r: 255, g: 88, b: 0, alpha: 1 },
+        },
+      })
+        .png()
+        .toFile(target);
+    }
+
+    let failed = false;
+    try {
+      execFileSync(
+        process.execPath,
+        [
+          path.resolve(__dirname, "../../scripts/mvp-visual-verify.mjs"),
+          "--input",
+          dir,
+          "--baseline",
+          baselineDir,
+          "--require-state",
+          "builtin-chat@mobile-portrait",
+          "--require-state",
+          "builtin-chat@desktop",
+          "--strict",
+        ],
+        {
+          cwd: path.resolve(__dirname, "../.."),
+          encoding: "utf8",
+          stdio: "pipe",
+        },
+      );
+    } catch (error) {
+      failed = true;
+      expect(error.status).toBe(1);
+    }
+
+    expect(failed).toBe(true);
+    const report = JSON.parse(
+      readFileSync(path.join(dir, "mvp-verify", "report.json"), "utf8"),
+    );
+    expect(report.summary.missingRequiredStates).toEqual([
+      { slug: "builtin-chat", viewport: "desktop" },
+    ]);
+    expect(report.summary.strictFailures).toBeGreaterThanOrEqual(1);
+  });
+
+  it("strict mode can require every committed baseline state", async () => {
+    const dir = mkdtempSync(
+      path.join(tmpdir(), "eliza-mvp-required-baseline-"),
+    );
+    const baselineDir = path.join(dir, "baseline");
+    const viewportDir = path.join(dir, "mobile-portrait");
+    mkdirSync(path.join(baselineDir, "mobile-portrait"), { recursive: true });
+    mkdirSync(viewportDir);
+    for (const target of [
+      path.join(viewportDir, "builtin-chat.png"),
+      path.join(baselineDir, "mobile-portrait", "builtin-chat.png"),
+      path.join(baselineDir, "mobile-portrait", "plugin-goals-gui.png"),
+    ]) {
+      await sharp({
+        create: {
+          width: 2,
+          height: 2,
+          channels: 4,
+          background: { r: 255, g: 88, b: 0, alpha: 1 },
+        },
+      })
+        .png()
+        .toFile(target);
+    }
+
+    let failed = false;
+    try {
+      execFileSync(
+        process.execPath,
+        [
+          path.resolve(__dirname, "../../scripts/mvp-visual-verify.mjs"),
+          "--input",
+          dir,
+          "--baseline",
+          baselineDir,
+          "--require-baseline-states",
+          "--strict",
+        ],
+        {
+          cwd: path.resolve(__dirname, "../.."),
+          encoding: "utf8",
+          stdio: "pipe",
+        },
+      );
+    } catch (error) {
+      failed = true;
+      expect(error.status).toBe(1);
+    }
+
+    expect(failed).toBe(true);
+    const report = JSON.parse(
+      readFileSync(path.join(dir, "mvp-verify", "report.json"), "utf8"),
+    );
+    expect(report.summary.requireBaselineStates).toBe(true);
+    expect(report.summary.missingRequiredStates).toEqual([
+      { slug: "plugin-goals-gui", viewport: "mobile-portrait" },
+    ]);
+  });
 });
 
 describe("audit:app OCR command contract", () => {
@@ -487,6 +667,9 @@ describe("audit:app OCR command contract", () => {
     );
     expect(appPackageJson.scripts["audit:app:verify"]).toContain(
       "ELIZA_MVP_OCR_ENGINE=packaged bun run mvp:visual-verify -- --strict",
+    );
+    expect(appPackageJson.scripts["audit:app:verify"]).toContain(
+      "--require-baseline-states",
     );
   });
 });
