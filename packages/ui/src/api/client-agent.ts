@@ -1359,6 +1359,19 @@ function isSharedResolverMissForDedicatedAgent(err: unknown): boolean {
   return /not a shared-runtime agent/i.test(err.message);
 }
 
+function cloudRestRunningStatus(): AgentStatus {
+  return {
+    state: "running",
+    agentName: "Eliza",
+    model: undefined,
+    // Cloud REST agents are provisioned + serving cloud-side — first-turn
+    // capability is online, so the composer should be live immediately.
+    canRespond: true,
+    uptime: undefined,
+    startedAt: undefined,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Prototype augmentation
 // ---------------------------------------------------------------------------
@@ -1370,16 +1383,15 @@ ElizaClient.prototype.getStatus = async function (this: ElizaClient) {
   // status:"running") so startup proceeds to chat — its REST adapter already
   // serves /api/conversations + /api/conversations/:id/messages.
   if (isDirectCloudSharedAgentBase(this.getBaseUrl())) {
-    return {
-      state: "running",
-      agentName: "Eliza",
-      model: undefined,
-      // Cloud-shared agent is provisioned + serving cloud-side — first-turn
-      // capability is online, so the composer should be live immediately.
-      canRespond: true,
-      uptime: undefined,
-      startedAt: undefined,
-    };
+    return cloudRestRunningStatus();
+  }
+  // Dedicated cloud agents serve chat on their own subdomain, but live cloud
+  // currently rejects `/api/status` for browser clients even when `/api/*` chat
+  // endpoints are usable. Startup already uses `/api/conversations` as the
+  // authoritative warm-passthrough probe before calling this, so skip the noisy
+  // status probe for dedicated bases.
+  if (isDedicatedCloudAgentBase(this.getBaseUrl())) {
+    return cloudRestRunningStatus();
   }
   try {
     const viaRpc = await getDesktopStatusRpc<AgentStatus>(
@@ -1969,6 +1981,13 @@ ElizaClient.prototype.getConfig = async function (this: ElizaClient) {
   logSettingsClient("GET /api/config → start", {
     baseUrl: this.getBaseUrl(),
   });
+  if (isDedicatedCloudAgentBase(this.getBaseUrl())) {
+    // Dedicated cloud chat runs through the per-agent REST surface, but the
+    // config endpoint is not exposed there today. Returning the empty config
+    // mirrors callers' existing "config unavailable" fallback without producing
+    // browser-visible 401 noise on every boot.
+    return {};
+  }
   let viaRpc: AppConfigResponse | null = null;
   try {
     viaRpc = await invokeLocalDesktopAgentRpc<AppConfigResponse>(
