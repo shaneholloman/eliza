@@ -270,6 +270,7 @@ export const redactTranscriptAction: Action = {
 			await callback?.({ text: result.text, actions: ["REDACT_TRANSCRIPT"] });
 			return result;
 		} catch (error) {
+			// error-policy:J1 action boundary returns a structured failure to the planner loop.
 			const messageText =
 				error instanceof Error ? error.message : String(error);
 			const result = fail("REDACT_TRANSCRIPT_FAILED", messageText);
@@ -401,6 +402,7 @@ export const shareTranscriptAction: Action = {
 			await callback?.({ text: result.text, actions: ["SHARE_TRANSCRIPT"] });
 			return result;
 		} catch (error) {
+			// error-policy:J1 action boundary returns a structured failure to the planner loop.
 			const messageText =
 				error instanceof Error ? error.message : String(error);
 			const result = fail("SHARE_TRANSCRIPT_FAILED", messageText);
