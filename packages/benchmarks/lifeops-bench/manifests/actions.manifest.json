@@ -140,7 +140,7 @@
       "type": "function",
       "function": {
         "name": "BLOCK_BLOCK",
-        "description": "BLOCK apps+websites only; NOT calendar/focus; block|unblock|status|permission|release",
+        "description": "Block/unblock phone apps or desktop websites. Scope phone apps, websites only; NOT calendar/focus/deep-work blocks -> CALENDAR subaction=create_event. target=app phone apps; target=website desktop websites. Actions block|unblock|status all targets; request_permission|release|list_active website-only. Website block drafts first; confirmed:true for website block + release. — subaction = block",
         "parameters": {
           "type": "object",
           "required": [],
@@ -270,7 +270,7 @@
       "type": "function",
       "function": {
         "name": "BLOCK_LIST_ACTIVE",
-        "description": "BLOCK apps+websites only; NOT calendar/focus; block|unblock|status|permission|release",
+        "description": "Block/unblock phone apps or desktop websites. Scope phone apps, websites only; NOT calendar/focus/deep-work blocks -> CALENDAR subaction=create_event. target=app phone apps; target=website desktop websites. Actions block|unblock|status all targets; request_permission|release|list_active website-only. Website block drafts first; confirmed:true for website block + release. — subaction = list_active",
         "parameters": {
           "type": "object",
           "required": [],
@@ -386,7 +386,7 @@
       "type": "function",
       "function": {
         "name": "BLOCK_RELEASE",
-        "description": "BLOCK apps+websites only; NOT calendar/focus; block|unblock|status|permission|release",
+        "description": "Block/unblock phone apps or desktop websites. Scope phone apps, websites only; NOT calendar/focus/deep-work blocks -> CALENDAR subaction=create_event. target=app phone apps; target=website desktop websites. Actions block|unblock|status all targets; request_permission|release|list_active website-only. Website block drafts first; confirmed:true for website block + release. — subaction = release",
         "parameters": {
           "type": "object",
           "required": [],
@@ -499,7 +499,7 @@
       "type": "function",
       "function": {
         "name": "BLOCK_REQUEST_PERMISSION",
-        "description": "BLOCK apps+websites only; NOT calendar/focus; block|unblock|status|permission|release",
+        "description": "Block/unblock phone apps or desktop websites. Scope phone apps, websites only; NOT calendar/focus/deep-work blocks -> CALENDAR subaction=create_event. target=app phone apps; target=website desktop websites. Actions block|unblock|status all targets; request_permission|release|list_active website-only. Website block drafts first; confirmed:true for website block + release. — subaction = request_permission",
         "parameters": {
           "type": "object",
           "required": [],
@@ -621,7 +621,7 @@
       "type": "function",
       "function": {
         "name": "BLOCK_STATUS",
-        "description": "BLOCK apps+websites only; NOT calendar/focus; block|unblock|status|permission|release",
+        "description": "Block/unblock phone apps or desktop websites. Scope phone apps, websites only; NOT calendar/focus/deep-work blocks -> CALENDAR subaction=create_event. target=app phone apps; target=website desktop websites. Actions block|unblock|status all targets; request_permission|release|list_active website-only. Website block drafts first; confirmed:true for website block + release. — subaction = status",
         "parameters": {
           "type": "object",
           "required": [],
@@ -737,7 +737,7 @@
       "type": "function",
       "function": {
         "name": "BLOCK_UNBLOCK",
-        "description": "BLOCK apps+websites only; NOT calendar/focus; block|unblock|status|permission|release",
+        "description": "Block/unblock phone apps or desktop websites. Scope phone apps, websites only; NOT calendar/focus/deep-work blocks -> CALENDAR subaction=create_event. target=app phone apps; target=website desktop websites. Actions block|unblock|status all targets; request_permission|release|list_active website-only. Website block drafts first; confirmed:true for website block + release. — subaction = unblock",
         "parameters": {
           "type": "object",
           "required": [],
@@ -1018,7 +1018,7 @@
       "type": "function",
       "function": {
         "name": "BRIEF_COMPOSE_EVENING",
-        "description": "briefing/digest (\"morning brief\", \"evening summary\", \"this week\", \"daily digest\") -> BRIEF; one-domain read -> CALENDAR.feed, MESSAGE.triage, etc.\nBRIEF compose_morning|compose_evening|compose_weekly; LifeOpsBriefing",
+        "description": "Compose owner LifeOpsBriefing: morning/evening/weekly; calendar feed, inbox triage, life due, money recurring charges. Subactions: compose_morning, compose_evening, compose_weekly. — subaction = compose_evening",
         "parameters": {
           "type": "object",
           "required": [],
@@ -1091,7 +1091,7 @@
       "type": "function",
       "function": {
         "name": "BRIEF_COMPOSE_MORNING",
-        "description": "briefing/digest (\"morning brief\", \"evening summary\", \"this week\", \"daily digest\") -> BRIEF; one-domain read -> CALENDAR.feed, MESSAGE.triage, etc.\nBRIEF compose_morning|compose_evening|compose_weekly; LifeOpsBriefing",
+        "description": "Compose owner LifeOpsBriefing: morning/evening/weekly; calendar feed, inbox triage, life due, money recurring charges. Subactions: compose_morning, compose_evening, compose_weekly. — subaction = compose_morning",
         "parameters": {
           "type": "object",
           "required": [],
@@ -1164,7 +1164,7 @@
       "type": "function",
       "function": {
         "name": "BRIEF_COMPOSE_WEEKLY",
-        "description": "briefing/digest (\"morning brief\", \"evening summary\", \"this week\", \"daily digest\") -> BRIEF; one-domain read -> CALENDAR.feed, MESSAGE.triage, etc.\nBRIEF compose_morning|compose_evening|compose_weekly; LifeOpsBriefing",
+        "description": "Compose owner LifeOpsBriefing: morning/evening/weekly; calendar feed, inbox triage, life due, money recurring charges. Subactions: compose_morning, compose_evening, compose_weekly. — subaction = compose_weekly",
         "parameters": {
           "type": "object",
           "required": [],
@@ -1468,7 +1468,7 @@
       "type": "function",
       "function": {
         "name": "CALENDAR_BULK_RESCHEDULE",
-        "description": "calendar feed|next|search|create|update|delete|trip_window|reschedule|availability|propose",
+        "description": "Live calendar: event CRUD, availability, meeting prefs. Subactions: feed, next_event, search_events, create_event, update_event, delete_event, trip_window, bulk_reschedule, check_availability, propose_times, update_preferences. Use CALENDLY for calendly.com URLs. Use PERSONAL_ASSISTANT action=scheduling for multi-turn proposal/response. — subaction = bulk_reschedule",
         "parameters": {
           "type": "object",
           "required": [],
@@ -1690,7 +1690,7 @@
       "type": "function",
       "function": {
         "name": "CALENDAR_CHECK_AVAILABILITY",
-        "description": "calendar feed|next|search|create|update|delete|trip_window|reschedule|availability|propose",
+        "description": "Live calendar: event CRUD, availability, meeting prefs. Subactions: feed, next_event, search_events, create_event, update_event, delete_event, trip_window, bulk_reschedule, check_availability, propose_times, update_preferences. Use CALENDLY for calendly.com URLs. Use PERSONAL_ASSISTANT action=scheduling for multi-turn proposal/response. — subaction = check_availability",
         "parameters": {
           "type": "object",
           "required": [],
@@ -1912,7 +1912,7 @@
       "type": "function",
       "function": {
         "name": "CALENDAR_CREATE_EVENT",
-        "description": "calendar feed|next|search|create|update|delete|trip_window|reschedule|availability|propose",
+        "description": "Live calendar: event CRUD, availability, meeting prefs. Subactions: feed, next_event, search_events, create_event, update_event, delete_event, trip_window, bulk_reschedule, check_availability, propose_times, update_preferences. Use CALENDLY for calendly.com URLs. Use PERSONAL_ASSISTANT action=scheduling for multi-turn proposal/response. — subaction = create_event",
         "parameters": {
           "type": "object",
           "required": [],
@@ -2134,7 +2134,7 @@
       "type": "function",
       "function": {
         "name": "CALENDAR_DELETE_EVENT",
-        "description": "calendar feed|next|search|create|update|delete|trip_window|reschedule|availability|propose",
+        "description": "Live calendar: event CRUD, availability, meeting prefs. Subactions: feed, next_event, search_events, create_event, update_event, delete_event, trip_window, bulk_reschedule, check_availability, propose_times, update_preferences. Use CALENDLY for calendly.com URLs. Use PERSONAL_ASSISTANT action=scheduling for multi-turn proposal/response. — subaction = delete_event",
         "parameters": {
           "type": "object",
           "required": [],
@@ -2356,7 +2356,7 @@
       "type": "function",
       "function": {
         "name": "CALENDAR_FEED",
-        "description": "calendar feed|next|search|create|update|delete|trip_window|reschedule|availability|propose",
+        "description": "Live calendar: event CRUD, availability, meeting prefs. Subactions: feed, next_event, search_events, create_event, update_event, delete_event, trip_window, bulk_reschedule, check_availability, propose_times, update_preferences. Use CALENDLY for calendly.com URLs. Use PERSONAL_ASSISTANT action=scheduling for multi-turn proposal/response. — subaction = feed",
         "parameters": {
           "type": "object",
           "required": [],
@@ -2578,7 +2578,7 @@
       "type": "function",
       "function": {
         "name": "CALENDAR_NEXT_EVENT",
-        "description": "calendar feed|next|search|create|update|delete|trip_window|reschedule|availability|propose",
+        "description": "Live calendar: event CRUD, availability, meeting prefs. Subactions: feed, next_event, search_events, create_event, update_event, delete_event, trip_window, bulk_reschedule, check_availability, propose_times, update_preferences. Use CALENDLY for calendly.com URLs. Use PERSONAL_ASSISTANT action=scheduling for multi-turn proposal/response. — subaction = next_event",
         "parameters": {
           "type": "object",
           "required": [],
@@ -2800,7 +2800,7 @@
       "type": "function",
       "function": {
         "name": "CALENDAR_PROPOSE_TIMES",
-        "description": "calendar feed|next|search|create|update|delete|trip_window|reschedule|availability|propose",
+        "description": "Live calendar: event CRUD, availability, meeting prefs. Subactions: feed, next_event, search_events, create_event, update_event, delete_event, trip_window, bulk_reschedule, check_availability, propose_times, update_preferences. Use CALENDLY for calendly.com URLs. Use PERSONAL_ASSISTANT action=scheduling for multi-turn proposal/response. — subaction = propose_times",
         "parameters": {
           "type": "object",
           "required": [],
@@ -3022,7 +3022,7 @@
       "type": "function",
       "function": {
         "name": "CALENDAR_SEARCH_EVENTS",
-        "description": "calendar feed|next|search|create|update|delete|trip_window|reschedule|availability|propose",
+        "description": "Live calendar: event CRUD, availability, meeting prefs. Subactions: feed, next_event, search_events, create_event, update_event, delete_event, trip_window, bulk_reschedule, check_availability, propose_times, update_preferences. Use CALENDLY for calendly.com URLs. Use PERSONAL_ASSISTANT action=scheduling for multi-turn proposal/response. — subaction = search_events",
         "parameters": {
           "type": "object",
           "required": [],
@@ -3244,7 +3244,7 @@
       "type": "function",
       "function": {
         "name": "CALENDAR_TRIP_WINDOW",
-        "description": "calendar feed|next|search|create|update|delete|trip_window|reschedule|availability|propose",
+        "description": "Live calendar: event CRUD, availability, meeting prefs. Subactions: feed, next_event, search_events, create_event, update_event, delete_event, trip_window, bulk_reschedule, check_availability, propose_times, update_preferences. Use CALENDLY for calendly.com URLs. Use PERSONAL_ASSISTANT action=scheduling for multi-turn proposal/response. — subaction = trip_window",
         "parameters": {
           "type": "object",
           "required": [],
@@ -3466,7 +3466,7 @@
       "type": "function",
       "function": {
         "name": "CALENDAR_UPDATE_EVENT",
-        "description": "calendar feed|next|search|create|update|delete|trip_window|reschedule|availability|propose",
+        "description": "Live calendar: event CRUD, availability, meeting prefs. Subactions: feed, next_event, search_events, create_event, update_event, delete_event, trip_window, bulk_reschedule, check_availability, propose_times, update_preferences. Use CALENDLY for calendly.com URLs. Use PERSONAL_ASSISTANT action=scheduling for multi-turn proposal/response. — subaction = update_event",
         "parameters": {
           "type": "object",
           "required": [],
@@ -3688,7 +3688,7 @@
       "type": "function",
       "function": {
         "name": "CALENDAR_UPDATE_PREFERENCES",
-        "description": "calendar feed|next|search|create|update|delete|trip_window|reschedule|availability|propose",
+        "description": "Live calendar: event CRUD, availability, meeting prefs. Subactions: feed, next_event, search_events, create_event, update_event, delete_event, trip_window, bulk_reschedule, check_availability, propose_times, update_preferences. Use CALENDLY for calendly.com URLs. Use PERSONAL_ASSISTANT action=scheduling for multi-turn proposal/response. — subaction = update_preferences",
         "parameters": {
           "type": "object",
           "required": [],
@@ -3972,7 +3972,7 @@
       "type": "function",
       "function": {
         "name": "CONFLICT_DETECT_SCAN_EVENT_PROPOSAL",
-        "description": "calendar conflict-scan (\"conflicts today\", \"does this slot work\", \"scan week overlaps\") -> CONFLICT_DETECT; conflict-on-create -> CALENDAR.create_event\ncalendar conflicts: scan_today|scan_week|scan_event_proposal; severity warning|hard",
+        "description": "Scan owner calendar overlaps. Compare proposed window vs owner feed. Subactions: scan_today, scan_week, scan_event_proposal. — subaction = scan_event_proposal",
         "parameters": {
           "type": "object",
           "required": [],
@@ -4033,7 +4033,7 @@
       "type": "function",
       "function": {
         "name": "CONFLICT_DETECT_SCAN_TODAY",
-        "description": "calendar conflict-scan (\"conflicts today\", \"does this slot work\", \"scan week overlaps\") -> CONFLICT_DETECT; conflict-on-create -> CALENDAR.create_event\ncalendar conflicts: scan_today|scan_week|scan_event_proposal; severity warning|hard",
+        "description": "Scan owner calendar overlaps. Compare proposed window vs owner feed. Subactions: scan_today, scan_week, scan_event_proposal. — subaction = scan_today",
         "parameters": {
           "type": "object",
           "required": [],
@@ -4094,7 +4094,7 @@
       "type": "function",
       "function": {
         "name": "CONFLICT_DETECT_SCAN_WEEK",
-        "description": "calendar conflict-scan (\"conflicts today\", \"does this slot work\", \"scan week overlaps\") -> CONFLICT_DETECT; conflict-on-create -> CALENDAR.create_event\ncalendar conflicts: scan_today|scan_week|scan_event_proposal; severity warning|hard",
+        "description": "Scan owner calendar overlaps. Compare proposed window vs owner feed. Subactions: scan_today, scan_week, scan_event_proposal. — subaction = scan_week",
         "parameters": {
           "type": "object",
           "required": [],
@@ -4162,7 +4162,7 @@
           "properties": {
             "connector": {
               "type": "string",
-              "description": "ConnectorRegistry kind: google, x, telegram, signal, discord, imessage, whatsapp, twilio, calendly, duffel, health, browser_bridge. Optional action=list."
+              "description": "ConnectorRegistry kind: google, x, telegram, signal, discord, imessage, whatsapp, wechat, twilio, calendly, duffel, health, browser_bridge. Optional action=list."
             },
             "action": {
               "type": "string",
@@ -4273,14 +4273,14 @@
       "type": "function",
       "function": {
         "name": "CONNECTOR_CONNECT",
-        "description": "CONNECTOR accounts: connect|disconnect|verify|status|list; plugin install/config -> PLUGIN",
+        "description": "Installed connector account state: connect, disconnect, verify, status, list. Actions: connect, disconnect, verify, status, list. External accounts: Google, Telegram, Discord, Slack, etc. Connector kinds from runtime ConnectorRegistry; verify active upstream API probe. Plugin install/uninstall/configure -> use PLUGIN. — subaction = connect",
         "parameters": {
           "type": "object",
           "required": [],
           "properties": {
             "connector": {
               "type": "string",
-              "description": "ConnectorRegistry kind: google, x, telegram, signal, discord, imessage, whatsapp, twilio, calendly, duffel, health, browser_bridge. Optional action=list."
+              "description": "ConnectorRegistry kind: google, x, telegram, signal, discord, imessage, whatsapp, wechat, twilio, calendly, duffel, health, browser_bridge. Optional action=list."
             },
             "action": {
               "type": "string",
@@ -4388,14 +4388,14 @@
       "type": "function",
       "function": {
         "name": "CONNECTOR_DISCONNECT",
-        "description": "CONNECTOR accounts: connect|disconnect|verify|status|list; plugin install/config -> PLUGIN",
+        "description": "Installed connector account state: connect, disconnect, verify, status, list. Actions: connect, disconnect, verify, status, list. External accounts: Google, Telegram, Discord, Slack, etc. Connector kinds from runtime ConnectorRegistry; verify active upstream API probe. Plugin install/uninstall/configure -> use PLUGIN. — subaction = disconnect",
         "parameters": {
           "type": "object",
           "required": [],
           "properties": {
             "connector": {
               "type": "string",
-              "description": "ConnectorRegistry kind: google, x, telegram, signal, discord, imessage, whatsapp, twilio, calendly, duffel, health, browser_bridge. Optional action=list."
+              "description": "ConnectorRegistry kind: google, x, telegram, signal, discord, imessage, whatsapp, wechat, twilio, calendly, duffel, health, browser_bridge. Optional action=list."
             },
             "action": {
               "type": "string",
@@ -4503,14 +4503,14 @@
       "type": "function",
       "function": {
         "name": "CONNECTOR_LIST",
-        "description": "CONNECTOR accounts: connect|disconnect|verify|status|list; plugin install/config -> PLUGIN",
+        "description": "Installed connector account state: connect, disconnect, verify, status, list. Actions: connect, disconnect, verify, status, list. External accounts: Google, Telegram, Discord, Slack, etc. Connector kinds from runtime ConnectorRegistry; verify active upstream API probe. Plugin install/uninstall/configure -> use PLUGIN. — subaction = list",
         "parameters": {
           "type": "object",
           "required": [],
           "properties": {
             "connector": {
               "type": "string",
-              "description": "ConnectorRegistry kind: google, x, telegram, signal, discord, imessage, whatsapp, twilio, calendly, duffel, health, browser_bridge. Optional action=list."
+              "description": "ConnectorRegistry kind: google, x, telegram, signal, discord, imessage, whatsapp, wechat, twilio, calendly, duffel, health, browser_bridge. Optional action=list."
             },
             "action": {
               "type": "string",
@@ -4618,14 +4618,14 @@
       "type": "function",
       "function": {
         "name": "CONNECTOR_STATUS",
-        "description": "CONNECTOR accounts: connect|disconnect|verify|status|list; plugin install/config -> PLUGIN",
+        "description": "Installed connector account state: connect, disconnect, verify, status, list. Actions: connect, disconnect, verify, status, list. External accounts: Google, Telegram, Discord, Slack, etc. Connector kinds from runtime ConnectorRegistry; verify active upstream API probe. Plugin install/uninstall/configure -> use PLUGIN. — subaction = status",
         "parameters": {
           "type": "object",
           "required": [],
           "properties": {
             "connector": {
               "type": "string",
-              "description": "ConnectorRegistry kind: google, x, telegram, signal, discord, imessage, whatsapp, twilio, calendly, duffel, health, browser_bridge. Optional action=list."
+              "description": "ConnectorRegistry kind: google, x, telegram, signal, discord, imessage, whatsapp, wechat, twilio, calendly, duffel, health, browser_bridge. Optional action=list."
             },
             "action": {
               "type": "string",
@@ -4733,14 +4733,14 @@
       "type": "function",
       "function": {
         "name": "CONNECTOR_VERIFY",
-        "description": "CONNECTOR accounts: connect|disconnect|verify|status|list; plugin install/config -> PLUGIN",
+        "description": "Installed connector account state: connect, disconnect, verify, status, list. Actions: connect, disconnect, verify, status, list. External accounts: Google, Telegram, Discord, Slack, etc. Connector kinds from runtime ConnectorRegistry; verify active upstream API probe. Plugin install/uninstall/configure -> use PLUGIN. — subaction = verify",
         "parameters": {
           "type": "object",
           "required": [],
           "properties": {
             "connector": {
               "type": "string",
-              "description": "ConnectorRegistry kind: google, x, telegram, signal, discord, imessage, whatsapp, twilio, calendly, duffel, health, browser_bridge. Optional action=list."
+              "description": "ConnectorRegistry kind: google, x, telegram, signal, discord, imessage, whatsapp, wechat, twilio, calendly, duffel, health, browser_bridge. Optional action=list."
             },
             "action": {
               "type": "string",
@@ -4847,6 +4847,270 @@
     {
       "type": "function",
       "function": {
+        "name": "CREATIVE_DRAFT",
+        "description": "ghostwrite/owner-voice drafting (\"write this in my voice\", \"turn these memos into an essay\", \"revise the second section\") -> CREATIVE_DRAFT; a plain briefing/digest -> BRIEF; a document search/sign -> OWNER_DOCUMENTS.\nCREATIVE_DRAFT compose|revise; owner-voice draft from memos + exemplars",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "action": {
+              "type": "string",
+              "description": "Draft op: compose | revise.",
+              "enum": [
+                "compose",
+                "revise"
+              ]
+            },
+            "request": {
+              "type": "object",
+              "description": "Draft request: { title, targetForm: essay|launch_thread|narrative|memo, ownerAsk, requestedVoice? }. Required for compose.",
+              "required": [],
+              "properties": {},
+              "additionalProperties": true
+            },
+            "memos": {
+              "type": "array",
+              "description": "Transcribed voice memos: [{ id, transcript, affect?, toneDirective?, capturedAt? }]. Required for compose.",
+              "items": {
+                "type": "object",
+                "required": [],
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            "ownerSources": {
+              "type": "array",
+              "description": "Owner-authored exemplars used to build the voice style card: [{ id, text, source: sent_mail|essay|thread|note }].",
+              "items": {
+                "type": "object",
+                "required": [],
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            "currentDraft": {
+              "type": "object",
+              "description": "Existing CreativeDraftArtifact to revise. Required for revise.",
+              "required": [],
+              "properties": {},
+              "additionalProperties": true
+            },
+            "revision": {
+              "type": "object",
+              "description": "Revision to apply: { instruction, acceptedEdit?, vetoedPhrase?, replacementText?, sectionId?, sectionIndex?, revisedAt }. Required for revise.",
+              "required": [],
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "strict": true
+      },
+      "_plugin": "@elizaos/plugin-personal-assistant",
+      "_tags": [
+        "domain:creative",
+        "capability:compose",
+        "capability:write",
+        "surface:internal"
+      ],
+      "_contexts": [
+        "creative",
+        "documents",
+        "voice"
+      ],
+      "_priority": 100,
+      "_examples_count": 2,
+      "_domain": "domain:creative",
+      "_capabilities": [
+        "capability:compose",
+        "capability:write"
+      ],
+      "_surfaces": [
+        "surface:internal"
+      ],
+      "_risk": null,
+      "_cost": null
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CREATIVE_DRAFT_COMPOSE",
+        "description": "Draft in the owner's voice from transcribed memos and owner-authored exemplars, then iterate. Subactions: compose (build style card + draft), revise (edit a targeted section of an existing draft). — subaction = compose",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "action": {
+              "type": "string",
+              "description": "Subaction discriminator (auto-set to \"compose\" for this virtual; do not change).",
+              "enum": [
+                "compose"
+              ],
+              "default": "compose"
+            },
+            "request": {
+              "type": "object",
+              "description": "Draft request: { title, targetForm: essay|launch_thread|narrative|memo, ownerAsk, requestedVoice? }. Required for compose.",
+              "required": [],
+              "properties": {},
+              "additionalProperties": true
+            },
+            "memos": {
+              "type": "array",
+              "description": "Transcribed voice memos: [{ id, transcript, affect?, toneDirective?, capturedAt? }]. Required for compose.",
+              "items": {
+                "type": "object",
+                "required": [],
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            "ownerSources": {
+              "type": "array",
+              "description": "Owner-authored exemplars used to build the voice style card: [{ id, text, source: sent_mail|essay|thread|note }].",
+              "items": {
+                "type": "object",
+                "required": [],
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            "currentDraft": {
+              "type": "object",
+              "description": "Existing CreativeDraftArtifact to revise. Required for revise.",
+              "required": [],
+              "properties": {},
+              "additionalProperties": true
+            },
+            "revision": {
+              "type": "object",
+              "description": "Revision to apply: { instruction, acceptedEdit?, vetoedPhrase?, replacementText?, sectionId?, sectionIndex?, revisedAt }. Required for revise.",
+              "required": [],
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "strict": true
+      },
+      "_plugin": "@elizaos/plugin-personal-assistant",
+      "_tags": [
+        "domain:creative",
+        "capability:compose",
+        "capability:write",
+        "surface:internal"
+      ],
+      "_contexts": [
+        "creative",
+        "documents",
+        "voice"
+      ],
+      "_priority": 100,
+      "_examples_count": 0,
+      "_domain": "domain:creative",
+      "_capabilities": [
+        "capability:compose",
+        "capability:write"
+      ],
+      "_surfaces": [
+        "surface:internal"
+      ],
+      "_risk": null,
+      "_cost": null
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CREATIVE_DRAFT_REVISE",
+        "description": "Draft in the owner's voice from transcribed memos and owner-authored exemplars, then iterate. Subactions: compose (build style card + draft), revise (edit a targeted section of an existing draft). — subaction = revise",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "action": {
+              "type": "string",
+              "description": "Subaction discriminator (auto-set to \"revise\" for this virtual; do not change).",
+              "enum": [
+                "revise"
+              ],
+              "default": "revise"
+            },
+            "request": {
+              "type": "object",
+              "description": "Draft request: { title, targetForm: essay|launch_thread|narrative|memo, ownerAsk, requestedVoice? }. Required for compose.",
+              "required": [],
+              "properties": {},
+              "additionalProperties": true
+            },
+            "memos": {
+              "type": "array",
+              "description": "Transcribed voice memos: [{ id, transcript, affect?, toneDirective?, capturedAt? }]. Required for compose.",
+              "items": {
+                "type": "object",
+                "required": [],
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            "ownerSources": {
+              "type": "array",
+              "description": "Owner-authored exemplars used to build the voice style card: [{ id, text, source: sent_mail|essay|thread|note }].",
+              "items": {
+                "type": "object",
+                "required": [],
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            "currentDraft": {
+              "type": "object",
+              "description": "Existing CreativeDraftArtifact to revise. Required for revise.",
+              "required": [],
+              "properties": {},
+              "additionalProperties": true
+            },
+            "revision": {
+              "type": "object",
+              "description": "Revision to apply: { instruction, acceptedEdit?, vetoedPhrase?, replacementText?, sectionId?, sectionIndex?, revisedAt }. Required for revise.",
+              "required": [],
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "strict": true
+      },
+      "_plugin": "@elizaos/plugin-personal-assistant",
+      "_tags": [
+        "domain:creative",
+        "capability:compose",
+        "capability:write",
+        "surface:internal"
+      ],
+      "_contexts": [
+        "creative",
+        "documents",
+        "voice"
+      ],
+      "_priority": 100,
+      "_examples_count": 0,
+      "_domain": "domain:creative",
+      "_capabilities": [
+        "capability:compose",
+        "capability:write"
+      ],
+      "_surfaces": [
+        "surface:internal"
+      ],
+      "_risk": null,
+      "_cost": null
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "CREDENTIALS",
         "description": "credentials search/list/copy/inject -> CREDENTIALS action=search|list|inject_*; on-page form fill -> action=fill\nCREDENTIALS fill|whitelist_add|list|search|inject_username|inject_password; clipboard-only",
         "parameters": {
@@ -4942,7 +5206,7 @@
       "type": "function",
       "function": {
         "name": "CREDENTIALS_FILL",
-        "description": "credentials search/list/copy/inject -> CREDENTIALS action=search|list|inject_*; on-page form fill -> action=fill\nCREDENTIALS fill|whitelist_add|list|search|inject_username|inject_password; clipboard-only",
+        "description": "Owner-only credentials. Browser autofill + OS password manager (1Password/ProtonPass). Actions fill whitelisted one-field; whitelist_add domain confirmed:true; whitelist_list; search query; list bounded; inject_username|inject_password OS clipboard confirmed:true. No plaintext credentials in chat; clipboard only. — subaction = fill",
         "parameters": {
           "type": "object",
           "required": [],
@@ -5029,7 +5293,7 @@
       "type": "function",
       "function": {
         "name": "CREDENTIALS_INJECT_PASSWORD",
-        "description": "credentials search/list/copy/inject -> CREDENTIALS action=search|list|inject_*; on-page form fill -> action=fill\nCREDENTIALS fill|whitelist_add|list|search|inject_username|inject_password; clipboard-only",
+        "description": "Owner-only credentials. Browser autofill + OS password manager (1Password/ProtonPass). Actions fill whitelisted one-field; whitelist_add domain confirmed:true; whitelist_list; search query; list bounded; inject_username|inject_password OS clipboard confirmed:true. No plaintext credentials in chat; clipboard only. — subaction = inject_password",
         "parameters": {
           "type": "object",
           "required": [],
@@ -5116,7 +5380,7 @@
       "type": "function",
       "function": {
         "name": "CREDENTIALS_INJECT_USERNAME",
-        "description": "credentials search/list/copy/inject -> CREDENTIALS action=search|list|inject_*; on-page form fill -> action=fill\nCREDENTIALS fill|whitelist_add|list|search|inject_username|inject_password; clipboard-only",
+        "description": "Owner-only credentials. Browser autofill + OS password manager (1Password/ProtonPass). Actions fill whitelisted one-field; whitelist_add domain confirmed:true; whitelist_list; search query; list bounded; inject_username|inject_password OS clipboard confirmed:true. No plaintext credentials in chat; clipboard only. — subaction = inject_username",
         "parameters": {
           "type": "object",
           "required": [],
@@ -5203,7 +5467,7 @@
       "type": "function",
       "function": {
         "name": "CREDENTIALS_LIST",
-        "description": "credentials search/list/copy/inject -> CREDENTIALS action=search|list|inject_*; on-page form fill -> action=fill\nCREDENTIALS fill|whitelist_add|list|search|inject_username|inject_password; clipboard-only",
+        "description": "Owner-only credentials. Browser autofill + OS password manager (1Password/ProtonPass). Actions fill whitelisted one-field; whitelist_add domain confirmed:true; whitelist_list; search query; list bounded; inject_username|inject_password OS clipboard confirmed:true. No plaintext credentials in chat; clipboard only. — subaction = list",
         "parameters": {
           "type": "object",
           "required": [],
@@ -5290,7 +5554,7 @@
       "type": "function",
       "function": {
         "name": "CREDENTIALS_SEARCH",
-        "description": "credentials search/list/copy/inject -> CREDENTIALS action=search|list|inject_*; on-page form fill -> action=fill\nCREDENTIALS fill|whitelist_add|list|search|inject_username|inject_password; clipboard-only",
+        "description": "Owner-only credentials. Browser autofill + OS password manager (1Password/ProtonPass). Actions fill whitelisted one-field; whitelist_add domain confirmed:true; whitelist_list; search query; list bounded; inject_username|inject_password OS clipboard confirmed:true. No plaintext credentials in chat; clipboard only. — subaction = search",
         "parameters": {
           "type": "object",
           "required": [],
@@ -5377,7 +5641,7 @@
       "type": "function",
       "function": {
         "name": "CREDENTIALS_WHITELIST_ADD",
-        "description": "credentials search/list/copy/inject -> CREDENTIALS action=search|list|inject_*; on-page form fill -> action=fill\nCREDENTIALS fill|whitelist_add|list|search|inject_username|inject_password; clipboard-only",
+        "description": "Owner-only credentials. Browser autofill + OS password manager (1Password/ProtonPass). Actions fill whitelisted one-field; whitelist_add domain confirmed:true; whitelist_list; search query; list bounded; inject_username|inject_password OS clipboard confirmed:true. No plaintext credentials in chat; clipboard only. — subaction = whitelist_add",
         "parameters": {
           "type": "object",
           "required": [],
@@ -5464,7 +5728,7 @@
       "type": "function",
       "function": {
         "name": "CREDENTIALS_WHITELIST_LIST",
-        "description": "credentials search/list/copy/inject -> CREDENTIALS action=search|list|inject_*; on-page form fill -> action=fill\nCREDENTIALS fill|whitelist_add|list|search|inject_username|inject_password; clipboard-only",
+        "description": "Owner-only credentials. Browser autofill + OS password manager (1Password/ProtonPass). Actions fill whitelisted one-field; whitelist_add domain confirmed:true; whitelist_list; search query; list bounded; inject_username|inject_password OS clipboard confirmed:true. No plaintext credentials in chat; clipboard only. — subaction = whitelist_list",
         "parameters": {
           "type": "object",
           "required": [],
@@ -5641,7 +5905,7 @@
             },
             "relationshipType": {
               "type": "string",
-              "description": "set_relationship edge type label e.g. manages|colleague_of|works_at|partner_of (e.g. manages, colleague_of, works_at)"
+              "description": "set_relationship edge type label e.g. manages|colleague_of|friend_of|family_of|co_parent_of (e.g. manages, colleague_of, friend_of)"
             },
             "sourceEntityIds": {
               "type": "array",
@@ -5747,768 +6011,6 @@
       "_domain": "domain:health",
       "_capabilities": [
         "capability:read"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "INBOX",
-        "description": "cross-channel inbox (\"show inbox\", \"all messages\", \"search every channel\", \"summarize inboxes\") -> INBOX; per-channel -> MESSAGE\nINBOX list|search|summarize|triage|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Inbox op: list | search | summarize | triage | reply | snooze | archive | approve.",
-              "enum": [
-                "list",
-                "search",
-                "summarize",
-                "triage",
-                "reply",
-                "snooze",
-                "archive",
-                "approve"
-              ]
-            },
-            "platforms": {
-              "type": "array",
-              "description": "Optional platform filter: gmail | slack | discord | telegram | signal | imessage | whatsapp. Default all.",
-              "items": {
-                "type": "string"
-              }
-            },
-            "since": {
-              "type": "string",
-              "description": "receivedAt lower bound. ISO-8601."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Limit per platform. Default 50."
-            },
-            "query": {
-              "type": "string",
-              "description": "Required for search. Free-form query."
-            },
-            "entryId": {
-              "type": "string",
-              "description": "Persisted triage entry id for reply, snooze, archive, or approve."
-            },
-            "body": {
-              "type": "string",
-              "description": "Reply body for reply/approve."
-            },
-            "until": {
-              "type": "string",
-              "description": "Snooze-until timestamp for snooze. ISO-8601."
-            },
-            "confirmed": {
-              "type": "boolean",
-              "description": "Explicit owner confirmation for sending reply/approve."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [
-        "domain:inbox",
-        "capability:read",
-        "capability:search",
-        "capability:summarize",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "inbox",
-        "messaging",
-        "cross-channel"
-      ],
-      "_priority": 100,
-      "_examples_count": 2,
-      "_domain": "domain:inbox",
-      "_capabilities": [
-        "capability:read",
-        "capability:search",
-        "capability:summarize"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "INBOX_APPROVE",
-        "description": "cross-channel inbox (\"show inbox\", \"all messages\", \"search every channel\", \"summarize inboxes\") -> INBOX; per-channel -> MESSAGE\nINBOX list|search|summarize|triage|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"approve\" for this virtual; do not change).",
-              "enum": [
-                "approve"
-              ],
-              "default": "approve"
-            },
-            "platforms": {
-              "type": "array",
-              "description": "Optional platform filter: gmail | slack | discord | telegram | signal | imessage | whatsapp. Default all.",
-              "items": {
-                "type": "string"
-              }
-            },
-            "since": {
-              "type": "string",
-              "description": "receivedAt lower bound. ISO-8601."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Limit per platform. Default 50."
-            },
-            "query": {
-              "type": "string",
-              "description": "Required for search. Free-form query."
-            },
-            "entryId": {
-              "type": "string",
-              "description": "Persisted triage entry id for reply, snooze, archive, or approve."
-            },
-            "body": {
-              "type": "string",
-              "description": "Reply body for reply/approve."
-            },
-            "until": {
-              "type": "string",
-              "description": "Snooze-until timestamp for snooze. ISO-8601."
-            },
-            "confirmed": {
-              "type": "boolean",
-              "description": "Explicit owner confirmation for sending reply/approve."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [
-        "domain:inbox",
-        "capability:read",
-        "capability:search",
-        "capability:summarize",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "inbox",
-        "messaging",
-        "cross-channel"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": "domain:inbox",
-      "_capabilities": [
-        "capability:read",
-        "capability:search",
-        "capability:summarize"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "INBOX_ARCHIVE",
-        "description": "cross-channel inbox (\"show inbox\", \"all messages\", \"search every channel\", \"summarize inboxes\") -> INBOX; per-channel -> MESSAGE\nINBOX list|search|summarize|triage|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"archive\" for this virtual; do not change).",
-              "enum": [
-                "archive"
-              ],
-              "default": "archive"
-            },
-            "platforms": {
-              "type": "array",
-              "description": "Optional platform filter: gmail | slack | discord | telegram | signal | imessage | whatsapp. Default all.",
-              "items": {
-                "type": "string"
-              }
-            },
-            "since": {
-              "type": "string",
-              "description": "receivedAt lower bound. ISO-8601."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Limit per platform. Default 50."
-            },
-            "query": {
-              "type": "string",
-              "description": "Required for search. Free-form query."
-            },
-            "entryId": {
-              "type": "string",
-              "description": "Persisted triage entry id for reply, snooze, archive, or approve."
-            },
-            "body": {
-              "type": "string",
-              "description": "Reply body for reply/approve."
-            },
-            "until": {
-              "type": "string",
-              "description": "Snooze-until timestamp for snooze. ISO-8601."
-            },
-            "confirmed": {
-              "type": "boolean",
-              "description": "Explicit owner confirmation for sending reply/approve."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [
-        "domain:inbox",
-        "capability:read",
-        "capability:search",
-        "capability:summarize",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "inbox",
-        "messaging",
-        "cross-channel"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": "domain:inbox",
-      "_capabilities": [
-        "capability:read",
-        "capability:search",
-        "capability:summarize"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "INBOX_LIST",
-        "description": "cross-channel inbox (\"show inbox\", \"all messages\", \"search every channel\", \"summarize inboxes\") -> INBOX; per-channel -> MESSAGE\nINBOX list|search|summarize|triage|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"list\" for this virtual; do not change).",
-              "enum": [
-                "list"
-              ],
-              "default": "list"
-            },
-            "platforms": {
-              "type": "array",
-              "description": "Optional platform filter: gmail | slack | discord | telegram | signal | imessage | whatsapp. Default all.",
-              "items": {
-                "type": "string"
-              }
-            },
-            "since": {
-              "type": "string",
-              "description": "receivedAt lower bound. ISO-8601."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Limit per platform. Default 50."
-            },
-            "query": {
-              "type": "string",
-              "description": "Required for search. Free-form query."
-            },
-            "entryId": {
-              "type": "string",
-              "description": "Persisted triage entry id for reply, snooze, archive, or approve."
-            },
-            "body": {
-              "type": "string",
-              "description": "Reply body for reply/approve."
-            },
-            "until": {
-              "type": "string",
-              "description": "Snooze-until timestamp for snooze. ISO-8601."
-            },
-            "confirmed": {
-              "type": "boolean",
-              "description": "Explicit owner confirmation for sending reply/approve."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [
-        "domain:inbox",
-        "capability:read",
-        "capability:search",
-        "capability:summarize",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "inbox",
-        "messaging",
-        "cross-channel"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": "domain:inbox",
-      "_capabilities": [
-        "capability:read",
-        "capability:search",
-        "capability:summarize"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "INBOX_REPLY",
-        "description": "cross-channel inbox (\"show inbox\", \"all messages\", \"search every channel\", \"summarize inboxes\") -> INBOX; per-channel -> MESSAGE\nINBOX list|search|summarize|triage|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"reply\" for this virtual; do not change).",
-              "enum": [
-                "reply"
-              ],
-              "default": "reply"
-            },
-            "platforms": {
-              "type": "array",
-              "description": "Optional platform filter: gmail | slack | discord | telegram | signal | imessage | whatsapp. Default all.",
-              "items": {
-                "type": "string"
-              }
-            },
-            "since": {
-              "type": "string",
-              "description": "receivedAt lower bound. ISO-8601."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Limit per platform. Default 50."
-            },
-            "query": {
-              "type": "string",
-              "description": "Required for search. Free-form query."
-            },
-            "entryId": {
-              "type": "string",
-              "description": "Persisted triage entry id for reply, snooze, archive, or approve."
-            },
-            "body": {
-              "type": "string",
-              "description": "Reply body for reply/approve."
-            },
-            "until": {
-              "type": "string",
-              "description": "Snooze-until timestamp for snooze. ISO-8601."
-            },
-            "confirmed": {
-              "type": "boolean",
-              "description": "Explicit owner confirmation for sending reply/approve."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [
-        "domain:inbox",
-        "capability:read",
-        "capability:search",
-        "capability:summarize",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "inbox",
-        "messaging",
-        "cross-channel"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": "domain:inbox",
-      "_capabilities": [
-        "capability:read",
-        "capability:search",
-        "capability:summarize"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "INBOX_SEARCH",
-        "description": "cross-channel inbox (\"show inbox\", \"all messages\", \"search every channel\", \"summarize inboxes\") -> INBOX; per-channel -> MESSAGE\nINBOX list|search|summarize|triage|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"search\" for this virtual; do not change).",
-              "enum": [
-                "search"
-              ],
-              "default": "search"
-            },
-            "platforms": {
-              "type": "array",
-              "description": "Optional platform filter: gmail | slack | discord | telegram | signal | imessage | whatsapp. Default all.",
-              "items": {
-                "type": "string"
-              }
-            },
-            "since": {
-              "type": "string",
-              "description": "receivedAt lower bound. ISO-8601."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Limit per platform. Default 50."
-            },
-            "query": {
-              "type": "string",
-              "description": "Required for search. Free-form query."
-            },
-            "entryId": {
-              "type": "string",
-              "description": "Persisted triage entry id for reply, snooze, archive, or approve."
-            },
-            "body": {
-              "type": "string",
-              "description": "Reply body for reply/approve."
-            },
-            "until": {
-              "type": "string",
-              "description": "Snooze-until timestamp for snooze. ISO-8601."
-            },
-            "confirmed": {
-              "type": "boolean",
-              "description": "Explicit owner confirmation for sending reply/approve."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [
-        "domain:inbox",
-        "capability:read",
-        "capability:search",
-        "capability:summarize",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "inbox",
-        "messaging",
-        "cross-channel"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": "domain:inbox",
-      "_capabilities": [
-        "capability:read",
-        "capability:search",
-        "capability:summarize"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "INBOX_SNOOZE",
-        "description": "cross-channel inbox (\"show inbox\", \"all messages\", \"search every channel\", \"summarize inboxes\") -> INBOX; per-channel -> MESSAGE\nINBOX list|search|summarize|triage|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"snooze\" for this virtual; do not change).",
-              "enum": [
-                "snooze"
-              ],
-              "default": "snooze"
-            },
-            "platforms": {
-              "type": "array",
-              "description": "Optional platform filter: gmail | slack | discord | telegram | signal | imessage | whatsapp. Default all.",
-              "items": {
-                "type": "string"
-              }
-            },
-            "since": {
-              "type": "string",
-              "description": "receivedAt lower bound. ISO-8601."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Limit per platform. Default 50."
-            },
-            "query": {
-              "type": "string",
-              "description": "Required for search. Free-form query."
-            },
-            "entryId": {
-              "type": "string",
-              "description": "Persisted triage entry id for reply, snooze, archive, or approve."
-            },
-            "body": {
-              "type": "string",
-              "description": "Reply body for reply/approve."
-            },
-            "until": {
-              "type": "string",
-              "description": "Snooze-until timestamp for snooze. ISO-8601."
-            },
-            "confirmed": {
-              "type": "boolean",
-              "description": "Explicit owner confirmation for sending reply/approve."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [
-        "domain:inbox",
-        "capability:read",
-        "capability:search",
-        "capability:summarize",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "inbox",
-        "messaging",
-        "cross-channel"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": "domain:inbox",
-      "_capabilities": [
-        "capability:read",
-        "capability:search",
-        "capability:summarize"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "INBOX_SUMMARIZE",
-        "description": "cross-channel inbox (\"show inbox\", \"all messages\", \"search every channel\", \"summarize inboxes\") -> INBOX; per-channel -> MESSAGE\nINBOX list|search|summarize|triage|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"summarize\" for this virtual; do not change).",
-              "enum": [
-                "summarize"
-              ],
-              "default": "summarize"
-            },
-            "platforms": {
-              "type": "array",
-              "description": "Optional platform filter: gmail | slack | discord | telegram | signal | imessage | whatsapp. Default all.",
-              "items": {
-                "type": "string"
-              }
-            },
-            "since": {
-              "type": "string",
-              "description": "receivedAt lower bound. ISO-8601."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Limit per platform. Default 50."
-            },
-            "query": {
-              "type": "string",
-              "description": "Required for search. Free-form query."
-            },
-            "entryId": {
-              "type": "string",
-              "description": "Persisted triage entry id for reply, snooze, archive, or approve."
-            },
-            "body": {
-              "type": "string",
-              "description": "Reply body for reply/approve."
-            },
-            "until": {
-              "type": "string",
-              "description": "Snooze-until timestamp for snooze. ISO-8601."
-            },
-            "confirmed": {
-              "type": "boolean",
-              "description": "Explicit owner confirmation for sending reply/approve."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [
-        "domain:inbox",
-        "capability:read",
-        "capability:search",
-        "capability:summarize",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "inbox",
-        "messaging",
-        "cross-channel"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": "domain:inbox",
-      "_capabilities": [
-        "capability:read",
-        "capability:search",
-        "capability:summarize"
-      ],
-      "_surfaces": [
-        "surface:internal"
-      ],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "INBOX_TRIAGE",
-        "description": "cross-channel inbox (\"show inbox\", \"all messages\", \"search every channel\", \"summarize inboxes\") -> INBOX; per-channel -> MESSAGE\nINBOX list|search|summarize|triage|reply|snooze|archive|approve gmail|slack|discord|telegram|signal|imessage|whatsapp",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"triage\" for this virtual; do not change).",
-              "enum": [
-                "triage"
-              ],
-              "default": "triage"
-            },
-            "platforms": {
-              "type": "array",
-              "description": "Optional platform filter: gmail | slack | discord | telegram | signal | imessage | whatsapp. Default all.",
-              "items": {
-                "type": "string"
-              }
-            },
-            "since": {
-              "type": "string",
-              "description": "receivedAt lower bound. ISO-8601."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Limit per platform. Default 50."
-            },
-            "query": {
-              "type": "string",
-              "description": "Required for search. Free-form query."
-            },
-            "entryId": {
-              "type": "string",
-              "description": "Persisted triage entry id for reply, snooze, archive, or approve."
-            },
-            "body": {
-              "type": "string",
-              "description": "Reply body for reply/approve."
-            },
-            "until": {
-              "type": "string",
-              "description": "Snooze-until timestamp for snooze. ISO-8601."
-            },
-            "confirmed": {
-              "type": "boolean",
-              "description": "Explicit owner confirmation for sending reply/approve."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [
-        "domain:inbox",
-        "capability:read",
-        "capability:search",
-        "capability:summarize",
-        "surface:internal"
-      ],
-      "_contexts": [
-        "inbox",
-        "messaging",
-        "cross-channel"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": "domain:inbox",
-      "_capabilities": [
-        "capability:read",
-        "capability:search",
-        "capability:summarize"
       ],
       "_surfaces": [
         "surface:internal"
@@ -6981,7 +6483,7 @@
       "type": "function",
       "function": {
         "name": "MESSAGE",
-        "description": "primary message action send read_channel read_with_contact search list_channels list_servers list_connections join leave react edit delete pin get_user triage list_inbox search_inbox draft_reply draft_followup respond send_draft schedule_draft_send manage dm group channel room thread user server inbox draft connections platforms reachable",
+        "description": "send/read/search/triage messages on a connector or channel, or manage the inbox/drafts -> MESSAGE; do NOT use to reply in the CURRENT chat/thread -> REPLY, to join/mute/follow a channel -> ROOM, or to publish to a public feed/timeline -> POST\nprimary message action send read_channel read_with_contact search list_channels list_servers list_connections join leave react edit delete pin get_user triage list_inbox search_inbox draft_reply draft_followup respond send_draft schedule_draft_send manage dm group channel room thread user server inbox draft connections platforms reachable",
         "parameters": {
           "type": "object",
           "required": [],
@@ -7801,6 +7303,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -7826,7 +7329,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ALARMS_COMPLETE",
-        "description": "owner alarms: action=create|update|delete|complete|skip|snooze|review -> OWNER_ALARMS; owner-only LifeOps\nowner alarms: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner alarms: create/update/delete/complete/skip/snooze/review alarm reminders. — subaction = complete",
         "parameters": {
           "type": "object",
           "required": [],
@@ -7892,6 +7395,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -7917,7 +7421,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ALARMS_CREATE",
-        "description": "owner alarms: action=create|update|delete|complete|skip|snooze|review -> OWNER_ALARMS; owner-only LifeOps\nowner alarms: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner alarms: create/update/delete/complete/skip/snooze/review alarm reminders. — subaction = create",
         "parameters": {
           "type": "object",
           "required": [],
@@ -7983,6 +7487,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -8008,7 +7513,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ALARMS_DELETE",
-        "description": "owner alarms: action=create|update|delete|complete|skip|snooze|review -> OWNER_ALARMS; owner-only LifeOps\nowner alarms: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner alarms: create/update/delete/complete/skip/snooze/review alarm reminders. — subaction = delete",
         "parameters": {
           "type": "object",
           "required": [],
@@ -8074,6 +7579,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -8099,7 +7605,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ALARMS_REVIEW",
-        "description": "owner alarms: action=create|update|delete|complete|skip|snooze|review -> OWNER_ALARMS; owner-only LifeOps\nowner alarms: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner alarms: create/update/delete/complete/skip/snooze/review alarm reminders. — subaction = review",
         "parameters": {
           "type": "object",
           "required": [],
@@ -8165,6 +7671,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -8190,7 +7697,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ALARMS_SKIP",
-        "description": "owner alarms: action=create|update|delete|complete|skip|snooze|review -> OWNER_ALARMS; owner-only LifeOps\nowner alarms: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner alarms: create/update/delete/complete/skip/snooze/review alarm reminders. — subaction = skip",
         "parameters": {
           "type": "object",
           "required": [],
@@ -8256,6 +7763,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -8281,7 +7789,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ALARMS_SNOOZE",
-        "description": "owner alarms: action=create|update|delete|complete|skip|snooze|review -> OWNER_ALARMS; owner-only LifeOps\nowner alarms: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner alarms: create/update/delete/complete/skip/snooze/review alarm reminders. — subaction = snooze",
         "parameters": {
           "type": "object",
           "required": [],
@@ -8347,6 +7855,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -8372,7 +7881,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ALARMS_UPDATE",
-        "description": "owner alarms: action=create|update|delete|complete|skip|snooze|review -> OWNER_ALARMS; owner-only LifeOps\nowner alarms: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner alarms: create/update/delete/complete/skip/snooze/review alarm reminders. — subaction = update",
         "parameters": {
           "type": "object",
           "required": [],
@@ -8438,6 +7947,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -8568,7 +8078,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_DOCUMENTS_CLOSE_REQUEST",
-        "description": "owner document signature/approval/upload/portal/ID-form (\"get signed\", \"send approval\", \"upload deck\", \"track NDA deadline\", \"close doc\") -> OWNER_DOCUMENTS; approval queue resolution -> RESOLVE_REQUEST\nOWNER_DOCUMENTS signature|approval|deadline|upload_asset|collect_id|close_request",
+        "description": "Owner documents: signature requests, approvals, deadlines, portal uploads, ID/form collection, close-out. Ops: request_signature|request_approval|track_deadline|upload_asset|collect_id|close_request. — subaction = close_request",
         "parameters": {
           "type": "object",
           "required": [],
@@ -8669,7 +8179,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_DOCUMENTS_COLLECT_ID",
-        "description": "owner document signature/approval/upload/portal/ID-form (\"get signed\", \"send approval\", \"upload deck\", \"track NDA deadline\", \"close doc\") -> OWNER_DOCUMENTS; approval queue resolution -> RESOLVE_REQUEST\nOWNER_DOCUMENTS signature|approval|deadline|upload_asset|collect_id|close_request",
+        "description": "Owner documents: signature requests, approvals, deadlines, portal uploads, ID/form collection, close-out. Ops: request_signature|request_approval|track_deadline|upload_asset|collect_id|close_request. — subaction = collect_id",
         "parameters": {
           "type": "object",
           "required": [],
@@ -8770,7 +8280,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_DOCUMENTS_REQUEST_APPROVAL",
-        "description": "owner document signature/approval/upload/portal/ID-form (\"get signed\", \"send approval\", \"upload deck\", \"track NDA deadline\", \"close doc\") -> OWNER_DOCUMENTS; approval queue resolution -> RESOLVE_REQUEST\nOWNER_DOCUMENTS signature|approval|deadline|upload_asset|collect_id|close_request",
+        "description": "Owner documents: signature requests, approvals, deadlines, portal uploads, ID/form collection, close-out. Ops: request_signature|request_approval|track_deadline|upload_asset|collect_id|close_request. — subaction = request_approval",
         "parameters": {
           "type": "object",
           "required": [],
@@ -8871,7 +8381,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_DOCUMENTS_REQUEST_SIGNATURE",
-        "description": "owner document signature/approval/upload/portal/ID-form (\"get signed\", \"send approval\", \"upload deck\", \"track NDA deadline\", \"close doc\") -> OWNER_DOCUMENTS; approval queue resolution -> RESOLVE_REQUEST\nOWNER_DOCUMENTS signature|approval|deadline|upload_asset|collect_id|close_request",
+        "description": "Owner documents: signature requests, approvals, deadlines, portal uploads, ID/form collection, close-out. Ops: request_signature|request_approval|track_deadline|upload_asset|collect_id|close_request. — subaction = request_signature",
         "parameters": {
           "type": "object",
           "required": [],
@@ -8972,7 +8482,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_DOCUMENTS_TRACK_DEADLINE",
-        "description": "owner document signature/approval/upload/portal/ID-form (\"get signed\", \"send approval\", \"upload deck\", \"track NDA deadline\", \"close doc\") -> OWNER_DOCUMENTS; approval queue resolution -> RESOLVE_REQUEST\nOWNER_DOCUMENTS signature|approval|deadline|upload_asset|collect_id|close_request",
+        "description": "Owner documents: signature requests, approvals, deadlines, portal uploads, ID/form collection, close-out. Ops: request_signature|request_approval|track_deadline|upload_asset|collect_id|close_request. — subaction = track_deadline",
         "parameters": {
           "type": "object",
           "required": [],
@@ -9073,7 +8583,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_DOCUMENTS_UPLOAD_ASSET",
-        "description": "owner document signature/approval/upload/portal/ID-form (\"get signed\", \"send approval\", \"upload deck\", \"track NDA deadline\", \"close doc\") -> OWNER_DOCUMENTS; approval queue resolution -> RESOLVE_REQUEST\nOWNER_DOCUMENTS signature|approval|deadline|upload_asset|collect_id|close_request",
+        "description": "Owner documents: signature requests, approvals, deadlines, portal uploads, ID/form collection, close-out. Ops: request_signature|request_approval|track_deadline|upload_asset|collect_id|close_request. — subaction = upload_asset",
         "parameters": {
           "type": "object",
           "required": [],
@@ -9310,7 +8820,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_FINANCES_ADD_SOURCE",
-        "description": "owner finances dashboard|sources|csv|transactions|spending|recurring|subscription",
+        "description": "Owner finances: sources, imports, spending, recurring charges, subscriptions. — subaction = add_source",
         "parameters": {
           "type": "object",
           "required": [],
@@ -9437,7 +8947,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_FINANCES_DASHBOARD",
-        "description": "owner finances dashboard|sources|csv|transactions|spending|recurring|subscription",
+        "description": "Owner finances: sources, imports, spending, recurring charges, subscriptions. — subaction = dashboard",
         "parameters": {
           "type": "object",
           "required": [],
@@ -9564,7 +9074,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_FINANCES_IMPORT_CSV",
-        "description": "owner finances dashboard|sources|csv|transactions|spending|recurring|subscription",
+        "description": "Owner finances: sources, imports, spending, recurring charges, subscriptions. — subaction = import_csv",
         "parameters": {
           "type": "object",
           "required": [],
@@ -9691,7 +9201,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_FINANCES_LIST_SOURCES",
-        "description": "owner finances dashboard|sources|csv|transactions|spending|recurring|subscription",
+        "description": "Owner finances: sources, imports, spending, recurring charges, subscriptions. — subaction = list_sources",
         "parameters": {
           "type": "object",
           "required": [],
@@ -9818,7 +9328,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_FINANCES_LIST_TRANSACTIONS",
-        "description": "owner finances dashboard|sources|csv|transactions|spending|recurring|subscription",
+        "description": "Owner finances: sources, imports, spending, recurring charges, subscriptions. — subaction = list_transactions",
         "parameters": {
           "type": "object",
           "required": [],
@@ -9945,7 +9455,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_FINANCES_RECURRING_CHARGES",
-        "description": "owner finances dashboard|sources|csv|transactions|spending|recurring|subscription",
+        "description": "Owner finances: sources, imports, spending, recurring charges, subscriptions. — subaction = recurring_charges",
         "parameters": {
           "type": "object",
           "required": [],
@@ -10072,7 +9582,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_FINANCES_REMOVE_SOURCE",
-        "description": "owner finances dashboard|sources|csv|transactions|spending|recurring|subscription",
+        "description": "Owner finances: sources, imports, spending, recurring charges, subscriptions. — subaction = remove_source",
         "parameters": {
           "type": "object",
           "required": [],
@@ -10199,7 +9709,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_FINANCES_SPENDING_SUMMARY",
-        "description": "owner finances dashboard|sources|csv|transactions|spending|recurring|subscription",
+        "description": "Owner finances: sources, imports, spending, recurring charges, subscriptions. — subaction = spending_summary",
         "parameters": {
           "type": "object",
           "required": [],
@@ -10326,7 +9836,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_FINANCES_SUBSCRIPTION_AUDIT",
-        "description": "owner finances dashboard|sources|csv|transactions|spending|recurring|subscription",
+        "description": "Owner finances: sources, imports, spending, recurring charges, subscriptions. — subaction = subscription_audit",
         "parameters": {
           "type": "object",
           "required": [],
@@ -10453,7 +9963,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_FINANCES_SUBSCRIPTION_CANCEL",
-        "description": "owner finances dashboard|sources|csv|transactions|spending|recurring|subscription",
+        "description": "Owner finances: sources, imports, spending, recurring charges, subscriptions. — subaction = subscription_cancel",
         "parameters": {
           "type": "object",
           "required": [],
@@ -10580,7 +10090,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_FINANCES_SUBSCRIPTION_STATUS",
-        "description": "owner finances dashboard|sources|csv|transactions|spending|recurring|subscription",
+        "description": "Owner finances: sources, imports, spending, recurring charges, subscriptions. — subaction = subscription_status",
         "parameters": {
           "type": "object",
           "required": [],
@@ -10707,7 +10217,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_GOALS",
-        "description": "owner goals: action=create|update|delete|review; backing kind=goal -> OWNER_GOALS; owner-only LifeOps\nowner goals: action=create|update|delete|review; backing kind=goal",
+        "description": "long-horizon outcomes/aspirations the owner is working toward ('my goal is X', 'life goal') -> OWNER_GOALS; do NOT use for time-triggered reminders ('remind me at 9pm') -> OWNER_REMINDERS, one-off checklist items -> OWNER_TODOS, or recurring daily habits -> OWNER_ROUTINES\nowner goals: create|update|delete|review savings/trip/fitness/learning/sleep outcomes",
         "parameters": {
           "type": "object",
           "required": [],
@@ -10775,6 +10285,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -10800,7 +10311,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_GOALS_CREATE",
-        "description": "owner goals: action=create|update|delete|review; backing kind=goal -> OWNER_GOALS; owner-only LifeOps\nowner goals: action=create|update|delete|review; backing kind=goal",
+        "description": "Owner goals: create/update/delete/review long-horizon goals/progress. Use for savings, travel/trip, fitness, learning, sleep, health, and other owner outcomes that need success criteria, support strategy, or check-ins. — subaction = create",
         "parameters": {
           "type": "object",
           "required": [],
@@ -10866,6 +10377,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -10891,7 +10403,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_GOALS_DELETE",
-        "description": "owner goals: action=create|update|delete|review; backing kind=goal -> OWNER_GOALS; owner-only LifeOps\nowner goals: action=create|update|delete|review; backing kind=goal",
+        "description": "Owner goals: create/update/delete/review long-horizon goals/progress. Use for savings, travel/trip, fitness, learning, sleep, health, and other owner outcomes that need success criteria, support strategy, or check-ins. — subaction = delete",
         "parameters": {
           "type": "object",
           "required": [],
@@ -10957,6 +10469,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -10982,7 +10495,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_GOALS_REVIEW",
-        "description": "owner goals: action=create|update|delete|review; backing kind=goal -> OWNER_GOALS; owner-only LifeOps\nowner goals: action=create|update|delete|review; backing kind=goal",
+        "description": "Owner goals: create/update/delete/review long-horizon goals/progress. Use for savings, travel/trip, fitness, learning, sleep, health, and other owner outcomes that need success criteria, support strategy, or check-ins. — subaction = review",
         "parameters": {
           "type": "object",
           "required": [],
@@ -11048,6 +10561,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -11073,7 +10587,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_GOALS_UPDATE",
-        "description": "owner goals: action=create|update|delete|review; backing kind=goal -> OWNER_GOALS; owner-only LifeOps\nowner goals: action=create|update|delete|review; backing kind=goal",
+        "description": "Owner goals: create/update/delete/review long-horizon goals/progress. Use for savings, travel/trip, fitness, learning, sleep, health, and other owner outcomes that need success criteria, support strategy, or check-ins. — subaction = update",
         "parameters": {
           "type": "object",
           "required": [],
@@ -11139,6 +10653,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -11227,7 +10742,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_HEALTH_BY_METRIC",
-        "description": "owner health/wearable reads (\"step count\", \"sleep last night\", heart rate, workouts) -> OWNER_HEALTH\nowner health: today|trend|by_metric|status; read-only telemetry",
+        "description": "Owner health telemetry reads: HealthKit, Google Fit, Strava, Fitbit, Withings, Oura. Ops: today|trend|by_metric|status. — subaction = by_metric",
         "parameters": {
           "type": "object",
           "required": [],
@@ -11288,7 +10803,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_HEALTH_STATUS",
-        "description": "owner health/wearable reads (\"step count\", \"sleep last night\", heart rate, workouts) -> OWNER_HEALTH\nowner health: today|trend|by_metric|status; read-only telemetry",
+        "description": "Owner health telemetry reads: HealthKit, Google Fit, Strava, Fitbit, Withings, Oura. Ops: today|trend|by_metric|status. — subaction = status",
         "parameters": {
           "type": "object",
           "required": [],
@@ -11349,7 +10864,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_HEALTH_TODAY",
-        "description": "owner health/wearable reads (\"step count\", \"sleep last night\", heart rate, workouts) -> OWNER_HEALTH\nowner health: today|trend|by_metric|status; read-only telemetry",
+        "description": "Owner health telemetry reads: HealthKit, Google Fit, Strava, Fitbit, Withings, Oura. Ops: today|trend|by_metric|status. — subaction = today",
         "parameters": {
           "type": "object",
           "required": [],
@@ -11410,7 +10925,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_HEALTH_TREND",
-        "description": "owner health/wearable reads (\"step count\", \"sleep last night\", heart rate, workouts) -> OWNER_HEALTH\nowner health: today|trend|by_metric|status; read-only telemetry",
+        "description": "Owner health telemetry reads: HealthKit, Google Fit, Strava, Fitbit, Withings, Oura. Ops: today|trend|by_metric|status. — subaction = trend",
         "parameters": {
           "type": "object",
           "required": [],
@@ -11471,7 +10986,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_REMINDERS",
-        "description": "owner reminders: action=create|update|delete|complete|skip|snooze|review -> OWNER_REMINDERS; owner-only LifeOps\nowner reminders: action=create|update|delete|complete|skip|snooze|review",
+        "description": "owner reminders/deadlines: action=create|update|delete|complete|skip|snooze|review -> OWNER_REMINDERS; owner-only LifeOps\nowner reminders/deadlines: action=create|update|delete|complete|skip|snooze|review",
         "parameters": {
           "type": "object",
           "required": [],
@@ -11537,11 +11052,13 @@
         "capability:update",
         "capability:delete",
         "capability:schedule",
-        "surface:internal"
+        "surface:internal",
+        "follow-up-capable"
       ],
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -11567,7 +11084,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_REMINDERS_COMPLETE",
-        "description": "owner reminders: action=create|update|delete|complete|skip|snooze|review -> OWNER_REMINDERS; owner-only LifeOps\nowner reminders: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner reminders: create/update/delete/complete/skip/snooze/review one-off, date-only, deadline (\"by the 20th\"), and recurring reminders. — subaction = complete",
         "parameters": {
           "type": "object",
           "required": [],
@@ -11628,11 +11145,13 @@
         "capability:update",
         "capability:delete",
         "capability:schedule",
-        "surface:internal"
+        "surface:internal",
+        "follow-up-capable"
       ],
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -11658,7 +11177,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_REMINDERS_CREATE",
-        "description": "owner reminders: action=create|update|delete|complete|skip|snooze|review -> OWNER_REMINDERS; owner-only LifeOps\nowner reminders: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner reminders: create/update/delete/complete/skip/snooze/review one-off, date-only, deadline (\"by the 20th\"), and recurring reminders. — subaction = create",
         "parameters": {
           "type": "object",
           "required": [],
@@ -11719,11 +11238,13 @@
         "capability:update",
         "capability:delete",
         "capability:schedule",
-        "surface:internal"
+        "surface:internal",
+        "follow-up-capable"
       ],
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -11749,7 +11270,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_REMINDERS_DELETE",
-        "description": "owner reminders: action=create|update|delete|complete|skip|snooze|review -> OWNER_REMINDERS; owner-only LifeOps\nowner reminders: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner reminders: create/update/delete/complete/skip/snooze/review one-off, date-only, deadline (\"by the 20th\"), and recurring reminders. — subaction = delete",
         "parameters": {
           "type": "object",
           "required": [],
@@ -11810,11 +11331,13 @@
         "capability:update",
         "capability:delete",
         "capability:schedule",
-        "surface:internal"
+        "surface:internal",
+        "follow-up-capable"
       ],
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -11840,7 +11363,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_REMINDERS_REVIEW",
-        "description": "owner reminders: action=create|update|delete|complete|skip|snooze|review -> OWNER_REMINDERS; owner-only LifeOps\nowner reminders: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner reminders: create/update/delete/complete/skip/snooze/review one-off, date-only, deadline (\"by the 20th\"), and recurring reminders. — subaction = review",
         "parameters": {
           "type": "object",
           "required": [],
@@ -11901,11 +11424,13 @@
         "capability:update",
         "capability:delete",
         "capability:schedule",
-        "surface:internal"
+        "surface:internal",
+        "follow-up-capable"
       ],
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -11931,7 +11456,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_REMINDERS_SKIP",
-        "description": "owner reminders: action=create|update|delete|complete|skip|snooze|review -> OWNER_REMINDERS; owner-only LifeOps\nowner reminders: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner reminders: create/update/delete/complete/skip/snooze/review one-off, date-only, deadline (\"by the 20th\"), and recurring reminders. — subaction = skip",
         "parameters": {
           "type": "object",
           "required": [],
@@ -11992,11 +11517,13 @@
         "capability:update",
         "capability:delete",
         "capability:schedule",
-        "surface:internal"
+        "surface:internal",
+        "follow-up-capable"
       ],
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -12022,7 +11549,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_REMINDERS_SNOOZE",
-        "description": "owner reminders: action=create|update|delete|complete|skip|snooze|review -> OWNER_REMINDERS; owner-only LifeOps\nowner reminders: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner reminders: create/update/delete/complete/skip/snooze/review one-off, date-only, deadline (\"by the 20th\"), and recurring reminders. — subaction = snooze",
         "parameters": {
           "type": "object",
           "required": [],
@@ -12083,11 +11610,13 @@
         "capability:update",
         "capability:delete",
         "capability:schedule",
-        "surface:internal"
+        "surface:internal",
+        "follow-up-capable"
       ],
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -12113,7 +11642,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_REMINDERS_UPDATE",
-        "description": "owner reminders: action=create|update|delete|complete|skip|snooze|review -> OWNER_REMINDERS; owner-only LifeOps\nowner reminders: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner reminders: create/update/delete/complete/skip/snooze/review one-off, date-only, deadline (\"by the 20th\"), and recurring reminders. — subaction = update",
         "parameters": {
           "type": "object",
           "required": [],
@@ -12174,11 +11703,13 @@
         "capability:update",
         "capability:delete",
         "capability:schedule",
-        "surface:internal"
+        "surface:internal",
+        "follow-up-capable"
       ],
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -12277,6 +11808,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -12302,7 +11834,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ROUTINES_COMPLETE",
-        "description": "owner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect -> OWNER_ROUTINES; owner-only LifeOps\nowner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect",
+        "description": "Owner habits & routines: save a new recurring habit/routine from chat (\"brush my teeth at 8 am and 9 pm every day\", \"meditate daily\") — builds the habit definition + reminder plan; also update/delete/complete/skip/snooze/review; passive schedule inference. — subaction = complete",
         "parameters": {
           "type": "object",
           "required": [],
@@ -12368,6 +11900,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -12393,7 +11926,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ROUTINES_CREATE",
-        "description": "owner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect -> OWNER_ROUTINES; owner-only LifeOps\nowner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect",
+        "description": "Owner habits & routines: save a new recurring habit/routine from chat (\"brush my teeth at 8 am and 9 pm every day\", \"meditate daily\") — builds the habit definition + reminder plan; also update/delete/complete/skip/snooze/review; passive schedule inference. — subaction = create",
         "parameters": {
           "type": "object",
           "required": [],
@@ -12459,6 +11992,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -12484,7 +12018,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ROUTINES_DELETE",
-        "description": "owner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect -> OWNER_ROUTINES; owner-only LifeOps\nowner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect",
+        "description": "Owner habits & routines: save a new recurring habit/routine from chat (\"brush my teeth at 8 am and 9 pm every day\", \"meditate daily\") — builds the habit definition + reminder plan; also update/delete/complete/skip/snooze/review; passive schedule inference. — subaction = delete",
         "parameters": {
           "type": "object",
           "required": [],
@@ -12550,6 +12084,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -12575,7 +12110,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ROUTINES_REVIEW",
-        "description": "owner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect -> OWNER_ROUTINES; owner-only LifeOps\nowner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect",
+        "description": "Owner habits & routines: save a new recurring habit/routine from chat (\"brush my teeth at 8 am and 9 pm every day\", \"meditate daily\") — builds the habit definition + reminder plan; also update/delete/complete/skip/snooze/review; passive schedule inference. — subaction = review",
         "parameters": {
           "type": "object",
           "required": [],
@@ -12641,6 +12176,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -12666,7 +12202,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ROUTINES_SCHEDULE_INSPECT",
-        "description": "owner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect -> OWNER_ROUTINES; owner-only LifeOps\nowner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect",
+        "description": "Owner habits & routines: save a new recurring habit/routine from chat (\"brush my teeth at 8 am and 9 pm every day\", \"meditate daily\") — builds the habit definition + reminder plan; also update/delete/complete/skip/snooze/review; passive schedule inference. — subaction = schedule_inspect",
         "parameters": {
           "type": "object",
           "required": [],
@@ -12732,6 +12268,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -12757,7 +12294,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ROUTINES_SCHEDULE_SUMMARY",
-        "description": "owner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect -> OWNER_ROUTINES; owner-only LifeOps\nowner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect",
+        "description": "Owner habits & routines: save a new recurring habit/routine from chat (\"brush my teeth at 8 am and 9 pm every day\", \"meditate daily\") — builds the habit definition + reminder plan; also update/delete/complete/skip/snooze/review; passive schedule inference. — subaction = schedule_summary",
         "parameters": {
           "type": "object",
           "required": [],
@@ -12823,6 +12360,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -12848,7 +12386,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ROUTINES_SKIP",
-        "description": "owner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect -> OWNER_ROUTINES; owner-only LifeOps\nowner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect",
+        "description": "Owner habits & routines: save a new recurring habit/routine from chat (\"brush my teeth at 8 am and 9 pm every day\", \"meditate daily\") — builds the habit definition + reminder plan; also update/delete/complete/skip/snooze/review; passive schedule inference. — subaction = skip",
         "parameters": {
           "type": "object",
           "required": [],
@@ -12914,6 +12452,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -12939,7 +12478,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ROUTINES_SNOOZE",
-        "description": "owner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect -> OWNER_ROUTINES; owner-only LifeOps\nowner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect",
+        "description": "Owner habits & routines: save a new recurring habit/routine from chat (\"brush my teeth at 8 am and 9 pm every day\", \"meditate daily\") — builds the habit definition + reminder plan; also update/delete/complete/skip/snooze/review; passive schedule inference. — subaction = snooze",
         "parameters": {
           "type": "object",
           "required": [],
@@ -13005,6 +12544,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -13030,7 +12570,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_ROUTINES_UPDATE",
-        "description": "owner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect -> OWNER_ROUTINES; owner-only LifeOps\nowner habits/routines: create new habit from chat (daily/weekly times + reminder plan)|update|delete|complete|skip|snooze|review|schedule_summary|inspect",
+        "description": "Owner habits & routines: save a new recurring habit/routine from chat (\"brush my teeth at 8 am and 9 pm every day\", \"meditate daily\") — builds the habit definition + reminder plan; also update/delete/complete/skip/snooze/review; passive schedule inference. — subaction = update",
         "parameters": {
           "type": "object",
           "required": [],
@@ -13096,6 +12636,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -13114,883 +12655,6 @@
       "_surfaces": [
         "surface:internal"
       ],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "OWNER_SCREENTIME",
-        "description": "owner screentime summary|today|weekly|by_app|by_website|activity|time_on_app|time_on_site",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Owner screentime op.",
-              "enum": [
-                "summary",
-                "today",
-                "weekly",
-                "weekly_average_by_app",
-                "by_app",
-                "by_website",
-                "activity_report",
-                "time_on_app",
-                "time_on_site",
-                "browser_activity"
-              ]
-            },
-            "source": {
-              "type": "string",
-              "description": "source filter: app|website",
-              "enum": [
-                "app",
-                "website"
-              ]
-            },
-            "identifier": {
-              "type": "string",
-              "description": "Specific app bundle id or website domain when filtering screen-time to one source."
-            },
-            "date": {
-              "type": "string",
-              "description": "YYYY-MM-DD for the today subaction."
-            },
-            "days": {
-              "type": "number",
-              "description": "Number of days back from now for weekly / weekly_average_by_app windows."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Top-N for by_app / by_website / browser_activity (default 10)."
-            },
-            "windowDays": {
-              "type": "number",
-              "description": "Window in days for by_app / by_website summary queries."
-            },
-            "windowHours": {
-              "type": "number",
-              "description": "Window in hours for activity_report / time_on_app / time_on_site (default 24, max 720)."
-            },
-            "appNameOrBundleId": {
-              "type": "string",
-              "description": "App name (e.g. 'Safari') or bundle id (e.g. 'com.apple.Safari') for time_on_app."
-            },
-            "domain": {
-              "type": "string",
-              "description": "Hostname (e.g. 'github.com') for time_on_site."
-            },
-            "deviceId": {
-              "type": "string",
-              "description": "Filter browser_activity to one registered device id; omit for default."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [],
-      "_contexts": [
-        "general"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": null,
-      "_capabilities": [],
-      "_surfaces": [],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "OWNER_SCREENTIME_ACTIVITY_REPORT",
-        "description": "owner screentime summary|today|weekly|by_app|by_website|activity|time_on_app|time_on_site",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"activity_report\" for this virtual; do not change).",
-              "enum": [
-                "activity_report"
-              ],
-              "default": "activity_report"
-            },
-            "source": {
-              "type": "string",
-              "description": "source filter: app|website",
-              "enum": [
-                "app",
-                "website"
-              ]
-            },
-            "identifier": {
-              "type": "string",
-              "description": "Specific app bundle id or website domain when filtering screen-time to one source."
-            },
-            "date": {
-              "type": "string",
-              "description": "YYYY-MM-DD for the today subaction."
-            },
-            "days": {
-              "type": "number",
-              "description": "Number of days back from now for weekly / weekly_average_by_app windows."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Top-N for by_app / by_website / browser_activity (default 10)."
-            },
-            "windowDays": {
-              "type": "number",
-              "description": "Window in days for by_app / by_website summary queries."
-            },
-            "windowHours": {
-              "type": "number",
-              "description": "Window in hours for activity_report / time_on_app / time_on_site (default 24, max 720)."
-            },
-            "appNameOrBundleId": {
-              "type": "string",
-              "description": "App name (e.g. 'Safari') or bundle id (e.g. 'com.apple.Safari') for time_on_app."
-            },
-            "domain": {
-              "type": "string",
-              "description": "Hostname (e.g. 'github.com') for time_on_site."
-            },
-            "deviceId": {
-              "type": "string",
-              "description": "Filter browser_activity to one registered device id; omit for default."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [],
-      "_contexts": [
-        "general"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": null,
-      "_capabilities": [],
-      "_surfaces": [],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "OWNER_SCREENTIME_BROWSER_ACTIVITY",
-        "description": "owner screentime summary|today|weekly|by_app|by_website|activity|time_on_app|time_on_site",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"browser_activity\" for this virtual; do not change).",
-              "enum": [
-                "browser_activity"
-              ],
-              "default": "browser_activity"
-            },
-            "source": {
-              "type": "string",
-              "description": "source filter: app|website",
-              "enum": [
-                "app",
-                "website"
-              ]
-            },
-            "identifier": {
-              "type": "string",
-              "description": "Specific app bundle id or website domain when filtering screen-time to one source."
-            },
-            "date": {
-              "type": "string",
-              "description": "YYYY-MM-DD for the today subaction."
-            },
-            "days": {
-              "type": "number",
-              "description": "Number of days back from now for weekly / weekly_average_by_app windows."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Top-N for by_app / by_website / browser_activity (default 10)."
-            },
-            "windowDays": {
-              "type": "number",
-              "description": "Window in days for by_app / by_website summary queries."
-            },
-            "windowHours": {
-              "type": "number",
-              "description": "Window in hours for activity_report / time_on_app / time_on_site (default 24, max 720)."
-            },
-            "appNameOrBundleId": {
-              "type": "string",
-              "description": "App name (e.g. 'Safari') or bundle id (e.g. 'com.apple.Safari') for time_on_app."
-            },
-            "domain": {
-              "type": "string",
-              "description": "Hostname (e.g. 'github.com') for time_on_site."
-            },
-            "deviceId": {
-              "type": "string",
-              "description": "Filter browser_activity to one registered device id; omit for default."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [],
-      "_contexts": [
-        "general"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": null,
-      "_capabilities": [],
-      "_surfaces": [],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "OWNER_SCREENTIME_BY_APP",
-        "description": "owner screentime summary|today|weekly|by_app|by_website|activity|time_on_app|time_on_site",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"by_app\" for this virtual; do not change).",
-              "enum": [
-                "by_app"
-              ],
-              "default": "by_app"
-            },
-            "source": {
-              "type": "string",
-              "description": "source filter: app|website",
-              "enum": [
-                "app",
-                "website"
-              ]
-            },
-            "identifier": {
-              "type": "string",
-              "description": "Specific app bundle id or website domain when filtering screen-time to one source."
-            },
-            "date": {
-              "type": "string",
-              "description": "YYYY-MM-DD for the today subaction."
-            },
-            "days": {
-              "type": "number",
-              "description": "Number of days back from now for weekly / weekly_average_by_app windows."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Top-N for by_app / by_website / browser_activity (default 10)."
-            },
-            "windowDays": {
-              "type": "number",
-              "description": "Window in days for by_app / by_website summary queries."
-            },
-            "windowHours": {
-              "type": "number",
-              "description": "Window in hours for activity_report / time_on_app / time_on_site (default 24, max 720)."
-            },
-            "appNameOrBundleId": {
-              "type": "string",
-              "description": "App name (e.g. 'Safari') or bundle id (e.g. 'com.apple.Safari') for time_on_app."
-            },
-            "domain": {
-              "type": "string",
-              "description": "Hostname (e.g. 'github.com') for time_on_site."
-            },
-            "deviceId": {
-              "type": "string",
-              "description": "Filter browser_activity to one registered device id; omit for default."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [],
-      "_contexts": [
-        "general"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": null,
-      "_capabilities": [],
-      "_surfaces": [],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "OWNER_SCREENTIME_BY_WEBSITE",
-        "description": "owner screentime summary|today|weekly|by_app|by_website|activity|time_on_app|time_on_site",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"by_website\" for this virtual; do not change).",
-              "enum": [
-                "by_website"
-              ],
-              "default": "by_website"
-            },
-            "source": {
-              "type": "string",
-              "description": "source filter: app|website",
-              "enum": [
-                "app",
-                "website"
-              ]
-            },
-            "identifier": {
-              "type": "string",
-              "description": "Specific app bundle id or website domain when filtering screen-time to one source."
-            },
-            "date": {
-              "type": "string",
-              "description": "YYYY-MM-DD for the today subaction."
-            },
-            "days": {
-              "type": "number",
-              "description": "Number of days back from now for weekly / weekly_average_by_app windows."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Top-N for by_app / by_website / browser_activity (default 10)."
-            },
-            "windowDays": {
-              "type": "number",
-              "description": "Window in days for by_app / by_website summary queries."
-            },
-            "windowHours": {
-              "type": "number",
-              "description": "Window in hours for activity_report / time_on_app / time_on_site (default 24, max 720)."
-            },
-            "appNameOrBundleId": {
-              "type": "string",
-              "description": "App name (e.g. 'Safari') or bundle id (e.g. 'com.apple.Safari') for time_on_app."
-            },
-            "domain": {
-              "type": "string",
-              "description": "Hostname (e.g. 'github.com') for time_on_site."
-            },
-            "deviceId": {
-              "type": "string",
-              "description": "Filter browser_activity to one registered device id; omit for default."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [],
-      "_contexts": [
-        "general"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": null,
-      "_capabilities": [],
-      "_surfaces": [],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "OWNER_SCREENTIME_SUMMARY",
-        "description": "owner screentime summary|today|weekly|by_app|by_website|activity|time_on_app|time_on_site",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"summary\" for this virtual; do not change).",
-              "enum": [
-                "summary"
-              ],
-              "default": "summary"
-            },
-            "source": {
-              "type": "string",
-              "description": "source filter: app|website",
-              "enum": [
-                "app",
-                "website"
-              ]
-            },
-            "identifier": {
-              "type": "string",
-              "description": "Specific app bundle id or website domain when filtering screen-time to one source."
-            },
-            "date": {
-              "type": "string",
-              "description": "YYYY-MM-DD for the today subaction."
-            },
-            "days": {
-              "type": "number",
-              "description": "Number of days back from now for weekly / weekly_average_by_app windows."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Top-N for by_app / by_website / browser_activity (default 10)."
-            },
-            "windowDays": {
-              "type": "number",
-              "description": "Window in days for by_app / by_website summary queries."
-            },
-            "windowHours": {
-              "type": "number",
-              "description": "Window in hours for activity_report / time_on_app / time_on_site (default 24, max 720)."
-            },
-            "appNameOrBundleId": {
-              "type": "string",
-              "description": "App name (e.g. 'Safari') or bundle id (e.g. 'com.apple.Safari') for time_on_app."
-            },
-            "domain": {
-              "type": "string",
-              "description": "Hostname (e.g. 'github.com') for time_on_site."
-            },
-            "deviceId": {
-              "type": "string",
-              "description": "Filter browser_activity to one registered device id; omit for default."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [],
-      "_contexts": [
-        "general"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": null,
-      "_capabilities": [],
-      "_surfaces": [],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "OWNER_SCREENTIME_TIME_ON_APP",
-        "description": "owner screentime summary|today|weekly|by_app|by_website|activity|time_on_app|time_on_site",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"time_on_app\" for this virtual; do not change).",
-              "enum": [
-                "time_on_app"
-              ],
-              "default": "time_on_app"
-            },
-            "source": {
-              "type": "string",
-              "description": "source filter: app|website",
-              "enum": [
-                "app",
-                "website"
-              ]
-            },
-            "identifier": {
-              "type": "string",
-              "description": "Specific app bundle id or website domain when filtering screen-time to one source."
-            },
-            "date": {
-              "type": "string",
-              "description": "YYYY-MM-DD for the today subaction."
-            },
-            "days": {
-              "type": "number",
-              "description": "Number of days back from now for weekly / weekly_average_by_app windows."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Top-N for by_app / by_website / browser_activity (default 10)."
-            },
-            "windowDays": {
-              "type": "number",
-              "description": "Window in days for by_app / by_website summary queries."
-            },
-            "windowHours": {
-              "type": "number",
-              "description": "Window in hours for activity_report / time_on_app / time_on_site (default 24, max 720)."
-            },
-            "appNameOrBundleId": {
-              "type": "string",
-              "description": "App name (e.g. 'Safari') or bundle id (e.g. 'com.apple.Safari') for time_on_app."
-            },
-            "domain": {
-              "type": "string",
-              "description": "Hostname (e.g. 'github.com') for time_on_site."
-            },
-            "deviceId": {
-              "type": "string",
-              "description": "Filter browser_activity to one registered device id; omit for default."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [],
-      "_contexts": [
-        "general"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": null,
-      "_capabilities": [],
-      "_surfaces": [],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "OWNER_SCREENTIME_TIME_ON_SITE",
-        "description": "owner screentime summary|today|weekly|by_app|by_website|activity|time_on_app|time_on_site",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"time_on_site\" for this virtual; do not change).",
-              "enum": [
-                "time_on_site"
-              ],
-              "default": "time_on_site"
-            },
-            "source": {
-              "type": "string",
-              "description": "source filter: app|website",
-              "enum": [
-                "app",
-                "website"
-              ]
-            },
-            "identifier": {
-              "type": "string",
-              "description": "Specific app bundle id or website domain when filtering screen-time to one source."
-            },
-            "date": {
-              "type": "string",
-              "description": "YYYY-MM-DD for the today subaction."
-            },
-            "days": {
-              "type": "number",
-              "description": "Number of days back from now for weekly / weekly_average_by_app windows."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Top-N for by_app / by_website / browser_activity (default 10)."
-            },
-            "windowDays": {
-              "type": "number",
-              "description": "Window in days for by_app / by_website summary queries."
-            },
-            "windowHours": {
-              "type": "number",
-              "description": "Window in hours for activity_report / time_on_app / time_on_site (default 24, max 720)."
-            },
-            "appNameOrBundleId": {
-              "type": "string",
-              "description": "App name (e.g. 'Safari') or bundle id (e.g. 'com.apple.Safari') for time_on_app."
-            },
-            "domain": {
-              "type": "string",
-              "description": "Hostname (e.g. 'github.com') for time_on_site."
-            },
-            "deviceId": {
-              "type": "string",
-              "description": "Filter browser_activity to one registered device id; omit for default."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [],
-      "_contexts": [
-        "general"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": null,
-      "_capabilities": [],
-      "_surfaces": [],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "OWNER_SCREENTIME_TODAY",
-        "description": "owner screentime summary|today|weekly|by_app|by_website|activity|time_on_app|time_on_site",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"today\" for this virtual; do not change).",
-              "enum": [
-                "today"
-              ],
-              "default": "today"
-            },
-            "source": {
-              "type": "string",
-              "description": "source filter: app|website",
-              "enum": [
-                "app",
-                "website"
-              ]
-            },
-            "identifier": {
-              "type": "string",
-              "description": "Specific app bundle id or website domain when filtering screen-time to one source."
-            },
-            "date": {
-              "type": "string",
-              "description": "YYYY-MM-DD for the today subaction."
-            },
-            "days": {
-              "type": "number",
-              "description": "Number of days back from now for weekly / weekly_average_by_app windows."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Top-N for by_app / by_website / browser_activity (default 10)."
-            },
-            "windowDays": {
-              "type": "number",
-              "description": "Window in days for by_app / by_website summary queries."
-            },
-            "windowHours": {
-              "type": "number",
-              "description": "Window in hours for activity_report / time_on_app / time_on_site (default 24, max 720)."
-            },
-            "appNameOrBundleId": {
-              "type": "string",
-              "description": "App name (e.g. 'Safari') or bundle id (e.g. 'com.apple.Safari') for time_on_app."
-            },
-            "domain": {
-              "type": "string",
-              "description": "Hostname (e.g. 'github.com') for time_on_site."
-            },
-            "deviceId": {
-              "type": "string",
-              "description": "Filter browser_activity to one registered device id; omit for default."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [],
-      "_contexts": [
-        "general"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": null,
-      "_capabilities": [],
-      "_surfaces": [],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "OWNER_SCREENTIME_WEEKLY",
-        "description": "owner screentime summary|today|weekly|by_app|by_website|activity|time_on_app|time_on_site",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"weekly\" for this virtual; do not change).",
-              "enum": [
-                "weekly"
-              ],
-              "default": "weekly"
-            },
-            "source": {
-              "type": "string",
-              "description": "source filter: app|website",
-              "enum": [
-                "app",
-                "website"
-              ]
-            },
-            "identifier": {
-              "type": "string",
-              "description": "Specific app bundle id or website domain when filtering screen-time to one source."
-            },
-            "date": {
-              "type": "string",
-              "description": "YYYY-MM-DD for the today subaction."
-            },
-            "days": {
-              "type": "number",
-              "description": "Number of days back from now for weekly / weekly_average_by_app windows."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Top-N for by_app / by_website / browser_activity (default 10)."
-            },
-            "windowDays": {
-              "type": "number",
-              "description": "Window in days for by_app / by_website summary queries."
-            },
-            "windowHours": {
-              "type": "number",
-              "description": "Window in hours for activity_report / time_on_app / time_on_site (default 24, max 720)."
-            },
-            "appNameOrBundleId": {
-              "type": "string",
-              "description": "App name (e.g. 'Safari') or bundle id (e.g. 'com.apple.Safari') for time_on_app."
-            },
-            "domain": {
-              "type": "string",
-              "description": "Hostname (e.g. 'github.com') for time_on_site."
-            },
-            "deviceId": {
-              "type": "string",
-              "description": "Filter browser_activity to one registered device id; omit for default."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [],
-      "_contexts": [
-        "general"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": null,
-      "_capabilities": [],
-      "_surfaces": [],
-      "_risk": null,
-      "_cost": null
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "OWNER_SCREENTIME_WEEKLY_AVERAGE_BY_APP",
-        "description": "owner screentime summary|today|weekly|by_app|by_website|activity|time_on_app|time_on_site",
-        "parameters": {
-          "type": "object",
-          "required": [],
-          "properties": {
-            "action": {
-              "type": "string",
-              "description": "Subaction discriminator (auto-set to \"weekly_average_by_app\" for this virtual; do not change).",
-              "enum": [
-                "weekly_average_by_app"
-              ],
-              "default": "weekly_average_by_app"
-            },
-            "source": {
-              "type": "string",
-              "description": "source filter: app|website",
-              "enum": [
-                "app",
-                "website"
-              ]
-            },
-            "identifier": {
-              "type": "string",
-              "description": "Specific app bundle id or website domain when filtering screen-time to one source."
-            },
-            "date": {
-              "type": "string",
-              "description": "YYYY-MM-DD for the today subaction."
-            },
-            "days": {
-              "type": "number",
-              "description": "Number of days back from now for weekly / weekly_average_by_app windows."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Top-N for by_app / by_website / browser_activity (default 10)."
-            },
-            "windowDays": {
-              "type": "number",
-              "description": "Window in days for by_app / by_website summary queries."
-            },
-            "windowHours": {
-              "type": "number",
-              "description": "Window in hours for activity_report / time_on_app / time_on_site (default 24, max 720)."
-            },
-            "appNameOrBundleId": {
-              "type": "string",
-              "description": "App name (e.g. 'Safari') or bundle id (e.g. 'com.apple.Safari') for time_on_app."
-            },
-            "domain": {
-              "type": "string",
-              "description": "Hostname (e.g. 'github.com') for time_on_site."
-            },
-            "deviceId": {
-              "type": "string",
-              "description": "Filter browser_activity to one registered device id; omit for default."
-            }
-          },
-          "additionalProperties": false
-        },
-        "strict": true
-      },
-      "_plugin": "@elizaos/plugin-personal-assistant",
-      "_tags": [],
-      "_contexts": [
-        "general"
-      ],
-      "_priority": 100,
-      "_examples_count": 0,
-      "_domain": null,
-      "_capabilities": [],
-      "_surfaces": [],
       "_risk": null,
       "_cost": null
     },
@@ -14069,6 +12733,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -14094,7 +12759,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_TODOS_COMPLETE",
-        "description": "owner todos: action=create|update|delete|complete|skip|snooze|review -> OWNER_TODOS; owner-only LifeOps\nowner todos: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner todos: create/update/delete/complete/skip/snooze/review personal. — subaction = complete",
         "parameters": {
           "type": "object",
           "required": [],
@@ -14160,6 +12825,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -14185,7 +12851,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_TODOS_CREATE",
-        "description": "owner todos: action=create|update|delete|complete|skip|snooze|review -> OWNER_TODOS; owner-only LifeOps\nowner todos: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner todos: create/update/delete/complete/skip/snooze/review personal. — subaction = create",
         "parameters": {
           "type": "object",
           "required": [],
@@ -14251,6 +12917,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -14276,7 +12943,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_TODOS_DELETE",
-        "description": "owner todos: action=create|update|delete|complete|skip|snooze|review -> OWNER_TODOS; owner-only LifeOps\nowner todos: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner todos: create/update/delete/complete/skip/snooze/review personal. — subaction = delete",
         "parameters": {
           "type": "object",
           "required": [],
@@ -14342,6 +13009,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -14367,7 +13035,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_TODOS_REVIEW",
-        "description": "owner todos: action=create|update|delete|complete|skip|snooze|review -> OWNER_TODOS; owner-only LifeOps\nowner todos: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner todos: create/update/delete/complete/skip/snooze/review personal. — subaction = review",
         "parameters": {
           "type": "object",
           "required": [],
@@ -14433,6 +13101,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -14458,7 +13127,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_TODOS_SKIP",
-        "description": "owner todos: action=create|update|delete|complete|skip|snooze|review -> OWNER_TODOS; owner-only LifeOps\nowner todos: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner todos: create/update/delete/complete/skip/snooze/review personal. — subaction = skip",
         "parameters": {
           "type": "object",
           "required": [],
@@ -14524,6 +13193,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -14549,7 +13219,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_TODOS_SNOOZE",
-        "description": "owner todos: action=create|update|delete|complete|skip|snooze|review -> OWNER_TODOS; owner-only LifeOps\nowner todos: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner todos: create/update/delete/complete/skip/snooze/review personal. — subaction = snooze",
         "parameters": {
           "type": "object",
           "required": [],
@@ -14615,6 +13285,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -14640,7 +13311,7 @@
       "type": "function",
       "function": {
         "name": "OWNER_TODOS_UPDATE",
-        "description": "owner todos: action=create|update|delete|complete|skip|snooze|review -> OWNER_TODOS; owner-only LifeOps\nowner todos: action=create|update|delete|complete|skip|snooze|review",
+        "description": "Owner todos: create/update/delete/complete/skip/snooze/review personal. — subaction = update",
         "parameters": {
           "type": "object",
           "required": [],
@@ -14706,6 +13377,7 @@
       "_contexts": [
         "general",
         "tasks",
+        "goals",
         "todos",
         "productivity",
         "calendar",
@@ -14772,7 +13444,7 @@
       "type": "function",
       "function": {
         "name": "PERSONAL_ASSISTANT_BOOK_TRAVEL",
-        "description": "personal assistant workflows: action=book_travel|scheduling|sign_document",
+        "description": "Owner personal-assistant workflows: action=book_travel travel booking; action=scheduling negotiation; action=sign_document signature, owner approval queue. — subaction = book_travel",
         "parameters": {
           "type": "object",
           "required": [],
@@ -14810,7 +13482,7 @@
       "type": "function",
       "function": {
         "name": "PERSONAL_ASSISTANT_SCHEDULING",
-        "description": "personal assistant workflows: action=book_travel|scheduling|sign_document",
+        "description": "Owner personal-assistant workflows: action=book_travel travel booking; action=scheduling negotiation; action=sign_document signature, owner approval queue. — subaction = scheduling",
         "parameters": {
           "type": "object",
           "required": [],
@@ -14848,7 +13520,7 @@
       "type": "function",
       "function": {
         "name": "PERSONAL_ASSISTANT_SIGN_DOCUMENT",
-        "description": "personal assistant workflows: action=book_travel|scheduling|sign_document",
+        "description": "Owner personal-assistant workflows: action=book_travel travel booking; action=scheduling negotiation; action=sign_document signature, owner approval queue. — subaction = sign_document",
         "parameters": {
           "type": "object",
           "required": [],
@@ -14952,7 +13624,7 @@
       "type": "function",
       "function": {
         "name": "PRIORITIZE_RANK_DECISIONS",
-        "description": "prioritization (\"focus on\", \"rank today\", \"which thread first\", \"what matters most\") -> PRIORITIZE; do not use plain list -> OWNER_TODOS.list / MESSAGE.list_inbox\nprioritize: rank_todos|rank_threads|rank_decisions; topN ranking by urgency × importance",
+        "description": "Rank owner open todos, message threads, pending decisions by urgency × importance. LLM pass. Subactions: rank_todos, rank_threads, rank_decisions. — subaction = rank_decisions",
         "parameters": {
           "type": "object",
           "required": [],
@@ -15017,7 +13689,7 @@
       "type": "function",
       "function": {
         "name": "PRIORITIZE_RANK_THREADS",
-        "description": "prioritization (\"focus on\", \"rank today\", \"which thread first\", \"what matters most\") -> PRIORITIZE; do not use plain list -> OWNER_TODOS.list / MESSAGE.list_inbox\nprioritize: rank_todos|rank_threads|rank_decisions; topN ranking by urgency × importance",
+        "description": "Rank owner open todos, message threads, pending decisions by urgency × importance. LLM pass. Subactions: rank_todos, rank_threads, rank_decisions. — subaction = rank_threads",
         "parameters": {
           "type": "object",
           "required": [],
@@ -15082,7 +13754,7 @@
       "type": "function",
       "function": {
         "name": "PRIORITIZE_RANK_TODOS",
-        "description": "prioritization (\"focus on\", \"rank today\", \"which thread first\", \"what matters most\") -> PRIORITIZE; do not use plain list -> OWNER_TODOS.list / MESSAGE.list_inbox\nprioritize: rank_todos|rank_threads|rank_decisions; topN ranking by urgency × importance",
+        "description": "Rank owner open todos, message threads, pending decisions by urgency × importance. LLM pass. Subactions: rank_todos, rank_threads, rank_decisions. — subaction = rank_todos",
         "parameters": {
           "type": "object",
           "required": [],
@@ -15146,8 +13818,45 @@
     {
       "type": "function",
       "function": {
+        "name": "RESOLVE_REFERENT",
+        "description": "under-specified ask that leans on prior context ('book the usual', 'you know why', 'same as last time') -> RESOLVE_REFERENT; a fully-named request goes straight to its domain action (CALENDAR/OWNER_REMINDERS/...)\nresolve implicit owner ask ('the usual'/'you know why'/'same as last time') -> confirm interpretation or ask one disambiguating question; preview-first, no execution",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        },
+        "strict": true
+      },
+      "_plugin": "@elizaos/plugin-personal-assistant",
+      "_tags": [
+        "domain:assistant",
+        "capability:read",
+        "surface:internal"
+      ],
+      "_contexts": [
+        "memory",
+        "tasks",
+        "calendar",
+        "messaging"
+      ],
+      "_priority": 100,
+      "_examples_count": 2,
+      "_domain": "domain:assistant",
+      "_capabilities": [
+        "capability:read"
+      ],
+      "_surfaces": [
+        "surface:internal"
+      ],
+      "_risk": null,
+      "_cost": null
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "RESOLVE_REQUEST",
-        "description": "approve|reject queue; requestId optional; send_email|send_message|book_travel|voice_call",
+        "description": "approve|reject pending approval queue; reject=hold/don't-send-now (nothing dispatches); requestId optional",
         "parameters": {
           "type": "object",
           "required": [],
@@ -15209,7 +13918,7 @@
       "type": "function",
       "function": {
         "name": "RESOLVE_REQUEST_APPROVE",
-        "description": "approve|reject queue; requestId optional; send_email|send_message|book_travel|voice_call",
+        "description": "Approve/reject pending owner-confirmation action: send_email, send_message, book_travel, voice_call, etc. Subactions approve|reject. Reject also covers holds ('don't send it', 'not yet', 'wait until I confirm') — it terminally cancels the queued dispatch and a fresh request can be queued later. requestId optional; handler inspects pending queue, infers owner intent, or asks follow-up. — subaction = approve",
         "parameters": {
           "type": "object",
           "required": [],
@@ -15271,7 +13980,7 @@
       "type": "function",
       "function": {
         "name": "RESOLVE_REQUEST_REJECT",
-        "description": "approve|reject queue; requestId optional; send_email|send_message|book_travel|voice_call",
+        "description": "Approve/reject pending owner-confirmation action: send_email, send_message, book_travel, voice_call, etc. Subactions approve|reject. Reject also covers holds ('don't send it', 'not yet', 'wait until I confirm') — it terminally cancels the queued dispatch and a fresh request can be queued later. requestId optional; handler inspects pending queue, infers owner intent, or asks follow-up. — subaction = reject",
         "parameters": {
           "type": "object",
           "required": [],
@@ -15333,7 +14042,7 @@
       "type": "function",
       "function": {
         "name": "SCHEDULED_TASKS",
-        "description": "manage EXISTING scheduled items (\"snooze that reminder\", \"follow-ups today\", \"complete check-in\", \"scheduled-item history\") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder (\"brush my teeth at 8 am and 9 pm every day\", \"remind me daily at 9pm\") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES\nlow-level scheduled-item admin list|get|create|update|snooze|skip|complete|ack|dismiss|cancel|history; NOT new-habit/routine creation (-> OWNER_ROUTINES/OWNER_REMINDERS create)",
+        "description": "manage EXISTING scheduled items (\"snooze that reminder\", \"show me only overdue tasks\" -> action=list dueWindow=overdue, \"what's due today\" -> action=list dueWindow=today, \"complete check-in\", \"scheduled-item history\") -> SCHEDULED_TASKS; NEW owner reminders/deadlines (\"remind me to renew registration by the 20th\", \"call mom tomorrow\") -> OWNER_REMINDERS action=create; NEW habit/routine/recurring personal reminder (\"brush my teeth at 8 am and 9 pm every day\", \"remind me daily at 9pm\") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; NEW owner goals, savings/trip goals, fitness goals, learning goals, or goal support/check-in plans -> OWNER_GOALS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES\nlow-level scheduled-item admin; NOT new owner reminders/deadlines/habits/goals (-> OWNER_REMINDERS/OWNER_ROUTINES/OWNER_GOALS create)",
         "parameters": {
           "type": "object",
           "required": [],
@@ -15379,6 +14088,14 @@
             "ownerVisibleOnly": {
               "type": "boolean",
               "description": "true: list ownerVisible tasks only."
+            },
+            "dueWindow": {
+              "type": "string",
+              "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
+              "enum": [
+                "overdue",
+                "today"
+              ]
             },
             "promptInstructions": {
               "type": "string",
@@ -15527,7 +14244,7 @@
         "productivity"
       ],
       "_priority": 100,
-      "_examples_count": 3,
+      "_examples_count": 5,
       "_domain": "domain:lifeops",
       "_capabilities": [
         "capability:read",
@@ -15546,7 +14263,7 @@
       "type": "function",
       "function": {
         "name": "SCHEDULED_TASKS_ACKNOWLEDGE",
-        "description": "manage EXISTING scheduled items (\"snooze that reminder\", \"follow-ups today\", \"complete check-in\", \"scheduled-item history\") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder (\"brush my teeth at 8 am and 9 pm every day\", \"remind me daily at 9pm\") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES\nlow-level scheduled-item admin list|get|create|update|snooze|skip|complete|ack|dismiss|cancel|history; NOT new-habit/routine creation (-> OWNER_ROUTINES/OWNER_REMINDERS create)",
+        "description": "Low-level admin surface over LifeOps ScheduledTask records. Kinds: reminder, checkin, followup, approval, recap, watcher, output, custom. Ops: list|get|create|update|snooze|skip|complete|acknowledge|dismiss|cancel|reopen|history. create schedules a raw task and requires an explicit structural trigger — it is NOT the flow for saving a new owner reminder, habit/routine, or goal the user asks for in chat, including one-off date/deadline reminders like \"by the 20th\" or savings/trip goals with check-ins; OWNER_REMINDERS action=create owns reminder definitions + reminder plans, OWNER_ROUTINES owns habits/routines, and OWNER_GOALS owns life goals. — subaction = acknowledge",
         "parameters": {
           "type": "object",
           "required": [],
@@ -15582,6 +14299,14 @@
             "ownerVisibleOnly": {
               "type": "boolean",
               "description": "true: list ownerVisible tasks only."
+            },
+            "dueWindow": {
+              "type": "string",
+              "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
+              "enum": [
+                "overdue",
+                "today"
+              ]
             },
             "promptInstructions": {
               "type": "string",
@@ -15749,7 +14474,7 @@
       "type": "function",
       "function": {
         "name": "SCHEDULED_TASKS_CANCEL",
-        "description": "manage EXISTING scheduled items (\"snooze that reminder\", \"follow-ups today\", \"complete check-in\", \"scheduled-item history\") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder (\"brush my teeth at 8 am and 9 pm every day\", \"remind me daily at 9pm\") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES\nlow-level scheduled-item admin list|get|create|update|snooze|skip|complete|ack|dismiss|cancel|history; NOT new-habit/routine creation (-> OWNER_ROUTINES/OWNER_REMINDERS create)",
+        "description": "Low-level admin surface over LifeOps ScheduledTask records. Kinds: reminder, checkin, followup, approval, recap, watcher, output, custom. Ops: list|get|create|update|snooze|skip|complete|acknowledge|dismiss|cancel|reopen|history. create schedules a raw task and requires an explicit structural trigger — it is NOT the flow for saving a new owner reminder, habit/routine, or goal the user asks for in chat, including one-off date/deadline reminders like \"by the 20th\" or savings/trip goals with check-ins; OWNER_REMINDERS action=create owns reminder definitions + reminder plans, OWNER_ROUTINES owns habits/routines, and OWNER_GOALS owns life goals. — subaction = cancel",
         "parameters": {
           "type": "object",
           "required": [],
@@ -15785,6 +14510,14 @@
             "ownerVisibleOnly": {
               "type": "boolean",
               "description": "true: list ownerVisible tasks only."
+            },
+            "dueWindow": {
+              "type": "string",
+              "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
+              "enum": [
+                "overdue",
+                "today"
+              ]
             },
             "promptInstructions": {
               "type": "string",
@@ -15952,7 +14685,7 @@
       "type": "function",
       "function": {
         "name": "SCHEDULED_TASKS_COMPLETE",
-        "description": "manage EXISTING scheduled items (\"snooze that reminder\", \"follow-ups today\", \"complete check-in\", \"scheduled-item history\") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder (\"brush my teeth at 8 am and 9 pm every day\", \"remind me daily at 9pm\") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES\nlow-level scheduled-item admin list|get|create|update|snooze|skip|complete|ack|dismiss|cancel|history; NOT new-habit/routine creation (-> OWNER_ROUTINES/OWNER_REMINDERS create)",
+        "description": "Low-level admin surface over LifeOps ScheduledTask records. Kinds: reminder, checkin, followup, approval, recap, watcher, output, custom. Ops: list|get|create|update|snooze|skip|complete|acknowledge|dismiss|cancel|reopen|history. create schedules a raw task and requires an explicit structural trigger — it is NOT the flow for saving a new owner reminder, habit/routine, or goal the user asks for in chat, including one-off date/deadline reminders like \"by the 20th\" or savings/trip goals with check-ins; OWNER_REMINDERS action=create owns reminder definitions + reminder plans, OWNER_ROUTINES owns habits/routines, and OWNER_GOALS owns life goals. — subaction = complete",
         "parameters": {
           "type": "object",
           "required": [],
@@ -15988,6 +14721,14 @@
             "ownerVisibleOnly": {
               "type": "boolean",
               "description": "true: list ownerVisible tasks only."
+            },
+            "dueWindow": {
+              "type": "string",
+              "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
+              "enum": [
+                "overdue",
+                "today"
+              ]
             },
             "promptInstructions": {
               "type": "string",
@@ -16155,7 +14896,7 @@
       "type": "function",
       "function": {
         "name": "SCHEDULED_TASKS_CREATE",
-        "description": "manage EXISTING scheduled items (\"snooze that reminder\", \"follow-ups today\", \"complete check-in\", \"scheduled-item history\") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder (\"brush my teeth at 8 am and 9 pm every day\", \"remind me daily at 9pm\") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES\nraw ScheduledTask create (explicit trigger required); NEW habit/routine/daily reminder -> OWNER_ROUTINES_CREATE/OWNER_REMINDERS_CREATE",
+        "description": "raw ScheduledTask create (explicit trigger required); NEW habit/routine/daily reminder -> OWNER_ROUTINES_CREATE/OWNER_REMINDERS_CREATE",
         "parameters": {
           "type": "object",
           "required": [],
@@ -16191,6 +14932,14 @@
             "ownerVisibleOnly": {
               "type": "boolean",
               "description": "true: list ownerVisible tasks only."
+            },
+            "dueWindow": {
+              "type": "string",
+              "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
+              "enum": [
+                "overdue",
+                "today"
+              ]
             },
             "promptInstructions": {
               "type": "string",
@@ -16358,7 +15107,7 @@
       "type": "function",
       "function": {
         "name": "SCHEDULED_TASKS_DISMISS",
-        "description": "manage EXISTING scheduled items (\"snooze that reminder\", \"follow-ups today\", \"complete check-in\", \"scheduled-item history\") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder (\"brush my teeth at 8 am and 9 pm every day\", \"remind me daily at 9pm\") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES\nlow-level scheduled-item admin list|get|create|update|snooze|skip|complete|ack|dismiss|cancel|history; NOT new-habit/routine creation (-> OWNER_ROUTINES/OWNER_REMINDERS create)",
+        "description": "Low-level admin surface over LifeOps ScheduledTask records. Kinds: reminder, checkin, followup, approval, recap, watcher, output, custom. Ops: list|get|create|update|snooze|skip|complete|acknowledge|dismiss|cancel|reopen|history. create schedules a raw task and requires an explicit structural trigger — it is NOT the flow for saving a new owner reminder, habit/routine, or goal the user asks for in chat, including one-off date/deadline reminders like \"by the 20th\" or savings/trip goals with check-ins; OWNER_REMINDERS action=create owns reminder definitions + reminder plans, OWNER_ROUTINES owns habits/routines, and OWNER_GOALS owns life goals. — subaction = dismiss",
         "parameters": {
           "type": "object",
           "required": [],
@@ -16394,6 +15143,14 @@
             "ownerVisibleOnly": {
               "type": "boolean",
               "description": "true: list ownerVisible tasks only."
+            },
+            "dueWindow": {
+              "type": "string",
+              "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
+              "enum": [
+                "overdue",
+                "today"
+              ]
             },
             "promptInstructions": {
               "type": "string",
@@ -16561,7 +15318,7 @@
       "type": "function",
       "function": {
         "name": "SCHEDULED_TASKS_GET",
-        "description": "manage EXISTING scheduled items (\"snooze that reminder\", \"follow-ups today\", \"complete check-in\", \"scheduled-item history\") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder (\"brush my teeth at 8 am and 9 pm every day\", \"remind me daily at 9pm\") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES\nlow-level scheduled-item admin list|get|create|update|snooze|skip|complete|ack|dismiss|cancel|history; NOT new-habit/routine creation (-> OWNER_ROUTINES/OWNER_REMINDERS create)",
+        "description": "Low-level admin surface over LifeOps ScheduledTask records. Kinds: reminder, checkin, followup, approval, recap, watcher, output, custom. Ops: list|get|create|update|snooze|skip|complete|acknowledge|dismiss|cancel|reopen|history. create schedules a raw task and requires an explicit structural trigger — it is NOT the flow for saving a new owner reminder, habit/routine, or goal the user asks for in chat, including one-off date/deadline reminders like \"by the 20th\" or savings/trip goals with check-ins; OWNER_REMINDERS action=create owns reminder definitions + reminder plans, OWNER_ROUTINES owns habits/routines, and OWNER_GOALS owns life goals. — subaction = get",
         "parameters": {
           "type": "object",
           "required": [],
@@ -16597,6 +15354,14 @@
             "ownerVisibleOnly": {
               "type": "boolean",
               "description": "true: list ownerVisible tasks only."
+            },
+            "dueWindow": {
+              "type": "string",
+              "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
+              "enum": [
+                "overdue",
+                "today"
+              ]
             },
             "promptInstructions": {
               "type": "string",
@@ -16764,7 +15529,7 @@
       "type": "function",
       "function": {
         "name": "SCHEDULED_TASKS_HISTORY",
-        "description": "manage EXISTING scheduled items (\"snooze that reminder\", \"follow-ups today\", \"complete check-in\", \"scheduled-item history\") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder (\"brush my teeth at 8 am and 9 pm every day\", \"remind me daily at 9pm\") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES\nlow-level scheduled-item admin list|get|create|update|snooze|skip|complete|ack|dismiss|cancel|history; NOT new-habit/routine creation (-> OWNER_ROUTINES/OWNER_REMINDERS create)",
+        "description": "Low-level admin surface over LifeOps ScheduledTask records. Kinds: reminder, checkin, followup, approval, recap, watcher, output, custom. Ops: list|get|create|update|snooze|skip|complete|acknowledge|dismiss|cancel|reopen|history. create schedules a raw task and requires an explicit structural trigger — it is NOT the flow for saving a new owner reminder, habit/routine, or goal the user asks for in chat, including one-off date/deadline reminders like \"by the 20th\" or savings/trip goals with check-ins; OWNER_REMINDERS action=create owns reminder definitions + reminder plans, OWNER_ROUTINES owns habits/routines, and OWNER_GOALS owns life goals. — subaction = history",
         "parameters": {
           "type": "object",
           "required": [],
@@ -16800,6 +15565,14 @@
             "ownerVisibleOnly": {
               "type": "boolean",
               "description": "true: list ownerVisible tasks only."
+            },
+            "dueWindow": {
+              "type": "string",
+              "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
+              "enum": [
+                "overdue",
+                "today"
+              ]
             },
             "promptInstructions": {
               "type": "string",
@@ -16967,7 +15740,7 @@
       "type": "function",
       "function": {
         "name": "SCHEDULED_TASKS_LIST",
-        "description": "manage EXISTING scheduled items (\"snooze that reminder\", \"follow-ups today\", \"complete check-in\", \"scheduled-item history\") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder (\"brush my teeth at 8 am and 9 pm every day\", \"remind me daily at 9pm\") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES\nlow-level scheduled-item admin list|get|create|update|snooze|skip|complete|ack|dismiss|cancel|history; NOT new-habit/routine creation (-> OWNER_ROUTINES/OWNER_REMINDERS create)",
+        "description": "Low-level admin surface over LifeOps ScheduledTask records. Kinds: reminder, checkin, followup, approval, recap, watcher, output, custom. Ops: list|get|create|update|snooze|skip|complete|acknowledge|dismiss|cancel|reopen|history. create schedules a raw task and requires an explicit structural trigger — it is NOT the flow for saving a new owner reminder, habit/routine, or goal the user asks for in chat, including one-off date/deadline reminders like \"by the 20th\" or savings/trip goals with check-ins; OWNER_REMINDERS action=create owns reminder definitions + reminder plans, OWNER_ROUTINES owns habits/routines, and OWNER_GOALS owns life goals. — subaction = list",
         "parameters": {
           "type": "object",
           "required": [],
@@ -17003,6 +15776,14 @@
             "ownerVisibleOnly": {
               "type": "boolean",
               "description": "true: list ownerVisible tasks only."
+            },
+            "dueWindow": {
+              "type": "string",
+              "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
+              "enum": [
+                "overdue",
+                "today"
+              ]
             },
             "promptInstructions": {
               "type": "string",
@@ -17170,7 +15951,7 @@
       "type": "function",
       "function": {
         "name": "SCHEDULED_TASKS_REOPEN",
-        "description": "manage EXISTING scheduled items (\"snooze that reminder\", \"follow-ups today\", \"complete check-in\", \"scheduled-item history\") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder (\"brush my teeth at 8 am and 9 pm every day\", \"remind me daily at 9pm\") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES\nlow-level scheduled-item admin list|get|create|update|snooze|skip|complete|ack|dismiss|cancel|history; NOT new-habit/routine creation (-> OWNER_ROUTINES/OWNER_REMINDERS create)",
+        "description": "Low-level admin surface over LifeOps ScheduledTask records. Kinds: reminder, checkin, followup, approval, recap, watcher, output, custom. Ops: list|get|create|update|snooze|skip|complete|acknowledge|dismiss|cancel|reopen|history. create schedules a raw task and requires an explicit structural trigger — it is NOT the flow for saving a new owner reminder, habit/routine, or goal the user asks for in chat, including one-off date/deadline reminders like \"by the 20th\" or savings/trip goals with check-ins; OWNER_REMINDERS action=create owns reminder definitions + reminder plans, OWNER_ROUTINES owns habits/routines, and OWNER_GOALS owns life goals. — subaction = reopen",
         "parameters": {
           "type": "object",
           "required": [],
@@ -17206,6 +15987,14 @@
             "ownerVisibleOnly": {
               "type": "boolean",
               "description": "true: list ownerVisible tasks only."
+            },
+            "dueWindow": {
+              "type": "string",
+              "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
+              "enum": [
+                "overdue",
+                "today"
+              ]
             },
             "promptInstructions": {
               "type": "string",
@@ -17373,7 +16162,7 @@
       "type": "function",
       "function": {
         "name": "SCHEDULED_TASKS_SKIP",
-        "description": "manage EXISTING scheduled items (\"snooze that reminder\", \"follow-ups today\", \"complete check-in\", \"scheduled-item history\") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder (\"brush my teeth at 8 am and 9 pm every day\", \"remind me daily at 9pm\") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES\nlow-level scheduled-item admin list|get|create|update|snooze|skip|complete|ack|dismiss|cancel|history; NOT new-habit/routine creation (-> OWNER_ROUTINES/OWNER_REMINDERS create)",
+        "description": "Low-level admin surface over LifeOps ScheduledTask records. Kinds: reminder, checkin, followup, approval, recap, watcher, output, custom. Ops: list|get|create|update|snooze|skip|complete|acknowledge|dismiss|cancel|reopen|history. create schedules a raw task and requires an explicit structural trigger — it is NOT the flow for saving a new owner reminder, habit/routine, or goal the user asks for in chat, including one-off date/deadline reminders like \"by the 20th\" or savings/trip goals with check-ins; OWNER_REMINDERS action=create owns reminder definitions + reminder plans, OWNER_ROUTINES owns habits/routines, and OWNER_GOALS owns life goals. — subaction = skip",
         "parameters": {
           "type": "object",
           "required": [],
@@ -17409,6 +16198,14 @@
             "ownerVisibleOnly": {
               "type": "boolean",
               "description": "true: list ownerVisible tasks only."
+            },
+            "dueWindow": {
+              "type": "string",
+              "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
+              "enum": [
+                "overdue",
+                "today"
+              ]
             },
             "promptInstructions": {
               "type": "string",
@@ -17576,7 +16373,7 @@
       "type": "function",
       "function": {
         "name": "SCHEDULED_TASKS_SNOOZE",
-        "description": "manage EXISTING scheduled items (\"snooze that reminder\", \"follow-ups today\", \"complete check-in\", \"scheduled-item history\") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder (\"brush my teeth at 8 am and 9 pm every day\", \"remind me daily at 9pm\") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES\nlow-level scheduled-item admin list|get|create|update|snooze|skip|complete|ack|dismiss|cancel|history; NOT new-habit/routine creation (-> OWNER_ROUTINES/OWNER_REMINDERS create)",
+        "description": "Low-level admin surface over LifeOps ScheduledTask records. Kinds: reminder, checkin, followup, approval, recap, watcher, output, custom. Ops: list|get|create|update|snooze|skip|complete|acknowledge|dismiss|cancel|reopen|history. create schedules a raw task and requires an explicit structural trigger — it is NOT the flow for saving a new owner reminder, habit/routine, or goal the user asks for in chat, including one-off date/deadline reminders like \"by the 20th\" or savings/trip goals with check-ins; OWNER_REMINDERS action=create owns reminder definitions + reminder plans, OWNER_ROUTINES owns habits/routines, and OWNER_GOALS owns life goals. — subaction = snooze",
         "parameters": {
           "type": "object",
           "required": [],
@@ -17612,6 +16409,14 @@
             "ownerVisibleOnly": {
               "type": "boolean",
               "description": "true: list ownerVisible tasks only."
+            },
+            "dueWindow": {
+              "type": "string",
+              "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
+              "enum": [
+                "overdue",
+                "today"
+              ]
             },
             "promptInstructions": {
               "type": "string",
@@ -17779,7 +16584,7 @@
       "type": "function",
       "function": {
         "name": "SCHEDULED_TASKS_UPDATE",
-        "description": "manage EXISTING scheduled items (\"snooze that reminder\", \"follow-ups today\", \"complete check-in\", \"scheduled-item history\") -> SCHEDULED_TASKS; NEW habit/routine/recurring personal reminder (\"brush my teeth at 8 am and 9 pm every day\", \"remind me daily at 9pm\") -> OWNER_ROUTINES/OWNER_REMINDERS action=create; coding/project/agent task threads -> TASKS/plugin-task-coordinator; per-occurrence complete/skip/snooze next occurrence -> OWNER_REMINDERS/OWNER_TODOS/OWNER_ROUTINES\nlow-level scheduled-item admin list|get|create|update|snooze|skip|complete|ack|dismiss|cancel|history; NOT new-habit/routine creation (-> OWNER_ROUTINES/OWNER_REMINDERS create)",
+        "description": "Low-level admin surface over LifeOps ScheduledTask records. Kinds: reminder, checkin, followup, approval, recap, watcher, output, custom. Ops: list|get|create|update|snooze|skip|complete|acknowledge|dismiss|cancel|reopen|history. create schedules a raw task and requires an explicit structural trigger — it is NOT the flow for saving a new owner reminder, habit/routine, or goal the user asks for in chat, including one-off date/deadline reminders like \"by the 20th\" or savings/trip goals with check-ins; OWNER_REMINDERS action=create owns reminder definitions + reminder plans, OWNER_ROUTINES owns habits/routines, and OWNER_GOALS owns life goals. — subaction = update",
         "parameters": {
           "type": "object",
           "required": [],
@@ -17815,6 +16620,14 @@
             "ownerVisibleOnly": {
               "type": "boolean",
               "description": "true: list ownerVisible tasks only."
+            },
+            "dueWindow": {
+              "type": "string",
+              "description": "list-only next-fire filter: \"overdue\" (fire time already past) or \"today\" (fires before end of the local day). Use for \"show me only overdue tasks\" / \"what's due today\".",
+              "enum": [
+                "overdue",
+                "today"
+              ]
             },
             "promptInstructions": {
               "type": "string",
@@ -18399,7 +17212,7 @@
       "type": "function",
       "function": {
         "name": "VOICE_CALL_DIAL",
-        "description": "Twilio voice dial: recipientKind=owner|external|e164; draft-confirm; approval-queue",
+        "description": "Owner-only outbound voice call via registered provider. Action dial; recipientKind=owner|external|e164. Provider Twilio; Android/app-phone implementation-only until VOICE_CALL provider wired. owner env owner number + standing escalation policy; external RelationshipStore contact + allow-list; e164 raw phoneNumber. All paths draft first; confirmed:true required; approval queue. — subaction = dial",
         "parameters": {
           "type": "object",
           "required": [
