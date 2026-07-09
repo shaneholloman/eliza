@@ -74,9 +74,9 @@ await writeFile(authStub, `export function useIsAuthenticated() { return true; }
 const navStub = join(outDir, "nav-stub.ts");
 await writeFile(
   navStub,
-  `export const HOME_WIDGET_SOLID_TILE_CLASS = "group relative flex h-auto w-full overflow-hidden rounded-2xl border border-[color:color-mix(in_srgb,var(--brand-white)_20%,var(--brand-black))] bg-[var(--brand-black)] text-left text-[var(--brand-white)]";
-export function useWidgetNavigation() { return { openView() {}, openTab() {} }; }
-`,
+  `export const HOME_WIDGET_SOLID_TILE_CLASS =
+  "group relative flex h-auto w-full overflow-hidden rounded-2xl border border-[color:color-mix(in_srgb,var(--brand-white)_20%,var(--brand-black))] bg-[var(--brand-black)] text-left text-[var(--brand-white)]";
+export function useWidgetNavigation() { return { openView() {}, openTab() {} }; }\n`,
 );
 
 const stubModules = {

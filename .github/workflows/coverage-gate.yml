@@ -67,6 +67,9 @@ jobs:
                   if grep -Eq "from ['\"]vitest['\"]|require\\(['\"]vitest['\"]\\)" "$file"; then
                     continue
                   fi
+                  if grep -Eq "from ['\"]@playwright/test['\"]|require\\(['\"]@playwright/test['\"]\\)" "$file"; then
+                    continue
+                  fi
                   echo "$file"
                 done
             echo 'EOF'

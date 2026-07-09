@@ -39,11 +39,11 @@ import {
   parseVisionDataImageUrl,
 } from "./image-input";
 import { resolveArbiterFromRuntime } from "./lifecycle";
-import { FileBridgeCameraSource } from "./mobile/file-bridge-camera";
 import {
   getMobileCameraSource,
   registerMobileCameraSource,
 } from "./mobile/capacitor-camera";
+import { FileBridgeCameraSource } from "./mobile/file-bridge-camera";
 import { OCRService } from "./ocr-service";
 import { ScreenCaptureService } from "./screen-capture";
 import { getTestImage } from "./test-input";

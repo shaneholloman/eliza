@@ -24,6 +24,7 @@ process.env.NODE_ENV ||= "test";
 process.env.MOCK_REDIS = "1";
 process.env.SKIP_AGENT_SANDBOX_ENSURE = "1";
 
+import { KmsError, StewardKmsAdapter } from "@elizaos/security/kms";
 import { pushSchema } from "drizzle-kit/api";
 import { closeDatabaseConnectionsForTests, dbWrite } from "../../db/client";
 import { resetKmsClientForTests } from "../../db/crypto/kms-client";
@@ -40,6 +41,8 @@ import {
 import { organizations } from "../../db/schemas/organizations";
 import { userCharacters } from "../../db/schemas/user-characters";
 import { users } from "../../db/schemas/users";
+import { type RuntimeR2Bucket, setRuntimeR2Bucket } from "../storage/r2-runtime-binding";
+import { resetObjectStorageClientForTests } from "../storage/s3-compatible-client";
 import { computeStateHash, diffBackupState } from "./agent-backup-diff";
 import {
   type BackupVerifierConfig,
@@ -64,7 +67,54 @@ const CONFIG: BackupVerifierConfig = {
   batchSize: 10,
   reVerifyIntervalMs: 24 * 3_600_000,
   escalationThresholdPct: 50,
+  minSystemicSample: 5,
+  maxDecryptBytesPerCycle: 256 * 1024 * 1024,
+  erroredAlertStreak: 3,
 };
+
+/** Set env overrides for the duration of `fn`, restoring prior values after. */
+async function withEnv(
+  overrides: Record<string, string | undefined>,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const prior = new Map<string, string | undefined>(
+    Object.keys(overrides).map((key) => [key, process.env[key]]),
+  );
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    await fn();
+  } finally {
+    for (const [key, value] of prior) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+/**
+ * Insert a raw r2-offloaded backup row whose payload no configured object
+ * store can serve — the shape a daemon host sees when a backup was offloaded
+ * elsewhere but this host has no storage configured (verifier infra error).
+ */
+async function seedUnfetchableR2Backup(sandboxRecordId: string, createdAt: Date): Promise<string> {
+  const [row] = await dbWrite
+    .insert(agentSandboxBackups)
+    .values({
+      sandbox_record_id: sandboxRecordId,
+      snapshot_type: "auto",
+      state_data: { memories: [], config: {}, workspaceFiles: {} },
+      state_data_storage: "r2",
+      state_data_key: "agent-sandbox-backups/none/2026-07-01/lost/state_data.json",
+      size_bytes: 64,
+      backup_kind: "full",
+      created_at: createdAt,
+    })
+    .returning();
+  return row.id;
+}
 
 function makeAlertSpy(): { alerts: DaemonHealthAlert[]; alert: (a: DaemonHealthAlert) => void } {
   const alerts: DaemonHealthAlert[] = [];
@@ -226,21 +276,26 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   expect(pgliteReady).toBe(true);
+  setRuntimeR2Bucket(null);
   await dbWrite.delete(agentSandboxBackups);
   await dbWrite.delete(agentSandboxes);
 });
 
 afterAll(async () => {
+  setRuntimeR2Bucket(null);
   await closeDatabaseConnectionsForTests();
 });
 
 describe("readBackupVerifierConfig", () => {
-  test("defaults: enabled, batch 10, 24h re-verify, 50% escalation", () => {
+  test("defaults: enabled, batch 10, 24h re-verify, 50% escalation, floor 5, 256MiB budget, streak 3", () => {
     const config = readBackupVerifierConfig({} as NodeJS.ProcessEnv);
     expect(config.enabled).toBe(true);
     expect(config.batchSize).toBe(10);
     expect(config.reVerifyIntervalMs).toBe(24 * 3_600_000);
     expect(config.escalationThresholdPct).toBe(50);
+    expect(config.minSystemicSample).toBe(5);
+    expect(config.maxDecryptBytesPerCycle).toBe(256 * 1024 * 1024);
+    expect(config.erroredAlertStreak).toBe(3);
   });
 
   test("opt-out flag and tunables parse; garbage falls back to defaults", () => {
@@ -255,16 +310,24 @@ describe("readBackupVerifierConfig", () => {
       BACKUP_VERIFICATION_BATCH_SIZE: "3",
       BACKUP_VERIFICATION_REVERIFY_HOURS: "6",
       BACKUP_VERIFICATION_ESCALATION_PCT: "80",
+      BACKUP_VERIFICATION_MIN_SYSTEMIC_SAMPLE: "2",
+      BACKUP_VERIFICATION_MAX_DECRYPT_BYTES: "1048576",
+      BACKUP_VERIFICATION_ERRORED_ALERT_STREAK: "5",
     } as NodeJS.ProcessEnv);
     expect(tuned.batchSize).toBe(3);
     expect(tuned.reVerifyIntervalMs).toBe(6 * 3_600_000);
     expect(tuned.escalationThresholdPct).toBe(80);
+    expect(tuned.minSystemicSample).toBe(2);
+    expect(tuned.maxDecryptBytesPerCycle).toBe(1_048_576);
+    expect(tuned.erroredAlertStreak).toBe(5);
     const garbage = readBackupVerifierConfig({
       BACKUP_VERIFICATION_BATCH_SIZE: "-5",
       BACKUP_VERIFICATION_REVERIFY_HOURS: "banana",
+      BACKUP_VERIFICATION_MAX_DECRYPT_BYTES: "0",
     } as NodeJS.ProcessEnv);
     expect(garbage.batchSize).toBe(10);
     expect(garbage.reVerifyIntervalMs).toBe(24 * 3_600_000);
+    expect(garbage.maxDecryptBytesPerCycle).toBe(256 * 1024 * 1024);
   });
 });
 
@@ -272,6 +335,15 @@ describe("classifyCryptoError", () => {
   test("KeyNotFoundError → key-unavailable (the #15310 signature)", () => {
     const error = new Error("key not found: org:abc/dek v1");
     error.name = "KeyNotFoundError";
+    expect(classifyCryptoError(error)?.kind).toBe("key-unavailable");
+  });
+
+  test("steward KMS 404 → key-unavailable", () => {
+    const error = new Error("steward KMS returned 404 for org key");
+    error.name = "KmsError";
+    (error as { $metadata?: { httpStatusCode: number } }).$metadata = {
+      httpStatusCode: 404,
+    };
     expect(classifyCryptoError(error)?.kind).toBe("key-unavailable");
   });
 
@@ -286,6 +358,49 @@ describe("classifyCryptoError", () => {
   test("unrelated errors are NOT classified (infra breakage must not stamp rows)", () => {
     expect(classifyCryptoError(new Error("connection terminated unexpectedly"))).toBeNull();
     expect(classifyCryptoError("boom")).toBeNull();
+  });
+
+  test("steward KmsError 404 → key-unavailable via the structured status", () => {
+    const structured = new KmsError(
+      "Steward KMS POST /v1/kms/keys/org%3Aabc%2Fdek/decrypt failed (404 Not Found): no such key material",
+      404,
+    );
+    expect(classifyCryptoError(structured)?.kind).toBe("key-unavailable");
+  });
+
+  test("steward KmsError with a non-404 status stays unclassified (transport breakage, not a bad key)", () => {
+    const unavailable = new KmsError(
+      "Steward KMS POST /v1/kms/keys/org%3Aabc%2Fdek/decrypt failed (503 Service Unavailable)",
+      503,
+    );
+    expect(classifyCryptoError(unavailable)).toBeNull();
+  });
+
+  test("REAL StewardKmsAdapter 404 decrypt classifies as key-unavailable", async () => {
+    const adapter = new StewardKmsAdapter({
+      baseUrl: "https://steward.example.test",
+      tokenProvider: async () => "token-1",
+      // Body deliberately avoids the words "key not found" so classification
+      // cannot ride the KeyNotFoundError message heuristic; the structured
+      // status assertion below pins the real steward wire contract.
+      fetch: async () =>
+        new Response(JSON.stringify({ error: "no such key material" }), {
+          status: 404,
+          statusText: "",
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    const error = await adapter
+      .decrypt("org:abc/dek", new Uint8Array(8), new Uint8Array(12), new Uint8Array(16))
+      .then(
+        () => {
+          throw new Error("expected steward decrypt to reject");
+        },
+        (err: unknown) => err,
+      );
+    expect(error).toBeInstanceOf(KmsError);
+    expect((error as KmsError).status).toBe(404);
+    expect(classifyCryptoError(error)?.kind).toBe("key-unavailable");
   });
 });
 
@@ -372,16 +487,11 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
     expect(row.verification_status).toBe("failed");
     expect(row.verification_error).toStartWith("decrypt-failed:");
     expect(row.verification_error).toContain("AEAD decrypt failed");
-    // 1/1 failed ≥ 50% threshold → both the failure alert and the systemic
-    // escalation fire, on distinct dedup keys.
-    expect(summary.escalated).toBe(true);
-    expect(alerts.map((a) => a.dedupKey)).toEqual([
-      "agent-backup-verification-failure",
-      "agent-backup-verification-systemic",
-    ]);
+    expect(summary.escalated).toBe(false);
+    expect(alerts.map((a) => a.dedupKey)).toEqual(["agent-backup-verification-failure"]);
   });
 
-  test("wrong KMS key (fresh memory backend, #15310): key-unavailable + systemic escalation", async () => {
+  test("wrong KMS key (fresh memory backend, #15310): key-unavailable below escalation floor", async () => {
     expect(pgliteReady).toBe(true);
     const sandboxA = await seedSandbox();
     const sandboxB = await seedSandbox();
@@ -402,11 +512,118 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
       expect(row.verification_status).toBe("failed");
       expect(row.verification_error).toStartWith("key-unavailable:");
     }
-    expect(summary.escalated).toBe(true);
+    expect(summary.escalated).toBe(false);
+    expect(alerts.map((a) => a.dedupKey)).toEqual(["agent-backup-verification-failure"]);
+  });
+
+  test("systemic escalation waits for a minimum sample floor", async () => {
+    expect(pgliteReady).toBe(true);
+    const backupIds: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const sandboxId = await seedSandbox();
+      backupIds.push(await seedFullBackup(sandboxId, sampleState(`kms-floor-${i}`)));
+    }
+    resetKmsClientForTests();
+
+    const { alerts, alert } = makeAlertSpy();
+    const summary = await runBackupVerificationCycle({ config: CONFIG, alert });
+
+    expect(summary).toMatchObject({ sampled: 5, verified: 0, failed: 5, escalated: true });
+    expect(summary.failures.map((f) => f.kind)).toEqual([
+      "key-unavailable",
+      "key-unavailable",
+      "key-unavailable",
+      "key-unavailable",
+      "key-unavailable",
+    ]);
+    for (const backupId of backupIds) {
+      expect((await readBackupRow(backupId)).verification_error).toStartWith("key-unavailable:");
+    }
     const systemic = alerts.find((a) => a.dedupKey === "agent-backup-verification-systemic");
     expect(systemic).toBeDefined();
     expect(systemic?.message).toContain("KMS misconfiguration");
-    expect(systemic?.details.keyUnavailable).toBe(2);
+    expect(systemic?.details.keyUnavailable).toBe(5);
+  });
+
+  test("missing R2 payload thrown as NoSuchKey is stamped payload-missing and cannot wedge sampling", async () => {
+    expect(pgliteReady).toBe(true);
+    const sandboxId = await seedSandbox();
+    const missingKey = "agent-backups/missing/state_data.json";
+    const missingError = new Error("NoSuchKey: object does not exist");
+    missingError.name = "NoSuchKey";
+    setRuntimeR2Bucket({
+      async get() {
+        throw missingError;
+      },
+      async put() {},
+      async delete() {},
+    } satisfies RuntimeR2Bucket);
+    const [backup] = await dbWrite
+      .insert(agentSandboxBackups)
+      .values({
+        sandbox_record_id: sandboxId,
+        snapshot_type: "auto",
+        state_data: sampleState("r2-preview"),
+        state_data_storage: "r2",
+        state_data_key: missingKey,
+        size_bytes: 1024,
+        backup_kind: "full",
+        content_hash: computeStateHash(sampleState("r2-preview")),
+      })
+      .returning();
+    expect(backup).toBeDefined();
+    const now = new Date("2026-07-09T00:00:00Z");
+    const { alerts, alert } = makeAlertSpy();
+
+    const summary = await runBackupVerificationCycle({ config: CONFIG, alert, now: () => now });
+
+    expect(summary).toMatchObject({ sampled: 1, verified: 0, failed: 1, errored: 0 });
+    expect(summary.failures[0]).toMatchObject({
+      backupId: backup.id,
+      kind: "payload-missing",
+    });
+    const row = await readBackupRow(backup.id);
+    expect(row.verification_status).toBe("failed");
+    expect(row.verified_at?.getTime()).toBe(now.getTime());
+    expect(row.verification_error).toStartWith("payload-missing:");
+    expect(alerts.map((a) => a.dedupKey)).toEqual(["agent-backup-verification-failure"]);
+  });
+
+  test("verifier infrastructure errors stamp verified_at and alert without marking backup failed", async () => {
+    expect(pgliteReady).toBe(true);
+    const sandboxId = await seedSandbox();
+    const [backup] = await dbWrite
+      .insert(agentSandboxBackups)
+      .values({
+        sandbox_record_id: sandboxId,
+        snapshot_type: "auto",
+        state_data: sampleState("r2-preview"),
+        state_data_storage: "r2",
+        state_data_key: "agent-backups/configured-nowhere/state_data.json",
+        size_bytes: 1024,
+        backup_kind: "full",
+        content_hash: computeStateHash(sampleState("r2-preview")),
+      })
+      .returning();
+    expect(backup).toBeDefined();
+    const now = new Date("2026-07-09T01:00:00Z");
+    const { alerts, alert } = makeAlertSpy();
+
+    // Force inline heavy-payload mode so resolving the r2 row is a
+    // deterministic no-object-storage-configured infra error on this host.
+    let summary: Awaited<ReturnType<typeof runBackupVerificationCycle>> | undefined;
+    await withEnv({ SQL_HEAVY_PAYLOAD_STORAGE: "inline" }, async () => {
+      summary = await runBackupVerificationCycle({ config: CONFIG, alert, now: () => now });
+    });
+
+    expect(summary).toMatchObject({ sampled: 1, verified: 0, failed: 0, errored: 1 });
+    const row = await readBackupRow(backup.id);
+    // `errored`, never `failed`: the backup itself may be healthy. The
+    // bracketed counter is the row's consecutive-attempt error streak.
+    expect(row.verification_status).toBe("errored");
+    expect(row.verified_at?.getTime()).toBe(now.getTime());
+    expect(row.verification_error).toStartWith("infra-error[1]:");
+    expect(alerts.map((a) => a.dedupKey)).toEqual(["agent-backup-verification-error"]);
   });
 
   test("content_hash drift on an otherwise-decryptable backup is stamped hash-mismatch", async () => {
@@ -585,5 +802,387 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
     expect(summary).toMatchObject({ enabled: false, sampled: 0 });
     expect((await readBackupRow(backupId)).verification_status).toBeNull();
     expect(alerts).toHaveLength(0);
+  });
+
+  test("systemic floor is tunable: with a floor of 1, a 1-of-1 failure escalates", async () => {
+    expect(pgliteReady).toBe(true);
+    const sandboxId = await seedSandbox();
+    const backupId = await seedFullBackup(sandboxId, sampleState("floor-tuned"));
+    const stored = await readBackupRow(backupId);
+    const envelope = stored.state_data as EncryptedAgentBackupStateData;
+    const tampered =
+      (envelope.ciphertext.startsWith("AAAAAAAA") ? "BBBBBBBB" : "AAAAAAAA") +
+      envelope.ciphertext.slice(8);
+    await dbWrite
+      .update(agentSandboxBackups)
+      .set({ state_data: { ...envelope, ciphertext: tampered } })
+      .where(eq(agentSandboxBackups.id, backupId));
+
+    const { alerts, alert } = makeAlertSpy();
+    const summary = await runBackupVerificationCycle({
+      config: { ...CONFIG, minSystemicSample: 1 },
+      alert,
+    });
+
+    expect(summary).toMatchObject({ sampled: 1, failed: 1, escalated: true });
+    expect(alerts.map((a) => a.dedupKey)).toEqual([
+      "agent-backup-verification-failure",
+      "agent-backup-verification-systemic",
+    ]);
+  });
+
+  test("errored row is stamped with the attempt and cannot head-of-line-block the next cycle", async () => {
+    expect(pgliteReady).toBe(true);
+    const sandboxBad = await seedSandbox();
+    const sandboxGood = await seedSandbox();
+    const now = new Date();
+    const badId = await seedUnfetchableR2Backup(sandboxBad, new Date(now.getTime() - 60_000));
+    const goodState = sampleState("wedge-good");
+    const good = await agentSandboxesRepository.createBackup({
+      sandbox_record_id: sandboxGood,
+      snapshot_type: "auto",
+      state_data: goodState,
+      size_bytes: 512,
+      backup_kind: "full",
+      content_hash: computeStateHash(goodState),
+      created_at: now,
+    });
+    const config = { ...CONFIG, batchSize: 1 };
+    const { alerts, alert } = makeAlertSpy();
+
+    await withEnv({ SQL_HEAVY_PAYLOAD_STORAGE: "inline" }, async () => {
+      // Cycle 1 samples the older broken row: infra error, stamped `errored`
+      // with the attempt timestamp — NOT `failed`.
+      const first = await runBackupVerificationCycle({ config, alert, now: () => now });
+      expect(first).toMatchObject({ sampled: 1, verified: 0, failed: 0, errored: 1 });
+      const badRow = await readBackupRow(badId);
+      expect(badRow.verification_status).toBe("errored");
+      expect(badRow.verified_at?.getTime()).toBe(now.getTime());
+      expect(badRow.verification_error).toStartWith("infra-error[1]:");
+
+      // Cycle 2 at the same clock: the stamped row is no longer due, so the
+      // batch-of-1 head moves on to the healthy agent instead of wedging.
+      const second = await runBackupVerificationCycle({ config, alert, now: () => now });
+      expect(second).toMatchObject({ sampled: 1, verified: 1, errored: 0 });
+      expect((await readBackupRow(good.id)).verification_status).toBe("verified");
+    });
+
+    // Infra errors are not backup failures: only the cycle-level infra alert
+    // fired (from cycle 1); no failure/systemic alert, and the per-row
+    // persistent-error alert has not reached its streak threshold.
+    expect(alerts.map((a) => a.dedupKey)).toEqual(["agent-backup-verification-error"]);
+  });
+
+  test("a row that errors N consecutive attempts raises the persistent-error alert", async () => {
+    expect(pgliteReady).toBe(true);
+    const sandboxId = await seedSandbox();
+    const t0 = new Date();
+    const badId = await seedUnfetchableR2Backup(sandboxId, new Date(t0.getTime() - 60_000));
+    const config = { ...CONFIG, erroredAlertStreak: 2 };
+    const { alerts, alert } = makeAlertSpy();
+
+    await withEnv({ SQL_HEAVY_PAYLOAD_STORAGE: "inline" }, async () => {
+      const first = await runBackupVerificationCycle({ config, alert, now: () => t0 });
+      expect(first.errored).toBe(1);
+      expect(alerts.map((a) => a.dedupKey)).toEqual(["agent-backup-verification-error"]);
+
+      // The next attempt happens a re-verify interval later and errors again.
+      const t1 = new Date(t0.getTime() + config.reVerifyIntervalMs + 60_000);
+      const second = await runBackupVerificationCycle({ config, alert, now: () => t1 });
+      expect(second.errored).toBe(1);
+    });
+
+    const row = await readBackupRow(badId);
+    expect(row.verification_error).toStartWith("infra-error[2]:");
+    // Cycle 2 adds the per-row persistent-error alert (streak threshold hit)
+    // ahead of its cycle-level infra alert.
+    expect(alerts.map((a) => a.dedupKey)).toEqual([
+      "agent-backup-verification-error",
+      "agent-backup-verification-persistent-error",
+      "agent-backup-verification-error",
+    ]);
+    const persistent = alerts.find(
+      (a) => a.dedupKey === "agent-backup-verification-persistent-error",
+    );
+    expect(persistent?.details.streak).toBe(2);
+    expect(persistent?.details.backupId).toBe(badId);
+  });
+
+  test("payload larger than the whole cycle budget is a bounded skip stamped errored", async () => {
+    expect(pgliteReady).toBe(true);
+    const sandboxId = await seedSandbox();
+    const backupId = await seedFullBackup(sandboxId, sampleState("oversize"));
+    const config = { ...CONFIG, maxDecryptBytesPerCycle: 16 };
+    const { alerts, alert } = makeAlertSpy();
+    const now = new Date();
+
+    const summary = await runBackupVerificationCycle({ config, alert, now: () => now });
+
+    expect(summary).toMatchObject({
+      sampled: 1,
+      verified: 0,
+      failed: 0,
+      errored: 0,
+      oversizeSkipped: 1,
+    });
+    const row = await readBackupRow(backupId);
+    expect(row.verification_status).toBe("errored");
+    expect(row.verified_at?.getTime()).toBe(now.getTime());
+    expect(row.verification_error).toMatch(
+      /^infra-error\[1\]: stored payload of \d+ bytes exceeds BACKUP_VERIFICATION_MAX_DECRYPT_BYTES=16$/,
+    );
+    // A bounded skip is neither a failure nor a cycle-level infra error.
+    expect(alerts).toHaveLength(0);
+
+    // Stamped: the next cycle inside the re-verify interval moves on.
+    const again = await runBackupVerificationCycle({ config, alert, now: () => now });
+    expect(again.sampled).toBe(0);
+  });
+
+  test("cycle budget exhaustion defers the remainder, unstamped, to the next cycle", async () => {
+    expect(pgliteReady).toBe(true);
+    const sandboxA = await seedSandbox();
+    const sandboxB = await seedSandbox();
+    const now = new Date();
+    // Same-length markers keep both stored payloads the same size.
+    const seed = async (sandbox: string, marker: string, createdAt: Date) => {
+      const state = sampleState(marker);
+      const backup = await agentSandboxesRepository.createBackup({
+        sandbox_record_id: sandbox,
+        snapshot_type: "auto",
+        state_data: state,
+        size_bytes: 512,
+        backup_kind: "full",
+        content_hash: computeStateHash(state),
+        created_at: createdAt,
+      });
+      return backup.id;
+    };
+    const aId = await seed(sandboxA, "budget-a", new Date(now.getTime() - 1_000));
+    const bId = await seed(sandboxB, "budget-b", now);
+    const bytesOf = async (id: string) =>
+      Buffer.byteLength(JSON.stringify((await readBackupRow(id)).state_data), "utf8");
+    const aBytes = await bytesOf(aId);
+    const bBytes = await bytesOf(bId);
+    // Budget covers either row alone but never both in one cycle.
+    const config = { ...CONFIG, maxDecryptBytesPerCycle: aBytes + bBytes - 1 };
+    const { alerts, alert } = makeAlertSpy();
+
+    const first = await runBackupVerificationCycle({ config, alert, now: () => now });
+    expect(first).toMatchObject({ sampled: 1, verified: 1, budgetDeferred: 1 });
+    expect((await readBackupRow(aId)).verification_status).toBe("verified");
+    // Deferred, not stamped: still eligible at the head of the next cycle.
+    expect((await readBackupRow(bId)).verification_status).toBeNull();
+
+    const second = await runBackupVerificationCycle({ config, alert, now: () => now });
+    expect(second).toMatchObject({ sampled: 1, verified: 1, budgetDeferred: 0 });
+    expect((await readBackupRow(bId)).verification_status).toBe("verified");
+    expect(alerts).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R2-offloaded rows, driven through the REAL S3-compatible client against a
+// local HTTP object-store stub (only the remote storage SERVER is simulated;
+// the SDK, offload/hydrate code, KMS, and verifier all run for real). The
+// stub speaks just enough S3: PUT stores, GET serves or returns the S3
+// NoSuchKey XML error the AWS SDK deserializes into a thrown `NoSuchKey`.
+// Per-key GET counters make the storage boundary observable, proving chain
+// reconstruction touches only chain members.
+// ---------------------------------------------------------------------------
+
+describe("r2-offloaded backups (real S3 client against a local object-store stub)", () => {
+  const objects = new Map<string, string>();
+  const getCounts = new Map<string, number>();
+  let server: ReturnType<typeof Bun.serve> | null = null;
+  let priorEnv = new Map<string, string | undefined>();
+
+  beforeAll(() => {
+    server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        // Path-style addressing: /<bucket>/<key…>
+        const key = url.pathname.split("/").slice(2).join("/");
+        if (req.method === "PUT") {
+          objects.set(key, await req.text());
+          return new Response(null, { status: 200 });
+        }
+        if (req.method === "GET") {
+          getCounts.set(key, (getCounts.get(key) ?? 0) + 1);
+          const body = objects.get(key);
+          if (body === undefined) {
+            return new Response(
+              '<?xml version="1.0" encoding="UTF-8"?>\n' +
+                `<Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message><Key>${key}</Key></Error>`,
+              { status: 404, headers: { "content-type": "application/xml" } },
+            );
+          }
+          return new Response(body, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response("unsupported", { status: 405 });
+      },
+    });
+    const env: Record<string, string> = {
+      STORAGE_PROVIDER: "s3",
+      STORAGE_ENDPOINT: `http://127.0.0.1:${server.port}`,
+      STORAGE_REGION: "local",
+      STORAGE_ACCESS_KEY_ID: "verifier-test",
+      STORAGE_SECRET_ACCESS_KEY: "verifier-test",
+      STORAGE_FORCE_PATH_STYLE: "1",
+      STORAGE_HEAVY_PAYLOADS_BUCKET: "verifier-test-bucket",
+      SQL_HEAVY_PAYLOAD_STORAGE: "r2",
+      SQL_HEAVY_PAYLOAD_MIN_BYTES: "0",
+    };
+    priorEnv = new Map(Object.keys(env).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, env);
+    resetObjectStorageClientForTests();
+  });
+
+  afterAll(() => {
+    for (const [key, value] of priorEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetObjectStorageClientForTests();
+    server?.stop(true);
+  });
+
+  beforeEach(() => {
+    objects.clear();
+    getCounts.clear();
+  });
+
+  async function stateDataKeyOf(backupId: string): Promise<string> {
+    const row = await readBackupRow(backupId);
+    expect(row.state_data_storage).toBe("r2");
+    if (!row.state_data_key) throw new Error(`backup ${backupId} has no state_data_key`);
+    return row.state_data_key;
+  }
+
+  test("R2 payload lost out from under the row (NoSuchKey) stamps payload-missing and alerts", async () => {
+    expect(pgliteReady).toBe(true);
+    const sandboxId = await seedSandbox();
+    const state = sampleState("r2-missing");
+    const backup = await agentSandboxesRepository.createBackup({
+      sandbox_record_id: sandboxId,
+      snapshot_type: "auto",
+      state_data: state,
+      size_bytes: 1024,
+      backup_kind: "full",
+      content_hash: computeStateHash(state),
+    });
+    const key = await stateDataKeyOf(backup.id);
+    expect(objects.has(key)).toBe(true);
+    // The bucket loses the object; the row still points at it.
+    objects.delete(key);
+
+    const { alerts, alert } = makeAlertSpy();
+    const summary = await runBackupVerificationCycle({ config: CONFIG, alert });
+
+    expect(summary).toMatchObject({ sampled: 1, verified: 0, failed: 1, errored: 0 });
+    expect(summary.failures[0].kind).toBe("payload-missing");
+    const row = await readBackupRow(backup.id);
+    expect(row.verification_status).toBe("failed");
+    expect(row.verified_at).not.toBeNull();
+    expect(row.verification_error).toStartWith("payload-missing:");
+    expect(row.verification_error).toContain(key);
+    expect(alerts.map((a) => a.dedupKey)).toEqual(["agent-backup-verification-failure"]);
+  });
+
+  test("r2-offloaded backup verifies end to end through download + decrypt", async () => {
+    expect(pgliteReady).toBe(true);
+    const sandboxId = await seedSandbox();
+    const state = sampleState("r2-happy");
+    const backup = await agentSandboxesRepository.createBackup({
+      sandbox_record_id: sandboxId,
+      snapshot_type: "auto",
+      state_data: state,
+      size_bytes: 1024,
+      backup_kind: "full",
+      content_hash: computeStateHash(state),
+    });
+    await stateDataKeyOf(backup.id);
+    const { alerts, alert } = makeAlertSpy();
+
+    const summary = await runBackupVerificationCycle({ config: CONFIG, alert });
+
+    expect(summary).toMatchObject({ sampled: 1, verified: 1, failed: 0, errored: 0 });
+    expect((await readBackupRow(backup.id)).verification_status).toBe("verified");
+    expect(alerts).toHaveLength(0);
+  });
+
+  test("incremental verification fetches ONLY chain members from object storage", async () => {
+    expect(pgliteReady).toBe(true);
+    const sandboxId = await seedSandbox();
+    const now = Date.now();
+
+    // Retained NON-chain fulls a restore of the newest backup never touches.
+    const unrelatedIds: string[] = [];
+    for (const [index, marker] of ["r2-old-1", "r2-old-2"].entries()) {
+      const state = sampleState(marker);
+      const backup = await agentSandboxesRepository.createBackup({
+        sandbox_record_id: sandboxId,
+        snapshot_type: "auto",
+        state_data: state,
+        size_bytes: 512,
+        backup_kind: "full",
+        content_hash: computeStateHash(state),
+        created_at: new Date(now - 30_000 + index * 5_000),
+      });
+      unrelatedIds.push(backup.id);
+    }
+
+    const base = sampleState("r2-chain-base");
+    const parent = await agentSandboxesRepository.createBackup({
+      sandbox_record_id: sandboxId,
+      snapshot_type: "auto",
+      state_data: base,
+      size_bytes: 512,
+      backup_kind: "full",
+      content_hash: computeStateHash(base),
+      created_at: new Date(now - 10_000),
+    });
+    const next: AgentBackupStateData = {
+      memories: [...base.memories, { role: "agent", text: "delta", timestamp: now }],
+      config: { ...base.config, delta: true },
+      workspaceFiles: { ...base.workspaceFiles, "delta.txt": "delta file" },
+    };
+    const incremental = await agentSandboxesRepository.createBackup({
+      sandbox_record_id: sandboxId,
+      snapshot_type: "auto",
+      state_data: diffBackupState(base, next),
+      size_bytes: 128,
+      backup_kind: "incremental",
+      parent_backup_id: parent.id,
+      content_hash: computeStateHash(next),
+      created_at: new Date(now),
+    });
+
+    const parentKey = await stateDataKeyOf(parent.id);
+    const targetKey = await stateDataKeyOf(incremental.id);
+    const unrelatedKeys = await Promise.all(unrelatedIds.map(stateDataKeyOf));
+    // Discard the GETs createBackup's own hydration performed while seeding;
+    // from here on, every GET is the verifier's.
+    getCounts.clear();
+
+    const { alerts, alert } = makeAlertSpy();
+    const summary = await runBackupVerificationCycle({ config: CONFIG, alert });
+
+    expect(summary).toMatchObject({ sampled: 1, verified: 1, failed: 0, errored: 0 });
+    expect((await readBackupRow(incremental.id)).verification_status).toBe("verified");
+    expect(alerts).toHaveLength(0);
+    // Storage-boundary proof: the sampled row and its chain parent were each
+    // downloaded exactly once; the sandbox's other retained backups (which
+    // the repository restore path would have hydrated wholesale) were never
+    // touched.
+    expect(getCounts.get(targetKey)).toBe(1);
+    expect(getCounts.get(parentKey)).toBe(1);
+    for (const key of unrelatedKeys) {
+      expect(getCounts.get(key)).toBeUndefined();
+    }
   });
 });

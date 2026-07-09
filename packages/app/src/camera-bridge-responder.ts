@@ -18,6 +18,7 @@ import { Directory, Encoding, Filesystem } from "@capacitor/filesystem";
 const DIR = "agent/vision-bridge";
 const REQUEST_PATH = `${DIR}/capture.req`;
 const ACK_PATH = `${DIR}/capture.ack`;
+const ERROR_PATH = `${DIR}/capture.err`;
 const FRAME_PATH = `${DIR}/capture.jpg`;
 const POLL_INTERVAL_MS = 400;
 
@@ -33,6 +34,10 @@ interface ElizaCameraLike {
     format?: string;
   }) => Promise<{ base64: string }>;
   stopPreview: () => Promise<unknown>;
+}
+
+function messageForError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function getCamera(): ElizaCameraLike | null {
@@ -65,15 +70,46 @@ async function readText(path: string): Promise<string | null> {
     });
     return typeof res.data === "string" ? res.data.trim() : null;
   } catch {
+    // error-policy:J4 absent request/ack files are the designed idle state.
     // Absent request/ack is the normal idle state — not an error.
     return null;
   }
 }
 
+async function ensureBridgeDir(): Promise<void> {
+  await Filesystem.mkdir({
+    path: DIR,
+    directory: Directory.Data,
+    recursive: true,
+  }).catch(() => {
+    // error-policy:J6 mkdir races with the agent/WebView bridge are harmless.
+  });
+}
+
+async function writeBridgeError(
+  reqId: string,
+  code: string,
+  error: unknown,
+): Promise<void> {
+  await ensureBridgeDir();
+  await Filesystem.writeFile({
+    path: ERROR_PATH,
+    directory: Directory.Data,
+    data: JSON.stringify({
+      id: reqId,
+      code,
+      message: messageForError(error),
+    }),
+    encoding: Encoding.UTF8,
+  });
+}
+
 async function captureOnce(camera: ElizaCameraLike): Promise<string> {
   const host = makePreviewHost();
   try {
-    await camera.requestPermissions?.().catch(() => {});
+    await camera.requestPermissions?.().catch(() => {
+      // error-policy:J4 native camera plugins may request lazily at preview.
+    });
     await camera.startPreview({
       element: host,
       direction: "rear",
@@ -84,7 +120,9 @@ async function captureOnce(camera: ElizaCameraLike): Promise<string> {
     const photo = await camera.capturePhoto({ quality: 85, format: "jpeg" });
     return photo.base64;
   } finally {
-    await camera.stopPreview().catch(() => {});
+    await camera.stopPreview().catch(() => {
+      // error-policy:J6 preview teardown is best-effort after capture failure.
+    });
     host.remove();
   }
 }
@@ -103,15 +141,19 @@ export function startCameraBridgeResponder(): () => void {
     const reqId = await readText(REQUEST_PATH);
     if (!reqId || reqId === lastHandled) return;
     const camera = getCamera();
-    if (!camera) return; // not Android / plugin absent — idle
+    if (!camera) {
+      await writeBridgeError(
+        reqId,
+        "camera_plugin_unavailable",
+        "ElizaCamera plugin unavailable",
+      );
+      lastHandled = reqId;
+      return;
+    }
     busy = true;
     lastHandled = reqId;
     try {
-      await Filesystem.mkdir({
-        path: DIR,
-        directory: Directory.Data,
-        recursive: true,
-      }).catch(() => {});
+      await ensureBridgeDir();
       const base64 = await captureOnce(camera);
       await Filesystem.writeFile({
         path: FRAME_PATH,
@@ -127,12 +169,18 @@ export function startCameraBridgeResponder(): () => void {
       // eslint-disable-next-line no-console
       console.info(`[camera-bridge] served capture ${reqId}`);
     } catch (err) {
-      // Surface the failure to the agent as an ack-less timeout rather than a
-      // silent hang; log for the WebView console trail.
+      await writeBridgeError(reqId, "capture_failed", err).catch((writeErr) => {
+        // error-policy:J7 bridge diagnostics must not kill the responder loop.
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[camera-bridge] failed to write error ack for ${reqId}:`,
+          messageForError(writeErr),
+        );
+      });
       // eslint-disable-next-line no-console
       console.warn(
         `[camera-bridge] capture ${reqId} failed:`,
-        err instanceof Error ? err.message : String(err),
+        messageForError(err),
       );
     } finally {
       busy = false;
@@ -140,7 +188,14 @@ export function startCameraBridgeResponder(): () => void {
   };
 
   const timer = setInterval(() => {
-    void tick();
+    void tick().catch((err) => {
+      // error-policy:J7 bridge diagnostics must not kill the responder loop.
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[camera-bridge] responder tick failed:",
+        messageForError(err),
+      );
+    });
   }, POLL_INTERVAL_MS);
 
   return () => {

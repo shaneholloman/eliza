@@ -18,6 +18,8 @@
  * Usage:
  *   node scripts/mvp-visual-verify.mjs [--input <dir>] [--baseline <dir>]
  *                                      [--update-baseline] [--viewport <name>]...
+ *                                      [--require-state <slug[@viewport]>]...
+ *                                      [--require-baseline-states]
  *                                      [--strict]
  * Env: ELIZA_AUDIT_APP_DIR overrides the input dir (matches the audit spec);
  * ELIZA_MVP_VISUAL_BASELINE_DIR overrides the committed baseline directory.
@@ -46,12 +48,21 @@ function log(msg) {
 }
 
 export function parseArgs(argv) {
-  const args = { viewports: [], updateBaseline: false, strict: false };
+  const args = {
+    viewports: [],
+    requiredStates: [],
+    requireBaselineStates: false,
+    updateBaseline: false,
+    strict: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === "--input") args.input = argv[++i];
     else if (a === "--baseline") args.baseline = argv[++i];
     else if (a === "--viewport") args.viewports.push(argv[++i]);
+    else if (a === "--require-state") args.requiredStates.push(argv[++i]);
+    else if (a === "--require-baseline-states")
+      args.requireBaselineStates = true;
     else if (a === "--update-baseline") args.updateBaseline = true;
     else if (a === "--strict") args.strict = true;
     else if (a === "--help" || a === "-h") args.help = true;
@@ -89,6 +100,24 @@ async function discoverViewportDirs(inputDir, only) {
   return dirs.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+export async function discoverBaselineRequiredStates(baselineRoot, only) {
+  const entries = await readdir(baselineRoot, { withFileTypes: true }).catch(
+    () => [],
+  );
+  const states = [];
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    if (only.length && !only.includes(e.name)) continue;
+    const pngs = (await readdir(path.join(baselineRoot, e.name))).filter((f) =>
+      f.endsWith(".png"),
+    );
+    for (const png of pngs) {
+      states.push(`${png.replace(/\.png$/, "")}@${e.name}`);
+    }
+  }
+  return states.sort();
+}
+
 async function loadReportIndex(inputDir) {
   const reportPath = path.join(inputDir, "report.json");
   const raw = await readFile(reportPath, "utf8").catch(() => null);
@@ -103,7 +132,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     log(
-      "post-processes audit:app screenshots into mvp-verify/ (OCR + palette + diff + expectations)",
+      "post-processes audit:app screenshots into mvp-verify/ (OCR + palette + diff + expectations + required-state coverage)",
     );
     return 0;
   }
@@ -253,12 +282,27 @@ async function main() {
       : a.slug.localeCompare(b.slug),
   );
 
+  const baselineRequiredStates = args.requireBaselineStates
+    ? await discoverBaselineRequiredStates(baselineRoot, args.viewports)
+    : [];
+  const requiredStates = uniqueRequiredStates([
+    ...args.requiredStates,
+    ...baselineRequiredStates,
+  ]);
+  const missingRequiredStates = computeMissingRequiredStates(
+    requiredStates,
+    results,
+  );
   const expectationSkips = countExpectationChecks(results, "skip");
   const expectationFailures = results.filter((r) => !r.expectation.pass).length;
   const newBaselines = results.filter((r) => r.diff.status === "new").length;
   const emptyRunFailures = results.length === 0 ? 1 : 0;
   const strictFailures =
-    expectationFailures + expectationSkips + newBaselines + emptyRunFailures;
+    expectationFailures +
+    expectationSkips +
+    newBaselines +
+    emptyRunFailures +
+    missingRequiredStates.length;
 
   const summary = {
     generatedAt: new Date().toISOString(),
@@ -271,6 +315,9 @@ async function main() {
     auditReportPresent: reportPresent,
     expectationFailures,
     expectationSkips,
+    requireBaselineStates: args.requireBaselineStates,
+    requiredStates,
+    missingRequiredStates,
     newBaselines,
     overflowStates: results.filter((r) => (r.horizontalOverflowPx ?? 0) > 2)
       .length,
@@ -292,7 +339,7 @@ async function main() {
     `wrote ${results.length} states → ${path.join(outDir, "report.json")} + contact-sheet.html`,
   );
   log(
-    `expectation failures: ${summary.expectationFailures} | expectation skips: ${summary.expectationSkips} | overflow states: ${summary.overflowStates} | new baselines: ${summary.newBaselines}`,
+    `expectation failures: ${summary.expectationFailures} | expectation skips: ${summary.expectationSkips} | missing required states: ${summary.missingRequiredStates.length} | overflow states: ${summary.overflowStates} | new baselines: ${summary.newBaselines}`,
   );
   if (summary.expectationFailures > 0) {
     for (const r of results.filter((r) => !r.expectation.pass)) {
@@ -315,9 +362,46 @@ async function main() {
     if (summary.expectationSkips > 0) {
       log(`  FAIL ${summary.expectationSkips} expectation check(s) skipped`);
     }
+    if (summary.missingRequiredStates.length > 0) {
+      log(
+        `  FAIL ${summary.missingRequiredStates.length} required screenshot state(s) missing`,
+      );
+      for (const state of summary.missingRequiredStates) {
+        log(
+          `    missing ${state.slug}${state.viewport ? ` @ ${state.viewport}` : ""}`,
+        );
+      }
+    }
     return 1;
   }
   return 0;
+}
+
+export function parseRequiredState(value) {
+  const [slug, viewport, extra] = String(value).split("@");
+  if (!slug || extra !== undefined || String(value).endsWith("@")) {
+    throw new Error(
+      `invalid --require-state value "${value}"; expected slug or slug@viewport`,
+    );
+  }
+  return { slug, viewport: viewport || null };
+}
+
+export function uniqueRequiredStates(states) {
+  return [...new Set(states)];
+}
+
+export function computeMissingRequiredStates(requiredStates, results) {
+  if (!requiredStates?.length) return [];
+  const presentPairs = new Set(results.map((r) => `${r.slug}@${r.viewport}`));
+  const presentSlugs = new Set(results.map((r) => r.slug));
+  return requiredStates
+    .map(parseRequiredState)
+    .filter((required) =>
+      required.viewport
+        ? !presentPairs.has(`${required.slug}@${required.viewport}`)
+        : !presentSlugs.has(required.slug),
+    );
 }
 
 export function countExpectationChecks(results, status) {
@@ -388,14 +472,25 @@ function renderContactSheet(summary, results) {
   .pass{color:#0a7d3c;font-weight:700} .fail{color:#c0392b;font-weight:700} .na{color:#b58900}
   .row-fail{background:#fff4f2} .checks{margin-top:4px}
   .chk{font-size:11px;padding:1px 0} .chk.pass{color:#0a7d3c} .chk.fail{color:#c0392b} .chk.skip{color:#8a8378}
-  .new{color:#b58900;font-weight:600}
+  .new{color:#b58900;font-weight:600} .missing{margin-top:6px;color:#c0392b;font-weight:600}
 </style>
 <h1>mvp visual verify</h1>
 <div class="summary">
   ${esc(summary.states)} states · OCR: ${esc(summary.ocrEngine)} · expectation failures: <b>${summary.expectationFailures}</b> ·
-  skipped checks: <b>${summary.expectationSkips}</b> · overflow states: <b>${summary.overflowStates}</b> ·
+  skipped checks: <b>${summary.expectationSkips}</b> · missing required states: <b>${summary.missingRequiredStates.length}</b> · overflow states: <b>${summary.overflowStates}</b> ·
   new baselines: ${summary.newBaselines} · audit report: ${summary.auditReportPresent ? "loaded" : "ABSENT"} ·
   baseline: ${esc(summary.baselineDir)} · ${esc(summary.generatedAt)}
+  ${
+    summary.missingRequiredStates.length
+      ? `<div class="missing">Missing required: ${esc(
+          summary.missingRequiredStates
+            .map((state) =>
+              state.viewport ? `${state.slug}@${state.viewport}` : state.slug,
+            )
+            .join(", "),
+        )}</div>`
+      : ""
+  }
 </div>
 <table>
   <tr><th>state</th><th>screenshot</th><th>OCR text</th><th>palette</th><th>diff vs baseline</th><th>expectations</th></tr>
