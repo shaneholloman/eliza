@@ -21,25 +21,25 @@
  * evaluates what is stored. Default-matrix ratification is tracked in #14777 —
  * revisit the ordering below if D4/D5 land differently.
  */
-import type { AccessContext, MemoryScope, UUID } from "../types";
+import type {
+	AccessContext,
+	ArtifactShareGrant,
+	ArtifactShareGrantMode,
+	ArtifactShareMetadata,
+	Memory,
+	MemoryScope,
+	UUID,
+} from "../types";
 import { actorFromAccessContext, canReadScope } from "./filter";
 
 /** What a viewer's DTO may contain for one artifact. */
 export type ArtifactDisclosure = "full" | "redacted" | "none";
 
-/** Per-viewer grant mode an owner can attach to an artifact reference. */
-export type ArtifactShareGrantMode = "full" | "redacted";
-
-/** One per-entity share grant stored on the referencing record. */
-export interface ArtifactShareGrant {
-	/** Entity the grant is issued to. */
-	entityId: UUID;
-	mode: ArtifactShareGrantMode;
-	/** Entity that issued the grant. */
-	grantedBy?: UUID;
-	/** Epoch ms the grant was issued. */
-	grantedAtMs?: number;
-}
+export type {
+	ArtifactShareGrant,
+	ArtifactShareGrantMode,
+	ArtifactShareMetadata,
+};
 
 const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -91,6 +91,52 @@ export interface ArtifactDisclosureRecord {
 	grants?: readonly ArtifactShareGrant[];
 }
 
+function normalizeScope(value: unknown): MemoryScope {
+	switch (value) {
+		case "shared":
+		case "private":
+		case "room":
+		case "global":
+		case "owner-private":
+		case "user-private":
+		case "agent-private":
+			return value;
+		default:
+			return "owner-private";
+	}
+}
+
+function stringUuid(value: unknown): UUID | undefined {
+	return typeof value === "string" && UUID_PATTERN.test(value)
+		? (value as UUID)
+		: undefined;
+}
+
+/**
+ * Normalize one stored memory into the artifact-disclosure record shape.
+ *
+ * Storage metadata is jsonb and therefore untrusted at read time. Unknown scope
+ * values collapse to `owner-private`, and malformed grants/scoped ids are
+ * ignored, so a corrupt row cannot widen disclosure by accident.
+ */
+export function artifactDisclosureRecordFromMemory(
+	memory: Pick<Memory, "entityId" | "metadata">,
+): ArtifactDisclosureRecord {
+	const metadata =
+		memory.metadata && typeof memory.metadata === "object"
+			? (memory.metadata as Record<string, unknown>)
+			: undefined;
+	const scopedEntityId =
+		stringUuid(metadata?.scopedToEntityId) ??
+		stringUuid(metadata?.addedBy) ??
+		memory.entityId;
+	return {
+		scope: normalizeScope(metadata?.scope),
+		...(scopedEntityId ? { scopedEntityId } : {}),
+		grants: parseArtifactShareGrants(metadata),
+	};
+}
+
 /**
  * Decide what `ctx`'s requester may see of one artifact record.
  *
@@ -124,4 +170,49 @@ export function resolveArtifactDisclosure(
 	return canReadScope(record.scope, record.scopedEntityId, actor)
 		? "full"
 		: "none";
+}
+
+/** Resolve artifact disclosure directly from a memory row. */
+export function resolveArtifactDisclosureForMemory(
+	memory: Pick<Memory, "entityId" | "metadata">,
+	ctx: AccessContext | undefined,
+	agentId: UUID,
+): ArtifactDisclosure {
+	return resolveArtifactDisclosure(
+		artifactDisclosureRecordFromMemory(memory),
+		ctx,
+		agentId,
+	);
+}
+
+export interface ArtifactVariantUrls {
+	fullUrl?: string | null;
+	redactedUrl?: string | null;
+}
+
+export interface DisclosedArtifactUrl {
+	disclosure: Exclude<ArtifactDisclosure, "none">;
+	url: string;
+	redacted: boolean;
+}
+
+/**
+ * Select the URL a DTO may disclose for a resolved artifact decision.
+ *
+ * A redacted grant is fail-closed: if no redacted variant exists yet, callers
+ * must omit the artifact instead of falling back to the original bytes.
+ */
+export function selectDisclosedArtifactUrl(
+	disclosure: ArtifactDisclosure,
+	urls: ArtifactVariantUrls,
+): DisclosedArtifactUrl | null {
+	if (disclosure === "none") return null;
+	if (disclosure === "redacted") {
+		return typeof urls.redactedUrl === "string" && urls.redactedUrl.length > 0
+			? { disclosure, url: urls.redactedUrl, redacted: true }
+			: null;
+	}
+	return typeof urls.fullUrl === "string" && urls.fullUrl.length > 0
+		? { disclosure, url: urls.fullUrl, redacted: false }
+		: null;
 }
