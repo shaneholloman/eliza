@@ -1807,14 +1807,7 @@ export function buildLibllamaForAbi({
     }
   }
 
-  const staticFusedRuntimeBackendOuts = isStaticFused
-    ? stageStaticFusedRuntimeBackendLibs({
-        buildDir,
-        abiAssetDir,
-        target: targetName,
-        log,
-      })
-    : [];
+  let staticFusedRuntimeBackendOuts = [];
 
   // Locate + stage the llama-server binary. cmake puts it under
   // `<build>/bin/llama-server` for upstream b8198 (and the apothic fork
@@ -1872,6 +1865,15 @@ export function buildLibllamaForAbi({
         `target ships — verify the elizainference cmake target built.`,
     );
   }
+  staticFusedRuntimeBackendOuts = isStaticFused
+    ? stageStaticFusedRuntimeBackendLibs({
+        buildDir,
+        abiAssetDir,
+        target: targetName,
+        fusedLibPath: fusedLibOut,
+        log,
+      })
+    : [];
   const fusedServerSrcCandidates = [
     path.join(buildDir, "bin", "llama-omnivoice-server"),
     path.join(buildDir, "llama-omnivoice-server"),
@@ -1929,23 +1931,33 @@ export function buildLibllamaForAbi({
 
 /**
  * Stage runtime backend shared objects that still exist in static-fused builds.
- * Most llama/ggml products are folded into libelizainference.so under
- * BUILD_SHARED_LIBS=OFF, but ggml-vulkan remains a dynamic backend and the
- * verifier requires it next to the fused library.
+ * Most llama/ggml products are folded into libelizainference.so when
+ * BUILD_SHARED_LIBS=OFF. If a backend still emits a separate shared object,
+ * stage it; otherwise require marker evidence that the Vulkan backend was
+ * linked into the fused library.
  */
 export function stageStaticFusedRuntimeBackendLibs({
   buildDir,
   abiAssetDir,
   target,
+  fusedLibPath = null,
   log = () => {},
 }) {
   if (!String(target).includes("vulkan")) return [];
   const vulkanBackend = locateBuiltLib(buildDir, "libggml-vulkan.so");
-  if (!vulkanBackend) {
+  if (!vulkanBackend && !staticFusedLibCarriesVulkan(fusedLibPath)) {
     throw new Error(
       `[compile-libllama] static-fuse Vulkan target ${target} built no libggml-vulkan.so under ${buildDir}. ` +
-        `A Vulkan fused APK must ship the ggml-vulkan runtime backend beside libelizainference.so; otherwise it silently runs CPU-only.`,
+        `It also lacks the static Vulkan/Mali mitigation marker in libelizainference.so. ` +
+        `A Vulkan fused APK must either ship the ggml-vulkan runtime backend beside libelizainference.so ` +
+        `or carry the statically-linked Vulkan backend inside libelizainference.so; otherwise it silently runs CPU-only.`,
     );
+  }
+  if (!vulkanBackend) {
+    log(
+      `[compile-libllama] ${target} carries ggml-vulkan statically inside libelizainference.so; no separate libggml-vulkan.so to stage.`,
+    );
+    return [];
   }
   fs.mkdirSync(abiAssetDir, { recursive: true });
   const out = path.join(abiAssetDir, "libggml-vulkan.so");
@@ -1954,6 +1966,12 @@ export function stageStaticFusedRuntimeBackendLibs({
     `[compile-libllama] Copied libggml-vulkan.so for ${target} (${(fs.statSync(out).size / (1024 * 1024)).toFixed(2)} MB).`,
   );
   return [out];
+}
+
+function staticFusedLibCarriesVulkan(fusedLibPath) {
+  if (!fusedLibPath || !fs.existsSync(fusedLibPath)) return false;
+  const bytes = fs.readFileSync(fusedLibPath);
+  return bytes.includes(Buffer.from("GGML_VK_FA_ALLOW_SUBGROUPS"));
 }
 
 /**
@@ -2482,7 +2500,9 @@ export function describeAndroidTargetDryRun({
   if (parsed.fused) {
     log(`    libelizainference.so`);
     if (parsed.backend === "vulkan") {
-      log(`    libggml-vulkan.so (runtime GPU backend)`);
+      log(
+        `    ggml-vulkan backend (separate libggml-vulkan.so if emitted, otherwise static marker in libelizainference.so)`,
+      );
     }
   } else {
     log(`    libllama.so libggml*.so llama-server`);
