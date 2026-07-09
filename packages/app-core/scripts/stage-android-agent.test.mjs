@@ -94,15 +94,17 @@ test("runtime provenance manifest name is exported for APK provenance embedding"
   );
 });
 
-test("launch script records the real detached agent child status", () => {
+test("launch scripts record the real detached agent child status", () => {
   const script = __testables.LAUNCH_SCRIPT;
+  const childScript = __testables.LAUNCH_CHILD_SCRIPT;
 
   assert.match(script, /DIAGNOSTICS_FILE=/);
-  assert.match(script, /agent-child-started/);
-  assert.match(script, /agent-child-exited/);
-  assert.match(script, /startupTraceId/);
-  assert.match(script, /agent_pid=\$!/);
-  assert.match(script, /wait "\$agent_pid"/);
+  assert.match(script, /launch-child\.sh/);
+  assert.match(childScript, /agent-child-started/);
+  assert.match(childScript, /agent-child-exited/);
+  assert.match(childScript, /startupTraceId/);
+  assert.match(childScript, /agent_pid=\$!/);
+  assert.match(childScript, /wait "\$agent_pid"/);
   assert.doesNotMatch(script, /LD_LIBRARY_PATH="\$runtime_ld" exec "\$@"/);
 });
 
