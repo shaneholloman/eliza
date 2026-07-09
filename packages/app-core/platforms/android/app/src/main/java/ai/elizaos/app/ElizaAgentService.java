@@ -2014,6 +2014,25 @@ public class ElizaAgentService extends Service {
             agentEnv.put("ELIZA_RUNTIME_MODE", "local-yolo");
             agentEnv.put("AGENT_COMMAND", "android-bridge");
             agentEnv.put("ELIZA_DISABLE_DIRECT_RUN", "1");
+            // Hybrid (local runtime + CLOUD inference): the on-device agent has
+            // no local text model on a sub-12 GB device (DeviceRamTierPolicy),
+            // so its @elizaos/plugin-elizacloud must reach Eliza Cloud (→ Cerebras)
+            // for TEXT_LARGE/TEXT_EMBEDDING. The agent is a separate process, so
+            // the credential rides in via env. The app writes the account's Eliza
+            // Cloud API key into the CapacitorStorage pref during the hybrid
+            // onboarding; absent (pure-local / not-yet-onboarded) this is a no-op
+            // and the agent boots without a cloud provider, exactly as before.
+            String cloudInferenceKey = readCloudInferenceApiKey(this);
+            if (cloudInferenceKey != null && !cloudInferenceKey.isEmpty()) {
+                agentEnv.put("ELIZAOS_CLOUD_API_KEY", cloudInferenceKey);
+                agentEnv.put("ELIZAOS_CLOUD_ENABLED", "1");
+                String cloudInferenceBase = readCloudInferenceBaseUrl(this);
+                if (cloudInferenceBase != null && !cloudInferenceBase.isEmpty()) {
+                    agentEnv.put("ELIZAOS_CLOUD_BASE_URL", cloudInferenceBase);
+                }
+                Log.i(TAG, "Hybrid cloud inference enabled: ELIZAOS_CLOUD_API_KEY"
+                    + " injected from prefs (len=" + cloudInferenceKey.length() + ")");
+            }
             // Local passwordless mode: the on-device agent trusts its own sealed
             // request socket so the single device owner never hits a login/pairing
             // gate. The per-boot bearer-token guard (ELIZA_REQUIRE_LOCAL_AUTH=1)
@@ -3765,6 +3784,37 @@ public class ElizaAgentService extends Service {
      * eliza/packages/app-core/src/first-run/mobile-runtime-mode.ts.
      */
     private static final String RUNTIME_MODE_KEY = "eliza:mobile-runtime-mode";
+
+    /**
+     * Storage keys for the hybrid cloud-inference credential the app hands the
+     * on-device agent (so plugin-elizacloud can reach Eliza Cloud → Cerebras for
+     * TEXT_LARGE on a device with no local text model). Written by the renderer
+     * during hybrid onboarding; read here into the agent process env.
+     */
+    private static final String CLOUD_INFERENCE_API_KEY_KEY =
+        "eliza:cloud-inference-api-key";
+    private static final String CLOUD_INFERENCE_BASE_URL_KEY =
+        "eliza:cloud-inference-base-url";
+
+    private static String readCloudInferenceApiKey(Context context) {
+        return readCapacitorPref(context, CLOUD_INFERENCE_API_KEY_KEY);
+    }
+
+    private static String readCloudInferenceBaseUrl(Context context) {
+        return readCapacitorPref(context, CLOUD_INFERENCE_BASE_URL_KEY);
+    }
+
+    private static String readCapacitorPref(Context context, String key) {
+        try {
+            String value = context
+                .getSharedPreferences(CAPACITOR_PREFS_GROUP, Context.MODE_PRIVATE)
+                .getString(key, null);
+            return value == null ? null : value.trim();
+        } catch (Exception e) {
+            Log.w(TAG, "Unable to read Capacitor pref " + key, e);
+            return null;
+        }
+    }
 
     /**
      * Whether the on-device agent should auto-start at app boot.
