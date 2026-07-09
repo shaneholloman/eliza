@@ -145,19 +145,23 @@ liveDescribe(
       LIVE_PUBLIC_ENDPOINT_TIMEOUT_MS,
     );
 
-    it("lists public models through the high-level client and compatibility client", async () => {
-      const client = publicClient();
-      const models = await client.listModels();
-      expect(Array.isArray(models.data)).toBe(true);
+    it(
+      "lists public models through the high-level client and compatibility client",
+      async () => {
+        const client = publicClient();
+        const models = await client.listModels();
+        expect(Array.isArray(models.data)).toBe(true);
 
-      const compatibility = new CloudApiClient(apiV1BaseUrl());
-      await expect(
-        compatibility.get("/models", { skipAuth: true }),
-      ).resolves.toMatchObject({ data: expect.any(Array) });
-      expect(compatibility.buildWsUrl("/agent/gateway-relay")).toContain(
-        "/agent/gateway-relay",
-      );
-    });
+        const compatibility = new CloudApiClient(apiV1BaseUrl());
+        await expect(
+          compatibility.get("/models", { skipAuth: true }),
+        ).resolves.toMatchObject({ data: expect.any(Array) });
+        expect(compatibility.buildWsUrl("/agent/gateway-relay")).toContain(
+          "/agent/gateway-relay",
+        );
+      },
+      LIVE_PUBLIC_ENDPOINT_TIMEOUT_MS,
+    );
   },
 );
 
