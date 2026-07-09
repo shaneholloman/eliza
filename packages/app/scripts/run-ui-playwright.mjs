@@ -385,6 +385,17 @@ if (hasPlaywrightConfig("playwright.ui-smoke.config.ts")) {
   }
 }
 
+// The all-views audit is evidence for production plugin bundles, so its stub
+// server must reject missing dist output instead of exercising the generic
+// placeholder used by lightweight offline smoke lanes. build-views runs below
+// before the server starts, making this a fail-closed provenance contract.
+if (
+  hasPlaywrightConfig("playwright.ui-smoke.config.ts") &&
+  hasPlaywrightProject("audit-app")
+) {
+  env.ELIZA_UI_SMOKE_REQUIRE_REAL_BUNDLES = "1";
+}
+
 if (
   hasPlaywrightConfig("playwright.ui-smoke.config.ts") &&
   env.ELIZA_UI_SMOKE_SKIP_VIEW_BUILD !== "1"
