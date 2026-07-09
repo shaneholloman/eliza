@@ -44,18 +44,52 @@
       "@elizaos/contracts/*": ["../../packages/contracts/src/*"],
       "@elizaos/plugin-app-control": ["../plugin-app-control/src/index.ts"],
       "@elizaos/plugin-app-control/*": ["../plugin-app-control/src/*"],
+      "@elizaos/plugin-agent-skills": ["../plugin-agent-skills/src/index.ts"],
+      "@elizaos/plugin-agent-skills/*": ["../plugin-agent-skills/src/*"],
+      "@elizaos/plugin-anthropic": ["../plugin-anthropic/src/index.ts"],
+      "@elizaos/plugin-anthropic/*": ["../plugin-anthropic/src/*"],
+      "@elizaos/plugin-app-manager": ["../plugin-app-manager/src/index.ts"],
+      "@elizaos/plugin-app-manager/*": ["../plugin-app-manager/src/*"],
+      "@elizaos/plugin-background-runner": [
+        "../plugin-background-runner/src/index.ts"
+      ],
+      "@elizaos/plugin-background-runner/*": [
+        "../plugin-background-runner/src/*"
+      ],
+      "@elizaos/plugin-browser": ["../plugin-browser/src/index.ts"],
+      "@elizaos/plugin-browser/*": ["../plugin-browser/src/*"],
       "@elizaos/plugin-capacitor-bridge": [
         "../plugin-capacitor-bridge/src/index.ts"
       ],
       "@elizaos/plugin-capacitor-bridge/*": [
         "../plugin-capacitor-bridge/src/*"
       ],
+      "@elizaos/plugin-coding-tools": ["../plugin-coding-tools/src/index.ts"],
+      "@elizaos/plugin-coding-tools/*": ["../plugin-coding-tools/src/*"],
+      "@elizaos/plugin-commands": ["../plugin-commands/src/index.ts"],
+      "@elizaos/plugin-discord/service": ["../plugin-discord/service.ts"],
+      "@elizaos/plugin-elizacloud/host-routes": [
+        "../plugin-elizacloud/src/host-routes.ts"
+      ],
       "@elizaos/plugin-google": ["../plugin-google/src/index.ts"],
       "@elizaos/plugin-google/*": ["../plugin-google/src/*"],
+      "@elizaos/plugin-native-filesystem": [
+        "../plugin-native-filesystem/src/index.ts"
+      ],
+      "@elizaos/plugin-registry": ["../plugin-registry/src/index.ts"],
+      "@elizaos/plugin-registry/*": ["../plugin-registry/src/*"],
       "@elizaos/plugin-scheduling": ["../plugin-scheduling/src/index.ts"],
       "@elizaos/plugin-scheduling/*": ["../plugin-scheduling/src/*"],
       "@elizaos/plugin-sql": ["../plugin-sql/src/index.node.ts"],
       "@elizaos/plugin-sql/*": ["../plugin-sql/src/*"],
+      "@elizaos/plugin-streaming": ["../plugin-streaming/src/index.ts"],
+      "@elizaos/plugin-task-coordinator": [
+        "../plugin-task-coordinator/src/index.ts"
+      ],
+      "@elizaos/plugin-task-coordinator/*": [
+        "../plugin-task-coordinator/src/*"
+      ],
+      "@elizaos/plugin-vision": ["../plugin-vision/src/index.ts"],
       "@elizaos/agent": ["../../packages/agent/src/index.ts"],
       "@elizaos/agent/*": ["../../packages/agent/src/*"],
       "@elizaos/core": ["../../packages/core/src/index.node.ts"],
@@ -71,6 +105,8 @@
       "@elizaos/logger/*": ["../../packages/logger/src/*"],
       "@elizaos/shared": ["../../packages/shared/src/index.ts"],
       "@elizaos/shared/*": ["../../packages/shared/src/*"],
+      "@elizaos/skills": ["../../packages/skills/src/index.ts"],
+      "@elizaos/skills/*": ["../../packages/skills/src/*"],
       "@elizaos/vault": ["../../packages/vault/src/index.ts"],
       "@elizaos/vault/*": ["../../packages/vault/src/*"]
     }
