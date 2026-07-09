@@ -1,14 +1,27 @@
+/**
+ * Managed binary resolution for video extraction and transcoding tools. The
+ * service owns yt-dlp cache updates and locates ffmpeg from explicit config,
+ * the host PATH, or the packaged static binary so callers can use VideoService
+ * without depending on machine-specific setup.
+ */
+
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   createWriteStream,
   constants as fsConstants,
   promises as fsp,
 } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { promisify } from "node:util";
 import { elizaLogger, resolveStateDir } from "@elizaos/core";
 import youtubeDl from "youtube-dl-exec";
+
+const require = createRequire(import.meta.url);
+const execFileAsync = promisify(execFile);
 
 export type YtDlpRunner = (
   url: string,
@@ -39,6 +52,10 @@ const YT_DLP_RELEASE_URL =
   "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
 const YT_DLP_UPDATE_THROTTLE_MS = 60 * 60 * 1000;
 const YT_DLP_META_FILENAME = "yt-dlp.meta.json";
+
+let ffmpegStaticInstallPromise: Promise<
+  { installed: true } | { installed: false; reason: string }
+> | null = null;
 
 interface GitHubAsset {
   name: string;
@@ -216,7 +233,13 @@ export class BinaryResolver {
     return cachePath;
   }
 
-  /** Resolution order: ELIZA_FFMPEG_PATH env → system ffmpeg → ffmpeg-static. */
+  /**
+   * Resolution order: ELIZA_FFMPEG_PATH env → system ffmpeg → ffmpeg-static.
+   *
+   * Some installs intentionally skip dependency postinstall scripts. In that
+   * case `ffmpeg-static` is present but its binary payload is absent, so this
+   * resolver runs that package's installer once before declaring ffmpeg missing.
+   */
   async getFfmpegPath(): Promise<string | null> {
     if (this.resolvedFfmpegPath !== undefined) return this.resolvedFfmpegPath;
 
@@ -232,26 +255,13 @@ export class BinaryResolver {
       return sys;
     }
 
-    try {
-      const mod: unknown = await import("ffmpeg-static");
-      const staticPath =
-        typeof mod === "string"
-          ? mod
-          : mod && typeof mod === "object" && "default" in mod
-            ? (mod.default as string | null | undefined)
-            : null;
-      if (
-        typeof staticPath === "string" &&
-        staticPath.length > 0 &&
-        (await isExecutable(staticPath))
-      ) {
-        this.resolvedFfmpegPath = staticPath;
-        return staticPath;
-      }
-    } catch (err) {
-      elizaLogger.warn(
-        `[plugin-video] ffmpeg-static not loadable: ${describeError(err)}`,
-      );
+    const bundled = await resolveBundledFfmpegPath();
+    if (bundled.path) {
+      this.resolvedFfmpegPath = bundled.path;
+      return bundled.path;
+    }
+    if (bundled.reason) {
+      elizaLogger.warn(`[plugin-video] ${bundled.reason}`);
     }
 
     this.resolvedFfmpegPath = null;
@@ -518,6 +528,27 @@ export function ytDlpFileName(): string {
   return process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
 }
 
+function isNodeExecutable(candidate: string): boolean {
+  return /^(node|nodejs)(\.exe)?$/i.test(candidate);
+}
+
+export function resolveNodeInstallRunner({
+  env = process.env,
+  execPath = process.execPath,
+}: {
+  env?: NodeJS.ProcessEnv;
+  execPath?: string;
+} = {}): string {
+  const configured = env.ELIZA_NODE_BIN?.trim() || env.NODE_BINARY?.trim();
+  if (configured) return configured;
+
+  const posixName = path.basename(execPath);
+  const winName = path.win32.basename(execPath);
+  return isNodeExecutable(posixName) || isNodeExecutable(winName)
+    ? execPath
+    : "node";
+}
+
 async function isExecutable(p: string): Promise<boolean> {
   try {
     await fsp.access(p, fsConstants.X_OK);
@@ -526,6 +557,142 @@ async function isExecutable(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export function ffmpegStaticExecutableName(
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+}
+
+export function resolveFfmpegStaticCandidatePath({
+  packageRoot = ffmpegStaticRoot(),
+  platform = process.platform,
+}: {
+  packageRoot?: string | null;
+  platform?: NodeJS.Platform;
+} = {}): string | null {
+  const pathApi = platform === "win32" ? path.win32 : path;
+  return packageRoot === null
+    ? null
+    : pathApi.join(packageRoot, ffmpegStaticExecutableName(platform));
+}
+
+async function ffmpegStaticPath(): Promise<{
+  path: string | null;
+  reason?: string;
+}> {
+  try {
+    const mod: unknown = await import("ffmpeg-static");
+    const staticPath =
+      typeof mod === "string"
+        ? mod
+        : mod && typeof mod === "object" && "default" in mod
+          ? (mod.default as string | null | undefined)
+          : null;
+    if (typeof staticPath === "string" && staticPath.length > 0) {
+      return { path: staticPath };
+    }
+    return {
+      path: resolveFfmpegStaticCandidatePath(),
+      reason: "ffmpeg-static did not expose a binary path",
+    };
+  } catch (err) {
+    // error-policy:J3 optional packaged binary — absence is reported by caller.
+    const candidate = resolveFfmpegStaticCandidatePath();
+    if (candidate) {
+      return {
+        path: candidate,
+        reason: `ffmpeg-static not loadable before install: ${describeError(err)}`,
+      };
+    }
+    return {
+      path: null,
+      reason: `ffmpeg-static not loadable: ${describeError(err)}`,
+    };
+  }
+}
+
+function ffmpegStaticRoot(): string | null {
+  try {
+    return path.dirname(require.resolve("ffmpeg-static/package.json"));
+  } catch (err) {
+    // error-policy:J3 optional packaged binary — absence is reported by caller.
+    void err;
+  }
+  return null;
+}
+
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    await fsp.access(p, fsConstants.F_OK);
+    return true;
+  } catch {
+    // error-policy:J3 optional packaged binary — absence is reported by caller.
+    return false;
+  }
+}
+
+async function installFfmpegStaticOnce(): Promise<
+  { installed: true } | { installed: false; reason: string }
+> {
+  ffmpegStaticInstallPromise ??= (async () => {
+    const root = ffmpegStaticRoot();
+    if (root === null) {
+      return {
+        installed: false,
+        reason: "ffmpeg-static package is not installed",
+      };
+    }
+
+    const installer = path.join(root, "install.js");
+    if (!(await fileExists(installer))) {
+      return {
+        installed: false,
+        reason: "ffmpeg-static install script is missing",
+      };
+    }
+
+    try {
+      const nodeRunner = resolveNodeInstallRunner();
+      await execFileAsync(nodeRunner, [installer], {
+        cwd: root,
+        timeout: 120_000,
+      });
+      elizaLogger.log("[plugin-video] ffmpeg-static binary installed.");
+      return { installed: true };
+    } catch (err) {
+      // error-policy:J3 optional packaged binary — caller reports unavailable tool.
+      return {
+        installed: false,
+        reason: `ffmpeg-static install failed: ${describeError(err).slice(0, 160)}`,
+      };
+    }
+  })();
+
+  return ffmpegStaticInstallPromise;
+}
+
+async function resolveBundledFfmpegPath(): Promise<{
+  path: string | null;
+  reason?: string;
+}> {
+  const bundled = await ffmpegStaticPath();
+  if (!bundled.path) return bundled;
+  if (await isExecutable(bundled.path)) return bundled;
+
+  const installed = await installFfmpegStaticOnce();
+  if (!installed.installed) {
+    return { path: null, reason: installed.reason };
+  }
+
+  const installedPath = bundled.path ?? resolveFfmpegStaticCandidatePath();
+  return installedPath !== null && (await isExecutable(installedPath))
+    ? bundled
+    : {
+        path: null,
+        reason: `ffmpeg-static install completed but ${installedPath ?? "the expected binary"} is still missing or not executable`,
+      };
 }
 
 /**
