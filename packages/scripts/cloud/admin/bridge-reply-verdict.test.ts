@@ -11,7 +11,7 @@ import {
   KNOWN_CANNED_FAILURE_REPLIES,
 } from "./bridge-reply-verdict";
 
-const TOKEN = "hetzner-pong-abc123";
+const TOKEN = "nightly proof phrase";
 
 describe("classifyBridgeReply", () => {
   test("genuine reply echoing the token passes and reports its transport", () => {
