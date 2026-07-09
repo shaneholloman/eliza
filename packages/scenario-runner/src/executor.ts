@@ -26,6 +26,7 @@ import {
   ChannelType,
   createMessageMemory,
   logger,
+  MemoryType,
   stringToUuid,
 } from "@elizaos/core";
 import type { VoiceWorkbenchScenarioRun } from "@elizaos/plugin-local-inference/voice-workbench";
@@ -1516,6 +1517,7 @@ async function executeMessageTurn(
     !Array.isArray(message.metadata)
       ? message.metadata
       : {}),
+    type: MemoryType.MESSAGE,
     scenarioId,
     ...(runId ? { batchId: runId } : {}),
   };

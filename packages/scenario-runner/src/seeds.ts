@@ -2115,6 +2115,7 @@ async function seedInboundMessageMemory(
   memory.createdAt = timestamp;
   memory.metadata = {
     ...memory.metadata,
+    type: MemoryType.MESSAGE,
     source: "scenario-seed",
     sourceId: messageId,
     timestamp,
