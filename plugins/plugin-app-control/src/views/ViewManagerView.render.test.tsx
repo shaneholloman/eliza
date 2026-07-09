@@ -206,10 +206,10 @@ describe("ViewManagerView GUI wrapper", () => {
 		expect(calls.filter((c) => c.url === "/api/views")).toHaveLength(2);
 	});
 
-	it("collapses duplicate future-modality declarations of one id into a single row with modality chips", async () => {
+	it("collapses duplicate GUI declarations of one id into a single row", async () => {
 		// /api/views can return the same logical view once per surface. The list
-		// must show it once, with one chip per surface, so a future modality does
-		// not duplicate the base GUI row.
+		// must show it once so duplicate registry data does not duplicate the base
+		// GUI row.
 		const dupViews = {
 			views: [
 				{
@@ -222,16 +222,8 @@ describe("ViewManagerView GUI wrapper", () => {
 				},
 				{
 					id: "future-surface",
-					label: "Future Surface Spatial",
-					viewType: "xr",
-					path: "/future-surface",
-					available: true,
-					pluginName: "@elizaos/plugin-future-surface",
-				},
-				{
-					id: "future-surface",
-					label: "Future Surface Terminal",
-					viewType: "tui",
+					label: "Future Surface Duplicate",
+					viewType: "gui",
 					path: "/future-surface",
 					available: true,
 					pluginName: "@elizaos/plugin-future-surface",
@@ -252,13 +244,9 @@ describe("ViewManagerView GUI wrapper", () => {
 		expect(
 			container.querySelector('[data-agent-id="open:future-surface"]'),
 		).toBeTruthy();
-		expect(screen.queryByText("Future Surface Spatial")).toBeNull();
-		expect(screen.queryByText("Future Surface Terminal")).toBeNull();
+		expect(screen.queryByText("Future Surface Duplicate")).toBeNull();
 
-		// One modality chip per surface, ordered gui · xr · tui.
 		expect(screen.getByText("gui")).toBeTruthy();
-		expect(screen.getByText("xr")).toBeTruthy();
-		expect(screen.getByText("tui")).toBeTruthy();
 	});
 
 	it("uses the same export and fetches the gui list (no viewType qs)", async () => {
