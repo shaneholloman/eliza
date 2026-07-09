@@ -82,6 +82,12 @@
 			"@elizaos/plugin-agent-skills/*": [
 				"../../plugins/plugin-agent-skills/src/*"
 			],
+			"@elizaos/plugin-app-control": [
+				"../../plugins/plugin-app-control/src/index.ts"
+			],
+			"@elizaos/plugin-app-control/*": [
+				"../../plugins/plugin-app-control/src/*"
+			],
 			"@elizaos/plugin-app-manager": [
 				"../../plugins/plugin-app-manager/src/index.ts"
 			],
@@ -135,6 +141,12 @@
 			"@elizaos/plugin-registry/*": ["../../plugins/plugin-registry/src/*"],
 			"@elizaos/plugin-streaming": [
 				"../../plugins/plugin-streaming/src/index.ts"
+			],
+			"@elizaos/plugin-scheduling": [
+				"../../plugins/plugin-scheduling/src/index.ts"
+			],
+			"@elizaos/plugin-scheduling/*": [
+				"../../plugins/plugin-scheduling/src/*"
 			],
 			"@elizaos/plugin-sql": ["../../plugins/plugin-sql/src/index.node.ts"],
 			"@elizaos/plugin-task-coordinator": [
