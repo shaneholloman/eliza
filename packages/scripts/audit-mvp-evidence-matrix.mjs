@@ -7,7 +7,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import process from "node:process";
 
 const DEFAULT_REPO = "elizaOS/eliza";
@@ -22,18 +22,30 @@ const BASE_EVIDENCE = [
     label: "Issue/PR closeout summary",
     reason:
       "Every MVP row needs an inline GitHub comment naming what changed, what was verified, and what remains human-owned.",
+    collectionHints: [
+      "gh issue view <issue> --repo elizaOS/eliza --comments",
+      "gh issue comment <issue> --repo elizaOS/eliza --body-file <review.md>",
+    ],
   },
   {
     id: "logs",
     label: "Relevant structured logs",
     reason:
       "The closeout standard requires the real client/server path to be observable instead of inferred from code.",
+    collectionHints: [
+      "bun run test:matrix:review",
+      "bun run --cwd packages/app test:e2e:record:review",
+    ],
   },
   {
     id: "domain-artifacts",
     label: "Domain artifacts",
     reason:
       "The issue should show the records, files, memories, scheduled tasks, or generated artifacts that prove the workflow ran.",
+    collectionHints: [
+      "Attach the generated DB rows, memories, scheduled tasks, files, or connector artifacts inline in the issue.",
+      "Include before/after identifiers or hashes so reviewers can tie artifacts to the run.",
+    ],
   },
 ];
 
@@ -59,6 +71,10 @@ const RULES = [
       label: "Before/after screenshots with OCR and color heuristics",
       reason:
         "UI/app work must prove the rendered state, readable text, palette, and obvious layout defects on desktop and mobile.",
+      collectionHints: [
+        "bun run --cwd packages/app audit:app:verify",
+        "bun run --cwd packages/app mvp:visual-verify -- --strict --require-baseline-states",
+      ],
     },
     matches: ({ text, labels }) =>
       labels.has("ui") ||
@@ -74,6 +90,10 @@ const RULES = [
       label: "MP4 walkthrough",
       reason:
         "User-facing flows need a human-reviewable recording of the real journey, including transitions and error/empty states.",
+      collectionHints: [
+        "bun run test:matrix:review",
+        "bun run --cwd packages/app test:e2e:record:review",
+      ],
     },
     matches: ({ text, labels }) =>
       labels.has("ui") ||
@@ -88,6 +108,10 @@ const RULES = [
       label: "Per-device screenshots, recording, logs, and status JSON",
       reason:
         "Device-gated MVP rows must prove the installed app and platform bridge behavior, not a desktop browser surrogate.",
+      collectionHints: [
+        "bun run --cwd packages/app capture:ios-sim",
+        "bun run --cwd packages/app capture:android-emu",
+      ],
     },
     matches: ({ text }) =>
       hasAnyToken(text, ["device", "ios", "android", "ipad", "sim", "emu"]),
@@ -99,6 +123,10 @@ const RULES = [
       label: "Audio sample, transcript, and latency/quality numbers",
       reason:
         "Voice rows need audible proof plus measured ASR/TTS behavior so success is not judged by a text-only path.",
+      collectionHints: [
+        "bun run --cwd packages/app-core voice:latency-report",
+        "Attach the captured audio sample, transcript, and measured TTS/STT latency.",
+      ],
     },
     matches: ({ text, labels }) =>
       labels.has("voice") ||
@@ -111,6 +139,10 @@ const RULES = [
       label: "Live-LLM scenario trajectory report",
       reason:
         "Agent, scenario, planner, memory, and persona behavior must be proven with model inputs and outputs, not mocks.",
+      collectionHints: [
+        "packages/scenario-runner/bin/eliza-scenarios run <scenario> --report <out>",
+        "Open the JSON report and run viewer, then attach the reviewed trajectory summary.",
+      ],
     },
     matches: ({ text, labels }) =>
       labels.has("testing") ||
@@ -133,6 +165,10 @@ const RULES = [
         "Connector dispatch or import transcript with credential-safe logs",
       reason:
         "Connector and corpus rows need the real external/channel boundary exercised or a named owner-owned credential blocker.",
+      collectionHints: [
+        "Run the connector import/dispatch against the real credentialed service.",
+        "Attach redacted request/response logs plus the resulting message, import, or dispatch artifact.",
+      ],
     },
     matches: ({ text, labels }) =>
       labels.has("connector") ||
@@ -155,6 +191,10 @@ const RULES = [
       label: "Security/redaction proof and negative-path evidence",
       reason:
         "Security, PII, permissioning, and privacy rows need leak checks, denial paths, and fail-closed behavior.",
+      collectionHints: [
+        "Run the positive path and denial path with representative private data.",
+        "Attach redacted logs showing no secret/PII leak and the explicit deny or unavailable state.",
+      ],
     },
     matches: ({ text, labels }) =>
       labels.has("security") ||
@@ -176,6 +216,10 @@ const RULES = [
       label: "ScheduledTask/ledger state before and after",
       reason:
         "Reminder, follow-up, watcher, and obligation rows must show structural task records and completion/escalation state.",
+      collectionHints: [
+        "Capture ScheduledTask records before and after the run.",
+        "Attach the task, ledger, completion, and escalation state that proves the scheduler path fired.",
+      ],
     },
     matches: ({ text }) =>
       hasAnyToken(text, [
@@ -196,13 +240,19 @@ const RULES = [
 function usage() {
   return `Usage:
   node packages/scripts/audit-mvp-evidence-matrix.mjs [--json]
+  node packages/scripts/audit-mvp-evidence-matrix.mjs --markdown [--output mvp-evidence.md]
+  node packages/scripts/audit-mvp-evidence-matrix.mjs --no-project --markdown [--output mvp-evidence.md]
   node packages/scripts/audit-mvp-evidence-matrix.mjs --issues-json issues.json --project-json project.json [--json]
+  node packages/scripts/audit-mvp-evidence-matrix.mjs --issues-json issues.json --no-project [--json]
 
 Options:
   --repo <owner/repo>             GitHub repo for live mode (default: ${DEFAULT_REPO}).
   --project-owner <org>          GitHub Project owner for live mode (default: ${DEFAULT_PROJECT_OWNER}).
   --project-number <number>      GitHub Project number for live mode (default: ${DEFAULT_PROJECT_NUMBER}).
-  --limit <n>                    GitHub issue/project limit (default: ${DEFAULT_LIMIT}).`;
+  --limit <n>                    GitHub issue/project limit (default: ${DEFAULT_LIMIT}).
+  --markdown                     Print a GitHub-ready evidence checklist.
+  --no-project                   Skip Project status lookup when GitHub GraphQL is rate-limited.
+  --output <file>                Write the selected format to a file.`;
 }
 
 function parseArgs(argv) {
@@ -212,11 +262,17 @@ function parseArgs(argv) {
     projectNumber: DEFAULT_PROJECT_NUMBER,
     limit: DEFAULT_LIMIT,
     json: false,
+    markdown: false,
+    noProject: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--json") {
       out.json = true;
+    } else if (arg === "--markdown") {
+      out.markdown = true;
+    } else if (arg === "--no-project") {
+      out.noProject = true;
     } else if (arg === "--help" || arg === "-h") {
       out.help = true;
     } else if (
@@ -224,6 +280,7 @@ function parseArgs(argv) {
       arg === "--project-owner" ||
       arg === "--project-number" ||
       arg === "--limit" ||
+      arg === "--output" ||
       arg === "--issues-json" ||
       arg === "--project-json"
     ) {
@@ -248,6 +305,30 @@ function readJson(file) {
 
 function ghJson(args) {
   return JSON.parse(execFileSync("gh", args, { encoding: "utf8" }));
+}
+
+export function normalizeRestIssue(issue) {
+  return {
+    number: issue.number,
+    title: issue.title,
+    body: issue.body ?? "",
+    url: issue.html_url ?? issue.url,
+    labels: labelNames(issue).map((name) => ({ name })),
+  };
+}
+
+function fetchOpenMvpIssuesRest(repo, limit) {
+  const pages = ghJson([
+    "api",
+    "--paginate",
+    "--slurp",
+    `repos/${repo}/issues?state=open&labels=mvp&per_page=100`,
+  ]);
+  return pages
+    .flat()
+    .filter((issue) => !issue.pull_request)
+    .slice(0, Number(limit))
+    .map(normalizeRestIssue);
 }
 
 function labelNames(issue) {
@@ -331,11 +412,12 @@ function evidenceCounts(rows) {
   return Object.fromEntries([...counts.entries()].sort());
 }
 
-export function buildEvidenceMatrix(issues, projectPayload, options = {}) {
+export function buildEvidenceMatrix(issues, projectPayload = {}, options = {}) {
   const statusByNumber = projectStatusByNumber(
     projectPayload,
     options.repo ?? DEFAULT_REPO,
   );
+  const projectStatusSource = options.projectStatusSource ?? "project";
   const rows = issues
     .map((issue) => ({
       ...issue,
@@ -346,6 +428,7 @@ export function buildEvidenceMatrix(issues, projectPayload, options = {}) {
   const humanGated = rows.filter((row) => row.blockerLabels.length > 0);
   const agentActionable = rows.filter((row) => row.blockerLabels.length === 0);
   return {
+    projectStatusSource,
     counts: {
       openMvpIssues: rows.length,
       humanGated: humanGated.length,
@@ -362,6 +445,7 @@ function formatText(report) {
     "LifeOps MVP evidence matrix",
     `open MVP issues: ${report.counts.openMvpIssues}`,
     `human-gated: ${report.counts.humanGated}; agent-actionable: ${report.counts.agentActionable}`,
+    `project-status source: ${report.projectStatusSource}`,
     "",
     "Evidence coverage:",
   ];
@@ -380,54 +464,135 @@ function formatText(report) {
   return `${lines.join("\n")}\n`;
 }
 
+function formatCollectionHint(hint) {
+  return /^(bun|gh|node|packages\/|ELIZA_|npm|pnpm|yarn)\b/.test(hint)
+    ? `\`${hint}\``
+    : hint;
+}
+
+function formatChecklistItem(evidence) {
+  const lines = [
+    `- [ ] **${evidence.label}** (\`${evidence.id}\`) — ${evidence.reason}`,
+  ];
+  if (evidence.collectionHints?.length > 0) {
+    lines.push("  - Collection hints:");
+    for (const hint of evidence.collectionHints) {
+      lines.push(`    - ${formatCollectionHint(hint)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function projectStatusLabel(row, report) {
+  if (row.projectStatus) return row.projectStatus;
+  if (report.projectStatusSource === "omitted")
+    return "not loaded (--no-project)";
+  return "unset";
+}
+
+export function formatMarkdown(report) {
+  const lines = [
+    "# LifeOps MVP Evidence Checklist",
+    "",
+    "| Metric | Count |",
+    "| --- | ---: |",
+    `| Open MVP issues | ${report.counts.openMvpIssues} |`,
+    `| Human/owner-gated | ${report.counts.humanGated} |`,
+    `| Agent-actionable | ${report.counts.agentActionable} |`,
+    `| Project status source | ${report.projectStatusSource} |`,
+    "",
+    "## Evidence Category Coverage",
+    "",
+    "| Evidence | Issues |",
+    "| --- | ---: |",
+  ];
+
+  for (const [id, count] of Object.entries(report.evidenceCounts)) {
+    lines.push(`| \`${id}\` | ${count} |`);
+  }
+
+  if (report.agentActionable.length > 0) {
+    lines.push("", "## Agent-Actionable Open Rows", "");
+    for (const row of report.agentActionable) {
+      lines.push(`- #${row.number} ${row.title}`);
+    }
+  }
+
+  lines.push("", "## Issue Checklists", "");
+  for (const row of report.rows) {
+    const blockers =
+      row.blockerLabels.length > 0 ? row.blockerLabels.join(", ") : "none";
+    lines.push(`### #${row.number} ${row.title}`);
+    lines.push("");
+    lines.push(`- Project status: ${projectStatusLabel(row, report)}`);
+    lines.push(`- Blocker labels: ${blockers}`);
+    if (row.url) lines.push(`- Issue: ${row.url}`);
+    lines.push("");
+    lines.push("Required evidence before closeout:");
+    for (const evidence of row.evidence) {
+      lines.push(formatChecklistItem(evidence));
+    }
+    lines.push("");
+  }
+
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function formatReport(report, args) {
+  if (args.json && args.markdown) {
+    throw new Error("--json and --markdown are mutually exclusive");
+  }
+  if (args.json) return `${JSON.stringify(report, null, 2)}\n`;
+  if (args.markdown) return formatMarkdown(report);
+  return formatText(report);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     process.stdout.write(`${usage()}\n`);
     return;
   }
-  if (
-    (args.issuesJson && !args.projectJson) ||
-    (!args.issuesJson && args.projectJson)
-  ) {
-    throw new Error("--issues-json and --project-json must be passed together");
+  if (args.noProject && args.projectJson) {
+    throw new Error("--no-project cannot be combined with --project-json");
+  }
+  if (!args.noProject && args.issuesJson && !args.projectJson) {
+    throw new Error(
+      "--issues-json requires --project-json unless --no-project is passed",
+    );
+  }
+  if (!args.issuesJson && args.projectJson) {
+    throw new Error("--project-json requires --issues-json");
   }
 
   const issues = args.issuesJson
     ? readJson(args.issuesJson)
-    : ghJson([
-        "issue",
-        "list",
-        "--repo",
-        args.repo,
-        "--state",
-        "open",
-        "--label",
-        "mvp",
-        "--limit",
-        args.limit,
-        "--json",
-        "number,title,body,labels,url",
-      ]);
+    : fetchOpenMvpIssuesRest(args.repo, args.limit);
   const projectPayload = args.projectJson
     ? readJson(args.projectJson)
-    : ghJson([
-        "project",
-        "item-list",
-        args.projectNumber,
-        "--owner",
-        args.projectOwner,
-        "--limit",
-        args.limit,
-        "--format",
-        "json",
-      ]);
+    : args.noProject
+      ? { items: [] }
+      : ghJson([
+          "project",
+          "item-list",
+          args.projectNumber,
+          "--owner",
+          args.projectOwner,
+          "--limit",
+          args.limit,
+          "--format",
+          "json",
+        ]);
   const report = buildEvidenceMatrix(issues, projectPayload, {
     repo: args.repo,
+    projectStatusSource: args.noProject ? "omitted" : "project",
   });
-  process.stdout.write(
-    args.json ? `${JSON.stringify(report, null, 2)}\n` : formatText(report),
-  );
+  const output = formatReport(report, args);
+  if (args.output) {
+    writeFileSync(args.output, output);
+  } else {
+    process.stdout.write(output);
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

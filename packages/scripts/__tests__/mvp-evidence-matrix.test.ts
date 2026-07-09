@@ -5,10 +5,16 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const matrix = await import(
   new URL("../audit-mvp-evidence-matrix.mjs", import.meta.url).href
 );
+const scriptPath = new URL("../audit-mvp-evidence-matrix.mjs", import.meta.url)
+  .pathname;
 
 function issue(number: number, title: string, labels: string[], body = "") {
   return {
@@ -34,6 +40,13 @@ function projectItem(number: number, status = "Needs human review") {
 
 function evidenceIds(row: { evidence: Array<{ id: string }> }) {
   return row.evidence.map((evidence) => evidence.id);
+}
+
+function evidenceById(
+  row: { evidence: Array<{ id: string; collectionHints?: string[] }> },
+  id: string,
+) {
+  return row.evidence.find((evidence) => evidence.id === id);
 }
 
 describe("MVP evidence matrix", () => {
@@ -65,6 +78,13 @@ describe("MVP evidence matrix", () => {
         "device-artifact-bundle",
       ]),
     );
+    expect(
+      evidenceById(report.rows[0], "visual-screenshots-ocr-color")
+        ?.collectionHints,
+    ).toContain("bun run --cwd packages/app audit:app:verify");
+    expect(
+      evidenceById(report.rows[0], "device-artifact-bundle")?.collectionHints,
+    ).toContain("bun run --cwd packages/app capture:ios-sim");
   });
 
   test("adds live model, connector, and security proof for corpus and permissioning rows", () => {
@@ -137,5 +157,103 @@ describe("MVP evidence matrix", () => {
     );
 
     expect(report.rows[0].projectStatus).toBeNull();
+  });
+
+  test("renders a GitHub-ready markdown checklist for issue evidence", () => {
+    const report = matrix.buildEvidenceMatrix(
+      [
+        issue(14358, "[onboarding] Device e2e for iOS sim + Android emu", [
+          "mvp",
+          "ui",
+          "needs-human",
+        ]),
+      ],
+      { items: [projectItem(14358)] },
+    );
+
+    const markdown = matrix.formatMarkdown(report);
+
+    expect(markdown).toContain("# LifeOps MVP Evidence Checklist");
+    expect(markdown).toContain("| Open MVP issues | 1 |");
+    expect(markdown).toContain(
+      "### #14358 [onboarding] Device e2e for iOS sim + Android emu",
+    );
+    expect(markdown).toContain("- Project status: Needs human review");
+    expect(markdown).toContain("| Project status source | project |");
+    expect(markdown).toContain("- Blocker labels: needs-human");
+    expect(markdown).toContain(
+      "- [ ] **Before/after screenshots with OCR and color heuristics** (`visual-screenshots-ocr-color`)",
+    );
+    expect(markdown).toContain("  - Collection hints:");
+    expect(markdown).toContain(
+      "    - `bun run --cwd packages/app audit:app:verify`",
+    );
+    expect(markdown).toContain(
+      "- [ ] **Per-device screenshots, recording, logs, and status JSON** (`device-artifact-bundle`)",
+    );
+    expect(markdown).toContain(
+      "    - `bun run --cwd packages/app capture:android-emu`",
+    );
+    expect(markdown).toContain(
+      "    - Attach the generated DB rows, memories, scheduled tasks, files, or connector artifacts inline in the issue.",
+    );
+  });
+
+  test("normalizes REST issue rows from GitHub without pull request fields", () => {
+    expect(
+      matrix.normalizeRestIssue({
+        number: 14783,
+        title: "[scenarios] Pack G1",
+        body: "Evidence body",
+        html_url: "https://github.com/elizaOS/eliza/issues/14783",
+        labels: [{ name: "mvp" }, { name: "needs-shaw" }],
+      }),
+    ).toEqual({
+      number: 14783,
+      title: "[scenarios] Pack G1",
+      body: "Evidence body",
+      url: "https://github.com/elizaOS/eliza/issues/14783",
+      labels: [{ name: "mvp" }, { name: "needs-shaw" }],
+    });
+  });
+
+  test("CLI no-project mode writes markdown without Project GraphQL data", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mvp-evidence-matrix-"));
+    const issuesJson = join(dir, "issues.json");
+    const output = join(dir, "checklist.md");
+    writeFileSync(
+      issuesJson,
+      JSON.stringify([
+        issue(14358, "[onboarding] Device e2e for iOS sim + Android emu", [
+          "mvp",
+          "ui",
+          "needs-human",
+        ]),
+      ]),
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        scriptPath,
+        "--issues-json",
+        issuesJson,
+        "--no-project",
+        "--markdown",
+        "--output",
+        output,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe("");
+    const markdown = readFileSync(output, "utf8");
+    expect(markdown).toContain("| Project status source | omitted |");
+    expect(markdown).toContain("- Project status: not loaded (--no-project)");
+    expect(markdown).toContain(
+      "- [ ] **Before/after screenshots with OCR and color heuristics** (`visual-screenshots-ocr-color`)",
+    );
   });
 });
