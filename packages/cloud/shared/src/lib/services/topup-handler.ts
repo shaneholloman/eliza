@@ -201,7 +201,14 @@ async function resolvePaymentRecipient(env: TopupEnv): Promise<string | null> {
   const configured = readEnvString(env, "X402_RECIPIENT_ADDRESS");
   if (configured) return configured;
 
-  await x402FacilitatorService.initialize();
+  try {
+    await x402FacilitatorService.initialize();
+  } catch (error) {
+    // error-policy:J1 boundary translation; topup quotes report unavailable
+    // x402 configuration instead of letting setup failures become Worker 500s.
+    logger.error("[x402] Failed to initialize facilitator for topup recipient", error);
+    return null;
+  }
   return x402FacilitatorService.getSignerAddress();
 }
 
