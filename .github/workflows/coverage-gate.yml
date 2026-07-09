@@ -61,6 +61,9 @@ jobs:
                   case "$file" in
                     *.e2e.test.*|*.live.test.*) continue ;;
                   esac
+                  if grep -Eq "from ['\"]@playwright/test['\"]|require\\(['\"]@playwright/test['\"]\\)" "$file"; then
+                    continue
+                  fi
                   if grep -Eq "from ['\"]vitest['\"]|require\\(['\"]vitest['\"]\\)" "$file"; then
                     continue
                   fi
@@ -76,6 +79,9 @@ jobs:
                   case "$file" in
                     *.e2e.test.*|*.live.test.*) continue ;;
                   esac
+                  if grep -Eq "from ['\"]@playwright/test['\"]|require\\(['\"]@playwright/test['\"]\\)" "$file"; then
+                    continue
+                  fi
                   if grep -Eq "from ['\"]vitest['\"]|require\\(['\"]vitest['\"]\\)" "$file"; then
                     echo "$file"
                   fi
