@@ -119,6 +119,7 @@ vi.mock("../state/cloud-login-launch", async (importOriginal) => {
 });
 
 import type { ConversationMessage, LocalAgentBackupMetadata } from "../api";
+import { APP_RESUME_EVENT } from "../events";
 import { __setAppValueForTests } from "../state/app-store";
 import {
   ConversationMessagesCtx,
@@ -1645,6 +1646,44 @@ describe("cloud-only onboarding (runtime chooser off — the production default)
       },
       { timeout: 3_000 },
     );
+    await waitFor(
+      () => {
+        expect(spies.completeFirstRun).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 3_000 },
+    );
+    await waitForTurn(turn, "first-run:cloud-done");
+    unmount();
+  });
+
+  it("native resume re-checks a Steward token that landed while sign-in was busy", async () => {
+    localStorage.removeItem("steward_session_token");
+    mocks.client.getCloudStatus.mockResolvedValue({ connected: false });
+    let finishLogin: () => void = () => {};
+    const handleCloudLogin = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishLogin = resolve;
+        }),
+    );
+    const spies = seedAppStore({
+      elizaCloudConnected: false,
+      handleCloudLogin,
+    });
+    const { turn, unmount } = renderConductor();
+    await waitForTurn(turn, "first-run:greeting");
+
+    expect(tryHandleFirstRunAction("__first_run__:runtime:cloud")).toBe(true);
+    await waitFor(() => {
+      expect(handleCloudLogin).toHaveBeenCalledTimes(1);
+    });
+    localStorage.setItem("steward_session_token", "cloud-token");
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    expect(spies.completeFirstRun).not.toHaveBeenCalled();
+
+    finishLogin();
+    document.dispatchEvent(new Event(APP_RESUME_EVENT));
+
     await waitFor(
       () => {
         expect(spies.completeFirstRun).toHaveBeenCalledTimes(1);

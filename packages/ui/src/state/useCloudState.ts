@@ -946,12 +946,6 @@ export function useCloudState({
         // Start polling
         elizaCloudLoginPollTimer.current = window.setInterval(async () => {
           if (!elizaCloudLoginPollTimer.current || pollInFlight) return;
-          if (Date.now() >= pollDeadline) {
-            stopCloudLoginPolling(
-              "Eliza Cloud login timed out. Please try again.",
-            );
-            return;
-          }
 
           pollInFlight = true;
           try {
@@ -1028,6 +1022,10 @@ export function useCloudState({
             } else if (poll.status === "expired" || poll.status === "error") {
               stopCloudLoginPolling(
                 poll.error ?? "Login session expired. Please try again.",
+              );
+            } else if (Date.now() >= pollDeadline) {
+              stopCloudLoginPolling(
+                "Eliza Cloud login timed out. Please try again.",
               );
             }
           } catch (pollErr) {
