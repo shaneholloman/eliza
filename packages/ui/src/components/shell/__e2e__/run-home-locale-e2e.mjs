@@ -17,10 +17,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { chromium } from "playwright";
+import {
+  stubElizaCore,
+  stubNodeBuiltins,
+} from "../../../testing/e2e-runner/esbuild-stubs.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const stylesDir = join(here, "../../../styles");
-const outDir = join(here, "output-home-locale");
+const outDir = join(here, "../../../../tmp/home-locale-e2e");
 await mkdir(outDir, { recursive: true });
 
 let failures = 0;
@@ -55,7 +59,7 @@ const result = await build({
   jsx: "automatic",
   loader: { ".tsx": "tsx", ".ts": "ts" },
   define: { "process.env.NODE_ENV": '"production"' },
-  plugins: [stubState],
+  plugins: [stubState, stubElizaCore(), stubNodeBuiltins()],
   write: false,
 });
 const js = result.outputFiles[0].text;
@@ -63,7 +67,7 @@ const html = `<!doctype html><html class="dark"><head><meta charset="utf-8"><tit
 <script src="https://cdn.tailwindcss.com"></script>
 <style>${baseCss}</style><style>${TOKEN_SHIM}</style>
 <style>html,body{margin:0;height:100%}</style>
-</head><body><div id="root"></div><script>${js}</script></body></html>`;
+</head><body><div id="root"></div><script>window.process=window.process||{env:{NODE_ENV:"production"},platform:"browser",cwd:function(){return "/"}};window.global=window.global||window;</script><script>${js}</script></body></html>`;
 const htmlPath = join(outDir, "home-locale.html");
 await writeFile(htmlPath, html);
 
