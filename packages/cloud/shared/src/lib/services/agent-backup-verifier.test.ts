@@ -8,7 +8,7 @@
  *
  * Harness mirrors `db/repositories/__tests__/agent-sandboxes-fleet-candidate-repo.test.ts`:
  * drizzle-kit `pushSchema` applies the real DDL to the PGlite connection the
- * service queries through; self-skips LOUDLY when the ambient DATABASE_URL is a
+ * service queries through; fails LOUDLY when the ambient DATABASE_URL is a
  * shared non-PGlite Postgres.
  */
 
@@ -207,7 +207,7 @@ beforeAll(async () => {
   if (!CAN_USE_ISOLATED_PGLITE) {
     pgliteReady = false;
     console.warn(
-      "[agent-backup-verifier.test] DATABASE_URL is a non-PGlite Postgres (shared CI DB); this in-process-PGlite isolation suite self-skips — drizzle-kit pushSchema against a shared connection crashes the bun runner and would mutate the shared schema.",
+      "[agent-backup-verifier.test] DATABASE_URL is a non-PGlite Postgres (shared CI DB); this in-process-PGlite isolation suite fails — drizzle-kit pushSchema against a shared connection crashes the bun runner and would mutate the shared schema.",
     );
     return;
   }
@@ -218,14 +218,14 @@ beforeAll(async () => {
   } catch (error) {
     pgliteReady = false;
     console.error(
-      "[agent-backup-verifier.test] PGlite/pushSchema unavailable — cannot drive the backup verifier against a real DB. Skipping all cases.",
+      "[agent-backup-verifier.test] PGlite/pushSchema unavailable — cannot drive the backup verifier against a real DB. Failing all cases.",
       error,
     );
   }
 }, PGLITE_TIMEOUT);
 
 beforeEach(async () => {
-  if (!pgliteReady) return;
+  expect(pgliteReady).toBe(true);
   await dbWrite.delete(agentSandboxBackups);
   await dbWrite.delete(agentSandboxes);
 });
@@ -291,7 +291,7 @@ describe("classifyCryptoError", () => {
 
 describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
   test("happy path: decrypts, matches content_hash, stamps verified, no alert", async () => {
-    if (!pgliteReady) return;
+    expect(pgliteReady).toBe(true);
     const sandboxId = await seedSandbox();
     const backupId = await seedFullBackup(sandboxId, sampleState("happy"));
     const { alerts, alert } = makeAlertSpy();
@@ -307,7 +307,7 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
   });
 
   test("manifest-bearing backup: per-file + component hashes validated", async () => {
-    if (!pgliteReady) return;
+    expect(pgliteReady).toBe(true);
     const sandboxId = await seedSandbox();
     const state: AgentBackupStateData = {
       ...sampleState("manifest"),
@@ -326,7 +326,7 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
   });
 
   test("manifest whose file bytes do not match its claimed sha256 fails as hash-mismatch", async () => {
-    if (!pgliteReady) return;
+    expect(pgliteReady).toBe(true);
     const sandboxId = await seedSandbox();
     const manifest = fixtureManifest(sandboxId);
     // The capture lied: claimed hash for real bytes it never had.
@@ -347,7 +347,7 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
   });
 
   test("corrupted ciphertext: AEAD failure is stamped decrypt-failed and alerts fire", async () => {
-    if (!pgliteReady) return;
+    expect(pgliteReady).toBe(true);
     const sandboxId = await seedSandbox();
     const backupId = await seedFullBackup(sandboxId, sampleState("corrupt"));
 
@@ -382,7 +382,7 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
   });
 
   test("wrong KMS key (fresh memory backend, #15310): key-unavailable + systemic escalation", async () => {
-    if (!pgliteReady) return;
+    expect(pgliteReady).toBe(true);
     const sandboxA = await seedSandbox();
     const sandboxB = await seedSandbox();
     const backupA = await seedFullBackup(sandboxA, sampleState("kms-a"));
@@ -410,7 +410,7 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
   });
 
   test("content_hash drift on an otherwise-decryptable backup is stamped hash-mismatch", async () => {
-    if (!pgliteReady) return;
+    expect(pgliteReady).toBe(true);
     const sandboxId = await seedSandbox();
     const backupId = await seedFullBackup(sandboxId, sampleState("drift"), {
       contentHash: computeStateHash(sampleState("some other state")),
@@ -427,7 +427,7 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
   });
 
   test("legacy row without content_hash still verifies decryptability (hash check skipped)", async () => {
-    if (!pgliteReady) return;
+    expect(pgliteReady).toBe(true);
     const sandboxId = await seedSandbox();
     const backupId = await seedFullBackup(sandboxId, sampleState("legacy"), { contentHash: null });
 
@@ -439,7 +439,7 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
   });
 
   test("incremental backup: chain replays through the parent and verifies the reconstructed hash", async () => {
-    if (!pgliteReady) return;
+    expect(pgliteReady).toBe(true);
     const sandboxId = await seedSandbox();
     const base = sampleState("chain-base");
     const next: AgentBackupStateData = {
@@ -475,7 +475,7 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
   });
 
   test("incremental backup with a corrupted PARENT fails: the restore chain is dead", async () => {
-    if (!pgliteReady) return;
+    expect(pgliteReady).toBe(true);
     const sandboxId = await seedSandbox();
     const base = sampleState("chain-corrupt");
     const next: AgentBackupStateData = { ...base, config: { ...base.config, changed: 1 } };
@@ -510,7 +510,7 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
   });
 
   test("fleet-coverage sampling honors the re-verify interval and newest-per-agent", async () => {
-    if (!pgliteReady) return;
+    expect(pgliteReady).toBe(true);
     const sandboxA = await seedSandbox();
     const sandboxB = await seedSandbox();
     // Agent A has an OLD unverified backup and a NEW recently-verified one;
@@ -552,7 +552,7 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
   });
 
   test("batch size bounds a cycle; the next cycle picks up the remainder", async () => {
-    if (!pgliteReady) return;
+    expect(pgliteReady).toBe(true);
     for (let i = 0; i < 3; i++) {
       const sandboxId = await seedSandbox();
       await seedFullBackup(sandboxId, sampleState(`batch-${i}`));
@@ -572,7 +572,7 @@ describe("runBackupVerificationCycle (real PGlite + real memory KMS)", () => {
   });
 
   test("disabled config is a no-op", async () => {
-    if (!pgliteReady) return;
+    expect(pgliteReady).toBe(true);
     const sandboxId = await seedSandbox();
     const backupId = await seedFullBackup(sandboxId, sampleState("disabled"));
     const { alerts, alert } = makeAlertSpy();
