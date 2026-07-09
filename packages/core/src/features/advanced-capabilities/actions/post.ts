@@ -275,10 +275,10 @@ async function persistPostMemory(
 			channelType: ChannelType.FEED,
 		},
 		metadata: {
+			...(sentMemory?.metadata ?? {}),
 			type: "message",
 			source: connector.source,
 			provider: connector.source,
-			...(sentMemory?.metadata ?? {}),
 		},
 		createdAt: sentMemory?.createdAt ?? Date.now(),
 	};
