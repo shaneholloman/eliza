@@ -8,7 +8,15 @@
  */
 import http from "node:http";
 import { Socket } from "node:net";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { handleDatabaseRowsCompatRoute } from "./database-rows-compat-routes";
 
 // This suite drives the REAL `ensureRouteMinRole` (via the real `./auth.ts`)
@@ -220,6 +228,15 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.ELIZA_API_TOKEN;
   delete process.env.ELIZA_REQUIRE_LOCAL_AUTH;
+});
+
+// Under `isolate: false` app-core suites share one module registry. This file
+// installs a full-replacement `@elizaos/shared` mock plus `../auth/sessions`
+// and `../../services/auth-store` mocks; clear the registry on teardown so those
+// stripped/mocked modules cannot leak into a later real-module suite (e.g.
+// first-run-persistence, which imports the genuine `@elizaos/shared` normalizers).
+afterAll(() => {
+  vi.resetModules();
 });
 
 describe("handleDatabaseRowsCompatRoute", () => {
