@@ -1795,10 +1795,10 @@ async function persistOutboundMemory(params: {
 					sentMemory?.content?.channelType ?? channelTypeForKind(kind),
 			},
 			metadata: {
+				...(sentMemory?.metadata ?? {}),
 				type: "message",
 				source,
 				provider: source,
-				...(sentMemory?.metadata ?? {}),
 				...(platformMessageId ? { messageIdFull: platformMessageId } : {}),
 			},
 			createdAt: sentMemory?.createdAt ?? Date.now(),

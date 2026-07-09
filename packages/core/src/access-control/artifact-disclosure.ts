@@ -1,7 +1,7 @@
 /**
  * Role-aware artifact disclosure decision for shared artifacts (transcripts,
  * stored files, chat attachments, meeting sessions) — the read-side selector
- * behind #14781, designed inside the #8876 attachments doctrine: bytes stay on
+ * behind #14778, designed inside the #8876 attachments doctrine: bytes stay on
  * the pre-auth content-addressed store (the sha256 URL is the capability), so
  * "permission" here means URL/DTO disclosure on the REFERENCING record, never
  * a byte-serve gate. Redacted variants are separate records/media objects; this

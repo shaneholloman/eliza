@@ -1,5 +1,5 @@
 /**
- * Unit contract for the role-aware artifact disclosure decision (#14781):
+ * Unit contract for the role-aware artifact disclosure decision (#14778):
  * the OWNER/ADMIN-full / USER-grant-driven / fail-closed matrix and the
  * untrusted grant parser. Pure functions, no harness.
  */
@@ -17,6 +17,17 @@ const AGENT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" as UUID;
 const OWNER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" as UUID;
 const VIEWER = "cccccccc-cccc-4ccc-8ccc-cccccccccccc" as UUID;
 const OTHER = "dddddddd-dddd-4ddd-8ddd-dddddddddddd" as UUID;
+
+const typedShareMemory: Pick<Memory, "entityId" | "metadata"> = {
+	entityId: OTHER,
+	metadata: {
+		type: "message",
+		scope: "owner-private",
+		share: {
+			grants: [{ entityId: VIEWER, mode: "redacted" }],
+		},
+	},
+};
 
 const ctx = (over: Partial<AccessContext> = {}): AccessContext => ({
 	requesterEntityId: VIEWER,
@@ -210,6 +221,14 @@ describe("parseArtifactShareGrants", () => {
 });
 
 describe("artifactDisclosureRecordFromMemory", () => {
+	it("types top-level memory.metadata.share for referencing records", () => {
+		expect(artifactDisclosureRecordFromMemory(typedShareMemory)).toEqual({
+			scope: "owner-private",
+			scopedEntityId: OTHER,
+			grants: [{ entityId: VIEWER, mode: "redacted" }],
+		});
+	});
+
 	it("normalizes stored metadata into a disclosure record", () => {
 		const memory = {
 			entityId: OTHER,
