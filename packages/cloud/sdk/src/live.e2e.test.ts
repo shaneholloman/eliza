@@ -183,16 +183,20 @@ authedDescribe("ElizaCloudClient real API e2e: API-key read paths", () => {
     await expect(client.getUser()).resolves.toMatchObject({ success: true });
   });
 
-  it("gets credit balance and summary", async () => {
-    const client = clientWithApiKey();
-    await expect(
-      client.getCreditsBalance({ fresh: true }),
-    ).resolves.toHaveProperty("balance");
-    await expect(client.getCreditsSummary()).resolves.toHaveProperty(
-      "success",
-      true,
-    );
-  });
+  it(
+    "gets credit balance and summary",
+    async () => {
+      const client = clientWithApiKey();
+      await expect(
+        client.getCreditsBalance({ fresh: true }),
+      ).resolves.toHaveProperty("balance");
+      await expect(client.getCreditsSummary()).resolves.toHaveProperty(
+        "success",
+        true,
+      );
+    },
+    LIVE_PUBLIC_ENDPOINT_TIMEOUT_MS,
+  );
 });
 
 containerReadDescribe(

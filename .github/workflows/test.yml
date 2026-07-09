@@ -861,7 +861,7 @@ jobs:
       - zero-key-diagnostics
       - zero-key-scenario-runner
       - zero-key-harness-e2e
-    if: always() && (github.event_name != 'pull_request' || needs.changes.outputs.zero_key == 'true')
+    if: ${{ !cancelled() && always() && (github.event_name != 'pull_request' || needs.changes.outputs.zero_key == 'true') }}
     runs-on: ${{ fromJSON(vars.HETZNER_FLEET_ONLINE == 'false' && '["ubuntu-24.04"]' || '["self-hosted","hetzner-robot"]') }}
     steps:
       - name: Check zero-key slices
