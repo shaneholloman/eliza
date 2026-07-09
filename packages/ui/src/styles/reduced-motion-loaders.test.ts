@@ -16,8 +16,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -27,7 +27,10 @@ const css = readFileSync(cssPath, "utf8");
 /** Extract the body of the universal `prefers-reduced-motion: reduce` block. */
 function reducedMotionBlock(): string {
   const start = css.indexOf("@media (prefers-reduced-motion: reduce)");
-  expect(start, "styles.css must contain a reduced-motion media block").toBeGreaterThanOrEqual(0);
+  expect(
+    start,
+    "styles.css must contain a reduced-motion media block",
+  ).toBeGreaterThanOrEqual(0);
   // Walk braces from the media query open to its matching close.
   const open = css.indexOf("{", start);
   let depth = 0;
@@ -55,12 +58,14 @@ describe("reduced-motion functional-loader exemption", () => {
     expect(block, "reduced-motion block must re-enable .animate-spin").toMatch(
       /\.animate-spin/,
     );
-    expect(block, "exempted loaders must run infinitely, not a single 0.01ms frame").toMatch(
-      /animation-iteration-count:\s*infinite\s*!important/,
-    );
-    expect(block, "exempted loaders must have a real (non-collapsed) duration").toMatch(
-      /animation-duration:\s*(?!0\.01ms)[^;]+!important/,
-    );
+    expect(
+      block,
+      "exempted loaders must run infinitely, not a single 0.01ms frame",
+    ).toMatch(/animation-iteration-count:\s*infinite\s*!important/);
+    expect(
+      block,
+      "exempted loaders must have a real (non-collapsed) duration",
+    ).toMatch(/animation-duration:\s*(?!0\.01ms)[^;]+!important/);
   });
 
   it("keeps ARIA progress indicators animating too", () => {
