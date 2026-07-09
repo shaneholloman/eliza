@@ -21,6 +21,7 @@ import {
 	type IAgentRuntime,
 	logger,
 	type Memory,
+	MemoryType,
 	Service,
 	type UUID,
 } from "@elizaos/core";
@@ -461,6 +462,7 @@ function blueBubblesMessageToMemory({
 	memory.createdAt = message.dateCreated;
 	memory.metadata = {
 		...(memory.metadata ?? {}),
+		type: MemoryType.MESSAGE,
 		source,
 		provider: "bluebubbles",
 		// Top-level accountId per MessageMetadata contract. Inbound connector
@@ -777,6 +779,7 @@ export class BlueBubblesService extends Service {
 					memory.createdAt = result.dateCreated;
 					memory.metadata = {
 						...(memory.metadata ?? {}),
+						type: MemoryType.MESSAGE,
 						accountId: service.accountId,
 						bluebubblesChatGuid: chatGuid,
 						bluebubblesMessageGuid: result.guid,
@@ -1457,6 +1460,7 @@ export class BlueBubblesService extends Service {
 			responseMemory.createdAt = Date.now();
 			responseMemory.metadata = {
 				...(responseMemory.metadata ?? {}),
+				type: MemoryType.MESSAGE,
 				accountId: this.accountId,
 				bluebubblesChatGuid: chatGuid,
 				bluebubblesMessageGuid: sent.guid,
