@@ -3408,6 +3408,31 @@ try {
   // sheet settles to HALF so the home appears behind the top half while the
   // conversation stays in hand.
   {
+    const short = await ctrl();
+    attachConsole(short, sink);
+    await short.setViewportSize({ width: 1080, height: 1240 });
+    await gotoFixture(short, `${url}?firstrun&tall`);
+    await short.waitForSelector('[data-testid="chat-thread-scroll"]');
+    await short.waitForTimeout(700);
+    const tallState = await threadScrollState(short);
+    assert(
+      !!tallState && tallState.scrollHeight > tallState.clientHeight + 120,
+      `ONBOARDING: tall first-run message overflows the transcript on a short viewport (scrollHeight=${Math.round(tallState?.scrollHeight ?? 0)}, clientHeight=${Math.round(tallState?.clientHeight ?? 0)})`,
+    );
+    const tallMoved = await short.evaluate(() => {
+      const el = document.querySelector('[data-testid="chat-thread-scroll"]');
+      if (!el) return null;
+      el.scrollTop = 0;
+      const atTop = el.scrollTop;
+      el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+      return { atTop, after: el.scrollTop };
+    });
+    assert(
+      !!tallMoved && tallMoved.atTop === 0 && tallMoved.after > 120,
+      `ONBOARDING: tall first-run transcript can scroll from top to bottom (top=${Math.round(tallMoved?.atTop ?? -1)}, bottom=${Math.round(tallMoved?.after ?? -1)})`,
+    );
+    await short.close();
+
     const p = await ctrl();
     attachConsole(p, sink);
     await gotoFixture(p, `${url}?firstrun`);
