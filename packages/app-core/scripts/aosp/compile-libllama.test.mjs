@@ -204,7 +204,7 @@ describe("compile-libllama Zig driver generation", () => {
       `-DCMAKE_RANLIB=${path.join(driverDir, "zig-ranlib")}`,
     );
     expect(output).toContain("ggml-vulkan");
-    expect(output).toContain("libggml-vulkan.so (runtime GPU backend)");
+    expect(output).toContain("static marker in libelizainference.so");
   });
 });
 
@@ -232,6 +232,25 @@ describe("compile-libllama static-fused runtime backend staging", () => {
     expect(logs.join("\n")).toContain("Copied libggml-vulkan.so");
   });
 
+  test("accepts static-linked Vulkan evidence when no separate backend is emitted", () => {
+    const buildDir = makeTmpDir();
+    const abiAssetDir = makeTmpDir();
+    const fusedLibPath = path.join(abiAssetDir, "libelizainference.so");
+    fs.writeFileSync(fusedLibPath, "GGML_VK_FA_ALLOW_SUBGROUPS");
+    const logs = [];
+
+    const staged = stageStaticFusedRuntimeBackendLibs({
+      buildDir,
+      abiAssetDir,
+      target: "android-arm64-vulkan-fused",
+      fusedLibPath,
+      log: (line) => logs.push(line),
+    });
+
+    expect(staged).toEqual([]);
+    expect(logs.join("\n")).toContain("statically inside libelizainference.so");
+  });
+
   test("does not stage a Vulkan backend for CPU fused builds", () => {
     const staged = stageStaticFusedRuntimeBackendLibs({
       buildDir: makeTmpDir(),
@@ -242,12 +261,13 @@ describe("compile-libllama static-fused runtime backend staging", () => {
     expect(staged).toEqual([]);
   });
 
-  test("fails closed when a Vulkan fused build has no runtime backend", () => {
+  test("fails closed when a Vulkan fused build has no backend evidence", () => {
     expect(() =>
       stageStaticFusedRuntimeBackendLibs({
         buildDir: makeTmpDir(),
         abiAssetDir: makeTmpDir(),
         target: "android-arm64-vulkan-fused",
+        fusedLibPath: null,
       }),
     ).toThrow(/libggml-vulkan\.so/);
   });
