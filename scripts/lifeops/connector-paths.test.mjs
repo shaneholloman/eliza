@@ -22,7 +22,7 @@ import {
   resolveDeepLink,
   validateConnectorPaths,
 } from "./connector-paths.mjs";
-import { PROBEABLE_PATH_IDS } from "./credential-probes.mjs";
+import { isSecretEnvName, PROBEABLE_PATH_IDS } from "./credential-probes.mjs";
 
 /** Deterministic machine context; override per scenario. */
 function fakeCtx(overrides = {}) {
@@ -291,19 +291,47 @@ test("telegram user-client gates on the owner session key with a legacy alias", 
 
   const missing = checkAvailability(path.availability, fakeCtx());
   assert.equal(missing.available, false);
-  assert.match(missing.reason, /TELEGRAM_OWNER_SESSION/);
+  assert.match(missing.reason, /TELEGRAM_API_ID/);
+
+  const sessionWithoutApiCredentials = checkAvailability(
+    path.availability,
+    fakeCtx({ env: { TELEGRAM_OWNER_SESSION: "session" } }),
+  );
+  assert.equal(sessionWithoutApiCredentials.available, false);
+  assert.match(sessionWithoutApiCredentials.reason, /TELEGRAM_API_ID/);
 
   const ownerSession = checkAvailability(
     path.availability,
-    fakeCtx({ env: { TELEGRAM_OWNER_SESSION: "session" } }),
+    fakeCtx({
+      env: {
+        TELEGRAM_API_ID: "12345",
+        TELEGRAM_API_HASH: "hash",
+        TELEGRAM_OWNER_SESSION: "session",
+      },
+    }),
   );
   assert.equal(ownerSession.available, true);
 
   const legacySession = checkAvailability(
     path.availability,
-    fakeCtx({ env: { TELEGRAM_USER_SESSION: "session" } }),
+    fakeCtx({
+      env: {
+        TELEGRAM_API_ID: "12345",
+        TELEGRAM_API_HASH: "hash",
+        TELEGRAM_USER_SESSION: "session",
+      },
+    }),
   );
   assert.equal(legacySession.available, true);
+
+  const savedSession = checkAvailability(
+    path.availability,
+    fakeCtx({
+      env: { TELEGRAM_API_ID: "12345", TELEGRAM_API_HASH: "hash" },
+      existsSync: (filePath) => filePath.endsWith("telegram-user.session"),
+    }),
+  );
+  assert.equal(savedSession.available, true);
 });
 
 test("x agent slot is a separate real account, permanently skipped with the matrix reason", () => {
@@ -497,6 +525,11 @@ test("evaluateConnectorPaths emits env names and reasons, never env values", () 
     assert.equal(typeof row.available, "boolean");
     assert.ok(row.available || typeof row.reason === "string");
   }
+});
+
+test("Telegram session env names are classified as secrets", () => {
+  assert.equal(isSecretEnvName("TELEGRAM_OWNER_SESSION"), true);
+  assert.equal(isSecretEnvName("TELEGRAM_USER_SESSION"), true);
 });
 
 // --- deep links -------------------------------------------------------------------------

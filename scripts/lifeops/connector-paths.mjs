@@ -304,18 +304,31 @@ export const CONNECTOR_PATHS = [
     probeEndpoint:
       "gramjs getMe over the string session (not yet wired in-repo)",
     availability: {
-      type: "any-of",
+      type: "all-of",
       specs: [
         {
-          type: "env-present",
-          names: ["TELEGRAM_OWNER_SESSION", "TELEGRAM_USER_SESSION"],
+          type: "env-all",
+          names: ["TELEGRAM_API_ID", "TELEGRAM_API_HASH"],
           reason:
-            "no owner gramjs string session in env (TELEGRAM_OWNER_SESSION)",
+            "missing Telegram API credentials (TELEGRAM_API_ID, TELEGRAM_API_HASH)",
         },
         {
-          type: "file-exists",
-          path: "~/.eliza/telegram-user.session",
-          reason: "no saved session file (~/.eliza/telegram-user.session)",
+          type: "any-of",
+          specs: [
+            {
+              type: "env-present",
+              names: ["TELEGRAM_OWNER_SESSION", "TELEGRAM_USER_SESSION"],
+              reason:
+                "no owner gramjs string session in env (TELEGRAM_OWNER_SESSION)",
+            },
+            {
+              type: "file-exists",
+              path: "~/.eliza/telegram-user.session",
+              reason: "no saved session file (~/.eliza/telegram-user.session)",
+            },
+          ],
+          reason:
+            "no owner gramjs string session in env (TELEGRAM_OWNER_SESSION)",
         },
       ],
     },

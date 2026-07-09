@@ -30,7 +30,7 @@ separate account provisioning instead of by env key names.
 | `google.oauth-owner` | google | user-oauth | OAuth requestedRole | n/a | n/a | GOOGLE_CLIENT_ID<br>GOOGLE_CLIENT_SECRET<br>GOOGLE_REDIRECT_URI | n/a |
 | `google.oauth-agent` | google | user-oauth | OAuth requestedRole | n/a | n/a | GOOGLE_CLIENT_ID<br>GOOGLE_CLIENT_SECRET<br>GOOGLE_REDIRECT_URI | OWNER and AGENT are separate real Google accounts (owner-agent matrix doc §3); the role rides oauth start metadata (packages/core/src/connectors/oauth-role.ts), not env names. |
 | `telegram.bot` | telegram | bot | single/slotless | n/a | n/a | TELEGRAM_BOT_TOKEN | n/a |
-| `telegram.user-client` | telegram | user-client | single/slotless | n/a | n/a | TELEGRAM_API_ID<br>TELEGRAM_API_HASH<br>TELEGRAM_USER_SESSION | Documented ahead of a gramjs integration; Telegram Desktop's tdata is proprietary/encrypted and is not a credential source. |
+| `telegram.user-client` | telegram | user-client | single/slotless | n/a | n/a | TELEGRAM_API_ID<br>TELEGRAM_API_HASH<br>TELEGRAM_OWNER_SESSION<br>TELEGRAM_USER_SESSION | Documented ahead of a gramjs integration; TELEGRAM_OWNER_SESSION is the owner-scoped key required by the HITL issue, while TELEGRAM_USER_SESSION remains a temporary read alias. Telegram Desktop's tdata is proprietary/encrypted and is not a credential source. |
 | `discord.bot` | discord | bot | single/slotless | n/a | n/a | DISCORD_API_TOKEN<br>DISCORD_BOT_TOKEN | n/a |
 | `discord.user-token` | discord | user-client | single/slotless | n/a | n/a | DISCORD_USER_TOKEN | n/a |
 | `discord.user-oauth` | discord | user-oauth | single/slotless | n/a | n/a | DISCORD_CLIENT_ID<br>DISCORD_CLIENT_SECRET | n/a |
@@ -55,4 +55,3 @@ separate account provisioning instead of by env key names.
 | `finance.paypal` | finance | api-key | single/slotless | n/a | n/a | PAYPAL_CLIENT_ID<br>PAYPAL_CLIENT_SECRET | LIFEOPS_FINANCE_CSV_FIXTURE remains the keyless finance alternative recognized by CONNECTOR_GROUPS; it is a fixture, not an auth path. |
 | `crypto.evm` | crypto | api-key | single/slotless | n/a | n/a | EVM_PRIVATE_KEY | n/a |
 | `crypto.solana` | crypto | api-key | single/slotless | n/a | n/a | SOLANA_PRIVATE_KEY | n/a |
-
