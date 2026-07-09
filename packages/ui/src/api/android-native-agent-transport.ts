@@ -4,6 +4,7 @@
  * including native streaming. Selected when the API base is an Android local URL.
  */
 import { Capacitor } from "@capacitor/core";
+import { readStoredStewardToken } from "@elizaos/shared/steward-session-client";
 import { getBootConfig } from "../config/boot-config";
 import { isAndroidLocalAgentUrl } from "../first-run/local-agent-token";
 import {
@@ -149,6 +150,7 @@ function readRuntimeMode(): string | null {
   } catch {
     // localStorage can be unavailable in tests and early native startup.
   }
+  if (hasStoredCloudSession()) return "cloud";
   const env = (
     import.meta as ImportMeta & {
       env?: Record<string, string | boolean | undefined>;
@@ -163,6 +165,16 @@ function readRuntimeMode(): string | null {
       ? env.VITE_ELIZA_MOBILE_RUNTIME_MODE.trim()
       : "";
   return androidRuntimeMode || mobileRuntimeMode || null;
+}
+
+function hasStoredCloudSession(): boolean {
+  try {
+    return Boolean(readStoredStewardToken()?.trim());
+  } catch {
+    // error-policy:J4 token storage is a capability probe here; failing closed
+    // lets explicit local-mode config keep the native transport available.
+    return false;
+  }
 }
 
 function configuredApiBaseIsAndroidLocal(): boolean {
@@ -204,7 +216,22 @@ function shouldBridgeFetchUrl(url: URL, rawUrl: string): boolean {
     return true;
   }
   if (!url.pathname.startsWith("/api/")) return false;
+  if (!isSameOriginFetchTarget(url)) return false;
+  if (hasStoredCloudSession()) return readRuntimeMode() === "local";
   return readRuntimeMode() === "local" || configuredApiBaseIsAndroidLocal();
+}
+
+function isSameOriginFetchTarget(url: URL): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    const locationOrigin =
+      window.location.origin || new URL(window.location.href).origin;
+    return url.origin === locationOrigin;
+  } catch {
+    // error-policy:J3 malformed/missing window.location means this is not a
+    // confidently same-origin request, so do not bridge it to local IPC.
+    return false;
+  }
 }
 
 function localAgentUrlForFetch(url: URL, rawUrl: string): string {
