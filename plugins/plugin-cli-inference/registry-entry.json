@@ -24,7 +24,7 @@
       "type": "string",
       "required": false,
       "sensitive": false,
-      "default": "claude-opus-4-7",
+      "default": "claude-opus-4-8",
       "label": "Claude CLI Model",
       "help": "Model passed to claude --print.",
       "advanced": true
