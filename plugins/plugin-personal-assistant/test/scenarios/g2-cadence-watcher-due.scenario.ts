@@ -98,7 +98,7 @@ export default scenario({
             cadenceDays: 180,
             lastInteractionIso: "2025-11-06T00:00:00.000Z",
           },
-          idempotencyKey: "g2-zane-stale-edge-followup",
+          idempotencyKey: "g2-followup",
         },
       },
     },
