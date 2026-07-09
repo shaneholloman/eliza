@@ -266,8 +266,8 @@ async function persistSentMailCommitments(args: {
     // error-policy:J7 the sent email is already committed externally; report the
     // projection failure without making the approval retriable and duplicating mail.
     logger.warn(
+      { error },
       `[approval] failed to project sent email approval ${args.request.id} into commitment ledger`,
-      error,
     );
     args.runtime.reportError?.("lifeops:commitment-ledger:sent-mail", error, {
       requestId: args.request.id,
