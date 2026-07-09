@@ -376,10 +376,13 @@ describe("TranscriptStore", () => {
 				title: "Payroll sync",
 				audioUrl: "/api/media/original.wav",
 				audioContentType: "audio/wav",
+				knowledgeDocumentId: "knowledge-original",
+				metadata: { platform: "meet", sensitiveJoinUrl: "https://join" },
 				segments: [
 					{
 						id: "s1",
 						speakerLabel: "Alice",
+						speakerEntityId: VIEWER,
 						startMs: 0,
 						endMs: 2000,
 						text: "Email bob@example.com and use SSN 123-45-6789.",
@@ -415,10 +418,19 @@ describe("TranscriptStore", () => {
 			expect(second.id).toBe(first.id);
 			expect(first.audioUrl).toBeUndefined();
 			expect(first.audioContentType).toBeUndefined();
+			expect(first.knowledgeDocumentId).toBeUndefined();
+			expect(first.metadata).toMatchObject({
+				redactionOf: ORIGINAL_ID,
+				redactedAtMs: 3000,
+				redactedBy: VIEWER,
+			});
+			expect(first.metadata).not.toHaveProperty("platform");
+			expect(first.metadata).not.toHaveProperty("sensitiveJoinUrl");
 			expect(first.segments[0]?.text).toContain("[EMAIL]");
 			expect(first.segments[0]?.text).toContain("[SSN]");
 			expect(first.segments[0]?.text).not.toContain("bob@example.com");
 			expect(first.segments[0]?.text).not.toContain("123-45-6789");
+			expect(first.segments[0]?.speakerEntityId).toBeUndefined();
 			expect(first.segments[0]?.words[0]?.text).toBe("[EMAIL]");
 
 			const originalAfter = await store.get(ORIGINAL_ID as UUID);

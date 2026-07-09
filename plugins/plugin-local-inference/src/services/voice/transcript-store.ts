@@ -192,19 +192,31 @@ function redactedText(text: string): string {
 
 function redactTranscript(original: Transcript): Transcript {
 	const segments = original.segments.map((segment) => ({
-		...segment,
+		id: segment.id,
+		...(segment.speakerLabel ? { speakerLabel: segment.speakerLabel } : {}),
+		startMs: segment.startMs,
+		endMs: segment.endMs,
 		text: redactedText(segment.text),
 		words: segment.words.map((word) => ({
 			...word,
 			text: redactedText(word.text),
 		})),
+		...(segment.confidence !== undefined
+			? { confidence: segment.confidence }
+			: {}),
 	}));
 	return {
-		...original,
+		id: original.id,
 		title: `${original.title} (redacted)`,
-		audioUrl: undefined,
-		audioContentType: undefined,
+		createdAt: original.createdAt,
+		...(original.endedAt !== undefined ? { endedAt: original.endedAt } : {}),
+		...(original.editedAt !== undefined ? { editedAt: original.editedAt } : {}),
+		durationMs: original.durationMs,
 		segments,
+		source: original.source,
+		scope: original.scope,
+		status: original.status,
+		speakerCount: original.speakerCount,
 	};
 }
 
@@ -385,7 +397,6 @@ export class TranscriptStore {
 			id: variantId,
 			createdAt: nowMs,
 			metadata: {
-				...(original.metadata ?? {}),
 				redactionOf: input.originalId,
 				redactedAtMs: nowMs,
 				...(input.redactedBy ? { redactedBy: input.redactedBy } : {}),

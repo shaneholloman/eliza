@@ -6,17 +6,14 @@
 
 import type { IAgentRuntime, Memory, UUID } from "@elizaos/core";
 import type { Transcript } from "@elizaos/shared/transcripts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { localInferencePlugin } from "../provider";
 import {
 	TranscriptStore,
 	type TranscriptStoreRuntime,
 } from "../services/voice/transcript-store";
 import {
-	type RoleAccessCheck,
 	redactTranscriptAction,
-	resetTranscriptPermissioningRoleAccessForTests,
-	setTranscriptPermissioningRoleAccessForTests,
 	shareTranscriptAction,
 } from "./transcript-permissioning";
 
@@ -67,6 +64,12 @@ function fakeRuntime(): TranscriptStoreRuntime &
 		agentId: AGENT,
 		reportError,
 		getService: () => null,
+		getSetting: (key: string) =>
+			key === "ELIZA_ADMIN_ENTITY_ID" ? ADMIN : undefined,
+		getRoom: async () => null,
+		getWorld: async () => null,
+		getEntityById: async () => null,
+		getRelationships: async () => [],
 		async createMemory(memory, tableName) {
 			const id = memory.id as UUID;
 			rows.set(id, memory);
@@ -124,15 +127,7 @@ async function seed(runtime: TranscriptStoreRuntime): Promise<TranscriptStore> {
 	return store;
 }
 
-function setRoles(check: RoleAccessCheck): void {
-	setTranscriptPermissioningRoleAccessForTests(check);
-}
-
 describe("transcript permission actions", () => {
-	afterEach(() => {
-		resetTranscriptPermissioningRoleAccessForTests();
-	});
-
 	it("registers redaction and share actions on the local-inference plugin", () => {
 		expect(localInferencePlugin.actions?.map((action) => action.name)).toEqual(
 			expect.arrayContaining(["REDACT_TRANSCRIPT", "SHARE_TRANSCRIPT"]),
@@ -144,9 +139,6 @@ describe("transcript permission actions", () => {
 	it("creates a redacted variant before granting redacted transcript access", async () => {
 		const runtime = fakeRuntime();
 		const store = await seed(runtime);
-		setRoles(
-			async (_runtime, _message, role) => role === "USER" || role === "ADMIN",
-		);
 
 		const result = await shareTranscriptAction.handler(
 			runtime,
@@ -168,7 +160,7 @@ describe("transcript permission actions", () => {
 			entityId: VIEWER,
 			mode: "redacted",
 		});
-		expect(result?.data?.variantId).toEqual(expect.any(String));
+		expect(result?.data?.variantId).toBeUndefined();
 
 		const viewerTranscript = await store.get(TRANSCRIPT_ID, {
 			requesterEntityId: VIEWER,
@@ -193,7 +185,6 @@ describe("transcript permission actions", () => {
 	it("lets a transcript owner create a redacted variant without changing the original", async () => {
 		const runtime = fakeRuntime();
 		const store = await seed(runtime);
-		setRoles(async (_runtime, _message, role) => role === "USER");
 
 		const result = await redactTranscriptAction.handler(
 			runtime,
@@ -211,7 +202,7 @@ describe("transcript permission actions", () => {
 				hasAudio: false,
 			},
 		});
-		expect(result?.data?.variantId).toEqual(expect.any(String));
+		expect(result?.data?.variantId).toBeUndefined();
 
 		const original = await store.get(TRANSCRIPT_ID, {
 			requesterEntityId: OWNER,
@@ -221,7 +212,9 @@ describe("transcript permission actions", () => {
 		expect(original?.audioUrl).toBe("/api/media/original.wav");
 		expect(original?.segments[0]?.text).toContain("bob@example.com");
 
-		const variantId = result?.data?.variantId as UUID;
+		const variantId = (
+			runtime.rows.get(TRANSCRIPT_ID)?.metadata as Record<string, unknown>
+		)?.redactedVariantId as UUID;
 		const variant = await store.get(variantId, {
 			requesterEntityId: OWNER,
 			role: "USER",
@@ -234,7 +227,6 @@ describe("transcript permission actions", () => {
 	it("requires admin access for full transcript grants", async () => {
 		const runtime = fakeRuntime();
 		await seed(runtime);
-		setRoles(async (_runtime, _message, role) => role === "USER");
 
 		const result = await shareTranscriptAction.handler(
 			runtime,
@@ -268,7 +260,6 @@ describe("transcript permission actions", () => {
 	it("audits role-allowed attempts to redact another user's transcript", async () => {
 		const runtime = fakeRuntime();
 		await seed(runtime);
-		setRoles(async (_runtime, _message, role) => role === "USER");
 
 		const result = await redactTranscriptAction.handler(
 			runtime,
@@ -291,5 +282,29 @@ describe("transcript permission actions", () => {
 			}),
 		);
 		expect(runtime.rows.size).toBe(1);
+	});
+
+	it("rejects malformed ids before reading transcript storage", async () => {
+		const runtime = fakeRuntime();
+		const getMemoryById = vi.spyOn(runtime, "getMemoryById");
+
+		const result = await shareTranscriptAction.handler(
+			runtime,
+			message(ADMIN),
+			undefined,
+			{
+				parameters: {
+					transcriptId: "not-a-uuid",
+					entityId: VIEWER,
+					mode: "redacted",
+				},
+			},
+		);
+
+		expect(result).toMatchObject({
+			success: false,
+			error: "SHARE_TRANSCRIPT_INVALID",
+		});
+		expect(getMemoryById).not.toHaveBeenCalled();
 	});
 });

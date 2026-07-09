@@ -24,26 +24,8 @@ import {
 } from "../services/voice/transcript-store.js";
 
 type RoleName = "USER" | "ADMIN";
-
-export type RoleAccessCheck = (
-	runtime: IAgentRuntime,
-	message: Memory,
-	requiredRole: RoleName,
-) => Promise<boolean>;
-
-let roleAccessCheck: RoleAccessCheck = (runtime, message, requiredRole) =>
-	hasRoleAccess(runtime, message, requiredRole);
-
-export function setTranscriptPermissioningRoleAccessForTests(
-	check: RoleAccessCheck,
-): void {
-	roleAccessCheck = check;
-}
-
-export function resetTranscriptPermissioningRoleAccessForTests(): void {
-	roleAccessCheck = (runtime, message, requiredRole) =>
-		hasRoleAccess(runtime, message, requiredRole);
-}
+const UUID_PATTERN =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface HandlerOptions {
 	parameters?: Record<string, unknown>;
@@ -72,13 +54,18 @@ function parseMode(value: unknown): ArtifactShareGrantMode | null {
 	return value === "full" || value === "redacted" ? value : null;
 }
 
+function parseUuid(value: unknown): UUID | null {
+	const text = nonEmptyString(value);
+	return text && UUID_PATTERN.test(text) ? (text as UUID) : null;
+}
+
 function parseInput(
 	parameters: Record<string, unknown>,
 	options: { requireEntity: boolean; defaultMode?: ArtifactShareGrantMode },
 ): TranscriptPermissioningInput | null {
-	const transcriptId = nonEmptyString(parameters.transcriptId);
+	const transcriptId = parseUuid(parameters.transcriptId);
 	if (!transcriptId) return null;
-	const entityId = nonEmptyString(parameters.entityId);
+	const entityId = parseUuid(parameters.entityId);
 	if (options.requireEntity && !entityId) return null;
 	const mode = parseMode(parameters.mode) ?? options.defaultMode;
 	if (parameters.mode !== undefined && !parseMode(parameters.mode)) return null;
@@ -93,16 +80,30 @@ function transcriptStore(runtime: IAgentRuntime): TranscriptStore {
 	return new TranscriptStore(runtime as TranscriptStoreRuntime);
 }
 
+function isRedactedVariantRow(row: Memory | null | undefined): boolean {
+	const metadata = row?.metadata as Record<string, unknown> | undefined;
+	return typeof metadata?.redactionOf === "string";
+}
+
+function hasTranscriptRoleAccess(
+	runtime: IAgentRuntime,
+	message: Memory,
+	requiredRole: RoleName,
+): Promise<boolean> {
+	return hasRoleAccess(runtime, message, requiredRole);
+}
+
 async function canManageTranscript(
 	runtime: IAgentRuntime,
 	message: Memory,
 	transcriptId: UUID,
 ): Promise<boolean> {
-	if (await roleAccessCheck(runtime, message, "ADMIN")) return true;
-	if (!(await roleAccessCheck(runtime, message, "USER"))) return false;
+	if (await hasTranscriptRoleAccess(runtime, message, "ADMIN")) return true;
+	if (!(await hasTranscriptRoleAccess(runtime, message, "USER"))) return false;
 	const row = await (runtime as TranscriptStoreRuntime).getMemoryById(
 		transcriptId,
 	);
+	if (isRedactedVariantRow(row)) return false;
 	return row?.entityId === message.entityId;
 }
 
@@ -114,7 +115,7 @@ async function accessContextForMessage(
 	if (typeof message.entityId !== "string" || message.entityId.length === 0) {
 		return undefined;
 	}
-	const isAdmin = await roleAccessCheck(runtime, message, "ADMIN");
+	const isAdmin = await hasTranscriptRoleAccess(runtime, message, "ADMIN");
 	const row = await (runtime as TranscriptStoreRuntime).getMemoryById(
 		transcriptId,
 	);
@@ -170,11 +171,21 @@ function auditDenied(
 }
 
 async function requireFullTranscript(
+	runtime: IAgentRuntime,
 	store: TranscriptStore,
 	transcriptId: UUID,
 	accessContext: AccessContext | undefined,
 ): Promise<ActionResult | null> {
 	const transcript = await store.get(transcriptId, accessContext);
+	const row = await (runtime as TranscriptStoreRuntime).getMemoryById(
+		transcriptId,
+	);
+	if (isRedactedVariantRow(row)) {
+		return fail(
+			"TRANSCRIPT_REDACTED_VIEW",
+			"Only an original transcript can be redacted or shared.",
+		);
+	}
 	if (!transcript) {
 		return fail(
 			"TRANSCRIPT_NOT_ACCESSIBLE",
@@ -224,7 +235,7 @@ export const redactTranscriptAction: Action = {
 		if (!input) {
 			const result = fail(
 				"REDACT_TRANSCRIPT_INVALID",
-				"REDACT_TRANSCRIPT requires transcriptId.",
+				"REDACT_TRANSCRIPT requires a valid transcriptId.",
 			);
 			await callback?.({ text: result.text, actions: ["REDACT_TRANSCRIPT"] });
 			return result;
@@ -247,6 +258,7 @@ export const redactTranscriptAction: Action = {
 				input.transcriptId,
 			);
 			const denied = await requireFullTranscript(
+				runtime,
 				store,
 				input.transcriptId,
 				accessContext,
@@ -256,14 +268,13 @@ export const redactTranscriptAction: Action = {
 				await callback?.({ text: denied.text, actions: ["REDACT_TRANSCRIPT"] });
 				return denied;
 			}
-			const variant = await store.createRedactedVariant({
+			await store.createRedactedVariant({
 				originalId: input.transcriptId,
 				redactedBy: message.entityId as UUID,
 			});
 			const result = ok("Redacted transcript variant is ready.", {
 				actionName: "REDACT_TRANSCRIPT",
 				transcriptId: input.transcriptId,
-				variantId: variant.id,
 				redacted: true,
 				hasAudio: false,
 			});
@@ -333,7 +344,7 @@ export const shareTranscriptAction: Action = {
 		if (!input?.entityId || !input.mode) {
 			const result = fail(
 				"SHARE_TRANSCRIPT_INVALID",
-				"SHARE_TRANSCRIPT requires transcriptId, entityId, and mode full or redacted.",
+				"SHARE_TRANSCRIPT requires valid transcriptId, entityId, and mode full or redacted.",
 			);
 			await callback?.({ text: result.text, actions: ["SHARE_TRANSCRIPT"] });
 			return result;
@@ -341,7 +352,7 @@ export const shareTranscriptAction: Action = {
 
 		const canShare =
 			input.mode === "full"
-				? await roleAccessCheck(runtime, message, "ADMIN")
+				? await hasTranscriptRoleAccess(runtime, message, "ADMIN")
 				: await canManageTranscript(runtime, message, input.transcriptId);
 		if (!canShare) {
 			auditDenied(runtime, "SHARE_TRANSCRIPT", message, input);
@@ -356,7 +367,6 @@ export const shareTranscriptAction: Action = {
 		}
 
 		try {
-			let variantId: string | undefined;
 			const store = transcriptStore(runtime);
 			const accessContext = await accessContextForMessage(
 				runtime,
@@ -364,6 +374,7 @@ export const shareTranscriptAction: Action = {
 				input.transcriptId,
 			);
 			const denied = await requireFullTranscript(
+				runtime,
 				store,
 				input.transcriptId,
 				accessContext,
@@ -374,11 +385,10 @@ export const shareTranscriptAction: Action = {
 				return denied;
 			}
 			if (input.mode === "redacted") {
-				const variant = await store.createRedactedVariant({
+				await store.createRedactedVariant({
 					originalId: input.transcriptId,
 					redactedBy: message.entityId as UUID,
 				});
-				variantId = variant.id;
 			}
 			await store.share({
 				transcriptId: input.transcriptId,
@@ -396,7 +406,6 @@ export const shareTranscriptAction: Action = {
 					transcriptId: input.transcriptId,
 					entityId: input.entityId,
 					mode: input.mode,
-					...(variantId ? { variantId } : {}),
 				},
 			);
 			await callback?.({ text: result.text, actions: ["SHARE_TRANSCRIPT"] });
