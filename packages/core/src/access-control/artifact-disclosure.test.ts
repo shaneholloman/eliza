@@ -4,10 +4,13 @@
  * untrusted grant parser. Pure functions, no harness.
  */
 import { describe, expect, it } from "vitest";
-import type { AccessContext, UUID } from "../types";
+import type { AccessContext, Memory, UUID } from "../types";
 import {
+	artifactDisclosureRecordFromMemory,
 	parseArtifactShareGrants,
 	resolveArtifactDisclosure,
+	resolveArtifactDisclosureForMemory,
+	selectDisclosedArtifactUrl,
 } from "./artifact-disclosure";
 
 const AGENT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" as UUID;
@@ -203,5 +206,111 @@ describe("parseArtifactShareGrants", () => {
 		expect(parseArtifactShareGrants({})).toEqual([]);
 		expect(parseArtifactShareGrants({ share: "nope" })).toEqual([]);
 		expect(parseArtifactShareGrants({ share: { grants: "nope" } })).toEqual([]);
+	});
+});
+
+describe("artifactDisclosureRecordFromMemory", () => {
+	it("normalizes stored metadata into a disclosure record", () => {
+		const memory = {
+			entityId: OTHER,
+			metadata: {
+				scope: "user-private",
+				scopedToEntityId: VIEWER,
+				share: {
+					grants: [{ entityId: OTHER, mode: "redacted" }],
+					roomSnapshot: {
+						roomId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+						entityIds: [VIEWER],
+						atMs: 123,
+					},
+				},
+			},
+		} as Pick<Memory, "entityId" | "metadata">;
+
+		expect(artifactDisclosureRecordFromMemory(memory)).toEqual({
+			scope: "user-private",
+			scopedEntityId: VIEWER,
+			grants: [{ entityId: OTHER, mode: "redacted" }],
+		});
+	});
+
+	it("fails closed on malformed scope and grants", () => {
+		const memory = {
+			entityId: OTHER,
+			metadata: {
+				scope: "public-to-everyone",
+				scopedToEntityId: "not-a-uuid",
+				share: {
+					grants: [{ entityId: VIEWER, mode: "everything" }],
+				},
+			},
+		} as Pick<Memory, "entityId" | "metadata">;
+
+		expect(artifactDisclosureRecordFromMemory(memory)).toEqual({
+			scope: "owner-private",
+			scopedEntityId: OTHER,
+			grants: [],
+		});
+	});
+
+	it("resolves disclosure from a memory row using stored share metadata", () => {
+		const memory = {
+			entityId: OWNER,
+			metadata: {
+				scope: "owner-private",
+				share: {
+					grants: [{ entityId: VIEWER, mode: "redacted" }],
+				},
+			},
+		} as Pick<Memory, "entityId" | "metadata">;
+
+		expect(
+			resolveArtifactDisclosureForMemory(memory, ctx({ role: "USER" }), AGENT),
+		).toBe("redacted");
+	});
+});
+
+describe("selectDisclosedArtifactUrl", () => {
+	it("returns the original URL for full disclosure", () => {
+		expect(
+			selectDisclosedArtifactUrl("full", {
+				fullUrl: "/api/media/original.wav",
+				redactedUrl: "/api/media/redacted.wav",
+			}),
+		).toEqual({
+			disclosure: "full",
+			url: "/api/media/original.wav",
+			redacted: false,
+		});
+	});
+
+	it("returns the redacted URL for redacted disclosure", () => {
+		expect(
+			selectDisclosedArtifactUrl("redacted", {
+				fullUrl: "/api/media/original.wav",
+				redactedUrl: "/api/media/redacted.wav",
+			}),
+		).toEqual({
+			disclosure: "redacted",
+			url: "/api/media/redacted.wav",
+			redacted: true,
+		});
+	});
+
+	it("omits redacted disclosure when no redacted variant exists", () => {
+		expect(
+			selectDisclosedArtifactUrl("redacted", {
+				fullUrl: "/api/media/original.wav",
+			}),
+		).toBeNull();
+	});
+
+	it("omits none or missing original URL", () => {
+		expect(
+			selectDisclosedArtifactUrl("none", {
+				fullUrl: "/api/media/original.wav",
+			}),
+		).toBeNull();
+		expect(selectDisclosedArtifactUrl("full", {})).toBeNull();
 	});
 });
