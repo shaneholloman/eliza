@@ -7,6 +7,8 @@ import { makeApp, makeRoomMessage, memoryRuntime } from "./helpers";
 
 const appIdOf = (m: { metadata?: unknown }) =>
   (m.metadata as { appId?: string } | undefined)?.appId;
+const metadataOf = (m: { metadata?: unknown }) =>
+  m.metadata as Record<string, unknown> | undefined;
 
 describe("app deploy facts", () => {
   it("records a durable deploy fact, then removeAppDeployFact purges it", async () => {
@@ -46,6 +48,11 @@ describe("app deploy facts", () => {
       app,
       "https://x-1.apps.elizacloud.ai",
     );
+    runtime.__facts[0].metadata = {
+      ...metadataOf(runtime.__facts[0]),
+      sender: { id: "sender-1" },
+    };
+
     const second = await recordAppDeployFact(
       runtime,
       message,
@@ -54,6 +61,10 @@ describe("app deploy facts", () => {
     );
     expect(second.updated).toBe(true);
     expect(runtime.__facts.filter((m) => appIdOf(m) === "id-x").length).toBe(1);
+    expect(metadataOf(runtime.__facts[0])?.appUrl).toBe(
+      "https://x-2.apps.elizacloud.ai",
+    );
+    expect(metadataOf(runtime.__facts[0])?.sender).toBeUndefined();
 
     expect(await removeAppDeployFact(runtime, message, "id-x")).toBe(true);
     expect(runtime.__facts.length).toBe(0);

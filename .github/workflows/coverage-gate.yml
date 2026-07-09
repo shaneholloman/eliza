@@ -91,7 +91,7 @@ jobs:
           exit 1
 
       - name: Setup Bun workspace
-        if: steps.changed.outputs.bun_tests != '' || steps.changed.outputs.vitest_tests != ''
+        if: steps.changed.outputs.files != '' && (steps.changed.outputs.bun_tests != '' || steps.changed.outputs.vitest_tests != '')
         # Keep dependency setup behind the changed-test check so docs-only and
         # test-free source PRs either skip or fail before spending setup time.
         uses: ./.github/actions/setup-bun-workspace
@@ -101,7 +101,7 @@ jobs:
           setup-python: "false"
 
       - name: Run changed Bun tests with coverage
-        if: steps.changed.outputs.bun_tests != ''
+        if: steps.changed.outputs.files != '' && steps.changed.outputs.bun_tests != ''
         run: |
           cat > "$RUNNER_TEMP/changed-tests.txt" <<'EOF'
           ${{ steps.changed.outputs.bun_tests }}
@@ -118,7 +118,7 @@ jobs:
           BUN_COVERAGE_DIR: coverage/bun
 
       - name: Run changed Vitest tests with coverage
-        if: steps.changed.outputs.vitest_tests != ''
+        if: steps.changed.outputs.files != '' && steps.changed.outputs.vitest_tests != ''
         run: |
           cat > "$RUNNER_TEMP/changed-vitest-tests.txt" <<'EOF'
           ${{ steps.changed.outputs.vitest_tests }}
