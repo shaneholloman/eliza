@@ -48,8 +48,8 @@
       "@elizaos/plugin-app-control/*": ["../plugin-app-control/src/*"],
       "@elizaos/plugin-agent-skills": ["../plugin-agent-skills/src/index.ts"],
       "@elizaos/plugin-agent-skills/*": ["../plugin-agent-skills/src/*"],
-      "@elizaos/plugin-anthropic": ["../plugin-anthropic/src/index.ts"],
-      "@elizaos/plugin-anthropic/*": ["../plugin-anthropic/src/*"],
+      "@elizaos/plugin-anthropic": ["../plugin-anthropic/index.ts"],
+      "@elizaos/plugin-anthropic/*": ["../plugin-anthropic/*"],
       "@elizaos/plugin-app-manager": ["../plugin-app-manager/src/index.ts"],
       "@elizaos/plugin-app-manager/*": ["../plugin-app-manager/src/*"],
       "@elizaos/plugin-background-runner": [
