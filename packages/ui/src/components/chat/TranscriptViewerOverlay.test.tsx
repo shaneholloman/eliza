@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // The maximized, editable transcript viewer: it loads the stored record, lets
-// the user edit + undo, copies, prepares share requests, and persists on save.
+// the user edit + undo, copies, grants/revokes access, and persists on save.
 
 import {
   cleanup,
@@ -13,15 +13,27 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageAttachment } from "../../api/client-types-chat";
 
-const { getTranscript, updateTranscript, deleteTranscript } = vi.hoisted(
-  () => ({
-    getTranscript: vi.fn(),
-    updateTranscript: vi.fn(),
-    deleteTranscript: vi.fn(),
-  }),
-);
+const {
+  getTranscript,
+  updateTranscript,
+  deleteTranscript,
+  shareTranscript,
+  revokeTranscriptShare,
+} = vi.hoisted(() => ({
+  getTranscript: vi.fn(),
+  updateTranscript: vi.fn(),
+  deleteTranscript: vi.fn(),
+  shareTranscript: vi.fn(),
+  revokeTranscriptShare: vi.fn(),
+}));
 vi.mock("../../api", () => ({
-  client: { getTranscript, updateTranscript, deleteTranscript },
+  client: {
+    getTranscript,
+    updateTranscript,
+    deleteTranscript,
+    shareTranscript,
+    revokeTranscriptShare,
+  },
 }));
 const { navigateBrowserPath } = vi.hoisted(() => ({
   navigateBrowserPath: vi.fn(),
@@ -82,6 +94,8 @@ describe("TranscriptViewerOverlay", () => {
     getTranscript.mockReset();
     updateTranscript.mockReset();
     deleteTranscript.mockReset();
+    shareTranscript.mockReset();
+    revokeTranscriptShare.mockReset();
     navigateBrowserPath.mockReset();
     getTranscript.mockResolvedValue({
       transcript: {
@@ -93,6 +107,17 @@ describe("TranscriptViewerOverlay", () => {
     });
     updateTranscript.mockResolvedValue({ transcript: {} });
     deleteTranscript.mockResolvedValue({ ok: true });
+    shareTranscript.mockResolvedValue({
+      ok: true,
+      transcriptId: "00000000-0000-0000-0000-000000000abc",
+      entityId: "99999999-9999-9999-9999-999999999999",
+      mode: "redacted",
+    });
+    revokeTranscriptShare.mockResolvedValue({
+      ok: true,
+      transcriptId: "00000000-0000-0000-0000-000000000abc",
+      entityId: "99999999-9999-9999-9999-999999999999",
+    });
     Object.assign(navigator, {
       clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
     });
@@ -193,66 +218,72 @@ describe("TranscriptViewerOverlay", () => {
     );
   });
 
-  it("opens a redacted-by-default share panel and prepares a grant request", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, {
-      clipboard: { writeText },
-      share: undefined,
-    });
+  it("opens the permission sheet and grants redacted transcript access", async () => {
+    const userRole = { role: "USER" as const };
     render(
-      <TranscriptViewerOverlay
-        attachment={transcriptAttachment()}
-        onClose={() => {}}
-      />,
+      <RoleProvider {...userRole}>
+        <TranscriptViewerOverlay
+          attachment={transcriptAttachment()}
+          onClose={() => {}}
+        />
+      </RoleProvider>,
     );
     await waitFor(() => screen.getByTestId("transcript-text"));
     fireEvent.click(screen.getByTestId("transcript-share"));
-    expect(screen.getByTestId("transcript-share-panel")).toBeTruthy();
+    expect(screen.getByTestId("transcript-share-sheet")).toBeTruthy();
     expect(
       screen.getByTestId("transcript-share-mode-full-disabled"),
     ).toBeTruthy();
 
     fireEvent.change(screen.getByTestId("transcript-share-target"), {
-      target: { value: "viewer-entity" },
+      target: { value: "99999999-9999-9999-9999-999999999999" },
     });
-    fireEvent.click(screen.getByTestId("transcript-share-prepare"));
+    fireEvent.click(screen.getByTestId("transcript-grant-share"));
     await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith(
-        "Share transcriptId=00000000-0000-0000-0000-000000000abc with entityId=viewer-entity mode=redacted.",
+      expect(shareTranscript).toHaveBeenCalledWith(
+        "00000000-0000-0000-0000-000000000abc",
+        {
+          entityId: "99999999-9999-9999-9999-999999999999",
+          mode: "redacted",
+        },
       ),
     );
-    expect(screen.getByTestId("transcript-share-notice").textContent).toContain(
-      "Request copied",
+    expect(screen.getByTestId("transcript-share-success").textContent).toMatch(
+      /redacted/i,
     );
   });
 
-  it("surfaces the prepared share request when clipboard and native share are unavailable", async () => {
-    Object.assign(navigator, { clipboard: undefined, share: undefined });
+  it("surfaces route failures without claiming access changed", async () => {
+    shareTranscript.mockRejectedValueOnce(new Error("denied"));
+    const userRole = { role: "USER" as const };
     render(
-      <TranscriptViewerOverlay
-        attachment={transcriptAttachment()}
-        onClose={() => {}}
-      />,
+      <RoleProvider {...userRole}>
+        <TranscriptViewerOverlay
+          attachment={transcriptAttachment()}
+          onClose={() => {}}
+        />
+      </RoleProvider>,
     );
     await waitFor(() => screen.getByTestId("transcript-text"));
     fireEvent.click(screen.getByTestId("transcript-share"));
     fireEvent.change(screen.getByTestId("transcript-share-target"), {
-      target: { value: "viewer-entity" },
+      target: { value: "99999999-9999-9999-9999-999999999999" },
     });
-    fireEvent.click(screen.getByTestId("transcript-share-prepare"));
+    fireEvent.click(screen.getByTestId("transcript-grant-share"));
     await waitFor(() =>
       expect(
-        screen.getByTestId("transcript-share-notice").textContent,
-      ).toContain("Share transcriptId=00000000-0000-0000-0000-000000000abc"),
+        screen.getByTestId("transcript-share-error").textContent,
+      ).toContain("denied"),
     );
-    expect(screen.getByTestId("transcript-copy").textContent).toContain("Copy");
+    expect(screen.queryByTestId("transcript-share-success")).toBeNull();
   });
 
-  it("lets admins prepare a full transcript grant", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, {
-      clipboard: { writeText },
-      share: undefined,
+  it("lets admins grant full transcript access", async () => {
+    shareTranscript.mockResolvedValueOnce({
+      ok: true,
+      transcriptId: "00000000-0000-0000-0000-000000000abc",
+      entityId: "99999999-9999-9999-9999-999999999999",
+      mode: "full",
     });
     const adminRole = { role: "ADMIN" as const };
     render(
@@ -267,28 +298,44 @@ describe("TranscriptViewerOverlay", () => {
     fireEvent.click(screen.getByTestId("transcript-share"));
     fireEvent.click(screen.getByTestId("transcript-share-mode-full"));
     fireEvent.change(screen.getByTestId("transcript-share-target"), {
-      target: { value: "viewer-entity" },
+      target: { value: "99999999-9999-9999-9999-999999999999" },
     });
-    fireEvent.click(screen.getByTestId("transcript-share-prepare"));
+    fireEvent.click(screen.getByTestId("transcript-grant-share"));
     await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith(
-        "Share transcriptId=00000000-0000-0000-0000-000000000abc with entityId=viewer-entity mode=full.",
+      expect(shareTranscript).toHaveBeenCalledWith(
+        "00000000-0000-0000-0000-000000000abc",
+        {
+          entityId: "99999999-9999-9999-9999-999999999999",
+          mode: "full",
+        },
       ),
     );
   });
 
-  it("shows the revoke caveat in the share panel", async () => {
+  it("revokes transcript access for the entered recipient", async () => {
+    const userRole = { role: "USER" as const };
     render(
-      <TranscriptViewerOverlay
-        attachment={transcriptAttachment()}
-        onClose={() => {}}
-      />,
+      <RoleProvider {...userRole}>
+        <TranscriptViewerOverlay
+          attachment={transcriptAttachment()}
+          onClose={() => {}}
+        />
+      </RoleProvider>,
     );
     await waitFor(() => screen.getByTestId("transcript-text"));
     fireEvent.click(screen.getByTestId("transcript-share"));
-    fireEvent.click(screen.getByTestId("transcript-share-kind-revoke"));
-    expect(screen.getByTestId("transcript-share-panel").textContent).toContain(
-      "People who already opened it may have kept a copy",
+    fireEvent.change(screen.getByTestId("transcript-share-target"), {
+      target: { value: "99999999-9999-9999-9999-999999999999" },
+    });
+    fireEvent.click(screen.getByTestId("transcript-revoke-share"));
+    await waitFor(() =>
+      expect(revokeTranscriptShare).toHaveBeenCalledWith(
+        "00000000-0000-0000-0000-000000000abc",
+        "99999999-9999-9999-9999-999999999999",
+      ),
+    );
+    expect(screen.getByTestId("transcript-share-success").textContent).toMatch(
+      /revoked/i,
     );
   });
 
