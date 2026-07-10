@@ -24,7 +24,7 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const stylesDir = join(here, "../../../styles");
-const outDir = join(here, "output-home-locale");
+const outDir = join(here, "../../../../tmp/home-locale-e2e");
 await mkdir(outDir, { recursive: true });
 
 let failures = 0;

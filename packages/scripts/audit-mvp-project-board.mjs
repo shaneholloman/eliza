@@ -2,7 +2,7 @@
 /**
  * Read-only audit for the LifeOps MVP project board. The GitHub Project is the
  * live kanban, but closeout work needs a compact stale-state report instead of
- * a raw 195-item dump: closed issues that are not Done, open MVP issues still
+ * a raw project dump: closed issues that are not Done, open issues still
  * active, and the subset that is explicitly human-gated.
  */
 
@@ -20,12 +20,14 @@ function usage() {
   return `Usage:
   node packages/scripts/audit-mvp-project-board.mjs [--json] [--strict]
   node packages/scripts/audit-mvp-project-board.mjs --project-json project.json --open-json open.json --closed-json closed.json [--json] [--strict]
+  node packages/scripts/audit-mvp-project-board.mjs --issues-only [--json] [--strict]
 
 Options:
   --owner <org>        GitHub Project owner for live mode (default: ${DEFAULT_OWNER}).
   --project <number>  GitHub Project number for live mode (default: ${DEFAULT_PROJECT}).
   --repo <owner/repo> GitHub repo for live mode (default: ${DEFAULT_REPO}).
   --limit <n>         GitHub item/page limit (default: ${DEFAULT_LIMIT}).
+  --issues-only       Skip Project status lookup and report only MVP issue label state.
   --strict            Exit 1 when any stale/actionable bucket is non-empty.`;
 }
 
@@ -36,12 +38,15 @@ function parseArgs(argv) {
     project: DEFAULT_PROJECT,
     limit: DEFAULT_LIMIT,
     json: false,
+    issuesOnly: false,
     strict: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--json") {
       out.json = true;
+    } else if (arg === "--issues-only") {
+      out.issuesOnly = true;
     } else if (arg === "--strict") {
       out.strict = true;
     } else if (arg === "--help" || arg === "-h") {
@@ -91,7 +96,12 @@ function parseArgs(argv) {
 }
 
 function ghJson(args) {
-  return JSON.parse(execFileSync("gh", args, { encoding: "utf8" }));
+  return JSON.parse(
+    execFileSync("gh", args, {
+      encoding: "utf8",
+      maxBuffer: 50 * 1024 * 1024,
+    }),
+  );
 }
 
 function readJson(file) {
@@ -112,6 +122,29 @@ export function normalizeProjectIssue(item) {
   };
 }
 
+export function normalizeRestIssue(issue) {
+  return {
+    number: issue.number,
+    title: issue.title,
+    url: issue.html_url ?? issue.url,
+    labels: (issue.labels ?? [])
+      .map((label) => (typeof label === "string" ? label : label?.name))
+      .filter(Boolean),
+  };
+}
+
+function fetchMvpIssuesByState(repo, state) {
+  return ghJson([
+    "api",
+    "--paginate",
+    "--slurp",
+    `repos/${repo}/issues?state=${state}&labels=mvp&per_page=100`,
+  ])
+    .flat()
+    .filter((issue) => !issue.pull_request)
+    .map(normalizeRestIssue);
+}
+
 function byNumber(items) {
   return new Map(items.map((item) => [item.number, item]));
 }
@@ -120,12 +153,14 @@ export function summarizeMvpBoard({ projectItems, openIssues, closedIssues }) {
   const openByNumber = byNumber(openIssues);
   const closedNumbers = new Set(closedIssues.map((issue) => issue.number));
   const issues = projectItems.map(normalizeProjectIssue).filter(Boolean);
-  const mvpIssues = issues.filter((issue) => issue.labels.includes("mvp"));
+  const labeledMvpIssues = issues.filter((issue) =>
+    issue.labels.includes("mvp"),
+  );
 
-  const closedNotDone = mvpIssues.filter(
+  const closedNotDone = issues.filter(
     (issue) => closedNumbers.has(issue.number) && issue.status !== DONE_STATUS,
   );
-  const openOnBoard = mvpIssues.filter(
+  const openOnBoard = issues.filter(
     (issue) => openByNumber.has(issue.number) && issue.status !== DONE_STATUS,
   );
   const humanGated = openOnBoard.filter((issue) =>
@@ -139,14 +174,14 @@ export function summarizeMvpBoard({ projectItems, openIssues, closedIssues }) {
         (label) => label === "needs-human" || label === "needs-shaw",
       ),
   );
-  const openDone = mvpIssues.filter(
+  const openDone = issues.filter(
     (issue) => openByNumber.has(issue.number) && issue.status === DONE_STATUS,
   );
 
   return {
     counts: {
       projectIssues: issues.length,
-      mvpIssues: mvpIssues.length,
+      labeledMvpIssues: labeledMvpIssues.length,
       closedNotDone: closedNotDone.length,
       openNotDone: openOnBoard.length,
       humanGated: humanGated.length,
@@ -161,27 +196,63 @@ export function summarizeMvpBoard({ projectItems, openIssues, closedIssues }) {
   };
 }
 
+export function summarizeMvpIssuesOnly({ openIssues, closedIssues }) {
+  const openMvpIssues = openIssues
+    .map(normalizeRestIssue)
+    .filter((issue) => issue.labels.includes("mvp"));
+  const closedMvpIssues = closedIssues
+    .map(normalizeRestIssue)
+    .filter((issue) => issue.labels.includes("mvp"));
+  const humanGated = openMvpIssues.filter((issue) =>
+    issue.labels.some(
+      (label) => label === "needs-human" || label === "needs-shaw",
+    ),
+  );
+  const agentActionable = openMvpIssues.filter(
+    (issue) =>
+      !issue.labels.some(
+        (label) => label === "needs-human" || label === "needs-shaw",
+      ),
+  );
+
+  return {
+    projectCheckSkipped: true,
+    counts: {
+      openMvpIssues: openMvpIssues.length,
+      closedMvpIssues: closedMvpIssues.length,
+      humanGated: humanGated.length,
+      agentActionable: agentActionable.length,
+    },
+    openMvpIssues,
+    closedMvpIssues,
+    humanGated,
+    agentActionable,
+  };
+}
+
 export function strictViolations(summary) {
   const violations = [];
-  if (summary.closedNotDone.length > 0) {
+  if (summary.closedNotDone?.length > 0) {
     violations.push({
       type: "closed-not-done",
       count: summary.closedNotDone.length,
-      message: `${summary.closedNotDone.length} closed MVP issue(s) are not marked Done`,
+      message: `${summary.closedNotDone.length} closed Project 15 issue(s) are not marked Done`,
     });
   }
   if (summary.agentActionable.length > 0) {
     violations.push({
       type: "agent-actionable-open",
       count: summary.agentActionable.length,
-      message: `${summary.agentActionable.length} open MVP issue(s) are neither Done nor human-gated`,
+      message: summary.projectCheckSkipped
+        ? `${summary.agentActionable.length} open MVP issue(s) are not human-gated`
+        : `${summary.agentActionable.length} open Project 15 issue(s) are neither Done nor human-gated`,
     });
   }
-  if (summary.openDone.length > 0) {
+  if (summary.openDone?.length > 0) {
     violations.push({
       type: "open-done",
       count: summary.openDone.length,
-      message: `${summary.openDone.length} open MVP issue(s) are already marked Done`,
+      message: `${summary.openDone.length} open Project 15 issue(s) are already marked Done`,
     });
   }
   return violations;
@@ -192,10 +263,19 @@ function formatIssue(issue) {
   return `#${issue.number} ${issue.status ?? "(no status)"} — ${issue.title}${labels}`;
 }
 
+function formatIssueOnly(issue) {
+  const labels = issue.labels.length > 0 ? ` [${issue.labels.join(",")}]` : "";
+  return `#${issue.number} — ${issue.title}${labels}`;
+}
+
 export function formatSummary(summary) {
+  if (summary.projectCheckSkipped) {
+    return formatIssuesOnlySummary(summary);
+  }
+
   const lines = [
     "LifeOps MVP project-board audit",
-    `project issues: ${summary.counts.projectIssues}; mvp issues: ${summary.counts.mvpIssues}`,
+    `project issues: ${summary.counts.projectIssues}; carrying mvp label: ${summary.counts.labeledMvpIssues}`,
     `closed-not-Done: ${summary.counts.closedNotDone}`,
     `open-not-Done: ${summary.counts.openNotDone} (${summary.counts.humanGated} human-gated, ${summary.counts.agentActionable} agent-actionable)`,
     `open-but-Done: ${summary.counts.openDone}`,
@@ -210,14 +290,56 @@ export function formatSummary(summary) {
     for (const row of rows) lines.push(`  ${formatIssue(row)}`);
   };
 
-  section("Closed MVP issues not marked Done", summary.closedNotDone);
+  section("Closed Project 15 issues not marked Done", summary.closedNotDone);
   section(
-    "Open MVP issues not Done and not human-gated",
+    "Open Project 15 issues not Done and not human-gated",
     summary.agentActionable,
   );
-  section("Open MVP issues not Done and human-gated", summary.humanGated);
-  section("Open MVP issues already marked Done", summary.openDone);
+  section(
+    "Open Project 15 issues not Done and human-gated",
+    summary.humanGated,
+  );
+  section("Open Project 15 issues already marked Done", summary.openDone);
   return lines.join("\n");
+}
+
+function formatIssuesOnlySummary(summary) {
+  const lines = [
+    "LifeOps MVP project-board audit",
+    "Project status check: SKIPPED (--issues-only)",
+    `open MVP issues: ${summary.counts.openMvpIssues} (${summary.counts.humanGated} human-gated, ${summary.counts.agentActionable} agent-actionable)`,
+    `closed MVP issues: ${summary.counts.closedMvpIssues}`,
+  ];
+
+  const section = (title, rows) => {
+    lines.push("", title);
+    if (rows.length === 0) {
+      lines.push("  (none)");
+      return;
+    }
+    for (const row of rows) lines.push(`  ${formatIssueOnly(row)}`);
+  };
+
+  section("Open MVP issues not human-gated", summary.agentActionable);
+  section("Open MVP issues human-gated", summary.humanGated);
+  return lines.join("\n");
+}
+
+function writeSummary(summary, args) {
+  const violations = strictViolations(summary);
+  process.stdout.write(
+    args.json
+      ? `${JSON.stringify({ ...summary, strictViolations: violations }, null, 2)}\n`
+      : `${formatSummary(summary)}\n`,
+  );
+  if (args.strict && violations.length > 0) {
+    process.stderr.write(
+      `[audit-mvp-project-board] strict failed: ${violations
+        .map((violation) => violation.message)
+        .join("; ")}\n`,
+    );
+    process.exitCode = 1;
+  }
 }
 
 async function main() {
@@ -232,9 +354,33 @@ async function main() {
     args.closedJson,
   ].filter(Boolean);
   if (fixtureInputs.length > 0 && fixtureInputs.length !== 3) {
+    if (
+      args.issuesOnly &&
+      !args.projectJson &&
+      args.openJson &&
+      args.closedJson
+    ) {
+      const openIssues = readJson(args.openJson);
+      const closedIssues = readJson(args.closedJson);
+      const summary = summarizeMvpIssuesOnly({ openIssues, closedIssues });
+      writeSummary(summary, args);
+      return;
+    }
     throw new Error(
       "--project-json, --open-json, and --closed-json must be passed together",
     );
+  }
+
+  if (args.issuesOnly) {
+    const openIssues = args.openJson
+      ? readJson(args.openJson)
+      : fetchMvpIssuesByState(args.repo, "open");
+    const closedIssues = args.closedJson
+      ? readJson(args.closedJson)
+      : fetchMvpIssuesByState(args.repo, "closed");
+    const summary = summarizeMvpIssuesOnly({ openIssues, closedIssues });
+    writeSummary(summary, args);
+    return;
   }
 
   const projectData = args.projectJson
@@ -259,8 +405,8 @@ async function main() {
         args.repo,
         "--state",
         "open",
-        "--label",
-        "mvp",
+        "--search",
+        `project:${args.owner}/${args.project}`,
         "--limit",
         args.limit,
         "--json",
@@ -275,8 +421,8 @@ async function main() {
         args.repo,
         "--state",
         "closed",
-        "--label",
-        "mvp",
+        "--search",
+        `project:${args.owner}/${args.project}`,
         "--limit",
         args.limit,
         "--json",
@@ -288,23 +434,7 @@ async function main() {
     openIssues,
     closedIssues,
   });
-  const violations = strictViolations(summary);
-  const output = args.json
-    ? { ...summary, strictViolations: violations }
-    : null;
-  process.stdout.write(
-    args.json
-      ? `${JSON.stringify(output, null, 2)}\n`
-      : `${formatSummary(summary)}\n`,
-  );
-  if (args.strict && violations.length > 0) {
-    process.stderr.write(
-      `[audit-mvp-project-board] strict failed: ${violations
-        .map((violation) => violation.message)
-        .join("; ")}\n`,
-    );
-    process.exitCode = 1;
-  }
+  writeSummary(summary, args);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
