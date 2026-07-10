@@ -157,6 +157,7 @@ const NAV_INDEX_PATH = fileURLToPath(
 );
 
 interface AuditCase {
+  id: string;
   slug: string;
   path: string;
   viewType: "gui" | "tui";
@@ -167,6 +168,7 @@ function buildAuditCases(): AuditCase[] {
   const cases: AuditCase[] = [];
   for (const [id, viewPath] of Object.entries(BUILTIN_TAB_PATHS)) {
     cases.push({
+      id,
       slug: `builtin-${id}`,
       path: viewPath,
       viewType: "gui",
@@ -175,6 +177,7 @@ function buildAuditCases(): AuditCase[] {
   }
   for (const view of VIEW_CASES) {
     cases.push({
+      id: view.id,
       slug: `plugin-${view.id}-${view.viewType}`,
       path: view.path,
       viewType: view.viewType,
@@ -330,6 +333,11 @@ interface ViewFinding {
   overlayPresent: boolean;
   overlayClearanceIssues: string[];
   viewType: "gui" | "tui";
+  /** Dynamic-bundle identity captured from the real stub response. Plugin
+   * routes without a remote registry entry leave these absent. */
+  bundleProvenance?: string;
+  bundleComponent?: string;
+  bundleViewId?: string;
   /** Readable text length in the view root; ~0 means the view never painted. */
   readableChars: number;
   /** documentElement.scrollWidth − innerWidth in px (≥0). >tolerance means the
@@ -863,6 +871,9 @@ function renderManualReviewStub(finding: ViewFinding): string {
     `# ${finding.slug} (${finding.viewport})`,
     "",
     `- **path:** \`${finding.path}\``,
+    `- **bundle provenance:** ${finding.bundleProvenance ?? "n/a (not a remote-bundle route)"}`,
+    `- **bundle component:** ${finding.bundleComponent ?? "n/a"}`,
+    `- **bundle view id:** ${finding.bundleViewId ?? "n/a"}`,
     `- **verdict:** ${finding.verdict}`,
     `- **console errors:** ${finding.consoleErrors.length}`,
     `- **blue colors (banned):** ${finding.blueColors.length ? finding.blueColors.join(", ") : "none"}`,
@@ -896,6 +907,77 @@ function renderManualReviewStub(finding: ViewFinding): string {
 // overlay-clearance + light-surface checks. They still must not crash, log
 // console errors, render fully blank, or use blue.
 const findings: ViewFinding[] = [];
+
+interface RemoteBundleAuditProof {
+  auditPath: string;
+  bundlePath: string;
+  componentExport: string;
+  response: Promise<import("@playwright/test").Response>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function forceRemoteBundleAuditRoute(
+  page: Page,
+  view: AuditCase,
+): Promise<RemoteBundleAuditProof | null> {
+  if (view.kind !== "plugin") return null;
+  const registryResponse = await page.request.get("/api/views");
+  expect(registryResponse.ok(), "plugin view registry must load").toBe(true);
+  const payload: unknown = await registryResponse.json();
+  if (!isRecord(payload) || !Array.isArray(payload.views)) {
+    throw new Error("plugin view registry returned an invalid views payload");
+  }
+  const registered = payload.views?.find(
+    (entry) =>
+      isRecord(entry) &&
+      entry.id === view.id &&
+      (entry.viewType ?? "gui") === view.viewType,
+  );
+  if (
+    !isRecord(registered) ||
+    typeof registered.bundleUrl !== "string" ||
+    typeof registered.componentExport !== "string"
+  ) {
+    throw new Error(
+      `${view.slug} is missing its production bundle declaration in /api/views`,
+    );
+  }
+
+  const auditPath = `/__audit/plugin-view/${encodeURIComponent(registered.id)}`;
+  const bundlePath = new URL(registered.bundleUrl, "http://audit.local")
+    .pathname;
+  await page.route("**/api/views", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: registryResponse.status(),
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...payload,
+        views: payload.views.map((entry) =>
+          isRecord(entry) &&
+          entry.id === registered.id &&
+          (entry.viewType ?? "gui") === view.viewType
+            ? { ...entry, path: auditPath }
+            : entry,
+        ),
+      }),
+    });
+  });
+  return {
+    auditPath,
+    bundlePath,
+    componentExport: registered.componentExport,
+    response: page.waitForResponse(
+      (response) => new URL(response.url()).pathname === bundlePath,
+    ),
+  };
+}
 
 test.describe("all-views aesthetic audit (#8796)", () => {
   const outputDir =
@@ -996,7 +1078,24 @@ test.describe("all-views aesthetic audit (#8796)", () => {
         await page.setViewportSize({ width: vp.width, height: vp.height });
         await seedAppStorage(page);
         await installDefaultAppRoutes(page);
-        await openAppPath(page, view.path);
+        const remoteBundleProof = await forceRemoteBundleAuditRoute(page, view);
+        await openAppPath(page, remoteBundleProof?.auditPath ?? view.path);
+        const bundleResponse = remoteBundleProof
+          ? await remoteBundleProof.response
+          : null;
+        if (bundleResponse && remoteBundleProof) {
+          expect(
+            bundleResponse.status(),
+            `${view.slug} must load its production dynamic bundle`,
+          ).toBe(200);
+          expect(
+            bundleResponse.headers()["x-eliza-view-bundle-provenance"],
+          ).toBe("real-dist");
+          expect(bundleResponse.headers()["x-eliza-view-component"]).toBe(
+            remoteBundleProof.componentExport,
+          );
+          expect(bundleResponse.headers()["x-eliza-view-id"]).toBe(view.id);
+        }
 
         // Robust readiness under sustained sequential load: most views render
         // <main>, but chat/phone/etc. render straight into #root with no <main>.
@@ -1141,6 +1240,10 @@ test.describe("all-views aesthetic audit (#8796)", () => {
           viewport: vp.name,
           path: view.path,
           viewType: view.viewType,
+          bundleProvenance:
+            bundleResponse?.headers()["x-eliza-view-bundle-provenance"],
+          bundleComponent: bundleResponse?.headers()["x-eliza-view-component"],
+          bundleViewId: bundleResponse?.headers()["x-eliza-view-id"],
           consoleErrors,
           blueColors,
           hoverViolations,

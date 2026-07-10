@@ -27,6 +27,9 @@ const port = Number(process.env.ELIZA_UI_SMOKE_API_PORT || "31337");
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../..", import.meta.url)),
 );
+const VIEW_BUNDLE_ROOT =
+  process.env.ELIZA_UI_SMOKE_VIEW_BUNDLE_ROOT?.trim() ||
+  path.join(repoRoot, "plugins");
 const SMOKE_GENERATED_AT = "2026-01-01T00:00:00.000Z";
 const DEMO_ORCHESTRATOR = process.env.ELIZA_UI_SMOKE_DEMO_ORCHESTRATOR === "1";
 const HUMAN_CHAT_FIXTURES = process.env.ELIZA_UI_SMOKE_HUMAN_CHAT === "1";
@@ -92,8 +95,7 @@ function smokeViewObject({
   const encodedId = encodeURIComponent(id);
   const query = "?v=ui-smoke";
   const bundlePath = path.join(
-    repoRoot,
-    "plugins",
+    VIEW_BUNDLE_ROOT,
     pluginDirName,
     "dist",
     "views",
@@ -1673,8 +1675,7 @@ function smokeViewBundleSource(view) {
 
 function sendSmokeViewAsset(req, res, url, view, subResource) {
   const bundleDir = path.join(
-    repoRoot,
-    "plugins",
+    VIEW_BUNDLE_ROOT,
     view._smokePluginDirName,
     "dist",
     "views",
