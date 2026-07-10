@@ -17,6 +17,7 @@ import {
 import {
   auditMvpBoardReadiness,
   normalizeProjectItems,
+  projectItemIsIssue,
   projectItemMatchesRepo,
 } from "./check-mvp-board-readiness.mjs";
 
@@ -247,8 +248,8 @@ export function buildCloseoutReport(snapshot) {
   // evidence filter internally, so the board summary gets the filtered items
   // here lest a same-numbered cross-repo card donate its status to an eliza
   // issue.
-  const projectItems = snapshot.project.items.filter((item) =>
-    projectItemMatchesRepo(item, repo),
+  const projectItems = snapshot.project.items.filter(
+    (item) => projectItemIsIssue(item) && projectItemMatchesRepo(item, repo),
   );
   const board = summarizeMvpBoard({
     projectItems,
@@ -279,6 +280,7 @@ export function buildCloseoutReport(snapshot) {
       projectNumber: snapshot.projectNumber ?? null,
       repo,
       projectItemCount: snapshot.project.items.length,
+      projectIssueItemCount: projectItems.length,
       openIssueCount: snapshot.openIssues.length,
       closedIssueCount: snapshot.closedIssues.length,
     },

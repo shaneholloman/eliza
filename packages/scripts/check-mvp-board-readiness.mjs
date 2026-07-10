@@ -183,10 +183,21 @@ export function projectItemMatchesRepo(item, repo = DEFAULT_REPO) {
   return !expectedRepo || !itemRepo || itemRepo === expectedRepo;
 }
 
+/**
+ * Project item-list mixes issues, pull requests, and draft cards. The MVP
+ * contract is issue-scoped, while older offline fixtures omit content.type;
+ * retain those fixtures but reject every explicitly non-Issue card.
+ */
+export function projectItemIsIssue(item) {
+  const type = item?.content?.type;
+  return type === undefined || type === "Issue";
+}
+
 export function normalizeProjectItems(payload, repo = DEFAULT_REPO) {
   const items = Array.isArray(payload) ? payload : (payload.items ?? []);
   const byNumber = new Map();
   for (const item of items) {
+    if (!projectItemIsIssue(item)) continue;
     if (!projectItemMatchesRepo(item, repo)) continue;
     const number = projectItemNumber(item);
     if (typeof number === "number") {

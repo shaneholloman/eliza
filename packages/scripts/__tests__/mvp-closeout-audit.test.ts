@@ -45,6 +45,21 @@ function issue(number: number, labels: string[]) {
   };
 }
 
+function pullRequestItem(number: number, status = "Done") {
+  return {
+    content: {
+      type: "PullRequest",
+      number,
+      repository: "elizaOS/eliza",
+      title: `Pull request ${number}`,
+      url: `https://github.com/elizaOS/eliza/pull/${number}`,
+    },
+    title: `Pull request ${number}`,
+    status,
+    labels: ["mvp"],
+  };
+}
+
 function snapshot() {
   return {
     fetchedAt: "2026-07-09T20:00:00.000Z",
@@ -78,6 +93,20 @@ describe("atomic MVP closeout audit", () => {
       agentActionable: 1,
     });
     expect(report.readiness.agentActionableCount).toBe(1);
+    expect(report.parity.readiness).toEqual([1, 2]);
+    expect(report.parity.evidence).toEqual([1, 2]);
+  });
+
+  test("excludes Project pull-request cards from issue reconciliation", () => {
+    const withPullRequest = snapshot();
+    withPullRequest.project.items.push(pullRequestItem(14490));
+
+    const report = audit.buildCloseoutReport(withPullRequest);
+
+    expect(report.integrityOk).toBe(true);
+    expect(report.snapshot.projectItemCount).toBe(4);
+    expect(report.snapshot.projectIssueItemCount).toBe(3);
+    expect(report.board.counts.projectIssues).toBe(3);
     expect(report.parity.readiness).toEqual([1, 2]);
     expect(report.parity.evidence).toEqual([1, 2]);
   });
