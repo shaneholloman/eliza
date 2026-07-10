@@ -47,8 +47,8 @@ export const CONNECTOR_PATH_KINDS = [
   "api-key",
 ];
 
-/** Probe ids valid on paths beyond the credential-probes.mjs families. */
-export const EXTRA_PROBE_IDS = ["github", "elizacloud"];
+/** Probe ids valid on paths beyond the credential-probes.mjs family sweep. */
+export const EXTRA_PROBE_IDS = ["github", "elizacloud", "imessage"];
 
 export const DEFAULT_APP_BASE = "http://localhost:2138";
 
@@ -64,7 +64,13 @@ export function resolveDeepLink(pathEntry, env = process.env) {
   return `${appBase(env)}${oneClick.hrefPath}`;
 }
 
-const ONE_CLICK_TYPES = ["gh-token", "deep-link", "shell", "siwe"];
+const ONE_CLICK_TYPES = [
+  "gh-token",
+  "github-device",
+  "deep-link",
+  "shell",
+  "siwe",
+];
 const ROLES_VIA = [
   "env-slots",
   "oauth-requested-role",
@@ -209,6 +215,28 @@ export const CONNECTOR_PATHS = [
       "OWNER label maps to plugin-github role 'user', AGENT to 'agent' (plugins/plugin-github/src/accounts.ts); GITHUB_ACCOUNTS JSON and character.settings.github.accounts are the multi-account forms; GITHUB_TOKEN stays the ownerless legacy single token.",
   }),
   definePath({
+    id: "github.device-oauth",
+    family: "github",
+    kind: "user-oauth",
+    label: "GitHub OAuth device login",
+    requiredAll: ["GITHUB_OAUTH_CLIENT_ID"],
+    optional: ["GITHUB_TOKEN"],
+    probeId: "github",
+    probeEndpoint:
+      "POST https://github.com/login/device/code, then GET https://api.github.com/user with the acquired token",
+    oneClick: {
+      type: "github-device",
+      detail:
+        "Display GitHub's short device code, confirm it on github.com, and save the returned token without exposing it to the browser",
+    },
+    availability: {
+      type: "env-all",
+      names: ["GITHUB_OAUTH_CLIENT_ID"],
+      reason:
+        "needs owner setup: no GitHub OAuth client id with device flow enabled (GITHUB_OAUTH_CLIENT_ID)",
+    },
+  }),
+  definePath({
     id: "github.user-oauth",
     family: "github",
     kind: "user-oauth",
@@ -298,31 +326,42 @@ export const CONNECTOR_PATHS = [
     group: "telegram",
     kind: "user-client",
     label: "Telegram user client (future gramjs)",
-    requiredAll: [
-      "TELEGRAM_API_ID",
-      "TELEGRAM_API_HASH",
-      "TELEGRAM_USER_SESSION",
-    ],
+    requiredAll: ["TELEGRAM_API_ID", "TELEGRAM_API_HASH"],
+    requiredAny: ["TELEGRAM_OWNER_SESSION", "TELEGRAM_USER_SESSION"],
     probeId: null,
     probeEndpoint:
       "gramjs getMe over the string session (not yet wired in-repo)",
     availability: {
-      type: "any-of",
+      type: "all-of",
       specs: [
         {
-          type: "env-present",
-          names: ["TELEGRAM_USER_SESSION"],
-          reason: "no gramjs string session in env",
+          type: "env-all",
+          names: ["TELEGRAM_API_ID", "TELEGRAM_API_HASH"],
+          reason:
+            "missing Telegram API credentials (TELEGRAM_API_ID, TELEGRAM_API_HASH)",
         },
         {
-          type: "file-exists",
-          path: "~/.eliza/telegram-user.session",
-          reason: "no saved session file (~/.eliza/telegram-user.session)",
+          type: "any-of",
+          specs: [
+            {
+              type: "env-present",
+              names: ["TELEGRAM_OWNER_SESSION", "TELEGRAM_USER_SESSION"],
+              reason:
+                "no owner gramjs string session in env (TELEGRAM_OWNER_SESSION)",
+            },
+            {
+              type: "file-exists",
+              path: "~/.eliza/telegram-user.session",
+              reason: "no saved session file (~/.eliza/telegram-user.session)",
+            },
+          ],
+          reason:
+            "no owner gramjs string session in env (TELEGRAM_OWNER_SESSION)",
         },
       ],
     },
     notes:
-      "Documented ahead of a gramjs integration; Telegram Desktop's tdata is proprietary/encrypted and is not a credential source.",
+      "Documented ahead of a gramjs integration; TELEGRAM_OWNER_SESSION is the owner-scoped key required by the HITL issue, while TELEGRAM_USER_SESSION remains a temporary read alias. Telegram Desktop's tdata is proprietary/encrypted and is not a credential source.",
   }),
 
   // --- Discord --------------------------------------------------------------------
@@ -345,7 +384,7 @@ export const CONNECTOR_PATHS = [
     kind: "user-client",
     label: "Discord user token paste",
     requiredAll: ["DISCORD_USER_TOKEN"],
-    probeId: null,
+    probeId: "discord",
     probeEndpoint:
       "GET https://discord.com/api/v10/users/@me (raw user token, no Bot prefix)",
     availability: { type: "always" },
@@ -389,7 +428,7 @@ export const CONNECTOR_PATHS = [
     kind: "user-client",
     label: "Slack user token (user-context calls)",
     requiredAll: ["SLACK_USER_TOKEN"],
-    probeId: null,
+    probeId: "slack",
     probeEndpoint: "POST https://slack.com/api/auth.test (xoxp user token)",
     availability: { type: "always" },
   }),
@@ -405,7 +444,7 @@ export const CONNECTOR_PATHS = [
     probeEndpoint:
       "local install/link status only — Signal Desktop's DB is SQLCipher-encrypted and is not a credential source",
     availability: {
-      type: "any-of",
+      type: "all-of",
       specs: [
         {
           type: "dir-exists",
@@ -452,17 +491,23 @@ export const CONNECTOR_PATHS = [
               reason: "signal-cli not in PATH",
             },
             {
-              type: "dir-exists",
-              path: "~/.local/share/signal-cli",
-              reason:
-                "no registered signal-cli account (~/.local/share/signal-cli missing)",
+              type: "command-ok",
+              command: "signal-cli",
+              args: ["--version"],
+              reason: "signal-cli is installed but not runnable",
+            },
+            {
+              type: "command-output-nonempty",
+              command: "signal-cli",
+              args: ["listAccounts"],
+              reason: "no linked Signal account",
             },
           ],
         },
       ],
     },
     notes:
-      "A signal-cli binary can be present but unrunnable (e.g. built for a newer JRE); the data-dir requirement keeps an unregistered install skipping instead of red.",
+      "Availability executes the read-only listAccounts command: an installed-but-unrunnable binary and a runnable client with no linked account remain distinct skip states.",
   }),
 
   // --- WhatsApp -----------------------------------------------------------------------
@@ -493,7 +538,7 @@ export const CONNECTOR_PATHS = [
     kind: "local-bridge",
     label: "macOS Messages bridge",
     optional: ["ELIZA_IMESSAGE_BACKEND"],
-    probeId: null,
+    probeId: "imessage",
     probeEndpoint:
       "local: ~/Library/Messages/chat.db readable (requires Full Disk Access)",
     availability: {
@@ -525,7 +570,7 @@ export const CONNECTOR_PATHS = [
     kind: "local-bridge",
     label: "BlueBubbles server",
     requiredAll: ["BLUEBUBBLES_SERVER_URL", "BLUEBUBBLES_PASSWORD"],
-    probeId: null,
+    probeId: "imessage",
     probeEndpoint:
       "GET {BLUEBUBBLES_SERVER_URL|http://localhost:1234}/api/v1/ping?password=<password>",
     availability: {
@@ -714,7 +759,7 @@ export const CONNECTOR_PATHS = [
     kind: "api-key",
     label: "Google Fit access token",
     requiredAll: ["ELIZA_GOOGLE_FIT_ACCESS_TOKEN"],
-    probeId: null,
+    probeId: "health",
     probeEndpoint:
       "GET https://www.googleapis.com/fitness/v1/users/me/dataSources (Bearer)",
     availability: { type: "always" },
@@ -823,7 +868,10 @@ export function defaultAvailabilityCtx() {
         encoding: "utf8",
         timeout: 10_000,
       });
-      return { ok: !result.error && result.status === 0 };
+      return {
+        ok: !result.error && result.status === 0,
+        stdout: result.stdout ?? "",
+      };
     },
   };
 }
@@ -878,6 +926,19 @@ export function checkAvailability(spec, ctx = defaultAvailabilityCtx()) {
             reason:
               spec.reason ?? `${spec.command} ${spec.args.join(" ")} failed`,
           };
+    case "command-output-nonempty": {
+      const result = ctx.runCommand(spec.command, spec.args);
+      return result.ok &&
+        typeof result.stdout === "string" &&
+        result.stdout.trim().length > 0
+        ? ok
+        : {
+            available: false,
+            reason:
+              spec.reason ??
+              `${spec.command} ${spec.args.join(" ")} returned no output`,
+          };
+    }
     case "platform":
       return ctx.platform === spec.platform
         ? ok
@@ -970,6 +1031,7 @@ function validateAvailabilitySpec(spec, id, problems) {
     "file-exists",
     "command-in-path",
     "command-ok",
+    "command-output-nonempty",
     "platform",
   ];
   if (!known.includes(spec.type)) {

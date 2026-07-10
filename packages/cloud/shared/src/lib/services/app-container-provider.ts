@@ -11,6 +11,7 @@
  * scaffolding, no shared network, no NET_ADMIN.
  */
 
+import { logger } from "../utils/logger";
 import {
   ambassadorName,
   buildEnsureAmbassadorCmds,
@@ -30,6 +31,8 @@ export interface AppContainerSsh {
 
 export interface AppContainerProviderDeps {
   ssh: AppContainerSsh;
+  /** Durable scheduler identity for the SSH target. */
+  nodeId: string;
   /** Allocate an external host port to map to the container's app port. */
   allocateHostPort: () => Promise<number>;
   /** Optional egress proxy URL routed into the container. */
@@ -62,6 +65,7 @@ export interface ProvisionedAppContainer {
   containerId: string;
   hostPort: number;
   network: string;
+  nodeId: string;
   /** The node the container runs on (for ingress routing + placement). */
   nodeHost: string;
 }
@@ -69,6 +73,10 @@ export interface ProvisionedAppContainer {
 function defaultExtractContainerId(stdout: string): string {
   const last = stdout.trim().split("\n").pop()?.trim() ?? "";
   return last;
+}
+
+function describeAppContainerError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -87,9 +95,11 @@ export function parseUsedHostPorts(dockerPsPortsOutput: string): Set<number> {
 
 export class AppContainerProvider {
   private readonly deps: AppContainerProviderDeps;
+  readonly targetNodeId: string;
 
   constructor(deps: AppContainerProviderDeps) {
     this.deps = deps;
+    this.targetNodeId = deps.nodeId;
   }
 
   /** Ensure the per-app `--internal` network, create the container, start it. */
@@ -133,7 +143,15 @@ export class AppContainerProvider {
     // `docker ps` probe is best-effort — on failure we fall back to the blind
     // pick (no worse than before). Re-pick a few times if the first collides.
     const usedPorts = parseUsedHostPorts(
-      await this.deps.ssh.exec("docker ps --format '{{.Ports}}'").catch(() => ""),
+      await this.deps.ssh.exec("docker ps --format '{{.Ports}}'").catch((error) => {
+        // error-policy:J4 explicit user-facing degrade; provisioning can still attempt the allocated port, but route-discovery failure must be observable.
+        logger.warn("[AppContainerProvider] Failed to read published host ports", {
+          appId: params.appId,
+          containerName: params.containerName,
+          error: describeAppContainerError(error),
+        });
+        return "";
+      }),
     );
     let hostPort = await this.deps.allocateHostPort();
     for (let attempt = 0; attempt < 20 && usedPorts.has(hostPort); attempt++) {
@@ -153,15 +171,38 @@ export class AppContainerProvider {
     // create --name` fail with 'name already in use'. Remove it first (no-op when
     // absent). Mirrors `executeContainerUpgrade`/`provider.delete`; self-heals
     // regardless of which deploy route enqueued this provision.
-    await this.deps.ssh
-      .exec(`docker rm -f ${shellQuote(params.containerName)}`)
-      .catch(() => undefined);
+    await this.deps.ssh.exec(`docker rm -f ${shellQuote(params.containerName)}`).catch((error) => {
+      // error-policy:J6 best-effort teardown; a missing/stale container must not block the replacement create, but failed cleanup stays visible.
+      logger.warn("[AppContainerProvider] Failed to remove stale app container before create", {
+        appId: params.appId,
+        containerName: params.containerName,
+        error: describeAppContainerError(error),
+      });
+    });
 
     const stdout = await this.deps.ssh.exec(createCmd);
     const containerId = (this.deps.extractContainerId ?? defaultExtractContainerId)(stdout);
-    await this.deps.ssh.exec(`docker start ${shellQuote(params.containerName)}`);
+    try {
+      await this.deps.ssh.exec(`docker start ${shellQuote(params.containerName)}`);
+    } catch (error) {
+      await this.delete(params.containerName).catch((cleanupError) => {
+        // error-policy:J6 failed-start cleanup is best-effort; the start failure still propagates to the slot rollback boundary.
+        logger.warn("[AppContainerProvider] Failed to remove container after start failure", {
+          appId: params.appId,
+          containerName: params.containerName,
+          error: describeAppContainerError(cleanupError),
+        });
+      });
+      throw error;
+    }
 
-    return { containerId, hostPort, network, nodeHost: this.deps.nodeHost ?? "" };
+    return {
+      containerId,
+      hostPort,
+      network,
+      nodeId: this.targetNodeId,
+      nodeHost: this.deps.nodeHost ?? "",
+    };
   }
 
   async delete(containerName: string): Promise<void> {
