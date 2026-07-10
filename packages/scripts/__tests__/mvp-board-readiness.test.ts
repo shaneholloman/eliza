@@ -171,6 +171,24 @@ describe("MVP board readiness audit", () => {
     expect(report.issueCount).toBe(0);
   });
 
+  test("does not treat pull-request cards as project issues", () => {
+    const report = board.auditMvpBoardReadiness([issue(14490, ["mvp"])], {
+      items: [
+        {
+          ...projectItem(14490, "Done"),
+          content: {
+            ...projectItem(14490, "Done").content,
+            type: "PullRequest",
+          },
+        },
+      ],
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.issueCount).toBe(0);
+    expect(report.rows).toEqual([]);
+  });
+
   test("flags human-review status without a blocker label", () => {
     const report = board.auditMvpBoardReadiness([issue(15748, ["testing"])], {
       items: [projectItem(15748, "Needs human review")],
