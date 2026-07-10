@@ -4814,19 +4814,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (
-    req.method === "GET" &&
-    url.pathname === "/api/social-alpha/leaderboard"
-  ) {
-    // Mirror the social-alpha leaderboard route's zero-key behavior
-    // (plugins/plugin-social-alpha/src/routes.ts): with no recommendations
-    // recorded the real route returns an empty data array, and the view
-    // renders its wallet-required / empty state. Returning the same shape
-    // keeps the visual smoke deterministic and avoids the catch-all 501.
-    sendJson(req, res, 200, { data: [] });
-    return;
-  }
-
   // ── Local-inference voice (drives the /chat overlay's bidirectional loop) ──
   // The client mic capture + VAD end-of-turn are REAL (Chromium fake-audio
   // file); these endpoints stand in for the on-device ASR/TTS models so the

@@ -76,7 +76,7 @@ const CURRENT_ROWS: ReportEntry[] = [
   { slug: "builtin-chat", viewport: "desktop-landscape", verdict: "good" },
   { slug: "builtin-phone", viewport: "desktop-landscape", verdict: "good" },
 ];
-const STALE_SLUG = "plugin-social-alpha-gui";
+const STALE_SLUG = "plugin-retired-gui";
 
 describe("authorizedShots (report-authoritative selection)", () => {
   let dir: string;
