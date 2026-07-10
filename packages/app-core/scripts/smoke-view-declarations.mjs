@@ -131,14 +131,7 @@ function toDeclaration(tuple) {
 function readSourceFiles(dir) {
   const sources = [];
   const walk = (current) => {
-    let entries;
-    try {
-      entries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      // error-policy:J3 a plugin dir that vanished mid-scan is reported by the
-      // caller as a parity miss (missing directory), not swallowed as "clean".
-      return;
-    }
+    const entries = readdirSync(current, { withFileTypes: true });
     for (const entry of entries) {
       if (
         entry.name === "node_modules" ||
@@ -226,12 +219,8 @@ export function checkSmokeViewParity(
     const { id, pluginDirName, componentExport, viewPath } =
       toDeclaration(tuple);
     const pluginDir = path.join(pluginsDir, pluginDirName);
-    let dirExists = false;
-    try {
-      dirExists = statSync(pluginDir).isDirectory();
-    } catch {
-      dirExists = false;
-    }
+    const dirExists =
+      existsSync(pluginDir) && statSync(pluginDir).isDirectory();
     if (!dirExists) {
       missing.push({
         id,

@@ -914,6 +914,10 @@ interface RemoteBundleAuditProof {
   response: Promise<import("@playwright/test").Response>;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 async function forceRemoteBundleAuditRoute(
   page: Page,
   view: AuditCase,
@@ -921,20 +925,25 @@ async function forceRemoteBundleAuditRoute(
   if (view.kind !== "plugin") return null;
   const registryResponse = await page.request.get("/api/views");
   expect(registryResponse.ok(), "plugin view registry must load").toBe(true);
-  const payload = (await registryResponse.json()) as {
-    views?: Array<{
-      id: string;
-      viewType?: string;
-      path?: string;
-      bundleUrl?: string;
-      componentExport?: string;
-    }>;
-  };
+  const payload: unknown = await registryResponse.json();
+  if (!isRecord(payload) || !Array.isArray(payload.views)) {
+    throw new Error("plugin view registry returned an invalid views payload");
+  }
   const registered = payload.views?.find(
     (entry) =>
-      entry.id === view.id && (entry.viewType ?? "gui") === view.viewType,
+      isRecord(entry) &&
+      entry.id === view.id &&
+      (entry.viewType ?? "gui") === view.viewType,
   );
-  if (!registered?.bundleUrl || !registered.componentExport) return null;
+  if (
+    !isRecord(registered) ||
+    typeof registered.bundleUrl !== "string" ||
+    typeof registered.componentExport !== "string"
+  ) {
+    throw new Error(
+      `${view.slug} is missing its production bundle declaration in /api/views`,
+    );
+  }
 
   const auditPath = `/__audit/plugin-view/${encodeURIComponent(registered.id)}`;
   const bundlePath = new URL(registered.bundleUrl, "http://audit.local")
@@ -949,7 +958,8 @@ async function forceRemoteBundleAuditRoute(
       contentType: "application/json",
       body: JSON.stringify({
         ...payload,
-        views: payload.views?.map((entry) =>
+        views: payload.views.map((entry) =>
+          isRecord(entry) &&
           entry.id === registered.id &&
           (entry.viewType ?? "gui") === view.viewType
             ? { ...entry, path: auditPath }
