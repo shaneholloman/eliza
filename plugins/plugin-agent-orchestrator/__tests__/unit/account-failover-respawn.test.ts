@@ -12,6 +12,11 @@
 import { CODING_AGENT_SELECTOR_BRIDGE_SYMBOL } from "@elizaos/core";
 import type { Content, HandlerCallback, Memory } from "@elizaos/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../src/services/config-env.js", () => ({
+  readConfigEnvKey: (key: string) => process.env[key],
+}));
+
 import { SubAgentRouter } from "../../src/services/sub-agent-router.js";
 import type { SessionInfo } from "../../src/services/types.js";
 
