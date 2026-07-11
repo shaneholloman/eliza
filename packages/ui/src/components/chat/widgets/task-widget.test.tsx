@@ -242,6 +242,22 @@ describe("TaskWidget", () => {
     });
   });
 
+  it("derives the displayed PR identity from the validated URL", async () => {
+    getCodingAgentTaskThreadMock.mockResolvedValueOnce(
+      detail({
+        metadata: {
+          prUrl: "https://github.com/canonical/repo/pull/77",
+          prNumber: 999,
+          prRepo: "spoofed/repo",
+        },
+      }),
+    );
+    render(<TaskWidget threadId={THREAD_ID} fallbackTitle="Optimistic" />);
+    const chip = await screen.findByTestId("task-widget-pr-chip");
+    expect(chip.textContent).toContain("#77");
+    expect(chip.getAttribute("title")).toBe("canonical/repo #77");
+  });
+
   it("renders no PR chip when metadata has no PR link", async () => {
     getCodingAgentTaskThreadMock.mockResolvedValueOnce(detail());
     render(<TaskWidget threadId={THREAD_ID} fallbackTitle="Optimistic" />);

@@ -113,7 +113,7 @@ interface TaskPullRequest {
 // A GitHub PR URL, mirrored from the server-side `extractPullRequestLink`
 // contract. The chip only ever renders a URL that matches this shape, so a
 // stray/spoofed `prUrl` in the metadata bag can never become a non-GitHub link.
-const PR_URL_RE = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
+const PR_URL_RE = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)$/;
 
 /**
  * Read the sub-agent's opened pull request off the durable task metadata
@@ -126,16 +126,13 @@ function readTaskPullRequest(
 ): TaskPullRequest | null {
   if (!metadata) return null;
   const url = metadata.prUrl;
-  if (typeof url !== "string" || !PR_URL_RE.test(url)) return null;
-  const numberValue = metadata.prNumber;
-  const number =
-    typeof numberValue === "number" && Number.isSafeInteger(numberValue)
-      ? numberValue
-      : Number.parseInt(url.slice(url.lastIndexOf("/") + 1), 10);
+  if (typeof url !== "string") return null;
+  const match = PR_URL_RE.exec(url);
+  if (!match) return null;
+  const [, owner, repository, numberRaw] = match;
+  const number = Number.parseInt(numberRaw, 10);
   if (!Number.isSafeInteger(number) || number <= 0) return null;
-  const repo =
-    typeof metadata.prRepo === "string" ? metadata.prRepo : undefined;
-  return { url, number, ...(repo ? { repo } : {}) };
+  return { url, number, repo: `${owner}/${repository}` };
 }
 
 /**
@@ -157,7 +154,7 @@ function PrChip({ pr }: { pr: TaskPullRequest }) {
       title={
         pr.repo ? `${pr.repo} #${pr.number}` : `Pull request #${pr.number}`
       }
-      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-surface px-1.5 py-0.5 text-xs font-medium text-accent transition-colors hover:border-accent hover:text-accent-hover"
+      className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1 rounded-full border border-border bg-surface px-2.5 text-xs font-medium text-accent transition-colors hover:border-accent hover:text-accent-hover"
     >
       <GitPullRequest className="h-3 w-3" aria-hidden="true" />
       <span className="tabular-nums">#{pr.number}</span>

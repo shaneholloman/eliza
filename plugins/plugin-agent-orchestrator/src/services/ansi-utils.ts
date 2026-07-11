@@ -752,53 +752,6 @@ export function cleanForFailoverContext(raw: string, workdir?: string): string {
     .trim();
 }
 
-/** A pull request the sub-agent opened, parsed out of its completion output. */
-export interface ParsedPullRequestLink {
-  /** The canonical `https://github.com/owner/repo/pull/N` URL. */
-  url: string;
-  /** The PR number (`N`). */
-  number: number;
-  /** `owner/repo`, for a compact chip label when a title is unavailable. */
-  repo: string;
-}
-
-// A GitHub PR URL: `https://github.com/<owner>/<repo>/pull/<number>`. Owner/repo
-// are the GitHub-permitted `[\w.-]+`; the number is the PR id. Kept in sync with
-// the `prUrls` scan inside `extractCompletionSummary`.
-const PULL_REQUEST_URL_RE =
-  /https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/g;
-
-/**
- * Extract the FIRST GitHub pull-request link from raw sub-agent output (its
- * final message or terminal tail), or `null` when none is present.
- *
- * Pure and ANSI-tolerant: strips terminal escapes first so a URL that a TUI
- * split with color codes still parses. The first match wins — a sub-agent that
- * opens one PR per task references it once; if it echoes the same URL multiple
- * times we still return a single link. Trailing `.git`/`)`/punctuation the
- * agent may append is excluded by the `\d+` number boundary. The returned URL
- * is rebuilt as canonical `https://` regardless of the matched scheme (the
- * task-widget chip only renders HTTPS GitHub links, so a stray `http://` echo
- * must not stamp metadata the UI will reject).
- */
-export function extractPullRequestLink(
-  raw: string,
-): ParsedPullRequestLink | null {
-  if (!raw) return null;
-  const stripped = applyAnsiStrip(raw);
-  PULL_REQUEST_URL_RE.lastIndex = 0;
-  const match = PULL_REQUEST_URL_RE.exec(stripped);
-  if (!match) return null;
-  const [, owner, repo, numberRaw] = match;
-  const number = Number.parseInt(numberRaw, 10);
-  if (!Number.isSafeInteger(number) || number <= 0) return null;
-  return {
-    url: `https://github.com/${owner}/${repo}/pull/${number}`,
-    number,
-    repo: `${owner}/${repo}`,
-  };
-}
-
 /**
  * Extract meaningful artifacts (PR URLs, commit hashes, key results) from raw
  * terminal output.  Returns a compact summary suitable for chat messages,

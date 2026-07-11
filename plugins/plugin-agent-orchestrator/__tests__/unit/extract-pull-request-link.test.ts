@@ -6,7 +6,7 @@
  * Deterministic unit test of a pure helper; no runtime, no live model.
  */
 import { describe, expect, it } from "vitest";
-import { extractPullRequestLink } from "../../src/services/ansi-utils.js";
+import { extractPullRequestLink } from "../../src/services/pull-request-link.js";
 
 describe("extractPullRequestLink", () => {
   it("returns null for empty / PR-free input", () => {

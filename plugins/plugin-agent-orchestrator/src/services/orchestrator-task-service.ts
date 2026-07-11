@@ -56,7 +56,6 @@ import {
   type SerializableSpawnOpts,
 } from "./admission-queue.js";
 import { assignAgentName } from "./agent-name-assignment.js";
-import { extractPullRequestLink } from "./ansi-utils.js";
 import {
   accountMetaFromSessionMetadata,
   assessCodingAccountReadiness,
@@ -155,6 +154,7 @@ import {
   resolveTaskProjectId,
   resolveTaskSpawnWorkdir,
 } from "./project-binding.js";
+import { extractPullRequestLink } from "./pull-request-link.js";
 import { buildSkillsManifest } from "./skill-manifest.js";
 import {
   configureSpendLedger,
