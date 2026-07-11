@@ -38,7 +38,11 @@ import { DiscordIcon } from "../../../../cloud-ui/components/icons";
 import { Alert, AlertDescription } from "../../../../components/primitives";
 import { Button } from "../../../../components/ui/button";
 import { Input } from "../../../../components/ui/input";
-import { preOpenCloudLoginWindow } from "../../../../state/cloud-login-launch";
+import {
+  canNavigateSameTabForBlockedPopup,
+  preOpenCloudLoginWindow,
+} from "../../../../state/cloud-login-launch";
+import { navigatePreOpenedWindow } from "../../../../utils/openExternalUrl";
 import { useCloudT } from "../../../shell/CloudI18nProvider";
 import {
   configuredStewardTenantId,
@@ -620,15 +624,13 @@ export default function StewardLoginSection() {
       codeChallenge,
     });
     if (authWindow && !authWindow.closed) {
-      authWindow.location.href = authorizeUrl;
-      try {
-        authWindow.opener = null;
-      } catch {
-        // Cross-origin window handles can reject opener assignment.
-      }
-    } else {
-      // Popup blocked or touch-primary browser: preserve the working fallback.
+      navigatePreOpenedWindow(authWindow, authorizeUrl);
+    } else if (canNavigateSameTabForBlockedPopup()) {
+      // Plain web can safely preserve the sign-in round trip in this tab.
       window.location.href = authorizeUrl;
+    } else {
+      // Native and desktop shells must retain their platform browser bridges.
+      navigatePreOpenedWindow(null, authorizeUrl);
     }
   }
 
