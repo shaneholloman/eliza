@@ -31,11 +31,12 @@ vi.mock("../../src/services/config-env.js", () => ({
 // (packages/core/src/account-pool-bridge.ts); Symbol.for resolves the SAME
 // registered symbol the source's bridgeSlot() reads/writes.
 const BRIDGE_SYMBOL = Symbol.for("eliza.account-pool.coding-agent.v1");
-import { SubAgentRouter } from "../../src/services/sub-agent-router.js";
+
 import {
-  readResumeContext,
   RESUME_CONTEXT_METADATA_KEY,
+  readResumeContext,
 } from "../../src/services/resume-context.js";
+import { SubAgentRouter } from "../../src/services/sub-agent-router.js";
 import type { SessionInfo } from "../../src/services/types.js";
 
 const ROOM = "11111111-1111-1111-1111-111111111111";
@@ -54,7 +55,12 @@ function installHealthyBridge(agentType: string): {
   const bridge = {
     describe: () => ({
       [agentType.toLowerCase()]: [
-        { providerId: "anthropic-subscription", total: 2, enabled: 2, healthy: 1 },
+        {
+          providerId: "anthropic-subscription",
+          total: 2,
+          enabled: 2,
+          healthy: 1,
+        },
       ],
     }),
     select: async () => null,
@@ -74,9 +80,11 @@ interface CapturedHandler {
   fn?: (sessionId: string, event: string, data: unknown) => void;
 }
 
-function makeAcp(session: SessionInfo) {
+function makeAcp(session: SessionInfo, emitError?: Error) {
   const captured: CapturedHandler = {};
-  const emitSessionEvent = vi.fn();
+  const emitSessionEvent = vi.fn(() => {
+    if (emitError) throw emitError;
+  });
   const spawnSession = vi.fn(async (o: { workdir?: string }) => ({
     sessionId: "resume-session-id",
     id: "resume-session-id",
@@ -299,5 +307,30 @@ describe("SubAgentRouter — rate-limit failover resume", () => {
         ?.metadata;
       expect(meta?.[RESUME_CONTEXT_METADATA_KEY]).toBeUndefined();
     }
+  });
+
+  it("reports a resume-event telemetry failure without undoing failover", async () => {
+    installHealthyBridge("claude");
+    const session = makeSession("claude");
+    const emitError = new Error("subscriber failed");
+    const acp = makeAcp(session, emitError);
+    const { runtime } = makeRuntime(acp.service);
+    await SubAgentRouter.start(runtime);
+
+    acp.emit(SESSION_ID, "error", {
+      message: "Error 429: rate limit exceeded",
+    });
+    await new Promise((r) => setTimeout(r, 300));
+
+    expect(acp.spawnSession).toHaveBeenCalledTimes(1);
+    expect(runtime.logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "resume-session-id" }),
+      "account failover resume event emit failed",
+    );
+    expect(runtime.reportError).toHaveBeenCalledWith(
+      "SubAgentRouter.emitAccountFailoverResumed",
+      emitError,
+      { sessionId: "resume-session-id" },
+    );
   });
 });

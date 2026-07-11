@@ -39,17 +39,17 @@ import {
   SESSION_RETRY_METADATA_KEY,
 } from "./orchestrator-task-types.js";
 import {
+  dispatchParentAgentDirective,
+  extractParentAgentDirective,
+  parentAgentMarkerIndex,
+} from "./parent-agent-dispatch.js";
+import {
   applyResumePreamble,
   buildResumeContext,
   RESUME_CONTEXT_METADATA_KEY,
   type ResumeContext,
   resumeEventFields,
 } from "./resume-context.js";
-import {
-  dispatchParentAgentDirective,
-  extractParentAgentDirective,
-  parentAgentMarkerIndex,
-} from "./parent-agent-dispatch.js";
 import {
   createRouterLoopState,
   type RouterLoopState,
@@ -1881,8 +1881,8 @@ export class SubAgentRouter extends Service {
       // OrchestratorTaskService session-event bridge records it to the task
       // timeline. Only for the resume path (resumeContext present), never for
       // an ordinary state-lost respawn.
-      // error-policy:J7 best-effort observability — a missing emitter or a
-      // throwing subscriber must not undo the authoritative respawn.
+      // error-policy:J7 The respawn is authoritative, so telemetry failure
+      // must remain observable without undoing the recovered session.
       if (resumeContext) {
         try {
           service.emitSessionEvent?.(
@@ -1896,10 +1896,15 @@ export class SubAgentRouter extends Service {
             },
           );
         } catch (err) {
-          this.log("debug", "account failover resume event emit failed", {
+          this.log("warn", "account failover resume event emit failed", {
             sessionId: result.sessionId,
             error: err instanceof Error ? err.message : String(err),
           });
+          this.runtime.reportError(
+            "SubAgentRouter.emitAccountFailoverResumed",
+            err,
+            { sessionId: result.sessionId },
+          );
         }
       }
       // Same handoff stamp as verify-retry (#11711): the old session's teardown
