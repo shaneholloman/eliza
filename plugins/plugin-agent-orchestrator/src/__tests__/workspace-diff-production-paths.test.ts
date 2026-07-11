@@ -1,3 +1,4 @@
+/** Exercises workspace change capture against real git repositories and filesystems. */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

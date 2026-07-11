@@ -1,3 +1,4 @@
+/** Verifies the create-PR boundary fails closed before calling the GitHub finalizer. */
 import { vi } from "vitest";
 
 const { capturePrGateChangeSet } = vi.hoisted(() => ({

@@ -747,6 +747,8 @@ export class CodingWorkspaceService {
         gateBase,
       );
     } catch (error) {
+      // error-policy:J1 The create-PR boundary emits a structured failure and
+      // preserves the typed scanner error for its action/route caller.
       // A failed security-boundary scan is both operator-visible and reported
       // through the runtime error channel. The original typed error is rethrown
       // so callers can distinguish capture/config failures.
