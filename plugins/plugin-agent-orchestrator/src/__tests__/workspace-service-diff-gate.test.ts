@@ -425,7 +425,10 @@ describe("CodingWorkspaceService workspace lifecycle seams", () => {
       id: "execution-2",
       isWorktree: true,
     });
-    internals.scratchCleanupTimers.set("session-1", setTimeout(() => {}, 1000));
+    internals.scratchCleanupTimers.set(
+      "session-1",
+      setTimeout(() => {}, 1000),
+    );
 
     await service.stop();
 
