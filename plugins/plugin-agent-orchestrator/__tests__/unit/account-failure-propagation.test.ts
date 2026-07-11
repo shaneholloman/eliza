@@ -9,10 +9,10 @@
 // biome-ignore assist/source/organizeImports: comment-only pass preserves import token order.
 import { CODING_AGENT_SELECTOR_BRIDGE_SYMBOL } from "@elizaos/core";
 import type { Content, HandlerCallback, Memory } from "@elizaos/core";
+import { isTokenExpiryText } from "@elizaos/auth/token-expiry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   classifyAccountFailure,
-  isTokenExpiryText,
   RATE_LIMIT_COOLOFF_MS,
 } from "../../src/services/coding-account-selection.js";
 import { SubAgentRouter } from "../../src/services/sub-agent-router.js";

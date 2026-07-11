@@ -121,6 +121,15 @@ async function isWorkTree(workdir: string): Promise<boolean> {
   return inside?.trim() === "true";
 }
 
+/** Returns the checked-out branch for resume metadata, or undefined outside a named branch. */
+export async function getWorkspaceBranch(
+  workdir: string,
+): Promise<string | undefined> {
+  if (!(await isWorkTree(workdir))) return undefined;
+  const branch = (await git(workdir, ["branch", "--show-current"]))?.trim();
+  return branch || undefined;
+}
+
 /**
  * The repo HEAD at spawn time, so the change set at completion is scoped to
  * exactly what this sub-agent did (committed or not). Undefined when the

@@ -15,6 +15,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isTokenExpiryText } from "@elizaos/auth/token-expiry";
 import type {
   Content,
   Entity,
@@ -31,7 +32,6 @@ import {
   type CodingAccountFailureKind,
   classifyAccountFailure,
   hasHealthyPooledAccount,
-  isTokenExpiryText,
   reportCodingAccountFailure,
 } from "./coding-account-selection.js";
 import {
@@ -65,6 +65,7 @@ import { stripToolTranscript } from "./transcript-sanitizer.js";
 import type { SessionEventName, SessionInfo } from "./types.js";
 import {
   captureChangeSet,
+  getWorkspaceBranch,
   summarizeChangeSet,
   verifyChangedFilesOnDisk,
   type WorkspaceArtifactVerification,
@@ -1047,6 +1048,10 @@ export class SubAgentRouter extends Service {
             // preamble instructs exactly that), so no git call is made here.
             // `failureKind` is the pooled-account taxonomy
             // (rate-limited | needs-reauth), a subset of ResumeReason.
+            const predecessorWorkspace = await this.resolvePredecessorWorkspace(
+              acp,
+              session,
+            );
             const resumeContext = buildResumeContext({
               reason: failureKind,
               authReason: isTokenExpiryText(failureMessage)
@@ -1054,6 +1059,9 @@ export class SubAgentRouter extends Service {
                 : undefined,
               fromSessionId: sessionId,
               workdir: session.workdir,
+              branch: predecessorWorkspace.branch,
+              diffStat: predecessorWorkspace.changeSet?.diffStat,
+              changedFiles: predecessorWorkspace.changeSet?.changedFiles,
               lastProgress: await this.resolvePredecessorProgress(
                 acp,
                 sessionId,
@@ -1956,6 +1964,42 @@ export class SubAgentRouter extends Service {
       pickPayloadString(data, "lastProgress") ??
       pickPayloadString(data, "summary")
     );
+  }
+
+  private async resolvePredecessorWorkspace(
+    service: AcpService,
+    session: SessionInfo,
+  ): Promise<{
+    branch?: string;
+    changeSet?: WorkspaceChangeSet;
+  }> {
+    const meta = session.metadata as Record<string, unknown> | undefined;
+    try {
+      const [branch, changeSet] = await Promise.all([
+        getWorkspaceBranch(session.workdir),
+        captureChangeSet(
+          session.workdir,
+          pickPlainString(meta?.codingBaselineSha),
+          service.getChangedPaths(session.id),
+          Array.isArray(meta?.codingBaselineDirty)
+            ? (meta.codingBaselineDirty as unknown[]).map(String)
+            : [],
+        ),
+      ]);
+      return { branch, changeSet };
+    } catch (err) {
+      // error-policy:J7 Workspace enrichment must not undo a recovered session.
+      this.log("warn", "failed to capture predecessor workspace for resume", {
+        sessionId: session.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      this.runtime.reportError(
+        "SubAgentRouter.resolvePredecessorWorkspace",
+        err,
+        { sessionId: session.id },
+      );
+      return {};
+    }
   }
 
   /**
