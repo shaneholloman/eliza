@@ -41,6 +41,8 @@ export function CockpitRoute() {
   // project registry (the same list the project switcher reads). Best-effort:
   // an absent/empty registry just yields a plain text input, no dropdown.
   const [knownRepos, setKnownRepos] = useState<string[]>([]);
+  const [repoSuggestionsUnavailable, setRepoSuggestionsUnavailable] =
+    useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -75,9 +77,11 @@ export function CockpitRoute() {
           ),
         );
         setKnownRepos(repos);
+        setRepoSuggestionsUnavailable(false);
       } catch {
-        // Best-effort suggestions only — a failed/absent registry leaves the
-        // repo field as a plain text input.
+        // error-policy:J4 Manual repo entry remains usable, while the form
+        // distinguishes a failed registry from a legitimately empty registry.
+        if (!cancelled) setRepoSuggestionsUnavailable(true);
       }
     })();
     return () => {
@@ -138,6 +142,7 @@ export function CockpitRoute() {
         rooms={rooms}
         onCreateSession={onCreateSession}
         knownRepos={knownRepos}
+        repoSuggestionsUnavailable={repoSuggestionsUnavailable}
         busy={busy}
         error={error}
         onSelectRoom={setSelectedTaskId}

@@ -108,6 +108,14 @@ describe("CockpitNewSessionForm", () => {
     expect(list.querySelectorAll("option").length).toBe(1);
   });
 
+  it("distinguishes unavailable repo suggestions from an empty registry", () => {
+    render(
+      <CockpitNewSessionForm onCreate={vi.fn()} repoSuggestionsUnavailable />,
+    );
+    expect(screen.getByText(/repo suggestions are unavailable/i)).toBeTruthy();
+    expect(screen.getByTestId("cockpit-repo-input")).toBeTruthy();
+  });
+
   it("reflects a mode switch in the submitted policy", async () => {
     const user = userEvent.setup();
     const onCreate = vi.fn();

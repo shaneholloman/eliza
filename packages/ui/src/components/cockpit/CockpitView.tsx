@@ -26,6 +26,8 @@ export interface CockpitViewProps {
   ) => void | Promise<void>;
   /** Known repos offered as repo-field autocomplete (from the project registry). */
   knownRepos?: readonly string[];
+  /** Whether the project registry failed while loading repo suggestions. */
+  repoSuggestionsUnavailable?: boolean;
   /** In-flight spawn (disables the form + shows "Starting…"). */
   busy?: boolean;
   /** Arm the TOS-unsafe experimental modes in the picker. */
@@ -61,6 +63,7 @@ export function CockpitView({
   rooms,
   onCreateSession,
   knownRepos = [],
+  repoSuggestionsUnavailable = false,
   busy = false,
   experimentalEnabled = false,
   error = null,
@@ -99,6 +102,7 @@ export function CockpitView({
         <CockpitNewSessionForm
           onCreate={onCreateSession}
           knownRepos={knownRepos}
+          repoSuggestionsUnavailable={repoSuggestionsUnavailable}
           busy={busy}
           experimentalEnabled={experimentalEnabled}
         />

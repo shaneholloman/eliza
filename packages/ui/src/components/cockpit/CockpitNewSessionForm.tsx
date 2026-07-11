@@ -43,6 +43,8 @@ export interface CockpitNewSessionFormProps {
    * otherwise it's a plain text input — no invented dropdown.
    */
   knownRepos?: readonly string[];
+  /** Whether repo suggestions are unavailable because the project registry failed. */
+  repoSuggestionsUnavailable?: boolean;
   /** Arm the TOS-unsafe experimental options in the picker. */
   experimentalEnabled?: boolean;
   /** Parent-controlled in-flight flag (disables submit + shows "Starting…"). */
@@ -62,6 +64,7 @@ export function CockpitNewSessionForm({
   onCreate,
   defaultMode = DEFAULT_MODE,
   knownRepos = [],
+  repoSuggestionsUnavailable = false,
   experimentalEnabled = false,
   busy = false,
   className,
@@ -140,7 +143,9 @@ export function CockpitNewSessionForm({
           </datalist>
         ) : null}
         <span className="text-[11px] text-muted/70">
-          Leave blank to run in a scratch workspace.
+          {repoSuggestionsUnavailable
+            ? "Repo suggestions are unavailable. Enter a repo manually or leave blank for a scratch workspace."
+            : "Leave blank to run in a scratch workspace."}
         </span>
       </label>
 
