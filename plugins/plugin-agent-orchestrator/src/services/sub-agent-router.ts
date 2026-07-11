@@ -995,29 +995,58 @@ export class SubAgentRouter extends Service {
     let accountFailoverExhausted: CodingAccountFailureKind | null = null;
     let accountFailoverCount = 0;
     if (event === "error") {
-      const failureKind = classifyAccountFailure(
-        pickPayloadString(data, "message"),
-      );
+      // A `token_expired` authReason means the BARE injected token aged out
+      // mid-run (Claude coding spawns cannot refresh it) while the account is
+      // healthy — NOT a dead credential. We STILL want the bounded respawn
+      // (which re-selects the same account and re-injects a freshly-resolved
+      // token — the correct recovery), but we must NOT report it to the pool as
+      // needs-reauth: that spends a verify cycle and risks sidelining a working
+      // account. So the respawn runs for both cases; only the pool mark is
+      // gated on this NOT being an injected-token expiry.
+      const isInjectedTokenExpiry =
+        pickPayloadString(data, "authReason") === "token_expired";
+      // `classifyAccountFailure` recognizes most expiry phrasing but NOT every
+      // phrase `isTokenExpiryText` accepts (e.g. `jwt expired`, `session
+      // expired`, `expired_token`). When the emitter already typed this as a
+      // token expiry, treat it as a needs-reauth-CLASS failover trigger even if
+      // the message classifier missed it, so the recovery respawn still fires
+      // for every supported expiry phrase. (The pool mark stays suppressed
+      // below via isInjectedTokenExpiry; only the respawn path is unlocked.)
+      const failureKind: CodingAccountFailureKind | null =
+        classifyAccountFailure(pickPayloadString(data, "message")) ??
+        (isInjectedTokenExpiry ? "needs-reauth" : null);
       const failureMessage = pickPayloadString(data, "message");
       const accountMeta = accountMetaFromSessionMetadata(
         session.metadata as Record<string, unknown> | undefined,
       );
       if (failureKind && accountMeta) {
-        this.log("warn", "coding account failure reported to pool", {
-          sessionId,
-          providerId: accountMeta.providerId,
-          accountId: accountMeta.accountId,
-          failureKind,
-        });
-        // Awaited (not fire-and-forget): the failover respawn below re-selects
-        // through the pool, so the dud account's mark must land first or the
-        // replacement can be handed the very account that just failed.
-        await reportCodingAccountFailure(
-          accountMeta,
-          failureKind,
-          Date.now(),
-          `sub-agent session ${sessionId} (${session.agentType})`,
-        );
+        if (!isInjectedTokenExpiry) {
+          this.log("warn", "coding account failure reported to pool", {
+            sessionId,
+            providerId: accountMeta.providerId,
+            accountId: accountMeta.accountId,
+            failureKind,
+          });
+          // Awaited (not fire-and-forget): the failover respawn below re-selects
+          // through the pool, so the dud account's mark must land first or the
+          // replacement can be handed the very account that just failed.
+          await reportCodingAccountFailure(
+            accountMeta,
+            failureKind,
+            Date.now(),
+            `sub-agent session ${sessionId} (${session.agentType})`,
+          );
+        } else {
+          this.log(
+            "info",
+            "claude injected-token expiry — respawning with a fresh token, account kept healthy",
+            {
+              sessionId,
+              providerId: accountMeta.providerId,
+              accountId: accountMeta.accountId,
+            },
+          );
+        }
         // Bounded in-router account failover, mirroring the state_lost
         // recovery: the failed account was just marked rate-limited /
         // needs-reauth (or verified healthy again by the bridge's auto-heal),
@@ -1078,6 +1107,22 @@ export class SubAgentRouter extends Service {
               // error-policy:J6 best-effort teardown; the respawn is authoritative.
               await acp.stopSession(sessionId).catch(() => {});
               return;
+            }
+            // Respawn failed to mint a successor. For a token-expiry we had
+            // SKIPPED the pool mark (the account was presumed healthy, just its
+            // injected token aged out) — but a failed respawn means the parent
+            // could NOT mint a replacement token (dead/revoked refresh or a
+            // refresh outage), so the account is not usable after all. Mark it
+            // needs-reauth now so the pool stops offering it and the task does
+            // not linger in `retrying` with no live worker; the honest error
+            // then falls through to the delivery path below.
+            if (isInjectedTokenExpiry && accountMeta) {
+              await reportCodingAccountFailure(
+                accountMeta,
+                failureKind,
+                Date.now(),
+                `sub-agent session ${sessionId} (${session.agentType}) token-expiry respawn failed`,
+              );
             }
           } else if (decision.kind === "terminal_failure") {
             accountFailoverExhausted = failureKind;
@@ -1903,17 +1948,13 @@ export class SubAgentRouter extends Service {
           // Emit on the predecessor, which is already task-mapped. The
           // successor id is carried in the payload so the bridge cannot drop
           // this synchronous event before registering the new session.
-          service.emitSessionEvent?.(
-            session.id,
-            "account_failover_resumed",
-            {
-              successorSessionId: result.sessionId,
-              ...resumeEventFields(resumeContext),
-              workdir: resumeContext.workdir,
-              branch: resumeContext.branch,
-              diffStat: resumeContext.diffStat,
-            },
-          );
+          service.emitSessionEvent?.(session.id, "account_failover_resumed", {
+            successorSessionId: result.sessionId,
+            ...resumeEventFields(resumeContext),
+            workdir: resumeContext.workdir,
+            branch: resumeContext.branch,
+            diffStat: resumeContext.diffStat,
+          });
         } catch (err) {
           this.log("warn", "account failover resume event emit failed", {
             sessionId: result.sessionId,
