@@ -116,6 +116,7 @@ function runtime(
   return {
     getService: () => acp ?? null,
     getSetting: (key: string) => settings[key],
+    reportError: vi.fn(),
     logger: {
       debug: vi.fn(),
       info: vi.fn(),
@@ -1495,6 +1496,7 @@ describe("OrchestratorTaskService — store degradation resilience (#11641)", ()
     const warn = vi.fn();
     const rt = {
       getService: () => acp ?? null,
+      reportError: vi.fn(),
       logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
     } as never as IAgentRuntime;
     return { runtime: rt, warn };

@@ -30,6 +30,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
+  ElizaError,
   getTrajectoryContext,
   type IAgentRuntime,
   projectWorldId,
@@ -993,6 +994,12 @@ export class OrchestratorTaskService extends Service {
       await this.applySessionEvent(taskId, sessionId, event, data);
       this.emitChange(taskId);
     } catch (err) {
+      // error-policy:J1 ACP event boundary translation — persistence failures
+      // are surfaced to the agent so it can retry or escalate the session.
+      this.runtime.reportError("OrchestratorTask.recordSessionEvent", err, {
+        sessionId,
+        event,
+      });
       // Warn once per session, not once per event. A persistently degraded
       // store would fire this on every `ready`/`tool_running`/... otherwise,
       // flooding the log for the life of the session (#11641).
@@ -1082,12 +1089,9 @@ export class OrchestratorTaskService extends Service {
           stoppedAt: Date.now(),
         });
         await this.mirrorChangeSetToStore(sessionId);
-        // Surface any pull request the sub-agent opened as a first-class task
-        // artifact (`prUrl` on task metadata) so the chat/task UI can render a
-        // clickable PR chip on completion, instead of the human hunting for the
-        // link in the completion prose. Additive + best-effort: no PR in the
-        // output leaves metadata untouched.
-        await this.mirrorPullRequestToStore(taskId, sessionId, summary ?? "");
+        // Completion metadata is written before validation advances so clients
+        // never observe a successful completion without its associated PR.
+        await this.mirrorPullRequestToStore(taskId, summary ?? "");
         // Attach the sub-agent's own recorded trajectories (its inner model
         // prompts/responses) as task artifacts under the shared traceId (#13775).
         // error-policy:J7 diagnostics-must-not-kill-the-loop — trace ingest is
@@ -1268,60 +1272,36 @@ export class OrchestratorTaskService extends Service {
    * these fields (`metadata.prUrl` → mapper) so the chat task widget can render
    * a clickable PR chip the instant the sub-agent's completion lands.
    *
-   * Semantics are deliberately "the task's pull request LINK", not "a PR this
-   * task literally created": the first GitHub `/pull/` URL in the completion
-   * wins. For a create-PR task that is the opened PR; for a review/update task
-   * it is the PR the task worked on. Both are the link the human wants one
-   * click away. Creation-only detection would need fragile prose heuristics
-   * over free-form sub-agent summaries, and a false negative silently hides
-   * the chip in the dominant (created-PR) case.
-   *
-   * Additive + null-safe: when the completion carries no GitHub PR URL, nothing
-   * is written. Idempotent-ish: a re-delivered `task_complete` for the same URL
-   * overwrites with the identical value; a DIFFERENT (newer) PR URL replaces the
-   * prior one, which matches the "latest PR wins" chip semantics.
-   *
-   * error-policy:J7 fire-and-forget on the `task_complete` write path — a failure
-   * is warned + reported (so a missing chip stays observable in diagnostics) and
-   * the chip is simply absent; it never breaks completion.
+   * The first GitHub `/pull/` URL wins because review/update tasks also need the
+   * PR they worked on surfaced; inferring creation from completion prose would
+   * make valid links disappear. Re-delivery skips an identical URL, while a
+   * later completion may replace it with the task's newer PR.
    */
   private async mirrorPullRequestToStore(
     taskId: string,
-    sessionId: string,
     completion: string,
   ): Promise<void> {
-    try {
-      const link = extractPullRequestLink(completion);
-      if (!link) return;
-      const doc = await this.store.getTask(taskId);
-      if (!doc) return;
-      // Skip a redundant write when the same PR URL is already stamped: a
-      // re-delivered completion must not churn the store or re-emit a change.
-      if (str(doc.task.metadata?.prUrl) === link.url) return;
-      await this.store.updateTask(taskId, {
-        metadata: {
-          ...doc.task.metadata,
-          prUrl: link.url,
-          prNumber: link.number,
-          prRepo: link.repo,
-        },
+    const link = extractPullRequestLink(completion);
+    if (!link) return;
+    const doc = await this.store.getTask(taskId);
+    if (!doc) {
+      throw new ElizaError("Cannot attach pull request to a missing task", {
+        code: "ORCHESTRATOR_TASK_NOT_FOUND",
+        context: { taskId, prUrl: link.url },
+        severity: "fatal",
       });
-      this.emitChange(taskId);
-    } catch (err) {
-      // error-policy:J7 best-effort mirror on the task_complete path; the failure
-      // is warned + reported (a missing chip must be distinguishable from "no PR
-      // was created" in diagnostics) but must not break the event-bridge write.
-      this.log("warn", "mirror pull-request link to store failed", {
-        taskId,
-        sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      this.runtime.reportError?.(
-        "OrchestratorTask.mirrorPullRequestToStore",
-        err,
-        { taskId, sessionId },
-      );
     }
+    // Re-delivery must not churn the store or re-emit a change.
+    if (str(doc.task.metadata?.prUrl) === link.url) return;
+    await this.store.updateTask(taskId, {
+      metadata: {
+        ...doc.task.metadata,
+        prUrl: link.url,
+        prNumber: link.number,
+        prRepo: link.repo,
+      },
+    });
+    this.emitChange(taskId);
   }
 
   /**
