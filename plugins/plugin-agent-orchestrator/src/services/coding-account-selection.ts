@@ -9,6 +9,7 @@
  * behavior untouched.
  */
 
+import { isTokenExpiryText } from "@elizaos/auth/token-expiry";
 import {
   type CodingAccountStrategy,
   type CodingAccountUsage,
@@ -280,9 +281,12 @@ export function classifyAccountFailure(
 ): CodingAccountFailureKind | null {
   if (!text) return null;
   if (RATE_LIMIT_RE.test(text)) return "rate-limited";
+  if (isTokenExpiryText(text)) return "needs-reauth";
   if (NEEDS_REAUTH_RE.test(text)) return "needs-reauth";
   return null;
 }
+
+export { isTokenExpiryText };
 
 /**
  * Best-effort: tell the pool a spawned account hit a rate-limit / needs reauth

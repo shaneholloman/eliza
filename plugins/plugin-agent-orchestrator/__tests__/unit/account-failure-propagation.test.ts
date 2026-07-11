@@ -12,6 +12,7 @@ import type { Content, HandlerCallback, Memory } from "@elizaos/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   classifyAccountFailure,
+  isTokenExpiryText,
   RATE_LIMIT_COOLOFF_MS,
 } from "../../src/services/coding-account-selection.js";
 import { SubAgentRouter } from "../../src/services/sub-agent-router.js";
@@ -72,6 +73,10 @@ describe("classifyAccountFailure", () => {
     expect(
       classifyAccountFailure("token expired, please re-authenticate"),
     ).toBe("needs-reauth");
+    expect(isTokenExpiryText("Claude access token has expired")).toBe(true);
+    expect(classifyAccountFailure("Claude access token has expired")).toBe(
+      "needs-reauth",
+    );
   });
 
   it("does NOT flag ordinary build output (no healthy-account eviction)", () => {

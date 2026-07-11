@@ -80,7 +80,7 @@ interface CapturedHandler {
   fn?: (sessionId: string, event: string, data: unknown) => void;
 }
 
-function makeAcp(session: SessionInfo, emitError?: Error) {
+function makeAcp(session: SessionInfo, emitError?: Error, sessionOutput = "") {
   const captured: CapturedHandler = {};
   const emitSessionEvent = vi.fn(() => {
     if (emitError) throw emitError;
@@ -107,6 +107,7 @@ function makeAcp(session: SessionInfo, emitError?: Error) {
     listSessions: vi.fn(async () => [session]),
     updateSessionMetadata: vi.fn(async () => {}),
     getChangedPaths: vi.fn(() => [] as string[]),
+    getSessionOutput: vi.fn(async () => sessionOutput),
     sendToSession: vi.fn(async () => ({})),
     spawnSession,
     emitSessionEvent,
@@ -225,6 +226,7 @@ describe("SubAgentRouter — rate-limit failover resume", () => {
     expect(marker?.reason).toBe("rate-limited");
     expect(marker?.fromSessionId).toBe(SESSION_ID);
     expect(marker?.workdir).toBe(WORKDIR);
+    expect(marker?.authReason).toBeUndefined();
     expect(arg?.metadata?.initialTask).toBe(
       "Implement the widget and add tests",
     );
@@ -332,5 +334,70 @@ describe("SubAgentRouter — rate-limit failover resume", () => {
       emitError,
       { sessionId: "resume-session-id" },
     );
+  });
+
+  it("uses recorded predecessor output as the authoritative progress summary", async () => {
+    installHealthyBridge("claude");
+    const session = makeSession("claude");
+    const acp = makeAcp(
+      session,
+      undefined,
+      "Edited src/widget.ts\nRan focused tests",
+    );
+    const { runtime } = makeRuntime(acp.service);
+    await SubAgentRouter.start(runtime);
+
+    acp.emit(SESSION_ID, "error", {
+      message: "Error 429: rate limit exceeded",
+      summary: "stale error payload summary",
+    });
+    await new Promise((r) => setTimeout(r, 300));
+
+    expect(acp.service.getSessionOutput).toHaveBeenCalledWith(SESSION_ID, 120);
+    const arg = acp.spawnSession.mock.calls[0]?.[0] as {
+      initialTask?: string;
+      metadata?: Record<string, unknown>;
+    };
+    expect(arg.initialTask).toContain("Edited src/widget.ts");
+    expect(arg.initialTask).toContain("Ran focused tests");
+    expect(arg.initialTask).not.toContain("stale error payload summary");
+    const marker = readResumeContext(
+      arg.metadata?.[RESUME_CONTEXT_METADATA_KEY],
+    );
+    expect(marker?.lastProgress).toBe(
+      "Edited src/widget.ts\nRan focused tests",
+    );
+  });
+
+  it("keeps token_expired as trigger metadata on the successful resume outcome", async () => {
+    const marks = installHealthyBridge("claude");
+    const session = makeSession("claude");
+    const acp = makeAcp(session);
+    const { runtime } = makeRuntime(acp.service);
+    await SubAgentRouter.start(runtime);
+
+    acp.emit(SESSION_ID, "error", {
+      message: "Claude access token has expired",
+    });
+    await new Promise((r) => setTimeout(r, 300));
+
+    expect(marks.markNeedsReauth).toHaveBeenCalledTimes(1);
+    const arg = acp.spawnSession.mock.calls[0]?.[0] as {
+      metadata?: Record<string, unknown>;
+    };
+    const marker = readResumeContext(
+      arg.metadata?.[RESUME_CONTEXT_METADATA_KEY],
+    );
+    expect(marker?.reason).toBe("needs-reauth");
+    expect(marker?.authReason).toBe("token_expired");
+    const resumeEvt = acp.emitSessionEvent.mock.calls.find(
+      (c) => c[1] === "account_failover_resumed",
+    );
+    expect(resumeEvt?.[2]).toMatchObject({
+      resumable: true,
+      resumeReason: "needs-reauth",
+      authReason: "token_expired",
+      resumeFromSessionId: SESSION_ID,
+    });
   });
 });

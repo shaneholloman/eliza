@@ -31,6 +31,7 @@ import {
   type CodingAccountFailureKind,
   classifyAccountFailure,
   hasHealthyPooledAccount,
+  isTokenExpiryText,
   reportCodingAccountFailure,
 } from "./coding-account-selection.js";
 import {
@@ -996,6 +997,7 @@ export class SubAgentRouter extends Service {
       const failureKind = classifyAccountFailure(
         pickPayloadString(data, "message"),
       );
+      const failureMessage = pickPayloadString(data, "message");
       const accountMeta = accountMetaFromSessionMetadata(
         session.metadata as Record<string, unknown> | undefined,
       );
@@ -1047,11 +1049,16 @@ export class SubAgentRouter extends Service {
             // (rate-limited | needs-reauth), a subset of ResumeReason.
             const resumeContext = buildResumeContext({
               reason: failureKind,
+              authReason: isTokenExpiryText(failureMessage)
+                ? "token_expired"
+                : undefined,
               fromSessionId: sessionId,
               workdir: session.workdir,
-              lastProgress:
-                pickPayloadString(data, "lastProgress") ??
-                pickPayloadString(data, "summary"),
+              lastProgress: await this.resolvePredecessorProgress(
+                acp,
+                sessionId,
+                data,
+              ),
             });
             const respawned = await this.respawnStateLost(
               session,
@@ -1922,6 +1929,31 @@ export class SubAgentRouter extends Service {
       );
       return false;
     }
+  }
+
+  private async resolvePredecessorProgress(
+    service: AcpService,
+    sessionId: string,
+    data: unknown,
+  ): Promise<string | undefined> {
+    try {
+      const output = await service.getSessionOutput?.(sessionId, 120);
+      if (output?.trim()) return output.trim();
+    } catch (err) {
+      this.log("warn", "failed to read predecessor session output for resume", {
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      this.runtime.reportError(
+        "SubAgentRouter.resolvePredecessorProgress",
+        err,
+        { sessionId },
+      );
+    }
+    return (
+      pickPayloadString(data, "lastProgress") ??
+      pickPayloadString(data, "summary")
+    );
   }
 
   /**

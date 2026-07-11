@@ -35,6 +35,7 @@ describe("resume-context: buildResumeContext", () => {
   it("builds a well-formed marker for a rate-limit failover", () => {
     const ctx = buildResumeContext({
       reason: "rate-limited",
+      authReason: "token_expired",
       ...BASE,
       branch: "feat/x",
       diffStat: "2 files changed, 10 insertions(+)",
@@ -45,6 +46,7 @@ describe("resume-context: buildResumeContext", () => {
     expect(ctx).toEqual({
       kind: "rate-limit-failover",
       reason: "rate-limited",
+      authReason: "token_expired",
       fromSessionId: "sess-1",
       workdir: "/work/repo",
       branch: "feat/x",
@@ -55,14 +57,15 @@ describe("resume-context: buildResumeContext", () => {
     });
   });
 
-  it.each(["rate-limited", "needs-reauth", "capacity"] as const)(
-    "carries the %s reason through",
-    (reason) => {
-      const ctx = buildResumeContext({ reason, ...BASE });
-      expect(ctx.reason).toBe(reason);
-      expect(resumeEventFields(ctx).resumeReason).toBe(reason);
-    },
-  );
+  it.each([
+    "rate-limited",
+    "needs-reauth",
+    "capacity",
+  ] as const)("carries the %s reason through", (reason) => {
+    const ctx = buildResumeContext({ reason, ...BASE });
+    expect(ctx.reason).toBe(reason);
+    expect(resumeEventFields(ctx).resumeReason).toBe(reason);
+  });
 
   it("dedupes and caps changedFiles, trimming blanks", () => {
     const many = Array.from(
@@ -157,21 +160,52 @@ describe("resume-context: readResumeContext round-trip + coercion", () => {
     expect(readResumeContext(value)).toBeUndefined();
   });
 
-  it("coerces a partial-but-valid marker, dropping garbage fields", () => {
+  it.each([
+    ["bad authReason", { authReason: "needs_reauth" }],
+    ["non-string branch", { branch: 123 }],
+    ["blank branch", { branch: " " }],
+    ["non-string diffStat", { diffStat: 123 }],
+    ["non-string lastProgress", { lastProgress: 123 }],
+    ["blank lastProgress", { lastProgress: " " }],
+    ["changedFiles is not an array", { changedFiles: "a.ts" }],
+    ["changedFiles contains non-string", { changedFiles: ["a.ts", 5] }],
+    ["changedFiles contains blank", { changedFiles: ["a.ts", " "] }],
+    ["missing capturedAt", {}],
+    ["non-finite capturedAt", { capturedAt: Number.NaN }],
+  ])("rejects malformed optional metadata: %s", (_label, extra) => {
+    expect(
+      readResumeContext({
+        kind: "rate-limit-failover",
+        reason: "rate-limited",
+        fromSessionId: "s1",
+        workdir: "/w",
+        ...extra,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("trims valid persisted strings without accepting malformed values", () => {
     const read = readResumeContext({
       kind: "rate-limit-failover",
-      reason: "rate-limited",
+      reason: "needs-reauth",
+      authReason: "token_expired",
       fromSessionId: " s1 ",
       workdir: " /w ",
-      branch: 123, // wrong type → dropped
-      changedFiles: ["a.ts", 5, "", "b.ts"], // non-strings dropped
-      capturedAt: "not-a-number", // → Date.now default
+      branch: " feat/x ",
+      changedFiles: [" a.ts ", " b.ts "],
+      lastProgress: " edited a ",
+      capturedAt: 42,
     });
-    expect(read?.fromSessionId).toBe("s1");
-    expect(read?.workdir).toBe("/w");
-    expect(read?.branch).toBeUndefined();
-    expect(read?.changedFiles).toEqual(["a.ts", "b.ts"]);
-    expect(Number.isFinite(read?.capturedAt)).toBe(true);
+    expect(read).toMatchObject({
+      reason: "needs-reauth",
+      authReason: "token_expired",
+      fromSessionId: "s1",
+      workdir: "/w",
+      branch: "feat/x",
+      changedFiles: ["a.ts", "b.ts"],
+      lastProgress: "edited a",
+      capturedAt: 42,
+    });
   });
 });
 
@@ -249,6 +283,21 @@ describe("resume-context: resumeEventFields", () => {
     expect(resumeEventFields(ctx)).toEqual({
       resumable: true,
       resumeReason: "rate-limited",
+      authReason: undefined,
+      resumeFromSessionId: "sess-1",
+    });
+  });
+
+  it("carries token expiry as trigger metadata, separate from the outcome event", () => {
+    const ctx = buildResumeContext({
+      reason: "needs-reauth",
+      authReason: "token_expired",
+      ...BASE,
+    });
+    expect(resumeEventFields(ctx)).toEqual({
+      resumable: true,
+      resumeReason: "needs-reauth",
+      authReason: "token_expired",
       resumeFromSessionId: "sess-1",
     });
   });

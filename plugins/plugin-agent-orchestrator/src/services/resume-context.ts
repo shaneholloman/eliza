@@ -48,6 +48,8 @@ export interface ResumeContext {
   kind: "rate-limit-failover";
   /** Why the predecessor died (drives the "rate-limited, resumable" UI copy). */
   reason: ResumeReason;
+  /** Canonical auth trigger when the failover was caused by access-token expiry. */
+  authReason?: "token_expired";
   /** The predecessor session id this run is resuming from (lineage). */
   fromSessionId: string;
   /** Worktree the successor reuses — same branch + uncommitted work on disk. */
@@ -88,6 +90,7 @@ export interface BuildResumeContextInput {
   diffStat?: string | null;
   changedFiles?: readonly string[] | null;
   lastProgress?: string | null;
+  authReason?: "token_expired" | null;
   now?: number;
 }
 
@@ -107,13 +110,16 @@ export function buildResumeContext(
   input: BuildResumeContextInput,
 ): ResumeContext {
   const changed = input.changedFiles
-    ? [...new Set(input.changedFiles.map((f) => f.trim()).filter(Boolean))]
-        .slice(0, MAX_RESUME_CHANGED_FILES)
+    ? [
+        ...new Set(input.changedFiles.map((f) => f.trim()).filter(Boolean)),
+      ].slice(0, MAX_RESUME_CHANGED_FILES)
     : undefined;
   const progress = cleanStr(input.lastProgress);
   return {
     kind: "rate-limit-failover",
     reason: input.reason,
+    authReason:
+      input.authReason === "token_expired" ? "token_expired" : undefined,
     fromSessionId: input.fromSessionId,
     workdir: input.workdir,
     branch: cleanStr(input.branch),
@@ -137,9 +143,7 @@ export function buildResumeContext(
  * validated defensively — a partial/garbage marker reads as "no resume
  * context" rather than throwing into the event path.
  */
-export function readResumeContext(
-  value: unknown,
-): ResumeContext | undefined {
+export function readResumeContext(value: unknown): ResumeContext | undefined {
   if (!value || typeof value !== "object") return undefined;
   const raw = value as Record<string, unknown>;
   if (raw.kind !== "rate-limit-failover") return undefined;
@@ -154,24 +158,51 @@ export function readResumeContext(
   const fromSessionId = cleanStr(raw.fromSessionId as string | undefined);
   const workdir = cleanStr(raw.workdir as string | undefined);
   if (!fromSessionId || !workdir) return undefined;
-  const changedFiles = Array.isArray(raw.changedFiles)
-    ? raw.changedFiles
-        .filter((f): f is string => typeof f === "string" && f.trim().length > 0)
-        .map((f) => f.trim())
-        .slice(0, MAX_RESUME_CHANGED_FILES)
-    : undefined;
-  const capturedAt =
-    typeof raw.capturedAt === "number" && Number.isFinite(raw.capturedAt)
-      ? raw.capturedAt
-      : Date.now();
+  if (raw.authReason !== undefined && raw.authReason !== "token_expired") {
+    return undefined;
+  }
+  if (
+    raw.branch !== undefined &&
+    cleanStr(raw.branch as string | undefined) === undefined
+  ) {
+    return undefined;
+  }
+  if (
+    raw.diffStat !== undefined &&
+    cleanStr(raw.diffStat as string | undefined) === undefined
+  ) {
+    return undefined;
+  }
+  if (
+    raw.lastProgress !== undefined &&
+    cleanStr(raw.lastProgress as string | undefined) === undefined
+  ) {
+    return undefined;
+  }
+  if (typeof raw.capturedAt !== "number" || !Number.isFinite(raw.capturedAt)) {
+    return undefined;
+  }
+  const capturedAt = raw.capturedAt;
+  let changedFiles: string[] | undefined;
+  if (raw.changedFiles !== undefined) {
+    if (!Array.isArray(raw.changedFiles)) return undefined;
+    const parsed = raw.changedFiles.map((file) =>
+      cleanStr(file as string | undefined),
+    );
+    if (parsed.some((file) => file === undefined)) return undefined;
+    changedFiles = parsed.slice(0, MAX_RESUME_CHANGED_FILES) as string[];
+  }
   return {
     kind: "rate-limit-failover",
     reason,
+    authReason:
+      raw.authReason === "token_expired" ? "token_expired" : undefined,
     fromSessionId,
     workdir,
     branch: cleanStr(raw.branch as string | undefined),
     diffStat: cleanStr(raw.diffStat as string | undefined),
-    changedFiles: changedFiles && changedFiles.length > 0 ? changedFiles : undefined,
+    changedFiles:
+      changedFiles && changedFiles.length > 0 ? changedFiles : undefined,
     lastProgress: cleanStr(raw.lastProgress as string | undefined),
     capturedAt,
   };
@@ -238,11 +269,13 @@ export function applyResumePreamble(
 export function resumeEventFields(ctx: ResumeContext): {
   resumable: true;
   resumeReason: ResumeReason;
+  authReason?: "token_expired";
   resumeFromSessionId: string;
 } {
   return {
     resumable: true,
     resumeReason: ctx.reason,
+    authReason: ctx.authReason,
     resumeFromSessionId: ctx.fromSessionId,
   };
 }
