@@ -1,4 +1,4 @@
-// Composes the mobile coding cockpit route from deck, session, and terminal panes.
+/** Composes the mobile coding cockpit route from deck, session, and terminal panes. */
 import {
   Button,
   type CockpitSpawnTarget,
@@ -141,6 +141,7 @@ export function CockpitRoute() {
       <CockpitView
         rooms={rooms}
         onCreateSession={onCreateSession}
+        className="pb-20"
         knownRepos={knownRepos}
         repoSuggestionsUnavailable={repoSuggestionsUnavailable}
         busy={busy}

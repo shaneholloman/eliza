@@ -1,9 +1,8 @@
-// @vitest-environment jsdom
-//
-// E2E-ish: drives the CockpitRoute container through the REAL spawn path
-// (poll roster -> render deck -> form submit -> client.createOrchestratorTask),
-// mocking only at the client boundary (the live orchestrator). Proves the
-// cockpit's spawn wiring end to end without a running agent.
+/**
+ * Drives the route through the spawn path with only the live orchestrator
+ * client boundary replaced, including its deck, drill-in, and error states.
+ * @vitest-environment jsdom
+ */
 import {
   cleanup,
   fireEvent,
@@ -20,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   addOrchestratorAgent: vi.fn(),
   listProjects: vi.fn(),
   cockpitViewProps: null as {
+    className?: string;
     repoSuggestionsUnavailable?: boolean;
   } | null,
 }));
@@ -64,6 +64,7 @@ vi.mock("@elizaos/ui", () => ({
     busy?: boolean;
     error?: string | null;
     repoSuggestionsUnavailable?: boolean;
+    className?: string;
   }) => {
     mocks.cockpitViewProps = props;
     return (
@@ -144,6 +145,12 @@ describe("CockpitRoute — live spawn wiring (agent mocked at client boundary)",
     await waitFor(() =>
       expect(screen.getByTestId("rooms-count").textContent).toBe("1"),
     );
+  });
+
+  it("reserves scroll clearance for the floating terminal controls", async () => {
+    render(<CockpitRoute />);
+    await waitFor(() => expect(mocks.cockpitViewProps).not.toBeNull());
+    expect(mocks.cockpitViewProps?.className).toContain("pb-20");
   });
 
   it("spawning creates the task AND spawns the agent with the picked mode", async () => {
