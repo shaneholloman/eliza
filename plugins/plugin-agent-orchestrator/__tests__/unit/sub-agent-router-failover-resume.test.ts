@@ -19,6 +19,11 @@
  * resolve without a live pool; no model, no subprocess, no I/O.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../src/services/config-env.js", () => ({
+  readConfigEnvKey: (key: string) => process.env[key],
+}));
+
 // Compute the coding-agent selector bridge slot key via Symbol.for so this
 // test does not depend on the built @elizaos/core re-exporting the symbol
 // constant (a stale symlinked node_modules build can lag the source). The key
