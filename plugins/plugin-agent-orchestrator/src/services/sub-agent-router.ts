@@ -1937,9 +1937,11 @@ export class SubAgentRouter extends Service {
     data: unknown,
   ): Promise<string | undefined> {
     try {
-      const output = await service.getSessionOutput?.(sessionId, 120);
+      const output = await service.getSessionOutput(sessionId, 120);
       if (output?.trim()) return output.trim();
     } catch (err) {
+      // error-policy:J7 Progress enrichment must not undo a recovered session;
+      // the failure is reported and the typed event payload remains available.
       this.log("warn", "failed to read predecessor session output for resume", {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
