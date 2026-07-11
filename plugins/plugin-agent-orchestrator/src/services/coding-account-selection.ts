@@ -9,7 +9,7 @@
  * behavior untouched.
  */
 
-import { isTokenExpiryText } from "@elizaos/auth/token-expiry";
+import { isTokenExpiryText } from "@elizaos/auth";
 import {
   type CodingAccountStrategy,
   type CodingAccountUsage,

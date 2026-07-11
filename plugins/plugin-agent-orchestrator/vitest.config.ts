@@ -4,6 +4,14 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@elizaos/auth": new URL(
+        "../../packages/auth/src/index.ts",
+        import.meta.url,
+      ).pathname,
+    },
+  },
   test: {
     environment: "node",
     setupFiles: ["./__tests__/setup.ts"],
