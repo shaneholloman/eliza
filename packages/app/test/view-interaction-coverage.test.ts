@@ -124,11 +124,11 @@ const GUI_INTERACTION_OWNERS: Readonly<
     {
       spec: "packages/app/test/ui-smoke/apps-comms-device-interactions.spec.ts",
       proves:
-        "Exercises Android contacts search, detail navigation, create form, and fixture persistence.",
+        "Exercises the Android contacts create form and fixture persistence.",
       signals: [
         "contacts deterministic controls",
-        "contacts-new",
-        "contacts-search",
+        "contacts-create-display-name",
+        "contacts-create-submit",
       ],
     },
   ],
@@ -156,22 +156,18 @@ const GUI_INTERACTION_OWNERS: Readonly<
       spec: "plugins/plugin-scheduling/src/components/lifeops-live-test/LifeOpsLiveTestSpatialView.tsx",
       proves:
         "Owns the LifeOps live-test readiness, run, retry, and fire-now agent controls consumed by the visual matrix.",
-      signals: [
-        "run-reminder",
-        "run-checkin",
-        "retry",
-      ],
+      signals: ["run-reminder", "run-checkin", "retry"],
     },
   ],
   messages: [
     {
       spec: "packages/app/test/ui-smoke/apps-comms-device-interactions.spec.ts",
       proves:
-        "Exercises SMS role request, thread navigation, compose fields, send action, and fixture persistence.",
+        "Exercises rendered SMS history, compose fields, send action, and fixture persistence.",
       signals: [
         "messages deterministic controls",
         "messages-send",
-        "messages-compose-body",
+        "messages-body",
       ],
     },
   ],
@@ -190,12 +186,8 @@ const GUI_INTERACTION_OWNERS: Readonly<
     {
       spec: "packages/app/test/ui-smoke/apps-comms-device-interactions.spec.ts",
       proves:
-        "Exercises dialer keypad, backspace, call action, recent calls, and native fixture persistence.",
-      signals: [
-        "phone deterministic controls",
-        "phone-dial-key",
-        "phone-dial-call",
-      ],
+        "Exercises the dialer keypad, contact dialing, call action, and native fixture persistence.",
+      signals: ["phone deterministic controls", "dialpad-", "dialer-call"],
     },
   ],
   polymarket: [
@@ -365,13 +357,17 @@ function readVisualMatrixCases(): VisualViewCase[] {
 
   return Array.from(
     viewCasesSource.matchAll(
-      /\["([^"]+)",\s*"(gui|tui)",\s*"([^"]+)"(?:,\s*\{[^}\]]*\})?\]/g,
+      /\["([^"]+)",\s*"(gui|tui|xr)",\s*"([^"]+)"(?:,\s*\{[^}\]]*\})?\]/g,
     ),
   ).flatMap((caseMatch) => {
     const id = caseMatch[1];
     const viewType = caseMatch[2];
     const viewPath = caseMatch[3];
-    if (!id || (viewType !== "gui" && viewType !== "tui") || !viewPath) {
+    expect(
+      viewType,
+      `Plugin visual matrix must stay GUI-only; remove ${id}:${viewType} from VIEW_CASES`,
+    ).toBe("gui");
+    if (!id || viewType !== "gui" || !viewPath) {
       return [];
     }
     return [{ id, viewType, path: viewPath }];
@@ -396,8 +392,9 @@ describe("plugin view interaction coverage", () => {
     const visualCases = readVisualMatrixCases();
     const unclassified = visualCases.filter((view) => {
       const owners = interactionOwners(view);
-      const hasInteractionOwner =
-        owners.some((owner) => owner !== VISUAL_BASELINE_OWNER);
+      const hasInteractionOwner = owners.some(
+        (owner) => owner !== VISUAL_BASELINE_OWNER,
+      );
       return !hasInteractionOwner && !(viewKey(view) in INTERACTION_DEBT);
     });
 

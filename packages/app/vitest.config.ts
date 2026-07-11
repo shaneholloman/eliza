@@ -20,6 +20,9 @@ const unitExcludes = [
   "**/*.spec.{ts,tsx}",
   "test/ui-smoke/**",
   "test/electrobun-packaged/**",
+  // Script-level tests use Bun or Node test APIs and run through the package's
+  // dedicated `bun test` phase, outside Vitest's jsdom transform.
+  "scripts/**/*.test.{ts,tsx,mjs}",
 ];
 
 export default defineConfig({
@@ -32,11 +35,7 @@ export default defineConfig({
     ...baseConfig.test,
     environment: "jsdom",
     setupFiles: [path.join(here, "test/setup.ts")],
-    include: [
-      "src/**/*.test.{ts,tsx}",
-      "scripts/**/*.test.{ts,tsx,mjs}",
-      "test/**/*.test.{ts,tsx}",
-    ],
+    include: ["src/**/*.test.{ts,tsx}", "test/**/*.test.{ts,tsx}"],
     exclude: unitExcludes,
   },
 });

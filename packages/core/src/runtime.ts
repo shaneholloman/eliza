@@ -123,6 +123,7 @@ import {
 	describeModelCallError,
 	isModelProviderFallbackError,
 } from "./services/message/fallback-reply";
+import { sanitizeOutboundText } from "./services/message/outbound-sanitize";
 import { ensureAgentVoice } from "./services/message/voice-gate";
 import type { TaskService } from "./services/task";
 import type { ToolPolicyService } from "./services/tool-policy";
@@ -1713,7 +1714,7 @@ export class AgentRuntime implements IAgentRuntime {
 	}
 
 	/**
-	 * Run pipeline hooks for a phase (skip metadata, ordering, and outgoing redact).
+	 * Run pipeline hooks for a phase (skip metadata, ordering, and outgoing sanitize + redact).
 	 * @param pipelineHookTelemetry When false, skips debug logs / `PIPELINE_HOOK_METRIC` per hook
 	 * (still logs warn/error for slow hooks). Defaults to false for `model_stream_chunk` only.
 	 */
@@ -1850,8 +1851,12 @@ export class AgentRuntime implements IAgentRuntime {
 						hookTelemetry,
 					);
 				}
+				// Mandatory outbound hygiene, hooks or none: strip leaked model
+				// machine syntax (#15888), then redact secrets. Runs before the
+				// content is persisted, so stored outbound memories carry the same
+				// text the connector delivers.
 				c.content.text = this.redactSecrets(
-					coerceOutgoingMessageText(c.content.text),
+					sanitizeOutboundText(coerceOutgoingMessageText(c.content.text)),
 				);
 				return;
 			}
@@ -6709,11 +6714,61 @@ export class AgentRuntime implements IAgentRuntime {
 			);
 			const templateContext = { ...filteredState, ...state.values };
 
-			const outputSegments = this.renderPromptTemplateSegments(
+			let outputSegments = this.renderPromptTemplateSegments(
 				finalTemplateStr,
 				templateContext,
 				state,
 			);
+			// Callers that assemble the prompt themselves (e.g. the PromptBatcher
+			// dispatcher) can pass `params.promptSegments` alongside the flat
+			// `params.prompt` to preserve stable/dynamic structure for provider
+			// prompt caching. Without this, the whole caller prompt renders as a
+			// single segment and volatile content (batched section contexts) can be
+			// marked stable, producing cache writes that are never read. The caller
+			// segmentation is adopted ONLY when it reproduces the rendered template
+			// byte-for-byte, so the prompt text sent to the model is provably
+			// unchanged; otherwise (placeholders, template cleaning, optimization
+			// hooks rewriting the template) we keep the rendered segmentation.
+			const callerPromptSegments = (params as { promptSegments?: unknown })
+				.promptSegments;
+			if (
+				Array.isArray(callerPromptSegments) &&
+				callerPromptSegments.length > 0
+			) {
+				const normalizedCallerSegments: PromptSegment[] = [];
+				let callerSegmentsValid = true;
+				for (const segment of callerPromptSegments) {
+					if (
+						typeof segment !== "object" ||
+						segment === null ||
+						typeof (segment as { content?: unknown }).content !== "string"
+					) {
+						callerSegmentsValid = false;
+						break;
+					}
+					const typedSegment = segment as PromptSegment;
+					normalizedCallerSegments.push({
+						content: typedSegment.content,
+						stable: Boolean(typedSegment.stable),
+						...(typedSegment.ttl === "long" || typedSegment.ttl === "short"
+							? { ttl: typedSegment.ttl }
+							: {}),
+					});
+				}
+				const renderedOutput = outputSegments
+					.map((segment) => segment.content)
+					.join("");
+				const callerJoined = normalizedCallerSegments
+					.map((segment) => segment.content)
+					.join("");
+				if (callerSegmentsValid && callerJoined === renderedOutput) {
+					outputSegments = this.mergePromptSegments(normalizedCallerSegments);
+				} else if (RUNTIME_DEBUG_LOG_ENABLED) {
+					this.logger.debug(
+						"dynamicPromptExecFromState: caller promptSegments do not reproduce the rendered prompt; using template segmentation",
+					);
+				}
+			}
 			const output = outputSegments.map((segment) => segment.content).join("");
 
 			// Process format options
@@ -6927,10 +6982,19 @@ ${section_end}`;
 			const _dynamicCacheHash =
 				computePrefixHashes(cachePrefixSegments(segments)).at(-1)?.hash ??
 				"no-context-segments";
+			const _callerTools = (params as { tools?: unknown }).tools;
 			const _dynamicCachePlan = buildProviderCachePlan({
 				prefixHash: _dynamicCacheHash,
 				segmentHashes: _dynamicPrefixHashes.map((e) => e.segmentHash),
 				promptSegments: segments,
+				// Providers with tool-aware cache policies (Gemini disables explicit
+				// caching when tools are present; Anthropic reserves a breakpoint for
+				// the tools array) need to know whether this call carries tools.
+				hasTools: Array.isArray(_callerTools)
+					? _callerTools.length > 0
+					: typeof _callerTools === "object" && _callerTools !== null
+						? Object.keys(_callerTools).length > 0
+						: false,
 			});
 			// Deep-merge caller-supplied providerOptions with the cache plan. See
 			// mergeProviderOptionsWithCachePlan for the full merging semantics.
@@ -10476,7 +10540,14 @@ ${section_end}`;
 		// (`content.agentVoiced`); the gate fails open, so a rephrase outage
 		// delivers the original text rather than blocking the send.
 		const voicedContent = await ensureAgentVoice(this, content, { source });
-		const result = await handler(this, target, voicedContent);
+		// Proactive sends bypass the message-turn callback wrap, so the shared
+		// machine-syntax sanitizer (#15888) applies here — after the voice gate,
+		// whose rephrase is itself model text.
+		const outboundContent =
+			typeof voicedContent.text === "string"
+				? { ...voicedContent, text: sanitizeOutboundText(voicedContent.text) }
+				: voicedContent;
+		const result = await handler(this, target, outboundContent);
 		return result as Memory | undefined;
 	}
 

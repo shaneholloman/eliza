@@ -29,7 +29,14 @@ import {
 import {
   touchLongPress,
   touchSwipe,
+  touchTap,
 } from "../../../testing/real-touch-gestures.ts";
+import {
+  SWIPE_HINT_DISPLAY_MS,
+  SWIPE_HINT_FADE_MS,
+  SWIPE_HINT_SHOW_DELAY_MS,
+  SWIPE_HINT_WIDGET_KEY,
+} from "../FirstSessionSwipeHint.tsx";
 
 // Frame gate for the home↔launcher rail swipe - same factor-based thresholds as
 // the sibling real-overlay gates (run-perf-gate-e2e / run-chat-perf-gate): the
@@ -238,6 +245,29 @@ async function touchSwipeRight(page, testId) {
 async function longPressHold(page, tileTestId) {
   await touchLongPress(page, `[data-testid="${tileTestId}"] button`, 600);
 }
+
+async function installCoarsePointerMedia(page) {
+  await page.addInitScript(() => {
+    const real = window.matchMedia.bind(window);
+    const coarsePointer = (query) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+      dispatchEvent() {
+        return false;
+      },
+    });
+    window.matchMedia = (query) =>
+      /hover:\s*hover|pointer:\s*fine/.test(query)
+        ? coarsePointer(query)
+        : real(query);
+  });
+}
+
 async function readHomeDarkForegrounds(page) {
   return page.evaluate(() => {
     const parseRgb = (value) => {
@@ -373,11 +403,64 @@ async function waitForSurfacePageSettled(p, pageName) {
         ? surfaceRect.left - surfaceRect.width
         : surfaceRect.left;
     const railSettled = Math.abs(railRect.left - expectedLeft) < 1;
-    const transitionsDone = rail
+    const transitionsDone = !rail
       .getAnimations()
-      .every((animation) => animation.playState === "finished");
+      .some((animation) => animation.playState === "running");
     return railSettled && transitionsDone;
   }, pageName);
+}
+async function waitForRenderedHomeSettled(page) {
+  const viewportWidth = page.viewportSize()?.width;
+  assert(viewportWidth, "mobile viewport width is available");
+  await page.waitForFunction(
+    async (expectedViewportWidth) => {
+      const sample = () => {
+        const surface = document.querySelector(
+          '[data-testid="home-launcher-surface"]',
+        );
+        const rail = document.querySelector(
+          '[data-testid="home-launcher-rail"]',
+        );
+        const home = document.querySelector(
+          '[data-testid="home-launcher-home-page"]',
+        );
+        if (
+          !(surface instanceof HTMLElement) ||
+          !(rail instanceof HTMLElement) ||
+          !(home instanceof HTMLElement)
+        ) {
+          return null;
+        }
+        const railRect = rail.getBoundingClientRect();
+        const homeRect = home.getBoundingClientRect();
+        return {
+          railLeft: railRect.left,
+          homeLeft: homeRect.left,
+          homeRight: homeRect.right,
+          viewportWidth: window.innerWidth,
+        };
+      };
+      const first = sample();
+      if (!first) return false;
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+      const second = sample();
+      if (!second) return false;
+      const stable = ["railLeft", "homeLeft", "homeRight"].every(
+        (key) => Math.abs(first[key] - second[key]) < 0.5,
+      );
+      return (
+        stable &&
+        Math.abs(second.viewportWidth - expectedViewportWidth) < 1 &&
+        Math.abs(second.railLeft) < 1 &&
+        Math.abs(second.homeLeft) < 1 &&
+        Math.abs(second.homeRight - expectedViewportWidth) < 1
+      );
+    },
+    viewportWidth,
+    { timeout: 15000 },
+  );
 }
 function medianNumber(values) {
   const sorted = values
@@ -433,25 +516,7 @@ try {
   });
   const mobile = await mobileContext.newPage();
   mobile.on("pageerror", (e) => sink.errors.push(String(e)));
-  await mobile.addInitScript(() => {
-    const real = window.matchMedia.bind(window);
-    const coarsePointer = (query) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addEventListener() {},
-      removeEventListener() {},
-      addListener() {},
-      removeListener() {},
-      dispatchEvent() {
-        return false;
-      },
-    });
-    window.matchMedia = (query) =>
-      /hover:\s*hover|pointer:\s*fine/.test(query)
-        ? coarsePointer(query)
-        : real(query);
-  });
+  await installCoarsePointerMedia(mobile);
   // Install the shared layout-shift PerformanceObserver BEFORE any paint, so
   // every shift during the home settle lands in window.__ELIZA_LAYOUT_SHIFTS__
   // (the same contract HomeScreen's dev observer + the KPI specs use). We read
@@ -463,10 +528,81 @@ try {
   await mobile.goto(`${url}?homeData=quiet`);
   await assertQuietHome(mobile, "quiet account");
   await snap(mobile, "mobile-home-quiet");
+  // The preceding quiet-state capture must not consume the one-time lesson;
+  // isolate this certification from runner timing before loading its subject.
+  await mobile.evaluate(() =>
+    localStorage.removeItem("eliza:home-dismissed:v1"),
+  );
   await mobile.goto(`${url}?native&homeData=attention`);
   await mobile.waitForSelector('[data-testid="home-launcher-surface"]');
   await mobile.waitForSelector('[data-testid="home-screen"]');
   await mobile.waitForTimeout(600);
+  const firstSessionSwipeHint = mobile.getByTestId(
+    "first-session-swipe-hint",
+  );
+  await firstSessionSwipeHint.waitFor({
+    state: "visible",
+    timeout: SWIPE_HINT_SHOW_DELAY_MS + 2_000,
+  });
+  assert(
+    (await firstSessionSwipeHint.getByText("Swipe for apps").count()) === 1,
+    "mobile coarse-pointer: first session renders the swipe lesson",
+  );
+  await snap(mobile, "mobile-first-session-swipe-hint");
+  await firstSessionSwipeHint.waitFor({
+    state: "hidden",
+    timeout: SWIPE_HINT_DISPLAY_MS + SWIPE_HINT_FADE_MS + 2_000,
+  });
+  const persistedSwipeHintLife = await mobile.evaluate(
+    (widgetKey) =>
+      JSON.parse(localStorage.getItem("eliza:home-dismissed:v1") ?? "{}")?.[
+        widgetKey
+      ],
+    SWIPE_HINT_WIDGET_KEY,
+  );
+  assert(
+    persistedSwipeHintLife?.seen === 1 &&
+      persistedSwipeHintLife?.dismissed === true,
+    "mobile coarse-pointer: completed lesson persists its retirement",
+  );
+  await mobile.reload();
+  await mobile.waitForSelector('[data-testid="home-launcher-surface"]');
+  await waitForSurfacePageSettled(mobile, "home");
+  await waitForHomeEnterSettled(mobile);
+  await mobile.waitForTimeout(SWIPE_HINT_SHOW_DELAY_MS + 1_000);
+  await Promise.all([
+    mobile.getByTestId("home-time-widget").waitFor({ state: "visible" }),
+    mobile.getByTestId("home-weather").waitFor({ state: "visible" }),
+    mobile.getByText("Buy groceries", { exact: true }).waitFor({
+      state: "visible",
+    }),
+    mobile.getByText("Design review", { exact: true }).waitFor({
+      state: "visible",
+    }),
+  ]);
+  await mobile.evaluate(async () => {
+    await document.fonts.ready;
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+  });
+  await waitForRenderedHomeSettled(mobile);
+  assert(
+    (await mobile.getByTestId("home-launcher-surface").getAttribute(
+      "data-page",
+    )) === "home",
+    "mobile coarse-pointer: reload returns to the home half",
+  );
+  assert(
+    (await mobile.getByTestId("first-session-swipe-hint").count()) === 0,
+    "mobile coarse-pointer: retired lesson stays absent after reload",
+  );
+  // Chromium's first screenshot after a mobile reload can race the compositor
+  // layer upload even after DOM geometry and animations have settled. Warm the
+  // capture path, then require another stable frame before recording evidence.
+  await mobile.screenshot();
+  await waitForRenderedHomeSettled(mobile);
+  await snap(mobile, "mobile-after-swipe-hint-retired");
   assert(
     (await mobile.getByTestId("rail-pager-edge-prev").count()) === 0 &&
       (await mobile.getByTestId("rail-pager-edge-next").count()) === 0 &&
@@ -548,13 +684,9 @@ try {
       `no home widget hit its error boundary (${errorCards.length})`,
     );
   }
-  // Notifications render INLINE on the home column (NotificationsHomeCenter,
-  // #15039) — no pull-up hint, no shade, no unread/read bookkeeping. The rested
-  // inbox is priority triage: only the seeded urgent (interrupt-tier) row shows,
-  // grouped by its destination (a `system` notification with no deep link groups
-  // under "System"), as a liquid-glass card. Tapping a row expands its
-  // contextual option strip; acting on an option acknowledges (clears) the row,
-  // and the emptied inbox self-hides.
+  // Notifications render inline on the home column. Rested mode shows the
+  // seeded interrupt-tier row; the count control opens the full shade without
+  // adding a second sheet or overlay surface.
   {
     const center = mobile.getByTestId("home-notification-center");
     await center.waitFor({ state: "visible", timeout: 5000 });
@@ -577,38 +709,41 @@ try {
       (await center.getByText("Payment failed", { exact: false }).count()) > 0,
       "the notification row shows the seeded title",
     );
-    // A single interrupt notification hides nothing, so the rested inbox shows
-    // no "N more" button (there is no shade to expand into).
+    const countButton = center.getByTestId("notifications-count-button");
     assert(
-      (await center.getByTestId("notifications-expand-toggle").count()) === 0,
-      "no expand button with a single interrupt notification",
+      (await countButton.textContent())?.includes("1 Notification"),
+      "the rested count control reflects the seeded notification",
     );
-    // Tap expands the row's option strip; a `system` row with no safe deep link
-    // offers only Dismiss. Acting on it acknowledges the row → inbox self-hides.
-    await center.getByTestId("notification-row").click();
-    const options = center.getByTestId("notification-row-options");
-    await options.waitFor({ state: "visible", timeout: 5000 });
     assert(
-      (await options.getByTestId("notification-option-dismiss").count()) === 1,
-      "the tapped row expands its Dismiss option",
+      (await center.getByTestId("notifications-clear-all").count()) === 0 &&
+        (await center.getByTestId("notifications-collapse").count()) === 0,
+      "expanded-only controls stay hidden at rest",
     );
-    await options.getByTestId("notification-option-dismiss").click();
-    await center.waitFor({ state: "detached", timeout: 5000 });
+
+    await touchTap(mobile, '[data-testid="notifications-count-button"]');
+    await center
+      .locator(
+        '[data-testid="home-notification-list"][data-shade-mode="expanded"]',
+      )
+      .waitFor({ state: "visible", timeout: 5000 });
     assert(
-      (await mobile.getByTestId("home-notification-center").count()) === 0,
-      "acknowledging the last notification self-hides the inline inbox",
+      (await center.getByTestId("notifications-clear-all").count()) === 1 &&
+        (await center.getByTestId("notifications-collapse").count()) === 1,
+      "opening the shade reveals clear and collapse controls",
+    );
+
+    await touchTap(mobile, '[data-testid="notifications-collapse"]');
+    await center
+      .locator(
+        '[data-testid="home-notification-list"][data-shade-mode="rested"]',
+      )
+      .waitFor({ state: "visible", timeout: 5000 });
+    assert(
+      (await center.getByTestId("notifications-clear-all").count()) === 0 &&
+        (await center.getByTestId("notifications-collapse").count()) === 0,
+      "collapse returns the notification center to its rested controls",
     );
   }
-  // The legacy pull-up hint / shade AND the older gesture-shell surfaces are
-  // GONE: no hint pill, no shade/scrim, no pull zone, no sheet, no panel.
-  assert(
-    (await mobile.getByTestId("home-notifications-hint").count()) === 0 &&
-      (await mobile.getByTestId("notifications-shade").count()) === 0 &&
-      (await mobile.getByTestId("home-notification-pull-zone").count()) === 0 &&
-      (await mobile.getByTestId("notification-sheet").count()) === 0 &&
-      (await mobile.getByTestId("notification-panel").count()) === 0,
-    "no legacy notification hint / shade / pull-zone / sheet / panel exists (inline only)",
-  );
   // No general quick-access tiles anymore - Launcher is the adjacent
   // launcher. The only tiles left are the AOSP native-OS surfaces, shown here
   // because the mobile page sets ?native (see HomeScreen.tsx HOME_TILES).
@@ -844,56 +979,6 @@ try {
   await touchSwipeLeft(mobile, "home-launcher-home-page");
   await waitForSurfacePageSettled(mobile, "launcher");
 
-  // ── Rail-swipe FPS gate: sample independent windows of REAL frames, each
-  // covering three full home↔launcher round-trips (right swipe back home, left
-  // swipe to the launcher - the exact gesture the launcher redesign must keep
-  // smooth), and hard-fail on sustained jank via the same shared, meta-tested
-  // frame-budget detectors the chat perf gates use. The rail paints via
-  // rAF-paced translate3d, so a regression that moves work onto the drag path
-  // (layout, paint storms, main-thread stalls) shows up here as dropped frames /
-  // p95 blowout.
-  {
-    const attempts = [];
-    for (let attempt = 0; attempt < RAIL_SWIPE_ATTEMPTS; attempt += 1) {
-      const result = await measureRailSwipeWindow(mobile);
-      attempts.push(result);
-      console.log(
-        `  [rail-swipe ${attempt + 1}/${RAIL_SWIPE_ATTEMPTS}] ` +
-          `fps=${result.fps.toFixed(1)} p95=${result.p95FrameMs.toFixed(1)}ms ` +
-          `worst=${result.worstFrameMs.toFixed(1)}ms ` +
-          `dropped=${result.effectiveDroppedFrames}/${result.sampleCount} ` +
-          `(${result.droppedPct.toFixed(0)}%) long=${result.longTasks}`,
-      );
-      assert(
-        result.sampleCount >= MIN_FRAME_SAMPLES,
-        `rail-swipe window ${attempt + 1} captured ≥${MIN_FRAME_SAMPLES} frames ` +
-          `(got ${result.sampleCount})`,
-      );
-    }
-    const budgetMs = attempts[0]?.budgetMs ?? 1000 / FRAME_BUDGET.targetFps;
-    const medianP95FrameMs = medianNumber(
-      attempts.map((attempt) => attempt.p95FrameMs),
-    );
-    const medianDroppedFrameRatio = medianNumber(
-      attempts.map((attempt) => attempt.droppedFrameRatio),
-    );
-    const medianDroppedPct = 100 * medianDroppedFrameRatio;
-    const overP95Budget =
-      medianP95FrameMs > budgetMs * FRAME_GATE.p95BudgetFactor;
-    const overDroppedBudget =
-      medianDroppedFrameRatio >= FRAME_GATE.droppedFrameRatio;
-    console.log(
-      `  [rail-swipe median] p95=${medianP95FrameMs.toFixed(1)}ms ` +
-        `dropped=${medianDroppedPct.toFixed(0)}% attempts=${attempts.length}`,
-    );
-    assert(
-      !overP95Budget && !overDroppedBudget,
-      `rail swipe median stays within the frame budget (p95 ${medianP95FrameMs.toFixed(1)}ms ≤ ` +
-        `${(budgetMs * FRAME_GATE.p95BudgetFactor).toFixed(1)}ms, dropped ` +
-        `${medianDroppedPct.toFixed(0)}% < ${(FRAME_GATE.droppedFrameRatio * 100).toFixed(0)}%)`,
-    );
-  }
-
   // ── ONE page of views. Developer tools are NOT a separate swipeable page any
   // more: when Developer Mode is on they sit on the SAME single page after the
   // apps (this fixture enables developer mode, so they render). The launcher is
@@ -944,6 +1029,7 @@ try {
   await mobile.goto(`${url}?homeData=quiet`);
   await assertQuietHome(mobile, "quiet account after clearing attention data");
   await snap(mobile, "mobile-home-quiet-after-clear");
+  const mobileStorageState = await mobileContext.storageState();
   const mobileVideo = await mobile.video();
   await mobile.close();
   await mobileContext.close();
@@ -953,6 +1039,74 @@ try {
     await rename(videoPath, stableVideoPath);
     console.log(`  🎥 ${stableVideoPath}`);
   }
+
+  // Measure the rail in a dedicated non-recording context. Video encoding is
+  // intentionally excluded from the frame budget: the product never performs
+  // that work, and including it turns encoder throughput into a false UI gate.
+  const perfContext = await browser.newContext({
+    viewport: { width: 402, height: 874 },
+    deviceScaleFactor: 2,
+    hasTouch: true,
+    isMobile: true,
+    storageState: mobileStorageState,
+  });
+  const perfMobile = await perfContext.newPage();
+  perfMobile.on("pageerror", (e) => sink.errors.push(String(e)));
+  await installCoarsePointerMedia(perfMobile);
+  await perfMobile.addInitScript(FRAME_SAMPLER_INIT);
+  await perfMobile.goto(`${url}?native&homeData=attention`);
+  await perfMobile.waitForSelector('[data-testid="home-launcher-surface"]');
+  await perfMobile.waitForSelector('[data-testid="home-screen"]');
+  await waitForHomeEnterSettled(perfMobile);
+  await touchSwipeLeft(perfMobile, "home-launcher-home-page");
+  await waitForSurfacePageSettled(perfMobile, "launcher");
+
+  // Sample independent windows of real frames, each covering three full
+  // home↔launcher round-trips. Hard-fail on sustained jank through the same
+  // shared frame-budget detector used by the chat performance gates.
+  {
+    const attempts = [];
+    for (let attempt = 0; attempt < RAIL_SWIPE_ATTEMPTS; attempt += 1) {
+      const result = await measureRailSwipeWindow(perfMobile);
+      attempts.push(result);
+      console.log(
+        `  [rail-swipe ${attempt + 1}/${RAIL_SWIPE_ATTEMPTS}] ` +
+          `fps=${result.fps.toFixed(1)} p95=${result.p95FrameMs.toFixed(1)}ms ` +
+          `worst=${result.worstFrameMs.toFixed(1)}ms ` +
+          `dropped=${result.effectiveDroppedFrames}/${result.sampleCount} ` +
+          `(${result.droppedPct.toFixed(0)}%) long=${result.longTasks}`,
+      );
+      assert(
+        result.sampleCount >= MIN_FRAME_SAMPLES,
+        `rail-swipe window ${attempt + 1} captured ≥${MIN_FRAME_SAMPLES} frames ` +
+          `(got ${result.sampleCount})`,
+      );
+    }
+    const budgetMs = attempts[0]?.budgetMs ?? 1000 / FRAME_BUDGET.targetFps;
+    const medianP95FrameMs = medianNumber(
+      attempts.map((attempt) => attempt.p95FrameMs),
+    );
+    const medianDroppedFrameRatio = medianNumber(
+      attempts.map((attempt) => attempt.droppedFrameRatio),
+    );
+    const medianDroppedPct = 100 * medianDroppedFrameRatio;
+    const overP95Budget =
+      medianP95FrameMs > budgetMs * FRAME_GATE.p95BudgetFactor;
+    const overDroppedBudget =
+      medianDroppedFrameRatio >= FRAME_GATE.droppedFrameRatio;
+    console.log(
+      `  [rail-swipe median] p95=${medianP95FrameMs.toFixed(1)}ms ` +
+        `dropped=${medianDroppedPct.toFixed(0)}% attempts=${attempts.length}`,
+    );
+    assert(
+      !overP95Budget && !overDroppedBudget,
+      `rail swipe median stays within the frame budget (p95 ${medianP95FrameMs.toFixed(1)}ms ≤ ` +
+        `${(budgetMs * FRAME_GATE.p95BudgetFactor).toFixed(1)}ms, dropped ` +
+        `${medianDroppedPct.toFixed(0)}% < ${(FRAME_GATE.droppedFrameRatio * 100).toFixed(0)}%)`,
+    );
+  }
+  await perfMobile.close();
+  await perfContext.close();
 
   // Desktop width
   const desktop = await browser.newPage({
@@ -972,9 +1126,7 @@ try {
     (await desktop.getByTestId("home-tile-phone").count()) === 0,
     "phone tile hidden when native disabled",
   );
-  // Desktop gets the SAME inline notification center as mobile: the seeded
-  // urgent row shows at rest on the home column, with none of the legacy
-  // pull-up hint / shade / anchored panel / pull-down sheet chrome.
+  // Desktop uses the same inline notification center and shade controls.
   {
     const center = desktop.getByTestId("home-notification-center");
     await center.waitFor({ state: "visible", timeout: 5000 });
@@ -982,15 +1134,23 @@ try {
       (await center.getByTestId("notification-row").count()) === 1,
       "desktop home renders the inline notification inbox with the seeded row",
     );
+    await center.getByTestId("notifications-count-button").click();
+    await center
+      .locator(
+        '[data-testid="home-notification-list"][data-shade-mode="expanded"]',
+      )
+      .waitFor({ state: "visible", timeout: 5000 });
     assert(
-      (await desktop.getByTestId("home-notifications-hint").count()) === 0 &&
-        (await desktop.getByTestId("notifications-shade").count()) === 0 &&
-        (await desktop.getByTestId("home-notification-pull-zone").count()) ===
-          0 &&
-        (await desktop.getByTestId("notification-sheet").count()) === 0 &&
-        (await desktop.getByTestId("notification-panel").count()) === 0,
-      "desktop has no legacy notification hint / shade / pull-zone / sheet / panel either",
+      (await center.getByTestId("notifications-clear-all").count()) === 1 &&
+        (await center.getByTestId("notifications-collapse").count()) === 1,
+      "desktop opens the same clear and collapse controls",
     );
+    await center.getByTestId("notifications-collapse").click();
+    await center
+      .locator(
+        '[data-testid="home-notification-list"][data-shade-mode="rested"]',
+      )
+      .waitFor({ state: "visible", timeout: 5000 });
   }
   await snap(desktop, "desktop-home");
   await swipeLeft(desktop.getByTestId("home-launcher-home-page"));

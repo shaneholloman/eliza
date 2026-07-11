@@ -92,8 +92,8 @@ export const ChoiceWidget = memo(function ChoiceWidget({
   // A single-action first-run prompt ("Sign in to Eliza Cloud") is a CTA, not
   // a choice: wrapped in the collapsible shell it read as a dropdown with one
   // entry (header + "1 options" chip + chevron) and its secondary chip washed
-  // out on the dark cloud surface (#15144). Render it as one full-width
-  // primary button — no shell, no count chip, no chevron, and no redundant
+  // out on the dark cloud surface (#15144). Render it as a compact primary
+  // button — no shell, no count chip, and no redundant
   // selected-status line after tap.
   const soleOption =
     firstRun && !allowCustom && options.length === 1 ? options[0] : null;
@@ -101,14 +101,14 @@ export const ChoiceWidget = memo(function ChoiceWidget({
     const isSelected = selected?.value === soleOption.value;
     return (
       <div
-        className="my-2 flex min-w-0 flex-col items-stretch gap-2"
+        className="flex w-full max-w-[13.5rem] min-w-0 flex-col items-stretch gap-1 self-start"
         data-choice-id={id}
         data-choice-scope={scope}
         data-testid={`choice-shell-${id}`}
       >
         <Button
           type="button"
-          variant="default"
+          variant="surface"
           size="default"
           disabled={selected !== null}
           aria-label={soleOption.label}
@@ -116,14 +116,16 @@ export const ChoiceWidget = memo(function ChoiceWidget({
           data-testid={`choice-${soleOption.value}`}
           // The locked (selected) state stays at full opacity: it is the
           // confirmation the user just acted on, not a faded leftover.
-          className="h-11 w-full justify-center px-4 text-sm font-medium disabled:opacity-100"
+          className="h-auto min-h-10 w-full justify-center whitespace-normal rounded-md border border-white/30 bg-[#2c2f3a] px-4 py-2 text-[14px] font-semibold text-[#f0f2f7] transition-colors hover:bg-[#363a46] disabled:bg-[#2c2f3a] disabled:text-[#f0f2f7] disabled:opacity-100"
           onClick={() => handleChoose(soleOption)}
         >
-          <span className="inline-flex items-center gap-2">
+          <span className="inline-flex min-w-0 items-center justify-center gap-2">
             {isSelected ? (
               <Check className="h-4 w-4 shrink-0" aria-hidden />
             ) : null}
-            <span>{soleOption.label}</span>
+            <span className="min-w-0 text-center [overflow-wrap:anywhere]">
+              {soleOption.label}
+            </span>
           </span>
         </Button>
       </div>
@@ -134,9 +136,10 @@ export const ChoiceWidget = memo(function ChoiceWidget({
     <ChatWidgetShell
       title={firstRun ? "Choose next step" : "Choose"}
       status={
-        // bg-surface, not bg-bg: on the dark cloud/os themes bg-bg is a
-        // near-transparent alpha that left this chip unreadable (#15144).
-        <span className="rounded-sm bg-surface px-2 py-0.5 text-[11px] font-medium text-muted">
+        // Plain muted text, no pill chrome: the theme text token stays
+        // readable on every surface (chat-native de-slop, supersedes the
+        // #15144 pill-background fix by removing the pill).
+        <span className="text-[11px] font-medium text-muted">
           {selected ? "Selected" : `${options.length} options`}
         </span>
       }
@@ -151,8 +154,8 @@ export const ChoiceWidget = memo(function ChoiceWidget({
       <fieldset
         className={
           firstRun
-            ? "flex min-w-0 flex-col items-stretch gap-2 border-0 p-3"
-            : "flex min-w-0 flex-wrap items-center gap-2 border-0 p-3"
+            ? "flex min-w-0 flex-col items-stretch gap-2 border-0 py-1.5"
+            : "flex min-w-0 flex-wrap items-center gap-2 border-0 py-1.5"
         }
         aria-label={`Choose ${scope}`}
         data-choice-id={id}
@@ -176,8 +179,8 @@ export const ChoiceWidget = memo(function ChoiceWidget({
               isSelected || (recommended && selected === null);
             const variant = highlighted ? "default" : "surface";
             const choiceClass = highlighted
-              ? "h-11 w-full justify-between px-4 text-sm font-medium disabled:opacity-100 aria-disabled:opacity-100"
-              : "h-11 w-full justify-between border border-border-strong bg-card px-4 text-sm font-medium text-txt-strong hover:bg-surface disabled:opacity-40 aria-disabled:opacity-40";
+              ? "h-auto min-h-11 w-full justify-between whitespace-normal px-4 py-2 text-sm font-medium disabled:opacity-100 aria-disabled:opacity-100"
+              : "h-auto min-h-11 w-full justify-between whitespace-normal border border-border-strong bg-card px-4 py-2 text-sm font-medium text-txt-strong hover:bg-surface disabled:opacity-40 aria-disabled:opacity-40";
             return (
               <Button
                 key={option.value}
@@ -191,11 +194,13 @@ export const ChoiceWidget = memo(function ChoiceWidget({
                 className={choiceClass}
                 onClick={() => handleChoose(option)}
               >
-                <span className="inline-flex items-center gap-2">
+                <span className="inline-flex min-w-0 items-center gap-2 text-left">
                   {isSelected ? (
                     <Check className="h-4 w-4 shrink-0" aria-hidden />
                   ) : null}
-                  <span>{option.label}</span>
+                  <span className="min-w-0 [overflow-wrap:anywhere]">
+                    {option.label}
+                  </span>
                 </span>
                 {!isSelected ? (
                   <ChevronRight

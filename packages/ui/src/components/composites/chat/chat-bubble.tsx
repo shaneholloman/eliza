@@ -1,11 +1,12 @@
 /**
- * Message bubble surface for a single chat line, toned for assistant vs user.
- * Two chromes: `panel` (theme-token fill, ChatView / detached windows /
- * ChatSurface) and `glass` (the continuous overlay's floating dark-glass row —
- * fixed light text + hairline edge + text shadow, never theme `--txt`, so it
- * stays legible over any wallpaper). When a connector `source` is set the panel
- * chrome draws a source-colored outline so cross-channel messages stay
- * visually distinct without a repeated text badge.
+ * Message surface for a single chat line, toned for assistant vs user and kept
+ * chat-native: assistant turns render as plain text (no card fill, no box) and
+ * only the user turn carries a subtle accent tint. Two variants: `panel`
+ * (theme tokens, ChatView / detached windows / ChatSurface) and `glass` (the
+ * continuous overlay's floating row — fixed light text + text shadow, never
+ * theme `--txt`, so it stays legible over any wallpaper). When a connector
+ * `source` is set the panel chrome draws a source-colored outline so
+ * cross-channel messages stay visually distinct without a repeated text badge.
  */
 import type * as React from "react";
 
@@ -71,13 +72,14 @@ export function ChatBubble({
             ? // Chromeless wallpaper text keeps the shared float shadow but no
               // box edge or padding.
               "text-white"
-            : cn(
-                "rounded-2xl px-3.5 py-2",
-                tone === "user" ? "rounded-br-md" : "rounded-bl-md",
-                // No per-message fill — text floats on the overlay's one shared
-                // panel glass; the hairline edge defines the item boundary (#10698).
-                WALLPAPER_GLASS.messageBubble,
-              ),
+            : tone === "user"
+              ? cn(
+                  // Keep authored turns visually scannable while assistant
+                  // replies remain shadcn-style plain text on the wallpaper.
+                  "rounded-2xl rounded-br-md border border-white/15 px-3.5 py-2",
+                  WALLPAPER_GLASS.messageBubble,
+                )
+              : cn("py-1", WALLPAPER_GLASS.messageBubble),
           WALLPAPER_FLOAT_SHADOW,
           className,
         )}
@@ -87,18 +89,23 @@ export function ChatBubble({
     );
   }
 
-  const sourceBorderClassName = normalizedSource
-    ? getChatSourceMeta(normalizedSource).borderClassName
-    : "border-transparent";
-
   return (
     <div
       className={cn(
-        "relative inline-block max-w-full whitespace-pre-wrap break-words rounded-sm border px-3 py-2",
+        "relative inline-block max-w-full whitespace-pre-wrap break-words",
+        // Chat-native: assistant turns are plain text on the page — no card
+        // fill, no box (#13560 de-slop). The user turn keeps its subtle accent
+        // tint so the reader can scan who said what at a glance.
         tone === "user"
-          ? "bg-[color:color-mix(in_srgb,var(--accent-subtle)_70%,var(--bg)_30%)] text-txt-strong"
-          : "bg-[color:color-mix(in_srgb,var(--card)_82%,var(--text)_12%)] text-txt",
-        sourceBorderClassName,
+          ? "rounded-sm bg-[color:color-mix(in_srgb,var(--accent-subtle)_70%,var(--bg)_30%)] px-3 py-2 text-txt-strong"
+          : "text-txt",
+        // Cross-channel messages keep their connector-colored outline — the
+        // border exists only when it carries information.
+        normalizedSource &&
+          cn(
+            "rounded-sm border px-3 py-2",
+            getChatSourceMeta(normalizedSource).borderClassName,
+          ),
         className,
       )}
       data-chat-source={normalizedSource ?? undefined}
