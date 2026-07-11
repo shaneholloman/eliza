@@ -39,6 +39,13 @@ import {
   SESSION_RETRY_METADATA_KEY,
 } from "./orchestrator-task-types.js";
 import {
+  applyResumePreamble,
+  buildResumeContext,
+  RESUME_CONTEXT_METADATA_KEY,
+  type ResumeContext,
+  resumeEventFields,
+} from "./resume-context.js";
+import {
   dispatchParentAgentDirective,
   extractParentAgentDirective,
   parentAgentMarkerIndex,
@@ -1030,9 +1037,26 @@ export class SubAgentRouter extends Service {
             return;
           }
           if (decision.kind === "respawn") {
+            // Build the resume context so the successor continues from the
+            // predecessor's ON-DISK progress in the SAME worktree instead of
+            // starting cold. Pure + I/O-free on this hot path: the workdir,
+            // reason, and predecessor id are all in hand; branch/diffStat are
+            // left for the successor to discover via `git status` (the
+            // preamble instructs exactly that), so no git call is made here.
+            // `failureKind` is the pooled-account taxonomy
+            // (rate-limited | needs-reauth), a subset of ResumeReason.
+            const resumeContext = buildResumeContext({
+              reason: failureKind,
+              fromSessionId: sessionId,
+              workdir: session.workdir,
+              lastProgress:
+                pickPayloadString(data, "lastProgress") ??
+                pickPayloadString(data, "summary"),
+            });
             const respawned = await this.respawnStateLost(
               session,
               `account ${failureKind}`,
+              resumeContext,
             );
             if (respawned) {
               this.verifyRetryHandedOffSessions.add(sessionId);
@@ -1793,6 +1817,7 @@ export class SubAgentRouter extends Service {
   private async respawnStateLost(
     session: SessionInfo,
     reason = "session_state_lost",
+    resumeContext?: ResumeContext,
   ): Promise<boolean> {
     const meta = (session.metadata ?? {}) as Record<string, unknown>;
     // The original task is stashed on metadata by TASKS op=spawn_agent —
@@ -1812,11 +1837,25 @@ export class SubAgentRouter extends Service {
     // respawn a stale copy would mis-attribute the replacement's failures to
     // an account that isn't serving it.
     const { account: _staleAccount, ...carriedMeta } = meta;
+    // On a rate-limit/capacity FAILOVER resume (not a bare state-lost crash),
+    // prepend a resume preamble so the successor continues from the
+    // predecessor's on-disk progress in the SAME worktree instead of starting
+    // cold, and stamp the resume marker so the event surface + downstream can
+    // tell "rate-limited, resumable" from a plain respawn. The `initialTask`
+    // metadata field stays the UNWRAPPED original (respawnLineageKey and the
+    // reference-text fallbacks key on it); only the spawned instruction is
+    // wrapped, and only the SUCCESSOR carries the marker.
+    const spawnInstruction = resumeContext
+      ? applyResumePreamble(originalTask, resumeContext)
+      : originalTask;
+    const resumeMeta = resumeContext
+      ? { [RESUME_CONTEXT_METADATA_KEY]: resumeContext }
+      : {};
     try {
       const result = await service.spawnSession({
         agentType: session.agentType,
         workdir: session.workdir,
-        initialTask: originalTask,
+        initialTask: spawnInstruction,
         approvalPreset: session.approvalPreset,
         // Carry the original metadata forward — origin routing keys
         // (originRoomId/taskRoomId/source/...) plus the unchanged `initialTask`
@@ -1829,12 +1868,37 @@ export class SubAgentRouter extends Service {
           ...sanitizeSuccessorMetadata(carriedMeta),
           keepAliveAfterComplete: false,
           retryOfSessionId: session.id,
+          ...resumeMeta,
         },
       });
       this.log("info", `re-dispatched sub-agent after ${reason}`, {
         sessionId: session.id,
         retrySessionId: result.sessionId,
       });
+      // Surface a resumable-failover on the task-event stream so the UI can
+      // show "rate-limited, resumable" instead of a bare respawn (item 4). A
+      // typed session event on the SUCCESSOR carries the resume fields; the
+      // OrchestratorTaskService session-event bridge records it to the task
+      // timeline. Only for the resume path (resumeContext present), never for
+      // an ordinary state-lost respawn.
+      // error-policy:J7 best-effort observability — a missing emitter or a
+      // throwing subscriber must not undo the authoritative respawn.
+      if (resumeContext) {
+        try {
+          service.emitSessionEvent?.(
+            result.sessionId,
+            "account_failover_resumed",
+            {
+              ...resumeEventFields(resumeContext),
+              workdir: resumeContext.workdir,
+              branch: resumeContext.branch,
+              diffStat: resumeContext.diffStat,
+            },
+          );
+        } catch {
+          // best-effort — see doc comment
+        }
+      }
       // Same handoff stamp as verify-retry (#11711): the old session's teardown
       // `stopped` is plumbing, not a user-facing completion — the respawn posts.
       await this.markSessionHandedOff(session.id, result.sessionId);

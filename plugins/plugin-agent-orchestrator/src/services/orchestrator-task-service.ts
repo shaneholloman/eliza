@@ -756,6 +756,18 @@ function describeEvent(event: string, data: unknown): string {
       return `Switched coding account to ${
         str(record.label) ?? str(record.accountId) ?? "unknown"
       }`;
+    case "account_failover_resumed": {
+      const reason = str(record.resumeReason);
+      return `Resumed after ${
+        reason === "rate-limited"
+          ? "a rate limit"
+          : reason === "needs-reauth"
+            ? "a credential expiry"
+            : reason === "capacity"
+              ? "a capacity/overload condition"
+              : "a provider limit"
+      } (work preserved)`;
+    }
     default:
       return event;
   }
