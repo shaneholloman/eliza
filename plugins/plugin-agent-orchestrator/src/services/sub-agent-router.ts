@@ -1895,8 +1895,11 @@ export class SubAgentRouter extends Service {
               diffStat: resumeContext.diffStat,
             },
           );
-        } catch {
-          // best-effort — see doc comment
+        } catch (err) {
+          this.log("debug", "account failover resume event emit failed", {
+            sessionId: result.sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       }
       // Same handoff stamp as verify-retry (#11711): the old session's teardown
