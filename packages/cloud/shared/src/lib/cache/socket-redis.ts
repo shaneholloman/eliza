@@ -137,6 +137,7 @@ const decoder = new TextDecoder("utf-8");
 // whole request wall-clock. With this bound a stall throws instead, and
 // CacheClient falls back to revalidate/DB — the cache degrades, never hangs.
 const SOCKET_OP_TIMEOUT_MS = 1000;
+const SOCKET_CLOSE_TIMEOUT_MS = 50;
 
 function encodeCommand(args: ReadonlyArray<string | number>): Uint8Array {
   let out = `*${args.length}${CRLF}`;
@@ -384,25 +385,34 @@ class Connection {
   }
 
   async close(): Promise<void> {
-    try {
-      await this.writer?.close();
-    } catch {
-      // ignore
-    }
-    try {
-      await this.reader?.cancel();
-    } catch {
-      // ignore
-    }
-    try {
-      await this.socket?.close();
-    } catch {
-      // ignore
-    }
+    const writer = this.writer;
+    const reader = this.reader;
+    const socket = this.socket;
     this.socket = null;
     this.writer = null;
     this.reader = null;
     this.parser = new RespParser();
+
+    // A timed-out Railway socket may never complete a graceful writer close.
+    // Detach it synchronously, abort all three stream layers in parallel, and
+    // bound teardown so the 1s operation ceiling remains a real caller-visible
+    // wall-clock ceiling. allSettled observes late failures after the deadline.
+    const cleanup = Promise.allSettled([
+      Promise.resolve().then(async () => await writer?.abort()),
+      Promise.resolve().then(async () => await reader?.cancel()),
+      Promise.resolve().then(async () => await socket?.close()),
+    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        cleanup,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, SOCKET_CLOSE_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 }
 
@@ -724,6 +734,11 @@ export class Pipeline {
 
   incr(key: string): this {
     this.commands.push(["INCR", key]);
+    return this;
+  }
+
+  pttl(key: string): this {
+    this.commands.push(["PTTL", key]);
     return this;
   }
 

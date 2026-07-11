@@ -9,6 +9,7 @@
  * @see ANALYTICS_PR_REVIEW_ANALYSIS.md - Issue #1 (Fixed)
  */
 
+import { createHash } from "node:crypto";
 import type { RouteParams } from "../api/hono-next-style-params";
 import { isHotPathCachesEnabled } from "../services/inference-hot-path-caches";
 import type { EndpointType, OrgRateLimitConfig } from "../services/org-rate-limits";
@@ -117,6 +118,10 @@ function getIpKey(request: Request): string {
   return `ip:${ip}`;
 }
 
+function hashRateLimitIdentifier(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 function getDefaultKey(request: Request): string {
   // Prefer stable, non-IP identifiers.
   //
@@ -136,14 +141,14 @@ function getDefaultKey(request: Request): string {
       return token.startsWith("eliza_") ? token : null;
     })();
 
-  if (apiKey) return `apikey:${apiKey}`;
+  if (apiKey) return `apikey:${hashRateLimitIdentifier(apiKey)}`;
 
   const anonSession =
     request.headers.get("x-anonymous-session") ||
     request.headers.get("X-Anonymous-Session") ||
     getRequestCookie(request, "eliza-anon-session") ||
     null;
-  if (anonSession) return `anon:${anonSession}`;
+  if (anonSession) return `anon:${hashRateLimitIdentifier(anonSession)}`;
 
   // If we truly can't identify the caller, use a shared bucket (still not IP-based).
   return "public";

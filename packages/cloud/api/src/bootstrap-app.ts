@@ -315,18 +315,21 @@ export function createApp(): Hono<AppEnv> {
   // still enforce it; this only guarantees that a route which forgot to add one
   // is not completely unprotected against per-IP flooding. The ceiling is
   // deliberately generous (10 req/s sustained) so it sits above every per-route
-  // policy and never interferes with legitimate traffic. Enforced only when
-  // REDIS_RATE_LIMITING=true (falls open otherwise). Registered before
+  // policy and never interferes with legitimate traffic. Cloudflare's local
+  // protective counter avoids a network hop at ingress. Registered before
   // authMiddleware so unauthenticated routes are covered too.
   app.use(
     "*",
-    rateLimit({
-      windowMs: 60_000,
-      maxRequests: 600,
-      // Namespaced so this backstop counter never collides with a per-route
-      // IP-keyed limiter sharing the same `ip:<addr>` key.
-      keyGenerator: (c) => `global:${getIpKey(c)}`,
-    }),
+    rateLimit(
+      {
+        windowMs: 60_000,
+        maxRequests: 600,
+        // Namespaced so this backstop counter never collides with a per-route
+        // IP-keyed limiter sharing the same `ip:<addr>` key.
+        keyGenerator: (c) => `global:${getIpKey(c)}`,
+      },
+      { bindingName: "GLOBAL_RATE_LIMITER" },
+    ),
   );
 
   app.use("*", authMiddleware);

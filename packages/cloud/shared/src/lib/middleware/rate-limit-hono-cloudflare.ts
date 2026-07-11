@@ -1,12 +1,14 @@
 /**
  * Rate-limit middleware for Hono on Cloudflare Workers.
  *
- * Falls open if Redis is not configured. Adds `X-RateLimit-*` headers on success.
+ * Protective hot paths may use Cloudflare's machine-local Rate Limiting
+ * binding. Other routes use Redis and fall open if it is not configured.
  * Routes that must stay available during a Redis outage can install an
  * explicit per-isolate fallback bucket; every other sensitive route either
  * fails closed or falls open according to its config.
  */
 
+import { createHash } from "node:crypto";
 import type { Context, MiddlewareHandler } from "hono";
 import type { AppContext, AppEnv, Bindings } from "../../types/cloud-worker-env";
 import { buildRedisClient, type CompatibleRedis } from "../cache/redis-factory";
@@ -38,6 +40,16 @@ export interface RateLimitConfig {
    * that install `redisUnavailableFallback` stay available but locally bounded.
    */
   failClosed?: boolean;
+}
+
+/** Cloudflare's machine-local Rate Limiting binding. */
+export interface CloudflareRateLimitBinding {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
+}
+
+export interface CloudflareRateLimitOptions {
+  /** Name of the Wrangler Rate Limiting binding in `c.env`. */
+  bindingName: string;
 }
 
 function getRedis(env: Bindings): CompatibleRedis | null {
@@ -92,6 +104,10 @@ function getIpKey(c: Context): string {
   return `ip:${getRequestIp(c) ?? "unknown"}`;
 }
 
+function hashRateLimitIdentifier(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 function getDefaultKey(c: AppContext): string {
   const apiKey =
     c.req.header("x-api-key") ||
@@ -102,7 +118,7 @@ function getDefaultKey(c: AppContext): string {
       const token = auth.slice(7);
       return token.startsWith("eliza_") ? token : null;
     })();
-  if (apiKey) return `apikey:${apiKey}`;
+  if (apiKey) return `apikey:${hashRateLimitIdentifier(apiKey)}`;
 
   const userId = c.get("user")?.id;
   if (userId) return `user:${userId}`;
@@ -112,7 +128,7 @@ function getDefaultKey(c: AppContext): string {
     c.req.header("X-Anonymous-Session") ||
     c.req.header("cookie")?.match(/eliza-anon-session=([^;]+)/)?.[1] ||
     null;
-  if (anon) return `anon:${anon}`;
+  if (anon) return `anon:${hashRateLimitIdentifier(anon)}`;
 
   // Unauthenticated public traffic buckets PER-IP, not a global constant.
   // Returning the literal "public" put ALL anonymous traffic worldwide into one
@@ -147,6 +163,38 @@ function fallOpenResult(config: RateLimitConfig): CheckResult {
     remaining: config.maxRequests,
     resetAt: Date.now() + config.windowMs,
   };
+}
+
+function isCloudflareRateLimitBinding(value: unknown): value is CloudflareRateLimitBinding {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "limit" in value &&
+    typeof value.limit === "function"
+  );
+}
+
+function nativeRateLimitHeaders(config: RateLimitConfig) {
+  return {
+    "X-RateLimit-Limit": String(config.maxRequests),
+    "X-RateLimit-Policy": "cloudflare-native",
+  };
+}
+
+function nativeRateLimitUnavailable(c: Context, bindingName: string): Response {
+  logger.error("[RateLimit] Required Cloudflare Rate Limiting binding unavailable", {
+    bindingName,
+  });
+  return c.json(
+    {
+      success: false,
+      error: "Service temporarily unavailable",
+      code: "rate_limit_unavailable" as const,
+      message: "Rate limiter binding is unavailable; request rejected.",
+    },
+    503,
+    { "Retry-After": "30" },
+  );
 }
 
 interface LocalFallbackBucket {
@@ -310,12 +358,21 @@ export async function checkUpstash(
 ): Promise<CheckResult> {
   const fullKey = `ratelimit:${key}`;
   const carriedCount = Math.max(0, Math.floor(options?.carriedCount ?? 0));
+
+  // A lease flush may carry dozens of locally-served requests. Sending one
+  // TCP round-trip per carried request turns the first request after a quiet
+  // period into an N-second stall. Redis pipelines preserve the exact count
+  // while flushing every increment and the TTL read in one network exchange.
+  const pipeline = redis.pipeline();
   for (let i = 0; i < carriedCount; i++) {
-    await redis.incr(fullKey);
+    pipeline.incr(fullKey);
   }
-  const count = await redis.incr(fullKey);
-  let ttl = count === 1 ? null : await redis.pttl(fullKey);
-  if (count === 1 || ttl === null || ttl < 0) {
+  pipeline.incr(fullKey);
+  pipeline.pttl(fullKey);
+  const results = await pipeline.exec();
+  const count = Number(results[carriedCount] ?? 0);
+  let ttl = Number(results[carriedCount + 1] ?? -1);
+  if (count === 1 || !Number.isFinite(ttl) || ttl < 0) {
     // First request of a window — or an ORPHANED counter: if the pexpire after
     // a previous window's first incr ever failed (Workers sub-request drop),
     // the key has no TTL (pttl -1), so the counter grows forever and the
@@ -337,7 +394,10 @@ export async function checkUpstash(
   };
 }
 
-export function rateLimit(config: RateLimitConfig): MiddlewareHandler<AppEnv> {
+export function rateLimit(
+  config: RateLimitConfig,
+  cloudflare?: CloudflareRateLimitOptions,
+): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const env = (c.env ?? {}) as Bindings;
 
@@ -359,6 +419,56 @@ export function rateLimit(config: RateLimitConfig): MiddlewareHandler<AppEnv> {
         rateLimitHeaders(effectiveConfig, fallOpenResult(effectiveConfig), "disabled"),
       );
       return;
+    }
+
+    if (cloudflare) {
+      const binding = env[cloudflare.bindingName];
+      if (isCloudflareRateLimitBinding(binding)) {
+        const key = (config.keyGenerator ?? getDefaultKey)(c);
+        let success: boolean | undefined;
+        try {
+          ({ success } = await binding.limit({ key }));
+        } catch (error) {
+          // error-policy:J1 middleware boundary translates a platform binding failure into a visible 503.
+          logger.error("[RateLimit] Cloudflare Rate Limiting binding failed", {
+            bindingName: cloudflare.bindingName,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          if (env.NODE_ENV === "production") {
+            return nativeRateLimitUnavailable(c, cloudflare.bindingName);
+          }
+        }
+
+        if (success === false) {
+          const headers = nativeRateLimitHeaders(effectiveConfig);
+          return c.json(
+            {
+              success: false,
+              error: "Too many requests",
+              code: "rate_limit_exceeded" as const,
+              message: `Rate limit exceeded. Maximum ${effectiveConfig.maxRequests} requests per ${Math.ceil(
+                effectiveConfig.windowMs / 1000,
+              )} seconds.`,
+              retryAfter: Math.ceil(effectiveConfig.windowMs / 1000),
+            },
+            429,
+            {
+              ...headers,
+              "Retry-After": String(Math.ceil(effectiveConfig.windowMs / 1000)),
+            },
+          );
+        }
+
+        if (success === true) {
+          await next();
+          applyRateLimitHeaders(c, nativeRateLimitHeaders(effectiveConfig));
+          return;
+        }
+      }
+
+      if (env.NODE_ENV === "production") {
+        return nativeRateLimitUnavailable(c, cloudflare.bindingName);
+      }
     }
 
     const redis = getRedis(env);

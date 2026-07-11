@@ -13,6 +13,7 @@ class FakeRedis {
   count = 0;
   incrCalls = 0;
   expireCalls = 0;
+  pipelineExecCalls = 0;
   ttl = -1;
 
   async incr(): Promise<number> {
@@ -29,6 +30,29 @@ class FakeRedis {
     this.expireCalls++;
     this.ttl = windowMs;
     return 1;
+  }
+
+  pipeline() {
+    const operations: Array<"incr" | "pttl"> = [];
+    const pipeline = {
+      incr: () => {
+        operations.push("incr");
+        return pipeline;
+      },
+      pttl: () => {
+        operations.push("pttl");
+        return pipeline;
+      },
+      exec: async () => {
+        this.pipelineExecCalls++;
+        const results: number[] = [];
+        for (const operation of operations) {
+          results.push(operation === "incr" ? await this.incr() : await this.pttl());
+        }
+        return results;
+      },
+    };
+    return pipeline;
   }
 }
 
@@ -75,6 +99,7 @@ describe("Hono rateLimit lease (#15428)", () => {
     redis.count = 0;
     redis.incrCalls = 0;
     redis.expireCalls = 0;
+    redis.pipelineExecCalls = 0;
     redis.ttl = -1;
     _resetHonoRateLimitLeases();
   });
@@ -90,6 +115,7 @@ describe("Hono rateLimit lease (#15428)", () => {
     }
 
     expect(redis.incrCalls).toBe(4);
+    expect(redis.pipelineExecCalls).toBe(4);
   });
 
   test("flag-on repeats within budget skip Redis and advertise the lease policy", async () => {
@@ -125,6 +151,7 @@ describe("Hono rateLimit lease (#15428)", () => {
 
     // First authoritative hit + two carried INCRs + current authoritative hit.
     expect(redis.incrCalls).toBe(4);
+    expect(redis.pipelineExecCalls).toBe(2);
   });
 
   test("denials are leased instead of hammering Redis", async () => {

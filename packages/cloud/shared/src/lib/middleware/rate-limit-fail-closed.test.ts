@@ -35,6 +35,16 @@ const throwingRedis = {
   pexpire: async () => {
     throw new Error("ECONNREFUSED: redis down");
   },
+  pipeline: () => {
+    const pipeline = {
+      incr: () => pipeline,
+      pttl: () => pipeline,
+      exec: async () => {
+        throw new Error("ECONNREFUSED: redis down");
+      },
+    };
+    return pipeline;
+  },
 };
 
 mock.module("../cache/redis-factory", () => ({
