@@ -11,12 +11,21 @@ import type {
 import { cn } from "../../lib/utils";
 import { OrchestratorRoomView } from "../chat/widgets/agent-orchestrator-room-view";
 import { CockpitNewSessionForm } from "./CockpitNewSessionForm";
+import type { CockpitSpawnTarget } from "./cockpit-modes";
 
 export interface CockpitViewProps {
   /** The live task-room roster (the deck). `null` while loading. */
   rooms: OrchestratorRoomRosterOverview | null;
-  /** Called with a ready create-task input when the user starts a session. */
-  onCreateSession: (input: CodingAgentCreateTaskInput) => void | Promise<void>;
+  /**
+   * Called with a ready create-task input when the user starts a session. The
+   * optional {@link CockpitSpawnTarget} carries the repo/workdir to spawn against.
+   */
+  onCreateSession: (
+    input: CodingAgentCreateTaskInput,
+    target?: CockpitSpawnTarget,
+  ) => void | Promise<void>;
+  /** Known repos offered as repo-field autocomplete (from the project registry). */
+  knownRepos?: readonly string[];
   /** In-flight spawn (disables the form + shows "Starting…"). */
   busy?: boolean;
   /** Arm the TOS-unsafe experimental modes in the picker. */
@@ -51,6 +60,7 @@ export interface CockpitViewProps {
 export function CockpitView({
   rooms,
   onCreateSession,
+  knownRepos = [],
   busy = false,
   experimentalEnabled = false,
   error = null,
@@ -88,6 +98,7 @@ export function CockpitView({
         <h2 className="text-sm font-semibold text-txt">New session</h2>
         <CockpitNewSessionForm
           onCreate={onCreateSession}
+          knownRepos={knownRepos}
           busy={busy}
           experimentalEnabled={experimentalEnabled}
         />
