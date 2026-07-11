@@ -2342,7 +2342,12 @@ export {
 // ACP service surface.
 export { AcpService } from "./services/acp-service.js";
 // Terminal-output normalizer for chat surfaces; consumed by live smoke harnesses.
-export { cleanForChat } from "./services/ansi-utils.js";
+// PR-link parser for the completion path (surfaced as the task-widget PR chip).
+export {
+  cleanForChat,
+  extractPullRequestLink,
+  type ParsedPullRequestLink,
+} from "./services/ansi-utils.js";
 export {
   COMPLETION_ENVELOPE_INSTRUCTION,
   type CompletionEnvelope,

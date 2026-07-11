@@ -56,6 +56,7 @@ import {
   type SerializableSpawnOpts,
 } from "./admission-queue.js";
 import { assignAgentName } from "./agent-name-assignment.js";
+import { extractPullRequestLink } from "./ansi-utils.js";
 import {
   accountMetaFromSessionMetadata,
   assessCodingAccountReadiness,
@@ -1081,6 +1082,12 @@ export class OrchestratorTaskService extends Service {
           stoppedAt: Date.now(),
         });
         await this.mirrorChangeSetToStore(sessionId);
+        // Surface any pull request the sub-agent opened as a first-class task
+        // artifact (`prUrl` on task metadata) so the chat/task UI can render a
+        // clickable PR chip on completion, instead of the human hunting for the
+        // link in the completion prose. Additive + best-effort: no PR in the
+        // output leaves metadata untouched.
+        await this.mirrorPullRequestToStore(taskId, sessionId, summary ?? "");
         // Attach the sub-agent's own recorded trajectories (its inner model
         // prompts/responses) as task artifacts under the shared traceId (#13775).
         // error-policy:J7 diagnostics-must-not-kill-the-loop — trace ingest is
@@ -1251,6 +1258,69 @@ export class OrchestratorTaskService extends Service {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+  }
+
+  /**
+   * Stamp the pull request associated with a sub-agent's completion onto the
+   * task's durable metadata (`prUrl`/`prNumber`/`prRepo`), parsed from its
+   * completion output. The `/api/orchestrator/tasks/:id` detail DTO surfaces
+   * these fields (`metadata.prUrl` → mapper) so the chat task widget can render
+   * a clickable PR chip the instant the sub-agent's completion lands.
+   *
+   * Semantics are deliberately "the task's pull request LINK", not "a PR this
+   * task literally created": the first GitHub `/pull/` URL in the completion
+   * wins. For a create-PR task that is the opened PR; for a review/update task
+   * it is the PR the task worked on. Both are the link the human wants one
+   * click away. Creation-only detection would need fragile prose heuristics
+   * over free-form sub-agent summaries, and a false negative silently hides
+   * the chip in the dominant (created-PR) case.
+   *
+   * Additive + null-safe: when the completion carries no GitHub PR URL, nothing
+   * is written. Idempotent-ish: a re-delivered `task_complete` for the same URL
+   * overwrites with the identical value; a DIFFERENT (newer) PR URL replaces the
+   * prior one, which matches the "latest PR wins" chip semantics.
+   *
+   * error-policy:J7 fire-and-forget on the `task_complete` write path — a failure
+   * is warned + reported (so a missing chip stays observable in diagnostics) and
+   * the chip is simply absent; it never breaks completion.
+   */
+  private async mirrorPullRequestToStore(
+    taskId: string,
+    sessionId: string,
+    completion: string,
+  ): Promise<void> {
+    try {
+      const link = extractPullRequestLink(completion);
+      if (!link) return;
+      const doc = await this.store.getTask(taskId);
+      if (!doc) return;
+      // Skip a redundant write when the same PR URL is already stamped: a
+      // re-delivered completion must not churn the store or re-emit a change.
+      if (str(doc.task.metadata?.prUrl) === link.url) return;
+      await this.store.updateTask(taskId, {
+        metadata: {
+          ...doc.task.metadata,
+          prUrl: link.url,
+          prNumber: link.number,
+          prRepo: link.repo,
+        },
+      });
+      this.emitChange(taskId);
+    } catch (err) {
+      // error-policy:J7 best-effort mirror on the task_complete path; the failure
+      // is warned + reported (a missing chip must be distinguishable from "no PR
+      // was created" in diagnostics) but must not break the event-bridge write.
+      this.log("warn", "mirror pull-request link to store failed", {
+        taskId,
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      this.runtime.reportError?.(
+        "OrchestratorTask.mirrorPullRequestToStore",
+        err,
+        { taskId, sessionId },
+      );
     }
   }
 
