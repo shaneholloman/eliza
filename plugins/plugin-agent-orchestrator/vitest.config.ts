@@ -8,6 +8,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "@elizaos/auth/token-expiry": fileURLToPath(
+        new URL("../../packages/auth/src/token-expiry.ts", import.meta.url),
+      ),
       "@elizaos/auth": new URL(
         "../../packages/auth/src/index.ts",
         import.meta.url,
