@@ -36,6 +36,9 @@ import {
   RESUME_CONTEXT_METADATA_KEY,
   readResumeContext,
 } from "../../src/services/resume-context.js";
+import { OrchestratorTaskService } from "../../src/services/orchestrator-task-service.js";
+import { OrchestratorTaskStore } from "../../src/services/orchestrator-task-store.js";
+import type { OrchestratorTaskSession } from "../../src/services/orchestrator-task-types.js";
 import { SubAgentRouter } from "../../src/services/sub-agent-router.js";
 import type { SessionInfo } from "../../src/services/types.js";
 
@@ -399,5 +402,243 @@ describe("SubAgentRouter — rate-limit failover resume", () => {
       authReason: "token_expired",
       resumeFromSessionId: SESSION_ID,
     });
+  });
+});
+
+function makeTaskAcp() {
+  let handler:
+    | ((sessionId: string, event: string, data: unknown) => void)
+    | undefined;
+  const service = {
+    onSessionEvent: vi.fn((fn: typeof handler) => {
+      handler = fn;
+      return () => {
+        handler = undefined;
+      };
+    }),
+    getSession: vi.fn(async () => null),
+    getChangedPaths: vi.fn(() => [] as string[]),
+  };
+  return {
+    service,
+    emit(sessionId: string, event: string, data: unknown) {
+      handler?.(sessionId, event, data);
+    },
+  };
+}
+
+function makeTaskRuntime(acpService: unknown) {
+  return {
+    agentId: "00000000-0000-0000-0000-000000000001",
+    logger: {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    },
+    getService: vi.fn(() => acpService),
+    getSetting: vi.fn(() => undefined),
+    reportError: vi.fn(),
+  } as never;
+}
+
+async function flushEventBridge() {
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+async function waitForTaskStatus(
+  store: OrchestratorTaskStore,
+  taskId: string,
+  status: string,
+) {
+  for (let i = 0; i < 40; i++) {
+    const doc = await store.getTask(taskId);
+    if (doc?.task.status === status) return doc;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  return store.getTask(taskId);
+}
+
+function makeStoredSession(
+  taskId: string,
+  sessionId: string,
+  patch: Partial<OrchestratorTaskSession> = {},
+): OrchestratorTaskSession {
+  const now = Date.now();
+  const iso = new Date("2026-07-11T00:00:00.000Z").toISOString();
+  return {
+    id: `${sessionId}-row`,
+    taskId,
+    sessionId,
+    framework: "claude",
+    label: "worker",
+    originalTask: "Implement the widget and add tests",
+    workdir: WORKDIR,
+    status: "ready",
+    decisionCount: 0,
+    autoResolvedCount: 0,
+    registeredAt: now,
+    lastActivityAt: now,
+    idleCheckCount: 0,
+    taskDelivered: false,
+    lastSeenDecisionIndex: 0,
+    spawnedAt: now,
+    retryCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheTokens: 0,
+    costUsd: 0,
+    usageState: "unavailable",
+    metadata: {},
+    createdAt: iso,
+    updatedAt: iso,
+    ...patch,
+  };
+}
+
+describe("OrchestratorTaskService — ACP event bridge", () => {
+  const previousAutoVerify = process.env.ELIZA_ORCHESTRATOR_AUTO_GOAL_VERIFY;
+
+  afterEach(() => {
+    if (previousAutoVerify === undefined) {
+      delete process.env.ELIZA_ORCHESTRATOR_AUTO_GOAL_VERIFY;
+    } else {
+      process.env.ELIZA_ORCHESTRATOR_AUTO_GOAL_VERIFY = previousAutoVerify;
+    }
+  });
+
+  it("records canonical progress, completion, and late-error outcomes", async () => {
+    process.env.ELIZA_ORCHESTRATOR_AUTO_GOAL_VERIFY = "0";
+    const acp = makeTaskAcp();
+    const runtime = makeTaskRuntime(acp.service);
+    const store = new OrchestratorTaskStore({ backend: "memory" });
+    const service = new OrchestratorTaskService(runtime, { store });
+    await service.start();
+
+    const created = await store.createTask({
+      title: "Widget",
+      goal: "Implement the widget and add tests",
+      originalRequest: "Please implement the widget.",
+      acceptanceCriteria: ["Focused tests pass"],
+    });
+    await store.addSession(
+      makeStoredSession(created.task.id, "task-session", {
+        metadata: { lastChangeSet: { changedFiles: "malformed" } },
+      }),
+    );
+
+    acp.emit("task-session", "ready", {});
+    await flushEventBridge();
+    expect((await store.getTask(created.task.id))?.task.status).toBe("active");
+
+    acp.emit("task-session", "plan", {
+      entries: [{ text: "Add tests", status: "in_progress" }],
+    });
+    acp.emit("task-session", "message", { text: "Implemented widget tests." });
+    acp.emit("task-session", "task_complete", {
+      response: "Done. Tests pass.",
+    });
+
+    const completed = await waitForTaskStatus(
+      store,
+      created.task.id,
+      "validating",
+    );
+    expect(completed?.task.status).toBe("validating");
+    expect(completed?.task.currentPlan).toEqual({
+      entries: [{ text: "Add tests", status: "in_progress" }],
+    });
+    expect(completed?.messages.map((message) => message.content)).toContain(
+      "Implemented widget tests.",
+    );
+    expect(
+      completed?.events.map((event) => [event.eventType, event.summary]),
+    ).toEqual(
+      expect.arrayContaining([
+        ["ready", "Sub-agent ready"],
+        ["plan", "Updated plan — 1 item"],
+        ["task_complete", "Sub-agent reported completion (pending validation)"],
+      ]),
+    );
+    expect(
+      completed?.sessions.find(
+        (session) => session.sessionId === "task-session",
+      ),
+    ).toMatchObject({
+      status: "completed",
+      taskDelivered: true,
+      completionSummary: "Done. Tests pass.",
+    });
+
+    acp.emit("task-session", "error", {
+      message: "state dropped after completion",
+    });
+    await flushEventBridge();
+    const afterLateError = await store.getTask(created.task.id);
+    expect(afterLateError?.task.status).toBe("validating");
+    expect(
+      afterLateError?.sessions.find(
+        (session) => session.sessionId === "task-session",
+      )?.status,
+    ).toBe("completed");
+
+    await service.stop();
+  });
+
+  it("routes unrecoverable and account-failover errors through distinct task outcomes", async () => {
+    const marks = installHealthyBridge("claude");
+    const acp = makeTaskAcp();
+    const runtime = makeTaskRuntime(acp.service);
+    const store = new OrchestratorTaskStore({ backend: "memory" });
+    const service = new OrchestratorTaskService(runtime, { store });
+    await service.start();
+
+    const plain = await store.createTask({
+      title: "Plain crash",
+      goal: "Crash plainly",
+      acceptanceCriteria: ["No crash"],
+    });
+    await store.addSession(makeStoredSession(plain.task.id, "plain-session"));
+    acp.emit("plain-session", "error", { message: "TypeError: boom" });
+    await flushEventBridge();
+    const plainDoc = await store.getTask(plain.task.id);
+    expect(plainDoc?.task.status).toBe("failed");
+    expect(plainDoc?.events.map((event) => event.eventType)).toContain(
+      "task_failed",
+    );
+
+    const pooled = await store.createTask({
+      title: "Pooled failover",
+      goal: "Continue after rate limit",
+      acceptanceCriteria: ["Retry on healthy account"],
+    });
+    await store.addSession(
+      makeStoredSession(pooled.task.id, "pooled-session", {
+        accountProviderId: "anthropic-subscription",
+        accountId: "acct-1",
+        accountLabel: "Work",
+      }),
+    );
+    acp.emit("pooled-session", "ready", {});
+    await flushEventBridge();
+    acp.emit("pooled-session", "error", {
+      message: "429 rate limit exceeded",
+    });
+    await flushEventBridge();
+    const pooledDoc = await store.getTask(pooled.task.id);
+    expect(pooledDoc?.task.status).toBe("active");
+    expect(pooledDoc?.events.map((event) => event.eventType)).toContain(
+      "session_error_retrying",
+    );
+    expect(marks.markRateLimited).toHaveBeenCalledTimes(1);
+    expect(
+      pooledDoc?.sessions.find(
+        (session) => session.sessionId === "pooled-session",
+      ),
+    ).toMatchObject({ status: "errored", retryCount: 1 });
+
+    await service.stop();
   });
 });
