@@ -30,6 +30,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
+  ElizaError,
   getTrajectoryContext,
   type IAgentRuntime,
   projectWorldId,
@@ -154,6 +155,7 @@ import {
   resolveTaskProjectId,
   resolveTaskSpawnWorkdir,
 } from "./project-binding.js";
+import { extractPullRequestLink } from "./pull-request-link.js";
 import { buildSkillsManifest } from "./skill-manifest.js";
 import {
   configureSpendLedger,
@@ -1004,6 +1006,12 @@ export class OrchestratorTaskService extends Service {
       await this.applySessionEvent(taskId, sessionId, event, data);
       this.emitChange(taskId);
     } catch (err) {
+      // error-policy:J1 ACP event boundary translation — persistence failures
+      // are surfaced to the agent so it can retry or escalate the session.
+      this.runtime.reportError("OrchestratorTask.recordSessionEvent", err, {
+        sessionId,
+        event,
+      });
       // Warn once per session, not once per event. A persistently degraded
       // store would fire this on every `ready`/`tool_running`/... otherwise,
       // flooding the log for the life of the session (#11641).
@@ -1093,6 +1101,9 @@ export class OrchestratorTaskService extends Service {
           stoppedAt: Date.now(),
         });
         await this.mirrorChangeSetToStore(sessionId);
+        // Completion metadata is written before validation advances so clients
+        // never observe a successful completion without its associated PR.
+        await this.mirrorPullRequestToStore(taskId, summary ?? "");
         // Attach the sub-agent's own recorded trajectories (its inner model
         // prompts/responses) as task artifacts under the shared traceId (#13775).
         // error-policy:J7 diagnostics-must-not-kill-the-loop — trace ingest is
@@ -1264,6 +1275,45 @@ export class OrchestratorTaskService extends Service {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  /**
+   * Stamp the pull request associated with a sub-agent's completion onto the
+   * task's durable metadata (`prUrl`/`prNumber`/`prRepo`), parsed from its
+   * completion output. The `/api/orchestrator/tasks/:id` detail DTO surfaces
+   * these fields (`metadata.prUrl` → mapper) so the chat task widget can render
+   * a clickable PR chip the instant the sub-agent's completion lands.
+   *
+   * The first GitHub `/pull/` URL wins because review/update tasks also need the
+   * PR they worked on surfaced; inferring creation from completion prose would
+   * make valid links disappear. Re-delivery skips an identical URL, while a
+   * later completion may replace it with the task's newer PR.
+   */
+  private async mirrorPullRequestToStore(
+    taskId: string,
+    completion: string,
+  ): Promise<void> {
+    const link = extractPullRequestLink(completion);
+    if (!link) return;
+    const doc = await this.store.getTask(taskId);
+    if (!doc) {
+      throw new ElizaError("Cannot attach pull request to a missing task", {
+        code: "ORCHESTRATOR_TASK_NOT_FOUND",
+        context: { taskId, prUrl: link.url },
+        severity: "fatal",
+      });
+    }
+    // Re-delivery must not churn the store or re-emit a change.
+    if (str(doc.task.metadata?.prUrl) === link.url) return;
+    await this.store.updateTask(taskId, {
+      metadata: {
+        ...doc.task.metadata,
+        prUrl: link.url,
+        prNumber: link.number,
+        prRepo: link.repo,
+      },
+    });
+    this.emitChange(taskId);
   }
 
   /**
