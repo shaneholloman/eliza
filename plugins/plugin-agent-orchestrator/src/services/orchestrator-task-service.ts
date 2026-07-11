@@ -1123,9 +1123,19 @@ export class OrchestratorTaskService extends Service {
       case "error": {
         const failureKind = str(record.failureKind);
         const message = str(record.message) ?? "";
+        // A `token_expired` authReason means the BARE injected token aged out
+        // mid-run (Claude coding spawns cannot refresh it) while the account
+        // itself is healthy — NOT a bad credential. Marking the account
+        // unhealthy here would needlessly evict/reauth a working account and
+        // defeat the recovery path (the router respawns with a freshly-selected
+        // token). So an auth error explicitly tagged token_expired skips the
+        // account-health mark; the respawn re-injects a fresh token.
+        const isInjectedTokenExpiry =
+          str(record.authReason) === "token_expired";
         if (
-          failureKind === "auth" ||
-          /401|403|invalid api key|unauthor/i.test(message)
+          !isInjectedTokenExpiry &&
+          (failureKind === "auth" ||
+            /401|403|invalid api key|unauthor/i.test(message))
         ) {
           await this.markSessionAccountUnhealthy(sessionId, "auth", message);
         } else if (/429|rate.?limit|quota/i.test(message)) {

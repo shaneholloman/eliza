@@ -173,15 +173,35 @@ export function listProviderAccounts(
  * `accountRefreshMutex` so concurrent callers don't race on the
  * refresh-token grant or the credential file write.
  *
+ * `opts.minRemainingMs` widens the refresh window: the token is refreshed
+ * unless it has at least this much life left (instead of the default 5-minute
+ * buffer). This lets a caller that is about to INJECT the token into a
+ * long-running subprocess it cannot later refresh (e.g. a Claude coding spawn
+ * with a bare `CLAUDE_CODE_OAUTH_TOKEN`) hand off a token that survives the
+ * expected run duration. Omitted → the historical 5-minute buffer, so existing
+ * callers are byte-for-byte unchanged.
+ *
  * Returns `null` when no credentials are stored or the refresh fails.
  */
 export async function getAccessToken(
   provider: AccountCredentialProvider,
   accountId: string = DEFAULT_ACCOUNT_ID,
+  opts?: { minRemainingMs?: number },
 ): Promise<string | null> {
+  // The token must have at least this much life left to be returned without a
+  // refresh. Never below the historical buffer; a non-positive/NaN override is
+  // ignored (fail-safe: a bad value can't disable the refresh).
+  const raw = opts?.minRemainingMs;
+  const effectiveBufferMs =
+    typeof raw === "number" && Number.isFinite(raw) && raw > REFRESH_BUFFER_MS
+      ? raw
+      : REFRESH_BUFFER_MS;
+
   if (!isSubscriptionProvider(provider)) {
     const direct = loadAccount(provider, accountId);
     if (!direct) return null;
+    // Direct API keys can't be refreshed; a still-valid key is returned even if
+    // it is inside the widened window (there is nothing to refresh into).
     if (direct.credentials.expires <= Date.now()) return null;
     return direct.credentials.access;
   }
@@ -189,7 +209,7 @@ export async function getAccessToken(
   const initial = loadCredentials(provider, accountId);
   if (!initial) return null;
 
-  if (initial.credentials.expires > Date.now() + REFRESH_BUFFER_MS) {
+  if (initial.credentials.expires > Date.now() + effectiveBufferMs) {
     return initial.credentials.access;
   }
 
@@ -215,7 +235,7 @@ export async function getAccessToken(
     const stored = loadCredentials(provider, accountId);
     if (!stored) return null;
     const { credentials } = stored;
-    if (credentials.expires > Date.now() + REFRESH_BUFFER_MS) {
+    if (credentials.expires > Date.now() + effectiveBufferMs) {
       return credentials.access;
     }
 

@@ -54,6 +54,7 @@ import {
   accountMetaFromSessionMetadata,
   type CodingAccountMeta,
   diagnoseCodingAccountFallback,
+  isTokenExpiryText,
   resolveCodingAccountStrategy,
   selectCodingAccount,
 } from "./coding-account-selection.js";
@@ -1939,7 +1940,9 @@ export class AcpService extends Service {
     this.emitSessionEvent(sessionId, "error", {
       message,
       stopReason,
-      failureKind: isAuthText(result.stderr) ? "auth" : undefined,
+      // stderr carries the provider auth envelope; refine "auth" → also
+      // "token_expired" (claude only) when the injected token merely aged out.
+      ...this.authFailureFields(result.stderr, session.agentType),
     });
     return promptResult;
   }
@@ -2551,7 +2554,7 @@ export class AcpService extends Service {
       await this.store.updateStatus(id, "errored", message);
       this.emitSessionEvent(id, "error", {
         message,
-        failureKind: isAuthText(message) ? "auth" : undefined,
+        ...this.authFailureFields(message, session.agentType),
       });
       throw new Error(message);
     }
@@ -2891,11 +2894,14 @@ export class AcpService extends Service {
           opts.sessionId &&
           !record.cancelled &&
           code !== 0 &&
-          isAuthText(record.stderr)
+          // Emit for a 401/unauthorized auth failure OR an explicit token-expiry
+          // exit (isAuthText alone misses a bare "token expired"), so a run that
+          // dies of injected-token expiry still surfaces the typed reason.
+          (isAuthText(record.stderr) || isTokenExpiryText(record.stderr))
         ) {
           this.emitSessionEvent(opts.sessionId, "error", {
             message: this.classifyExitError(code, record.stderr),
-            failureKind: "auth",
+            ...this.authFailureFields(record.stderr, opts.agentType),
           });
         }
         if (
@@ -3831,6 +3837,42 @@ export class AcpService extends Service {
         error: errorMessage(err),
       });
     }
+  }
+
+  /**
+   * Build the auth-related fields of an `error` session-event payload from a
+   * failure text. Emits `failureKind: "auth"` (the value the account-health
+   * marking + user-action Discord post key on) for any auth-shaped failure, and
+   * ADDS a companion `authReason: "token_expired"` when the text explicitly
+   * indicates an injected token that aged out mid-run — a Claude coding spawn
+   * gets a bare `CLAUDE_CODE_OAUTH_TOKEN` the third-party adapter cannot refresh,
+   * so a long run outlives its token even though the account is healthy. The
+   * companion field lets the UI say "your run outlived its token, nothing is
+   * wrong with your account" without changing the `"auth"` routing. Returns an
+   * empty object when the text is not auth-shaped (no failureKind stamped).
+   */
+  private authFailureFields(
+    text: string,
+    agentType?: AgentType,
+  ): { failureKind: "auth"; authReason?: "token_expired" } | Record<string, never> {
+    // Explicit token-expiry phrasing ("token expired", "session expired", …) is
+    // auth-shaped too, but `isAuthText` only matches 401/unauthorized/
+    // authenticate/login/api key/invalid_grant — NOT a bare "expired" — so a run
+    // that dies with only expiry text would otherwise emit no failureKind at
+    // all, defeating the typed signal. Recognize either.
+    const expired = isTokenExpiryText(text);
+    if (!isAuthText(text) && !expired) return {};
+    // The `token_expired` reason drives a downstream recovery that keeps the
+    // account HEALTHY and just re-injects a fresh token — valid ONLY for the
+    // claude bare-token injection path (CLAUDE_CODE_OAUTH_TOKEN the third-party
+    // adapter reads once and cannot refresh). Codex self-refreshes into its
+    // CODEX_HOME, so a Codex "refresh token expired" is a GENUINELY dead
+    // credential that must still mark needs-reauth — do NOT stamp the reason
+    // for non-claude backends, or a dead account would be respawned forever.
+    const isClaudeBareToken = agentType === "claude";
+    return expired && isClaudeBareToken
+      ? { failureKind: "auth", authReason: "token_expired" }
+      : { failureKind: "auth" };
   }
 
   private classifyExitError(code: number | null, stderr: string): string {

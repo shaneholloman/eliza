@@ -44,6 +44,10 @@ import {
   resolveStateDir,
   setCodingAgentSelectorBridge,
 } from "@elizaos/core";
+import {
+  claudeMinRemainingMs,
+  resolveClaudeExpectedRunMs,
+} from "./claude-token-refresh.js";
 import type { LinkedAccountProviderId } from "@elizaos/shared/contracts/service-routing";
 import {
   type AccountPool,
@@ -382,10 +386,49 @@ function makeBridge(pool: AccountPool): CodingAgentSelectorBridge {
         if (providerId === "openai-codex") {
           await adoptRotatedCodexTokens(account.id).catch(() => false);
         }
+        // Claude coding spawns get a BARE `CLAUDE_CODE_OAUTH_TOKEN` the
+        // third-party claude-agent-acp adapter reads ONCE and cannot refresh, so a
+        // long run outlives a short-TTL token (recon gap #3). Proactively widen
+        // the refresh window for anthropic-subscription so the injected token
+        // survives the expected run duration. Codex self-refreshes into its
+        // CODEX_HOME, so it keeps the default buffer.
+        const resolveOpts =
+          providerId === "anthropic-subscription"
+            ? {
+                minRemainingMs: claudeMinRemainingMs(
+                  resolveClaudeExpectedRunMs(
+                    (key) => process.env[key],
+                  ),
+                ),
+              }
+            : undefined;
         let accessToken: string | null = null;
         let resolveError: unknown;
         try {
-          accessToken = await getAccessToken(providerId, account.id);
+          accessToken = await getAccessToken(
+            providerId,
+            account.id,
+            resolveOpts,
+          );
+          // Proactive refresh is BEST-EFFORT: with the widened Claude buffer,
+          // getAccessToken forces a refresh for a still-valid token that has
+          // less than the expected-run TTL left, and returns null if that
+          // refresh fails (e.g. a transient Anthropic outage). Dropping the
+          // account here would regress a token that was perfectly usable under
+          // the default buffer, silently degrading to single-account. So on a
+          // null result from a WIDENED resolve, retry once at the default
+          // buffer to recover the still-valid token; the run then carries a
+          // shorter TTL (and surfaces the typed expiry signal if it ages out
+          // mid-run) instead of not spawning on this account at all.
+          if (accessToken === null && resolveOpts) {
+            const stillValid = await getAccessToken(providerId, account.id);
+            if (stillValid !== null) {
+              logger.info(
+                `[coding-account-bridge] proactive refresh for ${providerId}/${account.id} did not yield a fresh token; using the still-valid shorter-TTL token (a long run may hit the typed expiry signal)`,
+              );
+              accessToken = stillValid;
+            }
+          }
         } catch (err) {
           resolveError = err;
           logger.warn(
