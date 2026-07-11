@@ -12,6 +12,11 @@
 import { CODING_AGENT_SELECTOR_BRIDGE_SYMBOL } from "@elizaos/core";
 import type { Content, HandlerCallback, Memory } from "@elizaos/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../src/services/config-env.js", () => ({
+  readConfigEnvKey: (key: string) => process.env[key],
+}));
+
 import { SubAgentRouter } from "../../src/services/sub-agent-router.js";
 import type { SessionInfo } from "../../src/services/types.js";
 
@@ -181,6 +186,83 @@ describe("mid-session account failover", () => {
     expect(bridge.markNeedsReauth).toHaveBeenCalledTimes(1);
     expect(acp.spawnSession).toHaveBeenCalledTimes(1);
     expect(handleMessage).not.toHaveBeenCalled();
+
+    await router.stop();
+  });
+
+  it("with authReason=token_expired: respawns with a fresh token but does NOT mark the account needs-reauth", async () => {
+    // The injected bare CLAUDE_CODE_OAUTH_TOKEN aged out mid-run while the
+    // account stays healthy. The router must recover (respawn re-injects a
+    // fresh token) WITHOUT sidelining the working account in the pool.
+    const acp = makeAcp([makeSession("s-1")]);
+    const { runtime, handleMessage } = makeRuntime(acp.service);
+    const router = await SubAgentRouter.start(runtime);
+
+    acp.emit("s-1", "error", {
+      message: "oauth token has expired",
+      failureKind: "auth",
+      authReason: "token_expired",
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Account NOT marked — it is healthy, only the injected token expired.
+    expect(bridge.markNeedsReauth).not.toHaveBeenCalled();
+    expect(bridge.markRateLimited).not.toHaveBeenCalled();
+    // But the task still recovered via a respawn (fresh token re-injected).
+    expect(acp.spawnSession).toHaveBeenCalledTimes(1);
+    // Dead session's error narration suppressed (respawn is authoritative).
+    expect(handleMessage).not.toHaveBeenCalled();
+
+    await router.stop();
+  });
+
+  it("respawns on a token_expired authReason even when the message classifier misses the phrase (jwt expired)", async () => {
+    // `classifyAccountFailure` does not recognize `jwt expired` / `session
+    // expired` / `expired_token`, but the emitter already typed it via
+    // authReason. The router must still fire the recovery respawn, without
+    // marking the (healthy) account.
+    const acp = makeAcp([makeSession("s-1")]);
+    const { runtime, handleMessage } = makeRuntime(acp.service);
+    const router = await SubAgentRouter.start(runtime);
+
+    acp.emit("s-1", "error", {
+      message: "jwt expired", // NOT matched by classifyAccountFailure
+      failureKind: "auth",
+      authReason: "token_expired",
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Recovered via respawn despite the classifier miss.
+    expect(acp.spawnSession).toHaveBeenCalledTimes(1);
+    // Account kept healthy (token merely aged out).
+    expect(bridge.markNeedsReauth).not.toHaveBeenCalled();
+    expect(handleMessage).not.toHaveBeenCalled();
+
+    await router.stop();
+  });
+
+  it("token-expiry whose respawn FAILS marks the account needs-reauth (no stuck retry)", async () => {
+    // If the parent cannot mint a replacement token (dead refresh / outage),
+    // respawnStateLost fails. We must then mark the account needs-reauth so the
+    // task terminates honestly instead of lingering in retrying with no worker.
+    const acp = makeAcp([makeSession("s-1")]);
+    acp.spawnSession.mockRejectedValueOnce(new Error("token refresh failed"));
+    const { runtime, handleMessage } = makeRuntime(acp.service);
+    const router = await SubAgentRouter.start(runtime);
+
+    acp.emit("s-1", "error", {
+      message: "oauth token has expired",
+      failureKind: "auth",
+      authReason: "token_expired",
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Respawn was attempted...
+    expect(acp.spawnSession).toHaveBeenCalledTimes(1);
+    // ...and failed, so the account IS now marked needs-reauth (fallback).
+    expect(bridge.markNeedsReauth).toHaveBeenCalledTimes(1);
+    // The honest error reaches the planner/user (no silent stuck retry).
+    expect(handleMessage).toHaveBeenCalledTimes(1);
 
     await router.stop();
   });

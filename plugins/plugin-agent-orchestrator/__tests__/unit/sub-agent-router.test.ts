@@ -319,6 +319,8 @@ describe("SubAgentRouter", () => {
         },
       ],
     });
+    expect(metadata?.resumeReason).toBeUndefined();
+    expect(metadata?.resumable).toBeUndefined();
 
     await router.stop();
   });
