@@ -90,6 +90,102 @@ describe("getAccessToken minRemainingMs (proactive pre-spawn refresh)", () => {
     ).toMatchObject({ access: "fresh-access", refresh: "fresh-refresh" });
   });
 
+  it("reports insufficient lifetime when the refreshed token is still below minRemainingMs", async () => {
+    useTempElizaHome();
+    const refreshMock =
+      refreshAnthropicToken as unknown as ReturnType<typeof vi.fn>;
+    refreshMock.mockResolvedValue({
+      access: "short-fresh-access",
+      refresh: "short-fresh-refresh",
+      expires: Date.now() + 30 * MIN,
+    });
+    saveCredentials(
+      "anthropic-subscription",
+      {
+        access: "current-access",
+        refresh: "current-refresh",
+        expires: Date.now() + 10 * MIN,
+      },
+      "personal",
+    );
+
+    await expect(
+      getAccessToken("anthropic-subscription", "personal", {
+        minRemainingMs: 55 * MIN,
+        outcome: true,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      kind: "insufficient-lifetime",
+    });
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(
+      loadAccount("anthropic-subscription", "personal")?.credentials,
+    ).toMatchObject({
+      access: "short-fresh-access",
+      refresh: "short-fresh-refresh",
+    });
+    await expect(
+      getAccessToken("anthropic-subscription", "personal"),
+    ).resolves.toBe("short-fresh-access");
+  });
+
+  it("serializes concurrent refreshes so a rotated token is reused by waiters", async () => {
+    useTempElizaHome();
+    const refreshMock =
+      refreshAnthropicToken as unknown as ReturnType<typeof vi.fn>;
+    let releaseRefresh!: () => void;
+    const refreshStarted = new Promise<void>((resolve) => {
+      refreshMock.mockImplementationOnce(async () => {
+        resolve();
+        await new Promise<void>((release) => {
+          releaseRefresh = release;
+        });
+        return {
+          access: "rotated-access",
+          refresh: "rotated-refresh",
+          expires: Date.now() + 90 * MIN,
+        };
+      });
+    });
+    saveCredentials(
+      "anthropic-subscription",
+      {
+        access: "expired-access",
+        refresh: "old-refresh",
+        expires: Date.now() - MIN,
+      },
+      "personal",
+    );
+
+    const first = getAccessToken("anthropic-subscription", "personal", {
+      minRemainingMs: 55 * MIN,
+      outcome: true,
+    });
+    await refreshStarted;
+    const second = getAccessToken("anthropic-subscription", "personal", {
+      minRemainingMs: 55 * MIN,
+      outcome: true,
+    });
+    releaseRefresh();
+
+    await expect(first).resolves.toMatchObject({
+      ok: true,
+      accessToken: "rotated-access",
+      refreshed: true,
+    });
+    await expect(second).resolves.toMatchObject({
+      ok: true,
+      accessToken: "rotated-access",
+      refreshed: false,
+    });
+    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(refreshMock).toHaveBeenCalledWith("old-refresh");
+    expect(
+      loadAccount("anthropic-subscription", "personal")?.credentials.refresh,
+    ).toBe("rotated-refresh");
+  });
+
   it("best-effort fallback: a failed widened refresh returns null, but the default resolve still recovers the valid token", async () => {
     // Models the bridge's graceful degradation. A token with 30 min left is
     // inside a 55-min widened window, so getAccessToken forces a refresh; if

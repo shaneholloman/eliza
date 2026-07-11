@@ -9,6 +9,7 @@
  * behavior untouched.
  */
 
+import { isTokenExpiryText } from "@elizaos/auth/token-expiry";
 import {
   type CodingAccountStrategy,
   type CodingAccountUsage,
@@ -284,28 +285,7 @@ export function classifyAccountFailure(
   return null;
 }
 
-// A previously-valid access token that simply aged out mid-run. Distinct from a
-// revoked/invalid credential: a Claude coding spawn gets a BARE
-// `CLAUDE_CODE_OAUTH_TOKEN` the third-party adapter reads once and cannot refresh,
-// so a long run outlives its injected token even though the account is healthy.
-// Kept NARROW on purpose: a bare 401/unauthorized is NOT enough (that could be
-// a revoked account, which must route to needs-reauth) — only explicit
-// expiry phrasing qualifies. Used ONLY to refine an already-auth-shaped failure
-// into a clearer UI reason, never to widen what counts as an auth failure.
-const TOKEN_EXPIRED_RE =
-  /\b(?:token (?:has )?expired|expired[_ ]?token|oauth token (?:has )?expired|access token (?:has )?expired|token is expired|jwt expired|session expired)\b/i;
-
-/**
- * Pure: whether an auth-shaped failure message explicitly indicates an EXPIRED
- * injected token (as opposed to a revoked/invalid credential). Callers use this
- * to stamp a companion `authReason: "token_expired"` alongside the existing
- * `failureKind: "auth"` so the UI can explain "your run outlived its token,
- * nothing is wrong with your account" without changing the `"auth"` routing the
- * account-health machinery keys on.
- */
-export function isTokenExpiryText(text: string | undefined | null): boolean {
-  return !!text && TOKEN_EXPIRED_RE.test(text);
-}
+export { isTokenExpiryText };
 
 /**
  * Best-effort: tell the pool a spawned account hit a rate-limit / needs reauth

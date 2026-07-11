@@ -101,52 +101,8 @@ export function shouldProactivelyRefreshClaudeToken(args: {
   return expiresAtMs - nowMs < expectedRunMs;
 }
 
-/**
- * Typed reason a coding session ended. `token_expired` specifically means an
- * INJECTED spawn token aged out mid-run while the account itself remained
- * healthy (distinct from `needs_reauth`, a genuinely dead credential). The UI
- * can surface "your run outlived its token, nothing is wrong with your account"
- * for the former and "re-link your account" for the latter.
- */
-export type CodingAuthFailureReason =
-  | "token_expired"
-  | "needs_reauth"
-  | "rate_limited"
-  | "unknown";
-
-/**
- * Signals that an auth-shaped failure is specifically an EXPIRED-TOKEN failure
- * (as opposed to a revoked/invalid credential). These phrases appear in
- * provider 401 envelopes when a previously-valid access token has simply aged
- * out. Kept narrow: a bare "401"/"unauthorized" is NOT enough to claim expiry —
- * that could equally be a revoked account, which must route to needs-reauth.
- *
- * Matching order matters at the call site: a token-expiry match should be
- * consulted only for a failure ALREADY classified as auth-shaped, to refine
- * "auth" → "token_expired" for the UI, never to widen what counts as an auth
- * failure.
- */
-const TOKEN_EXPIRED_PATTERN =
-  /\b(?:token (?:has )?expired|expired[_ ]?token|oauth token (?:has )?expired|access token (?:has )?expired|token is expired|jwt expired|session expired)\b/i;
-
-/**
- * Refine an already-auth-classified failure into a typed reason. Only claims
- * `token_expired` on an explicit expiry phrase; otherwise `needs_reauth`.
- * Returns `unknown` for empty input.
- */
-export function classifyAuthFailureReason(
-  text: string | null | undefined,
-): CodingAuthFailureReason {
-  if (!text) return "unknown";
-  if (TOKEN_EXPIRED_PATTERN.test(text)) return "token_expired";
-  return "needs_reauth";
-}
-
-/**
- * Whether a text explicitly indicates an expired injected token. A thin,
- * side-effect-free predicate the spawn/error path can use to stamp a
- * `token_expired` failureKind without pulling in the full classifier.
- */
-export function isTokenExpiryText(text: string | null | undefined): boolean {
-  return !!text && TOKEN_EXPIRED_PATTERN.test(text);
-}
+export {
+  classifyAuthFailureReason,
+  type CodingAuthFailureReason,
+  isTokenExpiryText,
+} from "@elizaos/auth/token-expiry";
