@@ -5,4 +5,5 @@ export * from "./credentials.ts";
 export * from "./oauth-flow.ts";
 export * from "./token-expiry.ts";
 export * from "./openai-codex.ts";
+export * from "./codex-device.ts";
 export * from "./types.ts";
