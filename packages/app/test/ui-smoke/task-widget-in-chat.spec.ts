@@ -88,11 +88,7 @@ function taskDetail(overrides: JsonRecord = {}) {
     providerPolicy: null,
     lastUserTurnAt: null,
     lastCoordinatorTurnAt: null,
-    metadata: {
-      prUrl: "https://github.com/elizaOS/eliza/pull/16090",
-      prNumber: 16090,
-      prRepo: "elizaOS/eliza",
-    },
+    metadata: {},
     usage: usage({ totalTokens: 1234, state: "estimated" }),
     sessions: [],
     decisions: [],
@@ -168,8 +164,12 @@ function statusFor(detail: JsonRecord) {
 async function installTaskChatRoutes(
   page: Page,
   assistantText: string,
-): Promise<{ taskFetches: number; streamRequests: string[] }> {
-  const detail = taskDetail();
+): Promise<{
+  taskFetches: number;
+  streamRequests: string[];
+  completeTask: () => void;
+}> {
+  let detail = taskDetail();
   let taskFetches = 0;
   let sequence = 0;
   const streamRequests: string[] = [];
@@ -342,7 +342,22 @@ async function installTaskChatRoutes(
       return taskFetches;
     },
     streamRequests,
-  } as { taskFetches: number; streamRequests: string[] };
+    completeTask() {
+      detail = taskDetail({
+        status: "validating",
+        activeSessionCount: 0,
+        metadata: {
+          prUrl: "https://github.com/elizaOS/eliza/pull/16090",
+          prNumber: 16090,
+          prRepo: "elizaOS/eliza",
+        },
+      });
+    },
+  } as {
+    taskFetches: number;
+    streamRequests: string[];
+    completeTask: () => void;
+  };
 }
 
 test.use({ video: "on" });
@@ -396,7 +411,25 @@ test.describe("chat task widget", () => {
     await expect(widget).toContainText(FETCHED_TASK_TITLE);
     await expect(widget).toHaveAttribute("data-task-id", TASK_ID);
     await expect(widget).toHaveAttribute("data-task-status", "active");
-    const prChip = widget.getByTestId("task-widget-pr-chip");
+    await expect(widget.getByTestId("task-widget-pr-chip")).toHaveCount(0);
+    await page.screenshot({
+      path: testInfo.outputPath("task-widget-pr-before.jpg"),
+      fullPage: true,
+      type: "jpeg",
+      quality: 88,
+    });
+
+    handles.completeTask();
+    const completionPrompt = "Show the completed task.";
+    await page.getByTestId("chat-composer-textarea").fill(completionPrompt);
+    await page.getByTestId("chat-composer-action").click();
+    await expect.poll(() => handles.streamRequests).toContain(completionPrompt);
+    const completedWidget = page.getByTestId("task-widget").last();
+    await expect(completedWidget).toHaveAttribute(
+      "data-task-status",
+      "validating",
+    );
+    const prChip = completedWidget.getByTestId("task-widget-pr-chip");
     await expect(prChip).toBeVisible();
     await expect(prChip).toHaveAttribute(
       "href",
@@ -458,8 +491,10 @@ test.describe("chat task widget", () => {
 
     // Expansion and workbench navigation remain separate from the adjacent PR
     // anchor so every control is independently keyboard- and pointer-accessible.
-    await widget.getByRole("button").click();
-    await widget.getByRole("button", { name: "Open in workbench →" }).click();
+    await completedWidget.getByRole("button").click();
+    await completedWidget
+      .getByRole("button", { name: "Open in workbench →" })
+      .click();
 
     await expect
       .poll(() =>
