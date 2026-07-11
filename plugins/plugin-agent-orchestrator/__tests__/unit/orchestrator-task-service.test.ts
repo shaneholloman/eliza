@@ -1135,6 +1135,20 @@ describe("OrchestratorTaskService — event bridge session status", () => {
     expect(event.summary).toBe("Sub-agent ready");
   });
 
+  it("records account failover resumes as preserved-work events", async () => {
+    const { service, acp, taskId, sessionId } = await withSpawnedSession();
+    await drive(acp, sessionId, "account_failover_resumed", {
+      resumeReason: "rate-limited",
+    });
+    const event = must(
+      (await service.getTask(taskId))?.events.find(
+        (entry) => entry.eventType === "account_failover_resumed",
+      ),
+      "failover event",
+    );
+    expect(event.summary).toBe("Resumed after a rate limit (work preserved)");
+  });
+
   it("ignores events for sessions it does not own", async () => {
     const { service, acp, taskId } = await withSpawnedSession();
     const before = must(await service.getTask(taskId), "before").events.length;
