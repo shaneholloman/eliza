@@ -739,11 +739,41 @@ export class CodingWorkspaceService {
     // `targetBranch: options.base ?? workspace.baseBranch` in gitCreatePR), so
     // the gate never scans a different range than the PR actually diffs.
     const gateBase = options.base?.trim() || workspace.baseBranch;
-    const gateResult = await this.runDiffReviewGate(
-      workspaceId,
-      workspace,
-      gateBase,
-    );
+    let gateResult: DiffGateResult | undefined;
+    try {
+      gateResult = await this.runDiffReviewGate(
+        workspaceId,
+        workspace,
+        gateBase,
+      );
+    } catch (error) {
+      // A failed security-boundary scan is both operator-visible and reported
+      // through the runtime error channel. The original typed error is rethrown
+      // so callers can distinguish capture/config failures.
+      this.runtime.reportError(
+        "CodingWorkspaceService.createPR.diffGate",
+        error,
+        {
+          workspaceId,
+          baseBranch: gateBase,
+        },
+      );
+      this.emitEvent({
+        type: "workspace:finalizing",
+        workspaceId,
+        executionId: workspace.id,
+        timestamp: new Date(),
+        data: {
+          diffGate: {
+            outcome: "capture_failed",
+            passed: false,
+            findings: [],
+            summary: error instanceof Error ? error.message : String(error),
+          },
+        },
+      });
+      throw error;
+    }
     let effectiveOptions = options;
     if (gateResult) {
       if (!gateResult.passed) {
