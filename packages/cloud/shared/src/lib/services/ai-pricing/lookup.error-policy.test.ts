@@ -170,3 +170,50 @@ test("exact-price read transport FAILURE degrades to the fallback tier, never cr
   expect(result.inputCost).toBeGreaterThan(0);
   expect(result.outputCost).toBeGreaterThan(0);
 });
+
+test("starts input and output pricing reads concurrently on the inference hot path", async () => {
+  const started = new Set<string>();
+  let signalBothStarted!: () => void;
+  const bothStarted = new Promise<void>((resolve) => {
+    signalBothStarted = resolve;
+  });
+  let releaseReads!: () => void;
+  const readsReleased = new Promise<void>((resolve) => {
+    releaseReads = resolve;
+  });
+
+  pairsHandler = async (filters: unknown) => {
+    const chargeType = (filters as { chargeType: "input" | "output" }).chargeType;
+    started.add(chargeType);
+    if (started.size === 2) signalBothStarted();
+    await readsReleased;
+    return [
+      catalogRow(
+        "anthropic",
+        "anthropic/claude-opus-4-8",
+        chargeType,
+        chargeType === "input" ? 5 : 25,
+      ),
+    ];
+  };
+
+  const calculation = calculateTextCostFromCatalog({
+    model: "claude-opus-4-8",
+    provider: "anthropic",
+    inputTokens: 1_000,
+    outputTokens: 500,
+  });
+
+  await Promise.race([
+    bothStarted,
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(() => reject(new Error("pricing reads started serially")), 250),
+    ),
+  ]);
+  expect(started).toEqual(new Set(["input", "output"]));
+  releaseReads();
+
+  const result = await calculation;
+  expect(result.inputCost).toBeGreaterThan(0);
+  expect(result.outputCost).toBeGreaterThan(0);
+});
