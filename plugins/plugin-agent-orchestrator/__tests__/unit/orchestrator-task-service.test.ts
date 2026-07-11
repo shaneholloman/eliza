@@ -116,6 +116,7 @@ function runtime(
   return {
     getService: () => acp ?? null,
     getSetting: (key: string) => settings[key],
+    reportError: vi.fn(),
     logger: {
       debug: vi.fn(),
       info: vi.fn(),
@@ -1096,6 +1097,31 @@ describe("OrchestratorTaskService — event bridge session status", () => {
     expect(session.stoppedAt).toBeTruthy();
   });
 
+  it("stamps the sub-agent's PR link onto task metadata on task_complete (PR chip plumbing)", async () => {
+    const { service, acp, taskId, sessionId } = await withSpawnedSession();
+    await drive(acp, sessionId, "task_complete", {
+      response:
+        "Done. Opened https://github.com/elizaOS/eliza/pull/16090 for review.",
+    });
+    const detail = must(await service.getTask(taskId), "detail");
+    expect(detail.metadata.prUrl).toBe(
+      "https://github.com/elizaOS/eliza/pull/16090",
+    );
+    expect(detail.metadata.prNumber).toBe(16090);
+    expect(detail.metadata.prRepo).toBe("elizaOS/eliza");
+  });
+
+  it("leaves task metadata untouched when the completion carries no PR link", async () => {
+    const { service, acp, taskId, sessionId } = await withSpawnedSession();
+    await drive(acp, sessionId, "task_complete", {
+      response: "Committed abc1234 and pushed. No PR needed.",
+    });
+    const detail = must(await service.getTask(taskId), "detail");
+    expect(detail.metadata.prUrl).toBeUndefined();
+    expect(detail.metadata.prNumber).toBeUndefined();
+    expect(detail.metadata.prRepo).toBeUndefined();
+  });
+
   it("marks the session errored or stopped on those events", async () => {
     const a = await withSpawnedSession();
     await drive(a.acp, a.sessionId, "error", { message: "boom" });
@@ -1470,6 +1496,7 @@ describe("OrchestratorTaskService — store degradation resilience (#11641)", ()
     const warn = vi.fn();
     const rt = {
       getService: () => acp ?? null,
+      reportError: vi.fn(),
       logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
     } as never as IAgentRuntime;
     return { runtime: rt, warn };
