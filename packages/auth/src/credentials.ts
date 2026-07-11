@@ -22,7 +22,6 @@ import {
   resolveUserPath,
 } from "@elizaos/core";
 import type { SubscriptionCredentialSource } from "@elizaos/shared/contracts/first-run-options";
-import { ensureBuiltinSubscriptionAuthProviders } from "./subscription-auth/builtin-providers.ts";
 import {
   type AccountCredentialRecord,
   deleteAccount,
@@ -33,6 +32,7 @@ import {
 import { refreshAnthropicToken } from "./anthropic.ts";
 import { refreshCodexToken } from "./openai-codex.ts";
 import { accountRefreshMutex } from "./refresh-mutex.ts";
+import { ensureBuiltinSubscriptionAuthProviders } from "./subscription-auth/builtin-providers.ts";
 import {
   type AccountCredentialProvider,
   isCodingPlanKeySubscriptionProvider,
@@ -54,11 +54,13 @@ const DEFAULT_ACCOUNT_ID = "default";
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const invalidClaudeCodeRefreshTokens = new Set<string>();
 
+/** Stable failure categories for callers that manage account-pool health. */
 export type AccessTokenFailureKind =
   | "auth"
   | "transient"
   | "insufficient-lifetime";
 
+/** Typed token resolution result for callers that cannot treat every failure as reauthentication. */
 export type AccessTokenOutcome =
   | {
       ok: true;
@@ -74,10 +76,12 @@ export type AccessTokenOutcome =
       minRemainingMs?: number;
     };
 
+/** Freshness requested by a token consumer before it starts work. */
 export interface GetAccessTokenOptions {
   minRemainingMs?: number;
 }
 
+/** Selects the typed token result instead of the legacy nullable return. */
 export interface GetAccessTokenOutcomeOptions extends GetAccessTokenOptions {
   outcome: true;
 }
@@ -101,7 +105,7 @@ function tokenFailure(
 function classifyRefreshError(err: unknown): AccessTokenFailureKind {
   const message = err instanceof Error ? err.message : String(err);
   if (
-    /\b(?:400|401|403|invalid[_ ]?grant|invalid[_ ]?token|unauthor|forbidden|re-?auth|revoked|expired)\b/i.test(
+    /\b(?:401|403|invalid[_ ]?grant|invalid[_ ]?token|unauthor|forbidden|re-?auth|revoked|(?:access |refresh |oauth |jwt |session |credential )?token (?:has |is )?expired|expired[_ ]?(?:access[_ ]?|refresh[_ ]?|oauth[_ ]?|jwt[_ ]?)?token|(?:credential|jwt|session) (?:has |is )?expired)\b/i.test(
       message,
     )
   ) {
@@ -315,10 +319,7 @@ export async function getAccessToken(
   }
 
   if (isCodingPlanKeySubscriptionProvider(provider)) {
-    if (
-      initial.credentials.expires > Date.now() &&
-      !requestedWidenedLifetime
-    ) {
+    if (initial.credentials.expires > Date.now() && !requestedWidenedLifetime) {
       return finish({
         ok: true,
         accessToken: initial.credentials.access,
@@ -350,7 +351,10 @@ export async function getAccessToken(
       `[auth] ${provider} is not an importable OAuth credential; use its first-party coding client or supported coding endpoint.`,
     );
     return finish(
-      tokenFailure("auth", `${provider} cannot provide importable OAuth tokens`),
+      tokenFailure(
+        "auth",
+        `${provider} cannot provide importable OAuth tokens`,
+      ),
     );
   }
 
@@ -392,6 +396,8 @@ export async function getAccessToken(
         );
       }
     } catch (err) {
+      // error-policy:J1 Provider refresh failures become typed outcomes at the
+      // credential boundary so pool callers can distinguish auth from outages.
       logger.error(
         `[auth] Failed to refresh ${provider} token for "${accountId}": ${err}`,
       );
