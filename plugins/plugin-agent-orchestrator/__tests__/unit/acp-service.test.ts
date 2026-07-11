@@ -1969,6 +1969,27 @@ describe("AcpService", () => {
     );
   });
 
+  it("types a Claude injected-token expiry without misclassifying Codex refresh expiry", async () => {
+    const service = new AcpService(runtime());
+    const classify = (
+      service as unknown as {
+        authFailureFields(
+          text: string,
+          agentType?: string,
+        ): Record<string, unknown>;
+      }
+    ).authFailureFields.bind(service);
+
+    expect(classify("oauth token has expired", "claude")).toEqual({
+      failureKind: "auth",
+      authReason: "token_expired",
+    });
+    expect(classify("refresh token has expired", "codex")).toEqual({
+      failureKind: "auth",
+    });
+    expect(classify("ordinary compiler failure", "claude")).toEqual({});
+  });
+
   it("honors public env aliases for workspace, approval, and prompt timeout", async () => {
     const create = nextProc();
     const workspaceRoot = "/tmp/acp-workspace-root";

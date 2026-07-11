@@ -1110,6 +1110,28 @@ describe("OrchestratorTaskService — event bridge session status", () => {
     ).toBe("stopped");
   });
 
+  it("keeps a healthy account active when only Claude's injected token expired", async () => {
+    const { service, acp, sessionId } = await withSpawnedSession();
+    const markUnhealthy = vi.spyOn(
+      service as unknown as {
+        markSessionAccountUnhealthy(
+          sessionId: string,
+          kind: string,
+          message: string,
+        ): Promise<void>;
+      },
+      "markSessionAccountUnhealthy",
+    );
+
+    await drive(acp, sessionId, "error", {
+      message: "oauth token has expired",
+      failureKind: "auth",
+      authReason: "token_expired",
+    });
+
+    expect(markUnhealthy).not.toHaveBeenCalled();
+  });
+
   it("records a sub-agent message as stdout in the task room", async () => {
     const { service, acp, taskId, sessionId } = await withSpawnedSession();
     await drive(acp, sessionId, "message", { text: "making progress" });
