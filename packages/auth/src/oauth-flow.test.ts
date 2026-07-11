@@ -1,13 +1,11 @@
 /**
- * Tests the OAuth flow orchestrator's state broadcast: the `FlowState`
- * emitted to `/api/accounts/:provider/oauth/status` SSE subscribers must
- * never carry the OAuth access/refresh tokens, while the in-process
- * `OAuthFlowHandle.completion` promise and the on-disk credential record
- * keep the full credentials.
+ * Tests OAuth profile loading and the orchestrator's credential-free state
+ * broadcast. Profile failures must remain typed failures, while SSE frames
+ * must never carry access or refresh tokens and in-process/on-disk records
+ * retain the complete credentials.
  *
- * Only the vendor OAuth network layer (`startCodexLogin`) is faked — the
- * real `startGenericFlow`, `persistAccount`/`saveAccount`, `setTerminal`,
- * and listener emit paths all run for real against a temp ELIZA_HOME.
+ * Provider HTTP is injected at the fetch boundary; the real generic flow,
+ * persistence, terminal state, and listener paths run against a temp home.
  */
 
 import fs from "node:fs";
@@ -18,6 +16,7 @@ import { loadAccount } from "./account-storage";
 import {
   _resetFlowRegistry,
   type FlowState,
+  fetchAnthropicOAuthProfile,
   startCodexOAuthFlow,
   submitProviderFlowCode,
   subscribeFlow,
@@ -35,6 +34,70 @@ const REFRESH_TOKEN = "codex-refresh-token-SECRET";
 const ID_TOKEN = "codex-id-token-SECRET";
 
 const tempHomes: string[] = [];
+
+describe("fetchAnthropicOAuthProfile", () => {
+  it("returns validated identity fields from the authenticated profile", async () => {
+    const profile = await fetchAnthropicOAuthProfile("access-token", (async (
+      _input,
+      init,
+    ) => {
+      expect((init?.headers as Record<string, string>).Authorization).toBe(
+        "Bearer access-token",
+      );
+      return Response.json({
+        account: { uuid: "account-1", email: "person@example.com" },
+        organization: { uuid: "organization-1" },
+      });
+    }) as typeof fetch);
+
+    expect(profile).toEqual({
+      email: "person@example.com",
+      accountId: "account-1",
+      organizationId: "organization-1",
+    });
+  });
+
+  it.each([
+    ...[401, 429, 503].map(
+      (status) =>
+        [
+          `HTTP ${status}`,
+          async () => new Response("private body", { status }),
+          "anthropic_oauth.profile_http_error",
+        ] as const,
+    ),
+    [
+      "malformed JSON",
+      async () => new Response("not-json"),
+      "anthropic_oauth.profile_invalid_json",
+    ],
+    [
+      "invalid shape",
+      async () => Response.json([]),
+      "anthropic_oauth.profile_invalid_shape",
+    ],
+    [
+      "transport failure",
+      async () => {
+        throw new Error("network down");
+      },
+      "anthropic_oauth.profile_request_failed",
+    ],
+    [
+      "timeout",
+      async () => {
+        throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
+      },
+      "anthropic_oauth.profile_request_failed",
+    ],
+  ] as Array<
+    [string, () => Promise<Response>, string]
+  >)("surfaces %s instead of fabricating an empty profile", async (_name, fetchImpl, code) => {
+    await expect(
+      fetchAnthropicOAuthProfile("access-token", fetchImpl as typeof fetch),
+    ).rejects.toMatchObject({ code });
+  });
+});
 
 function useTempElizaHome(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "eliza-oauth-flow-test-"));

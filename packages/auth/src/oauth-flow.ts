@@ -19,7 +19,7 @@
  */
 
 import crypto from "node:crypto";
-import { logger } from "@elizaos/core";
+import { ElizaError, logger } from "@elizaos/core";
 import {
   type AccountCredentialRecord,
   saveAccount,
@@ -580,49 +580,81 @@ function extractJwtEmail(token: string | undefined): string | undefined {
       ? decoded.email
       : undefined;
   } catch {
+    // error-policy:J3 untrusted-input sanitizing — an imported id_token without
+    // a decodable JWT payload has no usable email identity.
     return undefined;
   }
 }
 
-export async function fetchAnthropicOAuthProfile(accessToken: string): Promise<{
+export async function fetchAnthropicOAuthProfile(
+  accessToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{
   email?: string;
   accountId?: string;
   organizationId?: string;
 }> {
+  let response: Response;
   try {
-    const response = await fetch(
-      "https://api.anthropic.com/api/oauth/profile",
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "anthropic-beta": "oauth-2025-04-20",
-          "Content-Type": "application/json",
-        },
-        signal: AbortSignal.timeout(10_000),
+    response = await fetchImpl("https://api.anthropic.com/api/oauth/profile", {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "anthropic-beta": "oauth-2025-04-20",
+        "Content-Type": "application/json",
       },
-    );
-    if (!response.ok) return {};
-    const profile = (await response.json()) as {
-      account?: { uuid?: unknown; email?: unknown; email_address?: unknown };
-      organization?: { uuid?: unknown };
-    };
-    const rawEmail = profile.account?.email ?? profile.account?.email_address;
-    const rawAccountId = profile.account?.uuid;
-    const rawOrganizationId = profile.organization?.uuid;
-    return {
-      ...(typeof rawEmail === "string" && rawEmail.length > 0
-        ? { email: rawEmail }
-        : {}),
-      ...(typeof rawAccountId === "string" && rawAccountId.length > 0
-        ? { accountId: rawAccountId }
-        : {}),
-      ...(typeof rawOrganizationId === "string" && rawOrganizationId.length > 0
-        ? { organizationId: rawOrganizationId }
-        : {}),
-    };
-  } catch {
-    // Identity enrichment is best-effort; credential persistence must still
-    // succeed when the profile endpoint is temporarily unavailable.
-    return {};
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (cause) {
+    // error-policy:J2 context-adding rethrow — account linking cannot claim a
+    // loaded identity when the authenticated profile request never completed.
+    throw new ElizaError("Anthropic OAuth profile request failed", {
+      code: "anthropic_oauth.profile_request_failed",
+      severity: "ephemeral",
+      cause,
+    });
   }
+  if (!response.ok) {
+    throw new ElizaError("Anthropic OAuth profile request was rejected", {
+      code: "anthropic_oauth.profile_http_error",
+      severity: response.status >= 500 ? "ephemeral" : "fatal",
+      context: { status: response.status },
+    });
+  }
+
+  let profile: unknown;
+  try {
+    profile = await response.json();
+  } catch (cause) {
+    // error-policy:J2 context-adding rethrow — malformed authenticated data is
+    // a failed profile load, not a valid profile with empty identity fields.
+    throw new ElizaError("Anthropic OAuth profile response was not JSON", {
+      code: "anthropic_oauth.profile_invalid_json",
+      severity: "fatal",
+      cause,
+    });
+  }
+  if (!profile || typeof profile !== "object" || Array.isArray(profile)) {
+    throw new ElizaError("Anthropic OAuth profile response was invalid", {
+      code: "anthropic_oauth.profile_invalid_shape",
+      severity: "fatal",
+    });
+  }
+  const record = profile as {
+    account?: { uuid?: unknown; email?: unknown; email_address?: unknown };
+    organization?: { uuid?: unknown };
+  };
+  const rawEmail = record.account?.email ?? record.account?.email_address;
+  const rawAccountId = record.account?.uuid;
+  const rawOrganizationId = record.organization?.uuid;
+  return {
+    ...(typeof rawEmail === "string" && rawEmail.length > 0
+      ? { email: rawEmail }
+      : {}),
+    ...(typeof rawAccountId === "string" && rawAccountId.length > 0
+      ? { accountId: rawAccountId }
+      : {}),
+    ...(typeof rawOrganizationId === "string" && rawOrganizationId.length > 0
+      ? { organizationId: rawOrganizationId }
+      : {}),
+  };
 }
