@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
 
+/**
+ * Exercises hosted OAuth popup navigation and PKCE failure cleanup with an
+ * in-memory Steward provider boundary; no live browser or OAuth service runs.
+ */
+
 import {
   cleanup,
   fireEvent,
@@ -18,6 +23,7 @@ const oauthState = vi.hoisted(() => ({
 
 vi.mock("../../../../state/cloud-login-launch", () => ({
   preOpenCloudLoginWindow: () => oauthState.popup,
+  canNavigateSameTabForBlockedPopup: () => true,
 }));
 
 vi.mock("@stwd/sdk", () => ({
