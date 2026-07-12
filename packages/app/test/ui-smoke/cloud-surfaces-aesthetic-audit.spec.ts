@@ -488,7 +488,9 @@ test.describe("cloud-surfaces aesthetic audit (#10725/#11342)", () => {
   test("coverage matches the registered cloud routes", async ({ page }) => {
     await seedStewardToken(page);
     await installCloudApiStubs(page);
-    await page.goto("/login", { waitUntil: "domcontentloaded" });
+    // The seeded session redirects /login asynchronously, which can destroy
+    // the evaluate context while the registry is being read.
+    await page.goto("/dashboard/agents", { waitUntil: "domcontentloaded" });
     const readRegistryPaths = () =>
       page.evaluate(() => {
         const store = (globalThis as unknown as Record<symbol, unknown>)[
