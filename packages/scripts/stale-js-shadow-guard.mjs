@@ -53,7 +53,9 @@ export function run({ root = scriptRoot, clean = false } = {}) {
 
   if (clean) {
     for (const path of shadows) unlinkSync(resolve(root, path));
-    process.stdout.write(`Removed ${shadows.length} ignored JavaScript source shadow(s):\n`);
+    process.stdout.write(
+      `Removed ${shadows.length} ignored JavaScript source shadow(s):\n`,
+    );
     for (const path of shadows) process.stdout.write(`  ${path}\n`);
     return 0;
   }
