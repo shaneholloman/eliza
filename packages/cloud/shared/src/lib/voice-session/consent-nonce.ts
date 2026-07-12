@@ -23,7 +23,6 @@ import {
   type CompatibleRedis,
   hasRedisConfig,
   isCloudflareWorkerRuntime,
-  type RedisFactoryEnv,
 } from "../cache/redis-factory";
 import { getCloudAwareEnv } from "../runtime/cloud-bindings";
 
@@ -37,7 +36,7 @@ function getRedis(): CompatibleRedis | null {
   if (!isCloudflareWorkerRuntime() && cachedRedis) return cachedRedis;
   // On Workers, Redis credentials live on `c.env`, exposed via
   // getCloudAwareEnv(); passing process.env would miss them.
-  const client = buildRedisClient(getCloudAwareEnv() as unknown as RedisFactoryEnv);
+  const client = buildRedisClient(getCloudAwareEnv());
   if (client && !isCloudflareWorkerRuntime()) cachedRedis = client;
   return client;
 }
@@ -47,7 +46,7 @@ function consentKey(userId: string, nonce: string): string {
 }
 
 export function isConsentStoreConfigured(): boolean {
-  return hasRedisConfig(getCloudAwareEnv() as unknown as RedisFactoryEnv);
+  return hasRedisConfig(getCloudAwareEnv());
 }
 
 export interface IssuedConsentNonce {

@@ -236,7 +236,7 @@ function connect(wsUrl: string): Promise<ClientRecorder> {
             });
           }),
         send: (obj) => ws.send(JSON.stringify(obj)),
-        sendBinary: (bytes) => ws.send(bytes),
+        sendBinary: (bytes) => ws.send(Uint8Array.from(bytes)),
         close: () => ws.close(),
       } as ClientRecorder);
   });

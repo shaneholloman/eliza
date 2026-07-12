@@ -57,7 +57,11 @@ export function floatPcmToInt16Bytes(pcm: Float32Array): Uint8Array {
   const out = new Uint8Array(pcm.length * 2);
   const view = new DataView(out.buffer);
   for (let i = 0; i < pcm.length; i += 1) {
-    view.setInt16(i * 2, floatSampleToInt16(pcm[i] ?? 0), /* littleEndian */ true);
+    view.setInt16(
+      i * 2,
+      floatSampleToInt16(pcm[i] ?? 0),
+      /* littleEndian */ true,
+    );
   }
   return out;
 }

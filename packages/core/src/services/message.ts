@@ -2139,9 +2139,11 @@ function appendStateProviderEvents(
 	// composeState's per-call ProviderResult, so resolve it by name here and
 	// stamp it on the event for context-renderer.ts to read.
 	const cacheStableByName = new Map<string, boolean>();
-	for (const def of providerDefinitions ?? []) {
-		if (typeof def.cacheStable === "boolean") {
-			cacheStableByName.set(def.name.toUpperCase(), def.cacheStable);
+	if (providerDefinitions) {
+		for (const def of providerDefinitions) {
+			if (typeof def.cacheStable === "boolean") {
+				cacheStableByName.set(def.name.toUpperCase(), def.cacheStable);
+			}
 		}
 	}
 	if (!providers || typeof providers !== "object") {

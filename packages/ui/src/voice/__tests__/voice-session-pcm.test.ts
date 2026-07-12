@@ -48,7 +48,9 @@ describe("voice-session-pcm Float32↔Int16 correctness (golden vectors)", () =>
   });
 
   it("round-trips Float32 → Int16 bytes → Float32 within one quantization step", () => {
-    const original = Float32Array.from([0, 0.25, -0.25, 0.9, -0.9, 0.001, -0.001]);
+    const original = Float32Array.from([
+      0, 0.25, -0.25, 0.9, -0.9, 0.001, -0.001,
+    ]);
     const decoded = int16BytesToFloatPcm(floatPcmToInt16Bytes(original));
     expect(decoded.length).toBe(original.length);
     for (let i = 0; i < original.length; i += 1) {

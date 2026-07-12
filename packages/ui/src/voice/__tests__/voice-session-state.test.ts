@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-
+import type { ServerControlFrame } from "../voice-session-protocol";
 import {
   applyClientAction,
   applyServerEvent,
@@ -9,7 +9,6 @@ import {
   toContinuousStatus,
   type VoiceSessionMachineState,
 } from "../voice-session-state";
-import type { ServerControlFrame } from "../voice-session-protocol";
 
 function fresh(): VoiceSessionMachineState {
   return { ...INITIAL_VOICE_SESSION_STATE };
@@ -20,9 +19,9 @@ describe("voice-session-state machine (§7.4)", () => {
     const connecting = applyClientAction(fresh(), { type: "client/connect" });
     expect(connecting.phase).toBe("connecting");
     // A second connect from a non-idle phase does nothing.
-    expect(applyClientAction(connecting, { type: "client/connect" }).phase).toBe(
-      "connecting",
-    );
+    expect(
+      applyClientAction(connecting, { type: "client/connect" }).phase,
+    ).toBe("connecting");
   });
 
   it("drives the full server lifecycle sequence in order", () => {
@@ -74,14 +73,22 @@ describe("voice-session-state machine (§7.4)", () => {
   });
 
   it("local barge-in from a non-speaking phase is a no-op", () => {
-    const s = applyServerEvent(fresh(), { t: "ready", sessionId: "x", traceId: "T" });
+    const s = applyServerEvent(fresh(), {
+      t: "ready",
+      sessionId: "x",
+      traceId: "T",
+    });
     expect(applyClientAction(s, { type: "client/local_barge_in" }).phase).toBe(
       "ready",
     );
   });
 
   it("stt_eager_eot updates trace but does not jump phase", () => {
-    let s = applyServerEvent(fresh(), { t: "stt_partial", text: "a", traceId: "T3" });
+    let s = applyServerEvent(fresh(), {
+      t: "stt_partial",
+      text: "a",
+      traceId: "T3",
+    });
     s = applyServerEvent(s, { t: "stt_eager_eot", traceId: "T3" });
     expect(s.phase).toBe("transcribing");
     expect(s.traceId).toBe("T3");
@@ -93,7 +100,10 @@ describe("voice-session-state machine (§7.4)", () => {
       code: "invalid_token",
       retryable: false,
     });
-    expect(fatal.lastError).toEqual({ code: "invalid_token", retryable: false });
+    expect(fatal.lastError).toEqual({
+      code: "invalid_token",
+      retryable: false,
+    });
     const retry = applyServerEvent(fresh(), {
       t: "error",
       code: "audio_too_large",
@@ -103,7 +113,10 @@ describe("voice-session-state machine (§7.4)", () => {
   });
 
   it("usage events carry trace but never change phase", () => {
-    const speaking = applyServerEvent(fresh(), { t: "speaking_start", traceId: "T4" });
+    const speaking = applyServerEvent(fresh(), {
+      t: "speaking_start",
+      traceId: "T4",
+    });
     const after = applyServerEvent(speaking, {
       t: "usage",
       sttMs: 10,
@@ -115,7 +128,11 @@ describe("voice-session-state machine (§7.4)", () => {
   });
 
   it("beginListening only advances from ready/complete", () => {
-    const ready = applyServerEvent(fresh(), { t: "ready", sessionId: "x", traceId: "T" });
+    const ready = applyServerEvent(fresh(), {
+      t: "ready",
+      sessionId: "x",
+      traceId: "T",
+    });
     expect(beginListening(ready).phase).toBe("listening");
     expect(beginListening(fresh()).phase).toBe("idle"); // idle stays idle
   });

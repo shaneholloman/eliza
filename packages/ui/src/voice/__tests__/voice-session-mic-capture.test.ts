@@ -1,15 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { resolveAudioWorkletModuleUrl } from "../audio-worklet-module-urls";
 import {
   startVoiceMicCapture,
   VoiceMicCaptureError,
 } from "../voice-session-mic-capture";
-import {
-  FakeMicAudioContext,
-  fakeGetUserMedia,
-  deniedGetUserMedia,
-} from "./voice-session-fakes";
 import { int16BytesToFloatPcm } from "../voice-session-pcm";
+import {
+  deniedGetUserMedia,
+  FakeMicAudioContext,
+  FakeMicWorkletAudioContext,
+  FakeVoiceAudioWorkletNode,
+  fakeGetUserMedia,
+} from "./voice-session-fakes";
 
 /** Grab the fake ScriptProcessor once the graph is built. */
 function scriptNodeOf(ctx: FakeMicAudioContext) {
@@ -18,7 +21,139 @@ function scriptNodeOf(ctx: FakeMicAudioContext) {
   return node;
 }
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+  FakeVoiceAudioWorkletNode.reset();
+});
+
 describe("voice-session mic capture (ScriptProcessor fallback path — WebView 113)", () => {
+  it("accepts and resumes an interrupted native AudioContext", async () => {
+    class NativeMicAudioContext extends FakeMicAudioContext {
+      static latest: NativeMicAudioContext | null = null;
+
+      constructor() {
+        super(16_000);
+        this.state = "interrupted";
+        NativeMicAudioContext.latest = this;
+      }
+    }
+    vi.stubGlobal("window", { AudioContext: NativeMicAudioContext });
+
+    const capture = await startVoiceMicCapture({
+      onFrame: () => {},
+      getUserMedia: fakeGetUserMedia(),
+      visibility: {
+        addListener() {},
+        removeListener() {},
+        isHidden: () => false,
+      },
+    });
+
+    expect(NativeMicAudioContext.latest?.state).toBe("running");
+    expect(capture.backend).toBe("scriptprocessor");
+    await capture.stop();
+  });
+
+  it("loads the uplink AudioWorklet from its static CSP-compatible URL", async () => {
+    vi.stubGlobal("AudioWorkletNode", FakeVoiceAudioWorkletNode);
+    const ctx = new FakeMicWorkletAudioContext(16_000);
+    const capture = await startVoiceMicCapture({
+      onFrame: () => {},
+      getUserMedia: fakeGetUserMedia(),
+      createAudioContext: () => ctx,
+      visibility: {
+        addListener() {},
+        removeListener() {},
+        isHidden: () => false,
+      },
+    });
+
+    expect(capture.backend).toBe("audioworklet");
+    expect(ctx.moduleUrls).toEqual([resolveAudioWorkletModuleUrl("uplink")]);
+    expect(ctx.moduleUrls[0]).not.toMatch(/^(?:blob|data):/);
+    expect(FakeVoiceAudioWorkletNode.instances[0]?.processorName).toBe(
+      "eliza-voice-session-uplink",
+    );
+    await capture.stop();
+  });
+
+  it("releases the mic graph when the static AudioWorklet module fails to load", async () => {
+    vi.stubGlobal("AudioWorkletNode", FakeVoiceAudioWorkletNode);
+    const ctx = new FakeMicWorkletAudioContext(16_000);
+    const disconnect = vi.fn();
+    ctx.createMediaStreamSource = () => ({
+      connect: vi.fn(),
+      disconnect,
+    });
+    Object.defineProperty(ctx, "audioWorklet", {
+      value: {
+        addModule: vi.fn(async () => {
+          throw new Error("worklet asset unavailable");
+        }),
+      },
+    });
+    const stopTrack = vi.fn();
+    const getUserMedia = async () =>
+      ({ getTracks: () => [{ stop: stopTrack }] }) as unknown as MediaStream;
+
+    await expect(
+      startVoiceMicCapture({
+        onFrame: () => {},
+        getUserMedia,
+        createAudioContext: () => ctx,
+        visibility: {
+          addListener() {},
+          removeListener() {},
+          isHidden: () => false,
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "VoiceMicCaptureError",
+      code: "start_failed",
+    });
+
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+    expect(ctx.closed).toBe(true);
+  });
+
+  it("stops the mic track when AudioContext construction fails", async () => {
+    const stopTrack = vi.fn();
+    const getUserMedia = async () =>
+      ({ getTracks: () => [{ stop: stopTrack }] }) as unknown as MediaStream;
+
+    await expect(
+      startVoiceMicCapture({
+        onFrame: () => {},
+        getUserMedia,
+        createAudioContext: () => {
+          throw new Error("AudioContext constructor failed");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "start_failed" });
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the mic track and closes the context when source creation fails", async () => {
+    const stopTrack = vi.fn();
+    const getUserMedia = async () =>
+      ({ getTracks: () => [{ stop: stopTrack }] }) as unknown as MediaStream;
+    const ctx = new FakeMicAudioContext(16_000);
+    ctx.createMediaStreamSource = () => {
+      throw new Error("media source failed");
+    };
+
+    await expect(
+      startVoiceMicCapture({
+        onFrame: () => {},
+        getUserMedia,
+        createAudioContext: () => ctx,
+      }),
+    ).rejects.toMatchObject({ code: "start_failed" });
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+    expect(ctx.closed).toBe(true);
+  });
+
   it("uses the ScriptProcessor backend when AudioWorklet is absent", async () => {
     const ctx = new FakeMicAudioContext(16_000);
     const frames: Uint8Array[] = [];
@@ -27,7 +162,11 @@ describe("voice-session mic capture (ScriptProcessor fallback path — WebView 1
       frameMs: 100, // 1600 samples/frame @16k
       getUserMedia: fakeGetUserMedia(),
       createAudioContext: () => ctx,
-      visibility: { addListener() {}, removeListener() {}, isHidden: () => false },
+      visibility: {
+        addListener() {},
+        removeListener() {},
+        isHidden: () => false,
+      },
     });
     expect(capture.backend).toBe("scriptprocessor");
     expect(ctx.state).toBe("running"); // resumed on start
@@ -43,7 +182,11 @@ describe("voice-session mic capture (ScriptProcessor fallback path — WebView 1
       frameMs: 100, // 1600 samples → 3200 bytes/frame
       getUserMedia: fakeGetUserMedia(),
       createAudioContext: () => ctx,
-      visibility: { addListener() {}, removeListener() {}, isHidden: () => false },
+      visibility: {
+        addListener() {},
+        removeListener() {},
+        isHidden: () => false,
+      },
     });
     const node = scriptNodeOf(ctx);
     // Feed 4096 samples (one ScriptProcessor block). At 16k, no resample.
@@ -66,7 +209,11 @@ describe("voice-session mic capture (ScriptProcessor fallback path — WebView 1
       frameMs: 100,
       getUserMedia: fakeGetUserMedia(),
       createAudioContext: () => ctx,
-      visibility: { addListener() {}, removeListener() {}, isHidden: () => false },
+      visibility: {
+        addListener() {},
+        removeListener() {},
+        isHidden: () => false,
+      },
     });
     const node = scriptNodeOf(ctx);
     // 9600 samples @48k ≈ 3200 samples @16k → two 1600-sample frames.
@@ -134,7 +281,11 @@ describe("voice-session mic capture (ScriptProcessor fallback path — WebView 1
         onFrame: () => {},
         getUserMedia: deniedGetUserMedia(),
         createAudioContext: () => new FakeMicAudioContext(),
-        visibility: { addListener() {}, removeListener() {}, isHidden: () => false },
+        visibility: {
+          addListener() {},
+          removeListener() {},
+          isHidden: () => false,
+        },
       }),
     ).rejects.toMatchObject({
       name: "VoiceMicCaptureError",
@@ -145,13 +296,18 @@ describe("voice-session mic capture (ScriptProcessor fallback path — WebView 1
   it("fails loud when neither AudioWorklet nor ScriptProcessor exists", async () => {
     const ctx = new FakeMicAudioContext(16_000);
     // Strip the ScriptProcessor factory to simulate a bare host.
-    (ctx as { createScriptProcessor?: unknown }).createScriptProcessor = undefined;
+    (ctx as { createScriptProcessor?: unknown }).createScriptProcessor =
+      undefined;
     await expect(
       startVoiceMicCapture({
         onFrame: () => {},
         getUserMedia: fakeGetUserMedia(),
         createAudioContext: () => ctx,
-        visibility: { addListener() {}, removeListener() {}, isHidden: () => false },
+        visibility: {
+          addListener() {},
+          removeListener() {},
+          isHidden: () => false,
+        },
       }),
     ).rejects.toBeInstanceOf(VoiceMicCaptureError);
   });

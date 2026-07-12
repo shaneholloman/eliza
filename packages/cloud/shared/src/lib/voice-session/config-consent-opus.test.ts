@@ -5,6 +5,7 @@
  */
 
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import * as realRedisFactory from "../cache/redis-factory";
 
 // Capture the REAL cloud-bindings surface so the stub keeps every export and can
 // be restored. The coverage lane runs all changed files in ONE bun process with
@@ -15,6 +16,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import * as realCloudBindings from "../runtime/cloud-bindings";
 
 const realCloudBindingsExports = { ...realCloudBindings };
+const realRedisFactoryExports = { ...realRedisFactory };
 
 const redisState = new Map<string, string>();
 const redisCalls: Array<{ op: string; key: string; value?: string; ex?: number }> = [];
@@ -46,6 +48,7 @@ mock.module("../runtime/cloud-bindings", () => ({
 }));
 
 afterAll(() => {
+  mock.module("../cache/redis-factory", () => realRedisFactoryExports);
   mock.module("../runtime/cloud-bindings", () => realCloudBindingsExports);
 });
 

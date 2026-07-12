@@ -20,6 +20,11 @@
  * Tests inject a fake AudioContext to drive the real queue/flush/unlock code.
  */
 
+import { resolveAudioWorkletModuleUrl } from "./audio-worklet-module-urls";
+import {
+  constructBrowserAudioContext,
+  constructBrowserAudioWorkletNode,
+} from "./browser-audio-runtime";
 import {
   int16BytesToFloatPcm,
   VOICE_PCM_SAMPLE_RATE,
@@ -27,7 +32,7 @@ import {
 
 export interface PlaybackAudioContextLike {
   readonly sampleRate: number;
-  readonly state: "suspended" | "running" | "closed";
+  readonly state: AudioContextState;
   audioWorklet?: { addModule(url: string): Promise<void> };
   createScriptProcessor?(
     bufferSize: number,
@@ -62,6 +67,49 @@ export interface PlaybackWorkletNodeLike extends PlaybackNodeLike {
   };
 }
 
+function isPlaybackNodeLike(value: unknown): value is PlaybackNodeLike {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof Reflect.get(value, "connect") === "function" &&
+    typeof Reflect.get(value, "disconnect") === "function"
+  );
+}
+
+function isPlaybackWorkletNodeLike(
+  value: unknown,
+): value is PlaybackWorkletNodeLike {
+  if (!isPlaybackNodeLike(value)) return false;
+  const port: unknown = Reflect.get(value, "port");
+  return (
+    typeof port === "object" &&
+    port !== null &&
+    "onmessage" in port &&
+    typeof Reflect.get(port, "postMessage") === "function"
+  );
+}
+
+function isPlaybackAudioContextLike(
+  value: unknown,
+): value is PlaybackAudioContextLike {
+  if (typeof value !== "object" || value === null) return false;
+  const state: unknown = Reflect.get(value, "state");
+  return (
+    typeof Reflect.get(value, "sampleRate") === "number" &&
+    (state === "suspended" ||
+      state === "interrupted" ||
+      state === "running" ||
+      state === "closed") &&
+    isPlaybackNodeLike(Reflect.get(value, "destination")) &&
+    typeof Reflect.get(value, "resume") === "function" &&
+    typeof Reflect.get(value, "close") === "function"
+  );
+}
+
+type WorkletCapablePlaybackContext = PlaybackAudioContextLike & {
+  audioWorklet: { addModule(url: string): Promise<void> };
+};
+
 export interface VoiceSessionPlaybackOptions {
   createAudioContext?: () => PlaybackAudioContextLike;
   /** Notified when the queue drains to empty (utterance finished playing). */
@@ -70,57 +118,12 @@ export interface VoiceSessionPlaybackOptions {
 
 const PLAYBACK_WORKLET_NAME = "eliza-voice-session-downlink";
 
-// The worklet owns a growable ring of Float32 samples; the main thread posts
-// PCM frames + a "flush" command. It pulls samples per render quantum, emitting
-// silence when starved (so playback never blocks) and posting "drained" when it
-// transitions from having audio to empty.
-const PLAYBACK_WORKLET_SOURCE = `
-class ElizaVoiceSessionDownlink extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.queue = [];
-    this.readOffset = 0;
-    this.hadAudio = false;
-    this.port.onmessage = (e) => {
-      const d = e.data;
-      if (!d) return;
-      if (d.type === 'pcm' && d.pcm) { this.queue.push(d.pcm); this.hadAudio = true; }
-      else if (d.type === 'flush') { this.queue = []; this.readOffset = 0; }
-    };
-  }
-  process(_inputs, outputs) {
-    const out = outputs[0];
-    const ch = out[0];
-    if (!ch) return true;
-    for (let i = 0; i < ch.length; i += 1) {
-      while (this.queue.length > 0 && this.readOffset >= this.queue[0].length) {
-        this.queue.shift();
-        this.readOffset = 0;
-      }
-      if (this.queue.length === 0) {
-        ch[i] = 0;
-        if (this.hadAudio) { this.hadAudio = false; this.port.postMessage({ type: 'drained' }); }
-      } else {
-        ch[i] = this.queue[0][this.readOffset];
-        this.readOffset += 1;
-      }
-    }
-    for (let c = 1; c < out.length; c += 1) out[c].set(ch);
-    return true;
-  }
-}
-registerProcessor("${PLAYBACK_WORKLET_NAME}", ElizaVoiceSessionDownlink);
-`;
-
 export function hasPlaybackWorkletSupport(
   ctx: PlaybackAudioContextLike,
-): boolean {
+): ctx is WorkletCapablePlaybackContext {
   return (
     typeof ctx.audioWorklet?.addModule === "function" &&
-    typeof AudioWorkletNode !== "undefined" &&
-    typeof Blob !== "undefined" &&
-    typeof URL !== "undefined" &&
-    typeof URL.createObjectURL === "function"
+    typeof globalThis.AudioWorkletNode !== "undefined"
   );
 }
 
@@ -146,23 +149,16 @@ export async function createVoiceSessionPlayback(
   const createAudioContext =
     options.createAudioContext ??
     (() => {
-      const Ctor =
-        typeof window !== "undefined"
-          ? (window as unknown as {
-              AudioContext?: new (o?: { sampleRate?: number }) => PlaybackAudioContextLike;
-            }).AudioContext ??
-            (window as unknown as {
-              webkitAudioContext?: new (o?: {
-                sampleRate?: number;
-              }) => PlaybackAudioContextLike;
-            }).webkitAudioContext
-          : undefined;
-      if (!Ctor) throw new Error("AudioContext unavailable for playback");
+      const context = constructBrowserAudioContext(
+        [{ sampleRate: VOICE_PCM_SAMPLE_RATE }],
+        isPlaybackAudioContextLike,
+      );
+      if (!context) throw new Error("AudioContext unavailable for playback");
       // Request a 16 kHz context so the pcm16 downlink plays at native rate with
       // no resample; if the platform ignores it (Safari sometimes forces 44.1),
       // the ScriptProcessor/worklet plays the raw samples — a pitch shift the
       // caller can correct later, but correctness of framing/flush is unaffected.
-      return new Ctor({ sampleRate: VOICE_PCM_SAMPLE_RATE });
+      return context;
     });
 
   const ctx = createAudioContext();
@@ -182,55 +178,67 @@ export async function createVoiceSessionPlayback(
   let jsReadOffset = 0;
   let jsHadAudio = false;
 
-  if (hasPlaybackWorkletSupport(ctx)) {
-    backend = "audioworklet";
-    const url = URL.createObjectURL(
-      new Blob([PLAYBACK_WORKLET_SOURCE], { type: "text/javascript" }),
-    );
-    try {
-      await ctx.audioWorklet!.addModule(url);
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-    workletNode = new (AudioWorkletNode as unknown as new (
-      c: PlaybackAudioContextLike,
-      name: string,
-    ) => PlaybackWorkletNodeLike)(ctx, PLAYBACK_WORKLET_NAME);
-    workletNode.port.onmessage = (event) => {
-      const d = event.data as { type?: string } | undefined;
-      if (d?.type === "drained") options.onDrained?.();
-    };
-    (workletNode as unknown as PlaybackNodeLike).connect(ctx.destination);
-  } else if (typeof ctx.createScriptProcessor === "function") {
-    backend = "scriptprocessor";
-    scriptNode = ctx.createScriptProcessor(4096, 1, 1);
-    scriptNode.onaudioprocess = (event) => {
-      const outBuf = event.outputBuffer;
-      const ch = outBuf.getChannelData(0);
-      for (let i = 0; i < ch.length; i += 1) {
-        while (jsQueue.length > 0 && jsReadOffset >= jsQueue[0].length) {
-          jsQueue.shift();
-          jsReadOffset = 0;
-        }
-        if (jsQueue.length === 0) {
-          ch[i] = 0;
-          if (jsHadAudio) {
-            jsHadAudio = false;
-            options.onDrained?.();
+  try {
+    if (hasPlaybackWorkletSupport(ctx)) {
+      backend = "audioworklet";
+      await ctx.audioWorklet.addModule(
+        resolveAudioWorkletModuleUrl("downlink"),
+      );
+      const node = constructBrowserAudioWorkletNode(
+        ctx,
+        PLAYBACK_WORKLET_NAME,
+        isPlaybackWorkletNodeLike,
+      );
+      if (!node) {
+        throw new Error("AudioWorkletNode unavailable for playback");
+      }
+      workletNode = node;
+      node.port.onmessage = (event) => {
+        const d = event.data as { type?: string } | undefined;
+        if (d?.type === "drained") options.onDrained?.();
+      };
+      node.connect(ctx.destination);
+    } else if (typeof ctx.createScriptProcessor === "function") {
+      backend = "scriptprocessor";
+      scriptNode = ctx.createScriptProcessor(4096, 1, 1);
+      scriptNode.onaudioprocess = (event) => {
+        const outBuf = event.outputBuffer;
+        const ch = outBuf.getChannelData(0);
+        for (let i = 0; i < ch.length; i += 1) {
+          while (jsQueue.length > 0 && jsReadOffset >= jsQueue[0].length) {
+            jsQueue.shift();
+            jsReadOffset = 0;
           }
-        } else {
-          ch[i] = jsQueue[0][jsReadOffset];
-          jsReadOffset += 1;
+          if (jsQueue.length === 0) {
+            ch[i] = 0;
+            if (jsHadAudio) {
+              jsHadAudio = false;
+              options.onDrained?.();
+            }
+          } else {
+            ch[i] = jsQueue[0][jsReadOffset];
+            jsReadOffset += 1;
+          }
         }
-      }
-      for (let c = 1; c < outBuf.numberOfChannels; c += 1) {
-        outBuf.getChannelData(c).set(ch);
-      }
-    };
-    scriptNode.connect(ctx.destination);
-  } else {
+        for (let c = 1; c < outBuf.numberOfChannels; c += 1) {
+          outBuf.getChannelData(c).set(ch);
+        }
+      };
+      scriptNode.connect(ctx.destination);
+    } else {
+      throw new Error("no AudioWorklet or ScriptProcessor for playback");
+    }
+  } catch (error) {
+    if (workletNode) {
+      workletNode.port.onmessage = null;
+      workletNode.disconnect();
+    }
+    if (scriptNode) {
+      scriptNode.onaudioprocess = null;
+      scriptNode.disconnect();
+    }
     await ctx.close().catch(() => {});
-    throw new Error("no AudioWorklet or ScriptProcessor for playback");
+    throw error;
   }
 
   const pushSamples = (samples: Float32Array): void => {
@@ -288,7 +296,7 @@ export async function createVoiceSessionPlayback(
     },
     async unlock() {
       if (stopped) return;
-      if (ctx.state === "suspended") {
+      if (ctx.state === "suspended" || ctx.state === "interrupted") {
         await ctx.resume().catch(() => {});
       }
       if (isRunning()) {

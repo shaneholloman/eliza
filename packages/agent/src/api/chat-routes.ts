@@ -444,6 +444,16 @@ function normalizeAndroidLocalDirectUserText(text: string): string {
 const ANDROID_LOCAL_HISTORY_LIMIT = 6;
 const ANDROID_LOCAL_HISTORY_TEXT_LIMIT = 700;
 
+function compareCreatedAtAscending(
+  left: { createdAt?: number },
+  right: { createdAt?: number },
+): number {
+  if (left.createdAt === right.createdAt) return 0;
+  if (left.createdAt === undefined) return -1;
+  if (right.createdAt === undefined) return 1;
+  return left.createdAt - right.createdAt;
+}
+
 async function buildAndroidLocalDirectChatPrompt(args: {
   runtime: AgentRuntime;
   message: ReturnType<typeof createMessageMemory>;
@@ -460,7 +470,7 @@ async function buildAndroidLocalDirectChatPrompt(args: {
     });
     history = recent
       .filter((memory) => memory.id !== args.message.id)
-      .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
+      .sort(compareCreatedAtAscending)
       .slice(-ANDROID_LOCAL_HISTORY_LIMIT)
       .flatMap((memory) => {
         const text = extractCompatTextContent(memory.content).trim();

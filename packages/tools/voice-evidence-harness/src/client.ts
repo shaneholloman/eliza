@@ -36,13 +36,51 @@ export interface ClientRunResult {
   firstSilenceAfterBargeInMonoMs: number | null;
 }
 
+interface HarnessWebSocket {
+  binaryType: string;
+  readonly readyState: number;
+  send(data: string | ArrayBufferLike | ArrayBufferView): void;
+  close(code?: number, reason?: string): void;
+  addEventListener(type: "open", listener: () => void): void;
+  addEventListener(
+    type: "message",
+    listener: (event: MessageEvent) => void,
+  ): void;
+  addEventListener(type: "error" | "close", listener: () => void): void;
+}
+
+function isHarnessWebSocket(value: unknown): value is HarnessWebSocket {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof Reflect.get(value, "binaryType") === "string" &&
+    typeof Reflect.get(value, "readyState") === "number" &&
+    typeof Reflect.get(value, "send") === "function" &&
+    typeof Reflect.get(value, "close") === "function" &&
+    typeof Reflect.get(value, "addEventListener") === "function"
+  );
+}
+
+function openHarnessWebSocket(url: string): HarnessWebSocket {
+  const ctor: unknown = globalThis.WebSocket;
+  if (typeof ctor !== "function") {
+    throw new Error("WebSocket is unavailable in this runtime");
+  }
+  const socket: unknown = Reflect.construct(ctor, [url]);
+  if (!isHarnessWebSocket(socket)) {
+    throw new Error(
+      "WebSocket runtime does not expose the required client API",
+    );
+  }
+  return socket;
+}
+
 export async function runClient(
   opts: ClientRunOptions,
 ): Promise<ClientRunResult> {
   const { evidence: ev } = opts;
-  const NativeWebSocket = WebSocket as unknown as new (u: string) => WebSocket;
-  const ws = new NativeWebSocket(opts.wsUrl);
-  (ws as unknown as { binaryType: string }).binaryType = "arraybuffer";
+  const ws = openHarnessWebSocket(opts.wsUrl);
+  ws.binaryType = "arraybuffer";
 
   const downlinkChunks: Uint8Array[] = [];
   const result: ClientRunResult = {

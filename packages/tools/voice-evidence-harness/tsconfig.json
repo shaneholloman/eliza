@@ -10,8 +10,8 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
-    "baseUrl": ".",
     "paths": {
+      "@/lib/*": ["../../cloud/shared/src/lib/*"],
       "@harness-adapters/deepgram-flux.ts": [
         "../../cloud/api/v1/voice/stt/providers/deepgram-flux.ts"
       ],

@@ -181,7 +181,7 @@ describe("PlaybackFramePump", () => {
 });
 
 describe("resumeAudioContextForPlayback", () => {
-  it("returns true immediately for a context that is not suspended", async () => {
+  it("returns true immediately for a running context", async () => {
     const ctx = fakeAudioContext("running");
     await expect(resumeAudioContextForPlayback(ctx)).resolves.toBe(true);
     expect(ctx.resume).not.toHaveBeenCalled();
@@ -191,6 +191,18 @@ describe("resumeAudioContextForPlayback", () => {
     const ctx = fakeAudioContext("suspended");
     await expect(resumeAudioContextForPlayback(ctx)).resolves.toBe(true);
     expect(ctx.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes an interrupted context and reports success", async () => {
+    const ctx = fakeAudioContext("interrupted");
+    await expect(resumeAudioContextForPlayback(ctx)).resolves.toBe(true);
+    expect(ctx.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a closed context as unavailable without calling resume", async () => {
+    const ctx = fakeAudioContext("closed");
+    await expect(resumeAudioContextForPlayback(ctx)).resolves.toBe(false);
+    expect(ctx.resume).not.toHaveBeenCalled();
   });
 
   it("times out and reports failure if resume() never settles", async () => {
@@ -225,6 +237,26 @@ describe("ensurePlaybackContextRunning", () => {
       ensurePlaybackContextRunning(ctx, "elevenlabs", onBlocked),
     ).resolves.toBeUndefined();
     expect(onBlocked).not.toHaveBeenCalled();
+  });
+
+  it("resumes an interrupted context and resolves once running", async () => {
+    const ctx = fakeAudioContext("interrupted");
+    const onBlocked = vi.fn();
+    await expect(
+      ensurePlaybackContextRunning(ctx, "elevenlabs", onBlocked),
+    ).resolves.toBeUndefined();
+    expect(ctx.resume).toHaveBeenCalledTimes(1);
+    expect(onBlocked).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for a closed context without attempting resume", async () => {
+    const ctx = fakeAudioContext("closed");
+    const onBlocked = vi.fn();
+    await expect(
+      ensurePlaybackContextRunning(ctx, "eliza-cloud", onBlocked),
+    ).rejects.toThrow(/blocked/i);
+    expect(ctx.resume).not.toHaveBeenCalled();
+    expect(onBlocked).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed with NotAllowedError and reports onBlocked when resume cannot unblock playback", async () => {

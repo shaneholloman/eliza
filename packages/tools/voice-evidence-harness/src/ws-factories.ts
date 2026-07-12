@@ -26,17 +26,17 @@
  * ------------------------------------------------------------------------
  */
 
-import WebSocketImpl from "ws";
-import type {
-  DeepgramFluxWebSocket,
-  DeepgramFluxWebSocketFactory,
-  DeepgramFluxTransportRequest,
-} from "@harness-adapters/deepgram-flux.ts";
 import type {
   CartesiaWebSocketFactory,
-  CartesiaWebSocketLike,
   CartesiaWebSocketFactoryOptions,
+  CartesiaWebSocketLike,
 } from "@harness-adapters/cartesia-sonic-tts.ts";
+import type {
+  DeepgramFluxTransportRequest,
+  DeepgramFluxWebSocket,
+  DeepgramFluxWebSocketFactory,
+} from "@harness-adapters/deepgram-flux.ts";
+import WebSocketImpl from "ws";
 
 export interface FactoryHooks {
   log?: (msg: string, data?: Record<string, unknown>) => void;
@@ -47,10 +47,15 @@ export interface FactoryHooks {
  * `addEventListener`. Wrap so the adapters' `addEventListener`/
  * `removeEventListener` DOM-shaped API works unchanged.
  */
-function wrapDom(socket: WebSocketImpl): DeepgramFluxWebSocket & CartesiaWebSocketLike {
-  const listenerMap = new WeakMap<(e: unknown) => void, (...a: unknown[]) => void>();
+type BridgeEventType = "open" | "message" | "error" | "close";
 
-  const toDomEvent = (type: string, ...args: unknown[]): unknown => {
+function wrapDom(socket: WebSocketImpl): unknown {
+  const listenerMap = new WeakMap<
+    (e: unknown) => void,
+    (...a: unknown[]) => void
+  >();
+
+  const toDomEvent = (type: BridgeEventType, ...args: unknown[]): unknown => {
     switch (type) {
       case "open":
         return { type: "open" };
@@ -64,24 +69,36 @@ function wrapDom(socket: WebSocketImpl): DeepgramFluxWebSocket & CartesiaWebSock
         let data: unknown = raw;
         if (typeof raw !== "string") {
           if (Buffer.isBuffer(raw)) data = raw.toString("utf8");
-          else if (raw instanceof ArrayBuffer) data = Buffer.from(raw).toString("utf8");
+          else if (raw instanceof ArrayBuffer)
+            data = Buffer.from(raw).toString("utf8");
           else if (ArrayBuffer.isView(raw))
-            data = Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength).toString("utf8");
-          else if (Array.isArray(raw)) data = Buffer.concat(raw).toString("utf8");
+            data = Buffer.from(
+              raw.buffer,
+              raw.byteOffset,
+              raw.byteLength,
+            ).toString("utf8");
+          else if (Array.isArray(raw))
+            data = Buffer.concat(raw).toString("utf8");
         }
         return { type: "message", data };
       }
       case "error": {
-        const err = args[0] as Error;
-        return { type: "error", message: err?.message, error: err };
+        const error = args[0];
+        return {
+          type: "error",
+          message: error instanceof Error ? error.message : String(error),
+          error,
+        };
       }
       case "close": {
-        const code = args[0] as number;
+        const code = typeof args[0] === "number" ? args[0] : 1006;
         const reason = args[1];
         return {
           type: "close",
           code,
-          reason: Buffer.isBuffer(reason) ? reason.toString("utf8") : String(reason ?? ""),
+          reason: Buffer.isBuffer(reason)
+            ? reason.toString("utf8")
+            : String(reason ?? ""),
           wasClean: code === 1000,
         };
       }
@@ -96,51 +113,93 @@ function wrapDom(socket: WebSocketImpl): DeepgramFluxWebSocket & CartesiaWebSock
     },
     set binaryType(v: string) {
       // ws uses "nodebuffer" | "arraybuffer" | "fragments"
-      (socket as unknown as { binaryType: string }).binaryType =
-        v === "arraybuffer" ? "arraybuffer" : "nodebuffer";
+      socket.binaryType = v === "arraybuffer" ? "arraybuffer" : "nodebuffer";
     },
     get binaryType() {
-      return (socket as unknown as { binaryType: string }).binaryType;
+      return socket.binaryType;
     },
     send(data: string | ArrayBuffer | ArrayBufferView) {
-      socket.send(data as never);
+      if (typeof data === "string" || data instanceof ArrayBuffer) {
+        socket.send(data);
+        return;
+      }
+      socket.send(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
     },
     close(code?: number, reason?: string) {
       socket.close(code, reason);
     },
-    addEventListener(type: string, listener: (e: unknown) => void) {
-      const handler = (...args: unknown[]) => listener(toDomEvent(type, ...args));
+    addEventListener(type: BridgeEventType, listener: (e: unknown) => void) {
+      const handler = (...args: unknown[]) =>
+        listener(toDomEvent(type, ...args));
       listenerMap.set(listener, handler);
-      socket.on(type, handler as never);
+      socket.on(type, handler);
     },
-    removeEventListener(type: string, listener: (e: unknown) => void) {
+    removeEventListener(type: BridgeEventType, listener: (e: unknown) => void) {
       const handler = listenerMap.get(listener);
-      if (handler) socket.off(type, handler as never);
+      if (handler) socket.off(type, handler);
     },
   };
-  return wrapped as unknown as DeepgramFluxWebSocket & CartesiaWebSocketLike;
+  return wrapped;
 }
 
-export function makeDeepgramFactory(hooks?: FactoryHooks): DeepgramFluxWebSocketFactory {
+function hasWebSocketBridgeShape(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof Reflect.get(value, "readyState") === "number" &&
+    typeof Reflect.get(value, "send") === "function" &&
+    typeof Reflect.get(value, "close") === "function" &&
+    typeof Reflect.get(value, "addEventListener") === "function" &&
+    typeof Reflect.get(value, "removeEventListener") === "function"
+  );
+}
+
+function isDeepgramSocket(value: unknown): value is DeepgramFluxWebSocket {
+  return hasWebSocketBridgeShape(value);
+}
+
+function isCartesiaSocket(value: unknown): value is CartesiaWebSocketLike {
+  return hasWebSocketBridgeShape(value);
+}
+
+export function makeDeepgramFactory(
+  hooks?: FactoryHooks,
+): DeepgramFluxWebSocketFactory {
   return (request: DeepgramFluxTransportRequest): DeepgramFluxWebSocket => {
     // Strip the unsupported `channels` param (see defect note above).
     const url = new URL(request.url);
     if (url.searchParams.has("channels")) {
       url.searchParams.delete("channels");
-      hooks?.log?.("deepgram-flux: stripped unsupported 'channels' query param (adapter defect #15950)", {
-        note: "Flux /v2/listen rejects channels; harness strips it to proceed",
-      });
+      hooks?.log?.(
+        "deepgram-flux: stripped unsupported 'channels' query param (adapter defect #15950)",
+        {
+          note: "Flux /v2/listen rejects channels; harness strips it to proceed",
+        },
+      );
     }
     const socket = new WebSocketImpl(url.toString(), {
       headers: request.headers,
     });
-    return wrapDom(socket);
+    const wrapped = wrapDom(socket);
+    if (!isDeepgramSocket(wrapped)) {
+      throw new Error("Deepgram WebSocket bridge is missing required methods");
+    }
+    return wrapped;
   };
 }
 
-export function makeCartesiaFactory(_hooks?: FactoryHooks): CartesiaWebSocketFactory {
-  return (url: string, options: CartesiaWebSocketFactoryOptions): CartesiaWebSocketLike => {
+export function makeCartesiaFactory(
+  _hooks?: FactoryHooks,
+): CartesiaWebSocketFactory {
+  return (
+    url: string,
+    options: CartesiaWebSocketFactoryOptions,
+  ): CartesiaWebSocketLike => {
     const socket = new WebSocketImpl(url, { headers: options.headers });
-    return wrapDom(socket);
+    const wrapped = wrapDom(socket);
+    if (!isCartesiaSocket(wrapped)) {
+      throw new Error("Cartesia WebSocket bridge is missing required methods");
+    }
+    return wrapped;
   };
 }

@@ -34,7 +34,6 @@ import {
   type CompatibleRedis,
   hasRedisConfig,
   isCloudflareWorkerRuntime,
-  type RedisFactoryEnv,
 } from "../cache/redis-factory";
 import { getCloudAwareEnv } from "../runtime/cloud-bindings";
 import { logger } from "../utils/logger";
@@ -292,7 +291,7 @@ function getRedis(): CompatibleRedis | null {
   // On Workers, Redis credentials are on `c.env` (via getCloudAwareEnv), not
   // plain process.env, so the session directory + revocation store resolve in
   // production instead of silently reporting "not configured".
-  const client = buildRedisClient(getCloudAwareEnv() as unknown as RedisFactoryEnv);
+  const client = buildRedisClient(getCloudAwareEnv());
   if (client && !isCloudflareWorkerRuntime()) cachedRedis = client;
   return client;
 }
@@ -314,7 +313,7 @@ function revocationKey(jti: string): string {
  * durable across workers. When false, revocation relies on the short TTL only.
  */
 export function isVoiceSessionRevocationConfigured(): boolean {
-  return hasRedisConfig(getCloudAwareEnv() as unknown as RedisFactoryEnv);
+  return hasRedisConfig(getCloudAwareEnv());
 }
 
 /**

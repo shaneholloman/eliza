@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createVoiceSessionClient,
@@ -8,9 +8,14 @@ import {
 import {
   FakeMicAudioContext,
   FakePlaybackAudioContext,
+  FakeWebSocket,
   fakeGetUserMedia,
   makeWsFactory,
 } from "./voice-session-fakes";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 interface MintOverrides {
   token?: string;
@@ -25,7 +30,9 @@ function makeMintFetch(overrides: MintOverrides[] = []) {
   const calls: Array<Record<string, unknown>> = [];
   let n = 0;
   const fetch = async (_url: string, init?: RequestInit): Promise<Response> => {
-    const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+    const body = init?.body
+      ? (JSON.parse(String(init.body)) as Record<string, unknown>)
+      : {};
     calls.push(body);
     const o = overrides[n] ?? {};
     n += 1;
@@ -49,7 +56,10 @@ function makeMintFetch(overrides: MintOverrides[] = []) {
   return { fetch, calls };
 }
 
-function baseDeps(mintFetch: ReturnType<typeof makeMintFetch>, ws: ReturnType<typeof makeWsFactory>) {
+function baseDeps(
+  mintFetch: ReturnType<typeof makeMintFetch>,
+  ws: ReturnType<typeof makeWsFactory>,
+) {
   const marks: VoiceTraceMark[] = [];
   const errors: Error[] = [];
   let t = 0;
@@ -77,7 +87,85 @@ async function flush(): Promise<void> {
   await Promise.resolve();
 }
 
+function playbackScriptNodeOf(ctx: FakePlaybackAudioContext) {
+  const node = ctx.scriptNode;
+  if (!node) throw new Error("no playback script node created");
+  return node;
+}
+
 describe("voice-session client (real framing/state/barge-in/reconnect)", () => {
+  it("constructs and validates the native WebSocket when no factory is injected", async () => {
+    class NativeWebSocket extends FakeWebSocket {
+      static readonly instances: NativeWebSocket[] = [];
+
+      constructor(url: string) {
+        super(url);
+        NativeWebSocket.instances.push(this);
+      }
+    }
+    vi.stubGlobal("WebSocket", NativeWebSocket);
+    const mint = makeMintFetch();
+    const errors: Error[] = [];
+    const client = createVoiceSessionClient({
+      agentId: "11111111-1111-1111-1111-111111111111",
+      conversationId: "22222222-2222-2222-2222-222222222222",
+      consentNonce: "native-ws",
+      fetch: mint.fetch,
+      getUserMedia: fakeGetUserMedia(),
+      createMicAudioContext: () => new FakeMicAudioContext(16_000),
+      createPlaybackAudioContext: () => new FakePlaybackAudioContext(16_000),
+      onError: (error) => errors.push(error),
+    });
+
+    await client.start();
+    await flush();
+    const socket = NativeWebSocket.instances[0];
+    expect(socket?.url).toBe(
+      "wss://cloud/api/v1/voice/session/ws?sessionId=sess-1",
+    );
+    expect(socket?.binaryType).toBe("arraybuffer");
+    socket?.emitOpen();
+    expect(socket?.sentControls()[0]).toMatchObject({
+      t: "hello",
+      token: "tok-1",
+    });
+    expect(errors).toEqual([]);
+    await client.stop();
+  });
+
+  it("rejects a malformed native WebSocket runtime", async () => {
+    class InvalidWebSocket {
+      static latest: InvalidWebSocket | null = null;
+      readonly close = vi.fn();
+
+      constructor() {
+        InvalidWebSocket.latest = this;
+      }
+    }
+    vi.stubGlobal("WebSocket", InvalidWebSocket);
+    const mint = makeMintFetch();
+    const errors: Error[] = [];
+    const client = createVoiceSessionClient({
+      agentId: "11111111-1111-1111-1111-111111111111",
+      conversationId: "22222222-2222-2222-2222-222222222222",
+      consentNonce: "invalid-native-ws",
+      fetch: mint.fetch,
+      getUserMedia: fakeGetUserMedia(),
+      createMicAudioContext: () => new FakeMicAudioContext(16_000),
+      createPlaybackAudioContext: () => new FakePlaybackAudioContext(16_000),
+      onError: (error) => errors.push(error),
+    });
+
+    await client.start();
+    await flush();
+
+    expect(
+      errors.some((error) => /required voice API/.test(error.message)),
+    ).toBe(true);
+    expect(InvalidWebSocket.latest?.close).toHaveBeenCalledTimes(1);
+    await client.stop();
+  });
+
   it("enforces hello-first: the FIRST frame sent is a JSON hello carrying the token", async () => {
     const mint = makeMintFetch();
     const ws = makeWsFactory();
@@ -190,7 +278,7 @@ describe("voice-session client (real framing/state/barge-in/reconnect)", () => {
     // Optimistic state: speaking → listening pre-ack.
     expect(client.state.phase).toBe("listening");
     // Playback queue is empty already → a pull yields pure silence.
-    const outPreAck = pbCtx.scriptNode!.render(100);
+    const outPreAck = playbackScriptNodeOf(pbCtx).render(100);
     expect(outPreAck.every((v) => v === 0)).toBe(true);
     // barge_in control frame was sent to the server.
     expect(sock.sentControls().some((c) => c.t === "barge_in")).toBe(true);
@@ -366,7 +454,13 @@ describe("voice-session client (real framing/state/barge-in/reconnect)", () => {
     });
     await client.start();
     await flush();
-    expect(errors.some((e) => e instanceof VoiceSessionMintError && (e as VoiceSessionMintError).status === 404)).toBe(true);
+    expect(
+      errors.some(
+        (e) =>
+          e instanceof VoiceSessionMintError &&
+          (e as VoiceSessionMintError).status === 404,
+      ),
+    ).toBe(true);
     // No socket ever opened.
     expect(ws.sockets.length).toBe(0);
   });
