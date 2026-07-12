@@ -31,17 +31,31 @@
  * through fakes — not stubs of the client itself.
  */
 
+import type { VoiceContinuousStatus } from "./voice-chat-types";
+import {
+  type MicAudioContextLike,
+  startVoiceMicCapture,
+  type VoiceMicCapture,
+  VoiceMicCaptureError,
+} from "./voice-session-mic-capture";
 import {
   createVoiceSessionPlayback,
   type PlaybackAudioContextLike,
   type VoiceSessionPlayback,
 } from "./voice-session-playback";
 import {
-  startVoiceMicCapture,
-  VoiceMicCaptureError,
-  type MicAudioContextLike,
-  type VoiceMicCapture,
-} from "./voice-session-mic-capture";
+  DEFAULT_DOWNLINK_CODEC,
+  DEFAULT_UPLINK_CODEC,
+  encodeClientControl,
+  isUsableMintResponse,
+  negotiateCodec,
+  parseServerControl,
+  type ServerControlFrame,
+  VOICE_SESSION_PROTOCOL_VERSION,
+  VOICE_SESSION_SAMPLE_RATE,
+  type VoiceSessionCodec,
+  type VoiceSessionMintResponse,
+} from "./voice-session-protocol";
 import {
   applyClientAction,
   applyServerEvent,
@@ -51,20 +65,6 @@ import {
   toContinuousStatus,
   type VoiceSessionMachineState,
 } from "./voice-session-state";
-import {
-  DEFAULT_DOWNLINK_CODEC,
-  DEFAULT_UPLINK_CODEC,
-  encodeClientControl,
-  isUsableMintResponse,
-  negotiateCodec,
-  parseServerControl,
-  VOICE_SESSION_PROTOCOL_VERSION,
-  VOICE_SESSION_SAMPLE_RATE,
-  type ServerControlFrame,
-  type VoiceSessionCodec,
-  type VoiceSessionMintResponse,
-} from "./voice-session-protocol";
-import type { VoiceContinuousStatus } from "./voice-chat-types";
 
 /** Minimal WebSocket surface the client drives (native or fake). */
 export interface VoiceWebSocketLike {
@@ -81,6 +81,29 @@ export interface VoiceWebSocketLike {
     listener: (event: { code?: number; reason?: string }) => void,
   ): void;
   addEventListener(type: "error", listener: () => void): void;
+}
+
+function isVoiceWebSocketLike(value: unknown): value is VoiceWebSocketLike {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof Reflect.get(value, "binaryType") === "string" &&
+    typeof Reflect.get(value, "send") === "function" &&
+    typeof Reflect.get(value, "close") === "function" &&
+    typeof Reflect.get(value, "addEventListener") === "function"
+  );
+}
+
+function openNativeVoiceWebSocket(url: string): VoiceWebSocketLike {
+  const ctor: unknown = globalThis.WebSocket;
+  if (typeof ctor !== "function") {
+    throw new Error("WebSocket is unavailable in this runtime");
+  }
+  const socket: unknown = Reflect.construct(ctor, [url]);
+  if (!isVoiceWebSocketLike(socket)) {
+    throw new Error("WebSocket runtime does not expose the required voice API");
+  }
+  return socket;
 }
 
 export type VoiceWebSocketFactory = (url: string) => VoiceWebSocketLike;
@@ -175,12 +198,7 @@ export function createVoiceSessionClient(
     });
   const wsFactory =
     options.webSocketFactory ??
-    ((url: string) => {
-      const Ctor = WebSocket as unknown as new (
-        u: string,
-      ) => VoiceWebSocketLike;
-      return new Ctor(url);
-    });
+    ((url: string) => openNativeVoiceWebSocket(url));
   const preferredUplink = options.uplinkCodec ?? DEFAULT_UPLINK_CODEC;
   const preferredDownlink = options.downlinkCodec ?? DEFAULT_DOWNLINK_CODEC;
   const maxReconnects = options.maxReconnects ?? 2;

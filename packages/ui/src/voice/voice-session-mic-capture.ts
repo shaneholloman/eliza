@@ -24,6 +24,10 @@
  */
 
 import {
+  constructBrowserAudioContext,
+  constructBrowserAudioWorkletNode,
+} from "./browser-audio-runtime";
+import {
   floatPcmToInt16Bytes,
   VOICE_PCM_SAMPLE_RATE,
 } from "./voice-session-pcm";
@@ -80,6 +84,43 @@ export interface AudioWorkletNodeLike extends AudioNodeLike {
     postMessage(data: unknown): void;
   };
 }
+
+function isAudioNodeLike(value: unknown): value is AudioNodeLike {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof Reflect.get(value, "connect") === "function" &&
+    typeof Reflect.get(value, "disconnect") === "function"
+  );
+}
+
+function isAudioWorkletNodeLike(value: unknown): value is AudioWorkletNodeLike {
+  if (!isAudioNodeLike(value)) return false;
+  const port: unknown = Reflect.get(value, "port");
+  return (
+    typeof port === "object" &&
+    port !== null &&
+    "onmessage" in port &&
+    typeof Reflect.get(port, "postMessage") === "function"
+  );
+}
+
+function isMicAudioContextLike(value: unknown): value is MicAudioContextLike {
+  if (typeof value !== "object" || value === null) return false;
+  const state: unknown = Reflect.get(value, "state");
+  return (
+    typeof Reflect.get(value, "sampleRate") === "number" &&
+    (state === "suspended" || state === "running" || state === "closed") &&
+    isAudioNodeLike(Reflect.get(value, "destination")) &&
+    typeof Reflect.get(value, "createMediaStreamSource") === "function" &&
+    typeof Reflect.get(value, "resume") === "function" &&
+    typeof Reflect.get(value, "close") === "function"
+  );
+}
+
+type WorkletCapableMicContext = MicAudioContextLike & {
+  audioWorklet: { addModule(url: string): Promise<void> };
+};
 
 export interface VoiceMicCaptureOptions {
   /** Emitted for every framed Int16 PCM chunk (little-endian, 16 kHz mono). */
@@ -139,10 +180,12 @@ registerProcessor("${WORKLET_NAME}", ElizaVoiceSessionUplink);
 `;
 
 /** Runtime AudioWorklet availability probe — never assumed (WebView 113). */
-export function hasAudioWorkletSupport(ctx: MicAudioContextLike): boolean {
+export function hasAudioWorkletSupport(
+  ctx: MicAudioContextLike,
+): ctx is WorkletCapableMicContext {
   return (
     typeof ctx.audioWorklet?.addModule === "function" &&
-    typeof AudioWorkletNode !== "undefined" &&
+    typeof globalThis.AudioWorkletNode !== "undefined" &&
     typeof Blob !== "undefined" &&
     typeof URL !== "undefined" &&
     typeof URL.createObjectURL === "function"
@@ -223,26 +266,14 @@ export async function startVoiceMicCapture(
   const createAudioContext =
     options.createAudioContext ??
     (() => {
-      const Ctor =
-        typeof window !== "undefined"
-          ? ((
-              window as unknown as {
-                AudioContext?: new () => MicAudioContextLike;
-              }
-            ).AudioContext ??
-            (
-              window as unknown as {
-                webkitAudioContext?: new () => MicAudioContextLike;
-              }
-            ).webkitAudioContext)
-          : undefined;
-      if (!Ctor) {
+      const context = constructBrowserAudioContext([], isMicAudioContextLike);
+      if (!context) {
         throw new VoiceMicCaptureError(
           "AudioContext unavailable",
           "unsupported",
         );
       }
-      return new Ctor();
+      return context;
     });
 
   let stream: MediaStream;
@@ -316,23 +347,31 @@ export async function startVoiceMicCapture(
       new Blob([WORKLET_SOURCE], { type: "text/javascript" }),
     );
     try {
-      await ctx.audioWorklet!.addModule(url);
+      await ctx.audioWorklet.addModule(url);
     } finally {
       URL.revokeObjectURL(url);
     }
-    workletNode = new (
-      AudioWorkletNode as unknown as new (
-        c: MicAudioContextLike,
-        name: string,
-      ) => AudioWorkletNodeLike
-    )(ctx, WORKLET_NAME);
-    workletNode.port.onmessage = (event) => {
+    const node = constructBrowserAudioWorkletNode(
+      ctx,
+      WORKLET_NAME,
+      isAudioWorkletNodeLike,
+    );
+    if (!node) {
+      for (const track of stream.getTracks()) track.stop();
+      await ctx.close();
+      throw new VoiceMicCaptureError(
+        "AudioWorkletNode unavailable",
+        "unsupported",
+      );
+    }
+    workletNode = node;
+    node.port.onmessage = (event) => {
       const data = event.data as { pcm?: Float32Array } | undefined;
       if (data?.pcm) emitResampled(data.pcm);
     };
-    source.connect(workletNode as unknown as AudioNodeLike);
+    source.connect(node);
     // Worklet needs a graph terminus to pull frames; connect to destination.
-    (workletNode as unknown as AudioNodeLike).connect(ctx.destination);
+    node.connect(ctx.destination);
   } else if (typeof ctx.createScriptProcessor === "function") {
     backend = "scriptprocessor";
     // 4096-sample buffer is the WebView-113-safe choice (power of two, low

@@ -21,6 +21,10 @@
  */
 
 import {
+  constructBrowserAudioContext,
+  constructBrowserAudioWorkletNode,
+} from "./browser-audio-runtime";
+import {
   int16BytesToFloatPcm,
   VOICE_PCM_SAMPLE_RATE,
 } from "./voice-session-pcm";
@@ -61,6 +65,46 @@ export interface PlaybackWorkletNodeLike extends PlaybackNodeLike {
     postMessage(data: unknown, transfer?: Transferable[]): void;
   };
 }
+
+function isPlaybackNodeLike(value: unknown): value is PlaybackNodeLike {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof Reflect.get(value, "connect") === "function" &&
+    typeof Reflect.get(value, "disconnect") === "function"
+  );
+}
+
+function isPlaybackWorkletNodeLike(
+  value: unknown,
+): value is PlaybackWorkletNodeLike {
+  if (!isPlaybackNodeLike(value)) return false;
+  const port: unknown = Reflect.get(value, "port");
+  return (
+    typeof port === "object" &&
+    port !== null &&
+    "onmessage" in port &&
+    typeof Reflect.get(port, "postMessage") === "function"
+  );
+}
+
+function isPlaybackAudioContextLike(
+  value: unknown,
+): value is PlaybackAudioContextLike {
+  if (typeof value !== "object" || value === null) return false;
+  const state: unknown = Reflect.get(value, "state");
+  return (
+    typeof Reflect.get(value, "sampleRate") === "number" &&
+    (state === "suspended" || state === "running" || state === "closed") &&
+    isPlaybackNodeLike(Reflect.get(value, "destination")) &&
+    typeof Reflect.get(value, "resume") === "function" &&
+    typeof Reflect.get(value, "close") === "function"
+  );
+}
+
+type WorkletCapablePlaybackContext = PlaybackAudioContextLike & {
+  audioWorklet: { addModule(url: string): Promise<void> };
+};
 
 export interface VoiceSessionPlaybackOptions {
   createAudioContext?: () => PlaybackAudioContextLike;
@@ -114,10 +158,10 @@ registerProcessor("${PLAYBACK_WORKLET_NAME}", ElizaVoiceSessionDownlink);
 
 export function hasPlaybackWorkletSupport(
   ctx: PlaybackAudioContextLike,
-): boolean {
+): ctx is WorkletCapablePlaybackContext {
   return (
     typeof ctx.audioWorklet?.addModule === "function" &&
-    typeof AudioWorkletNode !== "undefined" &&
+    typeof globalThis.AudioWorkletNode !== "undefined" &&
     typeof Blob !== "undefined" &&
     typeof URL !== "undefined" &&
     typeof URL.createObjectURL === "function"
@@ -146,23 +190,16 @@ export async function createVoiceSessionPlayback(
   const createAudioContext =
     options.createAudioContext ??
     (() => {
-      const Ctor =
-        typeof window !== "undefined"
-          ? (window as unknown as {
-              AudioContext?: new (o?: { sampleRate?: number }) => PlaybackAudioContextLike;
-            }).AudioContext ??
-            (window as unknown as {
-              webkitAudioContext?: new (o?: {
-                sampleRate?: number;
-              }) => PlaybackAudioContextLike;
-            }).webkitAudioContext
-          : undefined;
-      if (!Ctor) throw new Error("AudioContext unavailable for playback");
+      const context = constructBrowserAudioContext(
+        [{ sampleRate: VOICE_PCM_SAMPLE_RATE }],
+        isPlaybackAudioContextLike,
+      );
+      if (!context) throw new Error("AudioContext unavailable for playback");
       // Request a 16 kHz context so the pcm16 downlink plays at native rate with
       // no resample; if the platform ignores it (Safari sometimes forces 44.1),
       // the ScriptProcessor/worklet plays the raw samples — a pitch shift the
       // caller can correct later, but correctness of framing/flush is unaffected.
-      return new Ctor({ sampleRate: VOICE_PCM_SAMPLE_RATE });
+      return context;
     });
 
   const ctx = createAudioContext();
@@ -188,19 +225,25 @@ export async function createVoiceSessionPlayback(
       new Blob([PLAYBACK_WORKLET_SOURCE], { type: "text/javascript" }),
     );
     try {
-      await ctx.audioWorklet!.addModule(url);
+      await ctx.audioWorklet.addModule(url);
     } finally {
       URL.revokeObjectURL(url);
     }
-    workletNode = new (AudioWorkletNode as unknown as new (
-      c: PlaybackAudioContextLike,
-      name: string,
-    ) => PlaybackWorkletNodeLike)(ctx, PLAYBACK_WORKLET_NAME);
-    workletNode.port.onmessage = (event) => {
+    const node = constructBrowserAudioWorkletNode(
+      ctx,
+      PLAYBACK_WORKLET_NAME,
+      isPlaybackWorkletNodeLike,
+    );
+    if (!node) {
+      await ctx.close();
+      throw new Error("AudioWorkletNode unavailable for playback");
+    }
+    workletNode = node;
+    node.port.onmessage = (event) => {
       const d = event.data as { type?: string } | undefined;
       if (d?.type === "drained") options.onDrained?.();
     };
-    (workletNode as unknown as PlaybackNodeLike).connect(ctx.destination);
+    node.connect(ctx.destination);
   } else if (typeof ctx.createScriptProcessor === "function") {
     backend = "scriptprocessor";
     scriptNode = ctx.createScriptProcessor(4096, 1, 1);
