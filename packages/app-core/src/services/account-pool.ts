@@ -29,15 +29,14 @@ import {
   getAccessToken as getAccountAccessToken,
   listProviderAccounts,
 } from "@elizaos/auth/credentials";
+import { fetchAnthropicOAuthProfile } from "@elizaos/auth/oauth-flow";
 import {
   ACCOUNT_CREDENTIAL_PROVIDER_IDS,
   DIRECT_ACCOUNT_PROVIDER_ENV,
   DIRECT_ACCOUNT_PROVIDER_IDS,
   type DirectAccountProvider,
   isSubscriptionProvider,
-  type SubscriptionProvider,
 } from "@elizaos/auth/types";
-import { fetchAnthropicOAuthProfile } from "@elizaos/auth/oauth-flow";
 import {
   type AnthropicAccountPoolBridge,
   logger,
@@ -726,8 +725,11 @@ function recordToLinked(
 function emailFromIdToken(idToken: string | undefined): string | undefined {
   if (!idToken) return undefined;
   try {
+    const segments = idToken.split(".");
+    const encodedPayload = segments.length === 3 ? segments[1] : undefined;
+    if (!encodedPayload) return undefined;
     const payload = JSON.parse(
-      Buffer.from(idToken.split(".")[1] ?? "", "base64url").toString("utf8"),
+      Buffer.from(encodedPayload, "base64url").toString("utf8"),
     ) as { email?: unknown };
     return typeof payload.email === "string" && payload.email.includes("@")
       ? payload.email

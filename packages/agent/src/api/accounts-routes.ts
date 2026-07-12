@@ -76,7 +76,9 @@ const z = (zod as typeof zod & { z?: typeof zod }).z ?? zod;
 const execFileAsync = promisify(execFile);
 
 async function commandAvailable(command: string): Promise<boolean> {
-  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+  const executablePath = process.env.PATH;
+  if (!executablePath) return false;
+  for (const dir of executablePath.split(path.delimiter)) {
     if (!dir) continue;
     try {
       await access(path.join(dir, command));
@@ -107,10 +109,15 @@ async function ensureSubscriptionCli(
 }
 
 function requestUsesLocalRoot(req: RouteRequestContext["req"]): boolean {
+  const hostUrl =
+    typeof req.headers.host === "string" && req.headers.host.trim()
+      ? `http://${req.headers.host}`
+      : null;
   const raw =
     (typeof req.headers.origin === "string" && req.headers.origin) ||
     (typeof req.headers.referer === "string" && req.headers.referer) ||
-    `http://${req.headers.host ?? ""}`;
+    hostUrl;
+  if (!raw) return false;
   try {
     const host = new URL(raw).hostname;
     return host === "localhost" || host === "127.0.0.1" || host === "::1";
