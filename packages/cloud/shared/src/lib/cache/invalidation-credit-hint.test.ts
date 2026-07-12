@@ -1,60 +1,59 @@
 /** Credit mutations must invalidate every balance view, including inference admission. */
 
-import { beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
+import { cache } from "./client";
 import { CacheKeys } from "./keys";
+import { memoryCache } from "./memory-cache";
 
 const deleted: string[] = [];
 const deletedPatterns: string[] = [];
 const memoryInvalidations: string[] = [];
 
-mock.module("./client", () => ({
-  cache: {
-    del: async (key: string) => {
-      deleted.push(key);
-      return true;
-    },
-    delPattern: async (pattern: string) => {
-      deletedPatterns.push(pattern);
-      return 1;
-    },
+const delSpy = spyOn(cache, "del").mockImplementation(async (key: string) => {
+  deleted.push(key);
+});
+const delPatternSpy = spyOn(cache, "delPattern").mockImplementation(async (pattern: string) => {
+  deletedPatterns.push(pattern);
+});
+const invalidateOrganizationSpy = spyOn(memoryCache, "invalidateOrganization").mockImplementation(
+  async (organizationId: string) => {
+    memoryInvalidations.push(`organization:${organizationId}`);
   },
-}));
-
-mock.module("./memory-cache", () => ({
-  memoryCache: {
-    invalidateOrganization: async (organizationId: string) => {
-      memoryInvalidations.push(`organization:${organizationId}`);
-    },
-    invalidateRoom: async (roomId: string, organizationId: string) => {
-      memoryInvalidations.push(`room:${roomId}:${organizationId}`);
-    },
-    invalidateMemory: async (memoryId: string) => {
-      memoryInvalidations.push(`memory:${memoryId}`);
-    },
-    invalidateConversation: async (conversationId: string) => {
-      memoryInvalidations.push(`conversation:${conversationId}`);
-    },
+);
+const invalidateRoomSpy = spyOn(memoryCache, "invalidateRoom").mockImplementation(
+  async (roomId: string, organizationId: string) => {
+    memoryInvalidations.push(`room:${roomId}:${organizationId}`);
   },
-}));
-
-mock.module("../utils/logger", () => ({
-  // Bun module mocks are process-global across changed-file coverage runs, so
-  // preserve the complete logger contract for tests loaded after this file.
-  logger: {
-    debug: mock(() => undefined),
-    error: mock(() => undefined),
-    info: mock(() => undefined),
-    warn: mock(() => undefined),
+);
+const invalidateMemorySpy = spyOn(memoryCache, "invalidateMemory").mockImplementation(
+  async (memoryId: string) => {
+    memoryInvalidations.push(`memory:${memoryId}`);
   },
-}));
+);
+const invalidateConversationSpy = spyOn(memoryCache, "invalidateConversation").mockImplementation(
+  async (conversationId: string) => {
+    memoryInvalidations.push(`conversation:${conversationId}`);
+  },
+);
 
 const { CacheInvalidation } = await import("./invalidation");
 
-beforeEach(() => {
+afterAll(() => {
+  delSpy.mockRestore();
+  delPatternSpy.mockRestore();
+  invalidateOrganizationSpy.mockRestore();
+  invalidateRoomSpy.mockRestore();
+  invalidateMemorySpy.mockRestore();
+  invalidateConversationSpy.mockRestore();
+});
+
+function resetObservations(): void {
   deleted.length = 0;
   deletedPatterns.length = 0;
   memoryInvalidations.length = 0;
-});
+}
+
+beforeEach(resetObservations);
 
 test("onCreditMutation drops the optimistic inference balance hint", async () => {
   const organizationId = "org-credit-mutation";
@@ -66,27 +65,44 @@ test("onCreditMutation drops the optimistic inference balance hint", async () =>
   expect(deleted).toContain(CacheKeys.eliza.orgBalance(organizationId));
 });
 
-test("central invalidation routes every mutation to its scoped cache keys", async () => {
+test("each central invalidation method targets only its own cache scope", async () => {
   const organizationId = "org-invalidation-contract";
 
   await CacheInvalidation.onUsageRecordCreated(organizationId);
-  await CacheInvalidation.onGenerationCreated(organizationId);
-  await CacheInvalidation.onOrganizationUpdated(organizationId);
-  await CacheInvalidation.clearAll(organizationId);
-  await CacheInvalidation.onMemoryCreated(organizationId);
-  await CacheInvalidation.onMemoryCreated(organizationId, "room-1");
-  await CacheInvalidation.onMemoryDeleted(organizationId, "memory-1");
-  await CacheInvalidation.onConversationUpdated("conversation-1");
+  expect(deleted).toEqual([CacheKeys.org.dashboard(organizationId)]);
+  expect(deletedPatterns).toEqual([`analytics:overview:${organizationId}:*`]);
 
-  expect(deleted).toContain(CacheKeys.org.dashboard(organizationId));
-  expect(deleted).toContain(CacheKeys.org.data(organizationId));
-  expect(deletedPatterns).toContain(`analytics:overview:${organizationId}:*`);
-  expect(deletedPatterns).toContain(CacheKeys.org.pattern(organizationId));
-  expect(deletedPatterns).toContain(CacheKeys.analytics.pattern(organizationId));
-  expect(memoryInvalidations).toEqual([
-    `organization:${organizationId}`,
-    `room:room-1:${organizationId}`,
-    "memory:memory-1",
-    "conversation:conversation-1",
+  resetObservations();
+  await CacheInvalidation.onGenerationCreated(organizationId);
+  expect(deleted).toEqual([CacheKeys.org.dashboard(organizationId)]);
+
+  resetObservations();
+  await CacheInvalidation.onOrganizationUpdated(organizationId);
+  expect(deleted).toEqual([
+    CacheKeys.org.data(organizationId),
+    CacheKeys.org.dashboard(organizationId),
   ]);
+
+  resetObservations();
+  await CacheInvalidation.clearAll(organizationId);
+  expect(deletedPatterns).toEqual([
+    CacheKeys.org.pattern(organizationId),
+    CacheKeys.analytics.pattern(organizationId),
+  ]);
+  expect(memoryInvalidations).toEqual([`organization:${organizationId}`]);
+
+  resetObservations();
+  await CacheInvalidation.onMemoryCreated(organizationId);
+  expect(memoryInvalidations).toEqual([]);
+
+  await CacheInvalidation.onMemoryCreated(organizationId, "room-1");
+  expect(memoryInvalidations).toEqual([`room:room-1:${organizationId}`]);
+
+  resetObservations();
+  await CacheInvalidation.onMemoryDeleted(organizationId, "memory-1");
+  expect(memoryInvalidations).toEqual(["memory:memory-1"]);
+
+  resetObservations();
+  await CacheInvalidation.onConversationUpdated("conversation-1");
+  expect(memoryInvalidations).toEqual(["conversation:conversation-1"]);
 });

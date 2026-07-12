@@ -86,9 +86,11 @@ simple = { limit = 200, period = 60 }
 # Exact organization limits and non-native route limits use Railway TCP Redis
 # via REDIS_URL (in-Worker SocketRedis, RESP2 over cloudflare:sockets). The
 # global flood backstop and chat API-key gate above use Cloudflare's local
-# protective counters so Railway connection setup never blocks chat ingress.
-# Upstash REST remains a legacy fallback. Shared-runtime chat history still
-# depends on durable Redis; local dev uses embedded Wadis when unconfigured.
+# protective counters, so Railway connection setup no longer blocks those two
+# outer ingress checks. The exact organization quota remains Redis-backed in
+# the handler. Upstash REST remains a legacy fallback. Shared-runtime chat
+# history still depends on durable Redis; local dev uses embedded Wadis when
+# unconfigured.
 
 # Vectorize — embeddings (uncomment after `wrangler vectorize create`)
 # [[vectorize]]

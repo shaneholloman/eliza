@@ -1,13 +1,10 @@
 /**
  * Application-shell contracts for middleware that must wrap every generated
- * route. The generated router is intentionally replaced with an empty mount:
- * these tests exercise bootstrap ordering, not the hundreds of route modules.
+ * route. These tests use the real generated router so they leave no
+ * process-global Bun module mock behind for sibling files.
  */
 
-import { expect, mock, test } from "bun:test";
-
-const mountRoutes = mock(() => {});
-mock.module("./_router.generated", () => ({ mountRoutes }));
+import { expect, test } from "bun:test";
 
 const { createApp } = await import("./bootstrap-app");
 
@@ -37,7 +34,6 @@ test("the global native limiter rejects before auth and generated routes", async
     }),
   );
 
-  expect(mountRoutes).toHaveBeenCalledTimes(1);
   expect(keys).toEqual(["global:ip:203.0.113.8"]);
   expect(response.status).toBe(429);
   expect(response.headers.get("X-RateLimit-Policy")).toBe("cloudflare-native");
