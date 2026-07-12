@@ -302,6 +302,23 @@ describe("chat/completions optimistic-billing route decision (#9899/#10066)", ()
     streamText.mockClear();
   });
 
+  test("forwards the prompt cache key through the full Cerebras route", async () => {
+    await handleChatCompletionsPOST(
+      makeRequest(undefined, {
+        model: "gpt-oss-120b",
+        prompt_cache_key: "v5:optimistic-route",
+      }),
+      { skipOrgRateLimit: true },
+    );
+
+    expect(generateText).toHaveBeenCalledTimes(1);
+    expect(generateText.mock.calls[0]?.[0]).toMatchObject({
+      providerOptions: {
+        openai: { promptCacheKey: "v5:optimistic-route" },
+      },
+    });
+  });
+
   test("eligible org takes the optimistic path: writes backstop, skips the synchronous reserve", async () => {
     await drive();
     // POSITIVE: the decision was reached and chose optimistic.

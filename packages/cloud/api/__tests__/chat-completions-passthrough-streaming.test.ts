@@ -212,12 +212,12 @@ function makeLedgerReservation(startBalance: number, hold: number) {
   };
 }
 
-const QUALIFYING_REQUEST = {
+const QUALIFYING_REQUEST: Record<string, unknown> = {
   model: MODEL,
   messages: [{ role: "user", content: "hello" }],
   stream: true,
   stream_options: { include_usage: true },
-} as never;
+};
 
 function callStreaming(
   settleReservation: (actualCost: number) => Promise<unknown> | unknown,
@@ -434,7 +434,10 @@ describe("passthrough streaming — qualifying request pipes bytes verbatim and 
     const settle = createCreditReservationSettler(ledger.reservation);
     fetchImpl = async () => sseResponse(UPSTREAM_SSE);
 
-    const res = await callStreaming(settle, { effectiveMaxTokens: 4096 });
+    const res = await callStreaming(settle, {
+      effectiveMaxTokens: 4096,
+      request: { ...QUALIFYING_REQUEST, prompt_cache_key: "v5:stable-prefix" },
+    });
     const body = await res.text();
 
     // Byte-for-byte pass-through: vendor fields, reasoning delta, upstream id,
@@ -461,6 +464,8 @@ describe("passthrough streaming — qualifying request pipes bytes verbatim and 
     expect(sentBody.stream).toBe(true);
     expect(sentBody.stream_options).toEqual({ include_usage: true });
     expect(sentBody.max_tokens).toBe(4096);
+    expect(sentBody.prompt_cache_key).toBe("v5:stable-prefix");
+    expect(sentBody).not.toHaveProperty("promptCacheKey");
     expect(sentBody.messages).toEqual([{ role: "user", content: "hello" }]);
 
     // Billing: the terminal usage frame's tokens, through the real settler.
@@ -777,6 +782,29 @@ describe("passthrough streaming — upstream errors fail closed and refund the h
     expect(ledger.balance).toBeCloseTo(ledger.startBalance, 10);
     expect(billUsage).not.toHaveBeenCalled();
     expect(streamText).not.toHaveBeenCalled();
+  });
+
+  test("redacts an echoed prompt cache key from an upstream error", async () => {
+    const promptCacheKey = "opaque-cache-key-secret";
+    fetchImpl = async () =>
+      Response.json(
+        {
+          error: {
+            message: `prompt cache key ${promptCacheKey} is invalid`,
+            type: "invalid_request_error",
+          },
+        },
+        { status: 400 },
+      );
+
+    const res = await callStreaming(async () => null, {
+      request: { ...QUALIFYING_REQUEST, prompt_cache_key: promptCacheKey },
+    });
+    const body = await res.text();
+
+    expect(res.status).toBe(400);
+    expect(body).toContain("[REDACTED_PROMPT_CACHE_KEY]");
+    expect(body).not.toContain(promptCacheKey);
   });
 
   test("upstream 500 surfaces as 503 service_unavailable; hold refunded", async () => {
