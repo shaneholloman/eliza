@@ -25,7 +25,7 @@ import {
   runBatches,
   walkTests,
   writeSyncAll,
-} from "./test-cloud-run.mjs";
+} from "../test-cloud-run.mjs";
 
 describe("walkTests", () => {
   it("finds .test. and .spec. files recursively and skips excluded dirs", () => {
