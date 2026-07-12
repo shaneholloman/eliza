@@ -341,7 +341,13 @@ function checkRedisUnavailableFallback(
 
 function applyRateLimitHeaders(c: Context, headers: Record<string, string>): void {
   for (const [k, v] of Object.entries(headers)) {
-    c.res.headers.set(k, v);
+    // Hono middleware unwinds from the innermost route back to the outermost
+    // middleware. Preserve a more specific inner limiter's response metadata
+    // instead of replacing (for example) a 200/min chat limit with the outer
+    // 600/min global limit.
+    if (!c.res.headers.has(k)) {
+      c.res.headers.set(k, v);
+    }
   }
 }
 
