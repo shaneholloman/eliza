@@ -20,7 +20,10 @@
  */
 
 import { createHmac, randomUUID } from "node:crypto";
-import type { ServerWebSocket } from "bun";
+import {
+  CartesiaSonicTtsAdapter,
+  type CartesiaSonicTtsStream,
+} from "@harness-adapters/cartesia-sonic-tts.ts";
 
 import {
   createDeepgramFluxRealtimeSession,
@@ -28,15 +31,12 @@ import {
   type DeepgramFluxRealtimeEvent,
   type DeepgramFluxRealtimeSession,
 } from "@harness-adapters/deepgram-flux.ts";
-import {
-  CartesiaSonicTtsAdapter,
-  type CartesiaSonicTtsStream,
-} from "@harness-adapters/cartesia-sonic-tts.ts";
+import type { ServerWebSocket } from "bun";
 
-import { makeDeepgramFactory, makeCartesiaFactory } from "../ws-factories.ts";
-import { streamLlmReply, type LlmStreamConfig } from "./llm-bridge.ts";
+import { makeCartesiaFactory, makeDeepgramFactory } from "../ws-factories.ts";
+import { type LlmStreamConfig, streamLlmReply } from "./llm-bridge.ts";
 
-const HARNESS_MINT_SECRET = "harness-only-not-production-" + randomUUID();
+const HARNESS_MINT_SECRET = `harness-only-not-production-${randomUUID()}`;
 const TOKEN_TTL_MS = 120_000;
 
 export interface ProviderConfig {
@@ -119,7 +119,7 @@ export function mintHarnessToken(
   const sig = createHmac("sha256", HARNESS_MINT_SECRET)
     .update(payload)
     .digest("base64url");
-  const token = Buffer.from(payload).toString("base64url") + "." + sig;
+  const token = `${Buffer.from(payload).toString("base64url")}.${sig}`;
   return { sessionId, token, expiresAt };
 }
 
@@ -190,7 +190,7 @@ export function startReferenceServer(opts: StartServerOptions): RunningServer {
     ws.send(bytes);
   };
 
-  const server = Bun.serve<WsData, undefined>({
+  const server = Bun.serve<WsData>({
     port,
     fetch(req, srv) {
       const url = new URL(req.url);
@@ -487,7 +487,6 @@ export function startReferenceServer(opts: StartServerOptions): RunningServer {
     // done, and mark the LAST phrase so we close the context exactly once via
     // that phrase's completion (never send an empty trailing phrase into an
     // already-completing context -> that races into "Context closed").
-    let firstPhrase = true;
     let sentenceBuf = "";
     let phrasesSent = 0;
     const sendPhraseSafe = (text: string, last: boolean) => {
@@ -496,7 +495,6 @@ export function startReferenceServer(opts: StartServerOptions): RunningServer {
         // `continue:false` on the final phrase tells Cartesia this context is
         // complete after synthesizing it -> yields onComplete, no empty finish.
         tts.sendPhrase({ text, continueContext: !last });
-        firstPhrase = false;
         phrasesSent++;
       } catch (ignoredError) {
         void ignoredError;
@@ -628,6 +626,10 @@ export function startReferenceServer(opts: StartServerOptions): RunningServer {
   }
 
   const actualPort = server.port;
+  if (typeof actualPort !== "number") {
+    server.stop(true);
+    throw new Error("voice reference server did not bind a TCP port");
+  }
   const wsUrl = `ws://127.0.0.1:${actualPort}/api/v1/voice/session/ws`;
   return {
     port: actualPort,

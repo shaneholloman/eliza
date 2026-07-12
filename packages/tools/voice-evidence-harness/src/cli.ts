@@ -17,13 +17,16 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-
+import { type ClientRunResult, runClient } from "./client.ts";
 import { Evidence, type StageName } from "./evidence.ts";
-import { parseWav, writeWav } from "./wav.ts";
-import { runClient } from "./client.ts";
-import { startReferenceServer, type DomainRow, type ProviderConfig } from "./reference/voice-session-server.ts";
-import { startRealTarget, type RealTargetHandle } from "./real/real-target.ts";
 import { assembleMp4, ensureFfmpeg } from "./mp4.ts";
+import { startRealTarget } from "./real/real-target.ts";
+import {
+  type DomainRow,
+  type ProviderConfig,
+  startReferenceServer,
+} from "./reference/voice-session-server.ts";
+import { parseWav, writeWav } from "./wav.ts";
 
 type Target = "reference" | "real";
 
@@ -44,23 +47,33 @@ interface ScenarioResult {
 function loadSecret(path: string, field: string): string {
   const raw = JSON.parse(readFileSync(path, "utf8"));
   const v = raw[field];
-  if (!v || typeof v !== "string") throw new Error(`secret ${path}.${field} missing`);
+  if (!v || typeof v !== "string")
+    throw new Error(`secret ${path}.${field} missing`);
   return v;
 }
 
 function providerConfig(): ProviderConfig {
-  const deepgramApiKey = loadSecret(join(homedir(), ".moltbot/secrets/deepgram.json"), "api_key");
-  const cartesiaApiKey = loadSecret(join(homedir(), ".moltbot/secrets/cartesia.json"), "api_key");
+  const deepgramApiKey = loadSecret(
+    join(homedir(), ".moltbot/secrets/deepgram.json"),
+    "api_key",
+  );
+  const cartesiaApiKey = loadSecret(
+    join(homedir(), ".moltbot/secrets/cartesia.json"),
+    "api_key",
+  );
   const llmApiKey = process.env.OPENROUTER_API_KEY;
-  if (!llmApiKey) throw new Error("OPENROUTER_API_KEY not set (harness LLM leg)");
+  if (!llmApiKey)
+    throw new Error("OPENROUTER_API_KEY not set (harness LLM leg)");
   return {
     deepgramApiKey,
     cartesiaApiKey,
     // public Cartesia voice ("Skylar - Friendly Guide"); documented in README
-    cartesiaVoiceId: process.env.CARTESIA_VOICE_ID ?? "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4",
+    cartesiaVoiceId:
+      process.env.CARTESIA_VOICE_ID ?? "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4",
     llm: {
       apiKey: llmApiKey,
-      model: process.env.HARNESS_LLM_MODEL ?? "meta-llama/llama-3.1-8b-instruct",
+      model:
+        process.env.HARNESS_LLM_MODEL ?? "meta-llama/llama-3.1-8b-instruct",
     },
   };
 }
@@ -79,8 +92,24 @@ const FIXTURES: Record<Scenario, string> = {
 
 // Required stages per scenario. Absent = FAIL (no missing-becomes-zero).
 const REQUIRED_STAGES: Record<Scenario, StageName[]> = {
-  baseline: ["mint", "ws_hello", "ready", "stt_final", "llm_first_text", "tts_first_frame", "tts_complete"],
-  bargein: ["mint", "ws_hello", "ready", "stt_final", "tts_first_frame", "interrupt_requested", "interrupt_to_silence"],
+  baseline: [
+    "mint",
+    "ws_hello",
+    "ready",
+    "stt_final",
+    "llm_first_text",
+    "tts_first_frame",
+    "tts_complete",
+  ],
+  bargein: [
+    "mint",
+    "ws_hello",
+    "ready",
+    "stt_final",
+    "tts_first_frame",
+    "interrupt_requested",
+    "interrupt_to_silence",
+  ],
   // error-auth intentionally does NOT require `ready`: a bad provider key must
   // prevent the session from reaching ready. It requires the auth handshake
   // stages plus a surfaced error (asserted separately in the gate below).
@@ -109,34 +138,43 @@ async function runScenario(
     bits: wav.bitsPerSample,
     pcmBytes: wav.pcm.byteLength,
   });
-  if (wav.sampleRate !== 16000 || wav.channels !== 1 || wav.bitsPerSample !== 16) {
-    reasons.push(`fixture not linear16 mono 16k (got ${wav.sampleRate}Hz/${wav.channels}ch/${wav.bitsPerSample}bit)`);
+  if (
+    wav.sampleRate !== 16000 ||
+    wav.channels !== 1 ||
+    wav.bitsPerSample !== 16
+  ) {
+    reasons.push(
+      `fixture not linear16 mono 16k (got ${wav.sampleRate}Hz/${wav.channels}ch/${wav.bitsPerSample}bit)`,
+    );
   }
   ev.writeArtifact("input.wav", wavBytes, "input audio (spoken fixture)");
 
   // domain-artifact capture
   const domainRows: DomainRow[] = [];
 
-  const faultInjection = scenario === "error-auth" ? "deepgram-auth-fail" : undefined;
+  const faultInjection =
+    scenario === "error-auth" ? "deepgram-auth-fail" : undefined;
 
   // Boot the target: either the harness §7 REFERENCE server, or the REAL
   // production Phase-1 voice-session server (mint route consent+jwt precondition
   // chain + attachVoiceWsHandler + VoiceSession + merged adapters), booted on a
   // node WS transport shim. Both expose the same {wsUrl, mint, stop} surface.
   let wsBase: string;
-  let mintFn: () => Promise<{ sessionId: string; token: string; expiresAt: string }>;
+  let mintFn: () => Promise<{
+    sessionId: string;
+    token: string;
+    expiresAt: string | number;
+  }>;
   let stopFn: () => void | Promise<void>;
-  let realHandle: RealTargetHandle | null = null;
-
   if (target === "real") {
-    realHandle = await startRealTarget({
+    const realTarget = await startRealTarget({
       providers,
       faultInjection,
       hooks: { log: (level, msg, data) => ev.log("server", level, msg, data) },
     });
-    wsBase = realHandle.wsUrl; // ends with `sessionId=`
-    mintFn = () => realHandle!.mint();
-    stopFn = () => realHandle!.stop();
+    wsBase = realTarget.wsUrl; // ends with `sessionId=`
+    mintFn = () => realTarget.mint();
+    stopFn = () => realTarget.stop();
     ev.log("harness", "info", "REAL voice server started", {
       wsUrl: wsBase,
       faultInjection: faultInjection ?? "none",
@@ -150,29 +188,43 @@ async function runScenario(
         onServerEmit: (kind, payload) => ev.wsEvent("s2c", kind, payload),
         onDomainRow: (row) => {
           domainRows.push(row);
-          ev.log("server", "info", `domain-row:${row.table}`, row as unknown as Record<string, unknown>);
+          ev.log("server", "info", `domain-row:${row.table}`, { ...row });
         },
       },
     });
     wsBase = server.wsUrl;
     mintFn = async () => server.mint("harness-agent", "harness-conversation");
     stopFn = () => server.stop();
-    ev.log("harness", "info", "reference server started", { wsUrl: server.wsUrl, faultInjection: faultInjection ?? "none" });
+    ev.log("harness", "info", "reference server started", {
+      wsUrl: server.wsUrl,
+      faultInjection: faultInjection ?? "none",
+    });
   }
 
   // §7.1 mint
   const minted = await mintFn();
   ev.mark("mint");
   ev.wsEvent("c2s", "json", { kind: "mint_request", target });
-  ev.wsEvent("s2c", "json", { kind: "mint_response", sessionId: minted.sessionId, expiresAt: minted.expiresAt, token: "<REDACTED>" });
-  ev.log("harness", "info", "minted session", { sessionId: minted.sessionId, target });
+  ev.wsEvent("s2c", "json", {
+    kind: "mint_response",
+    sessionId: minted.sessionId,
+    expiresAt: minted.expiresAt,
+    token: "<REDACTED>",
+  });
+  ev.log("harness", "info", "minted session", {
+    sessionId: minted.sessionId,
+    target,
+  });
 
   // The REAL server's WS url carries the sessionId as a query param (the
   // production ws/route.ts reads `?sessionId=`); the reference server's wsUrl is
   // already complete. Compose the final URL accordingly.
-  const connectUrl = target === "real" ? `${wsBase}${encodeURIComponent(minted.sessionId)}` : wsBase;
+  const connectUrl =
+    target === "real"
+      ? `${wsBase}${encodeURIComponent(minted.sessionId)}`
+      : wsBase;
 
-  let clientResult;
+  let clientResult: ClientRunResult;
   try {
     clientResult = await runClient({
       wsUrl: connectUrl,
@@ -230,20 +282,37 @@ async function runScenario(
       bitsPerSample: 16,
       audioFormat: 1,
     });
-    ev.writeArtifact("output-tts.wav", outWav, "TTS downlink audio (Cartesia Sonic, real)");
+    ev.writeArtifact(
+      "output-tts.wav",
+      outWav,
+      "TTS downlink audio (Cartesia Sonic, real)",
+    );
   } else if (scenario !== "error-auth") {
     reasons.push("no downlink TTS audio captured");
   }
 
   // ---- domain artifacts ----
-  ev.writeJsonArtifact("domain-rows.json", domainRows, "session + transcript rows the server produced");
+  ev.writeJsonArtifact(
+    "domain-rows.json",
+    domainRows,
+    "session + transcript rows the server produced",
+  );
   const sessionRows = domainRows.filter((r) => r.table === "voice_sessions");
-  const transcriptRows = domainRows.filter((r) => r.table === "voice_transcripts");
-  ev.log("harness", "info", "domain artifacts", { sessions: sessionRows.length, transcripts: transcriptRows.length });
+  const transcriptRows = domainRows.filter(
+    (r) => r.table === "voice_transcripts",
+  );
+  ev.log("harness", "info", "domain artifacts", {
+    sessions: sessionRows.length,
+    transcripts: transcriptRows.length,
+  });
 
   // ---- stage timing report ----
   const timing = ev.timingReport(REQUIRED_STAGES[scenario]);
-  ev.writeJsonArtifact("timing-report.json", timing, "stage timing report with explicit not_reached");
+  ev.writeJsonArtifact(
+    "timing-report.json",
+    timing,
+    "stage timing report with explicit not_reached",
+  );
 
   // ---- interrupt assertion (barge-in) ----
   const interruptAssertion = {
@@ -253,7 +322,11 @@ async function runScenario(
     assertion: "post-interrupt downlink frame count MUST be 0",
     pass: clientResult.postBargeInFrameCount === 0,
   };
-  ev.writeJsonArtifact("interrupt-assertion.json", interruptAssertion, "post-interrupt frame-count assertion");
+  ev.writeJsonArtifact(
+    "interrupt-assertion.json",
+    interruptAssertion,
+    "post-interrupt frame-count assertion",
+  );
 
   // ---- DoD gate ----
   if (timing.missing.length > 0) {
@@ -267,7 +340,9 @@ async function runScenario(
   if (scenario === "bargein") {
     if (!clientResult.sawInterrupted) reasons.push("interrupt never confirmed");
     if (clientResult.postBargeInFrameCount !== 0) {
-      reasons.push(`POST-INTERRUPT FRAMES LEAKED: ${clientResult.postBargeInFrameCount} (must be 0)`);
+      reasons.push(
+        `POST-INTERRUPT FRAMES LEAKED: ${clientResult.postBargeInFrameCount} (must be 0)`,
+      );
     }
   }
   if (scenario === "error-auth") {
@@ -280,11 +355,18 @@ async function runScenario(
     // `transport_error` (the live /v2/listen upgrade is rejected at auth →ws
     // close → adapter error). Both are the same DoD fact: a surfaced provider
     // auth/transport error, session never reaches ready-with-audio, no TTS.
-    const PROVIDER_ERROR_CODES = new Set(["stt_connect_timeout", "transport_error", "auth_failed"]);
+    const PROVIDER_ERROR_CODES = new Set([
+      "stt_connect_timeout",
+      "transport_error",
+      "auth_failed",
+    ]);
     const gotStt = clientResult.errors.some(
       (e) => e.code.startsWith("stt_") || PROVIDER_ERROR_CODES.has(e.code),
     );
-    if (!gotStt) reasons.push("error-path did not surface a provider/auth error (stt_*/transport_error)");
+    if (!gotStt)
+      reasons.push(
+        "error-path did not surface a provider/auth error (stt_*/transport_error)",
+      );
     // and it MUST NOT have produced TTS audio
     if (clientResult.downlinkFrameCount > 0) {
       reasons.push("error-path incorrectly produced TTS audio");
@@ -318,17 +400,40 @@ async function runScenario(
     });
     if (!mp4.ok) reasons.push(`mp4 assembly failed: ${mp4.error}`);
     else {
-      const mp4Bytes = new Uint8Array(readFileSync(join(evDir, "walkthrough.mp4")));
-      ev.writeArtifact("walkthrough.mp4", mp4Bytes, "input+output audio over timeline card (GitHub-inline MP4)");
+      const mp4Bytes = new Uint8Array(
+        readFileSync(join(evDir, "walkthrough.mp4")),
+      );
+      ev.writeArtifact(
+        "walkthrough.mp4",
+        mp4Bytes,
+        "input+output audio over timeline card (GitHub-inline MP4)",
+      );
     }
   }
 
   // ---- README index with SHA-256s ----
-  const readme = buildReadme(scenario, ev, timing, clientResult, { sessions: sessionRows.length, transcripts: transcriptRows.length }, minted.sessionId, target);
-  ev.writeArtifact("README.md", new TextEncoder().encode(readme), "evidence index");
+  const readme = buildReadme(
+    scenario,
+    ev,
+    timing,
+    clientResult,
+    { sessions: sessionRows.length, transcripts: transcriptRows.length },
+    minted.sessionId,
+    target,
+  );
+  ev.writeArtifact(
+    "README.md",
+    new TextEncoder().encode(readme),
+    "evidence index",
+  );
 
   const pass = reasons.length === 0;
-  ev.log("harness", pass ? "info" : "error", `scenario ${scenario} ${pass ? "PASS" : "FAIL"}`, { reasons });
+  ev.log(
+    "harness",
+    pass ? "info" : "error",
+    `scenario ${scenario} ${pass ? "PASS" : "FAIL"}`,
+    { reasons },
+  );
   return { scenario, pass, reasons, evidenceDir: evDir };
 }
 
@@ -348,17 +453,27 @@ function buildReadme(
   const lines: string[] = [];
   lines.push(`# Voice E2E evidence — ${scenario}`);
   lines.push("");
-  lines.push(`Generated ${new Date().toISOString()} by \`@elizaos/voice-evidence-harness\`.`);
+  lines.push(
+    `Generated ${new Date().toISOString()} by \`@elizaos/voice-evidence-harness\`.`,
+  );
   lines.push("");
-  lines.push(`Target: **${target === "real" ? "REAL Phase-1 voice-session server (production mint+jwt+ws-handler+VoiceSession)" : "harness §7 reference server"}**.`);
-  lines.push("Real providers: **Deepgram Flux (STT)** + **Cartesia Sonic 3.5 (TTS)**, LIVE keys.");
-  lines.push("LLM leg: real streaming LLM over OpenRouter standing in for Cerebras `gemma-4-31b` via the Eliza SSE bridge (see harness README §LLM-leg).");
+  lines.push(
+    `Target: **${target === "real" ? "REAL Phase-1 voice-session server (production mint+jwt+ws-handler+VoiceSession)" : "harness §7 reference server"}**.`,
+  );
+  lines.push(
+    "Real providers: **Deepgram Flux (STT)** + **Cartesia Sonic 3.5 (TTS)**, LIVE keys.",
+  );
+  lines.push(
+    "LLM leg: real streaming LLM over OpenRouter standing in for Cerebras `gemma-4-31b` via the Eliza SSE bridge (see harness README §LLM-leg).",
+  );
   lines.push(`Session: \`${sessionId}\``);
   lines.push("");
   lines.push("## Stage timings");
   lines.push("");
   for (const s of timing.stages) {
-    lines.push(`- \`${s.stage}\`: ${s.reached ? `${s.monoMs.toFixed(1)}ms` : `**not_reached** (${(s as { reason: string }).reason})`}`);
+    lines.push(
+      `- \`${s.stage}\`: ${s.reached ? `${s.monoMs.toFixed(1)}ms` : `**not_reached** (${(s as { reason: string }).reason})`}`,
+    );
   }
   lines.push("");
   lines.push("## Deltas");
@@ -369,7 +484,9 @@ function buildReadme(
   lines.push("");
   lines.push("## Interrupt assertion");
   lines.push("");
-  lines.push(`- post-interrupt downlink frames (client-observed): **${client.postBargeInFrameCount}** (MUST be 0)`);
+  lines.push(
+    `- post-interrupt downlink frames (client-observed): **${client.postBargeInFrameCount}** (MUST be 0)`,
+  );
   lines.push(`- interrupted event seen: ${client.sawInterrupted}`);
   lines.push("");
   lines.push("## Domain artifacts");
@@ -389,7 +506,9 @@ function buildReadme(
   lines.push("## How to reproduce");
   lines.push("");
   lines.push("```bash");
-  lines.push(`cd packages/tools/voice-evidence-harness && bun run src/cli.ts --scenario=${scenario} --target=${target}`);
+  lines.push(
+    `cd packages/tools/voice-evidence-harness && bun run src/cli.ts --scenario=${scenario} --target=${target}`,
+  );
   lines.push("```");
   lines.push("");
   return lines.join("\n");
@@ -397,18 +516,31 @@ function buildReadme(
 
 async function main() {
   const args = process.argv.slice(2);
-  const scenarioArg = (args.find((a) => a.startsWith("--scenario="))?.split("=")[1] ?? "all") as Scenario | "all";
-  const fixtureOverride = args.find((a) => a.startsWith("--fixture="))?.split("=")[1];
-  const target = ((args.find((a) => a.startsWith("--target="))?.split("=")[1]) ?? "reference") as Target;
+  const scenarioArg = (args
+    .find((a) => a.startsWith("--scenario="))
+    ?.split("=")[1] ?? "all") as Scenario | "all";
+  const fixtureOverride = args
+    .find((a) => a.startsWith("--fixture="))
+    ?.split("=")[1];
+  const target = (args.find((a) => a.startsWith("--target="))?.split("=")[1] ??
+    "reference") as Target;
   if (target !== "reference" && target !== "real") {
-    console.error(`invalid --target=${target} (expected "reference" or "real")`);
+    console.error(
+      `invalid --target=${target} (expected "reference" or "real")`,
+    );
     process.exit(2);
   }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const runDir = join(evidenceRoot(), target === "real" ? `${stamp}-real-server` : stamp);
+  const runDir = join(
+    evidenceRoot(),
+    target === "real" ? `${stamp}-real-server` : stamp,
+  );
 
-  const scenarios: Scenario[] = scenarioArg === "all" ? ["baseline", "bargein", "error-auth"] : [scenarioArg];
+  const scenarios: Scenario[] =
+    scenarioArg === "all"
+      ? ["baseline", "bargein", "error-auth"]
+      : [scenarioArg];
 
   // Keep-alive: the REAL target boots a node WS server whose inbound socket is
   // the process's last live handle. When that socket closes (session teardown),
@@ -420,7 +552,12 @@ async function main() {
   const results: ScenarioResult[] = [];
   for (const s of scenarios) {
     console.log(`\n########## ${s} (target=${target}) ##########`);
-    const r = await runScenario(s, runDir, target, s === scenarioArg ? fixtureOverride : undefined);
+    const r = await runScenario(
+      s,
+      runDir,
+      target,
+      s === scenarioArg ? fixtureOverride : undefined,
+    );
     results.push(r);
   }
   clearInterval(keepAlive);
@@ -434,7 +571,10 @@ async function main() {
     "",
     "| scenario | result | reasons |",
     "| --- | --- | --- |",
-    ...results.map((r) => `| ${r.scenario} | ${r.pass ? "PASS" : "**FAIL**"} | ${r.reasons.join("; ") || "-"} |`),
+    ...results.map(
+      (r) =>
+        `| ${r.scenario} | ${r.pass ? "PASS" : "**FAIL**"} | ${r.reasons.join("; ") || "-"} |`,
+    ),
     "",
   ];
   const { writeFileSync, mkdirSync } = await import("node:fs");
@@ -445,7 +585,9 @@ async function main() {
 
   const allPass = results.every((r) => r.pass);
   if (!allPass) {
-    console.error("\nEVIDENCE RUN FAILED — one or more scenarios did not meet DoD.");
+    console.error(
+      "\nEVIDENCE RUN FAILED — one or more scenarios did not meet DoD.",
+    );
     process.exit(1);
   }
   console.log("\nEVIDENCE RUN PASSED.");

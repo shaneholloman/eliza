@@ -285,8 +285,10 @@ describe("LLM bridge", () => {
         controller.close();
       },
     });
-    globalThis.fetch = (async () =>
-      new Response(stream, { status: 200 })) as typeof fetch;
+    globalThis.fetch = Object.assign(
+      async () => new Response(stream, { status: 200 }),
+      { preconnect: originalFetch.preconnect },
+    );
     const deltas: string[] = [];
     const first: number[] = [];
     const done: string[] = [];
@@ -308,8 +310,10 @@ describe("LLM bridge", () => {
     expect(done).toEqual(["Hi there"]);
 
     const errors: string[] = [];
-    globalThis.fetch = (async () =>
-      new Response("bad", { status: 503, statusText: "Nope" })) as typeof fetch;
+    globalThis.fetch = Object.assign(
+      async () => new Response("bad", { status: 503, statusText: "Nope" }),
+      { preconnect: originalFetch.preconnect },
+    );
     await llmBridge.streamLlmReply(
       "weather",
       { apiKey: "key", baseUrl: "https://llm.test" },
@@ -389,7 +393,8 @@ describe("client and reference-server contract helpers", () => {
         maxRunMs: 1000,
       });
       await new Promise((resolve) => setTimeout(resolve, 0));
-      const ws = FakeWebSocket.instances[0]!;
+      const ws = FakeWebSocket.instances[0];
+      if (!ws) throw new Error("voice client did not create a WebSocket");
       expect(JSON.parse(String(ws.sent[0]))).toMatchObject({
         t: "hello",
         token: "token",
@@ -473,8 +478,8 @@ describe("provider websocket factories", () => {
     expect(fakeWsInstances[1]?.options?.headers).toEqual({
       "X-API-Key": "cartesia",
     });
-    cartesia.binaryType = "arraybuffer";
-    expect(cartesia.binaryType).toBe("arraybuffer");
+    expect(Reflect.set(cartesia, "binaryType", "arraybuffer")).toBe(true);
+    expect(Reflect.get(cartesia, "binaryType")).toBe("arraybuffer");
   });
 });
 

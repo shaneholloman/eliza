@@ -54,27 +54,38 @@ export type StageRecord = StageMark | StageMiss;
 const REDACT_PATTERNS: Array<[RegExp, string]> = [
   [/Token\s+[A-Za-z0-9._-]{12,}/g, "Token <REDACTED>"],
   [/Bearer\s+[A-Za-z0-9._-]{12,}/g, "Bearer <REDACTED>"],
-  [/("?(?:api[_-]?key|apiKey|X-API-Key|Authorization|token|deepgramApiKey)"?\s*[:=]\s*")[^"]+(")/gi, '$1<REDACTED>$2'],
+  [
+    /("?(?:api[_-]?key|apiKey|X-API-Key|Authorization|token|deepgramApiKey)"?\s*[:=]\s*")[^"]+(")/gi,
+    "$1<REDACTED>$2",
+  ],
   [/sk-[A-Za-z0-9]{16,}/g, "sk-<REDACTED>"],
 ];
 
-export function redact<T>(value: T): T {
+export function redact(value: string): string;
+export function redact(value: Record<string, unknown>): Record<string, unknown>;
+export function redact(value: readonly unknown[]): unknown[];
+export function redact(value: unknown): unknown;
+export function redact(value: unknown): unknown {
   if (typeof value === "string") {
     let s = value;
     for (const [re, rep] of REDACT_PATTERNS) s = s.replace(re, rep);
-    return s as unknown as T;
+    return s;
   }
-  if (Array.isArray(value)) return value.map((v) => redact(v)) as unknown as T;
+  if (Array.isArray(value)) return value.map((item) => redact(item));
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (/(^|[_-])(key|token|authorization|secret)$/i.test(k) && typeof v === "string") {
-        out[k] = "<REDACTED>";
+    for (const key of Object.keys(value)) {
+      const item: unknown = Reflect.get(value, key);
+      if (
+        /(^|[_-])(key|token|authorization|secret)$/i.test(key) &&
+        typeof item === "string"
+      ) {
+        out[key] = "<REDACTED>";
       } else {
-        out[k] = redact(v);
+        out[key] = redact(item);
       }
     }
-    return out as unknown as T;
+    return out;
   }
   return value;
 }
@@ -87,7 +98,12 @@ export class Evidence {
   private readonly serverLogs: LogEntry[] = [];
   private readonly stages = new Map<StageName, StageRecord>();
   private readonly wsTranscript: Array<Record<string, unknown>> = [];
-  private readonly artifacts: Array<{ name: string; bytes: number; sha256: string; note?: string }> = [];
+  private readonly artifacts: Array<{
+    name: string;
+    bytes: number;
+    sha256: string;
+    note?: string;
+  }> = [];
 
   constructor(dir: string) {
     this.dir = dir;
@@ -99,7 +115,12 @@ export class Evidence {
     return performance.now() - this.startMono;
   }
 
-  log(side: Side, level: LogEntry["level"], msg: string, data?: Record<string, unknown>): void {
+  log(
+    side: Side,
+    level: LogEntry["level"],
+    msg: string,
+    data?: Record<string, unknown>,
+  ): void {
     const entry: LogEntry = {
       ts: new Date().toISOString(),
       monoMs: Number(this.now().toFixed(3)),
@@ -117,7 +138,11 @@ export class Evidence {
   }
 
   /** Record a WS control/audio event exactly as it crossed the wire (redacted). */
-  wsEvent(direction: "c2s" | "s2c", kind: "json" | "binary", payload: Record<string, unknown>): void {
+  wsEvent(
+    direction: "c2s" | "s2c",
+    kind: "json" | "binary",
+    payload: Record<string, unknown>,
+  ): void {
     this.wsTranscript.push({
       monoMs: Number(this.now().toFixed(3)),
       direction,
@@ -128,7 +153,11 @@ export class Evidence {
 
   mark(stage: StageName): void {
     if (this.stages.has(stage)) return; // first occurrence wins
-    this.stages.set(stage, { stage, monoMs: Number(this.now().toFixed(3)), reached: true });
+    this.stages.set(stage, {
+      stage,
+      monoMs: Number(this.now().toFixed(3)),
+      reached: true,
+    });
     this.log("harness", "info", `stage:${stage}`, { monoMs: this.now() });
   }
 
@@ -139,7 +168,7 @@ export class Evidence {
 
   stageMs(stage: StageName): number | null {
     const r = this.stages.get(stage);
-    return r && r.reached ? r.monoMs : null;
+    return r?.reached ? r.monoMs : null;
   }
 
   /** Delta between two reached stages, or null if either is missing. Never 0-for-missing. */
@@ -156,15 +185,27 @@ export class Evidence {
     writeFileSync(path, bytes);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     this.artifacts.push({ name, bytes: bytes.byteLength, sha256, note });
-    this.log("harness", "info", `artifact:${name}`, { bytes: bytes.byteLength, sha256 });
+    this.log("harness", "info", `artifact:${name}`, {
+      bytes: bytes.byteLength,
+      sha256,
+    });
     return sha256;
   }
 
   writeJsonArtifact(name: string, value: unknown, note?: string): string {
-    return this.writeArtifact(name, new TextEncoder().encode(JSON.stringify(value, null, 2) + "\n"), note);
+    return this.writeArtifact(
+      name,
+      new TextEncoder().encode(`${JSON.stringify(value, null, 2)}\n`),
+      note,
+    );
   }
 
-  get artifactIndex(): ReadonlyArray<{ name: string; bytes: number; sha256: string; note?: string }> {
+  get artifactIndex(): ReadonlyArray<{
+    name: string;
+    bytes: number;
+    sha256: string;
+    note?: string;
+  }> {
     return this.artifacts;
   }
 
@@ -174,10 +215,26 @@ export class Evidence {
 
   /** Flush per-side logs + transcript + timings to disk. */
   flushLogs(): void {
-    this.writeJsonArtifact("ws-transcript.json", this.wsTranscript, "full WS message transcript (tokens redacted)");
-    this.writeJsonArtifact("server.log.json", this.serverLogs, "server + provider structured logs");
-    this.writeJsonArtifact("client.log.json", this.clientLogs, "client-side event log");
-    this.writeJsonArtifact("all.log.json", this.logs, "combined structured log");
+    this.writeJsonArtifact(
+      "ws-transcript.json",
+      this.wsTranscript,
+      "full WS message transcript (tokens redacted)",
+    );
+    this.writeJsonArtifact(
+      "server.log.json",
+      this.serverLogs,
+      "server + provider structured logs",
+    );
+    this.writeJsonArtifact(
+      "client.log.json",
+      this.clientLogs,
+      "client-side event log",
+    );
+    this.writeJsonArtifact(
+      "all.log.json",
+      this.logs,
+      "combined structured log",
+    );
   }
 
   /**
@@ -192,17 +249,33 @@ export class Evidence {
     const stages: StageRecord[] = [];
     const missing: string[] = [];
     for (const s of requiredStages) {
-      const rec = this.stages.get(s) ?? { stage: s, reached: false as const, reason: "stage never fired" };
+      const rec = this.stages.get(s) ?? {
+        stage: s,
+        reached: false as const,
+        reason: "stage never fired",
+      };
       stages.push(rec);
       if (!rec.reached) missing.push(s);
     }
     const deltas: Record<string, number | null> = {
       "mint->ready": this.stageDelta("mint", "ready"),
       "ready->stt_final": this.stageDelta("ready", "stt_final"),
-      "stt_final->llm_first_text": this.stageDelta("stt_final", "llm_first_text"),
-      "llm_first_text->tts_first_frame": this.stageDelta("llm_first_text", "tts_first_frame"),
-      "stt_final->tts_first_frame": this.stageDelta("stt_final", "tts_first_frame"),
-      "tts_first_frame->tts_complete": this.stageDelta("tts_first_frame", "tts_complete"),
+      "stt_final->llm_first_text": this.stageDelta(
+        "stt_final",
+        "llm_first_text",
+      ),
+      "llm_first_text->tts_first_frame": this.stageDelta(
+        "llm_first_text",
+        "tts_first_frame",
+      ),
+      "stt_final->tts_first_frame": this.stageDelta(
+        "stt_final",
+        "tts_first_frame",
+      ),
+      "tts_first_frame->tts_complete": this.stageDelta(
+        "tts_first_frame",
+        "tts_complete",
+      ),
       "interrupt_requested->interrupt_to_silence": this.stageDelta(
         "interrupt_requested",
         "interrupt_to_silence",
