@@ -201,7 +201,9 @@ describe("claude chat/coding effort gates", () => {
     }
     // Live-probed 2026-07-12: haiku rejects the chat-API effort parameter
     // entirely; only the coding CLI's separate effort env applies to it.
-    expect(entry(catalog, "claude-chat", "claude-haiku-4-5-20251001").efforts).toEqual([]);
+    expect(
+      entry(catalog, "claude-chat", "claude-haiku-4-5-20251001").efforts,
+    ).toEqual([]);
     expect(
       entry(catalog, "claude-coding", "claude-haiku-4-5-20251001").efforts,
     ).toEqual(["low", "medium", "high"]);
