@@ -142,6 +142,24 @@ afterEach(() => {
 const originalFetch = globalThis.fetch;
 
 describe("coding-account-bridge", () => {
+  it("derives identity only from a structurally valid three-segment id token", () => {
+    const encodedPayload = Buffer.from(
+      JSON.stringify({ email: "valid@example.com" }),
+    ).toString("base64url");
+    writeAccount("openai-codex", "valid-jwt", "valid-access", {
+      idToken: `e30.${encodedPayload}.signature`,
+    });
+    writeAccount("openai-codex", "extra-segment", "invalid-access", {
+      idToken: `e30.${encodedPayload}.signature.untrusted`,
+    });
+
+    const pool = getDefaultAccountPool();
+    expect(pool.get("valid-jwt", "openai-codex")?.email).toBe(
+      "valid@example.com",
+    );
+    expect(pool.get("extra-segment", "openai-codex")?.email).toBeUndefined();
+  });
+
   it("selects the least-used Claude subscription and returns CLAUDE_CODE_OAUTH_TOKEN", async () => {
     writeAccount("anthropic-subscription", "busy", "sk-ant-oat-BUSY");
     writeAccount("anthropic-subscription", "idle", "sk-ant-oat-IDLE");
