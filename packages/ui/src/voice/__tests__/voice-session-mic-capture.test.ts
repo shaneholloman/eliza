@@ -77,6 +77,83 @@ describe("voice-session mic capture (ScriptProcessor fallback path — WebView 1
     await capture.stop();
   });
 
+  it("releases the mic graph when the static AudioWorklet module fails to load", async () => {
+    vi.stubGlobal("AudioWorkletNode", FakeVoiceAudioWorkletNode);
+    const ctx = new FakeMicWorkletAudioContext(16_000);
+    const disconnect = vi.fn();
+    ctx.createMediaStreamSource = () => ({
+      connect: vi.fn(),
+      disconnect,
+    });
+    Object.defineProperty(ctx, "audioWorklet", {
+      value: {
+        addModule: vi.fn(async () => {
+          throw new Error("worklet asset unavailable");
+        }),
+      },
+    });
+    const stopTrack = vi.fn();
+    const getUserMedia = async () =>
+      ({ getTracks: () => [{ stop: stopTrack }] }) as unknown as MediaStream;
+
+    await expect(
+      startVoiceMicCapture({
+        onFrame: () => {},
+        getUserMedia,
+        createAudioContext: () => ctx,
+        visibility: {
+          addListener() {},
+          removeListener() {},
+          isHidden: () => false,
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "VoiceMicCaptureError",
+      code: "start_failed",
+    });
+
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+    expect(ctx.closed).toBe(true);
+  });
+
+  it("stops the mic track when AudioContext construction fails", async () => {
+    const stopTrack = vi.fn();
+    const getUserMedia = async () =>
+      ({ getTracks: () => [{ stop: stopTrack }] }) as unknown as MediaStream;
+
+    await expect(
+      startVoiceMicCapture({
+        onFrame: () => {},
+        getUserMedia,
+        createAudioContext: () => {
+          throw new Error("AudioContext constructor failed");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "start_failed" });
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the mic track and closes the context when source creation fails", async () => {
+    const stopTrack = vi.fn();
+    const getUserMedia = async () =>
+      ({ getTracks: () => [{ stop: stopTrack }] }) as unknown as MediaStream;
+    const ctx = new FakeMicAudioContext(16_000);
+    ctx.createMediaStreamSource = () => {
+      throw new Error("media source failed");
+    };
+
+    await expect(
+      startVoiceMicCapture({
+        onFrame: () => {},
+        getUserMedia,
+        createAudioContext: () => ctx,
+      }),
+    ).rejects.toMatchObject({ code: "start_failed" });
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+    expect(ctx.closed).toBe(true);
+  });
+
   it("uses the ScriptProcessor backend when AudioWorklet is absent", async () => {
     const ctx = new FakeMicAudioContext(16_000);
     const frames: Uint8Array[] = [];

@@ -65,6 +65,23 @@ describe("voice-session streaming PCM playback sink (ScriptProcessor path)", () 
     await playback.stop();
   });
 
+  it("closes the context when the static AudioWorklet module fails to load", async () => {
+    vi.stubGlobal("AudioWorkletNode", FakeVoiceAudioWorkletNode);
+    const ctx = new FakePlaybackWorkletAudioContext();
+    Object.defineProperty(ctx, "audioWorklet", {
+      value: {
+        addModule: vi.fn(async () => {
+          throw new Error("worklet asset unavailable");
+        }),
+      },
+    });
+
+    await expect(
+      createVoiceSessionPlayback({ createAudioContext: () => ctx }),
+    ).rejects.toThrow("worklet asset unavailable");
+    expect(ctx.closed).toBe(true);
+  });
+
   it("uses the ScriptProcessor backend when AudioWorklet is absent", async () => {
     const ctx = new FakePlaybackAudioContext();
     const pb = await createVoiceSessionPlayback({

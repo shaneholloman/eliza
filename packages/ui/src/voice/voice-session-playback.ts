@@ -178,54 +178,67 @@ export async function createVoiceSessionPlayback(
   let jsReadOffset = 0;
   let jsHadAudio = false;
 
-  if (hasPlaybackWorkletSupport(ctx)) {
-    backend = "audioworklet";
-    await ctx.audioWorklet.addModule(VOICE_SESSION_DOWNLINK_WORKLET_MODULE_URL);
-    const node = constructBrowserAudioWorkletNode(
-      ctx,
-      PLAYBACK_WORKLET_NAME,
-      isPlaybackWorkletNodeLike,
-    );
-    if (!node) {
-      await ctx.close();
-      throw new Error("AudioWorkletNode unavailable for playback");
-    }
-    workletNode = node;
-    node.port.onmessage = (event) => {
-      const d = event.data as { type?: string } | undefined;
-      if (d?.type === "drained") options.onDrained?.();
-    };
-    node.connect(ctx.destination);
-  } else if (typeof ctx.createScriptProcessor === "function") {
-    backend = "scriptprocessor";
-    scriptNode = ctx.createScriptProcessor(4096, 1, 1);
-    scriptNode.onaudioprocess = (event) => {
-      const outBuf = event.outputBuffer;
-      const ch = outBuf.getChannelData(0);
-      for (let i = 0; i < ch.length; i += 1) {
-        while (jsQueue.length > 0 && jsReadOffset >= jsQueue[0].length) {
-          jsQueue.shift();
-          jsReadOffset = 0;
-        }
-        if (jsQueue.length === 0) {
-          ch[i] = 0;
-          if (jsHadAudio) {
-            jsHadAudio = false;
-            options.onDrained?.();
+  try {
+    if (hasPlaybackWorkletSupport(ctx)) {
+      backend = "audioworklet";
+      await ctx.audioWorklet.addModule(
+        VOICE_SESSION_DOWNLINK_WORKLET_MODULE_URL,
+      );
+      const node = constructBrowserAudioWorkletNode(
+        ctx,
+        PLAYBACK_WORKLET_NAME,
+        isPlaybackWorkletNodeLike,
+      );
+      if (!node) {
+        throw new Error("AudioWorkletNode unavailable for playback");
+      }
+      workletNode = node;
+      node.port.onmessage = (event) => {
+        const d = event.data as { type?: string } | undefined;
+        if (d?.type === "drained") options.onDrained?.();
+      };
+      node.connect(ctx.destination);
+    } else if (typeof ctx.createScriptProcessor === "function") {
+      backend = "scriptprocessor";
+      scriptNode = ctx.createScriptProcessor(4096, 1, 1);
+      scriptNode.onaudioprocess = (event) => {
+        const outBuf = event.outputBuffer;
+        const ch = outBuf.getChannelData(0);
+        for (let i = 0; i < ch.length; i += 1) {
+          while (jsQueue.length > 0 && jsReadOffset >= jsQueue[0].length) {
+            jsQueue.shift();
+            jsReadOffset = 0;
           }
-        } else {
-          ch[i] = jsQueue[0][jsReadOffset];
-          jsReadOffset += 1;
+          if (jsQueue.length === 0) {
+            ch[i] = 0;
+            if (jsHadAudio) {
+              jsHadAudio = false;
+              options.onDrained?.();
+            }
+          } else {
+            ch[i] = jsQueue[0][jsReadOffset];
+            jsReadOffset += 1;
+          }
         }
-      }
-      for (let c = 1; c < outBuf.numberOfChannels; c += 1) {
-        outBuf.getChannelData(c).set(ch);
-      }
-    };
-    scriptNode.connect(ctx.destination);
-  } else {
+        for (let c = 1; c < outBuf.numberOfChannels; c += 1) {
+          outBuf.getChannelData(c).set(ch);
+        }
+      };
+      scriptNode.connect(ctx.destination);
+    } else {
+      throw new Error("no AudioWorklet or ScriptProcessor for playback");
+    }
+  } catch (error) {
+    if (workletNode) {
+      workletNode.port.onmessage = null;
+      workletNode.disconnect();
+    }
+    if (scriptNode) {
+      scriptNode.onaudioprocess = null;
+      scriptNode.disconnect();
+    }
     await ctx.close().catch(() => {});
-    throw new Error("no AudioWorklet or ScriptProcessor for playback");
+    throw error;
   }
 
   const pushSamples = (samples: Float32Array): void => {
