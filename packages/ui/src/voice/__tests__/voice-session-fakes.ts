@@ -6,17 +6,19 @@
  * barge-in / reconnect / PCM code — never a stub of the thing under test.
  */
 
+import type { VoiceWebSocketLike } from "../voice-session-client";
 import type {
-  MicAudioContextLike,
   AudioNodeLike,
+  AudioWorkletNodeLike,
+  MicAudioContextLike,
   ScriptProcessorNodeLike,
 } from "../voice-session-mic-capture";
 import type {
   PlaybackAudioContextLike,
   PlaybackNodeLike,
   PlaybackScriptNodeLike,
+  PlaybackWorkletNodeLike,
 } from "../voice-session-playback";
-import type { VoiceWebSocketLike } from "../voice-session-client";
 
 // ── Fake WebSocket ─────────────────────────────────────────────────────
 
@@ -54,10 +56,19 @@ export class FakeWebSocket implements VoiceWebSocketLike {
   }
 
   addEventListener(type: "open", listener: () => void): void;
-  addEventListener(type: "message", listener: (e: { data: unknown }) => void): void;
-  addEventListener(type: "close", listener: (e: { code?: number; reason?: string }) => void): void;
+  addEventListener(
+    type: "message",
+    listener: (e: { data: unknown }) => void,
+  ): void;
+  addEventListener(
+    type: "close",
+    listener: (e: { code?: number; reason?: string }) => void,
+  ): void;
   addEventListener(type: "error", listener: () => void): void;
-  addEventListener(type: keyof Listeners, listener: (...args: never[]) => void): void {
+  addEventListener(
+    type: keyof Listeners,
+    listener: (...args: never[]) => void,
+  ): void {
     (this.listeners[type] as Array<(...a: never[]) => void>).push(listener);
   }
 
@@ -92,7 +103,9 @@ export class FakeWebSocket implements VoiceWebSocketLike {
   }
   /** Count of binary uplink frames sent. */
   sentAudioCount(): number {
-    return this.sent.filter((d) => d instanceof ArrayBuffer || ArrayBuffer.isView(d)).length;
+    return this.sent.filter(
+      (d) => d instanceof ArrayBuffer || ArrayBuffer.isView(d),
+    ).length;
   }
 }
 
@@ -117,16 +130,45 @@ export function makeWsFactory(): {
 // ── Fake node ──
 
 class FakeNode implements AudioNodeLike, PlaybackNodeLike {
-  connect(target: AudioNodeLike & PlaybackNodeLike): AudioNodeLike & PlaybackNodeLike {
+  connect(
+    target: AudioNodeLike & PlaybackNodeLike,
+  ): AudioNodeLike & PlaybackNodeLike {
     return target;
   }
   disconnect(): void {}
 }
 
+/** Shared constructor double installed as the browser AudioWorkletNode. */
+export class FakeVoiceAudioWorkletNode
+  extends FakeNode
+  implements AudioWorkletNodeLike, PlaybackWorkletNodeLike
+{
+  static readonly instances: FakeVoiceAudioWorkletNode[] = [];
+  readonly postedMessages: unknown[] = [];
+  readonly port = {
+    onmessage: null as ((event: { data: unknown }) => void) | null,
+    postMessage: (data: unknown): void => {
+      this.postedMessages.push(data);
+    },
+  };
+
+  constructor(
+    readonly context: unknown,
+    readonly processorName: string,
+  ) {
+    super();
+    FakeVoiceAudioWorkletNode.instances.push(this);
+  }
+
+  static reset(): void {
+    FakeVoiceAudioWorkletNode.instances.length = 0;
+  }
+}
+
 // ── Fake mic AudioContext (ScriptProcessor path — WebView 113) ─────────
 
 export class FakeMicAudioContext implements MicAudioContextLike {
-  state: "suspended" | "running" | "closed" = "suspended";
+  state: AudioContextState = "suspended";
   readonly destination = new FakeNode();
   scriptNode: FakeScriptProcessor | null = null;
   closed = false;
@@ -152,6 +194,16 @@ export class FakeMicAudioContext implements MicAudioContextLike {
   }
 }
 
+/** Fake mic context that selects the AudioWorklet path and records its URL. */
+export class FakeMicWorkletAudioContext extends FakeMicAudioContext {
+  readonly moduleUrls: string[] = [];
+  readonly audioWorklet = {
+    addModule: async (url: string): Promise<void> => {
+      this.moduleUrls.push(url);
+    },
+  };
+}
+
 class FakeScriptProcessor extends FakeNode implements ScriptProcessorNodeLike {
   onaudioprocess:
     | ((event: {
@@ -170,7 +222,7 @@ class FakeScriptProcessor extends FakeNode implements ScriptProcessorNodeLike {
 // ── Fake playback AudioContext (ScriptProcessor path) ──────────────────
 
 export class FakePlaybackAudioContext implements PlaybackAudioContextLike {
-  state: "suspended" | "running" | "closed" = "suspended";
+  state: AudioContextState = "suspended";
   readonly destination = new FakeNode();
   scriptNode: FakePlaybackScriptNode | null = null;
   closed = false;
@@ -189,7 +241,20 @@ export class FakePlaybackAudioContext implements PlaybackAudioContextLike {
   }
 }
 
-export class FakePlaybackScriptNode extends FakeNode implements PlaybackScriptNodeLike {
+/** Fake playback context that selects AudioWorklet and records its URL. */
+export class FakePlaybackWorkletAudioContext extends FakePlaybackAudioContext {
+  readonly moduleUrls: string[] = [];
+  readonly audioWorklet = {
+    addModule: async (url: string): Promise<void> => {
+      this.moduleUrls.push(url);
+    },
+  };
+}
+
+export class FakePlaybackScriptNode
+  extends FakeNode
+  implements PlaybackScriptNodeLike
+{
   onaudioprocess:
     | ((event: {
         outputBuffer: {
@@ -217,14 +282,18 @@ export class FakePlaybackScriptNode extends FakeNode implements PlaybackScriptNo
 
 // ── Fake getUserMedia ──────────────────────────────────────────────────
 
-export function fakeGetUserMedia(): (c: MediaStreamConstraints) => Promise<MediaStream> {
+export function fakeGetUserMedia(): (
+  c: MediaStreamConstraints,
+) => Promise<MediaStream> {
   return async () =>
     ({
       getTracks: () => [{ stop() {} }],
     }) as unknown as MediaStream;
 }
 
-export function deniedGetUserMedia(): (c: MediaStreamConstraints) => Promise<MediaStream> {
+export function deniedGetUserMedia(): (
+  c: MediaStreamConstraints,
+) => Promise<MediaStream> {
   return async () => {
     const err = new Error("denied");
     (err as { name?: string }).name = "NotAllowedError";

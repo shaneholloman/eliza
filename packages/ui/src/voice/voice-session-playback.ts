@@ -20,6 +20,7 @@
  * Tests inject a fake AudioContext to drive the real queue/flush/unlock code.
  */
 
+import { VOICE_SESSION_DOWNLINK_WORKLET_MODULE_URL } from "./audio-worklet-module-urls";
 import {
   constructBrowserAudioContext,
   constructBrowserAudioWorkletNode,
@@ -31,7 +32,7 @@ import {
 
 export interface PlaybackAudioContextLike {
   readonly sampleRate: number;
-  readonly state: "suspended" | "running" | "closed";
+  readonly state: AudioContextState;
   audioWorklet?: { addModule(url: string): Promise<void> };
   createScriptProcessor?(
     bufferSize: number,
@@ -95,7 +96,10 @@ function isPlaybackAudioContextLike(
   const state: unknown = Reflect.get(value, "state");
   return (
     typeof Reflect.get(value, "sampleRate") === "number" &&
-    (state === "suspended" || state === "running" || state === "closed") &&
+    (state === "suspended" ||
+      state === "interrupted" ||
+      state === "running" ||
+      state === "closed") &&
     isPlaybackNodeLike(Reflect.get(value, "destination")) &&
     typeof Reflect.get(value, "resume") === "function" &&
     typeof Reflect.get(value, "close") === "function"
@@ -114,57 +118,12 @@ export interface VoiceSessionPlaybackOptions {
 
 const PLAYBACK_WORKLET_NAME = "eliza-voice-session-downlink";
 
-// The worklet owns a growable ring of Float32 samples; the main thread posts
-// PCM frames + a "flush" command. It pulls samples per render quantum, emitting
-// silence when starved (so playback never blocks) and posting "drained" when it
-// transitions from having audio to empty.
-const PLAYBACK_WORKLET_SOURCE = `
-class ElizaVoiceSessionDownlink extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.queue = [];
-    this.readOffset = 0;
-    this.hadAudio = false;
-    this.port.onmessage = (e) => {
-      const d = e.data;
-      if (!d) return;
-      if (d.type === 'pcm' && d.pcm) { this.queue.push(d.pcm); this.hadAudio = true; }
-      else if (d.type === 'flush') { this.queue = []; this.readOffset = 0; }
-    };
-  }
-  process(_inputs, outputs) {
-    const out = outputs[0];
-    const ch = out[0];
-    if (!ch) return true;
-    for (let i = 0; i < ch.length; i += 1) {
-      while (this.queue.length > 0 && this.readOffset >= this.queue[0].length) {
-        this.queue.shift();
-        this.readOffset = 0;
-      }
-      if (this.queue.length === 0) {
-        ch[i] = 0;
-        if (this.hadAudio) { this.hadAudio = false; this.port.postMessage({ type: 'drained' }); }
-      } else {
-        ch[i] = this.queue[0][this.readOffset];
-        this.readOffset += 1;
-      }
-    }
-    for (let c = 1; c < out.length; c += 1) out[c].set(ch);
-    return true;
-  }
-}
-registerProcessor("${PLAYBACK_WORKLET_NAME}", ElizaVoiceSessionDownlink);
-`;
-
 export function hasPlaybackWorkletSupport(
   ctx: PlaybackAudioContextLike,
 ): ctx is WorkletCapablePlaybackContext {
   return (
     typeof ctx.audioWorklet?.addModule === "function" &&
-    typeof globalThis.AudioWorkletNode !== "undefined" &&
-    typeof Blob !== "undefined" &&
-    typeof URL !== "undefined" &&
-    typeof URL.createObjectURL === "function"
+    typeof globalThis.AudioWorkletNode !== "undefined"
   );
 }
 
@@ -221,14 +180,7 @@ export async function createVoiceSessionPlayback(
 
   if (hasPlaybackWorkletSupport(ctx)) {
     backend = "audioworklet";
-    const url = URL.createObjectURL(
-      new Blob([PLAYBACK_WORKLET_SOURCE], { type: "text/javascript" }),
-    );
-    try {
-      await ctx.audioWorklet.addModule(url);
-    } finally {
-      URL.revokeObjectURL(url);
-    }
+    await ctx.audioWorklet.addModule(VOICE_SESSION_DOWNLINK_WORKLET_MODULE_URL);
     const node = constructBrowserAudioWorkletNode(
       ctx,
       PLAYBACK_WORKLET_NAME,
@@ -331,7 +283,7 @@ export async function createVoiceSessionPlayback(
     },
     async unlock() {
       if (stopped) return;
-      if (ctx.state === "suspended") {
+      if (ctx.state === "suspended" || ctx.state === "interrupted") {
         await ctx.resume().catch(() => {});
       }
       if (isRunning()) {

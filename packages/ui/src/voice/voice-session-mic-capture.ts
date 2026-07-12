@@ -23,6 +23,7 @@
  * code (no stub of the thing under test).
  */
 
+import { VOICE_SESSION_UPLINK_WORKLET_MODULE_URL } from "./audio-worklet-module-urls";
 import {
   constructBrowserAudioContext,
   constructBrowserAudioWorkletNode,
@@ -51,7 +52,7 @@ export class VoiceMicCaptureError extends Error {
 /** Minimal AudioContext surface the capture drives (real or injected fake). */
 export interface MicAudioContextLike {
   readonly sampleRate: number;
-  readonly state: "suspended" | "running" | "closed";
+  readonly state: AudioContextState;
   createMediaStreamSource(stream: MediaStream): AudioNodeLike;
   createScriptProcessor?(
     bufferSize: number,
@@ -110,7 +111,10 @@ function isMicAudioContextLike(value: unknown): value is MicAudioContextLike {
   const state: unknown = Reflect.get(value, "state");
   return (
     typeof Reflect.get(value, "sampleRate") === "number" &&
-    (state === "suspended" || state === "running" || state === "closed") &&
+    (state === "suspended" ||
+      state === "interrupted" ||
+      state === "running" ||
+      state === "closed") &&
     isAudioNodeLike(Reflect.get(value, "destination")) &&
     typeof Reflect.get(value, "createMediaStreamSource") === "function" &&
     typeof Reflect.get(value, "resume") === "function" &&
@@ -153,42 +157,13 @@ export interface VoiceMicCaptureOptions {
 
 const WORKLET_NAME = "eliza-voice-session-uplink";
 
-// Inline worklet: downmix to mono, post Float32 frames to the main thread where
-// resample+Int16 framing happens (keeping the DSP in one tested place).
-const WORKLET_SOURCE = `
-class ElizaVoiceSessionUplink extends AudioWorkletProcessor {
-  process(inputs) {
-    const input = inputs[0];
-    if (!input || input.length === 0) return true;
-    const frames = input[0] ? input[0].length : 0;
-    if (frames === 0) return true;
-    const channels = input.length;
-    const mono = new Float32Array(frames);
-    for (let i = 0; i < frames; i += 1) {
-      let sum = 0;
-      for (let ch = 0; ch < channels; ch += 1) {
-        const c = input[ch];
-        sum += c ? (c[i] || 0) : 0;
-      }
-      mono[i] = sum / channels;
-    }
-    this.port.postMessage({ pcm: mono, sampleRate }, [mono.buffer]);
-    return true;
-  }
-}
-registerProcessor("${WORKLET_NAME}", ElizaVoiceSessionUplink);
-`;
-
 /** Runtime AudioWorklet availability probe — never assumed (WebView 113). */
 export function hasAudioWorkletSupport(
   ctx: MicAudioContextLike,
 ): ctx is WorkletCapableMicContext {
   return (
     typeof ctx.audioWorklet?.addModule === "function" &&
-    typeof globalThis.AudioWorkletNode !== "undefined" &&
-    typeof Blob !== "undefined" &&
-    typeof URL !== "undefined" &&
-    typeof URL.createObjectURL === "function"
+    typeof globalThis.AudioWorkletNode !== "undefined"
   );
 }
 
@@ -304,7 +279,7 @@ export async function startVoiceMicCapture(
   }
 
   const ctx = createAudioContext();
-  if (ctx.state === "suspended") {
+  if (ctx.state === "suspended" || ctx.state === "interrupted") {
     try {
       await ctx.resume();
     } catch (ignoredError) {
@@ -343,14 +318,7 @@ export async function startVoiceMicCapture(
 
   if (hasAudioWorkletSupport(ctx)) {
     backend = "audioworklet";
-    const url = URL.createObjectURL(
-      new Blob([WORKLET_SOURCE], { type: "text/javascript" }),
-    );
-    try {
-      await ctx.audioWorklet.addModule(url);
-    } finally {
-      URL.revokeObjectURL(url);
-    }
+    await ctx.audioWorklet.addModule(VOICE_SESSION_UPLINK_WORKLET_MODULE_URL);
     const node = constructBrowserAudioWorkletNode(
       ctx,
       WORKLET_NAME,

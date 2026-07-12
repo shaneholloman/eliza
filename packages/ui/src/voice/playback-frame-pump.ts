@@ -11,6 +11,7 @@
 import { fetchWithCsrf } from "../api/csrf-client";
 import { resolveApiUrl } from "../utils";
 import { ttsDebug } from "../utils/tts-debug";
+import { PLAYBACK_REFERENCE_TAP_WORKLET_MODULE_URL } from "./audio-worklet-module-urls";
 import {
   markTtsPlaybackEnded,
   markTtsPlaybackStarted,
@@ -22,34 +23,6 @@ const FRAME_MS = 20;
 const MAX_BATCH_FRAMES = 49;
 const FLUSH_INTERVAL_MS = 250;
 const WORKLET_NAME = "eliza-playback-reference-tap";
-
-const WORKLET_SOURCE = `
-class ElizaPlaybackReferenceTap extends AudioWorkletProcessor {
-  process(inputs) {
-    const input = inputs[0] || [];
-    const first = input[0];
-    if (first && first.length > 0) {
-      const mono = new Float32Array(first.length);
-      const channels = Math.max(1, input.length);
-      for (let i = 0; i < first.length; i += 1) {
-        let sum = 0;
-        let count = 0;
-        for (let ch = 0; ch < channels; ch += 1) {
-          const channel = input[ch];
-          if (channel) {
-            sum += channel[i] || 0;
-            count += 1;
-          }
-        }
-        mono[i] = count > 0 ? sum / count : 0;
-      }
-      this.port.postMessage({ pcm: mono, sampleRate }, [mono.buffer]);
-    }
-    return true;
-  }
-}
-registerProcessor("${WORKLET_NAME}", ElizaPlaybackReferenceTap);
-`;
 
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -94,10 +67,7 @@ function getNowMs(): number {
 function hasAudioWorklet(ctx: AudioContext): boolean {
   return (
     typeof ctx.audioWorklet?.addModule === "function" &&
-    typeof AudioWorkletNode !== "undefined" &&
-    typeof Blob !== "undefined" &&
-    typeof URL !== "undefined" &&
-    typeof URL.createObjectURL === "function"
+    typeof AudioWorkletNode !== "undefined"
   );
 }
 
@@ -105,16 +75,9 @@ async function ensurePlaybackWorklet(ctx: AudioContext): Promise<void> {
   const existing = workletModules.get(ctx);
   if (existing) return existing;
 
-  const pending = (async () => {
-    const url = URL.createObjectURL(
-      new Blob([WORKLET_SOURCE], { type: "text/javascript" }),
-    );
-    try {
-      await ctx.audioWorklet.addModule(url);
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-  })();
+  const pending = ctx.audioWorklet.addModule(
+    PLAYBACK_REFERENCE_TAP_WORKLET_MODULE_URL,
+  );
   workletModules.set(ctx, pending);
   return pending;
 }
