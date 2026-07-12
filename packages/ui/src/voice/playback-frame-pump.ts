@@ -11,7 +11,7 @@
 import { fetchWithCsrf } from "../api/csrf-client";
 import { resolveApiUrl } from "../utils";
 import { ttsDebug } from "../utils/tts-debug";
-import { PLAYBACK_REFERENCE_TAP_WORKLET_MODULE_URL } from "./audio-worklet-module-urls";
+import { resolveAudioWorkletModuleUrl } from "./audio-worklet-module-urls";
 import {
   markTtsPlaybackEnded,
   markTtsPlaybackStarted,
@@ -76,7 +76,7 @@ async function ensurePlaybackWorklet(ctx: AudioContext): Promise<void> {
   if (existing) return existing;
 
   const pending = ctx.audioWorklet.addModule(
-    PLAYBACK_REFERENCE_TAP_WORKLET_MODULE_URL,
+    resolveAudioWorkletModuleUrl("playback-reference"),
   );
   workletModules.set(ctx, pending);
   return pending;

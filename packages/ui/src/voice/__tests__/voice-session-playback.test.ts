@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { VOICE_SESSION_DOWNLINK_WORKLET_MODULE_URL } from "../audio-worklet-module-urls";
+import { resolveAudioWorkletModuleUrl } from "../audio-worklet-module-urls";
 import { floatPcmToInt16Bytes } from "../voice-session-pcm";
 import { createVoiceSessionPlayback } from "../voice-session-playback";
 import {
@@ -57,7 +57,7 @@ describe("voice-session streaming PCM playback sink (ScriptProcessor path)", () 
     });
 
     expect(playback.backend).toBe("audioworklet");
-    expect(ctx.moduleUrls).toEqual([VOICE_SESSION_DOWNLINK_WORKLET_MODULE_URL]);
+    expect(ctx.moduleUrls).toEqual([resolveAudioWorkletModuleUrl("downlink")]);
     expect(ctx.moduleUrls[0]).not.toMatch(/^(?:blob|data):/);
     expect(FakeVoiceAudioWorkletNode.instances[0]?.processorName).toBe(
       "eliza-voice-session-downlink",

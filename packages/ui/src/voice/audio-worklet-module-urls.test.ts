@@ -3,11 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import {
-  PLAYBACK_REFERENCE_TAP_WORKLET_MODULE_URL,
-  VOICE_SESSION_DOWNLINK_WORKLET_MODULE_URL,
-  VOICE_SESSION_UPLINK_WORKLET_MODULE_URL,
-} from "./audio-worklet-module-urls";
+import { resolveAudioWorkletModuleUrl } from "./audio-worklet-module-urls";
 
 const voiceDirectory = dirname(fileURLToPath(import.meta.url));
 const uiPackageJsonPath = resolve(voiceDirectory, "../../package.json");
@@ -18,17 +14,17 @@ const moduleUrlSourcePath = resolve(
 
 const modules = [
   {
-    url: VOICE_SESSION_UPLINK_WORKLET_MODULE_URL,
+    url: resolveAudioWorkletModuleUrl("uplink"),
     fileName: "voice-session-uplink.js",
     processorName: "eliza-voice-session-uplink",
   },
   {
-    url: VOICE_SESSION_DOWNLINK_WORKLET_MODULE_URL,
+    url: resolveAudioWorkletModuleUrl("downlink"),
     fileName: "voice-session-downlink.js",
     processorName: "eliza-voice-session-downlink",
   },
   {
-    url: PLAYBACK_REFERENCE_TAP_WORKLET_MODULE_URL,
+    url: resolveAudioWorkletModuleUrl("playback-reference"),
     fileName: "playback-reference-tap.js",
     processorName: "eliza-playback-reference-tap",
   },

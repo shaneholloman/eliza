@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { VOICE_SESSION_UPLINK_WORKLET_MODULE_URL } from "../audio-worklet-module-urls";
+import { resolveAudioWorkletModuleUrl } from "../audio-worklet-module-urls";
 import {
   startVoiceMicCapture,
   VoiceMicCaptureError,
@@ -69,7 +69,7 @@ describe("voice-session mic capture (ScriptProcessor fallback path — WebView 1
     });
 
     expect(capture.backend).toBe("audioworklet");
-    expect(ctx.moduleUrls).toEqual([VOICE_SESSION_UPLINK_WORKLET_MODULE_URL]);
+    expect(ctx.moduleUrls).toEqual([resolveAudioWorkletModuleUrl("uplink")]);
     expect(ctx.moduleUrls[0]).not.toMatch(/^(?:blob|data):/);
     expect(FakeVoiceAudioWorkletNode.instances[0]?.processorName).toBe(
       "eliza-voice-session-uplink",

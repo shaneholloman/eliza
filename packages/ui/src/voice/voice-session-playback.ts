@@ -20,7 +20,7 @@
  * Tests inject a fake AudioContext to drive the real queue/flush/unlock code.
  */
 
-import { VOICE_SESSION_DOWNLINK_WORKLET_MODULE_URL } from "./audio-worklet-module-urls";
+import { resolveAudioWorkletModuleUrl } from "./audio-worklet-module-urls";
 import {
   constructBrowserAudioContext,
   constructBrowserAudioWorkletNode,
@@ -182,7 +182,7 @@ export async function createVoiceSessionPlayback(
     if (hasPlaybackWorkletSupport(ctx)) {
       backend = "audioworklet";
       await ctx.audioWorklet.addModule(
-        VOICE_SESSION_DOWNLINK_WORKLET_MODULE_URL,
+        resolveAudioWorkletModuleUrl("downlink"),
       );
       const node = constructBrowserAudioWorkletNode(
         ctx,

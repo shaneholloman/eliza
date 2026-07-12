@@ -23,7 +23,7 @@
  * code (no stub of the thing under test).
  */
 
-import { VOICE_SESSION_UPLINK_WORKLET_MODULE_URL } from "./audio-worklet-module-urls";
+import { resolveAudioWorkletModuleUrl } from "./audio-worklet-module-urls";
 import {
   constructBrowserAudioContext,
   constructBrowserAudioWorkletNode,
@@ -345,7 +345,7 @@ export async function startVoiceMicCapture(
   try {
     if (hasAudioWorkletSupport(ctx)) {
       backend = "audioworklet";
-      await ctx.audioWorklet.addModule(VOICE_SESSION_UPLINK_WORKLET_MODULE_URL);
+      await ctx.audioWorklet.addModule(resolveAudioWorkletModuleUrl("uplink"));
       const node = constructBrowserAudioWorkletNode(
         ctx,
         WORKLET_NAME,
