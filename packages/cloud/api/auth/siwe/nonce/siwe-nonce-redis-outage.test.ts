@@ -8,8 +8,11 @@
  * issues + persists a bound nonce; only the Redis factory is swapped.
  */
 
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Hono } from "hono";
+import * as realRedisFactory from "@/lib/cache/redis-factory";
+
+const realRedisFactoryExports = { ...realRedisFactory };
 
 type RedisMode = "throwing" | "null" | "healthy";
 let redisMode: RedisMode = "healthy";
@@ -136,6 +139,10 @@ beforeEach(() => {
   redisMode = "healthy";
   stored.clear();
   _resetRedisUnavailableFallbackBuckets();
+});
+
+afterAll(() => {
+  mock.module("@/lib/cache/redis-factory", () => realRedisFactoryExports);
 });
 
 describe("GET /api/auth/siwe/nonce — Redis failure boundary", () => {

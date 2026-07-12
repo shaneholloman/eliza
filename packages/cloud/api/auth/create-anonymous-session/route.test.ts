@@ -1,5 +1,8 @@
 // Exercises cloud API auth create anonymous session route.test behavior with deterministic Worker route fixtures.
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import * as realRedisFactory from "@/lib/cache/redis-factory";
+
+const realRedisFactoryExports = { ...realRedisFactory };
 
 // Count how many anonymous users actually get minted (DB rows inserted).
 const createAnonymousUserAndSession = mock(async () => ({
@@ -38,6 +41,10 @@ function mint(ip: string) {
 describe("create-anonymous-session anti-sybil rate limit", () => {
   beforeEach(() => {
     createAnonymousUserAndSession.mockClear();
+  });
+
+  afterAll(() => {
+    mock.module("@/lib/cache/redis-factory", () => realRedisFactoryExports);
   });
 
   test("caps anonymous mints per IP and stops creating users after the cap", async () => {

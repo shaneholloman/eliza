@@ -8,8 +8,11 @@
  * swapped.
  */
 
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Hono } from "hono";
+import * as realRedisFactory from "@/lib/cache/redis-factory";
+
+const realRedisFactoryExports = { ...realRedisFactory };
 
 type RedisMode = "throwing" | "null" | "healthy";
 let redisMode: RedisMode = "healthy";
@@ -136,6 +139,10 @@ beforeEach(() => {
   redisMode = "healthy";
   stored.clear();
   _resetRedisUnavailableFallbackBuckets();
+});
+
+afterAll(() => {
+  mock.module("@/lib/cache/redis-factory", () => realRedisFactoryExports);
 });
 
 describe("GET /api/auth/siws/nonce — Redis failure boundary", () => {
