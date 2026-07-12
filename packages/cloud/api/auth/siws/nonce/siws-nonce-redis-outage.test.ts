@@ -16,18 +16,66 @@ let redisMode: RedisMode = "healthy";
 
 const stored = new Map<string, string>();
 
-const throwingRedis = new Proxy(
-  {},
-  {
-    get:
-      () =>
-      async (..._args: unknown[]) => {
-        throw new Error("ECONNREFUSED: redis down");
-      },
+// checkUpstash drives the counter through redis.pipeline() (incr + pttl in one
+// round-trip). A pipeline builder is synchronous — only .exec() is async — so
+// the throwing case must reject from exec(), not from the property access
+// itself: returning a rejected promise from a bare `get` trap left the
+// pipeline() call itself as an unawaited rejected promise (no `.exec()` was
+// ever called on it), which Bun reports as an unhandled rejection instead of
+// letting the middleware's try/catch translate it into the expected 503.
+function throwingPipeline() {
+  return {
+    incr: () => throwingPipeline(),
+    pttl: () => throwingPipeline(),
+    exec: async () => {
+      throw new Error("ECONNREFUSED: redis down");
+    },
+  };
+}
+
+const throwingRedis = {
+  pipeline: () => throwingPipeline(),
+  incr: async () => {
+    throw new Error("ECONNREFUSED: redis down");
   },
-);
+  pttl: async () => {
+    throw new Error("ECONNREFUSED: redis down");
+  },
+  pexpire: async () => {
+    throw new Error("ECONNREFUSED: redis down");
+  },
+  expire: async () => {
+    throw new Error("ECONNREFUSED: redis down");
+  },
+  setex: async () => {
+    throw new Error("ECONNREFUSED: redis down");
+  },
+  get: async () => {
+    throw new Error("ECONNREFUSED: redis down");
+  },
+  del: async () => {
+    throw new Error("ECONNREFUSED: redis down");
+  },
+};
+
+function healthyPipeline(ops: Array<() => Promise<unknown>>) {
+  const results: Array<() => Promise<unknown>> = [...ops];
+  const builder = {
+    incr: () => {
+      results.push(async () => 1);
+      return builder;
+    },
+    pttl: () => {
+      results.push(async () => 60_000);
+      return builder;
+    },
+    exec: async () => Promise.all(results.map((op) => op())),
+  };
+  return builder;
+}
 
 const healthyRedis = {
+  pipeline: () => healthyPipeline([]),
   incr: async () => 1,
   pttl: async () => 60_000,
   pexpire: async () => 1,
