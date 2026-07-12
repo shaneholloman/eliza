@@ -30,6 +30,20 @@ function account(
 }
 
 describe("AccountPool provider-scoped account resolution", () => {
+  it("delegates metadata deletion with the provider-qualified account id", async () => {
+    const deleteAccount = vi.fn(async () => {});
+    const pool = new AccountPool({
+      readAccounts: () => ({}),
+      writeAccount: async () => {},
+      deleteAccount,
+    });
+
+    await pool.deleteMetadata("openai-codex", "shared-id");
+
+    expect(deleteAccount).toHaveBeenCalledOnce();
+    expect(deleteAccount).toHaveBeenCalledWith("openai-codex", "shared-id");
+  });
+
   it("gets the matching provider account when ids collide", () => {
     const accounts = {
       "openai-codex:shared-id": account("openai-codex"),
