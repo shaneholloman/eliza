@@ -90,16 +90,21 @@ export function warmPlaybackWorklet(ctx: AudioContext): void {
   });
 }
 
+function isPlaybackContextRunning(ctx: AudioContext): boolean {
+  return ctx.state === "running";
+}
+
 /**
- * Resumes a suspended AudioContext with a timeout, so a `resume()` call that
- * never settles (observed on some mobile WebViews) cannot block playback
- * forever. Returns whether the context is running afterward.
+ * Resumes a suspended or interrupted AudioContext with a timeout, so a
+ * `resume()` call that never settles (observed on some mobile WebViews) cannot
+ * block playback forever. Returns whether the context is running afterward.
  */
 export async function resumeAudioContextForPlayback(
   ctx: AudioContext,
   timeoutMs = 1200,
 ): Promise<boolean> {
-  if (ctx.state !== "suspended") return true;
+  if (isPlaybackContextRunning(ctx)) return true;
+  if (ctx.state !== "suspended" && ctx.state !== "interrupted") return false;
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -112,7 +117,7 @@ export async function resumeAudioContextForPlayback(
         timeoutId = setTimeout(() => resolve(false), timeoutMs);
       }),
     ]);
-    return resumed && ctx.state !== "suspended";
+    return resumed && isPlaybackContextRunning(ctx);
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
   }
@@ -130,7 +135,7 @@ export async function ensurePlaybackContextRunning(
   provider: string,
   onBlocked: () => void,
 ): Promise<void> {
-  if (ctx.state !== "suspended") return;
+  if (isPlaybackContextRunning(ctx)) return;
   const resumed = await resumeAudioContextForPlayback(ctx);
   if (resumed) return;
   ttsDebug("play:audio-context-blocked", { provider, state: ctx.state });
