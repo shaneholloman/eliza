@@ -52,6 +52,11 @@ export interface CloudflareRateLimitOptions {
   bindingName: string;
 }
 
+/** Optional construction dependencies for hosts that manage Redis lifecycle externally. */
+export interface RateLimitDependencies {
+  buildRedisClient?: (env: Bindings) => CompatibleRedis | null;
+}
+
 function getRedis(env: Bindings): CompatibleRedis | null {
   if (
     env.REDIS_RATE_LIMITING === "false" ||
@@ -397,6 +402,7 @@ export async function checkUpstash(
 export function rateLimit(
   config: RateLimitConfig,
   cloudflare?: CloudflareRateLimitOptions,
+  dependencies?: RateLimitDependencies,
 ): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const env = (c.env ?? {}) as Bindings;
@@ -471,7 +477,9 @@ export function rateLimit(
       }
     }
 
-    const redis = getRedis(env);
+    const redis = dependencies?.buildRedisClient
+      ? dependencies.buildRedisClient(env)
+      : getRedis(env);
     if (!redis) {
       await next();
       applyRateLimitHeaders(

@@ -118,6 +118,7 @@ mock.module("@/lib/services/team-credential-pool", () => ({
 
 // Import the route AFTER the mocks so it binds to the stubs.
 const {
+  default: chatCompletionsRouter,
   __streamingCreditTestHooks,
   __passthroughStreamingTestHooks,
   __reasoningEffortTestHooks,
@@ -181,6 +182,33 @@ beforeEach(() => {
   globalThis.fetch = fetchMock as unknown as typeof fetch;
   process.env.INFERENCE_PASSTHROUGH_STREAMING = "true";
   process.env.CEREBRAS_API_KEY = "test-cerebras-key";
+});
+
+test("the route invokes its dedicated native limiter before provider work", async () => {
+  const keys: string[] = [];
+  const response = await chatCompletionsRouter.fetch(
+    new Request("https://api.example.test/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(QUALIFYING_REQUEST),
+    }),
+    {
+      NODE_ENV: "production",
+      CHAT_ROUTE_RATE_LIMITER: {
+        async limit({ key }: { key: string }) {
+          keys.push(key);
+          return { success: false };
+        },
+      },
+    } as never,
+  );
+
+  expect(response.status).toBe(429);
+  expect(keys).toEqual(["public"]);
+  expect(response.headers.get("X-RateLimit-Policy")).toBe("cloudflare-native");
+  expect(generateText).not.toHaveBeenCalled();
+  expect(streamText).not.toHaveBeenCalled();
+  expect(fetchMock).not.toHaveBeenCalled();
 });
 
 /** In-memory credit ledger, identical to the credit-leak suite's. */

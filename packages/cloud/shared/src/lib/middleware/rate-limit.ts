@@ -40,6 +40,23 @@ interface RateLimitEntry {
 // PRODUCTION: Always set REDIS_RATE_LIMITING=true
 const rateLimitStore = new Map<string, RateLimitEntry>();
 
+/**
+ * Background cleanup must not keep short-lived Node/Bun processes alive.
+ * Cloudflare Workers return a numeric timer handle, while Node-compatible
+ * runtimes return an object with `unref()`.
+ */
+function unrefNodeTimer(timer: ReturnType<typeof setInterval>): void {
+  const candidate: unknown = timer;
+  if (
+    typeof candidate === "object" &&
+    candidate !== null &&
+    "unref" in candidate &&
+    typeof candidate.unref === "function"
+  ) {
+    candidate.unref();
+  }
+}
+
 // Validate rate limiting configuration on startup
 let hasValidatedConfig = false;
 function validateRateLimitConfig() {
@@ -80,7 +97,7 @@ function validateRateLimitConfig() {
 /**
  * Clean up expired entries periodically
  */
-setInterval(() => {
+const rateLimitCleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of rateLimitStore.entries()) {
     if (entry.resetAt < now) {
@@ -88,6 +105,7 @@ setInterval(() => {
     }
   }
 }, 60000); // Clean every minute
+unrefNodeTimer(rateLimitCleanupTimer);
 
 /**
  * Mask sensitive keys for logging (never log full API keys)
@@ -668,7 +686,7 @@ export async function checkCostBasedRateLimit(
 /**
  * Clean up cost limit store periodically
  */
-setInterval(() => {
+const costLimitCleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of costLimitStore.entries()) {
     if (entry.resetAt < now) {
@@ -676,3 +694,4 @@ setInterval(() => {
     }
   }
 }, 60000);
+unrefNodeTimer(costLimitCleanupTimer);
