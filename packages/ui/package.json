@@ -54,7 +54,7 @@
     "test:activity-feedback-e2e": "bun run --cwd ../.. packages/ui/src/components/chat/__e2e__/run-activity-feedback-e2e.mjs",
     "test:background-e2e": "bun run --cwd ../.. packages/ui/src/components/pages/__e2e__/run-background-e2e.mjs",
     "test:chat-infinite-scroll-e2e": "bun run --cwd ../.. packages/ui/src/components/pages/__e2e__/run-chat-infinite-scroll-e2e.mjs",
-    "test:suggestions-e2e": "bun run --cwd ../.. packages/ui/src/components/pages/__e2e__/run-suggestions-e2e.mjs",
+    "test:suggestions-e2e": "bun --conditions=eliza-source run --cwd ../.. packages/ui/src/components/pages/__e2e__/run-suggestions-e2e.mjs",
     "test:launcher-e2e": "bun run --cwd ../.. packages/ui/src/components/pages/__e2e__/run-launcher-e2e.mjs",
     "test:connectors-e2e": "bun run --cwd ../.. packages/ui/src/components/pages/__e2e__/run-connectors-e2e.mjs",
     "test:view-lifecycle-e2e": "bun run --cwd ../.. packages/ui/src/components/views/__e2e__/run-view-lifecycle-e2e.mjs",
