@@ -285,7 +285,11 @@ function callStreaming(
   );
 }
 
-function callNonStreaming(model: string, reasoningEffort: "none" | "low") {
+function callNonStreaming(
+  model: string,
+  reasoningEffort: "none" | "low",
+  promptCacheKey?: string,
+) {
   return handleNonStreamingRequest(
     model,
     undefined,
@@ -294,6 +298,7 @@ function callNonStreaming(model: string, reasoningEffort: "none" | "low") {
       model,
       messages: [{ role: "user", content: "hello" }],
       reasoning_effort: reasoningEffort,
+      ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
     } as never,
     { id: USER, organization_id: ORG },
     null,
@@ -643,9 +648,10 @@ describe("passthrough streaming — fallthrough to the SDK path", () => {
     expect(res.headers.get("X-Eliza-Inference-Path")).toBeNull();
   });
 
-  test("SDK streaming forwards reasoning_effort through OpenAI provider options", async () => {
+  test("SDK streaming preserves prompt_cache_key alongside reasoning_effort", async () => {
     sdkFaithfulStream();
     const model = "zai-glm-4.7";
+    const promptCacheKey = "v5:reasoning-prefix";
     const res = await callStreaming(async () => null, {
       model,
       request: {
@@ -654,6 +660,7 @@ describe("passthrough streaming — fallthrough to the SDK path", () => {
         stream: true,
         stream_options: { include_usage: true },
         reasoning_effort: "none",
+        prompt_cache_key: promptCacheKey,
         tools: [
           {
             type: "function",
@@ -669,11 +676,13 @@ describe("passthrough streaming — fallthrough to the SDK path", () => {
     expect(streamText).toHaveBeenCalledTimes(1);
     expect(streamText.mock.calls[0]?.[0]).toMatchObject({
       maxOutputTokens: 512,
-      providerOptions: { openai: { reasoningEffort: "none" } },
+      providerOptions: {
+        openai: { promptCacheKey, reasoningEffort: "none" },
+      },
     });
   });
 
-  test("SDK non-streaming forwards reasoning_effort through OpenAI provider options", async () => {
+  test("SDK non-streaming preserves prompt_cache_key alongside reasoning_effort", async () => {
     generateTextImpl = () => ({
       text: "Hello",
       toolCalls: [],
@@ -681,12 +690,15 @@ describe("passthrough streaming — fallthrough to the SDK path", () => {
       usage: { inputTokens: 72, outputTokens: 1, totalTokens: 73 },
     });
 
-    const res = await callNonStreaming("zai-glm-4.7", "none");
+    const promptCacheKey = "v5:reasoning-prefix";
+    const res = await callNonStreaming("zai-glm-4.7", "none", promptCacheKey);
     expect(res.status).toBe(200);
     expect(generateText).toHaveBeenCalledTimes(1);
     expect(generateText.mock.calls[0]?.[0]).toMatchObject({
       maxOutputTokens: 512,
-      providerOptions: { openai: { reasoningEffort: "none" } },
+      providerOptions: {
+        openai: { promptCacheKey, reasoningEffort: "none" },
+      },
     });
   });
 
