@@ -48,7 +48,7 @@ function namedStep(name: string): WorkflowStep {
 describe("App Live E2E real Cloud job (#14357, #16194)", () => {
   test("maps the runtime key to the established repository-secret fallback", () => {
     expect(cloudJob?.env?.ELIZAOS_CLOUD_API_KEY).toBe(
-      "${{ secrets.ELIZAOS_CLOUD_API_KEY || secrets.ELIZACLOUD_API_KEY }}",
+      "$" + "{{ secrets.ELIZAOS_CLOUD_API_KEY || secrets.ELIZACLOUD_API_KEY }}",
     );
   });
 
