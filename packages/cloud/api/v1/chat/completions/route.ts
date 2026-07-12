@@ -271,8 +271,9 @@ function buildReasoningEffortProviderOptions(
  * Merges spreadable `{ providerOptions }` fragments (Anthropic CoT +
  * prompt-cache-key, OpenAI-style reasoning effort) into one spread so a naive
  * `...a, ...b` cannot clobber the earlier fragment's `providerOptions` key.
- * Provider namespaces are merged shallowly; they are disjoint today
- * (anthropic/google/cerebras/eliza vs openai).
+ * Merge each provider namespace one level deeper as well: prompt caching and
+ * reasoning effort both target `openai`, so replacing that namespace would
+ * silently discard whichever option was added first.
  */
 function combineProviderOptions(
   ...parts: ReadonlyArray<Record<string, unknown>>
@@ -283,7 +284,23 @@ function combineProviderOptions(
   for (const part of parts) {
     for (const [key, value] of Object.entries(part)) {
       if (key === "providerOptions" && value && typeof value === "object") {
-        Object.assign(providerOptions, value as Record<string, unknown>);
+        for (const [provider, options] of Object.entries(
+          value as Record<string, unknown>,
+        )) {
+          const existing = providerOptions[provider];
+          providerOptions[provider] =
+            existing &&
+            typeof existing === "object" &&
+            !Array.isArray(existing) &&
+            options &&
+            typeof options === "object" &&
+            !Array.isArray(options)
+              ? {
+                  ...(existing as Record<string, unknown>),
+                  ...(options as Record<string, unknown>),
+                }
+              : options;
+        }
         hasProviderOptions = true;
       } else {
         merged[key] = value;
@@ -3339,16 +3356,22 @@ honoRouter.options("/", async (c) => {
     return failureResponse(c, error);
   }
 });
-honoRouter.post("/", rateLimit(RateLimitPresets.RELAXED), async (c) => {
-  try {
-    return await handleChatCompletionsPOST(c.req.raw, {
-      executionCtx: c.executionCtx,
-    });
-  } catch (error) {
-    // error-policy:J1 route boundary — every catch in v1/chat/* translates a thrown error into a structured HTTP failure via failureResponse (never a fabricated 200/empty completion). Credit reservations are released before rethrow on the streaming paths above.
-    return failureResponse(c, error);
-  }
-});
+honoRouter.post(
+  "/",
+  rateLimit(RateLimitPresets.RELAXED, {
+    bindingName: "CHAT_ROUTE_RATE_LIMITER",
+  }),
+  async (c) => {
+    try {
+      return await handleChatCompletionsPOST(c.req.raw, {
+        executionCtx: c.executionCtx,
+      });
+    } catch (error) {
+      // error-policy:J1 route boundary — every catch in v1/chat/* translates a thrown error into a structured HTTP failure via failureResponse (never a fabricated 200/empty completion). Credit reservations are released before rethrow on the streaming paths above.
+      return failureResponse(c, error);
+    }
+  },
+);
 export default honoRouter;
 
 /**
