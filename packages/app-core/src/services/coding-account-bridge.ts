@@ -48,10 +48,6 @@ import {
   resolveStateDir,
   setCodingAgentSelectorBridge,
 } from "@elizaos/core";
-import {
-  claudeMinRemainingMs,
-  resolveClaudeExpectedRunMs,
-} from "./claude-token-refresh.js";
 import type { LinkedAccountProviderId } from "@elizaos/shared/contracts/service-routing";
 import {
   type AccountPool,
@@ -59,6 +55,10 @@ import {
   type Strategy,
   selectionForProvider,
 } from "./account-pool.js";
+import {
+  claudeMinRemainingMs,
+  resolveClaudeExpectedRunMs,
+} from "./claude-token-refresh.js";
 
 const VALID_CODING_STRATEGIES = new Set<Strategy>([
   "priority",

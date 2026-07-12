@@ -91,65 +91,6 @@ export {
   type VoiceCaptureTranscriptSegment,
 } from "./voice-capture-factory";
 export {
-  createVoiceSessionClient,
-  VoiceSessionMintError,
-  type VoiceSessionClient,
-  type VoiceSessionClientOptions,
-  type VoiceTraceMark,
-  type VoiceWebSocketFactory,
-  type VoiceWebSocketLike,
-} from "./voice-session-client";
-export {
-  hasAudioWorkletSupport,
-  startVoiceMicCapture,
-  VoiceMicCaptureError,
-  type AudioNodeLike,
-  type MicAudioContextLike,
-  type VoiceMicCapture,
-  type VoiceMicCaptureOptions,
-} from "./voice-session-mic-capture";
-export {
-  createVoiceSessionPlayback,
-  hasPlaybackWorkletSupport,
-  type PlaybackAudioContextLike,
-  type VoiceSessionPlayback,
-  type VoiceSessionPlaybackOptions,
-} from "./voice-session-playback";
-export {
-  clampFloatSample,
-  downmixChannelsToMono,
-  floatPcmToInt16Bytes,
-  floatSampleToInt16,
-  int16BytesToFloatPcm,
-  int16SampleToFloat,
-  VOICE_PCM_SAMPLE_RATE,
-} from "./voice-session-pcm";
-export {
-  applyClientAction,
-  applyServerEvent,
-  beginListening,
-  INITIAL_VOICE_SESSION_STATE,
-  loopToListening,
-  toContinuousStatus,
-  type VoiceSessionClientAction,
-  type VoiceSessionMachineState,
-  type VoiceSessionPhase,
-} from "./voice-session-state";
-export {
-  DEFAULT_DOWNLINK_CODEC,
-  DEFAULT_UPLINK_CODEC,
-  encodeClientControl,
-  isUsableMintResponse,
-  negotiateCodec,
-  parseServerControl,
-  VOICE_SESSION_PROTOCOL_VERSION as VOICE_SESSION_CLIENT_PROTOCOL_VERSION,
-  VOICE_SESSION_SAMPLE_RATE,
-  type ClientControlFrame,
-  type ServerControlFrame as VoiceSessionServerControlFrame,
-  type VoiceSessionCodec,
-  type VoiceSessionMintResponse,
-} from "./voice-session-protocol";
-export {
   type DefaultVoiceProviderResult,
   type PickDefaultVoiceProviderInput,
   type PresetPlatform,
@@ -169,6 +110,65 @@ export {
   type VoiceSelfTestReport,
   type VoiceSelfTestStage,
 } from "./voice-selftest/voice-selftest-harness";
+export {
+  createVoiceSessionClient,
+  type VoiceSessionClient,
+  type VoiceSessionClientOptions,
+  VoiceSessionMintError,
+  type VoiceTraceMark,
+  type VoiceWebSocketFactory,
+  type VoiceWebSocketLike,
+} from "./voice-session-client";
+export {
+  type AudioNodeLike,
+  hasAudioWorkletSupport,
+  type MicAudioContextLike,
+  startVoiceMicCapture,
+  type VoiceMicCapture,
+  VoiceMicCaptureError,
+  type VoiceMicCaptureOptions,
+} from "./voice-session-mic-capture";
+export {
+  clampFloatSample,
+  downmixChannelsToMono,
+  floatPcmToInt16Bytes,
+  floatSampleToInt16,
+  int16BytesToFloatPcm,
+  int16SampleToFloat,
+  VOICE_PCM_SAMPLE_RATE,
+} from "./voice-session-pcm";
+export {
+  createVoiceSessionPlayback,
+  hasPlaybackWorkletSupport,
+  type PlaybackAudioContextLike,
+  type VoiceSessionPlayback,
+  type VoiceSessionPlaybackOptions,
+} from "./voice-session-playback";
+export {
+  type ClientControlFrame,
+  DEFAULT_DOWNLINK_CODEC,
+  DEFAULT_UPLINK_CODEC,
+  encodeClientControl,
+  isUsableMintResponse,
+  negotiateCodec,
+  parseServerControl,
+  type ServerControlFrame as VoiceSessionServerControlFrame,
+  VOICE_SESSION_PROTOCOL_VERSION as VOICE_SESSION_CLIENT_PROTOCOL_VERSION,
+  VOICE_SESSION_SAMPLE_RATE,
+  type VoiceSessionCodec,
+  type VoiceSessionMintResponse,
+} from "./voice-session-protocol";
+export {
+  applyClientAction,
+  applyServerEvent,
+  beginListening,
+  INITIAL_VOICE_SESSION_STATE,
+  loopToListening,
+  toContinuousStatus,
+  type VoiceSessionClientAction,
+  type VoiceSessionMachineState,
+  type VoiceSessionPhase,
+} from "./voice-session-state";
 export {
   DEFAULT_CONFIRM_WINDOW_MS,
   hasTrainedHead,

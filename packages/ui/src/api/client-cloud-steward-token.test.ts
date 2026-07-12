@@ -125,9 +125,9 @@ describe("resolveDirectCloudWebBase / resolveDirectCloudAuthApiBase", () => {
   });
 
   it("maps a staging API host to the staging web host", () => {
-    expect(
-      resolveDirectCloudWebBase("https://api-staging.elizacloud.ai"),
-    ).toBe("https://staging.elizacloud.ai");
+    expect(resolveDirectCloudWebBase("https://api-staging.elizacloud.ai")).toBe(
+      "https://staging.elizacloud.ai",
+    );
   });
 
   it("passes through an unmapped host unchanged (trailing slash trimmed)", () => {

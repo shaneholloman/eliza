@@ -51,7 +51,9 @@ export function extractCacheTokens(usage: AIUsage): {
   cacheCreation?: number;
 } {
   const cacheRead =
-    usage.cacheReadInputTokens ?? usage.cachedInputTokens ?? usage.inputTokenDetails?.cacheReadTokens;
+    usage.cacheReadInputTokens ??
+    usage.cachedInputTokens ??
+    usage.inputTokenDetails?.cacheReadTokens;
   const cacheCreation = usage.cacheCreationInputTokens ?? usage.inputTokenDetails?.cacheWriteTokens;
   return { cacheRead, cacheCreation };
 }

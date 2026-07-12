@@ -114,44 +114,46 @@ function installMocks() {
   cloudTtsHardFailure = false;
   elevenlabsProxyStatus = 200;
   fetchedUrls.length = 0;
-  fetchWithCsrf.mockImplementation(async (input: unknown, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : String(input);
-    fetchedUrls.push(url);
-    if (url.includes("/api/tts/cloud")) {
-      if (cloudTtsHardFailure) {
-        return new Response("internal error", { status: 500 });
+  fetchWithCsrf.mockImplementation(
+    async (input: unknown, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : String(input);
+      fetchedUrls.push(url);
+      if (url.includes("/api/tts/cloud")) {
+        if (cloudTtsHardFailure) {
+          return new Response("internal error", { status: 500 });
+        }
+        if (cloudTtsStatus !== 200) {
+          return new Response("blocked", { status: cloudTtsStatus });
+        }
+        return new Response(new Uint8Array([1, 2, 3, 4]).buffer, {
+          status: 200,
+          headers: { "content-type": "audio/wav" },
+        });
       }
-      if (cloudTtsStatus !== 200) {
-        return new Response("blocked", { status: cloudTtsStatus });
+      if (url.includes("/api/tts/elevenlabs")) {
+        if (elevenlabsProxyStatus !== 200) {
+          return new Response("unavailable", { status: elevenlabsProxyStatus });
+        }
+        return new Response(new Uint8Array([1, 2, 3, 4]).buffer, {
+          status: 200,
+          headers: { "content-type": "audio/mpeg" },
+        });
       }
-      return new Response(new Uint8Array([1, 2, 3, 4]).buffer, {
-        status: 200,
-        headers: { "content-type": "audio/wav" },
-      });
-    }
-    if (url.includes("/api/tts/elevenlabs")) {
-      if (elevenlabsProxyStatus !== 200) {
-        return new Response("unavailable", { status: elevenlabsProxyStatus });
+      if (url.includes("/api/tts/local-inference")) {
+        return new Response(new Uint8Array([1, 2, 3, 4]).buffer, {
+          status: 200,
+          headers: { "content-type": "audio/wav" },
+        });
       }
-      return new Response(new Uint8Array([1, 2, 3, 4]).buffer, {
-        status: 200,
-        headers: { "content-type": "audio/mpeg" },
-      });
-    }
-    if (url.includes("/api/tts/local-inference")) {
-      return new Response(new Uint8Array([1, 2, 3, 4]).buffer, {
-        status: 200,
-        headers: { "content-type": "audio/wav" },
-      });
-    }
-    if (url.includes("/api/voice/playback-frames")) {
-      playbackFrameBodies.push(
-        JSON.parse(String(init?.body)) as PlaybackFramesBody,
-      );
-      return new Response(null, { status: 204 });
-    }
-    return new Response("unexpected endpoint", { status: 404 });
-  });
+      if (url.includes("/api/voice/playback-frames")) {
+        playbackFrameBodies.push(
+          JSON.parse(String(init?.body)) as PlaybackFramesBody,
+        );
+        return new Response(null, { status: 204 });
+      }
+      return new Response("unexpected endpoint", { status: 404 });
+    },
+  );
   Object.defineProperty(globalThis, "AudioContext", {
     configurable: true,
     value: FakeAudioContext,
@@ -272,9 +274,9 @@ describe("useVoiceChat playback is decoupled from the visualizer worklet (#16102
     // Finishing playback stops the tap with reset so the far-end reference
     // stream is cleared for the next utterance.
     await waitFor(() => {
-      expect(
-        playbackFrameBodies.some((body) => body.reset === true),
-      ).toBe(true);
+      expect(playbackFrameBodies.some((body) => body.reset === true)).toBe(
+        true,
+      );
     });
   });
 
@@ -309,9 +311,9 @@ describe("useVoiceChat playback is decoupled from the visualizer worklet (#16102
       expect(result.current.isSpeaking).toBe(false);
     });
     await waitFor(() => {
-      expect(
-        playbackFrameBodies.some((body) => body.reset === true),
-      ).toBe(true);
+      expect(playbackFrameBodies.some((body) => body.reset === true)).toBe(
+        true,
+      );
     });
   });
 
@@ -341,9 +343,9 @@ describe("useVoiceChat playback is decoupled from the visualizer worklet (#16102
       expect(result.current.isSpeaking).toBe(false);
     });
     await waitFor(() => {
-      expect(
-        playbackFrameBodies.some((body) => body.reset === true),
-      ).toBe(true);
+      expect(playbackFrameBodies.some((body) => body.reset === true)).toBe(
+        true,
+      );
     });
   });
 
@@ -366,9 +368,9 @@ describe("useVoiceChat playback is decoupled from the visualizer worklet (#16102
     expect(fetchedUrls.some((url) => url.includes("/api/tts/cloud"))).toBe(
       true,
     );
-    expect(
-      fetchedUrls.some((url) => url.includes("/api/tts/elevenlabs")),
-    ).toBe(true);
+    expect(fetchedUrls.some((url) => url.includes("/api/tts/elevenlabs"))).toBe(
+      true,
+    );
 
     await act(async () => {
       createdSources[0]?.onended?.();
@@ -448,9 +450,7 @@ describe("useVoiceChat playback is decoupled from the visualizer worklet (#16102
     });
 
     act(() => {
-      result.current.speak(
-        "hello total failure, a phrase unique to this test",
-      );
+      result.current.speak("hello total failure, a phrase unique to this test");
     });
 
     await waitFor(() => {
@@ -480,7 +480,8 @@ describe("useVoiceChat playback is decoupled from the visualizer worklet (#16102
     await waitFor(() => expect(result.current.isSpeaking).toBe(false));
 
     const fetchCountAfterFirstSpeak = fetchedUrls.filter(
-      (url) => url.includes("/api/tts/cloud") || url.includes("/api/tts/elevenlabs"),
+      (url) =>
+        url.includes("/api/tts/cloud") || url.includes("/api/tts/elevenlabs"),
     ).length;
     expect(fetchCountAfterFirstSpeak).toBeGreaterThan(0);
 
