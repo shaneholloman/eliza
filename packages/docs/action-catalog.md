@@ -15,7 +15,7 @@ This catalog is generated from `packages/prompts/specs/**` by `bun run --cwd pac
 - **Plugin overlay actions:** 9
 - **Canonical providers:** 23
 - **Core providers:** 23
-- **Registered runtime actions:** 186
+- **Registered runtime actions:** 187
 
 ## Actions
 
@@ -260,7 +260,10 @@ Set or show current model
 
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
-| `model` | no | string | provider/model or alias |
+| `target` | no | string | small, large, coding, show, local, cloud — or a model for this room |
+| `model` | no | string | model id — for coding, the backend (codex, claude, opencode, elizaos) |
+| `effort` | no | string | reasoning effort — for coding, the model id |
+| `coding-effort` | no | string | reasoning effort (coding target) |
 
 ### QUEUE_COMMAND
 
@@ -489,6 +492,7 @@ section drifts from source.
 - `TAU_BENCH_TOOL` — `plugins/plugin-benchmarks/src/actions/tau-bench.ts`
 - `TERMINAL_SHELL` — `packages/agent/src/actions/terminal.ts`
 - `TODO` — `plugins/plugin-todos/src/actions/todo.ts`
+- `TRADE` — `plugins/plugin-wallet/src/actions/trade-action.ts`
 - `TRIGGER` — `packages/agent/src/actions/trigger.ts`
 - `TRUST` — `packages/core/src/features/trust/actions/trust.ts`
 - `TUNNEL_CREDENTIAL_TO_CHILD_SESSION` — `packages/core/src/features/sub-agent-credentials/actions/tunnel-credential-to-child-session.ts`

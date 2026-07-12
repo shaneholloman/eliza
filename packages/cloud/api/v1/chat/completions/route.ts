@@ -203,6 +203,113 @@ function buildChatPromptForBilling(request: ChatRequest): string {
     .join("\n");
 }
 
+type ReasoningEffort = "none" | "low" | "medium" | "high";
+
+const CEREBRAS_REASONING_EFFORTS = {
+  "gemma-4-31b": ["none", "low", "medium", "high"],
+  "gpt-oss-120b": ["low", "medium", "high"],
+  "zai-glm-4.7": ["none"],
+} as const satisfies Record<string, readonly ReasoningEffort[]>;
+
+type ReasoningEffortValidation =
+  | { ok: true; value: ReasoningEffort | undefined }
+  | { ok: false; message: string };
+
+/**
+ * Validate the OpenAI-compatible reasoning knob against Cerebras's per-model
+ * contract before reserving credits or contacting the provider.
+ *
+ * Cerebras intentionally exposes different values for each served model:
+ * Gemma can toggle reasoning, GPT-OSS always reasons at a selected effort, and
+ * GLM accepts only `none` as an explicit override (omission enables reasoning).
+ * Treat `null` like omission, matching the nullable upstream API field.
+ * Source: https://inference-docs.cerebras.ai/capabilities/reasoning
+ */
+function validateCerebrasReasoningEffort(
+  model: string,
+  value: unknown,
+): ReasoningEffortValidation {
+  if (value == null) return { ok: true, value: undefined };
+
+  const modelId = canonicalizeCerebrasModelId(model);
+  const allowed =
+    CEREBRAS_REASONING_EFFORTS[
+      modelId as keyof typeof CEREBRAS_REASONING_EFFORTS
+    ];
+  if (!allowed) {
+    return {
+      ok: false,
+      message: `reasoning_effort is not supported for model '${model}'`,
+    };
+  }
+  if (
+    typeof value !== "string" ||
+    !(allowed as readonly string[]).includes(value)
+  ) {
+    return {
+      ok: false,
+      message: `reasoning_effort for model '${modelId}' must be one of: ${allowed.join(", ")}`,
+    };
+  }
+  return { ok: true, value: value as ReasoningEffort };
+}
+
+/** AI SDK's OpenAI provider maps this option to wire `reasoning_effort`. */
+function buildReasoningEffortProviderOptions(
+  reasoningEffort: ReasoningEffort | undefined,
+): Record<string, unknown> {
+  return reasoningEffort
+    ? {
+        providerOptions: {
+          openai: { reasoningEffort },
+        },
+      }
+    : {};
+}
+
+/**
+ * Merges spreadable `{ providerOptions }` fragments (Anthropic CoT +
+ * prompt-cache-key, OpenAI-style reasoning effort) into one spread so a naive
+ * `...a, ...b` cannot clobber the earlier fragment's `providerOptions` key.
+ * Merge each provider namespace one level deeper as well: prompt caching and
+ * reasoning effort both target `openai`, so replacing that namespace would
+ * silently discard whichever option was added first.
+ */
+function combineProviderOptions(
+  ...parts: ReadonlyArray<Record<string, unknown>>
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = {};
+  const providerOptions: Record<string, unknown> = {};
+  let hasProviderOptions = false;
+  for (const part of parts) {
+    for (const [key, value] of Object.entries(part)) {
+      if (key === "providerOptions" && value && typeof value === "object") {
+        for (const [provider, options] of Object.entries(
+          value as Record<string, unknown>,
+        )) {
+          const existing = providerOptions[provider];
+          providerOptions[provider] =
+            existing &&
+            typeof existing === "object" &&
+            !Array.isArray(existing) &&
+            options &&
+            typeof options === "object" &&
+            !Array.isArray(options)
+              ? {
+                  ...(existing as Record<string, unknown>),
+                  ...(options as Record<string, unknown>),
+                }
+              : options;
+        }
+        hasProviderOptions = true;
+      } else {
+        merged[key] = value;
+      }
+    }
+  }
+  return hasProviderOptions ? { ...merged, providerOptions } : merged;
+}
+
 /**
  * Computes effective max_tokens, reserving response capacity for reasoning models.
  *
@@ -213,8 +320,14 @@ function buildChatPromptForBilling(request: ChatRequest): string {
  * the consumed tokens. To prevent that:
  *   - Anthropic CoT: max_tokens must be >= thinking budget + response capacity
  *     (the API also hard-rejects max_tokens < thinking budget).
- *   - Any other reasoning model: floor max_tokens at MIN_RESPONSE_TOKENS so there
- *     is always room for an answer after the reasoning.
+ *   - Any other model with reasoning active: floor max_tokens at
+ *     MIN_RESPONSE_TOKENS so there is always room for an answer after reasoning.
+ *   - When reasoning is disabled (including Gemma's default), preserve the
+ *     caller's cap exactly.
+ *
+ * A low explicit ceiling can still be exhausted by hidden reasoning. The response
+ * paths report an empty-but-billed completion as `finish_reason: "length"` rather
+ * than silently authorizing more generation and spend than the caller requested.
  *
  * `model` is the requested model id (provider-prefixed is fine).
  */
@@ -223,26 +336,34 @@ function computeEffectiveMaxTokens(
   cotBudget: number | null,
   model: string,
   supportedParameters?: readonly string[],
+  reasoningEffort?: ReasoningEffort,
 ): number | undefined {
+  // max_tokens is a caller-controlled output and spend ceiling. Never raise an
+  // explicit value, including when Anthropic extended thinking is configured.
+  // Providers may reject an incompatible thinking budget with a truthful 400.
+  if (requestMaxTokens !== undefined) {
+    return requestMaxTokens;
+  }
+
   if (cotBudget !== null) {
-    // When CoT is active, ensure max_tokens covers both thinking budget AND response capacity
-    // Without this, thinking consumes all tokens leaving nothing for the actual response
-    return Math.max(
-      requestMaxTokens ?? MIN_RESPONSE_TOKENS,
-      cotBudget + MIN_RESPONSE_TOKENS,
-    );
+    // With no caller ceiling, leave room for both configured thinking and output.
+    return cotBudget + MIN_RESPONSE_TOKENS;
+  }
+  const cerebrasModel = canonicalizeCerebrasModelId(model);
+  if (
+    reasoningEffort === "none" ||
+    (reasoningEffort === undefined && cerebrasModel === "gemma-4-31b")
+  ) {
+    // No hidden reasoning tokens consume the caller's output budget. Preserve
+    // the advertised max_tokens contract exactly instead of silently raising a
+    // short formatting call (often 260-512 tokens) to 4096.
+    return requestMaxTokens;
   }
   if (modelUsesReasoningTokens(model, supportedParameters)) {
-    // Non-Anthropic reasoning model. Guarantee at least MIN_RESPONSE_TOKENS so the
-    // model does not truncate mid-reasoning and return empty (but billed) output.
-    // If the caller asked for more, honor it; if they asked for less (or nothing),
-    // raise it to the floor.
-    return Math.max(
-      requestMaxTokens ?? MIN_RESPONSE_TOKENS,
-      MIN_RESPONSE_TOKENS,
-    );
+    // With no caller ceiling, avoid the common empty-but-billed reasoning result.
+    return MIN_RESPONSE_TOKENS;
   }
-  return requestMaxTokens;
+  return undefined;
 }
 
 // ============================================================================
@@ -274,9 +395,14 @@ interface ChatRequest {
   messages: ChatMessage[];
   temperature?: number;
   max_tokens?: number;
+  /** Cerebras prompt-cache routing hint (camelCase accepted for compatibility). */
+  prompt_cache_key?: unknown;
+  promptCacheKey?: unknown;
   top_p?: number;
   frequency_penalty?: number;
   presence_penalty?: number;
+  /** Cerebras model-specific control for hidden reasoning generation. */
+  reasoning_effort?: ReasoningEffort | null;
   stream?: boolean;
   /**
    * OpenAI `stream_options`: when `include_usage` is true the stream carries
@@ -315,6 +441,52 @@ interface ChatRequest {
   webSearchEnabled?: boolean;
   /** Optional max search budget for provider-native web search. */
   webSearchMaxUses?: number;
+}
+
+function resolvePromptCacheKey(
+  request: ChatRequest,
+): { key?: string } | { error: string } {
+  const hasCanonical = Object.hasOwn(request, "prompt_cache_key");
+  const value = hasCanonical
+    ? request.prompt_cache_key
+    : request.promptCacheKey;
+  if (value === undefined && !hasCanonical) return {};
+  if (typeof value !== "string" || value.length === 0 || value.length > 1024) {
+    return {
+      error:
+        "prompt_cache_key must be a nonempty string of at most 1024 characters",
+    };
+  }
+  return { key: value };
+}
+
+function mergePromptCacheProviderOptions(
+  base: ReturnType<typeof mergeAnthropicCotProviderOptions>,
+  key: string | undefined,
+): ReturnType<typeof mergeAnthropicCotProviderOptions> {
+  if (!key) return base;
+  const providerOptions =
+    "providerOptions" in base && base.providerOptions
+      ? { ...base.providerOptions }
+      : {};
+  providerOptions.openai = {
+    ...(providerOptions.openai ?? {}),
+    promptCacheKey: key,
+  };
+  providerOptions.cerebras = {
+    ...(providerOptions.cerebras ?? {}),
+    prompt_cache_key: key,
+    promptCacheKey: key,
+  };
+  providerOptions.eliza = {
+    ...(providerOptions.eliza ?? {}),
+    promptCacheKey: key,
+  };
+  return { ...base, providerOptions };
+}
+
+function redactPromptCacheKey(value: string, key: string | undefined): string {
+  return key ? value.replaceAll(key, "[REDACTED_PROMPT_CACHE_KEY]") : value;
 }
 
 // ============================================================================
@@ -710,6 +882,21 @@ function normalizeUsageTokens(usage: unknown): {
   };
 }
 
+function isEmptyButBilled(
+  visibleText: string,
+  hasToolCalls: boolean,
+  usage: unknown,
+  providerFinishReason?: string,
+): boolean {
+  return (
+    !visibleText &&
+    !hasToolCalls &&
+    providerFinishReason !== "content-filter" &&
+    providerFinishReason !== "content_filter" &&
+    normalizeUsageTokens(usage).outputTokens > 0
+  );
+}
+
 function hasReportedUsageTokens(usage: unknown): boolean {
   const record = (usage ?? {}) as {
     inputTokens?: number;
@@ -926,6 +1113,7 @@ async function recordPooledInferenceSuccess(
 async function recordPooledInferenceFailure(
   pooledCredential: PooledInferenceCredential | null,
   error: unknown,
+  promptCacheKey?: string,
 ): Promise<void> {
   if (!pooledCredential) return;
   const status =
@@ -936,7 +1124,10 @@ async function recordPooledInferenceFailure(
     credentialId: pooledCredential.credentialId,
     providerId: pooledCredential.providerId,
     status,
-    detail: error instanceof Error ? error.message : String(error),
+    detail: redactPromptCacheKey(
+      error instanceof Error ? error.message : String(error),
+      promptCacheKey,
+    ),
   });
 }
 
@@ -991,6 +1182,7 @@ export async function handleChatCompletionsPOST(
   // Hoisted so the catch below can echo the requested model in the sanitized
   // provider-configuration error; set right after the body parses.
   let model = "";
+  let promptCacheKeyForRedaction: string | undefined;
 
   try {
     // 1. Authenticate (+ moderation). #9899: API-key dedicated-agent requests
@@ -1090,7 +1282,45 @@ export async function handleChatCompletionsPOST(
     // by dedicated agents) to the bare Cerebras id so pricing, routing, and
     // billing all agree and route to cerebras-direct instead of OpenRouter.
     model = canonicalizeCerebrasModelId(request.model);
+    const reasoningEffortValidation = validateCerebrasReasoningEffort(
+      model,
+      request.reasoning_effort,
+    );
+    if (!reasoningEffortValidation.ok) {
+      return addCorsHeaders(
+        Response.json(
+          {
+            error: {
+              message: reasoningEffortValidation.message,
+              type: "invalid_request_error",
+              code: "invalid_reasoning_effort",
+            },
+          },
+          { status: 400 },
+        ),
+      );
+    }
+    const reasoningEffort = reasoningEffortValidation.value;
+    // Normalize nullable omission once so every downstream path (passthrough,
+    // SDK streaming, and SDK generation) observes the same validated value.
+    request.reasoning_effort = reasoningEffort;
     const provider = getProviderFromModel(model);
+    const promptCacheKeyResult = resolvePromptCacheKey(request);
+    if ("error" in promptCacheKeyResult) {
+      return addCorsHeaders(
+        Response.json(
+          {
+            error: {
+              message: promptCacheKeyResult.error,
+              type: "invalid_request_error",
+              code: "invalid_prompt_cache_key",
+            },
+          },
+          { status: 400 },
+        ),
+      );
+    }
+    promptCacheKeyForRedaction = promptCacheKeyResult.key;
     const normalizedModel = normalizeModelName(model);
     const cotBudget = resolveAnthropicThinkingBudgetTokens(model, process.env);
     const cotOptions =
@@ -1174,6 +1404,7 @@ export async function handleChatCompletionsPOST(
       cotBudget,
       model,
       modelSupportedParameters,
+      reasoningEffort,
     );
     const webSearchEnabled = request.webSearchEnabled === true;
     const webSearchActive = isAnthropicWebSearchEnabled(
@@ -1667,12 +1898,18 @@ export async function handleChatCompletionsPOST(
     return preforwardResponse;
   } catch (error) {
     await settleReservation?.(0);
-    const rawMessage = error instanceof Error ? error.message : String(error);
+    const rawMessage = redactPromptCacheKey(
+      error instanceof Error ? error.message : String(error),
+      promptCacheKeyForRedaction,
+    );
     logger.error("[Chat Completions] Error", {
       error: rawMessage,
       cause:
         error instanceof Error && error.cause
-          ? String((error.cause as Error).message ?? error.cause)
+          ? redactPromptCacheKey(
+              String((error.cause as Error).message ?? error.cause),
+              promptCacheKeyForRedaction,
+            )
           : undefined,
     });
     // Provider-configuration failures (missing/invalid provider keys) carry
@@ -2068,8 +2305,15 @@ async function tryPassthroughStreamingRequest(params: {
   if (safeParams.stopSequences?.length) {
     upstreamBody.stop = safeParams.stopSequences;
   }
+  if (request.reasoning_effort !== undefined) {
+    upstreamBody.reasoning_effort = request.reasoning_effort;
+  }
   if (params.effectiveMaxTokens != null) {
     upstreamBody.max_tokens = params.effectiveMaxTokens;
+  }
+  const promptCacheKey = resolvePromptCacheKey(request);
+  if (!("error" in promptCacheKey) && promptCacheKey.key) {
+    upstreamBody.prompt_cache_key = promptCacheKey.key;
   }
 
   // Client disconnect must cancel the upstream fetch (the meter then settles
@@ -2117,10 +2361,12 @@ async function tryPassthroughStreamingRequest(params: {
         getObjectValue(parseJsonObject(bodyText), "error"),
         "message",
       );
-      message =
+      message = redactPromptCacheKey(
         typeof upstreamMessage === "string" && upstreamMessage.trim()
           ? upstreamMessage
-          : `upstream provider returned ${upstreamResponse.status}`;
+          : `upstream provider returned ${upstreamResponse.status}`,
+        "error" in promptCacheKey ? undefined : promptCacheKey.key,
+      );
     } else {
       // error-policy:J6 best-effort teardown — release the upstream connection;
       // the (auth/infra) body is intentionally unused.
@@ -2327,6 +2573,16 @@ async function handleStreamingRequest(
     if (passthroughResponse) return passthroughResponse;
   }
 
+  const promptCacheKeyResult = resolvePromptCacheKey(request);
+  const promptCacheKey =
+    "error" in promptCacheKeyResult ? undefined : promptCacheKeyResult.key;
+  const modelProviderOptions = mergePromptCacheProviderOptions(
+    cotOptions,
+    getProviderFromModel(model).startsWith("cerebras") &&
+      !("error" in promptCacheKeyResult)
+      ? promptCacheKey
+      : undefined,
+  );
   const provider = getProviderFromModel(model);
   const tools = convertTools(request.tools);
   const toolChoice = mapToolChoice(request.tool_choice);
@@ -2390,6 +2646,9 @@ async function handleStreamingRequest(
         : [request.stop]
       : undefined,
   });
+  const reasoningProviderOptions = buildReasoningEffortProviderOptions(
+    request.reasoning_effort ?? undefined,
+  );
 
   const result = streamText({
     model: getLanguageModel(model, pooledCredential ?? undefined),
@@ -2403,7 +2662,7 @@ async function handleStreamingRequest(
     ...(toolChoice ? { toolChoice } : {}),
     ...(experimentalOutput ? { output: experimentalOutput } : {}),
     ...(effectiveMaxTokens != null && { maxOutputTokens: effectiveMaxTokens }),
-    ...cotOptions,
+    ...combineProviderOptions(modelProviderOptions, reasoningProviderOptions),
     // Parity with the non-streaming path (#8759): the settlement chain below
     // (billUsage → settleReservation → analytics → audit) is 5+ serial DB
     // round-trips, and the AI SDK awaits onFinish before it ends fullStream —
@@ -2514,12 +2773,19 @@ async function handleStreamingRequest(
     // later onFinish/onAbort cannot double-refund.
     onError: async ({ error }: { error: unknown }) => {
       await refundStreamingReservationOnce();
-      await recordPooledInferenceFailure(pooledCredential, error);
+      await recordPooledInferenceFailure(
+        pooledCredential,
+        error,
+        promptCacheKey,
+      );
       logger.error(
         "[Chat Completions] Stream provider error — reservation refunded",
         {
           model,
-          error: error instanceof Error ? error.message : String(error),
+          error: redactPromptCacheKey(
+            error instanceof Error ? error.message : String(error),
+            promptCacheKey,
+          ),
         },
       );
     },
@@ -2682,6 +2948,20 @@ async function handleStreamingRequest(
           }
         }
 
+        // A low explicit max_tokens can be consumed entirely by hidden
+        // reasoning. Match the non-streaming contract: an empty-but-billed
+        // completion is a length truncation, never a successful stop.
+        if (
+          isEmptyButBilled(
+            deliveredText,
+            nextToolCallIndex > 0,
+            finishUsage,
+            finishReason,
+          )
+        ) {
+          finishReason = "length";
+        }
+
         // Send final chunk with finish_reason
         const finalChunk = {
           id: responseId,
@@ -2739,7 +3019,11 @@ async function handleStreamingRequest(
           await settleStreamingAbortOnce([]);
         } else {
           await refundStreamingReservationOnce();
-          await recordPooledInferenceFailure(pooledCredential, error);
+          await recordPooledInferenceFailure(
+            pooledCredential,
+            error,
+            promptCacheKey,
+          );
         }
         // Same sanitization as the non-streaming path: a provider-
         // configuration failure surfacing mid-stream (e.g. the gateway's
@@ -2752,7 +3036,10 @@ async function handleStreamingRequest(
             "[Chat Completions] Provider configuration error during stream",
             {
               model,
-              error: error instanceof Error ? error.message : String(error),
+              error: redactPromptCacheKey(
+                error instanceof Error ? error.message : String(error),
+                promptCacheKey,
+              ),
             },
           );
         }
@@ -2765,9 +3052,10 @@ async function handleStreamingRequest(
             error: {
               message: isConfigError
                 ? modelNotAvailableMessage(model)
-                : error instanceof Error
-                  ? error.message
-                  : String(error),
+                : redactPromptCacheKey(
+                    error instanceof Error ? error.message : String(error),
+                    promptCacheKey,
+                  ),
               // Same status→type mapping as the non-streaming path — a
               // hardcoded "rate_limit_error" here mislabeled every mid-stream
               // provider failure (schema 400s, upstream 5xx) as rate limiting,
@@ -2847,6 +3135,16 @@ async function handleNonStreamingRequest(
   const billingAffiliateCode =
     pooledCredential && !useMonetizedAppBilling ? null : affiliateCode;
 
+  const promptCacheKeyResult = resolvePromptCacheKey(request);
+  const promptCacheKey =
+    "error" in promptCacheKeyResult ? undefined : promptCacheKeyResult.key;
+  const modelProviderOptions = mergePromptCacheProviderOptions(
+    cotOptions,
+    provider.startsWith("cerebras") && !("error" in promptCacheKeyResult)
+      ? promptCacheKey
+      : undefined,
+  );
+
   const safeParamsNonStream = getSafeModelParams(model, {
     temperature: request.temperature,
     topP: request.top_p,
@@ -2858,6 +3156,9 @@ async function handleNonStreamingRequest(
         : [request.stop]
       : undefined,
   });
+  const reasoningProviderOptions = buildReasoningEffortProviderOptions(
+    request.reasoning_effort ?? undefined,
+  );
 
   try {
     const result = await generateText({
@@ -2874,7 +3175,7 @@ async function handleNonStreamingRequest(
       ...(effectiveMaxTokens != null && {
         maxOutputTokens: effectiveMaxTokens,
       }),
-      ...cotOptions,
+      ...combineProviderOptions(modelProviderOptions, reasoningProviderOptions),
     } as Parameters<typeof generateText>[0]);
 
     // Token counts for the OpenAI-compat response come straight from the
@@ -2983,8 +3284,12 @@ async function handleNonStreamingRequest(
     // max_tokens) instead of a misleading "stop" with null content.
     const hasToolCalls = Boolean(result.toolCalls?.length);
     const visibleText = result.text || "";
-    const emptyButBilled =
-      !visibleText && !hasToolCalls && (result.usage?.outputTokens ?? 0) > 0;
+    const emptyButBilled = isEmptyButBilled(
+      visibleText,
+      hasToolCalls,
+      result.usage,
+      result.finishReason,
+    );
     const finishReason: "tool_calls" | "length" | "content_filter" | "stop" =
       hasToolCalls || result.finishReason === "tool-calls"
         ? "tool_calls"
@@ -3038,7 +3343,7 @@ async function handleNonStreamingRequest(
     );
   } catch (error) {
     await settleReservation?.(0);
-    await recordPooledInferenceFailure(pooledCredential, error);
+    await recordPooledInferenceFailure(pooledCredential, error, promptCacheKey);
     throw error;
   }
 }
@@ -3051,16 +3356,22 @@ honoRouter.options("/", async (c) => {
     return failureResponse(c, error);
   }
 });
-honoRouter.post("/", rateLimit(RateLimitPresets.RELAXED), async (c) => {
-  try {
-    return await handleChatCompletionsPOST(c.req.raw, {
-      executionCtx: c.executionCtx,
-    });
-  } catch (error) {
-    // error-policy:J1 route boundary — every catch in v1/chat/* translates a thrown error into a structured HTTP failure via failureResponse (never a fabricated 200/empty completion). Credit reservations are released before rethrow on the streaming paths above.
-    return failureResponse(c, error);
-  }
-});
+honoRouter.post(
+  "/",
+  rateLimit(RateLimitPresets.RELAXED, {
+    bindingName: "CHAT_ROUTE_RATE_LIMITER",
+  }),
+  async (c) => {
+    try {
+      return await handleChatCompletionsPOST(c.req.raw, {
+        executionCtx: c.executionCtx,
+      });
+    } catch (error) {
+      // error-policy:J1 route boundary — every catch in v1/chat/* translates a thrown error into a structured HTTP failure via failureResponse (never a fabricated 200/empty completion). Credit reservations are released before rethrow on the streaming paths above.
+      return failureResponse(c, error);
+    }
+  },
+);
 export default honoRouter;
 
 /**
@@ -3100,7 +3411,18 @@ export const __nativeToolingTestHooks = {
   mapToolChoice,
   convertTools,
   computeEffectiveMaxTokens,
+  validateCerebrasReasoningEffort,
+  buildReasoningEffortProviderOptions,
+  isEmptyButBilled,
   toOpenAiFinishReason,
+  resolvePromptCacheKey,
+  mergePromptCacheProviderOptions,
+  redactPromptCacheKey,
+} as const;
+
+/** Test seam for the non-streaming AI SDK forwarding contract. */
+export const __reasoningEffortTestHooks = {
+  handleNonStreamingRequest,
 } as const;
 
 /**

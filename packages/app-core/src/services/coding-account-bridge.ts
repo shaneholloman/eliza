@@ -28,7 +28,11 @@ import os from "node:os";
 import path from "node:path";
 import { loadAccount } from "@elizaos/auth/account-storage";
 import { writeJsonAtomicSync } from "@elizaos/auth/atomic-json";
-import { getAccessToken, saveCredentials } from "@elizaos/auth/credentials";
+import {
+  type AccessTokenOutcome,
+  getAccessToken,
+  saveCredentials,
+} from "@elizaos/auth/credentials";
 import { probeDirectApiKey } from "@elizaos/auth/direct-api-probe";
 import { accountRefreshMutex } from "@elizaos/auth/refresh-mutex";
 import type { DirectAccountProvider } from "@elizaos/auth/types";
@@ -51,6 +55,10 @@ import {
   type Strategy,
   selectionForProvider,
 } from "./account-pool.js";
+import {
+  claudeMinRemainingMs,
+  resolveClaudeExpectedRunMs,
+} from "./claude-token-refresh.js";
 
 const VALID_CODING_STRATEGIES = new Set<Strategy>([
   "priority",
@@ -113,6 +121,14 @@ export function isAuthFailure(err: unknown): boolean {
   if (err === undefined) return true;
   const msg = err instanceof Error ? err.message : String(err);
   return AUTH_FAILURE_PATTERN.test(msg);
+}
+
+function accessTokenFailureIsAuth(
+  outcome: AccessTokenOutcome | undefined,
+  err?: unknown,
+): boolean {
+  if (outcome && !outcome.ok) return outcome.kind === "auth";
+  return isAuthFailure(err);
 }
 
 function codexHomeDir(accountId: string): string {
@@ -225,6 +241,36 @@ export async function adoptRotatedCodexTokens(
 }
 
 /**
+ * Reasoning-effort values the Codex model catalog knows. Codex itself silently
+ * accepts an invalid `model_reasoning_effort`, so validation is on us: an
+ * unknown operator value is warned about and dropped, never interpolated.
+ */
+const CODEX_EFFORT_VALUES: ReadonlySet<string> = new Set([
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+]);
+
+/**
+ * The effort subset the pinned codex-acp adapter can deserialize. Its bundled
+ * codex core's `ReasoningEffort` enum is `minimal|low|medium|high|xhigh`
+ * (verified against the @zed-industries/codex-acp@0.14.0 binary's serde
+ * variant table); an unknown variant fails the WHOLE config.toml parse, which
+ * would also discard the `model` pin ChatGPT-account auth requires — far worse
+ * than running at the default effort. `max`/`ultra` are valid catalog values
+ * on newer Codex builds but are withheld here until the adapter pin moves.
+ */
+const PINNED_CODEX_ACP_EFFORTS: ReadonlySet<string> = new Set([
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+]);
+
+/**
  * Materialize a per-account `CODEX_HOME` so Codex authenticates as the selected
  * account instead of the machine's single `~/.codex` login. Writes the
  * ChatGPT-login `auth.json` shape Codex reads; the account_id is the OAuth
@@ -263,21 +309,34 @@ function materializeCodexHome(accountId: string, accessToken: string): string {
   // Codex reads its model from CODEX_HOME/config.toml; with none, codex-acp
   // falls back to a built-in default (e.g. gpt-5.3-codex) that ChatGPT-account
   // auth rejects ("model is not supported when using Codex with a ChatGPT
-  // account"). Write a MINIMAL config.toml with just the model — reusing the
-  // operator's working model (extracted from ~/.codex/config.toml) but NOT the
-  // rest of their config, which can carry fields the pinned codex-acp rejects
-  // (e.g. newer reasoning-effort variants). Falls back to a compatible default.
+  // account"). Write a MINIMAL config.toml — the model plus an optional
+  // validated reasoning effort — reusing the operator's working model
+  // (extracted from ~/.codex/config.toml) but NOT the rest of their config,
+  // which can carry fields the pinned codex-acp rejects (e.g. newer
+  // reasoning-effort variants; see PINNED_CODEX_ACP_EFFORTS). Falls back to a
+  // compatible default.
   const targetConfig = path.join(dir, "config.toml");
   try {
-    let model = process.env.ELIZA_CODEX_MODEL?.trim();
-    // Validate the operator-supplied model: it is interpolated into TOML, so a
-    // stray quote/newline would break out of the string (corrupt config) — and
-    // a model name is a conservative token anyway. Reject anything else.
-    if (model && !/^[\w.:/-]+$/.test(model)) {
-      logger.warn(
-        `[coding-account-bridge] ignoring malformed ELIZA_CODEX_MODEL=${JSON.stringify(model)}`,
-      );
-      model = undefined;
+    // Resolution order: explicit env pin > app-configured model (what
+    // POST /api/models/config writes for the codex coding target) > the
+    // operator's machine config > the compatible default. Without the
+    // POWERFUL read here, the app-configured model was a dead-end key — the
+    // machine ~/.codex/config.toml silently won on every spawn.
+    let model: string | undefined;
+    for (const key of ["ELIZA_CODEX_MODEL", "ELIZA_CODEX_MODEL_POWERFUL"]) {
+      const candidate = process.env[key]?.trim();
+      if (!candidate) continue;
+      // Validate the operator-supplied model: it is interpolated into TOML, so
+      // a stray quote/newline would break out of the string (corrupt config) —
+      // and a model name is a conservative token anyway. Reject anything else.
+      if (!/^[\w.:/-]+$/.test(candidate)) {
+        logger.warn(
+          `[coding-account-bridge] ignoring malformed ${key}=${JSON.stringify(candidate)}`,
+        );
+        continue;
+      }
+      model = candidate;
+      break;
     }
     if (!model) {
       const machineConfig = path.join(os.homedir(), ".codex", "config.toml");
@@ -291,9 +350,29 @@ function materializeCodexHome(accountId: string, accessToken: string): string {
         if (m?.[1]) model = m[1];
       }
     }
-    writeFileSync(targetConfig, `model = "${model || "gpt-5.1-codex"}"\n`, {
-      mode: 0o600,
-    });
+    let effort = process.env.ELIZA_CODEX_EFFORT?.trim().toLowerCase();
+    if (effort && !CODEX_EFFORT_VALUES.has(effort)) {
+      // error-policy:J7 an invalid operator effort must not poison the spawn —
+      // warn and omit the line; the model pin below still ships.
+      logger.warn(
+        `[coding-account-bridge] ignoring invalid ELIZA_CODEX_EFFORT=${JSON.stringify(effort)} (expected low|medium|high|xhigh|max|ultra)`,
+      );
+      effort = undefined;
+    } else if (effort && !PINNED_CODEX_ACP_EFFORTS.has(effort)) {
+      // error-policy:J7 see PINNED_CODEX_ACP_EFFORTS — writing max/ultra would
+      // fail the pinned adapter's whole config.toml parse and drop the model pin.
+      logger.warn(
+        `[coding-account-bridge] ELIZA_CODEX_EFFORT=${JSON.stringify(effort)} is not parseable by the pinned codex-acp (supported: low|medium|high|xhigh); omitting model_reasoning_effort so config.toml stays loadable`,
+      );
+      effort = undefined;
+    }
+    writeFileSync(
+      targetConfig,
+      `model = "${model || "gpt-5.6-terra"}"\n${
+        effort ? `model_reasoning_effort = "${effort}"\n` : ""
+      }`,
+      { mode: 0o600 },
+    );
   } catch (err) {
     logger.warn(
       `[coding-account-bridge] could not materialize codex config.toml: ${String(err)}`,
@@ -382,10 +461,50 @@ function makeBridge(pool: AccountPool): CodingAgentSelectorBridge {
         if (providerId === "openai-codex") {
           await adoptRotatedCodexTokens(account.id).catch(() => false);
         }
+        // Claude coding spawns get a BARE `CLAUDE_CODE_OAUTH_TOKEN` the
+        // third-party claude-agent-acp adapter reads ONCE and cannot refresh, so a
+        // long run outlives a short-TTL token (recon gap #3). Proactively widen
+        // the refresh window for anthropic-subscription so the injected token
+        // survives the expected run duration. Codex self-refreshes into its
+        // CODEX_HOME, so it keeps the default buffer.
+        const resolveOpts =
+          providerId === "anthropic-subscription"
+            ? {
+                minRemainingMs: claudeMinRemainingMs(
+                  resolveClaudeExpectedRunMs((key) => process.env[key]),
+                ),
+              }
+            : undefined;
         let accessToken: string | null = null;
+        let resolveOutcome: AccessTokenOutcome | undefined;
         let resolveError: unknown;
         try {
-          accessToken = await getAccessToken(providerId, account.id);
+          resolveOutcome = await getAccessToken(providerId, account.id, {
+            ...resolveOpts,
+            outcome: true,
+          });
+          accessToken = resolveOutcome.ok ? resolveOutcome.accessToken : null;
+          // A widened Claude resolve is only a freshness preference. The
+          // default-buffer retry preserves a still-valid token when refresh is
+          // transiently unavailable or the vendor minted a shorter-lived token.
+          if (
+            accessToken === null &&
+            resolveOpts &&
+            resolveOutcome &&
+            !resolveOutcome.ok &&
+            resolveOutcome.kind !== "auth"
+          ) {
+            const stillValid = await getAccessToken(providerId, account.id, {
+              outcome: true,
+            });
+            resolveOutcome = stillValid;
+            if (stillValid.ok) {
+              logger.info(
+                `[coding-account-bridge] proactive refresh for ${providerId}/${account.id} did not yield a fresh token; using the still-valid shorter-TTL token (a long run may hit the typed expiry signal)`,
+              );
+              accessToken = stillValid.accessToken;
+            }
+          }
         } catch (err) {
           resolveError = err;
           logger.warn(
@@ -395,7 +514,7 @@ function makeBridge(pool: AccountPool): CodingAgentSelectorBridge {
         if (!accessToken) {
           // Only flag for re-auth on a genuine auth failure; a transient
           // network/5xx blip must not pull a healthy account out of rotation.
-          if (isAuthFailure(resolveError)) {
+          if (accessTokenFailureIsAuth(resolveOutcome, resolveError)) {
             await pool.markNeedsReauth(
               account.id,
               "No valid credential / token refresh failed",
@@ -442,21 +561,17 @@ function makeBridge(pool: AccountPool): CodingAgentSelectorBridge {
       accountId,
       detail,
     ) {
-      // A session-level 401 usually means the token INJECTED at spawn aged out
-      // mid-run (Claude gets a bare access token it cannot refresh), not that
-      // the account's credential is dead. Verify before evicting: adopt any
-      // CLI-rotated Codex tokens, resolve a token through the normal refresh
-      // path, then prove it server-side with the usage probe (a cached-but-
-      // revoked access token must not keep a dead account in rotation; probe
-      // success also restores health + usage). Only an auth-shaped verify
-      // failure marks needs-reauth — a transient blip leaves the account for
-      // the keep-alive sweep to re-check.
+      // Session-level auth failures can come from an injected token aging out.
+      // Verify the stored credential before evicting the account from rotation.
       if (providerId === "openai-codex") {
         await adoptRotatedCodexTokens(accountId).catch(() => false);
       }
       try {
-        const token = await getAccessToken(providerId, accountId);
-        if (token) {
+        const tokenOutcome = await getAccessToken(providerId, accountId, {
+          outcome: true,
+        });
+        if (tokenOutcome.ok) {
+          const token = tokenOutcome.accessToken;
           if (isSubscriptionProvider(providerId)) {
             const record = pool.get(accountId, providerId);
             await pool.refreshUsage(accountId, token, {
@@ -490,7 +605,12 @@ function makeBridge(pool: AccountPool): CodingAgentSelectorBridge {
           );
           return;
         }
-        // Token resolve returned null: no credential / refresh failed → mark.
+        if (tokenOutcome.kind !== "auth") {
+          logger.info(
+            `[coding-account-bridge] ${providerId}/${accountId} auth-failure verify did not produce a reauth failure (${tokenOutcome.kind}) — leaving rotation state to the keep-alive sweep`,
+          );
+          return;
+        }
       } catch (err) {
         if (!isAuthFailure(err)) {
           logger.info(

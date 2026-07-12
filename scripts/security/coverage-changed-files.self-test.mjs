@@ -79,6 +79,31 @@ try {
 
   // Merge-base commit: the point the feature branch forks from.
   write(dir, "packages/demo/src/base.ts", "export const base = 1;\n");
+  write(
+    dir,
+    "packages/demo/src/runtime-equivalent.ts",
+    "export const stable: number = 1;\n",
+  );
+  write(
+    dir,
+    "packages/demo/src/runtime-changed.ts",
+    "export const changed: number = 1;\n",
+  );
+  write(
+    dir,
+    "packages/demo/src/vite-directive.ts",
+    'export const load = () => import("./module");\n',
+  );
+  write(
+    dir,
+    "packages/demo/src/coverage-directive.ts",
+    "export const covered: number = 1;\n",
+  );
+  write(
+    dir,
+    "packages/demo/src/decorator-metadata.ts",
+    "class Example { @field value: string; }\n",
+  );
   write(dir, "packages/demo/src/deleted.ts", "export const removed = 1;\n");
   git(dir, "add", "-A");
   git(dir, "commit", "-q", "-m", "base");
@@ -93,6 +118,31 @@ try {
   // Feature branch forks from the merge-base and adds its own source + tests.
   git(dir, "checkout", "-q", "-b", "feature", mergeBase);
   rmSync(join(dir, "packages/demo/src/deleted.ts"));
+  write(
+    dir,
+    "packages/demo/src/runtime-equivalent.ts",
+    "export   const stable : number | string = 1;\n",
+  );
+  write(
+    dir,
+    "packages/demo/src/runtime-changed.ts",
+    "export const changed: number = 2;\n",
+  );
+  write(
+    dir,
+    "packages/demo/src/vite-directive.ts",
+    'export const load = () => import(/* @vite-ignore */ "./module");\n',
+  );
+  write(
+    dir,
+    "packages/demo/src/coverage-directive.ts",
+    "/* c8 ignore next */\nexport const covered: number = 1;\n",
+  );
+  write(
+    dir,
+    "packages/demo/src/decorator-metadata.ts",
+    "class Example { @field value: number; }\n",
+  );
   write(dir, "packages/demo/src/feature.ts", "export const f = 1;\n");
   write(
     dir,
@@ -108,6 +158,16 @@ try {
   write(dir, "packages/demo/src/runtime.cjs", "exports.cjs = 1;\n");
   write(
     dir,
+    "packages/demo/src/_router.generated.ts",
+    "export const generatedRoute = 1;\n",
+  );
+  write(
+    dir,
+    "packages/demo/src/generated/schema.ts",
+    "export const generatedSchema = 1;\n",
+  );
+  write(
+    dir,
     "packages/demo/src/runtime.mts",
     "export const mts: number = 1;\n",
   );
@@ -115,6 +175,11 @@ try {
     dir,
     "packages/demo/src/runtime.cts",
     "export const cts: number = 1;\n",
+  );
+  write(
+    dir,
+    "packages/app/scripts/walkthrough-e2e.mjs",
+    "export async function runWalkthrough() {}\n",
   );
   write(
     dir,
@@ -145,6 +210,11 @@ try {
     dir,
     "packages/demo/test/e2e/flow.test.ts",
     "import { test } from 'bun:test';\ntest('e2e', () => {});\n",
+  );
+  write(
+    dir,
+    "packages/test/cloud-e2e/tests/live-deploy.spec.ts",
+    "import { test } from '../src/helpers/test-fixtures';\ntest('live', () => {});\n",
   );
   write(
     dir,
@@ -204,11 +274,26 @@ try {
     },
   );
 
+  assertCase("cloud Playwright specs stay in their dedicated lane", () => {
+    const liveSpec = "packages/test/cloud-e2e/tests/live-deploy.spec.ts";
+    assert.ok(
+      !out.bun_tests.includes(liveSpec),
+      `cloud Playwright spec leaked into bun lane: ${out.bun_tests.join(",")}`,
+    );
+    assert.ok(
+      !out.vitest_tests.includes(liveSpec),
+      `cloud Playwright spec leaked into vitest lane: ${out.vitest_tests.join(",")}`,
+    );
+  });
+
   assertCase(
     "e2e fixtures and stories are not product coverage targets",
     () => {
       assert.ok(!out.files.includes("packages/demo/src/__e2e__/fixture.tsx"));
       assert.ok(!out.files.includes("packages/demo/src/feature.stories.tsx"));
+      assert.ok(
+        !out.files.includes("packages/app/scripts/walkthrough-e2e.mjs"),
+      );
     },
   );
 
@@ -234,6 +319,11 @@ try {
     );
   });
 
+  assertCase("generated modules are not LCOV-enforced source", () => {
+    assert.ok(!out.files.includes("packages/demo/src/_router.generated.ts"));
+    assert.ok(!out.files.includes("packages/demo/src/generated/schema.ts"));
+  });
+
   assertCase(
     "only registered standalone self-tests leave source enforcement",
     () => {
@@ -255,6 +345,27 @@ try {
       assert.ok(!out.files.includes("packages/demo/src/types.ts"));
     },
   );
+
+  assertCase("runtime-equivalent source changes are not LCOV-enforced", () => {
+    assert.ok(!out.files.includes("packages/demo/src/runtime-equivalent.ts"));
+    assert.ok(
+      out.files.includes("packages/demo/src/runtime-changed.ts"),
+      `runtime change missing from changed source: ${out.files.join(",")}`,
+    );
+    assert.ok(
+      out.files.includes("packages/demo/src/feature.ts"),
+      `added runtime source missing from changed source: ${out.files.join(",")}`,
+    );
+  });
+
+  assertCase("semantic comment changes remain LCOV-enforced", () => {
+    assert.ok(out.files.includes("packages/demo/src/vite-directive.ts"));
+    assert.ok(out.files.includes("packages/demo/src/coverage-directive.ts"));
+  });
+
+  assertCase("decorator metadata type changes remain LCOV-enforced", () => {
+    assert.ok(out.files.includes("packages/demo/src/decorator-metadata.ts"));
+  });
 
   assertCase("all executable module extensions are LCOV-enforced", () => {
     for (const extension of ["mjs", "cjs", "mts", "cts"]) {

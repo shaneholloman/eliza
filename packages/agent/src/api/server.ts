@@ -444,6 +444,7 @@ import {
   handleMemoryRoutes,
   handleMiscRoutes,
   handleMobileOptionalRoutes,
+  handleModelConfigRoutes,
   handleModelsRoutes,
   handlePermissionRoutes,
   handlePermissionsExtraRoutes,
@@ -1753,7 +1754,26 @@ async function handleRequest(
     method === "GET" &&
     pathname === "/api/first-run/status" &&
     isCloudProvisioned;
+  // app-core authenticates these session-tier dashboard reads before
+  // forwarding into the agent server. Do not require a second token here:
+  // browser sessions are stored by app-core and are intentionally opaque to
+  // the lower agent HTTP boundary.
+  const isAppCoreSessionCloudRead =
+    method === "GET" &&
+    (pathname === "/api/cloud/status" || pathname === "/api/cloud/credits");
   const isAuthProtectedPath = isAuthProtectedRoute(pathname);
+  let hostSessionAuthorized = false;
+  let hostSessionAuthorizationAttempted = false;
+  const isHostSessionAuthorized = async (): Promise<boolean> => {
+    if (hostSessionAuthorizationAttempted) return hostSessionAuthorized;
+    hostSessionAuthorizationAttempted = true;
+    const authorize = getAgentHostBridge().isHttpRequestAuthorized;
+    hostSessionAuthorized =
+      typeof authorize === "function"
+        ? await authorize(req, state.runtime)
+        : false;
+    return hostSessionAuthorized;
+  };
 
   const canonicalizeRestartReason = (reason: string): string => {
     if (
@@ -1903,11 +1923,13 @@ async function handleRequest(
     !isAuthEndpoint &&
     !isHealthEndpoint &&
     !isCloudFirstRunStatusEndpoint &&
+    !isAppCoreSessionCloudRead &&
     !isPublicRuntimePluginRoute({
       runtime: state.runtime,
       method,
       pathname,
     }) &&
+    !(await isHostSessionAuthorized()) &&
     !isAuthorized(req) &&
     !isBoundaryRoleAuthorized(req, method, pathname)
   ) {
@@ -2494,6 +2516,29 @@ async function handleRequest(
     })
   ) {
     return;
+  }
+
+  // Gate on the exact path before building the context so the runtime
+  // operation manager is not instantiated on unrelated requests.
+  if (pathname === "/api/models/config") {
+    if (
+      await handleModelConfigRoutes({
+        req,
+        res,
+        method,
+        pathname,
+        json,
+        readJsonBody,
+        state: { config: state.config },
+        saveElizaConfig,
+        runtimeOperationManager: getOrCreateRuntimeOperationManager(
+          state,
+          restartRuntime,
+        ),
+      })
+    ) {
+      return;
+    }
   }
 
   if (
@@ -3469,7 +3514,7 @@ async function handleRequest(
       pathname,
       url,
       runtime: state.runtime,
-      isAuthorized: () => isAuthorized(req),
+      isAuthorized: () => hostSessionAuthorized || isAuthorized(req),
       hostContext: {
         config: state.config as Record<string, unknown>,
         saveConfig: (nextConfig) => {
@@ -3554,14 +3599,18 @@ async function handleRequest(
       // routes, so the dispatch-level re-check must accept it too — otherwise
       // resolver-authorized requests pass the outer gate and 401 in dispatch.
       isAuthorized: () =>
-        isAuthorized(req) || isBoundaryRoleAuthorized(req, method, pathname),
+        hostSessionAuthorized ||
+        isAuthorized(req) ||
+        isBoundaryRoleAuthorized(req, method, pathname),
       isTrustedLocal: () => isTrustedLocalRequest(req),
       // Per-viewer principal for DTO selection (#14781). Trunk-authorized
       // callers stay on the single-owner boundary (no context → routes serve
       // unfiltered, unchanged); only resolver-recognized viewer tokens
       // (WaifuChat, artifact share-viewer) carry a principal into dispatch.
       accessContext: () =>
-        isAuthorized(req) ? undefined : resolveHttpAccessContext(req),
+        hostSessionAuthorized || isAuthorized(req)
+          ? undefined
+          : resolveHttpAccessContext(req),
     })
   ) {
     return;
