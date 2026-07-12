@@ -118,6 +118,7 @@ mock.module("@/lib/services/team-credential-pool", () => ({
 
 // Import the route AFTER the mocks so it binds to the stubs.
 const {
+  default: chatCompletionsRouter,
   __streamingCreditTestHooks,
   __passthroughStreamingTestHooks,
   __reasoningEffortTestHooks,
@@ -181,6 +182,33 @@ beforeEach(() => {
   globalThis.fetch = fetchMock as unknown as typeof fetch;
   process.env.INFERENCE_PASSTHROUGH_STREAMING = "true";
   process.env.CEREBRAS_API_KEY = "test-cerebras-key";
+});
+
+test("the route invokes its dedicated native limiter before provider work", async () => {
+  const keys: string[] = [];
+  const response = await chatCompletionsRouter.fetch(
+    new Request("https://api.example.test/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(QUALIFYING_REQUEST),
+    }),
+    {
+      NODE_ENV: "production",
+      CHAT_ROUTE_RATE_LIMITER: {
+        async limit({ key }: { key: string }) {
+          keys.push(key);
+          return { success: false };
+        },
+      },
+    } as never,
+  );
+
+  expect(response.status).toBe(429);
+  expect(keys).toEqual(["public"]);
+  expect(response.headers.get("X-RateLimit-Policy")).toBe("cloudflare-native");
+  expect(generateText).not.toHaveBeenCalled();
+  expect(streamText).not.toHaveBeenCalled();
+  expect(fetchMock).not.toHaveBeenCalled();
 });
 
 /** In-memory credit ledger, identical to the credit-leak suite's. */
@@ -257,7 +285,11 @@ function callStreaming(
   );
 }
 
-function callNonStreaming(model: string, reasoningEffort: "none" | "low") {
+function callNonStreaming(
+  model: string,
+  reasoningEffort: "none" | "low",
+  promptCacheKey?: string,
+) {
   return handleNonStreamingRequest(
     model,
     undefined,
@@ -266,6 +298,7 @@ function callNonStreaming(model: string, reasoningEffort: "none" | "low") {
       model,
       messages: [{ role: "user", content: "hello" }],
       reasoning_effort: reasoningEffort,
+      ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
     } as never,
     { id: USER, organization_id: ORG },
     null,
@@ -615,9 +648,10 @@ describe("passthrough streaming — fallthrough to the SDK path", () => {
     expect(res.headers.get("X-Eliza-Inference-Path")).toBeNull();
   });
 
-  test("SDK streaming forwards reasoning_effort through OpenAI provider options", async () => {
+  test("SDK streaming preserves prompt_cache_key alongside reasoning_effort", async () => {
     sdkFaithfulStream();
     const model = "zai-glm-4.7";
+    const promptCacheKey = "v5:reasoning-prefix";
     const res = await callStreaming(async () => null, {
       model,
       request: {
@@ -626,6 +660,7 @@ describe("passthrough streaming — fallthrough to the SDK path", () => {
         stream: true,
         stream_options: { include_usage: true },
         reasoning_effort: "none",
+        prompt_cache_key: promptCacheKey,
         tools: [
           {
             type: "function",
@@ -641,11 +676,13 @@ describe("passthrough streaming — fallthrough to the SDK path", () => {
     expect(streamText).toHaveBeenCalledTimes(1);
     expect(streamText.mock.calls[0]?.[0]).toMatchObject({
       maxOutputTokens: 512,
-      providerOptions: { openai: { reasoningEffort: "none" } },
+      providerOptions: {
+        openai: { promptCacheKey, reasoningEffort: "none" },
+      },
     });
   });
 
-  test("SDK non-streaming forwards reasoning_effort through OpenAI provider options", async () => {
+  test("SDK non-streaming preserves prompt_cache_key alongside reasoning_effort", async () => {
     generateTextImpl = () => ({
       text: "Hello",
       toolCalls: [],
@@ -653,12 +690,15 @@ describe("passthrough streaming — fallthrough to the SDK path", () => {
       usage: { inputTokens: 72, outputTokens: 1, totalTokens: 73 },
     });
 
-    const res = await callNonStreaming("zai-glm-4.7", "none");
+    const promptCacheKey = "v5:reasoning-prefix";
+    const res = await callNonStreaming("zai-glm-4.7", "none", promptCacheKey);
     expect(res.status).toBe(200);
     expect(generateText).toHaveBeenCalledTimes(1);
     expect(generateText.mock.calls[0]?.[0]).toMatchObject({
       maxOutputTokens: 512,
-      providerOptions: { openai: { reasoningEffort: "none" } },
+      providerOptions: {
+        openai: { promptCacheKey, reasoningEffort: "none" },
+      },
     });
   });
 
