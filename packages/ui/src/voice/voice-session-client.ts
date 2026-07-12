@@ -94,6 +94,19 @@ function isVoiceWebSocketLike(value: unknown): value is VoiceWebSocketLike {
   );
 }
 
+function closeInvalidNativeWebSocket(socket: unknown): void {
+  if ((typeof socket !== "object" && typeof socket !== "function") || !socket) {
+    return;
+  }
+  try {
+    const close: unknown = Reflect.get(socket, "close");
+    if (typeof close === "function") Reflect.apply(close, socket, []);
+  } catch (ignoredError) {
+    // error-policy:J6 Best-effort cleanup must not mask the runtime shape error.
+    void ignoredError;
+  }
+}
+
 function openNativeVoiceWebSocket(url: string): VoiceWebSocketLike {
   const ctor: unknown = globalThis.WebSocket;
   if (typeof ctor !== "function") {
@@ -101,6 +114,7 @@ function openNativeVoiceWebSocket(url: string): VoiceWebSocketLike {
   }
   const socket: unknown = Reflect.construct(ctor, [url]);
   if (!isVoiceWebSocketLike(socket)) {
+    closeInvalidNativeWebSocket(socket);
     throw new Error("WebSocket runtime does not expose the required voice API");
   }
   return socket;

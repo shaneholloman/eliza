@@ -27,7 +27,14 @@ describe("browser audio runtime boundaries", () => {
   });
 
   it("uses webkitAudioContext and rejects a constructor result that fails validation", () => {
-    class WebkitAudioContext {}
+    class WebkitAudioContext {
+      static latest: WebkitAudioContext | null = null;
+      readonly close = vi.fn(async () => {});
+
+      constructor() {
+        WebkitAudioContext.latest = this;
+      }
+    }
     vi.stubGlobal("window", { webkitAudioContext: WebkitAudioContext });
 
     const context = constructBrowserAudioContext(
@@ -36,6 +43,7 @@ describe("browser audio runtime boundaries", () => {
     );
 
     expect(context).toBeNull();
+    expect(WebkitAudioContext.latest?.close).toHaveBeenCalledTimes(1);
   });
 
   it("constructs and validates the native AudioWorkletNode", () => {
@@ -68,7 +76,14 @@ describe("browser audio runtime boundaries", () => {
       ),
     ).toBeNull();
 
-    class InvalidAudioWorkletNode {}
+    class InvalidAudioWorkletNode {
+      static latest: InvalidAudioWorkletNode | null = null;
+      readonly disconnect = vi.fn();
+
+      constructor() {
+        InvalidAudioWorkletNode.latest = this;
+      }
+    }
     vi.stubGlobal("AudioWorkletNode", InvalidAudioWorkletNode);
     expect(
       constructBrowserAudioWorkletNode(
@@ -77,5 +92,6 @@ describe("browser audio runtime boundaries", () => {
         (_value): _value is { accepted: true } => false,
       ),
     ).toBeNull();
+    expect(InvalidAudioWorkletNode.latest?.disconnect).toHaveBeenCalledTimes(1);
   });
 });

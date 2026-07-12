@@ -6,6 +6,26 @@
 
 export type RuntimeValidator<T> = (value: unknown) => value is T;
 
+function invokeCleanupBestEffort(value: unknown, methodName: string): void {
+  if ((typeof value !== "object" && typeof value !== "function") || !value) {
+    return;
+  }
+  try {
+    const cleanup: unknown = Reflect.get(value, methodName);
+    if (typeof cleanup !== "function") return;
+    const result: unknown = Reflect.apply(cleanup, value, []);
+    if (result && typeof Reflect.get(Object(result), "then") === "function") {
+      void Promise.resolve(result).catch((ignoredError) => {
+        // error-policy:J6 Rejected native cleanup must not mask validation.
+        void ignoredError;
+      });
+    }
+  } catch (ignoredError) {
+    // error-policy:J6 Best-effort cleanup must not mask validation.
+    void ignoredError;
+  }
+}
+
 function browserAudioContextConstructor(): unknown {
   if (typeof window === "undefined") return undefined;
   return (
@@ -21,7 +41,9 @@ export function constructBrowserAudioContext<T>(
   const ctor = browserAudioContextConstructor();
   if (typeof ctor !== "function") return null;
   const context: unknown = Reflect.construct(ctor, Array.from(args));
-  return validate(context) ? context : null;
+  if (validate(context)) return context;
+  invokeCleanupBestEffort(context, "close");
+  return null;
 }
 
 export function constructBrowserAudioWorkletNode<T>(
@@ -32,5 +54,7 @@ export function constructBrowserAudioWorkletNode<T>(
   const ctor: unknown = globalThis.AudioWorkletNode;
   if (typeof ctor !== "function") return null;
   const node: unknown = Reflect.construct(ctor, [context, name]);
-  return validate(node) ? node : null;
+  if (validate(node)) return node;
+  invokeCleanupBestEffort(node, "disconnect");
+  return null;
 }

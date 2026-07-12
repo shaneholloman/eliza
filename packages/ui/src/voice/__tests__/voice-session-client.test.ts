@@ -134,7 +134,14 @@ describe("voice-session client (real framing/state/barge-in/reconnect)", () => {
   });
 
   it("rejects a malformed native WebSocket runtime", async () => {
-    class InvalidWebSocket {}
+    class InvalidWebSocket {
+      static latest: InvalidWebSocket | null = null;
+      readonly close = vi.fn();
+
+      constructor() {
+        InvalidWebSocket.latest = this;
+      }
+    }
     vi.stubGlobal("WebSocket", InvalidWebSocket);
     const mint = makeMintFetch();
     const errors: Error[] = [];
@@ -155,6 +162,7 @@ describe("voice-session client (real framing/state/barge-in/reconnect)", () => {
     expect(
       errors.some((error) => /required voice API/.test(error.message)),
     ).toBe(true);
+    expect(InvalidWebSocket.latest?.close).toHaveBeenCalledTimes(1);
     await client.stop();
   });
 
