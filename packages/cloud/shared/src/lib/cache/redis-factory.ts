@@ -30,8 +30,10 @@ export interface RedisFactoryEnv {
   MOCK_REDIS?: string;
 }
 
-export function buildRedisClient(env?: RedisFactoryEnv): CompatibleRedis | null {
-  const e = env ?? (process.env as RedisFactoryEnv);
+export type RedisFactoryEnvSource = RedisFactoryEnv | NodeJS.ProcessEnv;
+
+export function buildRedisClient(env?: RedisFactoryEnvSource): CompatibleRedis | null {
+  const e = env ?? process.env;
 
   if (e.MOCK_REDIS === "1") {
     return new MockSocketRedis() as unknown as SocketRedis;
@@ -55,8 +57,8 @@ export function buildRedisClient(env?: RedisFactoryEnv): CompatibleRedis | null 
  * callers gate on the same condition the factory uses, instead of hard-coding
  * an Upstash-only `KV_REST_API_*` check that misses a TCP `REDIS_URL` deploy.
  */
-export function hasRedisConfig(env?: RedisFactoryEnv): boolean {
-  const e = env ?? (process.env as RedisFactoryEnv);
+export function hasRedisConfig(env?: RedisFactoryEnvSource): boolean {
+  const e = env ?? process.env;
   if (e.MOCK_REDIS === "1") return true;
   if (e.REDIS_URL) return true;
   const restUrl = e.KV_REST_API_URL || e.UPSTASH_REDIS_REST_URL;
