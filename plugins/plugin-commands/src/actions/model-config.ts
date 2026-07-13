@@ -24,24 +24,47 @@ const CHAT_PROVIDERS = ["cerebras", "elizacloud", "claude-chat"] as const;
 type ChatProvider = (typeof CHAT_PROVIDERS)[number];
 
 /** Coding backends accepted by POST /api/models/config for target "coding". */
-type CodingBackend = "codex" | "claude" | "opencode" | "eliza-code";
+export type CodingBackend = "codex" | "claude" | "opencode" | "eliza-code";
 
 // "elizaos" is the orchestrator's spelling of the in-house backend (and what
-// ELIZA_DEFAULT_AGENT_TYPE persists); the API literal is "eliza-code".
-const CODING_BACKEND_TOKENS: Record<string, CodingBackend> = {
+// ELIZA_DEFAULT_AGENT_TYPE persists); the API literal is "eliza-code" and the
+// user-facing name is "eliza". Shared with `/backend` (backend.ts) so both
+// commands accept the same tokens.
+export const CODING_BACKEND_TOKENS: Record<string, CodingBackend> = {
 	codex: "codex",
 	claude: "claude",
 	opencode: "opencode",
+	eliza: "eliza-code",
 	"eliza-code": "eliza-code",
 	elizaos: "eliza-code",
 };
+
+/**
+ * One user-facing name per backend, for display strings. The token map above
+ * is the INPUT surface (aliases welcome); dumping its keys at the user showed
+ * the same backend three times.
+ */
+export const CODING_BACKEND_DISPLAY: readonly string[] = [
+	"codex",
+	"claude",
+	"opencode",
+	"eliza",
+];
+
+/** Map a persisted wire value (e.g. "elizaos") to its user-facing name. */
+export function displayCodingBackend(value: string): string {
+	return value === "elizaos" || value === "eliza-code" ? "eliza" : value;
+}
 
 export interface ModelConfigWriteBody {
 	target: "small" | "large" | "coding";
 	provider?: ChatProvider;
 	backend?: CodingBackend;
-	model: string;
+	/** Omitted only for the defaultBackend-only coding switch (`/backend`). */
+	model?: string;
 	effort?: string;
+	/** Coding-backend switch, persisted as ELIZA_DEFAULT_AGENT_TYPE. */
+	defaultBackend?: CodingBackend;
 }
 
 export type ModelConfigCommand =
@@ -61,7 +84,7 @@ function chatUsage(target: "small" | "large"): string {
 	return `Usage: /model ${target} [provider] <model> [effort] — provider is one of ${CHAT_PROVIDERS.join(", ")} (needed only when the model is served by more than one).`;
 }
 
-const CODING_USAGE = `Usage: /model coding <backend> <model> [effort] — backend is one of ${Object.keys(CODING_BACKEND_TOKENS).join(", ")}.`;
+const CODING_USAGE = `Usage: /model coding <backend> <model> [effort] — backend is one of ${CODING_BACKEND_DISPLAY.join(", ")}.`;
 
 /**
  * Parse a `/model` argument list into a model-config command. Returns null when
@@ -158,7 +181,10 @@ interface ModelConfigWriteResponse {
 function describeWrite(body: ModelConfigWriteBody): string {
 	const effort = body.effort ? ` at ${body.effort} effort` : "";
 	if (body.target === "coding") {
-		return `Coding model for ${body.backend} set to ${body.model}${effort}`;
+		if (body.model === undefined) {
+			return `Default coding backend set to ${displayCodingBackend(body.defaultBackend ?? "")}`;
+		}
+		return `Coding model for ${displayCodingBackend(body.backend ?? "")} set to ${body.model}${effort}`;
 	}
 	const provider = body.provider ? ` (${body.provider})` : "";
 	return `${body.target === "small" ? "Small" : "Large"} chat model set to ${body.model}${provider}${effort}`;
